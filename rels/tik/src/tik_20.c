@@ -1,4 +1,5 @@
 // tik_20 (埋没した都市, Rogueport Sewers): a side room off tik_15 with blocks and an item.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -6,15 +7,18 @@
 #include "evt/evt_movefloor.h"
 #include "driver/hitdrv.h"
 #include "evt/evt_hit.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_snd.h"
-#include "tik.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "evt/evt_mobj.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 static BeroEntry bero_entry_data[2];
 static HitDamageReturn hitDmgRetPoints[7];
+EvtWord tik_20_init_evt[104];
 
 /** Doors of this room: the west exit back to tik_15. */
 static BeroEntry bero_entry_data[] = {
@@ -54,15 +58,15 @@ static HitDamageReturn hitDmgRetPoints[] = {
  * the Defend Plus badge and three Shine Sprite power blocks.
  */
 EVT_BEGIN(tik_20_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK7"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK7"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_map_playanim, STRING("anm_mizu"), 1, 0)
+    CALL(evt_map_playanim, STRING("anm_mizu"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change_01"), STRING("ue"))
     SET_VALUE(LW(0), STRING("dai_3"))
     SET_VALUE(LW(1), STRING("a_dai_3"))
@@ -75,9 +79,9 @@ EVT_BEGIN(tik_20_init_evt)
     SET_VALUE(LW(11), 0)
     SET_VALUE(LW(12), 0)
     SPAWN_EVENT(moving_floor)
-    CALL(evt_item_entry, STRING("item_01"), ITEM_DEFEND_PLUS, 180, 100, -125, ITEM_ENTRY_FIXED, GSWF(GSWF_TIK20_DEFEND_PLUS_TAKEN), 0)
-    CALL(evt_mobj_powerupblk, STRING("pblk01"), -50, 60, -75, 0, GSWF(GSWF_TIK20_SHINE_SPRITE_1), 0)
-    CALL(evt_mobj_powerupblk, STRING("pblk02"), 0, 100, -25, 0, GSWF(GSWF_TIK20_SHINE_SPRITE_2), 0)
-    CALL(evt_mobj_powerupblk, STRING("pblk03"), 50, 60, -75, 0, GSWF(GSWF_TIK20_SHINE_SPRITE_3), 0)
+    CALL(evt_item_entry, STRING("item_01"), ITEM_DEFEND_PLUS, 180, 100, -125, ITEM_TYPE_STILL, GSWF_TIK_20_DEFEND_PLUS, 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk01"), -50, 60, -75, 0, GSWF_SHINE_10, 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk02"), 0, 100, -25, 0, GSWF_SHINE_11, 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk03"), 50, 60, -75, 0, GSWF_SHINE_12, 0)
     RETURN
 EVT_END()

@@ -1,6 +1,6 @@
-// Magnus von Grapple 2.0 effects (batten, バッテンダーエックス): type 0 the X mark (four expanding layers),
+// Magnus von Grapple effects (batten, バッテンダーエックス): type 0 the X mark (three expanding layers),
 // types 1-2 the target reticle and its lock-on (EFF_batten_x), type 3 the rocket jets (EFF_batten_rocket).
-#include "eff/eff_batten.h"
+
 #include "driver/animdrv.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,10 +9,25 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_batten.h"
+#include "driver/mapdrv.h"
+
+typedef struct EffBattenWork {
+    s32 type;     // 0x0
+    Vec position; // 0x4
+    f32 scale;    // 0x10
+    u8 alpha;     // 0x14
+    s32 state;    // 0x18
+    s32 frame;    // 0x1C
+    s32 pad20;    // 0x20
+    s32 poseId;   // 0x24
+    Mtx mtx;      // 0x28
+    s32 pad58;    // 0x58
+} EffBattenWork;
 
 static void effBattenMain(EffectEntry* effect);
-static void effBattenDisp(CameraId cameraId, EffectEntry* effect);
-static void effBattenDisp2(CameraId cameraId, EffectEntry* effect);
+static void effBattenDisp(CameraId cameraId, void* payload);
+static void effBattenDisp2(CameraId cameraId, void* payload);
 
 /**
  * Spawns a Magnus von Grapple 2.0 part: type 0 allocates a header and three X-mark layers,
@@ -22,7 +37,6 @@ static void effBattenDisp2(CameraId cameraId, EffectEntry* effect);
 EffectEntry* effBattenEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffBattenWork* work;
-    EffBattenWork* p;
     s32 count;
     s32 i;
 
@@ -33,7 +47,7 @@ EffectEntry* effBattenEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 sca
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffBattenWork));
     effect->userdata = work;
     effect->callback = effBattenMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -47,14 +61,14 @@ EffectEntry* effBattenEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 sca
     }
     work->poseId = -1;
     PSMTXIdentity(work->mtx);
-    for (i = 1, p = work + 1; i < effect->count; i++, p++) {
-        p->position.x = 0.0f;
-        p->position.y = 0.0f;
-        p->position.z = 0.0f;
-        p->alpha = 0;
-        p->scale = 3.0f;
-        p->state = 0;
-        p->frame = (i - 1) * 10;
+    for (i = 1, work++; i < effect->count; i++, work++) {
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->alpha = 0;
+        work->scale = 3.0f;
+        work->state = 0;
+        work->frame = (i - 1) * 10;
     }
     return effect;
 }
@@ -67,7 +81,7 @@ static void effBattenMain(EffectEntry* effect) {
     EffBattenWork* work;
     s32 done;
     s32 type;
-    s32 lang;
+    s32 group;
     s32 i;
     Vec tmp;
     Vec pos = {0.0f, 0.0f, 0.0f};
@@ -79,38 +93,38 @@ static void effBattenMain(EffectEntry* effect) {
     pos.z = work->position.z;
     tmp = pos;
     type = work->type;
-    lang = gp->inBattle != 0;
+    group = gp->inBattle != 0;
     switch (type) {
         case 1:
-            if (!animGroupBaseAsync("EFF_batten_x", lang, NULL)) {
+            if (!animGroupBaseAsync("EFF_batten_x", group, NULL)) {
                 return;
             }
             if (work->poseId == -1) {
-                work->poseId = animPoseEntry("EFF_batten_x", lang);
+                work->poseId = animPoseEntry("EFF_batten_x", group);
                 animPoseSetAnim(work->poseId, "A_1", 1);
             }
             break;
         case 2:
-            if (!animGroupBaseAsync("EFF_batten_x", lang, NULL)) {
+            if (!animGroupBaseAsync("EFF_batten_x", group, NULL)) {
                 return;
             }
             if (work->poseId == -1) {
-                work->poseId = animPoseEntry("EFF_batten_x", lang);
+                work->poseId = animPoseEntry("EFF_batten_x", group);
                 animPoseSetAnim(work->poseId, "A_2", 1);
             }
             break;
         case 3:
-            if (!animGroupBaseAsync("EFF_batten_rocket", lang, NULL)) {
+            if (!animGroupBaseAsync("EFF_batten_rocket", group, NULL)) {
                 return;
             }
             if (work->poseId == -1) {
-                work->poseId = animPoseEntry("EFF_batten_rocket", lang);
+                work->poseId = animPoseEntry("EFF_batten_rocket", group);
                 animPoseSetAnim(work->poseId, "A_1", 1);
             }
             break;
     }
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->frame = 0x20;
     }
     if (work->frame < 1000) {
@@ -166,9 +180,9 @@ static void effBattenMain(EffectEntry* effect) {
             effDelete(effect);
             return;
         }
-        dispEntry(CAMERA_3D, dispCalcZ(&tmp), 2, (DispCallback)effBattenDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&tmp), DISP_MODE_XLU, effBattenDisp, effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&tmp), 2, (DispCallback)effBattenDisp2, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&tmp), DISP_MODE_XLU, effBattenDisp2, effect);
     }
 }
 
@@ -177,7 +191,8 @@ static void effBattenMain(EffectEntry* effect) {
  * As effBattenMain steps them, each layer starts 10 frames after the one before, shrinks from scale 3 to 1
  * while fading in to half alpha, and then all three grow to scale 10 and fade out together.
  */
-static void effBattenDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBattenDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     EffBattenWork* work;
     s32 i;
     CameraEntry* camera;
@@ -216,6 +231,8 @@ static void effBattenDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx, scale, scale);
     PSMTXConcat(scale, rot, view);
     PSMTXConcat(camera->view, view, view);
+
+    // The quad corners come from variables: the retail code computes neg = -w * half at run time (fneg, fmuls)
     w = 32.0f;
     half = 0.5f;
     neg = -w * half;
@@ -244,7 +261,8 @@ static void effBattenDisp(CameraId cameraId, EffectEntry* effect) {
  * Draws the pose-animated variants (types 1-3: EFF_batten_x, EFF_batten_rocket) facing the camera
  * with animPoseDrawMtx.
  */
-static void effBattenDisp2(CameraId cameraId, EffectEntry* effect) {
+static void effBattenDisp2(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     EffBattenWork* work;
     Mtx mtx;
     Mtx scale;
@@ -260,7 +278,7 @@ static void effBattenDisp2(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx, rot, mtx);
     PSMTXConcat(mtx, scale, mtx);
     PSMTXConcat(mtx, work->mtx, mtx);
-    animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
     animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
     animPoseMain(work->poseId);
     animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 2.0f);

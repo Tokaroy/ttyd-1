@@ -1,6 +1,7 @@
 // Paper Mario 64 effect: dogabon attack, 25 pieces placed on a spiral that spin, with stone smoke puffs.
-#include "eff/n64/eff_dogabon_attack_n64.h"
+
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_dogabon_attack_n64.h"
 #include "eff/n64/eff_stone_smoke_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,6 +9,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 #define PIECES 25
@@ -44,28 +46,31 @@ typedef struct EffDogabonAttackN64Work {
 } EffDogabonAttackN64Work;
 
 static void effDogabonAttackMain(EffectEntry* effect);
-static void effDogabonAttackDisp(CameraId cameraId, EffectEntry* effect);
+static void effDogabonAttackDisp(CameraId cameraId, void* param);
 
-/** Piece size (in percent) while it settles into place: a small squash, then a bounce back to full size. */
+/** Piece height (in percent) of a squash-and-stretch wobble that repeats every 7 frames (width = 200 minus this). */
 static u8 scale_data[7] = {94, 92, 100, 105, 107, 105, 100};
+
 /** Piece size (in percent) as it grows in over eight frames. */
-u8 scale_data_2[8] = {20, 40, 58, 73, 85, 92, 97, 100};
-/** Progress (in percent) of a piece flying from its spiral spot to the target, easing in over 15 frames. */
-u8 move_data_1[15] = {0, 2, 5, 9, 14, 20, 27, 35, 44, 54, 64, 74, 84, 94, 100};
-/** Progress (in percent) of a piece on the miss (hazure) path: it flies past the target to 145% over 20 frames. */
-u8 move_data_hazure[20] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 109, 117, 124, 130, 135, 139, 142, 144, 145};
-/** Progress (in percent) of a piece over its 70-frame swing: out to 145% and back. */
-u8 move_data_2[70] = {
+static u8 scale_data_2[8] = {20, 40, 58, 73, 85, 92, 97, 100};
+
+/** Progress (in percent) of a piece flying from its outer spot (radius 120) in to its inner spot (radius 15), easing in over 15 frames. */
+static u8 move_data_1[15] = {0, 2, 5, 9, 14, 20, 27, 35, 44, 54, 64, 74, 84, 94, 100};
+
+/** Progress (in percent) of a piece on the miss (hazure) path: it flies past its inner spot to 145% over 20 frames. */
+static u8 move_data_hazure[20] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 109, 117, 124, 130, 135, 139, 142, 144, 145};
+
+/** Swirl factor (in percent) over the 70-frame twist: it rises to 145% and back twice; the radius is 15 divided by its square. */
+static u8 move_data_2[70] = {
     100, 100, 100, 100, 100, 100, 100, 100, 101, 102, 102, 103, 103, 104, 104, 104, 107, 107,
     110, 110, 118, 118, 126, 126, 134, 142, 145, 145, 145, 142, 134, 126, 126, 118, 118, 110,
     110, 105, 105, 105, 102, 103, 103, 104, 104, 104, 107, 107, 110, 110, 118, 118, 126, 126,
     134, 142, 145, 145, 145, 142, 134, 126, 126, 118, 118, 110, 110, 105, 105, 105};
-
 /** Height offset of each of the 25 pieces, rising from -5 to 5 along the spiral. */
 static s8 y_data[] = {-5, -5, -5, -4, -4, -4, -3, -3, -2, -2, -1, -1, 0, 0, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5};
 
 /** 12x12 quad each of the 25 pieces is drawn with. */
-effN64Vtx size12x12_tex32x32_vtx[] = {
+static effN64Vtx size12x12_tex32x32_vtx[] = {
     {-6, -6, 0, 0, 0, 0, 0, 0, 255},
     {6, -6, 0, 1024, 0, 0, 0, 0, 255},
     {6, 6, 0, 1024, 1024, 0, 0, 0, 255},
@@ -77,7 +82,6 @@ effN64Vtx size12x12_tex32x32_vtx[] = {
  * each starting after a staggered delay.
  * The effect table labels it ドガボン (dogabon) and kemuri11_n64 ドガボンけむり (dogabon smoke).
  * Reached only through evt_eff64; no script in the tree spawns it.
- * Guess: dogabon is a crash-and-boom sound word.
  */
 EffectEntry* effDogabonAttackN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -93,7 +97,7 @@ EffectEntry* effDogabonAttackN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffDogabonAttackN64Work));
     effect->userdata = work;
     effect->callback = effDogabonAttackMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -110,7 +114,7 @@ EffectEntry* effDogabonAttackN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     work->g = 180;
     work->b = 120;
     for (i = 0; i < PIECES; i++) {
-        ang = 6.2831855f * (f32)(i * 1080 / 25) / 360.0f;
+        ang = 6.2831855f * (f32)(i * 1080 / PIECES) / 360.0f;
         sn = sin(ang);
         cs = cos(ang);
         work->rotZ[i] = rand() % 360 - 180;
@@ -130,9 +134,10 @@ EffectEntry* effDogabonAttackN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
 }
 
 /**
- * Runs a per-piece state machine (states 0-7) driven by the scale_data and move_data tables,
- * starting each piece after its delay and spawning a stone-smoke puff when a piece reaches state 6.
- * A delete request leaves 64 frames.
+ * Per frame: after its delay each piece grows in, then flies in to its inner spot (type 0; other types fly past it on
+ * the miss path and are thrown off at once). For type 0, once the last piece is in, all swirl for 70 frames; each piece
+ * is then thrown off, flies 17 frames and leaves a stone smoke puff. Ends with its lifetime (64 frames after a soft
+ * delete).
  */
 static void effDogabonAttackMain(EffectEntry* effect) {
     EffDogabonAttackN64Work* work = effect->userdata;
@@ -147,7 +152,7 @@ static void effDogabonAttackMain(EffectEntry* effect) {
     f32 sn;
     f32 ang;
     f32 c1;
-    f32 progress;
+    f32 moveScale;
     Mtx trans;
     Mtx rot;
     EffectEntry* smoke;
@@ -157,8 +162,8 @@ static void effDogabonAttackMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 64;
     }
     if (work->lifetime < 1000) {
@@ -237,7 +242,7 @@ static void effDogabonAttackMain(EffectEntry* effect) {
                 }
                 break;
             case 3:
-                if (i == 24) {
+                if (i == PIECES - 1) {
                     work->state[0] = 4;
                     work->state[1] = 4;
                     work->state[2] = 4;
@@ -266,12 +271,12 @@ static void effDogabonAttackMain(EffectEntry* effect) {
                 }
                 break;
             case 4:
-                progress = 0.01f * move_data_2[work->timer[i]];
-                c1 = cos(6.2831855f * (f32)(i * 180 / 25) / 360.0f);
-                ang = 6.2831855f * ((f32)(i * 1080 / 25) + 0.5f * (1080.0f * (1.0f - progress)) * c1) / 360.0f;
+                moveScale = 0.01f * move_data_2[work->timer[i]];
+                c1 = cos(6.2831855f * (f32)(i * 180 / PIECES) / 360.0f);
+                ang = 6.2831855f * ((f32)(i * 1080 / PIECES) + 0.5f * (1080.0f * (1.0f - moveScale)) * c1) / 360.0f;
                 sn = sin(ang);
                 cn = cos(ang);
-                t = 15.0f / progress / progress;
+                t = 15.0f / moveScale / moveScale;
                 work->x[i] = sn * t;
                 work->y[i] = y_data[i] + 10;
                 work->z[i] = cn * t;
@@ -312,11 +317,12 @@ static void effDogabonAttackMain(EffectEntry* effect) {
                 break;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 1, (DispCallback)effDogabonAttackDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_ALPHA_TEST, effDogabonAttackDisp, effect);
 }
 
 /** Draws the 25 pieces with texture 140, scaled by each piece's scaleX/scaleY. */
-static void effDogabonAttackDisp(CameraId cameraId, EffectEntry* effect) {
+static void effDogabonAttackDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffDogabonAttackN64Work* work;
     s32 i;
@@ -357,6 +363,8 @@ static void effDogabonAttackDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTXTrans(trans, work->x[i], work->y[i], work->z[i]);
             PSMTXConcat(rot, trans, trans);
             PSMTXRotRad(rot, 'y', 0.017453292f * -work->rotY[i]);
+
+            // BUG: rot is not used here; trans is multiplied by itself
             PSMTXConcat(trans, trans, trans);
             PSMTXRotRad(rot, 'z', 0.017453292f * work->rotZ[i]);
             PSMTXConcat(trans, rot, trans);

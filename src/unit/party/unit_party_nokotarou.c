@@ -1,4 +1,5 @@
 // Battle unit data and scripts for Koops (Nokotarou) as a partner.
+
 #include "version.h"
 #include "icon_ids.h"
 #include "battle/battle.h"
@@ -19,19 +20,26 @@
 #include "battle/battle_weapon_power.h"
 #include "evt/evt_audience.h"
 #include "evt/evt_sub.h"
+#include "party/party_motion.h"
 #include "unit/unit_koura.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_snd.h"
+#include "battle/battle_status_effect.h"
+#include "battle/battle_damage.h"
+#include "system.h"
+#include "battle/unit_work.h"
 
-// Unit work slots of Koops (btlevtcmd_SetUnitWork / GetUnitWork).
-enum {
-    UW_NOKOTAROU_SPINNING = 0,       // 1 while the shell-spin loop (_koura_rotate_start) runs; 0 stops it
-    UW_NOKOTAROU_SPIN_TARGET = 1,    // spin speed the loop ramps toward, in degrees per frame (negative: the other way)
-    UW_NOKOTAROU_SPIN_REVERSE = 2,   // 1 asks the spin loop to reverse its direction; the loop clears it
-    UW_NOKOTAROU_CHARGE_SFX = 3,     // Power Shell: id of the charging whirr (SFX_BTL_NOKO_IPPATSU1), -1 until it starts
-    UW_NOKOTAROU_SPIN_SFX_PITCH = 4, // top pitch of the spin whirr (3410 from init), scaled by UW_NOKOTAROU_CHARGE
-    UW_NOKOTAROU_CHARGE = 5,         // charge of the current shell move, 0-100 (percent of the whirr pitch)
-};
+// BattleUnit.work slots (btlevtcmd_Get/Set/AddUnitWork)
+#define UNIT_WORK_SHELL_SPINNING 0     // 1 keeps the shell-spin loop of _koura_rotate_start running; 0 ends it (_koura_rotate_stop, _restore_koura_pose)
+#define UNIT_WORK_SHELL_SPIN_SPEED 1   // degrees per frame the shell spin ramps up to (45, 36, 24, 15, 12; the sign gives the direction)
+#define UNIT_WORK_SHELL_SPIN_REVERSE 2 // nonzero makes the spin loop flip the spin direction once (the loop clears it)
+#define UNIT_WORK_CHARGE_SFX 3         // sound id of SFX_BTL_NOKO_IPPATSU1 while Tsuranuki charges (-1 before it starts); its pitch follows the AC
+#define UNIT_WORK_SFX_PITCH_BASE 4     // base pitch (3410) of the charge sound; evt_snd_sfx_pit gets base * UNIT_WORK_SFX_PITCH_RATE / 100
+#define UNIT_WORK_SFX_PITCH_RATE 5     // percentage 0-100 of the base pitch (ramps while the shell is held, or the AC output in Tsuranuki); 0 after the shot
+// BattleUnitPart.work slots (btlevtcmd_Get/SetPartsWork)
+#define PARTS_WORK_SPIN_DUST 0    // part 1: 1 makes the shell spin raise kemuri_test dust once per revolution (Tsuranuki charge)
+#define PARTS_WORK_CHARGE_LEVEL 1 // part 1: Tsuranuki charge level 0-3 from the AC; _tsuranuki_effect_control sizes the effNokotarou effect by it
+#define PARTS_WORK_EFFECT_END 2   // part 1: 1 makes _tsuranuki_effect_control delete the charge effect and finish (it clears the flag)
 
 static USER_FUNC(_check_guard_koura);
 static USER_FUNC(_tsuranuki_effect_control);
@@ -41,15 +49,18 @@ static void __makeTechMenuFunc(BattleCommand* command, s32* count);
 
 PoseTableEntry pose_table_nokotarou_stay[26];
 PoseTableEntry pose_table_nokotarou_turn[12];
+
 #if VERSION <= VERSION_DEMO_JP
 static BattleDataEntry data_table[11];
 #else
 static BattleDataEntry data_table[12];
 #endif
-BattleUnitKindPart unitpartsdata_Party_Nokotarou[1];
+
+static BattleUnitKindPart unitpartsdata_Party_Nokotarou[1];
 BattleUnitKind unitdata_Party_Nokotarou;
+static EvtWord battle_entry_event[59];
 static EvtWord init_event[78];
-extern EvtWord change_party_spawn_init_event[];
+EvtWord change_party_spawn_init_event[28];
 static EvtWord dmg_turn_event[65];
 static EvtWord wakeup_event[67];
 BattleWeapon partyWeapon_NokotarouFirstAttack;
@@ -57,17 +68,37 @@ BattleWeapon partyWeapon_NokotarouKouraAttack;
 BattleWeapon partyWeapon_NokotarouSyubibinKoura;
 BattleWeapon partyWeapon_NokotarouKouraGuard;
 BattleWeapon partyWeapon_NokotarouTsuranukiKoura;
-extern EvtWord partyNokotarouAttack_FirstAttack[];
-extern EvtWord partyNokotarouAttack_NormalAttack[];
-extern EvtWord partyNokotarouAttack_SyubibinKoura[];
-extern EvtWord partyNokotarouAttack_KouraGuard[];
-extern EvtWord partyNokotarouAttack_TsuranukiKoura[];
-extern EvtWord nokotarou_appeal_event[];
+static EvtWord _change_koura_pose[34];
+static EvtWord _change_koura_pose_fast[78];
+static EvtWord _restore_koura_pose[47];
+static EvtWord _koura_rotate_start[199];
+static EvtWord _koura_rotate_stop[13];
+static EvtWord partyNokotarouAttack_FirstAttack[236];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord partyNokotarouAttack_NormalAttack[769];
+static EvtWord partyNokotarouAttack_SyubibinKoura[667];
+#else
+static EvtWord partyNokotarouAttack_NormalAttack[VERSION_PICK(793, 804)];
+static EvtWord partyNokotarouAttack_SyubibinKoura[VERSION_PICK(691, 702)];
+#endif
+
+EvtWord partyNokotarouAttack_KouraGuard[];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord partyNokotarouAttack_TsuranukiKoura[901];
+#else
+static EvtWord partyNokotarouAttack_TsuranukiKoura[VERSION_PICK(931, 942)];
+#endif
+
+static EvtWord nokotarou_appeal_event[34];
 static EvtWord party_win_reaction[16];
 static EvtWord attack_audience_event[263];
+
 #if VERSION >= VERSION_JP
-extern EvtWord nokotarou_revive_event[];
+EvtWord nokotarou_revive_event[16];
 #endif
+
 static BattleUnitDefense defence;
 static BattleUnitDefenseAttr defence_attr;
 static BattleUnitDefense defence_turn;
@@ -75,67 +106,78 @@ static StatusVulnerability regist;
 static EvtWord damage_event[10];
 static EvtWord attack_event[2];
 static EvtWord wait_event[6];
-BattleUnitSetup entry_koura;
+static BattleUnitSetup entry_koura;
 
-/** Koops's defence while on his feet: 1 against every element, from his shell. */
-static BattleUnitDefense defence = {{1, 1, 1, 1, 1}};
+#if VERSION <= VERSION_DEMO_JP
+static StatusVulnerability regist = {
+    100, // sleep
+    100, // stop
+    100, // dizzy
+    100, // poison
+    100, // confuse
+    100, // electric
+    100, // burn
+    100, // freeze
+    100, // huge
+    100, // tiny
+    100, // attackUp
+    100, // attackDown
+    100, // defenseUp
+    100, // defenseDown
+    100, // allergic
+    100, // fright
+    100, // galeForce
+    100, // fast
+    100, // slow
+    100, // dodgy
+    100, // invisible
+    100, // ohko
+};
+#endif
 
-/** Koops's element reactions: none special, every element hits him normally. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
-
-/** Koops's defence while flipped on his back (dmg_turn_event): 0. */
-static BattleUnitDefense defence_turn = {0};
-
-/** Koops's status vulnerabilities: base rate (100) for every status. */
-static StatusVulnerability regist = {100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100, 100};
-
-/**
- * Koops's pose table on his feet: battle pose types mapped to his c_pnk animations
- * (PNK_S_1 standing, PNK_R_1 running, PNK_W_1 walking, PNK_A_1 in his shell, PNK_D_* hurt, PNK_O_1 appeal...).
- */
 PoseTableEntry pose_table_nokotarou_stay[] = {
-    {9, "PNK_D_5"},
-    {2, "PNK_D_5"},
-    {3, "PNK_X_1"},
-    {4, "PNK_D_2"},
-    {5, "PNK_X_1"},
-    {1, "PNK_N_1"},
-    {27, "PNK_D_3"},
-    {BTL_POSE_NORMAL, "PNK_S_1"},
-    {37, "PNK_G_2"},
-    {31, "PNK_G_1"},
-    {BTL_POSE_DAMAGE, "PNK_D_1"},
-    {BTL_POSE_WALK, "PNK_W_1"},
-    {BTL_POSE_RUN, "PNK_R_1"},
-    {50, "PNK_A_1"},
-    {BTL_POSE_PERIL, "PNK_D_2"},
-    {BTL_POSE_DANGER, "PNK_D_2"},
-    {BTL_POSE_ESCAPE_FAIL, "PNK_D_4"},
-    {BTL_POSE_ESCAPE_FAIL_END, "PNK_X_1"},
-    {BTL_POSE_TALK, "PNK_T_1"},
-    {BTL_POSE_ITEM_USE, "PNK_I_1"},
-    {BTL_POSE_COMMAND_WAIT, "PNK_C_1"},
-    {BTL_POSE_APPEAL, "PNK_O_1"},
-    {BTL_POSE_ZERO_GRAVITY, "PNK_X_1"},
-    {49, "PNK_A_1"},
-    {BTL_POSE_DEFEND, "PNK_G_1"},
-    {BTL_POSE_STAY_DEFAULT, "PNK_S_1"},
+    {POSE_TYPE_FREEZE, "PNK_D_5"},
+    {POSE_TYPE_STOP, "PNK_D_5"},
+    {POSE_TYPE_DIZZY, "PNK_X_1"},
+    {POSE_TYPE_POISON, "PNK_D_2"},
+    {POSE_TYPE_CONFUSE, "PNK_X_1"},
+    {POSE_TYPE_SLEEP, "PNK_N_1"},
+    {POSE_TYPE_KO, "PNK_D_3"},
+    {POSE_TYPE_NORMAL, "PNK_S_1"},
+    {POSE_TYPE_DAMAGE_DRAINED, "PNK_G_2"},
+    {POSE_TYPE_DAMAGE_GUARDED, "PNK_G_1"},
+    {POSE_TYPE_DAMAGE, "PNK_D_1"},
+    {POSE_TYPE_WALK, "PNK_W_1"},
+    {POSE_TYPE_RUN, "PNK_R_1"},
+    {POSE_TYPE_ATTACK, "PNK_A_1"},
+    {POSE_TYPE_PERIL, "PNK_D_2"},
+    {POSE_TYPE_DANGER, "PNK_D_2"},
+    {POSE_TYPE_ESCAPE_STUMBLE, "PNK_D_4"},
+    {POSE_TYPE_ESCAPE_RECOVER, "PNK_X_1"},
+    {POSE_TYPE_TALK, "PNK_T_1"},
+    {POSE_TYPE_ITEM, "PNK_I_1"},
+    {POSE_TYPE_COMMAND, "PNK_C_1"},
+    {POSE_TYPE_APPEAL, "PNK_O_1"},
+    {POSE_TYPE_ZERO_GRAVITY, "PNK_X_1"},
+    {POSE_TYPE_AVOID_COUNTER, "PNK_A_1"},
+    {POSE_TYPE_DEFEND, "PNK_G_1"},
+    {POSE_TYPE_ACTION, "PNK_S_1"},
 };
 
 /** Koops's pose table while flipped on his back: mostly PNK_H_1, swapped in by dmg_turn_event and wakeup_event. */
 PoseTableEntry pose_table_nokotarou_turn[] = {
-    {9, "PNK_D_5"},
-    {2, "PNK_D_5"},
-    {1, "PNK_N_2"},
-    {27, "PNK_D_3"},
-    {BTL_POSE_NORMAL, "PNK_H_1"},
-    {31, "PNK_D_1"},
-    {BTL_POSE_DAMAGE, "PNK_D_1"},
-    {BTL_POSE_PERIL, "PNK_H_1"},
-    {BTL_POSE_DANGER, "PNK_H_1"},
-    {BTL_POSE_ZERO_GRAVITY, "PNK_H_1"},
-    {BTL_POSE_DEFEND, "PNK_H_1"},
-    {BTL_POSE_STAY_DEFAULT, "PNK_H_1"},
+    {POSE_TYPE_FREEZE, "PNK_D_5"},
+    {POSE_TYPE_STOP, "PNK_D_5"},
+    {POSE_TYPE_SLEEP, "PNK_N_2"},
+    {POSE_TYPE_KO, "PNK_D_3"},
+    {POSE_TYPE_NORMAL, "PNK_H_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "PNK_D_1"},
+    {POSE_TYPE_DAMAGE, "PNK_D_1"},
+    {POSE_TYPE_PERIL, "PNK_H_1"},
+    {POSE_TYPE_DANGER, "PNK_H_1"},
+    {POSE_TYPE_ZERO_GRAVITY, "PNK_H_1"},
+    {POSE_TYPE_DEFEND, "PNK_H_1"},
+    {POSE_TYPE_ACTION, "PNK_H_1"},
 };
 
 /**
@@ -145,25 +187,25 @@ PoseTableEntry pose_table_nokotarou_turn[] = {
  * is paid (7), from JP on the revive handler (67), and the default spin when he superguards an attack (47).
  */
 static BattleDataEntry data_table[] = {
-    {5, nokotarou_appeal_event},
-    {6, attack_audience_event},
-    {4, change_party_spawn_init_event},
-    {13, dmg_turn_event},
-    {1, __makeTechMenuFunc},
-    {2, wakeup_event},
-    {48, btldefaultevt_Dummy},
-    {64, party_win_reaction},
-    {7, subset_attack_ready_jump_event},
+    {UNIT_DATA_APPEAL_EVENT, nokotarou_appeal_event},
+    {UNIT_DATA_ATTACK_AUDIENCE, attack_audience_event},
+    {UNIT_DATA_CHANGE_PARTY_SPAWN_INIT_EVENT, change_party_spawn_init_event},
+    {UNIT_DATA_DAMAGE_TURN_EVENT, dmg_turn_event},
+    {UNIT_DATA_TECH_MENU_FUNC, __makeTechMenuFunc},
+    {UNIT_DATA_WAKEUP_EVENT, wakeup_event},
+    {UNIT_DATA_FIRST_ATTACK_POS_EVENT, btldefaultevt_Dummy},
+    {UNIT_DATA_WIN_REACTION_EVENT, party_win_reaction},
+    {UNIT_DATA_ATTACK_READY_EVENT, subset_attack_ready_jump_event},
 #if VERSION >= VERSION_JP
-    {67, nokotarou_revive_event},
+    {UNIT_DATA_REVIVE_EVENT, nokotarou_revive_event},
 #endif
-    {47, btldefaultevt_avoid_counter_event},
+    {UNIT_DATA_AVOID_COUNTER_EVENT, btldefaultevt_avoid_counter_event},
     {0, NULL},
 };
 
 /** Koops's single body part: model c_pnk with his defence, element and pose tables; shelled, so it flips. */
-BattleUnitKindPart unitpartsdata_Party_Nokotarou[] = {
-    {1, "btl_un_nokotarou", "c_pnk", 0.0f, 0.0f, 0.0f, 12.0f, 30.0f, 5.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER | PART_ATTR_SHELLED, 0, pose_table_nokotarou_stay},
+static BattleUnitKindPart unitpartsdata_Party_Nokotarou[] = {
+    {1, "btl_un_nokotarou", "c_pnk", 0.0f, 0.0f, 0.0f, 12.0f, 30.0f, 5.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart | kIsShelled, 0, pose_table_nokotarou_stay},
 };
 
 /**
@@ -171,69 +213,51 @@ BattleUnitKindPart unitpartsdata_Party_Nokotarou[] = {
  * status table, body part and init script. No HP gauge is drawn over him; his HP comes from the partner stats.
  */
 BattleUnitKind unitdata_Party_Nokotarou = {
-    225,
-    "btl_un_nokotarou",
-    10,
-    5,
-    5,
-    1,
-    1,
-    0,
-    0,
-    0,
-    0,
-    100,
-    9,
-    20,
-    33,
-    14,
-    36,
-    0.0f,
-    12.0f,
-    0.0f,
-    0,
-    0,
-    0.0f,
-    40.0f,
-    0.0f,
-    0.0f,
-    40.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    10.0f,
-    0.0f,
-    0.0f,
-    10.0f,
-    21.45f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0,
-    0,
-    -1,
-    0,
-    100,
-    20,
-    0.0f,
-    0.0f,
-    0.0f,
-    "SFX_PARTY_DAMAGE1",
-    "SFX_MARIO_DAMAGE_FIRE1",
-    "SFX_MARIO_DAMAGE_ICE1",
-    "SFX_MARIO_DAMAGE_BIRIBIRI1",
-    UNIT_ATTR_NO_HP_GAUGE,
-    &regist,
-    1,
-    unitpartsdata_Party_Nokotarou,
-    init_event,
-    data_table,
+    UNIT_KOOPS, // unitType
+    "btl_un_nokotarou", // name
+    10, // maxHp
+    5, // maxFp
+    5, // dangerHP
+    1, // perilHP
+    1, // level
+    0, // bonusExp
+    0, // bonusCoin
+    0, // bonusCoinRate
+    0, // baseCoin
+    100, // runRate
+    9, // pbSoftCap
+    20, // width
+    33, // height
+    {14, 36}, // hitOffset
+    {0.0f, 12.0f, 0.0f}, // centerOffset
+    {0, 0}, // hpGaugeOffset
+    {0.0f, 40.0f, 0.0f}, // talkTogeBaseOffset
+    {0.0f, 40.0f, 0.0f}, // heldItemBaseOffset
+    {0.0f, 0.0f, 0.0f}, // burnFlameOffset
+    0.0f, // vivianOffsetX
+    0.0f, // vivianOffsetZ
+    {10.0f, 0.0f, 0.0f}, // bintaHitOffset
+    {10.0f, 21.45f, 0.0f}, // kissHitOffset
+    {0.0f, 0.0f, 0.0f}, // cutBaseOffset
+    0.0f, // cutWidth
+    0.0f, // cutHeight
+    0, // turnOrder
+    0, // turnOrderVariance
+    -1, // swallowChance
+    0, // swallowAttributes
+    100, // hammerKnockbackChance
+    20, // itemStealParam
+    {0.0f, 0.0f, 0.0f}, // starPointDispOffset
+    "SFX_PARTY_DAMAGE1", // damageSfxName
+    "SFX_MARIO_DAMAGE_FIRE1", // fireDamageSfxName
+    "SFX_MARIO_DAMAGE_ICE1", // iceDamageSfxName
+    "SFX_MARIO_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    kUnitNoHpGauge, // attributeFlags
+    &regist, // statusVulnerability
+    1, // numParts
+    unitpartsdata_Party_Nokotarou, // parts
+    init_event, // initEventCode
+    data_table, // dataTable
 };
 
 /**
@@ -241,50 +265,53 @@ BattleUnitKind unitdata_Party_Nokotarou = {
  * runs in to it at speed 4 with his footstep sounds, then takes his stay pose.
  */
 static EVT_BEGIN(battle_entry_event)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 250)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 250)
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     WAIT_FRAMES(40)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(4.0f))
-    CALL(btlevtcmd_SetMoveSoundDataWork, BTL_UNIT_SELF, STRING("SFX_PARTY_BATTLE_SUBMOVE1L"), STRING("SFX_PARTY_BATTLE_SUBMOVE1R"), 0, 9, 9, 0, 0)
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -2, 0)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(4.0f))
+    CALL(btlevtcmd_SetMoveSoundDataWork, UNIT_ID_SELF, STRING("SFX_PARTY_BATTLE_SUBMOVE1L"), STRING("SFX_PARTY_BATTLE_SUBMOVE1R"), 0, 9, 9, 0, 0)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_KEEP, 0)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()
 
 /**
- * Init for Koops: registers his wait, attack, damage, confusion and entry scripts and his walk,
- * run and jump sounds; clears the shell-spin work (UW_NOKOTAROU_SPINNING, UW_NOKOTAROU_SPIN_TARGET, part work 0 and 2)
- * and sets the Shell Toss spin sound's top pitch (UW_NOKOTAROU_SPIN_SFX_PITCH = 3410, scaled by UW_NOKOTAROU_CHARGE).
+ * Init for Koops: registers his wait, attack, damage, confusion and entry scripts and his walk, run and jump
+ * sounds; clears UNIT_WORK_SHELL_SPINNING, UNIT_WORK_SHELL_SPIN_SPEED and UNIT_WORK_SFX_PITCH_RATE and part
+ * 1's PARTS_WORK_SPIN_DUST and PARTS_WORK_EFFECT_END, sets the charge sound's base pitch
+ * (UNIT_WORK_SFX_PITCH_BASE) to 3410 and starts his wait event.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPINNING, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_SFX_PITCH, 3410)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, 0)
-    CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 0, 0)
-    CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 2, 0)
-    CALL(btlevtcmd_SetWalkSound, BTL_UNIT_SELF, STRING("SFX_PARTY_BATTLE_MOVE1L"), STRING("SFX_PARTY_BATTLE_MOVE1R"), 6, 12, 16)
-    CALL(btlevtcmd_SetRunSound, BTL_UNIT_SELF, STRING("SFX_PARTY_BATTLE_MOVE1L"), STRING("SFX_PARTY_BATTLE_MOVE1R"), 0, 9, 3)
-    CALL(btlevtcmd_SetJumpSound, BTL_UNIT_SELF, STRING("SFX_PARTY_BATTLE_JUMP1"), STRING("SFX_PARTY_BATTLE_LANDING1"))
-    CALL(btlevtcmd_SetEventEntry, BTL_UNIT_SELF, PTR(battle_entry_event))
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPINNING, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_BASE, 3410)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, 0)
+    CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_SPIN_DUST, 0)
+    CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_EFFECT_END, 0)
+    CALL(btlevtcmd_SetWalkSound, UNIT_ID_SELF, STRING("SFX_PARTY_BATTLE_MOVE1L"), STRING("SFX_PARTY_BATTLE_MOVE1R"), 6, 12, 16)
+    CALL(btlevtcmd_SetRunSound, UNIT_ID_SELF, STRING("SFX_PARTY_BATTLE_MOVE1L"), STRING("SFX_PARTY_BATTLE_MOVE1R"), 0, 9, 3)
+    CALL(btlevtcmd_SetJumpSound, UNIT_ID_SELF, STRING("SFX_PARTY_BATTLE_JUMP1"), STRING("SFX_PARTY_BATTLE_LANDING1"))
+    CALL(btlevtcmd_SetEventEntry, UNIT_ID_SELF, PTR(battle_entry_event))
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
+#if VERSION <= VERSION_DEMO_JP
 /** Hit reaction: the default damage script with no special pose (LW10 = -2). */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
 EVT_END()
+#endif
 
 /**
  * Run when Koops is switched into battle (data tag 4):
@@ -292,13 +319,13 @@ EVT_END()
  * restores the flipped defence and pose tables and flag, then starts his pose from the table.
  */
 EVT_BEGIN(change_party_spawn_init_event)
-    CALL(btlevtcmd_GetOverTurnCount, BTL_UNIT_PARTNER, LW(0))
+    CALL(btlevtcmd_GetOverTurnCount, UNIT_ID_PARTNER, LW(0))
     IF_INT_GREATER_OR_EQUAL(LW(0), 1)
-        CALL(btlevtcmd_SetPartsDefenceTable, BTL_UNIT_PARTNER, 1, PTR(&defence_turn))
-        CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_PARTNER, 1, PTR(pose_table_nokotarou_turn))
-        CALL(btlevtcmd_OnStatusFlag, BTL_UNIT_PARTNER, STATUS_FLAG_FLIPPED)
+        CALL(btlevtcmd_SetPartsDefenceTable, UNIT_ID_PARTNER, 1, PTR(&defence_turn))
+        CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_PARTNER, 1, PTR(pose_table_nokotarou_turn))
+        CALL(btlevtcmd_OnStatusFlag, UNIT_ID_PARTNER, UNIT_STATUS_FLAG_FLIPPED)
     END_IF
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_PARTNER, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_PARTNER, 1)
     RETURN
 EVT_END()
 
@@ -308,19 +335,19 @@ EVT_END()
  * drops any Defend, plays the status sound and bounces twice.
  */
 static EVT_BEGIN(dmg_turn_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL(btlevtcmd_SetPartsDefenceTable, LW(10), LW(11), PTR(&defence_turn))
     CALL(btlevtcmd_AnimeSetPoseTable, LW(10), LW(11), PTR(pose_table_nokotarou_turn))
-    CALL(btlevtcmd_OnStatusFlag, LW(10), STATUS_FLAG_FLIPPED)
+    CALL(btlevtcmd_OnStatusFlag, LW(10), UNIT_STATUS_FLAG_FLIPPED)
     CALL(btlevtcmd_SetOverTurnCount, LW(10), 2)
     CALL(btlevtcmd_AnimeChangePose, LW(10), LW(11), STRING("PNK_D_1"))
-    CALL(btlevtcmd_OffStatusFlag, LW(10), STATUS_FLAG_DEFENDING)
+    CALL(btlevtcmd_OffStatusFlag, LW(10), UNIT_STATUS_FLAG_DEFEND)
     CALL(evt_snd_sfxon, STRING("SFX_CONDITION_INSIDE"), 0)
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(1.0f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 12, -1)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 6, -1)
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(1.0f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 12, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 6, MOVE_SOUND_FROM_TABLE)
     RETURN
 EVT_END()
 
@@ -330,36 +357,33 @@ EVT_END()
  * clears the flipped flag and hops back onto his feet.
  */
 static EVT_BEGIN(wakeup_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL(btlevtcmd_GetOverTurnCount, LW(10), LW(0))
     SUBTRACT(LW(0), 1)
     CALL(btlevtcmd_SetOverTurnCount, LW(10), LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
     CALL(btlevtcmd_SetPartsDefenceTable, LW(10), LW(11), PTR(&defence))
-    CALL(btlevtcmd_OffStatusFlag, LW(10), STATUS_FLAG_FLIPPED)
+    CALL(btlevtcmd_OffStatusFlag, LW(10), UNIT_STATUS_FLAG_FLIPPED)
     CALL(btlevtcmd_AnimeSetPoseTable, LW(10), LW(11), PTR(pose_table_nokotarou_stay))
     CALL(btlevtcmd_AnimeChangePose, LW(10), LW(11), STRING("PNK_S_1"))
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(1.0f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 12, -1)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(1.0f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 12, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
-/** Empty: partner moves come from the player's menu choices, not a unit attack script. */
-static EVT_BEGIN(attack_event)
-    RETURN
-EVT_END()
-
+#if VERSION <= VERSION_DEMO_JP
 /** Idle: plays the stay pose from the current pose table (normal or flipped). */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()
+#endif
 
 /**
  * Koops's First Strike weapon (no menu name), run by partyNokotarouAttack_FirstAttack when he hits an enemy in the
@@ -367,11 +391,7 @@ EVT_END()
  */
 BattleWeapon partyWeapon_NokotarouFirstAttack = {
     NULL, // name
-#if VERSION >= VERSION_US
-    344, // icon
-#else
-    336, // icon
-#endif
+    ICON_PARTNER_MOVE_NORMAL, // icon
     {0}, // pad_06
     0, NULL, // itemId..description
     100, // baseAccuracy
@@ -385,16 +405,16 @@ BattleWeapon partyWeapon_NokotarouFirstAttack = {
     {2, 2, 3, 3, 5, 5, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSS_LIKE | TARGET_PROP_FRONTMOST | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSSLIKE | TARGET_PROP_ONLY_FRONTMOST | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
     ELEMENT_NORMAL, // element
-    8, // damagePattern
+    ATTACKPATTERN_SHELL_ATTACK, // damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_ALWAYS_HITS | SPECIAL_SHATTERS_FREEZE | SPECIAL_UNGUARDABLE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_CANNOT_MISS | SPECIAL_FREEZE_CRUSH | SPECIAL_UNGUARDABLE, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -413,11 +433,7 @@ BattleWeapon partyWeapon_NokotarouFirstAttack = {
  */
 BattleWeapon partyWeapon_NokotarouKouraAttack = {
     "btl_wn_pnk_normal", // name
-#if VERSION >= VERSION_US
-    344, // icon
-#else
-    336, // icon
-#endif
+    ICON_PARTNER_MOVE_NORMAL, // icon
     {0}, // pad_06
     0, // itemId
     "msg_pnk_normal_attack", // description
@@ -432,16 +448,16 @@ BattleWeapon partyWeapon_NokotarouKouraAttack = {
     {1, 2, 2, 3, 3, 5, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSS_LIKE | TARGET_PROP_FRONTMOST | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
+    TARGET_CLASS_SINGLE | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSSLIKE | TARGET_PROP_ONLY_FRONTMOST | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
     ELEMENT_NORMAL, // element
-    8, // damagePattern
+    ATTACKPATTERN_SHELL_ATTACK, // damagePattern
     3, // acLevel
     2, // reserved_6F
     "msg_ac_hammer", // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE | SPECIAL_USABLE_IF_CONFUSED | SPECIAL_UNGUARDABLE, // special
-    COUNTER_RESIST_ELECTRIC | COUNTER_RESIST_TOP_SPIKY | COUNTER_RESIST_PREEMPTIVE_SPIKY | COUNTER_RESIST_FRONT_SPIKY | COUNTER_RESIST_FIERY | COUNTER_RESIST_ICY | COUNTER_RESIST_POISON | COUNTER_RESIST_EXPLOSIVE | COUNTER_RESIST_VOLATILE_EXPLOSIVE | COUNTER_RESIST_HOLD_FAST, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH | SPECIAL_CONFUSED_ACTION | SPECIAL_UNGUARDABLE, // special
+    COUNTER_RESIST_ALL & ~COUNTER_RESIST_PAYBACK, // counterResistFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -463,11 +479,7 @@ BattleWeapon partyWeapon_NokotarouKouraAttack = {
  */
 BattleWeapon partyWeapon_NokotarouSyubibinKoura = {
     "btl_wn_pnk_lv1", // name
-#if VERSION >= VERSION_US
-    345, // icon
-#else
-    337, // icon
-#endif
+    ICON_PARTNER_MOVE_LV1, // icon
     {0}, // pad_06
     0, // itemId
     "msg_pnk_syubibin_koura", // description
@@ -487,16 +499,16 @@ BattleWeapon partyWeapon_NokotarouSyubibinKoura = {
     {1, 2, 2, 3, 3, 5, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSS_LIKE | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSSLIKE | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
     ELEMENT_NORMAL, // element
-    8, // damagePattern
+    ATTACKPATTERN_SHELL_ATTACK, // damagePattern
     3, // acLevel
     2, // reserved_6F
     "msg_ac_koura_shubibin", // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE | SPECIAL_UNGUARDABLE, // special
-    COUNTER_RESIST_ELECTRIC | COUNTER_RESIST_TOP_SPIKY | COUNTER_RESIST_PREEMPTIVE_SPIKY | COUNTER_RESIST_FRONT_SPIKY | COUNTER_RESIST_FIERY | COUNTER_RESIST_ICY | COUNTER_RESIST_POISON | COUNTER_RESIST_EXPLOSIVE | COUNTER_RESIST_VOLATILE_EXPLOSIVE | COUNTER_RESIST_HOLD_FAST, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH | SPECIAL_UNGUARDABLE, // special
+    COUNTER_RESIST_ALL & ~COUNTER_RESIST_PAYBACK, // counterResistFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -518,11 +530,7 @@ BattleWeapon partyWeapon_NokotarouSyubibinKoura = {
  */
 BattleWeapon partyWeapon_NokotarouKouraGuard = {
     "btl_wn_pnk_lv2", // name
-#if VERSION >= VERSION_US
-    346, // icon
-#else
-    338, // icon
-#endif
+    ICON_PARTNER_MOVE_LV2, // icon
     {0}, // pad_06
     0, // itemId
     "msg_pnk_koura_no_mamori", // description
@@ -538,15 +546,15 @@ BattleWeapon partyWeapon_NokotarouKouraGuard = {
     {0, 2, 2, 3, 3, 4, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_ONLY_MARIO | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OWN_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_ONLY_MARIO | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_SAME_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     "msg_ac_koura_no_mamori", // acHelpMsg
     SPECIAL_UNGUARDABLE, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -564,11 +572,7 @@ BattleWeapon partyWeapon_NokotarouKouraGuard = {
  */
 BattleWeapon partyWeapon_NokotarouTsuranukiKoura = {
     "btl_wn_pnk_lv3_tsuranuki", // name
-#if VERSION >= VERSION_US
-    347, // icon
-#else
-    339, // icon
-#endif
+    ICON_PARTNER_MOVE_LV3, // icon
     {0}, // pad_06
     0, // itemId
     "msg_pnk_koura_tsuranuki", // description
@@ -588,15 +592,15 @@ BattleWeapon partyWeapon_NokotarouTsuranukiKoura = {
     {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSS_LIKE | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_NO_CEILING | TARGET_PROP_SHELL_TOSSLIKE | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     "msg_ac_tsuranuki_koura", // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_PIERCES_DEFENSE | SPECIAL_SHATTERS_FREEZE | SPECIAL_UNGUARDABLE, // special
-    COUNTER_RESIST_ELECTRIC | COUNTER_RESIST_TOP_SPIKY | COUNTER_RESIST_PREEMPTIVE_SPIKY | COUNTER_RESIST_FRONT_SPIKY | COUNTER_RESIST_FIERY | COUNTER_RESIST_ICY | COUNTER_RESIST_POISON | COUNTER_RESIST_EXPLOSIVE | COUNTER_RESIST_VOLATILE_EXPLOSIVE | COUNTER_RESIST_HOLD_FAST, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_PIERCE_DEFENSE | SPECIAL_FREEZE_CRUSH | SPECIAL_UNGUARDABLE, // special
+    COUNTER_RESIST_ALL & ~COUNTER_RESIST_PAYBACK, // counterResistFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -612,17 +616,17 @@ BattleWeapon partyWeapon_NokotarouTsuranukiKoura = {
 #endif
 };
 
-/** Withdraws Koops into his shell for Shell Toss: shell pose PNK_K_2, spinning 15 degrees a frame for 24 frames. */
+/** Withdraws Koops into his shell for Shell Toss and Power Shell: shell pose PNK_K_2, spinning 15 degrees a frame for 24 frames. */
 static EVT_BEGIN(_change_koura_pose)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_2"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_2"))
     LOOP(18)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+        CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
     END_LOOP
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_1"))
     LOOP(6)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+        CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
     END_LOOP
     RETURN
 EVT_END()
@@ -632,80 +636,82 @@ EVT_END()
  * and a second puff.
  */
 static EVT_BEGIN(_change_koura_pose_fast)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(evt_eff, 0, STRING("kemuri_test"), 5, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_2"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_2"))
     LOOP(10)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 27, 0)
+        CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 27, 0)
     END_LOOP
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_1"))
     LOOP(3)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 30, 0)
+        CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 30, 0)
     END_LOOP
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(evt_eff, 0, STRING("kemuri_test"), 5, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
     RETURN
 EVT_END()
 
 /**
- * Pops Koops back out of his shell: stops the spin loop (UW_NOKOTAROU_SPINNING = 0),
- * resets his rotation and turns him through two short spins while switching shell poses.
+ * Ends Koops's shell spin: stops the spin loop (UNIT_WORK_SHELL_SPINNING = 0), resets his rotation and
+ * turns him through two short spins (6 frames of 45 degrees, then 6 of 15) while switching to the shell
+ * poses PNK_K_1 and PNK_K_2.
  */
 static EVT_BEGIN(_restore_koura_pose)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPINNING, 0)
-    CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPINNING, 0)
+    CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
     WAIT_FRAMES(1)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_1"))
     LOOP(6)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 45, 0)
+        CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 45, 0)
     END_LOOP
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_2"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_2"))
     LOOP(6)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+        CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
     END_LOOP
     RETURN
 EVT_END()
 
 /**
- * Starts the shell-spin loop in an inline event.
- * LW0 is the starting spin speed and UW_NOKOTAROU_SPIN_TARGET the target speed in degrees per frame (negative = the other
- * way); the speed moves 1 a frame toward it, UW_NOKOTAROU_SPIN_REVERSE set reverses it,
- * and with part work 0 set a smoke puff appears each turn. Runs until UW_NOKOTAROU_SPINNING is cleared.
+ * Starts the shell-spin loop in an inline event. LW(0) is the starting spin speed and
+ * UNIT_WORK_SHELL_SPIN_SPEED the target speed in degrees per frame (negative = the other way); the speed
+ * moves 1 a frame toward it, a nonzero UNIT_WORK_SHELL_SPIN_REVERSE flips both (the loop clears it), and
+ * with part work PARTS_WORK_SPIN_DUST set a smoke puff appears each turn. Runs until
+ * UNIT_WORK_SHELL_SPINNING is cleared.
  */
 static EVT_BEGIN(_koura_rotate_start)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPINNING, 1)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_REVERSE, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPINNING, 1)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_REVERSE, 0)
     BEGIN_INLINE_EVENT
         LABEL(0)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPINNING, LW(1))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPINNING, LW(1))
         IF_INT_EQUAL(LW(1), 0)
             GOTO(10)
         END_IF
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_REVERSE, LW(11))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_REVERSE, LW(11))
         IF_INT_NOT_EQUAL(LW(11), 0)
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_REVERSE, 0)
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, LW(10))
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_REVERSE, 0)
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, LW(10))
             MULTIPLY(LW(10), -1)
             MULTIPLY(LW(0), -1)
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, LW(10))
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, LW(10))
         END_IF
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, LW(10))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, LW(10))
         IF_INT_GREATER_OR_EQUAL(LW(10), 0)
             ADD(LW(0), 1)
             IF_INT_GREATER(LW(0), LW(10))
                 SET_VALUE(LW(0), LW(10))
             END_IF
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, LW(0), 0)
-            CALL(btlevtcmd_GetRotate, BTL_UNIT_SELF, EVT_NULLPTR, LW(1), EVT_NULLPTR)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, LW(0), 0)
+            CALL(btlevtcmd_GetRotate, UNIT_ID_SELF, EVT_NULLPTR, LW(1), EVT_NULLPTR)
             IF_INT_LESS(LW(1), LW(0))
-                CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, 1, 0, LW(1))
+                CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_SPIN_DUST, LW(1))
                 IF_INT_NOT_EQUAL(LW(1), 0)
                     BEGIN_SIBLING_EVENT
-                        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+                        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
                         CALL(evt_eff, 0, STRING("kemuri_test"), 5, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
                     END_SIBLING_EVENT
                 END_IF
@@ -715,15 +721,15 @@ static EVT_BEGIN(_koura_rotate_start)
             IF_INT_LESS(LW(0), LW(10))
                 SET_VALUE(LW(0), LW(10))
             END_IF
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, LW(0), 0)
-            CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, 1, 0, LW(1))
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, LW(0), 0)
+            CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_SPIN_DUST, LW(1))
             IF_INT_NOT_EQUAL(LW(1), 0)
                 BEGIN_SIBLING_EVENT
                     MULTIPLY(LW(0), -1)
-                    CALL(btlevtcmd_GetRotate, BTL_UNIT_SELF, EVT_NULLPTR, LW(1), EVT_NULLPTR)
+                    CALL(btlevtcmd_GetRotate, UNIT_ID_SELF, EVT_NULLPTR, LW(1), EVT_NULLPTR)
                     ADD(LW(1), 360)
                     IF_INT_LESS(LW(1), LW(0))
-                        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+                        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
                         CALL(evt_eff, 0, STRING("kemuri_test"), 5, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
                     END_IF
                 END_SIBLING_EVENT
@@ -736,10 +742,10 @@ static EVT_BEGIN(_koura_rotate_start)
     RETURN
 EVT_END()
 
-/** Stops the shell-spin loop (UW_NOKOTAROU_SPINNING = 0) and resets Koops's rotation. */
+/** Stops the shell-spin loop (UNIT_WORK_SHELL_SPINNING = 0) and resets Koops's rotation. */
 static EVT_BEGIN(_koura_rotate_stop)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPINNING, 0)
-    CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPINNING, 0)
+    CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
     RETURN
 EVT_END()
 
@@ -747,61 +753,61 @@ EVT_END()
  * Koops's first strike, used when he hits an enemy in the field to start the battle:
  * he spins in his shell from offstage into the first-attack target, bounces back and returns home.
  */
-EVT_BEGIN(partyNokotarouAttack_FirstAttack)
-    CALL(btlevtcmd_JumpSetting, BTL_UNIT_SELF, 20, FLOAT(0.0f), FLOAT(0.69921875f))
+static EVT_BEGIN(partyNokotarouAttack_FirstAttack)
+    CALL(btlevtcmd_JumpSetting, UNIT_ID_SELF, 20, FLOAT(0.0f), FLOAT(0.69921875f))
     CALL(btlevtcmd_GetFirstAttackTarget, LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
     CALL(btlevtcmd_WeaponAftereffect, PTR(&partyWeapon_NokotarouFirstAttack))
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, LW(3), BTL_UNIT_NONE)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, LW(3), -1)
     CALL(evt_btl_camera_set_zoom, 0, 300)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     SET_VALUE(LW(0), 45)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 45)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 45)
     CALL_CHILD(_koura_rotate_start)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 250)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 250)
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     WAIT_FRAMES(50)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(5), LW(2))
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(6.0f))
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(6.0f))
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_ATTACK2"), 0)
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, 0, 0)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
     CALL_CHILD(_koura_rotate_stop)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&partyWeapon_NokotarouFirstAttack))
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&partyWeapon_NokotarouFirstAttack), DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_AC_SUCCESS, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&partyWeapon_NokotarouFirstAttack), DAMAGE_RESULT_FINAL_HIT | DAMAGE_RESULT_AC_SUCCESS, LW(5))
     SET_VALUE(LW(0), 45)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 45)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 45)
     CALL_CHILD(_koura_rotate_start)
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.69921875f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.69921875f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     SET_VALUE(LW(1), 0)
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 30)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 18, -1)
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.5996094f))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 20)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 12, -1)
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 8)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 8, -1)
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 30)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 18, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.5996094f))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 20)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 12, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 8)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 8, MOVE_SOUND_FROM_TABLE)
     CALL_CHILD(_koura_rotate_stop)
     CALL_CHILD(_restore_koura_pose)
     CALL(evt_audience_ap_recovery)
     CALL(btlevtcmd_InviteApInfoReport)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(6.0f))
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_WALK)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(6.0f))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_WALK)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     CALL_CHILD(btldefaultevt_SuitoruBadgeEffect)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -809,36 +815,38 @@ EVT_END()
  * Koops's Shell Toss: he spins in his shell along the ground into the front enemy,
  * the action command (charging the spin) setting the damage, then bounces back home.
  */
-EVT_BEGIN(partyNokotarouAttack_NormalAttack)
+static EVT_BEGIN(partyNokotarouAttack_NormalAttack)
     // Find the chosen enemy and pay for the move; with no target, skip to the end.
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(12))
+    CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(12))
     CALL(btlevtcmd_WeaponAftereffect, LW(12))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_CommandPayWeaponCost, BTL_UNIT_SELF)
-    CALL(btlevtcmd_RunDataEventChild, BTL_UNIT_SELF, 7)
+    CALL(btlevtcmd_CommandPayWeaponCost, UNIT_ID_SELF)
+    CALL(btlevtcmd_RunDataEventChild, UNIT_ID_SELF, UNIT_DATA_ATTACK_READY_EVENT)
+
     // Camera closes in; he faces the enemy, pulls into his shell and starts spinning with its whirring sound.
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, 1)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, 1)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
     CALL(evt_btl_camera_set_posoffset, 0, 20, 0, 0)
     WAIT_FRAMES(20)
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
     CALL_CHILD(_change_koura_pose)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_ATTACK1"), LW(13))
     SET_VALUE(LW(0), 15)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 45)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 45)
     CALL_CHILD(_koura_rotate_start)
+
     // Set up the hold-left-and-release command from the difficulty.
     CALL(btlevtcmd_CommandGetWeaponActionLv, LW(0))
-    CALL(btlevtcmd_AcSetDifficulty, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_AcSetDifficulty, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_AcGetDifficulty, LW(0))
     SUBTRACT(LW(0), 3)
     SWITCH(LW(0))
@@ -865,9 +873,10 @@ EVT_BEGIN(partyNokotarouAttack_NormalAttack)
         SET_VALUE(LW(1), 960)
     END_SWITCH
     CALL(btlevtcmd_AcSetParamAll, 2, LW(0), 0, 1, LW(1), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
-    CALL(btlevtcmd_AcSetFlag, 3)
-    CALL(btlevtcmd_SetupAC, BTL_UNIT_SELF, 19, 1, 60)
+    CALL(btlevtcmd_AcSetFlag, AC_GAUGE_TIMING_FLAG_WRAP | AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE)
+    CALL(btlevtcmd_SetupAC, UNIT_ID_SELF, 19, 1, 60)
     WAIT_FRAMES(22)
+
     // Once the stick is held, the whirr rises in pitch as he charges.
     BEGIN_SIBLING_EVENT_GET_ID(LW(15))
         LOOP(10000)
@@ -883,127 +892,144 @@ EVT_BEGIN(partyNokotarouAttack_NormalAttack)
             IF_INT_GREATER(LW(6), 100)
                 SET_VALUE(LW(6), 100)
             END_IF
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, LW(6))
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_SFX_PITCH, LW(0))
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, LW(1))
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, LW(6))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_BASE, LW(0))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, LW(1))
             MULTIPLY(LW(0), LW(1))
             DIVIDE(LW(0), 100)
             CALL(evt_snd_sfx_pit, LW(13), LW(0))
             WAIT_FRAMES(1)
         END_LOOP
     END_SIBLING_EVENT
+
     // Check whether the enemy can be hit; the camera pulls back and the command runs.
-    CALL(btlevtcmd_CommandPreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT, LW(6))
+    CALL(btlevtcmd_CommandPreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT, LW(6))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 4)
     CALL(evt_btl_camera_set_zoom, 0, 400)
     CALL(btlevtcmd_StartAC, 1)
     CALL(btlevtcmd_ResultAC)
+
     // Released: a launch sound and he shoots along the ground to the enemy.
     DELETE_EVENT(LW(15))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, 0)
     CALL(evt_snd_sfxoff, LW(13))
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_ATTACK2"), 0)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_posoffset, 0, 0, 0, 0)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(10.0f))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(10.0f))
     CALL(btlevtcmd_GetPos, LW(3), LW(0), LW(1), LW(2))
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
     ADD(LW(2), 5)
     CALL(btlevtcmd_TransStageFloorPosition, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_GetMoveFrame, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, LW(13))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), LW(13), 0, 0)
+    CALL(btlevtcmd_GetMoveFrame, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, LW(13))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), LW(13), MOVE_SOUND_NONE, 0)
+
     // Miss: the enemy's dodge plays if it has one, he slides past it, pops out of his shell and runs home.
-    IF_INT_NOT_EQUAL(LW(6), 1)
-        IF_INT_EQUAL(LW(6), 3)
-            CALL(btlevtcmd_StartAvoid, LW(3), 38)
+    IF_INT_NOT_EQUAL(LW(6), PRECHECK_HIT)
+        IF_INT_EQUAL(LW(6), PRECHECK_LUCKY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         END_IF
-        IF_INT_EQUAL(LW(6), 6)
-            CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        IF_INT_EQUAL(LW(6), PRECHECK_DODGY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         END_IF
-        IF_INT_EQUAL(LW(6), 2)
-            CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        IF_INT_EQUAL(LW(6), PRECHECK_MISS)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         END_IF
         CALL(btlevtcmd_StopAC)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 40)
-        CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 40)
+        CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
         CALL_CHILD(_koura_rotate_stop)
         CALL_CHILD(_restore_koura_pose)
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
         WAIT_FRAMES(30)
         CALL(evt_audience_ap_recovery)
         CALL(btlevtcmd_InviteApInfoReport)
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
-        CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(6.0f))
-        CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
+        CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(6.0f))
+        CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+#if VERSION <= VERSION_DEMO_JP
+        CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
         GOTO(99)
     END_IF
-    // In JP and later, if the enemy would counter, his spin stops at once.
+
     CALL(evt_btl_camera_set_mode, 0, 0)
-#if VERSION >= VERSION_JP
-    CALL(btlevtcmd_CommandPreCheckCounter, BTL_UNIT_SELF, LW(3), LW(4), 256, LW(0))
-    IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 0)
-        CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
-        CALL_CHILD(_koura_rotate_stop)
-    END_IF
-#endif
+
     // The hit, with the rating effect after a good command.
     CALL(btlevtcmd_GetResultAC, LW(0))
     IF_BITS_SET(LW(0), 2)
-        CALL(btlevtcmd_CommandCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_AC_SUCCESS, LW(5))
+#else
+        CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
+        GOTO(99)
+    END_IF
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+
+    // In JP and later, if the enemy would counter, his spin stops at once.
+    CALL(btlevtcmd_CommandPreCheckCounter, UNIT_ID_SELF, LW(3), LW(4), 256, LW(0))
+    IF_INT_NOT_EQUAL(LW(0), CHECK_COUNTER_NONE)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 0)
+        CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
+        CALL_CHILD(_koura_rotate_stop)
+    END_IF
+
+    // The hit, with the rating effect after a good command.
+    CALL(btlevtcmd_GetResultAC, LW(0))
+    IF_BITS_SET(LW(0), AC_RESULT_SUCCESS)
+#endif
+        CALL(btlevtcmd_CommandCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT | DAMAGE_RESULT_AC_SUCCESS, LW(5))
         CALL(btlevtcmd_GetResultPrizeLv, LW(3), 0, LW(6))
         CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
         CALL(btlevtcmd_ACSuccessEffect, LW(6), LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareACResult, LW(0), LW(6))
     ELSE
-        CALL(btlevtcmd_CommandCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT, LW(5))
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT, LW(5))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareACResult, LW(0), -1)
     END_IF
+
     // He bounces back off the enemy, with a stylish window during the bounce.
     LABEL(90)
     CALL(btlevtcmd_StopAC)
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.69921875f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.69921875f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(btlevtcmd_TransStageFloorPosition, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 30)
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 30)
     BEGIN_SIBLING_EVENT
-        CALL(btlevtcmd_ACRStart, BTL_UNIT_SELF, 0, 17, 17, 0)
+        CALL(btlevtcmd_ACRStart, UNIT_ID_SELF, 0, 17, 17, 0)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 18, -1)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 18, MOVE_SOUND_FROM_TABLE)
     CALL(btlevtcmd_ACRGetResult, LW(6), LW(7))
     IF_INT_EQUAL(LW(6), 2)
 #if VERSION >= VERSION_US
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareAcrobatResult, LW(0), 1, 0, 0, 0)
 #endif
+
         // Stylish hit: he flips over and spins on his back, with a second stylish window.
-        CALL(btlevtcmd_SetRotateOffset, BTL_UNIT_SELF, 0, 10, 0)
+        CALL(btlevtcmd_SetRotateOffset, UNIT_ID_SELF, 0, 10, 0)
         LOOP(9)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 0, 20)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 0, 20)
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.69921875f))
-        CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 180, 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_2"))
+        CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.69921875f))
+        CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 180, 0)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_2"))
         BEGIN_SIBLING_EVENT
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 45)
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 45)
             LABEL(91)
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, LW(0))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, LW(0))
             IF_INT_LESS_OR_EQUAL(LW(0), 0)
                 GOTO(92)
             END_IF
             SUBTRACT(LW(0), 1)
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, LW(0))
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, LW(0))
             WAIT_FRAMES(2)
             GOTO(91)
             LABEL(92)
         END_SIBLING_EVENT
-        CALL(btlevtcmd_ACRStart, BTL_UNIT_SELF, 60, 90, 90, 0)
+        CALL(btlevtcmd_ACRStart, UNIT_ID_SELF, 60, 90, 90, 0)
         CALL(btlevtcmd_ACRGetResult, LW(6), LW(7))
         IF_INT_EQUAL(LW(6), 1)
             GOTO(94)
@@ -1011,54 +1037,59 @@ EVT_BEGIN(partyNokotarouAttack_NormalAttack)
         IF_INT_NOT_EQUAL(LW(6), 2)
             GOTO(94)
         END_IF
+
         // Second stylish hit: he pops up out of his shell and poses.
         CALL_CHILD(_koura_rotate_stop)
         LOOP(6)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 45, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 45, 0)
         END_LOOP
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_3"))
         LOOP(6)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
         END_LOOP
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareAcrobatResult, LW(0), 1, 0, 0, 0)
         WAIT_FRAMES(60)
         GOTO(95)
+
         // Second stylish missed: he stops spinning and pops out of his shell.
         LABEL(94)
         CALL_CHILD(_koura_rotate_stop)
         CALL(evt_audience_acrobat_notry)
         CALL_CHILD(_restore_koura_pose)
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
         WAIT_FRAMES(30)
         GOTO(95)
     END_IF
+
     // No stylish: two more bounces and he pops out of his shell.
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.5996094f))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 20)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 12, -1)
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 8)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 8, -1)
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.5996094f))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 20)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 12, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 8)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 8, MOVE_SOUND_FROM_TABLE)
     CALL_CHILD(_restore_koura_pose)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
     WAIT_FRAMES(30)
+
     // Audience AP; he runs back to his home spot.
     LABEL(95)
     CALL(evt_audience_ap_recovery)
     CALL(btlevtcmd_InviteApInfoReport)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(6.0f))
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(6.0f))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
+
     // End of the move: face forward, apply the HP and FP drain badges, back to idle.
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     CALL_CHILD(btldefaultevt_SuitoruBadgeEffect)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -1066,35 +1097,37 @@ EVT_END()
  * Koops's Power Shell: he spins in his shell and sweeps through every enemy on the ground,
  * the action command deciding the damage, then returns home.
  */
-EVT_BEGIN(partyNokotarouAttack_SyubibinKoura)
+static EVT_BEGIN(partyNokotarouAttack_SyubibinKoura)
     // Declare the move on all enemies and pay for it; with no target, skip to the end.
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(12))
+    CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(12))
     CALL(btlevtcmd_WeaponAftereffect, LW(12))
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_CommandPayWeaponCost, BTL_UNIT_SELF)
-    CALL(btlevtcmd_RunDataEventChild, BTL_UNIT_SELF, 7)
+    CALL(btlevtcmd_CommandPayWeaponCost, UNIT_ID_SELF)
+    CALL(btlevtcmd_RunDataEventChild, UNIT_ID_SELF, UNIT_DATA_ATTACK_READY_EVENT)
+
     // Camera closes in; he pulls into his shell and starts spinning with its whirring sound.
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, 1)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, 1)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
     CALL(evt_btl_camera_set_posoffset, 0, 20, 0, 0)
     WAIT_FRAMES(20)
     CALL_CHILD(_change_koura_pose)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_SHUBIBIN1"), LW(13))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, 0)
     SET_VALUE(LW(0), 15)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 45)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 45)
     CALL_CHILD(_koura_rotate_start)
+
     // Set up the hold-left-and-release command from the difficulty.
     CALL(btlevtcmd_CommandGetWeaponActionLv, LW(0))
-    CALL(btlevtcmd_AcSetDifficulty, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_AcSetDifficulty, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_AcGetDifficulty, LW(0))
     SUBTRACT(LW(0), 3)
     SWITCH(LW(0))
@@ -1120,14 +1153,16 @@ EVT_BEGIN(partyNokotarouAttack_SyubibinKoura)
         SET_VALUE(LW(0), 100)
         SET_VALUE(LW(1), 30)
     END_SWITCH
-#if VERSION >= VERSION_JP
-    CALL(btlevtcmd_AcSetParamAll, 2, LW(0), 1, 95, LW(1), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
-#else
+#if VERSION <= VERSION_DEMO_JP
     CALL(btlevtcmd_AcSetParamAll, 2, LW(0), 1, 90, LW(1), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
-#endif
     CALL(btlevtcmd_AcSetFlag, 3)
-    CALL(btlevtcmd_SetupAC, BTL_UNIT_SELF, 19, 1, 60)
+#else
+    CALL(btlevtcmd_AcSetParamAll, 2, LW(0), 1, 95, LW(1), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
+    CALL(btlevtcmd_AcSetFlag, AC_GAUGE_TIMING_FLAG_WRAP | AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE)
+#endif
+    CALL(btlevtcmd_SetupAC, UNIT_ID_SELF, 19, 1, 60)
     WAIT_FRAMES(22)
+
     // Once the stick is held, the whirr rises in pitch as he charges.
     BEGIN_SIBLING_EVENT_GET_ID(LW(15))
         LOOP(10000)
@@ -1145,74 +1180,83 @@ EVT_BEGIN(partyNokotarouAttack_SyubibinKoura)
             END_IF
             SET_VALUE(LW(7), LW(6))
             DIVIDE(LW(7), 2)
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, LW(7))
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_SFX_PITCH, LW(0))
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, LW(1))
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, LW(7))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_BASE, LW(0))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, LW(1))
             MULTIPLY(LW(0), LW(1))
             DIVIDE(LW(0), 100)
             CALL(evt_snd_sfx_pit, LW(13), LW(0))
             WAIT_FRAMES(1)
         END_LOOP
     END_SIBLING_EVENT
+
     // The camera pulls back and the command runs.
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 4)
     CALL(evt_btl_camera_set_zoom, 0, 400)
     CALL(btlevtcmd_StartAC, 1)
     CALL(btlevtcmd_ResultAC)
     CALL(btlevtcmd_StopAC)
+
     // Released: a launch sound and he shoots off along the ground.
     DELETE_EVENT(LW(15))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, 0)
     CALL(evt_snd_sfxoff, LW(13))
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_SHUBIBIN2"), 0)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_posoffset, 0, 0, 0, 0)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
+
     // For each enemy in turn: he reaches it and, if it can be hit, deals the damage (with the rating effect after a
     // good command); otherwise its dodge plays. In JP and later, a counter stops his spin.
     SET_VALUE(LW(10), 0)
     LABEL(10)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(10.0f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(10.0f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(5), LW(5))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, 0, 0)
-    CALL(btlevtcmd_CommandPreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT, LW(6))
-    IF_INT_NOT_EQUAL(LW(6), 1)
-        IF_INT_EQUAL(LW(6), 3)
-            CALL(btlevtcmd_StartAvoid, LW(3), 38)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
+    CALL(btlevtcmd_CommandPreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT, LW(6))
+    IF_INT_NOT_EQUAL(LW(6), PRECHECK_HIT)
+        IF_INT_EQUAL(LW(6), PRECHECK_LUCKY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         END_IF
-        IF_INT_EQUAL(LW(6), 6)
-            CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        IF_INT_EQUAL(LW(6), PRECHECK_DODGY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         END_IF
-        IF_INT_EQUAL(LW(6), 2)
-            CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        IF_INT_EQUAL(LW(6), PRECHECK_MISS)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         END_IF
         GOTO(50)
     END_IF
+#if VERSION <= VERSION_DEMO_JP
     CALL(evt_btl_camera_set_mode, 0, 0)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 0)
-#if VERSION >= VERSION_JP
-    CALL(btlevtcmd_CommandPreCheckCounter, BTL_UNIT_SELF, LW(3), LW(4), 256, LW(0))
-    IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 0)
-        CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
-        CALL_CHILD(_koura_rotate_stop)
-    END_IF
-#endif
     CALL(btlevtcmd_GetResultAC, LW(0))
     IF_BITS_SET(LW(0), 2)
-        CALL(btlevtcmd_CommandCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_AC_SUCCESS, LW(5))
+#else
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(evt_btl_camera_set_moveSpeedLv, 0, 0)
+    CALL(btlevtcmd_CommandPreCheckCounter, UNIT_ID_SELF, LW(3), LW(4), 256, LW(0))
+    IF_INT_NOT_EQUAL(LW(0), CHECK_COUNTER_NONE)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 0)
+        CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
+        CALL_CHILD(_koura_rotate_stop)
+    END_IF
+    CALL(btlevtcmd_GetResultAC, LW(0))
+    IF_BITS_SET(LW(0), AC_RESULT_SUCCESS)
+#endif
+        CALL(btlevtcmd_CommandCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT | DAMAGE_RESULT_AC_SUCCESS, LW(5))
         CALL(btlevtcmd_GetResultPrizeLv, LW(3), 0, LW(6))
         CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
         CALL(btlevtcmd_ACSuccessEffect, LW(6), LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareACResult, LW(0), LW(6))
     ELSE
-        CALL(btlevtcmd_CommandCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT, LW(5))
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT, LW(5))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareACResult, LW(0), -1)
     END_IF
+
     // Next enemy.
     LABEL(50)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
@@ -1220,89 +1264,97 @@ EVT_BEGIN(partyNokotarouAttack_SyubibinKoura)
         ADD(LW(10), 1)
         GOTO(10)
     END_IF
+
     // He shoots off the far edge of the stage and comes back in from the other side to his home spot.
     LABEL(80)
     CALL(btlevtcmd_TransStageFloorPosition, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, 400, LW(1), LW(2), 0, 0, 0)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, 400, LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
     LABEL(90)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     MULTIPLY(LW(0), -1)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, 0, 0)
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
+
     // Stylish window as he arrives: on a hit he hops up and spins on his back, with a second stylish window.
-    CALL(btlevtcmd_ACRStart, BTL_UNIT_SELF, 0, 9, 9, 0)
+    CALL(btlevtcmd_ACRStart, UNIT_ID_SELF, 0, 9, 9, 0)
     CALL(btlevtcmd_ACRGetResult, LW(6), LW(7))
     IF_INT_EQUAL(LW(6), 2)
 #if VERSION >= VERSION_US
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareAcrobatResult, LW(0), 1, 0, 0, 0)
 #endif
-        CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 12)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.2998047f))
-        CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 30, -1)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_1"))
+        CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 12)
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.2998047f))
+        CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 30, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_1"))
         WAIT_FRAMES(10)
-        CALL(btlevtcmd_ACRStart, BTL_UNIT_SELF, 49, 79, 79, 0)
+        CALL(btlevtcmd_ACRStart, UNIT_ID_SELF, 49, 79, 79, 0)
         CALL(btlevtcmd_ACRGetResult, LW(6), LW(7))
+
         // Second stylish missed: he stops spinning and stands up.
         IF_INT_NOT_EQUAL(LW(6), 2)
             CALL_CHILD(_koura_rotate_stop)
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_2"))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_2"))
             LOOP(6)
                 WAIT_FRAMES(1)
-                CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 45, 0)
+                CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 45, 0)
             END_LOOP
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_S_1"))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_S_1"))
             LOOP(6)
                 WAIT_FRAMES(1)
-                CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+                CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
             END_LOOP
             CALL(evt_audience_acrobat_notry)
             GOTO(99)
         END_IF
+
         // Second stylish hit: he pops up out of his shell and poses.
         CALL_CHILD(_koura_rotate_stop)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_2"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_2"))
         LOOP(6)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 45, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 45, 0)
         END_LOOP
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_3"))
         LOOP(6)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
         END_LOOP
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareAcrobatResult, LW(0), 1, 0, 0, 0)
         WAIT_FRAMES(60)
         GOTO(99)
     END_IF
+
     // No stylish: he pops out of his shell.
     CALL_CHILD(_restore_koura_pose)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
     WAIT_FRAMES(30)
+
     // End of the move: audience AP, face forward, apply the HP and FP drain badges, back to idle.
     LABEL(99)
     CALL(evt_audience_ap_recovery)
     CALL(btlevtcmd_InviteApInfoReport)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     CALL_CHILD(btldefaultevt_SuitoruBadgeEffect)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
- * Setup for the giant shell (unit_koura) that Shell Shield spawns over Mario: on Mario's side, acting before the
- * player, placed off screen until the move positions it.
+ * Koops's Shell Shield: removes any existing shell,
+ * then drops a new shell unit (unit_koura) over Mario whose HP the action command sets.
+ * Mario is hidden and untargetable inside it; if he still has a move, the shell opens again.
  */
-BattleUnitSetup entry_koura = {
+#if VERSION <= VERSION_DEMO_JP
+static BattleUnitSetup entry_koura = {
     &unit_koura, // unitKindParams
-    0, // alliance
+    ALLIANCE_PLAYER, // alliance
     {0}, // pad_05
     BATTLE_PHASE_BEFORE_PLAYER, // attackPhase
     {1000.0f, 0.0f, 1000.0f}, // position
@@ -1310,11 +1362,12 @@ BattleUnitSetup entry_koura = {
     {0}, // unitWork
     NULL, // itemDropTable
 };
+#endif
 
 /**
- * Koops's Shell Shield: removes any existing shell,
- * then drops a new shell unit (unit_koura) over Mario whose HP the action command sets.
- * Mario is hidden and untargetable inside it; if he still has a move, the shell opens again.
+ * Attack event of Shell Shield: removes a shell already guarding Mario, spawns the giant shell (entry_koura) high above
+ * him and lowers it onto him with the action command, whose result also gives the shell its HP; the shell then guards
+ * Mario; the audience reacts and Koops returns to waiting.
  */
 EVT_BEGIN(partyNokotarouAttack_KouraGuard)
     // Find Mario as the target and pay for the move; with no target, skip to the end.
@@ -1322,36 +1375,40 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_RunDataEventChild, BTL_UNIT_SELF, 7)
-    CALL(btlevtcmd_CommandPayWeaponCost, BTL_UNIT_SELF)
+    CALL(btlevtcmd_RunDataEventChild, UNIT_ID_SELF, UNIT_DATA_ATTACK_READY_EVENT)
+    CALL(btlevtcmd_CommandPayWeaponCost, UNIT_ID_SELF)
+
     // Camera closes in on Koops as he faces Mario.
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, BTL_UNIT_SELF)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, UNIT_ID_SELF)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
     CALL(evt_btl_camera_set_posoffset, 0, 20, 0, 0)
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
+
     // An old shell already over Mario is removed first.
-    CALL(_check_guard_koura, BTL_UNIT_MARIO, LW(10))
+    CALL(_check_guard_koura, UNIT_ID_MARIO, LW(10))
     IF_INT_NOT_EQUAL(LW(10), -1)
-        CALL(btlevtcmd_RunDataEventChild, LW(10), 62)
+        CALL(btlevtcmd_RunDataEventChild, LW(10), UNIT_DATA_DESTROY_EVENT)
     END_IF
+
     // He raises his arms and the giant shell appears high above Mario.
-    CALL(_color_lv_set, BTL_UNIT_MARIO, 0, LW(14))
-    CALL(_color_lv_set, BTL_UNIT_MARIO, 1, 255)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_A_2"))
+    CALL(_color_lv_set, UNIT_ID_MARIO, 0, LW(14))
+    CALL(_color_lv_set, UNIT_ID_MARIO, 1, 255)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_A_2"))
     WAIT_FRAMES(30)
     CALL(btlevtcmd_SpawnUnit, LW(10), PTR(&entry_koura), 0)
-    CALL(btlevtcmd_OnAttribute, LW(10), UNIT_ATTR_HIDDEN)
+    CALL(btlevtcmd_OnAttribute, LW(10), kUnitHidden)
     CALL(btlevtcmd_GetPos, LW(3), LW(0), LW(1), LW(2))
     ADD(LW(2), 5)
     ADD(LW(1), 240)
     CALL(btlevtcmd_SetPos, LW(10), LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_OffAttribute, LW(10), UNIT_ATTR_HIDDEN)
+    CALL(btlevtcmd_OffAttribute, LW(10), kUnitHidden)
+
     // Set up the timed A press from the difficulty.
     CALL(btlevtcmd_CommandGetWeaponActionLv, LW(0))
-    CALL(btlevtcmd_AcSetDifficulty, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_AcSetDifficulty, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_GetBodyId, LW(10), LW(11))
     CALL(btlevtcmd_AcGetDifficulty, LW(0))
     SUBTRACT(LW(0), 3)
@@ -1380,26 +1437,29 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
     END_SWITCH
     CALL(btlevtcmd_AcSetParamAll, 1, LW(10), LW(11), 30, LW(0), LW(1), EVT_NULLPTR, EVT_NULLPTR)
     CALL(btlevtcmd_AcSetFlag, 0)
-    CALL(btlevtcmd_SetupAC, BTL_UNIT_SELF, 12, 1, 0)
+    CALL(btlevtcmd_SetupAC, UNIT_ID_SELF, 12, 1, 0)
+
+    // The shell floats down towards Mario while the command runs.
 #if VERSION >= VERSION_DEMO_EU
     WAIT_FRAMES(2)
 #endif
-    // The shell floats down towards Mario while the command runs.
     CALL(btlevtcmd_GetPos, LW(10), LW(0), LW(1), LW(2))
     SET_VALUE(LW(1), 125)
-    CALL(btlevtcmd_DivePosition, LW(10), LW(0), LW(1), LW(2), 60, 0, 13, 0, -1)
+    CALL(btlevtcmd_DivePosition, LW(10), LW(0), LW(1), LW(2), 60, 0, EASING_SINE_IN, 0, MOVE_SOUND_FROM_TABLE)
     CALL(btlevtcmd_StartAC, 1)
     CALL(btlevtcmd_ResultAC)
     CALL(btlevtcmd_GetResultAC, LW(6))
+
+    // Always true: the script between this block's END_IF and LABEL(99) is never reached.
     // This branch always runs: Mario looks up in surprise, and a stylish window opens for Koops.
     IF_INT_EQUAL(0, 0)
         BEGIN_SIBLING_EVENT
             WAIT_FRAMES(10)
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_MARIO, 1, STRING("M_N_7"))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_MARIO, 1, STRING("M_N_7"))
             WAIT_FRAMES(35)
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_MARIO, 1, STRING("M_B_1"))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_MARIO, 1, STRING("M_B_1"))
             WAIT_FRAMES(15)
-            CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_MARIO, 1, BTL_POSE_STAY)
+            CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_MARIO, 1, POSE_TYPE_NEUTRAL)
         END_SIBLING_EVENT
         CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
         CALL(evt_btl_camera_set_zoom, 0, 400)
@@ -1412,17 +1472,18 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
         CALL(btlevtcmd_snd_se, LW(10), STRING("SFX_BTL_NOKO_GUARD2"), EVT_NULLPTR, 0, LW(5))
         BEGIN_SIBLING_EVENT
             WAIT_FRAMES(2)
-            CALL(btlevtcmd_ACRStart, BTL_UNIT_SELF, 48, 67, 67, 0)
+            CALL(btlevtcmd_ACRStart, UNIT_ID_SELF, 48, 67, 67, 0)
             CALL(btlevtcmd_ACRGetResult, LW(6), LW(7))
             IF_INT_EQUAL(LW(6), 2)
-                CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+                CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
                 CALL(btlevtcmd_AudienceDeclareAcrobatResult, LW(0), 1, 0, 0, 0)
-                CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_O_1"))
+                CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_O_1"))
                 WAIT_MS(1000)
             ELSE
                 CALL(evt_audience_acrobat_notry)
             END_IF
         END_SIBLING_EVENT
+
         // The shell drops over Mario with a thud and a small screen shake, then settles upright.
         CALL(btlevtcmd_FallPosition, LW(10), LW(0), LW(1), LW(2), 60)
         CALL(evt_snd_sfxoff, LW(5))
@@ -1430,15 +1491,15 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
         CALL(btlevtcmd_AnimeChangePose, LW(10), 1, STRING("PKO_F_1"))
         CALL(btlevtcmd_snd_se, LW(10), STRING("SFX_BTL_NOKO_GUARD1"), EVT_NULLPTR, 0, EVT_NULLPTR)
         CALL(evt_btl_camera_shake_h, 0, 2, 0, 10, 13)
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(12))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(12))
         CALL(btlevtcmd_WeaponAftereffect, LW(12))
         BEGIN_SIBLING_EVENT
             SET_VALUE(LW(9), LW(10))
             CALL(btlevtcmd_GetRotate, LW(9), EVT_NULLPTR, EVT_NULLPTR, LW(8))
             IF_INT_LESS(LW(8), 180)
-                CALL(evt_sub_intpl_init, 11, LW(8), 0, 50)
+                CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, LW(8), 0, 50)
             ELSE
-                CALL(evt_sub_intpl_init, 11, LW(8), 360, 50)
+                CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, LW(8), 360, 50)
             END_IF
             LOOP(50)
                 CALL(evt_sub_intpl_get_value_para, LW(1), LW(2))
@@ -1446,8 +1507,9 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
                 WAIT_FRAMES(1)
             END_LOOP
         END_SIBLING_EVENT
+
         // Rating from the command's output, which also gives the shell its HP.
-        IF_BITS_SET(LW(6), 2)
+        IF_BITS_SET(LW(6), AC_RESULT_SUCCESS)
             CALL(btlevtcmd_AcGetOutputParam, 1, LW(0))
             SWITCH(LW(0))
                 CASE_GREATER_OR_EQUAL(8)
@@ -1461,7 +1523,7 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
             END_SWITCH
             IF_INT_GREATER_OR_EQUAL(LW(0), 0)
 #if VERSION >= VERSION_DEMO_EU
-                CALL(btlevtcmd_GetResultPrizeLv, BTL_UNIT_NONE, LW(0), LW(7))
+                CALL(btlevtcmd_GetResultPrizeLv, -1, LW(0), LW(7))
 #else
                 CALL(btlevtcmd_GetResultPrizeLv, LW(3), LW(0), LW(7))
 #endif
@@ -1474,19 +1536,20 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
         ELSE
             CALL(btlevtcmd_AudienceDeclareACResult, LW(12), -1)
         END_IF
+
         // Mario is now inside the shell: it takes hits for him and he is hidden and cannot be targeted.
         WAIT_FRAMES(50)
-        CALL(btlevtcmd_OnAttribute, LW(3), UNIT_ATTR_SHELL_SHIELDED)
+        CALL(btlevtcmd_OnAttribute, LW(3), kShellShielded)
         CALL(btlevtcmd_GetUnitId, LW(3), LW(0))
-        CALL(btlevtcmd_SetUnitWork, LW(10), UW_KOURA_SHIELDED_UNIT, LW(0))
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
-        CALL(btlevtcmd_SetUnitWork, LW(10), UW_KOURA_FOLLOWS_UNIT, KOURA_FOLLOW_SLIDE)
+        CALL(btlevtcmd_SetUnitWork, LW(10), SHELL_SHIELD_WORK_TARGET, LW(0))
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
+        CALL(btlevtcmd_SetUnitWork, LW(10), SHELL_SHIELD_WORK_FOLLOW, KOURA_FOLLOW_SLIDE)
         BEGIN_SIBLING_EVENT_GET_ID(LW(15))
             SET_VALUE(LW(5), 5)
             LOOP(LW(5))
-                // BUG: reads into LW(10) but tests LW(0) (Mario's unit id), so the loop ends on its first pass and the slide
-                // is not waited for. Fix: read into LW(0).
-                CALL(btlevtcmd_GetUnitWork, LW(10), UW_KOURA_FOLLOWS_UNIT, LW(10))
+                // BUG: reads the follow state into LW(10) but tests LW(0), the target's unit id from GetUnitId above,
+                // so unless that id equals KOURA_FOLLOW_SLIDE the loop breaks on its first pass and the slide is not waited for.
+                CALL(btlevtcmd_GetUnitWork, LW(10), SHELL_SHIELD_WORK_FOLLOW, LW(10))
                 IF_INT_NOT_EQUAL(LW(0), KOURA_FOLLOW_SLIDE)
                     BREAK_LOOP
                 END_IF
@@ -1495,48 +1558,62 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
             END_LOOP
         END_SIBLING_EVENT
         CALL(btlevtcmd_WaitEventEnd, LW(15))
-        CALL(btlevtcmd_SetUnitWork, LW(10), UW_KOURA_FOLLOWS_UNIT, KOURA_FOLLOW_NONE)
-        IF_BITS_SET(LW(6), 2)
+        CALL(btlevtcmd_SetUnitWork, LW(10), SHELL_SHIELD_WORK_FOLLOW, KOURA_FOLLOW_NONE)
+        IF_BITS_SET(LW(6), AC_RESULT_SUCCESS)
             CALL(btlevtcmd_AcGetOutputParam, 1, LW(0))
         ELSE
             CALL(btlevtcmd_AcGetOutputParam, 2, LW(0))
         END_IF
         CALL(btlevtcmd_SetHp, LW(10), LW(0))
-        CALL(btlevtcmd_RunDataEventChild, LW(10), 61)
-        CALL(btlevtcmd_AnimeChangePoseType, LW(10), 1, BTL_POSE_STAY)
-        CALL(btlevtcmd_OnPartsAttribute, LW(3), 1, PART_ATTR_HIDDEN)
-        CALL(btlevtcmd_OnAttribute, LW(3), UNIT_ATTR_SHELL_SHIELDED | UNIT_ATTR_NOT_SAMPLED_AS_TARGET)
-#if VERSION >= VERSION_JP
-        CALL(btlevtcmd_StartWaitEvent, LW(3))
-#endif
+
         // If Mario still has a move this turn, the shell opens to let him act.
+#if VERSION <= VERSION_DEMO_JP
+        CALL(btlevtcmd_RunDataEventChild, LW(10), 61)
+        CALL(btlevtcmd_AnimeChangePoseType, LW(10), 1, POSE_TYPE_NEUTRAL)
+        CALL(btlevtcmd_OnPartsAttribute, LW(3), 1, kHidden)
+        CALL(btlevtcmd_OnAttribute, LW(3), kShellShielded | kUnitNeverTargetable)
         CALL(_check_mario_move_count, LW(0))
         IF_INT_GREATER_OR_EQUAL(LW(0), 1)
             CALL(evt_btl_camera_set_mode, 0, 0)
+#else
+        CALL(btlevtcmd_RunDataEventChild, LW(10), UNIT_DATA_POSE_TABLE_RESET_EVENT)
+        CALL(btlevtcmd_AnimeChangePoseType, LW(10), 1, POSE_TYPE_NEUTRAL)
+        CALL(btlevtcmd_OnPartsAttribute, LW(3), 1, kHidden)
+        CALL(btlevtcmd_OnAttribute, LW(3), kShellShielded | kUnitNeverTargetable)
+        CALL(btlevtcmd_StartWaitEvent, LW(3))
+        CALL(_check_mario_move_count, LW(0))
+        IF_INT_GREATER_OR_EQUAL(LW(0), 1)
+            CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+#endif
             CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
             CALL(evt_btl_camera_off_posoffset_manual, 0)
             WAIT_MS(500)
-            CALL(btlevtcmd_RunDataEventChild, LW(10), 59)
+            CALL(btlevtcmd_RunDataEventChild, LW(10), UNIT_DATA_KOURA_OPEN_EVENT)
             WAIT_FRAMES(60)
         END_IF
+
         // End of the move: audience AP, back to idle.
-        CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+        CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
         CALL(evt_audience_ap_recovery)
         CALL(btlevtcmd_InviteApInfoReport)
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
-        CALL(evt_btl_camera_set_mode, 0, 0)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
         CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
         CALL(evt_btl_camera_off_posoffset_manual, 0)
+
+        // BUG: returns without the _color_lv_set restore of Mario's moveColorLv (saved in LW(14), set to 255
+        // above); that restore after LABEL(99) is reached only through the no-target GOTO, with LW(14) unset.
         RETURN
     END_IF
+
     // Never reached (the check above is always true): the shell would land, crack in two, blink and vanish.
     BEGIN_SIBLING_EVENT_GET_ID(LW(15))
         WAIT_FRAMES(10)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_MARIO, 1, STRING("M_N_7"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_MARIO, 1, STRING("M_N_7"))
         WAIT_FRAMES(35)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_MARIO, 1, STRING("M_B_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_MARIO, 1, STRING("M_B_1"))
         WAIT_FRAMES(150)
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_MARIO, 1, BTL_POSE_STAY)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_MARIO, 1, POSE_TYPE_NEUTRAL)
     END_SIBLING_EVENT
     CALL(btlevtcmd_snd_se, LW(10), STRING("SFX_BTL_NOKO_GUARD2"), EVT_NULLPTR, 0, LW(5))
     CALL(btlevtcmd_SetFallAccel, LW(10), FLOAT(0.39941406f))
@@ -1546,14 +1623,14 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
     CALL(btlevtcmd_SetHomePos, LW(10), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxoff, LW(5))
     CALL(evt_btl_camera_shake_h, 0, 2, 0, 10, 13)
-    CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(12))
+    CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(12))
     CALL(btlevtcmd_WeaponAftereffect, LW(12))
     CALL(btlevtcmd_SetRotate, LW(10), 0, 0, 0)
     CALL(btlevtcmd_AnimeChangePose, LW(10), 1, STRING("PKO_F_1"))
     WAIT_FRAMES(50)
     CALL(btlevtcmd_AnimeChangePose, LW(10), 1, STRING("PKO_H_1"))
     CALL(btlevtcmd_AnimeChangePose, LW(10), 2, STRING("PKO_H_2"))
-    CALL(btlevtcmd_OffPartsAttribute, LW(10), 2, PART_ATTR_HIDDEN)
+    CALL(btlevtcmd_OffPartsAttribute, LW(10), 2, kHidden)
     CALL(btlevtcmd_SetPartsRotateOffset, LW(10), 1, 20, 0, 0)
     CALL(btlevtcmd_SetPartsRotateOffset, LW(10), 2, -20, 0, 0)
     LOOP(20)
@@ -1562,25 +1639,26 @@ EVT_BEGIN(partyNokotarouAttack_KouraGuard)
         WAIT_FRAMES(1)
     END_LOOP
     LOOP(10)
-        CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, PART_ATTR_HIDDEN)
-        CALL(btlevtcmd_OnPartsAttribute, LW(10), 2, PART_ATTR_HIDDEN)
+        CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kHidden)
+        CALL(btlevtcmd_OnPartsAttribute, LW(10), 2, kHidden)
         WAIT_FRAMES(2)
-        CALL(btlevtcmd_OffPartsAttribute, LW(10), 1, PART_ATTR_HIDDEN)
-        CALL(btlevtcmd_OffPartsAttribute, LW(10), 2, PART_ATTR_HIDDEN)
+        CALL(btlevtcmd_OffPartsAttribute, LW(10), 1, kHidden)
+        CALL(btlevtcmd_OffPartsAttribute, LW(10), 2, kHidden)
         WAIT_FRAMES(2)
     END_LOOP
     CALL(btlevtcmd_KillUnit, LW(10), 0)
     CALL(btlevtcmd_WaitEventEnd, LW(15))
+
     // End: restore Mario's colour, audience AP, back to idle.
     LABEL(99)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
     CALL(evt_btl_camera_off_posoffset_manual, 0)
-    CALL(_color_lv_set, BTL_UNIT_MARIO, 1, LW(14))
+    CALL(_color_lv_set, UNIT_ID_MARIO, 1, LW(14))
     CALL(evt_audience_ap_recovery)
     CALL(btlevtcmd_InviteApInfoReport)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -1588,30 +1666,31 @@ EVT_END()
  * Koops's Shell Slam: he charges a spin with the action command (_tsuranuki_effect_control grows the effect with
  * the charge level) and slams through every ground enemy, ignoring defence, then returns home.
  */
-EVT_BEGIN(partyNokotarouAttack_TsuranukiKoura)
-    // Declare the move on all enemies and pay for it; with no target, skip to the end.
+static EVT_BEGIN(partyNokotarouAttack_TsuranukiKoura)
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(12))
+    CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(12))
     CALL(btlevtcmd_WeaponAftereffect, LW(12))
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_CommandPayWeaponCost, BTL_UNIT_SELF)
-    CALL(btlevtcmd_RunDataEventChild, BTL_UNIT_SELF, 7)
+    CALL(btlevtcmd_CommandPayWeaponCost, UNIT_ID_SELF)
+    CALL(btlevtcmd_RunDataEventChild, UNIT_ID_SELF, UNIT_DATA_ATTACK_READY_EVENT)
+
     // Camera closes in on him, then pulls back.
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, 1)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, 1)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
     CALL(evt_btl_camera_set_posoffset, 0, 20, 0, 0)
     WAIT_FRAMES(20)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 4)
     CALL(evt_btl_camera_set_zoom, 0, 400)
+
     // Set up the tilt-left gauge command from the difficulty.
     CALL(btlevtcmd_CommandGetWeaponActionLv, LW(0))
-    CALL(btlevtcmd_AcSetDifficulty, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_AcSetDifficulty, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_AcGetDifficulty, LW(0))
     SUBTRACT(LW(0), 3)
     SWITCH(LW(0))
@@ -1640,10 +1719,11 @@ EVT_BEGIN(partyNokotarouAttack_TsuranukiKoura)
     CALL(btlevtcmd_AcSetParamAll, 7, 200, 178, LW(0), LW(1), 20, 61, EVT_NULLPTR)
     CALL(btlevtcmd_AcSetGaugeParam, 60, 80, 100, 100)
     CALL(btlevtcmd_AcSetFlag, 0)
-    CALL(btlevtcmd_SetupAC, BTL_UNIT_SELF, 6, 1, 0)
+    CALL(btlevtcmd_SetupAC, UNIT_ID_SELF, 6, 1, 0)
     WAIT_FRAMES(22)
+
     // Once the stick is first tilted, he pops into his shell with puffs of smoke and starts spinning.
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE_SFX, -1)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_CHARGE_SFX, -1)
     BEGIN_SIBLING_EVENT_GET_ID(LW(15))
         LABEL(5)
         CALL(btlevtcmd_AcGetOutputParam, 0, LW(0))
@@ -1652,20 +1732,22 @@ EVT_BEGIN(partyNokotarouAttack_TsuranukiKoura)
             GOTO(5)
         END_IF
         CALL_CHILD(_change_koura_pose_fast)
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 0, 1)
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_SPIN_DUST, 1)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
         CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_IPPATSU1"), LW(13))
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE_SFX, LW(13))
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, 0)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_CHARGE_SFX, LW(13))
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, 0)
         SET_VALUE(LW(0), 15)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 15)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 15)
         CALL_CHILD(_koura_rotate_start)
     END_SIBLING_EVENT
+
     // The charge effect grows around him while the command runs.
     BEGIN_SIBLING_EVENT
         CALL(btlevtcmd_WaitEventEnd, LW(15))
-        CALL(_tsuranuki_effect_control, BTL_UNIT_SELF)
+        CALL(_tsuranuki_effect_control, UNIT_ID_SELF)
     END_SIBLING_EVENT
+
     // The command runs: the faster the gauge fills, the faster he spins and the higher the whirr.
     CALL(btlevtcmd_StartAC, 1)
     BEGIN_SIBLING_EVENT_GET_ID(LW(14))
@@ -1674,23 +1756,23 @@ EVT_BEGIN(partyNokotarouAttack_TsuranukiKoura)
             CALL(btlevtcmd_AcGetOutputParam, 2, LW(0))
             SWITCH(LW(0))
                 CASE_LESS_OR_EQUAL(1)
-                CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 1, 0)
+                CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_CHARGE_LEVEL, 0)
                 CASE_EQUAL(2)
-                CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 1, 1)
-                CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 24)
+                CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_CHARGE_LEVEL, 1)
+                CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 24)
                 CASE_EQUAL(3)
-                CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 1, 2)
-                CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 36)
+                CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_CHARGE_LEVEL, 2)
+                CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 36)
                 CASE_EQUAL(4)
-                CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 1, 3)
-                CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 45)
+                CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_CHARGE_LEVEL, 3)
+                CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 45)
             END_SWITCH
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE_SFX, LW(13))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_CHARGE_SFX, LW(13))
             IF_INT_NOT_EQUAL(LW(13), -1)
                 CALL(btlevtcmd_AcGetOutputParam, 1, LW(1))
-                CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, LW(1))
-                CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_SFX_PITCH, LW(0))
-                CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, LW(1))
+                CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, LW(1))
+                CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_BASE, LW(0))
+                CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, LW(1))
                 MULTIPLY(LW(0), LW(1))
                 DIVIDE(LW(0), 100)
                 CALL(evt_snd_sfx_pit, LW(13), LW(0))
@@ -1699,302 +1781,383 @@ EVT_BEGIN(partyNokotarouAttack_TsuranukiKoura)
             SET_VALUE(LW(5), 5)
         END_LOOP
     END_SIBLING_EVENT
+
     // Never tilted: he spins slowly to a halt on his back, wobbles and gets up; the move ends.
     CALL(btlevtcmd_ResultAC)
     DELETE_EVENT(LW(14))
     CALL(btlevtcmd_AcGetOutputParam, 0, LW(0))
     IF_INT_EQUAL(LW(0), 0)
         DELETE_EVENT(LW(15))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 0, 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_2"))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_SPIN_DUST, 0)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_2"))
         LOOP(10)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 12, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 12, 0)
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_K_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_K_1"))
         LOOP(16)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 20, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 20, 0)
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_H_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_H_1"))
         LOOP(14)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 20, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 20, 0)
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
+        CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
         CALL(evt_snd_sfxon, STRING("SFX_BTL_ACROBAT_SHAKE1"), 0)
         WAIT_FRAMES(40)
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 2, 1)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_EFFECT_END, 1)
         CALL_CHILD(_restore_koura_pose)
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
         WAIT_FRAMES(30)
         GOTO(99)
     END_IF
+
     // Charged: a launch sound and he shoots off along the ground.
     CALL(btlevtcmd_WaitEventEnd, LW(15))
-    CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 0, 0)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE_SFX, LW(13))
+    CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_SPIN_DUST, 0)
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_CHARGE_SFX, LW(13))
     CALL(evt_snd_sfxoff, LW(13))
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_IPPATSU2"), 0)
     CALL(btlevtcmd_StopAC)
     DELETE_EVENT(LW(15))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_CHARGE, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SFX_PITCH_RATE, 0)
     CALL(evt_snd_sfxoff, LW(13))
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_SHUBIBIN2"), 0)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_posoffset, 0, 0, 0, 0)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
+
     // For each enemy in turn: he reaches it and, if it can be hit, deals the damage (with the rating effect when
     // the gauge got high enough); otherwise its dodge plays. In JP and later, a counter stops his spin.
     SET_VALUE(LW(10), 0)
     LABEL(10)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(10.0f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(10.0f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), EVT_NULLPTR, EVT_NULLPTR)
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, 0, 0)
-    CALL(btlevtcmd_CommandPreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT, LW(6))
-    IF_INT_NOT_EQUAL(LW(6), 1)
-        IF_INT_EQUAL(LW(6), 3)
-            CALL(btlevtcmd_StartAvoid, LW(3), 38)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
+    CALL(btlevtcmd_CommandPreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT, LW(6))
+    IF_INT_NOT_EQUAL(LW(6), PRECHECK_HIT)
+        IF_INT_EQUAL(LW(6), PRECHECK_LUCKY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         END_IF
-        IF_INT_EQUAL(LW(6), 6)
-            CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        IF_INT_EQUAL(LW(6), PRECHECK_DODGY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         END_IF
-        IF_INT_EQUAL(LW(6), 2)
-            CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        IF_INT_EQUAL(LW(6), PRECHECK_MISS)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         END_IF
         GOTO(50)
     END_IF
+#if VERSION <= VERSION_DEMO_JP
     CALL(evt_btl_camera_set_mode, 0, 0)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 0)
-#if VERSION >= VERSION_JP
-    CALL(btlevtcmd_CommandPreCheckCounter, BTL_UNIT_SELF, LW(3), LW(4), 256, LW(0))
-    IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 2, 1)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 0)
-        CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
-        CALL_CHILD(_koura_rotate_stop)
-    END_IF
-#endif
     CALL(btlevtcmd_GetResultAC, LW(0))
     IF_BITS_SET(LW(0), 2)
-        CALL(btlevtcmd_CommandCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_AC_SUCCESS, LW(5))
+#else
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(evt_btl_camera_set_moveSpeedLv, 0, 0)
+    CALL(btlevtcmd_CommandPreCheckCounter, UNIT_ID_SELF, LW(3), LW(4), 256, LW(0))
+    IF_INT_NOT_EQUAL(LW(0), CHECK_COUNTER_NONE)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_EFFECT_END, 1)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 0)
+        CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
+        CALL_CHILD(_koura_rotate_stop)
+    END_IF
+    CALL(btlevtcmd_GetResultAC, LW(0))
+    IF_BITS_SET(LW(0), AC_RESULT_SUCCESS)
+#endif
+        CALL(btlevtcmd_CommandCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT | DAMAGE_RESULT_AC_SUCCESS, LW(5))
         CALL(btlevtcmd_AcGetOutputParam, 2, LW(9))
         IF_INT_GREATER_OR_EQUAL(LW(9), 4)
             SUBTRACT(LW(9), 4)
             CALL(btlevtcmd_GetResultPrizeLv, LW(3), LW(9), LW(6))
             CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
             CALL(btlevtcmd_ACSuccessEffect, LW(6), LW(0), LW(1), LW(2))
-            CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+            CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
             CALL(btlevtcmd_AudienceDeclareACResult, LW(0), LW(6))
         ELSE
-            CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+            CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
             CALL(btlevtcmd_AudienceDeclareACResult, LW(0), -1)
         END_IF
     ELSE
-        CALL(btlevtcmd_CommandCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT, LW(5))
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandCheckDamage, UNIT_ID_SELF, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT, LW(5))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareACResult, LW(0), -1)
     END_IF
-    // Next enemy.
     LABEL(50)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
     IF_INT_NOT_EQUAL(LW(3), -1)
         ADD(LW(10), 1)
         GOTO(10)
     END_IF
-    // He shoots off the far edge of the stage and comes back in from the other side to his home spot.
     LABEL(80)
     CALL(btlevtcmd_TransStageFloorPosition, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, 400, LW(1), LW(2), 0, 0, 0)
-    CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 1, 2, 1)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, 400, LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
+    CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 1, PARTS_WORK_EFFECT_END, 1)
     WAIT_MS(100)
     LABEL(90)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     MULTIPLY(LW(0), -1)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, 0, 0)
-    // Stylish window as he arrives: on a hit he hops up and spins on his back, with a second stylish window.
-    CALL(btlevtcmd_ACRStart, BTL_UNIT_SELF, 0, 9, 9, 0)
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
+    CALL(btlevtcmd_ACRStart, UNIT_ID_SELF, 0, 9, 9, 0)
     CALL(btlevtcmd_ACRGetResult, LW(6), LW(7))
     IF_INT_EQUAL(LW(6), 2)
 #if VERSION >= VERSION_US
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareAcrobatResult, LW(0), 1, 0, 0, 0)
 #endif
-        CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 12)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.2998047f))
-        CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 30, -1)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_1"))
+        CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 12)
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.2998047f))
+        CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 30, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_1"))
         WAIT_FRAMES(10)
-        CALL(btlevtcmd_ACRStart, BTL_UNIT_SELF, 49, 79, 79, 0)
+        CALL(btlevtcmd_ACRStart, UNIT_ID_SELF, 49, 79, 79, 0)
         CALL(btlevtcmd_ACRGetResult, LW(6), LW(7))
-        // Second stylish missed: he stops spinning and stands up.
         IF_INT_NOT_EQUAL(LW(6), 2)
             CALL(evt_audience_acrobat_notry)
             CALL_CHILD(_koura_rotate_stop)
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_2"))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_2"))
             LOOP(6)
                 WAIT_FRAMES(1)
-                CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 45, 0)
+                CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 45, 0)
             END_LOOP
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_S_1"))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_S_1"))
             LOOP(6)
                 WAIT_FRAMES(1)
-                CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+                CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
             END_LOOP
             GOTO(99)
         END_IF
-        // Second stylish hit: he pops up out of his shell and poses.
         CALL_CHILD(_koura_rotate_stop)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_2"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_2"))
         LOOP(6)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 45, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 45, 0)
         END_LOOP
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_E_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_E_3"))
         LOOP(6)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddRotate, BTL_UNIT_SELF, 0, 15, 0)
+            CALL(btlevtcmd_AddRotate, UNIT_ID_SELF, 0, 15, 0)
         END_LOOP
-        CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
         CALL(btlevtcmd_AudienceDeclareAcrobatResult, LW(0), 1, 0, 0, 0)
         WAIT_FRAMES(60)
         GOTO(99)
     ELSE
         CALL(evt_audience_acrobat_notry)
     END_IF
-    // No stylish: he pops out of his shell.
     CALL_CHILD(_restore_koura_pose)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
     WAIT_FRAMES(30)
-    // End of the move: audience AP, face forward, apply the HP and FP drain badges, back to idle.
     LABEL(99)
     CALL(evt_audience_ap_recovery)
     CALL(btlevtcmd_InviteApInfoReport)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     CALL_CHILD(btldefaultevt_SuitoruBadgeEffect)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
-/** Koops's Appeal (data tag 5): appeal pose and sound, then the audience is fired up. */
-EVT_BEGIN(nokotarou_appeal_event)
-    CALL(btlevtcmd_RunDataEventChild, BTL_UNIT_SELF, 7)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_APPEAL)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+/**
+ * Appeal (UNIT_DATA_APPEAL_EVENT): Koops strikes POSE_TYPE_APPEAL with SFX_MARIO_APPEAL1 and the audience reacts
+ * (btlevtcmd_AudienceAppeal).
+ */
+static EVT_BEGIN(nokotarou_appeal_event)
+    CALL(btlevtcmd_RunDataEventChild, UNIT_ID_SELF, UNIT_DATA_ATTACK_READY_EVENT)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_APPEAL)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MARIO_APPEAL1"), LW(0), LW(1), LW(2), 0)
     WAIT_FRAMES(58)
-    CALL(btlevtcmd_AudienceAppeal, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AudienceAppeal, UNIT_ID_SELF)
     WAIT_FRAMES(30)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
-/** Victory reaction (data tag 64): Koops's PNK_Y_1 pose, unless he is still flipped on his back. */
+/** Victory reaction (data tag 64): Koops's PNK_Y_1 pose, unless he is flipped (STATUS_FLIPPED). */
 static EVT_BEGIN(party_win_reaction)
-    CALL(btlevtcmd_CheckStatus, BTL_UNIT_SELF, STATUS_FLIPPED, LW(0))
+    CALL(btlevtcmd_CheckStatus, UNIT_ID_SELF, STATUS_FLIPPED, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PNK_Y_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PNK_Y_1"))
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Audience-attack reaction (data tag 6): Koops runs offstage, reappears in the audience, spins up in his shell,
- * shoots into the chosen audience member, bounces back out of his shell and runs home.
+ * Audience-attack reaction (data tag 6): Koops runs offstage, reappears in the audience, spins up his shell and rams
+ * the chosen audience member (_attack_aud, SFX_BTL_NOKO_ATTACK2), bounces three times, takes his normal pose back
+ * (_restore_koura_pose) and runs home.
  */
 static EVT_BEGIN(attack_audience_event)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(btlevtcmd_GetStageSize, LW(3), EVT_NULLPTR, EVT_NULLPTR)
-    CALL(btlevtcmd_GetFaceDirection, BTL_UNIT_SELF, LW(4))
+    CALL(btlevtcmd_GetFaceDirection, UNIT_ID_SELF, LW(4))
     SET_VALUE(LW(8), LW(3))
     MULTIPLY(LW(8), LW(4))
     MULTIPLY(LW(8), -1)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(6.0f))
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(8), LW(1), LW(2), 0, -1, 0)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(6.0f))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(8), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
     WAIT_FRAMES(20)
     CALL(_get_attack_aud_no, LW(3), LW(0), LW(1), LW(2))
     CALL(btlevtcmd_GetStageAudienceAreaSize, LW(4), EVT_NULLPTR, EVT_NULLPTR)
-    CALL(btlevtcmd_GetFaceDirection, BTL_UNIT_SELF, LW(5))
+    CALL(btlevtcmd_GetFaceDirection, UNIT_ID_SELF, LW(5))
     SET_VALUE(LW(6), LW(4))
     MULTIPLY(LW(6), LW(5))
     MULTIPLY(LW(6), -1)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(6), LW(1), LW(2))
-    CALL(evt_btl_camera_set_mode, 0, 12)
-    CALL(evt_btl_camera_set_homing_unit_audience, 0, BTL_UNIT_SELF, 1, LW(3))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(6), LW(1), LW(2))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_AUDIENCE_MEMBER)
+    CALL(evt_btl_camera_set_homing_unit_audience, 0, UNIT_ID_SELF, 1, LW(3))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 100)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
     BEGIN_SIBLING_EVENT_GET_ID(LW(15))
         SET_VALUE(LW(0), 15)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_NOKOTAROU_SPIN_TARGET, 45)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_SHELL_SPIN_SPEED, 45)
         CALL_CHILD(_koura_rotate_start)
     END_SIBLING_EVENT
     CALL(btlevtcmd_WaitEventEnd, LW(15))
     WAIT_MS(1000)
     CALL(evt_snd_sfxon, STRING("SFX_BTL_NOKO_ATTACK2"), 0)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(8.0f))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 15)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(8.0f))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 15)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
 #else
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, 0, 0)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_NONE, 0)
 #endif
     CALL(_attack_aud, LW(3), 0)
-    CALL(evt_btl_camera_set_mode, 0, 3)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_FREE)
     BEGIN_SIBLING_EVENT_GET_ID(LW(15))
         WAIT_MS(1500)
-        CALL(evt_btl_camera_set_mode, 0, 0)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
         WAIT_MS(1000)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.69921875f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.69921875f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL(btlevtcmd_TransStageFloorPosition, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 30)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 18, -1)
-    CALL(btlevtcmd_SetFallAccel, BTL_UNIT_SELF, FLOAT(0.5996094f))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 20)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 12, -1)
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 8)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 8, -1)
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 30)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 18, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_SetFallAccel, UNIT_ID_SELF, FLOAT(0.5996094f))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 20)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 12, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 8)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 8, MOVE_SOUND_FROM_TABLE)
     CALL_CHILD(_restore_koura_pose)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(4.0f))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(6), LW(1), LW(2), 0, -1, 0)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(8), LW(1), LW(2))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(4.0f))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(6), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(8), LW(1), LW(2))
     CALL(btlevtcmd_WaitEventEnd, LW(15))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
- * Data tag 67, run on Koops (args in LW(10)/LW(11)) when he is revived:
- * resets his defence and pose tables to the upright ones and clears the flipped flag. Not in the US demo.
+ * JP and later, Koops's revive event (UNIT_DATA_REVIVE_EVENT): restores his standing defence table and pose table and
+ * clears UNIT_STATUS_FLAG_FLIPPED.
  */
 #if VERSION >= VERSION_JP
 EVT_BEGIN(nokotarou_revive_event)
     CALL(btlevtcmd_SetPartsDefenceTable, LW(10), LW(11), PTR(&defence))
-    CALL(btlevtcmd_OffStatusFlag, LW(10), STATUS_FLAG_FLIPPED)
+    CALL(btlevtcmd_OffStatusFlag, LW(10), UNIT_STATUS_FLAG_FLIPPED)
     CALL(btlevtcmd_AnimeSetPoseTable, LW(10), LW(11), PTR(pose_table_nokotarou_stay))
     RETURN
 EVT_END()
 #endif
 
+/** Koops's defence while on his feet: 1 against every element, from his shell. */
+static BattleUnitDefense defence = {{1, 1, 1, 1, 1}};
+
+/** Koops's element reactions: none special, every element hits him normally. */
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
+
+/** Koops's defence while flipped on his back (dmg_turn_event): 0. */
+static BattleUnitDefense defence_turn = {0};
+
+/** Koops's status vulnerabilities: base rate (100) for every status. */
+#if VERSION >= VERSION_JP
+static StatusVulnerability regist = {
+    100, // sleep
+    100, // stop
+    100, // dizzy
+    100, // poison
+    100, // confuse
+    100, // electric
+    100, // burn
+    100, // freeze
+    100, // huge
+    100, // tiny
+    100, // attackUp
+    100, // attackDown
+    100, // defenseUp
+    100, // defenseDown
+    100, // allergic
+    100, // fright
+    100, // galeForce
+    100, // fast
+    100, // slow
+    100, // dodgy
+    100, // invisible
+    100, // ohko
+};
+#endif
+
+/** Hit reaction: the default damage script with no special pose (LW10 = -2). */
+#if VERSION >= VERSION_JP
+static EVT_BEGIN(damage_event)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
+    SET_VALUE(LW(11), 1)
+    CALL_CHILD(btldefaultevt_Damage)
+    RETURN
+EVT_END()
+#endif
+
+/** Empty: partner moves come from the player's menu choices, not a unit attack script. */
+static EVT_BEGIN(attack_event)
+    RETURN
+EVT_END()
+
+/** Idle: plays the stay pose from the current pose table (normal or flipped). */
+#if VERSION >= VERSION_JP
+static EVT_BEGIN(wait_event)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
+    RETURN
+EVT_END()
+#endif
+
 /**
- * Builds Koops's battle move list (data tag 1):
- * Shell Toss and Power Shell always (with fixed menu icons),
- * Shell Shield from Super rank and Shell Slam from Ultra rank,
- * appending each to command->weapon and advancing *count.
+ * Setup for the giant shell (unit_koura) that Shell Shield spawns over Mario: on Mario's side, acting before the
+ * player, placed off screen until the move positions it.
+ */
+#if VERSION >= VERSION_JP
+static BattleUnitSetup entry_koura = {
+    &unit_koura, // unitKindParams
+    ALLIANCE_PLAYER, // alliance
+    {0}, // pad_05
+    BATTLE_PHASE_BEFORE_PLAYER, // attackPhase
+    {1000.0f, 0.0f, 1000.0f}, // position
+    0, // hitOffsetX
+    {0}, // unitWork
+    NULL, // itemDropTable
+};
+#endif
+
+/**
+ * Appends Koops' moves to the partner move list at *count, each disabled at first: partyWeapon_NokotarouKouraAttack
+ * always, then partyWeapon_NokotarouSyubibinKoura, _KouraGuard and _TsuranukiKoura from partner rank (partyGetTechLv)
+ * 0, 1 and 2.
  */
 static void __makeTechMenuFunc(BattleCommand* command, s32* count) {
     s32 techLv;
@@ -2002,25 +2165,25 @@ static void __makeTechMenuFunc(BattleCommand* command, s32* count) {
     techLv = partyGetTechLv(BattleTransPartyId(BattleGetPartyPtr(_battleWorkPointer)->currentKind));
 
     command->weapon[*count].index = -1;
-    command->weapon[*count].itemId = 0;
+    command->weapon[*count].itemId = ITEM_NULL;
     command->weapon[*count].weapon = &partyWeapon_NokotarouKouraAttack;
     command->weapon[*count].enabled = 0;
-    command->weapon[*count].icon = ICON_150;
+    command->weapon[*count].icon = ICON_PARTNER_MOVE_NORMAL;
     command->weapon[*count].name = msgSearch(command->weapon[*count].weapon->name);
     (*count)++;
 
     if (techLv >= 0) {
         command->weapon[*count].index = -1;
-        command->weapon[*count].itemId = 0;
+        command->weapon[*count].itemId = ITEM_NULL;
         command->weapon[*count].weapon = &partyWeapon_NokotarouSyubibinKoura;
         command->weapon[*count].enabled = 0;
-        command->weapon[*count].icon = ICON_151;
+        command->weapon[*count].icon = ICON_PARTNER_MOVE_LV1;
         command->weapon[*count].name = msgSearch(command->weapon[*count].weapon->name);
         (*count)++;
     }
     if (techLv >= 1) {
         command->weapon[*count].index = -1;
-        command->weapon[*count].itemId = 0;
+        command->weapon[*count].itemId = ITEM_NULL;
         command->weapon[*count].weapon = &partyWeapon_NokotarouKouraGuard;
         command->weapon[*count].enabled = 0;
         command->weapon[*count].icon = command->weapon[*count].weapon->icon;
@@ -2029,7 +2192,7 @@ static void __makeTechMenuFunc(BattleCommand* command, s32* count) {
     }
     if (techLv >= 2) {
         command->weapon[*count].index = -1;
-        command->weapon[*count].itemId = 0;
+        command->weapon[*count].itemId = ITEM_NULL;
         command->weapon[*count].weapon = &partyWeapon_NokotarouTsuranukiKoura;
         command->weapon[*count].enabled = 0;
         command->weapon[*count].icon = command->weapon[*count].weapon->icon;
@@ -2053,7 +2216,8 @@ static USER_FUNC(_check_mario_move_count) {
 /**
  * Reads or writes unit args[0]'s moveColorLv: with args[1] zero it is returned in args[2],
  * otherwise set to args[2].
- * Shell Shield saves Mario's value, sets it to 255 during the move and restores it after.
+ * Shell Shield saves Mario's value and sets it to 255; its restore call sits after LABEL(99), which the always-true
+ * branch returns before reaching.
  */
 static USER_FUNC(_color_lv_set) {
     EvtWord* args = event->args;
@@ -2086,6 +2250,7 @@ static USER_FUNC(_tsuranuki_effect_control) {
     EffectEntry* effect;
     Vec pos;
     s32 id, target;
+    f32 size;
 
     id = evtGetValue(event, event->args[0]);
     wp = _battleWorkPointer;
@@ -2094,11 +2259,11 @@ static USER_FUNC(_tsuranuki_effect_control) {
     part = BtlUnit_GetPartsPtr(unit, 1);
     if (isFirstCall) {
         event->userdatap[0] = effNokotarouEntry(0, 1000, pos.x, pos.y, pos.z, unit->sizeMultiplier);
-        part->work[2] = 0;
-        part->work[1] = 0;
+        part->work[PARTS_WORK_EFFECT_END] = 0;
+        part->work[PARTS_WORK_CHARGE_LEVEL] = 0;
         event->userdata[1] = 0;
     }
-    target = part->work[1] * 100;
+    target = part->work[PARTS_WORK_CHARGE_LEVEL] * 100;
     if (event->userdata[1] != target) {
         if (event->userdata[1] < target) {
             event->userdata[1] += 10;
@@ -2112,18 +2277,16 @@ static USER_FUNC(_tsuranuki_effect_control) {
             }
         }
     }
-    {
-        f32 size = (2.0f + 0.006f * event->userdata[1]);
+    size = 2.0f + 0.006f * event->userdata[1];
 
-        size *= unit->sizeMultiplier;
-        effect = event->userdatap[0];
-        ((EffNokotarouWork*)effect->userdata)->position.x = pos.x;
-        ((EffNokotarouWork*)effect->userdata)->position.y = pos.y;
-        ((EffNokotarouWork*)effect->userdata)->position.z = pos.z;
-        ((EffNokotarouWork*)effect->userdata)->size = size;
-    }
-    if (part->work[2]) {
-        part->work[2] = 0;
+    size *= unit->sizeMultiplier;
+    effect = event->userdatap[0];
+    ((EffNokotarouWork*)effect->userdata)->position.x = pos.x;
+    ((EffNokotarouWork*)effect->userdata)->position.y = pos.y;
+    ((EffNokotarouWork*)effect->userdata)->position.z = pos.z;
+    ((EffNokotarouWork*)effect->userdata)->size = size;
+    if (part->work[PARTS_WORK_EFFECT_END]) {
+        part->work[PARTS_WORK_EFFECT_END] = 0;
         effSoftDelete(effect);
         return EVT_RETURN_DONE;
     }
@@ -2141,7 +2304,7 @@ static USER_FUNC(_check_guard_koura) {
     id = evtGetValue(event, args[0]);
     index = args[1];
     unit = BattleGetUnitPtr(wp, BattleTransID(event, id));
-    if (!(unit->attributeFlags & UNIT_ATTR_SHELL_SHIELDED)) {
+    if (!(unit->attributeFlags & kShellShielded)) {
         evtSetValue(event, index, -1);
         return EVT_RETURN_DONE;
     }

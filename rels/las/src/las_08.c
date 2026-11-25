@@ -1,29 +1,51 @@
 // las_08 (ラストダンジョン, Palace of Shadow): the looping corridor (mugen kairou) with the torches.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "eff/eff_torch.h"
+#include "evt/evt_map.h"
+#include "evt/evt_seq.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_sub.h"
+#include "pmario_sound.h"
 
 #include "driver/mapdrv.h"
 #include "driver/hitdrv.h"
 #include "driver/effdrv.h"
 #include "evt/evt_bero.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_map.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "las.h"
-#include "evt/evt_story.h"
+#include "driver/seqdrv.h"
 
 static USER_FUNC(hi_onoff);
 static USER_FUNC(mugen_kairou_get_list);
 
+static EvtWord w1_door_close[22];
+static EvtWord w1_door_open[22];
+static EvtWord w2_door_close[22];
+static EvtWord w2_door_open[22];
+static EvtWord e1_door_close[22];
+static EvtWord e1_door_open[22];
+static EvtWord e2_door_close[22];
+static EvtWord e2_door_open[22];
+static EvtWord door_matigai_evt[15];
+static EvtWord door_seikai_evt[19];
 static BeroEntry bero_entry_data[5];
-BeroEntry e_bero_1_matigai[1];
-BeroEntry e_bero_1_seikai[1];
-BeroEntry e_bero_2_seikai[1];
-const char* taimatu_data[16];
-s32 mugen_kairou_list[7];
+static BeroEntry e_bero_1_matigai[1];
+static BeroEntry e_bero_1_seikai[1];
+static BeroEntry e_bero_2_seikai[1];
+static const char* taimatu_data[16];
+static EvtWord hikari_anim[52];
+static EvtWord taimatu_evt[18];
+static s32 mugen_kairou_list[7];
+static EvtWord mugen_kairou_init[96];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_08_init_evt[];
+#else
+EvtWord las_08_init_evt[22];
+#endif
 
 /**
  * Door animation script (closing) for the west (door 1) door,
@@ -138,29 +160,29 @@ static EVT_BEGIN(e2_door_open)
 EVT_END()
 
 /**
- * Event script (bero callback): when a door in the corridor puzzle is taken
- * while the story is at STORY_STG8_01_02_LOCK, resets the corridor streak GSW_LAS08_CORRIDOR_STREAK to 0
- * and sets GSWF_LAS_WRONG_DOOR_TAKEN (the buzzer plays in las_07). Returns 0 in LW(0).
+ * Exit event of the wrong doors of the corridor puzzle: at STG8_01_02_LOCK it resets the corridor streak
+ * GSW_LAS_08_CORRECT_DOOR_COUNT to 0 and sets GSWF_LAS_WRONG_DOOR_SFX_PENDING (the sound plays in las_07).
+ * Returns 0 in LW(0).
  */
 static EVT_BEGIN(door_matigai_evt)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_01_02_LOCK)
-        SET_VALUE(GSW(GSW_LAS08_CORRIDOR_STREAK), 0)
-        SET_VALUE(GSWF(GSWF_LAS_WRONG_DOOR_TAKEN), 1)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG8_01_02_LOCK)
+        SET_VALUE(GSW_LAS_08_CORRECT_DOOR_COUNT, 0)
+        SET_VALUE(GSWF_LAS_WRONG_DOOR_SFX_PENDING, 1)
     END_IF
     SET_VALUE(LW(0), 0)
     RETURN
 EVT_END()
 
 /**
- * Door-enter hook for the correct door of the endless corridor:
- * while the story is at STORY_STG8_01_02_LOCK it counts one more correct door in GSW_LAS08_CORRIDOR_STREAK,
- * and after seven in a row advances the story to STORY_STG8_02_FOLLOW_THE_LIT_TORCHES. Returns 0 in LW(0).
+ * Exit event of the correct east door of the endless corridor: while the story is at STG8_01_02_LOCK it counts
+ * one more correct door in GSW_LAS_08_CORRECT_DOOR_COUNT, and after seven in a row advances the story to
+ * STG8_02_FOLLOW_THE_LIT_TORCHES. Returns 0 in LW(0).
  */
-EVT_BEGIN(door_seikai_evt)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_01_02_LOCK)
-        ADD(GSW(GSW_LAS08_CORRIDOR_STREAK), 1)
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_LAS08_CORRIDOR_STREAK), 7)
-            SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_02_FOLLOW_THE_LIT_TORCHES)
+static EVT_BEGIN(door_seikai_evt)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG8_01_02_LOCK)
+        ADD(GSW_LAS_08_CORRECT_DOOR_COUNT, 1)
+        IF_INT_GREATER_OR_EQUAL(GSW_LAS_08_CORRECT_DOOR_COUNT, 7)
+            SET_VALUE(GSW_STORY_PROGRESS, STG8_02_FOLLOW_THE_LIT_TORCHES)
         END_IF
     END_IF
     SET_VALUE(LW(0), 0)
@@ -182,7 +204,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)door_matigai_evt, // exitEvent
+        door_matigai_evt, // exitEvent
         "las_07", // nextMapName
         "e_bero_1", // nextBeroName
         5, // enterAnimeType
@@ -200,7 +222,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)door_seikai_evt, // exitEvent
+        door_seikai_evt, // exitEvent
         "las_09", // nextMapName
         "w_bero", // nextBeroName
         5, // enterAnimeType
@@ -218,7 +240,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)door_matigai_evt, // exitEvent
+        door_matigai_evt, // exitEvent
         "las_07", // nextMapName
         "e_bero_2", // nextBeroName
         5, // enterAnimeType
@@ -236,7 +258,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)door_matigai_evt, // exitEvent
+        door_matigai_evt, // exitEvent
         "las_07", // nextMapName
         "w_bero_2", // nextBeroName
         5, // enterAnimeType
@@ -248,7 +270,7 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /** Exit of las_08: east door e_bero_1 to las_07 (w_bero_1). */
-BeroEntry e_bero_1_matigai[] = {
+static BeroEntry e_bero_1_matigai[] = {
     {
         "e_bero_1", // hitName
         1, // type
@@ -259,7 +281,7 @@ BeroEntry e_bero_1_matigai[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)door_matigai_evt, // exitEvent
+        door_matigai_evt, // exitEvent
         "las_07", // nextMapName
         "w_bero_1", // nextBeroName
         5, // enterAnimeType
@@ -270,7 +292,7 @@ BeroEntry e_bero_1_matigai[] = {
 };
 
 /** Exit of las_08: east door e_bero_1 to las_08 (w_bero_1). */
-BeroEntry e_bero_1_seikai[] = {
+static BeroEntry e_bero_1_seikai[] = {
     {
         "e_bero_1", // hitName
         1, // type
@@ -281,7 +303,7 @@ BeroEntry e_bero_1_seikai[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)door_seikai_evt, // exitEvent
+        door_seikai_evt, // exitEvent
         "las_08", // nextMapName
         "w_bero_1", // nextBeroName
         5, // enterAnimeType
@@ -292,7 +314,7 @@ BeroEntry e_bero_1_seikai[] = {
 };
 
 /** Exit of las_08: east door e_bero_2 to las_08 (w_bero_2). */
-BeroEntry e_bero_2_seikai[] = {
+static BeroEntry e_bero_2_seikai[] = {
     {
         "e_bero_2", // hitName
         1, // type
@@ -303,7 +325,7 @@ BeroEntry e_bero_2_seikai[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)door_seikai_evt, // exitEvent
+        door_seikai_evt, // exitEvent
         "las_08", // nextMapName
         "w_bero_2", // nextBeroName
         5, // enterAnimeType
@@ -313,11 +335,7 @@ BeroEntry e_bero_2_seikai[] = {
     },
 };
 
-/**
- * Torch objects of the corridor as pairs: the glow model S_hikari_NN and the hit object A_hi_NN that gives
- * the position of the flame.
- */
-const char* taimatu_data[] = {
+static const char* taimatu_data[] = {
     "S_hikari_01",
     "A_hi_01",
     "S_hikari_02",
@@ -340,9 +358,9 @@ const char* taimatu_data[] = {
  * Event script: pulses the eight torch flames of the corridor,
  * scaling their light map objects with a sine wave (0.6 to 1.0) forever.
  */
-EVT_BEGIN(hikari_anim)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_bero_exec_wait, 65536)
+static EVT_BEGIN(hikari_anim)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     SET_VALUE(LW(0), 0)
     LOOP(0)
         CALL(evt_sub_get_sincos, LW(0), LW(1), LW(2))
@@ -366,11 +384,11 @@ EVT_END()
  * Event script: hides the eight torch map objects of the corridor,
  * then starts hikari_anim to make the lit torches flicker.
  */
-EVT_BEGIN(taimatu_evt)
+static EVT_BEGIN(taimatu_evt)
     SET_INT_READ_ADDR(PTR(&taimatu_data))
     LOOP(8)
         READ_INT2(LW(0), LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, LW(0), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, LW(0), MAP_OBJ_FLAG_HIDDEN)
     END_LOOP
     SPAWN_EVENT(hikari_anim)
     RETURN
@@ -380,29 +398,31 @@ EVT_END()
  * Which door is right in each of the seven rounds of the endless corridor: 7 means door e_bero_1 and 3 means
  * e_bero_2.
  */
-s32 mugen_kairou_list[] = {
+static s32 mugen_kairou_list[] = {
     7, 7, 3, 3, 7, 3, 7,
 };
 
 /**
  * Event script: sets up the endless corridor (mugen kairou),
  * a room that repeats until Mario takes the right door seven times.
- * Before the Palace lock is opened it just lights the four torches 4..7;
- * afterwards it lights the torch given by mugen_kairou_list for the current streak
+ * At any story progress other than STG8_01_02_LOCK (before the Palace lock is opened, and again once the
+ * corridor is solved) it just lights the four torches 4..7;
+ * at STG8_01_02_LOCK it lights the torch given by mugen_kairou_list for the current streak
  * and rewires the east doors e_bero_1 and e_bero_2
- * so that the right one leads on (the list entry, 7 or 3, decides which).
+ * so that the right one counts the round (the list entry, 7 or 3, decides which; in the last round e_bero_1
+ * keeps its exit to las_09).
  */
-EVT_BEGIN(mugen_kairou_init)
+static EVT_BEGIN(mugen_kairou_init)
     CALL_CHILD(taimatu_evt)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_01_02_LOCK)
-        CALL(mugen_kairou_get_list, GSW(GSW_LAS08_CORRIDOR_STREAK), LW(0))
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG8_01_02_LOCK)
+        CALL(mugen_kairou_get_list, GSW_LAS_08_CORRECT_DOOR_COUNT, LW(0))
         CALL(hi_onoff, LW(0), 1)
-        CALL(evt_seq_wait, 2)
-        CALL(evt_bero_exec_wait, 65536)
-        CALL(mugen_kairou_get_list, GSW(GSW_LAS08_CORRIDOR_STREAK), LW(0))
+        CALL(evt_seq_wait, SEQ_GAME)
+        CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
+        CALL(mugen_kairou_get_list, GSW_LAS_08_CORRECT_DOOR_COUNT, LW(0))
         SWITCH(LW(0))
             CASE_EQUAL(7)
-            IF_INT_LESS(GSW(GSW_LAS08_CORRIDOR_STREAK), 6)
+            IF_INT_LESS(GSW_LAS_08_CORRECT_DOOR_COUNT, 6)
                 SET_VALUE(LW(0), STRING("e_bero_1"))
                 CALL_CHILD(bero_case_switch_off)
                 CALL(evt_bero_overwrite, STRING("e_bero_1"), PTR(e_bero_1_seikai))
@@ -430,10 +450,13 @@ EVT_BEGIN(mugen_kairou_init)
     RETURN
 EVT_END()
 
-/** Map init script for las_08: music and ambience, the door set, and the endless corridor setup. */
+/**
+ * Map init of las_08 (relSetEvtAddr in las.c): BGM_STG8_LST1 and ENV_STG8_LAS1 (JP and later reverb mode 2), the
+ * entrances and mugen_kairou_init.
+ */
 EVT_BEGIN(las_08_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
@@ -444,12 +467,9 @@ EVT_BEGIN(las_08_init_evt)
     RETURN
 EVT_END()
 
-EffectEntry* effTorchEntry(s32 type, f32 x, f32 y, f32 z, f32 scale);
-
 /**
- * Script helper: turns torch args[0] on (args[1] nonzero) or off.
- * On shows its light object and starts a torch fire effect at its hit object;
- * off hides the light and softly deletes the effect.
+ * Script helper: shows torch map object args[0] of taimatu_data (args[1] nonzero) and lights a named torch effect at
+ * its hit object, or hides it and removes that effect.
  */
 static USER_FUNC(hi_onoff) {
     EvtWord* args = event->args;
@@ -459,11 +479,11 @@ static USER_FUNC(hi_onoff) {
     Vec pos;
 
     if (on) {
-        obj->flags &= ~1;
+        obj->flags &= ~MAP_OBJ_FLAG_HIDDEN;
         hitObjGetPos((const char*)taimatu_data[index * 2 + 1], &pos);
         effSetName(effTorchEntry(0, pos.x, pos.y, pos.z, 0.7f), (const char*)taimatu_data[index * 2 + 1]);
     } else {
-        obj->flags |= 1;
+        obj->flags |= MAP_OBJ_FLAG_HIDDEN;
         effSoftDelete(effNameToPtr((const char*)taimatu_data[index * 2 + 1]));
     }
     return EVT_RETURN_DONE;

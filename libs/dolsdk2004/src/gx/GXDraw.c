@@ -8,10 +8,6 @@
 static GXVtxDescList vcd[27];
 static GXVtxAttrFmtList vat[27];
 
-/**
- * Saves the current vertex descriptor and the format table 3 attributes, then sets up float position and normal,
- * direct, in vertex format 3 for the shape drawing functions.
- */
 static void GetVertState(void) {
     GXGetVtxDescv(vcd);
     GXGetVtxAttrFmtv(GX_VTXFMT3, vat);
@@ -22,13 +18,11 @@ static void GetVertState(void) {
     GXSetVtxAttrFmt(GX_VTXFMT3, GX_VA_NRM, GX_NRM_XYZ, GX_F32, 0);
 }
 
-/** Restores the vertex descriptor and format table 3 saved by GetVertState. */
 static void RestoreVertState(void) {
     GXSetVtxDescv(vcd);
     GXSetVtxAttrFmtv(GX_VTXFMT3, vat);
 }
 
-/** Computes u = p2 - p1 for 3D vectors. */
 static void vsub(f32 p1[3], f32 p2[3], f32 u[3]) {
     u32 i;
 
@@ -37,7 +31,6 @@ static void vsub(f32 p1[3], f32 p2[3], f32 u[3]) {
     }
 }
 
-/** Computes the cross product n = u x v of two 3D vectors. */
 static void vcross(f32 u[3], f32 v[3], f32 n[3]) {
     f32 n1[3];
 
@@ -49,7 +42,6 @@ static void vcross(f32 u[3], f32 v[3], f32 n[3]) {
     n[2] = n1[2];
 }
 
-/** Scales a 3D vector to unit length in place. */
 static void normalize(f32 v[3]) {
     f32 d = sqrtf((v[0] * v[0]) + (v[1] * v[1]) + (v[2] * v[2]));
 
@@ -59,13 +51,11 @@ static void normalize(f32 v[3]) {
     v[2] /= d;
 }
 
-/** Sends one vertex (position v and normal n) to the FIFO. */
 static void myvertex(f32 v[3], f32 n[3]) {
     GXPosition3f32(v[0], v[1], v[2]);
     GXNormal3f32(n[0], n[1], n[2]);
 }
 
-/** Draws one triangle of a unit sphere approximation, using each vertex position as its normal. */
 static void DumpTriangle(f32 v0[3], f32 v1[3], f32 v2[3]) {
     GXBegin(GX_TRIANGLES, GX_VTXFMT3, 3);
     myvertex(v0, v0);
@@ -74,10 +64,6 @@ static void DumpTriangle(f32 v0[3], f32 v1[3], f32 v2[3]) {
     GXEnd();
 }
 
-/**
- * Draws a triangle on the unit sphere split recursively into four (edge midpoints pushed out to the sphere) down
- * to the given depth.
- */
 static void Subdivide(u8 depth, f32 v0[3], f32 v1[3], f32 v2[3]) {
     f32 v01[3];
     f32 v12[3];
@@ -104,19 +90,14 @@ static void Subdivide(u8 depth, f32 v0[3], f32 v1[3], f32 v2[3]) {
     Subdivide(depth - 1, v01, v12, v20);
 }
 
-/** Draws triangle i of an index table, subdivided to the given depth. */
 static void SubDivTriangle(u8 depth, u8 i, f32 (*data)[3], u8 (*ndx)[3]) {
-    f32 *x0 = data[ndx[i][0]];
-    f32 *x1 = data[ndx[i][1]];
-    f32 *x2 = data[ndx[i][2]];
+    f32* x0 = data[ndx[i][0]];
+    f32* x1 = data[ndx[i][1]];
+    f32* x2 = data[ndx[i][2]];
 
     Subdivide(depth, x0, x1, x2);
 }
 
-/**
- * Draws a cylinder of radius 1 from z = -1 to z = 1 with numEdges sides:
- * a triangle strip for the side and fans for the two caps, with normals.
- */
 void GXDrawCylinder(u8 numEdges) {
     s32 i;
     f32 top;
@@ -169,11 +150,6 @@ void GXDrawCylinder(u8 numEdges) {
     RestoreVertState();
 }
 
-/**
- * Draws a torus whose tube has radius rc (ring radius 1 - rc),
- * with numc segments around the tube and numt around the ring,
- * with normals and texture coordinates if texture 0 is in use.
- */
 void GXDrawTorus(f32 rc, u8 numc, u8 numt) {
     GXAttrType ttype;
     s32 i, j, k;
@@ -217,10 +193,6 @@ void GXDrawTorus(f32 rc, u8 numc, u8 numt) {
     RestoreVertState();
 }
 
-/**
- * Draws a unit sphere as numMajor bands of triangle strips with numMinor steps around,
- * with normals and texture coordinates if texture 0 is in use.
- */
 void GXDrawSphere(u8 numMajor, u8 numMinor) {
     GXAttrType ttype;
     f32 radius = 1.0f;
@@ -238,7 +210,7 @@ void GXDrawSphere(u8 numMajor, u8 numMinor) {
 
     if (ttype != GX_NONE) {
         GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-        GXSetVtxAttrFmt(GX_VTXFMT3, GX_VA_TEX0, GX_TEX_ST, GX_RGBA6, 0);
+        GXSetVtxAttrFmt(GX_VTXFMT3, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     }
 
     for (i = 0; i < numMajor; i++) {
@@ -269,11 +241,6 @@ void GXDrawSphere(u8 numMajor, u8 numMinor) {
     RestoreVertState();
 }
 
-/**
- * Draws one face of the cube as a quad of four vertices from the face's normal, tangent and binormal vectors.
- * The tangent and binormal are sent as extra normals and texture coordinates only
- * when those attributes are in use.
- */
 static void GXDrawCubeFace(f32 nx, f32 ny, f32 nz, f32 tx, f32 ty, f32 tz, f32 bx, f32 by, f32 bz, GXAttrType binormal, GXAttrType texture) {
     GXPosition3f32(0.57735026f * (nx + tx + bx), 0.57735026f * (ny + ty + by), 0.57735026f * (nz + tz + bz));
     GXNormal3f32(nx, ny, nz);
@@ -324,10 +291,6 @@ static void GXDrawCubeFace(f32 nx, f32 ny, f32 nz, f32 tx, f32 ty, f32 tz, f32 b
     }
 }
 
-/**
- * Draws a cube with corners at plus and minus 0.577 (inscribed in the unit sphere) as six quads,
- * with normals (and tangent/binormal and texture coordinates if in use).
- */
 void GXDrawCube(void) {
     GXAttrType ntype;
     GXAttrType ttype;
@@ -337,11 +300,11 @@ void GXDrawCube(void) {
     GetVertState();
     if (ntype != GX_NONE) {
         GXSetVtxDesc(GX_VA_NBT, GX_DIRECT);
-        GXSetVtxAttrFmt(GX_VTXFMT3, GX_VA_NBT, GX_TEX_ST, GX_RGBA6, 0);
+        GXSetVtxAttrFmt(GX_VTXFMT3, GX_VA_NBT, GX_NRM_NBT, GX_F32, 0);
     }
     if (ttype != GX_NONE) {
         GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-        GXSetVtxAttrFmt(GX_VTXFMT3, GX_VA_TEX0, GX_TEX_ST, GX_RGB8, 0);
+        GXSetVtxAttrFmt(GX_VTXFMT3, GX_VA_TEX0, GX_TEX_ST, GX_S8, 0);
     }
 
     GXBegin(GX_QUADS, GX_VTXFMT3, 24);
@@ -356,7 +319,6 @@ void GXDrawCube(void) {
     RestoreVertState();
 }
 
-/** The dodecahedron's 12 faces as five corner indexes into verts. */
 static u32 polygons[12][5] = {
     {  0, 12, 10, 11, 16 },
     {  1, 17,  8,  9, 13 },
@@ -372,7 +334,6 @@ static u32 polygons[12][5] = {
     { 11, 19,  7,  6, 16 },
 };
 
-/** The dodecahedron's 20 corners. */
 static f32 verts[20][3] = {
     { -0.809015f,  0.0f,       0.309015f },
     { -0.809015f,  0.0f,      -0.309015f },
@@ -396,12 +357,11 @@ static f32 verts[20][3] = {
     {  0.5f,       0.5f,       0.5 },
 };
 
-/** Draws a regular dodecahedron as 12 pentagon fans, each with its face normal. */
 void GXDrawDodeca(void) {
     u32 i;
-    f32 *p0;
-    f32 *p1;
-    f32 *p2;
+    f32* p0;
+    f32* p1;
+    f32* p2;
     f32 u[3];
     f32 v[3];
     f32 n[3];
@@ -426,7 +386,6 @@ void GXDrawDodeca(void) {
     RestoreVertState();
 }
 
-/** The octahedron's six corners (unit length along each axis). */
 static f32 odata[6][3] = {
     {  1.0f,  0.0f,  0.0f },
     { -1.0f,  0.0f,  0.0f },
@@ -436,7 +395,6 @@ static f32 odata[6][3] = {
     {  0.0f,  0.0f, -1.0f },
 };
 
-/** The octahedron's eight faces as corner indexes into odata. */
 static u8 ondex[8][3] = {
     { 0, 4, 2 },
     { 1, 2, 4 },
@@ -448,7 +406,6 @@ static u8 ondex[8][3] = {
     { 1, 3, 5 },
 };
 
-/** Draws a regular octahedron of unit radius as 8 triangles. */
 void GXDrawOctahedron(void) {
     s32 i;
 
@@ -459,7 +416,6 @@ void GXDrawOctahedron(void) {
     RestoreVertState();
 }
 
-/** The icosahedron's 12 corners (unit length). */
 static f32 idata[12][3] = {
     { -0.5257311f,  0.0f,        0.8506508f },
     {  0.5257311f,  0.0f,        0.8506508f },
@@ -475,7 +431,6 @@ static f32 idata[12][3] = {
     { -0.8506508f, -0.5257311f,  0.0f },
 };
 
-/** The icosahedron's 20 faces as corner indexes into idata; GXDrawSphere1 subdivides them. */
 static u8 index[20][3] = {
     {  0,  4,  1 },
     {  0,  9,  4 },
@@ -499,7 +454,6 @@ static u8 index[20][3] = {
     {  7,  2, 11 },
 };
 
-/** Draws a regular icosahedron of unit radius as 20 triangles. */
 void GXDrawIcosahedron(void) {
     s32 i;
 
@@ -510,7 +464,6 @@ void GXDrawIcosahedron(void) {
     RestoreVertState();
 }
 
-/** Draws a sphere made by subdividing the icosahedron's 20 triangles to the given depth. */
 void GXDrawSphere1(u8 depth) {
     s32 i;
 
@@ -521,13 +474,13 @@ void GXDrawSphere1(u8 depth) {
     RestoreVertState();
 }
 
-/** Returns true if two normals are exactly equal. */
 static u32 CmpNormal32(f32 n1[3], f32 n2[3]) {
     u32 i;
 
     for (i = 0; i < 3; i++) {
-        if (n1[i] != n2[i])
+        if (n1[i] != n2[i]) {
             return FALSE;
+        }
     }
     return TRUE;
 }
@@ -535,14 +488,14 @@ static u32 CmpNormal32(f32 n1[3], f32 n2[3]) {
 static u32 nrm_cnt;
 static f32* nrm_tab;
 
-/** Adds a normal to the table being built unless an equal one is already in it. */
 static void AddNormal(f32 n[3]) {
     u32 indx;
     u32 i;
 
     for (i = 0; i < nrm_cnt; i++) {
-        if (CmpNormal32(n, &nrm_tab[i * 3]))
+        if (CmpNormal32(n, &nrm_tab[i * 3])) {
             return;
+        }
     }
     indx = nrm_cnt * 3;
     nrm_tab[indx + 0] = n[0];
@@ -551,10 +504,6 @@ static void AddNormal(f32 n[3]) {
     nrm_cnt++;
 }
 
-/**
- * Subdivides a triangle recursively as Subdivide does,
- * but adds the corner points at the final depth to the normal table.
- */
 static void SubdivideNrm(u8 depth, f32 v0[3], f32 v1[3], f32 v2[3]) {
     f32 v01[3];
     f32 v12[3];
@@ -583,7 +532,6 @@ static void SubdivideNrm(u8 depth, f32 v0[3], f32 v1[3], f32 v2[3]) {
     SubdivideNrm(depth - 1, v01, v12, v20);
 }
 
-/** Subdivides triangle i of an index table into the normal table. */
 static void SubDivNrm(u8 depth, u8 i, f32 (*data)[3], u8 (*ndx)[3]) {
     f32* x0 = data[ndx[i][0]];
     f32* x1 = data[ndx[i][1]];
@@ -592,10 +540,6 @@ static void SubDivNrm(u8 depth, u8 i, f32 (*data)[3], u8 (*ndx)[3]) {
     SubdivideNrm(depth, x0, x1, x2);
 }
 
-/**
- * Fills table with the unit normals found by subdividing the 8 triangles of an octahedron to the given depth,
- * without duplicates, and returns how many there are.
- */
 u32 GXGenNormalTable(u8 depth, f32* table) {
     s32 i;
 

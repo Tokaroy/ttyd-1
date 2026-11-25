@@ -1,17 +1,16 @@
-// Paper Mario 64 effect: a single flat sprite that stretches over `time` frames (progress 0-7);
+// Paper Mario 64 effect: a single camera-facing smoke puff that plays a 7-frame strip over `time` frames (progress 0-7);
 // the failure counterpart of eff_rothammer_success_n64.c.
-#include "eff/n64/eff_rothammer_fail_n64.h"
+
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_rothammer_fail_n64.h"
 #include "driver/camdrv.h"
 #include "driver/effdrv.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_propagation off
 
 typedef struct EffRotHammerFailN64Work {
     s16 type;     // 0x0
@@ -34,43 +33,43 @@ static effN64Vtx size24x24_tex32x32_vtx[] = {
 };
 
 static void effRotHammerFailMain(EffectEntry* effect);
-static void effRotHammerFailDisp(CameraId cameraId, EffectEntry* effect);
+static void effRotHammerFailDisp(CameraId cameraId, void* payload);
 
 /**
- * Spawns one smoke puff at (x, y, z) that plays its 7-frame animation over `time` frames (scale is ignored).
- * Spawned by event scripts through evt_eff.
+ * Spawns one smoke puff at (x, y, z) that plays its 7-frame animation over `time` frames.
+ * Reached only through evt_eff64 "rothammer_fail_n64"; no script callers found.
  */
-EffectEntry* effRotHammerFailN64Entry(s32 type, s32 time, f32 x, f32 y, f32 z, f32 scale) {
+EffectEntry* effRotHammerFailN64Entry(s32 type, s32 time, f32 x, f32 y, f32 z, f32 unused) {
     EffectEntry* effect;
-    EffRotHammerFailN64Work* child;
-    f32 zero;
     EffRotHammerFailN64Work* work;
+    s32 i;
 
     effect = effEntry();
     effect->type = "RotHammerFailN64";
     effect->count = 2;
     effect->userdata = work = __memAlloc(HEAP_EFFECT, sizeof(EffRotHammerFailN64Work) * 2);
-    zero = 0.0f;
     effect->callback = effRotHammerFailMain;
     work->lifetime = time;
-    child = work++;
-    child = work;
-    work--;
     work->frame = 0;
     work->total = time;
-    work->progress = zero;
+    work->progress = 0.0f;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
     work->position.z = z;
     work->scaleY = 10.0f;
     work->scaleX = 30.0f;
-    work[1].position.x = zero;
-    work[1].position.y = zero;
-    work[1].position.z = zero;
-    child->velocity.x = (f32)sin(zero);
-    child->velocity.y = zero;
-    child->velocity.z = (f32)cos(zero);
+    work++;
+    for (i = 1; i < 2; i++, work++) {
+        f32 angle = 0.0f;
+
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->velocity.x = sin(angle);
+        work->velocity.y = 0.0f;
+        work->velocity.z = cos(angle);
+    }
     return effect;
 }
 
@@ -107,14 +106,15 @@ static void effRotHammerFailMain(EffectEntry* effect) {
         work->position.y += work->velocity.y;
         work->position.z = scale * work->velocity.z;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effRotHammerFailDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effRotHammerFailDisp, effect);
 }
 
 /**
  * Draws the puff as a camera-facing 24x24 quad of the 7-frame strip in texture 0xD,
  * cross-fading between the current and next frame, in pale grey (E6,DE,DE).
  */
-static void effRotHammerFailDisp(CameraId cameraId, EffectEntry* effect) {
+static void effRotHammerFailDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffRotHammerFailN64Work* work;
     s32 isSix;
@@ -133,7 +133,11 @@ static void effRotHammerFailDisp(CameraId cameraId, EffectEntry* effect) {
     work = effect->userdata;
     idx = work->progress;
     alpha = 256.0f * (work->progress - (f32)idx);
-    isSix = idx == 6;
+    if (idx == 6) {
+        isSix = 1;
+    } else {
+        isSix = 0;
+    }
     GXSetNumChans(0);
     GXSetNumTexGens(2);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);

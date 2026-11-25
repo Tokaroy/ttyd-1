@@ -1,5 +1,8 @@
 // Script commands that start effects by effect-set name: evt_eff for the GameCube effects,
 // evt_eff64 for the N64-style effects.
+
+#include "version.h"
+#include "eff/n64/eff_thunderflare_n64.h"
 #include "mario/mario.h"
 #include "evt/evt_eff.h"
 #include "driver/effdrv.h"
@@ -17,12 +20,13 @@
 #include "eff/n64/eff_snow_n64.h"
 #include "eff/n64/eff_sstar_n64.h"
 #include "eff/n64/eff_stardust_n64.h"
-#include "eff/n64/eff_magic1_n64.h"
+#include "eff/eff_magic1_n64.h"
 #include "eff/n64/eff_magic2_n64.h"
 #include "eff/n64/eff_hokori_n64.h"
 #include "eff/n64/eff_kemuri8_n64.h"
 #include "eff/n64/eff_small_star_n64.h"
 #include "eff/n64/eff_bomb_n64.h"
+#include "eff/n64/eff_booboo_n64.h"
 #include "eff/n64/eff_kemuri9_n64.h"
 #include "eff/n64/eff_kemuri10_n64.h"
 #include "eff/n64/eff_rappa_n64.h"
@@ -138,37 +142,34 @@
 #include "eff/eff_majinai.h"
 #include "mario/mario_party.h"
 #include "manager/evtmgr_cmd.h"
-
-#include "party.h"
-#include "eff/eff_fukidashi.h"
-#include "eff/n64/eff_thunderflare_n64.h"
-#include "eff/n64/eff_coin_n64.h"
-#include "eff/eff_kemuri.h"
-#include "eff/eff_fall.h"
-#include "eff/eff_levelup.h"
-#include "eff/eff_nozle.h"
-#include "eff/eff_particle.h"
+#include "eff/n64/eff_wangflush_n64.h"
+#include "eff/n64/eff_rothammer_success_n64.h"
 #include "eff/eff_toge_flush.h"
+#include "eff/eff_levelup.h"
+#include "eff/eff_kemuri.h"
+#include "eff/n64/eff_hagetaka_flush_n64.h"
+#include "eff/eff_fukidashi.h"
+#include "eff/eff_fall.h"
 #include "eff/n64/eff_fall_leaf_n64.h"
 #include "eff/n64/eff_fireflower_n64.h"
 #include "eff/n64/eff_flower_n64.h"
 #include "eff/n64/eff_magic3_n64.h"
 #include "eff/n64/eff_magic_horao_n64.h"
+#include "eff/eff_nozle.h"
 #include "eff/n64/eff_opuku_jetwrain_n64.h"
-#include "eff/n64/eff_rothammer_success_n64.h"
+#include "eff/eff_particle.h"
 #include "eff/n64/eff_timestamp_n64.h"
-#include "eff/n64/eff_wangflush_n64.h"
 #include "eff/n64/eff_whirlwind_n64.h"
-#include "eff/n64/eff_hagetaka_flush_n64.h"
+#include "eff/n64/eff_coin_n64.h"
 #include "eff/n64/eff_gareki_n64.h"
-#include "eff/n64/eff_rothammer_fail_n64.h"
 #include "eff/n64/eff_lensflare_n64.h"
-#include "eff/n64/eff_booboo_n64.h"
-#include "version.h"
+#include "eff/n64/eff_rothammer_fail_n64.h"
+
+#include "party.h"
 
 /**
  * Spawns an effect by effect-set name args[1] ("kemuri", "recovery", ...) and names it args[0]
- * unless that is ""; args[2..13] are passed to the set's entry function as ints or floats as each one needs.
+ * unless that is ""; args[2..14] are passed to the set's entry function as ints or floats as each one needs.
  */
 USER_FUNC(evt_eff) {
     EvtWord* args = event->args;
@@ -177,14 +178,12 @@ USER_FUNC(evt_eff) {
     s32* r;
     const char* effName;
     const char* effSet;
-    s32 int2, int6, int7, int8, int9;
-    s32 int10, int11;
+    s32 int2, int3, int4, int5, int6, int7, int8, int9;
+    s32 int10, int11, int12, int13, int14;
     EffectEntry* entry;
-    f32 float3, float4, float5, float6, float7, float8, float10, float12, float13;
+    f32 float2, float3, float4, float5, float6, float7, float8,
+        float9, float10, float11, float12, float13, float14;
 
-    // intN / floatN: script argument N read as an int / as a float. The original reads every argument both
-    // ways through three pointer walks and discards the reads it does not need; the effect-set id switch
-    // below selects which of them each effect uses.
     p = args;
     q = args;
     r = args;
@@ -195,31 +194,31 @@ USER_FUNC(evt_eff) {
     evtGetValue(event, *(q++));
     evtGetValue(event, *(r++));
     int2 = evtGetValue(event, p[0]);
-    evtGetValue(event, p[1]);
-    evtGetValue(event, p[2]);
-    evtGetValue(event, p[3]);
+    int3 = evtGetValue(event, p[1]);
+    int4 = evtGetValue(event, p[2]);
+    int5 = evtGetValue(event, p[3]);
     int6 = evtGetValue(event, p[4]);
     int7 = evtGetValue(event, p[5]);
     int8 = evtGetValue(event, p[6]);
     int9 = evtGetValue(event, p[7]);
     int10 = evtGetValue(event, p[8]);
     int11 = evtGetValue(event, p[9]);
-    evtGetValue(event, p[10]);
-    evtGetValue(event, p[11]);
-    evtGetValue(event, p[12]);
-    evtGetFloat(event, q[0]);
+    int12 = evtGetValue(event, p[10]);
+    int13 = evtGetValue(event, p[11]);
+    int14 = evtGetValue(event, p[12]);
+    float2 = evtGetFloat(event, q[0]);
     float3 = evtGetFloat(event, q[1]);
     float4 = evtGetFloat(event, q[2]);
     float5 = evtGetFloat(event, q[3]);
     float6 = evtGetFloat(event, q[4]);
     float7 = evtGetFloat(event, q[5]);
     float8 = evtGetFloat(event, q[6]);
-    evtGetFloat(event, q[7]);
+    float9 = evtGetFloat(event, q[7]);
     float10 = evtGetFloat(event, q[8]);
-    evtGetFloat(event, q[9]);
+    float11 = evtGetFloat(event, q[9]);
     float12 = evtGetFloat(event, q[10]);
     float13 = evtGetFloat(event, q[11]);
-    evtGetFloat(event, q[12]);
+    float14 = evtGetFloat(event, q[12]);
 
     entry = NULL;
     switch (effGetSet(effSet)->id) {
@@ -244,7 +243,7 @@ USER_FUNC(evt_eff) {
         case 13:
             entry = effBreathFireEntry(int2, int9, int10, int11, float3, float4, float5, float6, float7, float8);
             ((EffBreathFireN64Work*)entry->userdata)->scale = float12;
-            ((EffBreathFireN64Work*)entry->userdata)->initialScale = float12;
+            ((EffBreathFireN64Work*)entry->userdata)->baseScale = float12;
             ((EffBreathFireN64Work*)entry->userdata)->targetScale = float13;
             break;
         case 4:
@@ -311,6 +310,7 @@ USER_FUNC(evt_eff) {
             entry = effParticleEntry(int2, float3, float4, float5, float6, float7, float8, int9, int10);
             break;
         case 9:
+            // BUG: the entry is not stored, so effName is never set on it and it cannot be found by name later.
             effStardustEntry(int2, int8, int9, float3, float4, float5, float6, float7);
             break;
         case 44:
@@ -394,8 +394,8 @@ USER_FUNC(evt_eff) {
 }
 
 /**
- * Like evt_eff for the effects ported from Paper Mario 64 (the *_n64 effect sets):
- * args[0] name, args[1] set name, the rest as each entry function needs.
+ * Like evt_eff, for the effect sets ported from Paper Mario 64 (the *_n64 effects):
+ * args[0] is the effect name, args[1] the set name, the rest as each entry function needs.
  */
 USER_FUNC(evt_eff64) {
     EvtWord* args;
@@ -406,6 +406,7 @@ USER_FUNC(evt_eff64) {
     const char* effSet;
     s32 int2;
     s32 int3;
+    s32 int4;
     s32 int5;
     s32 int6;
     s32 int7;
@@ -413,6 +414,9 @@ USER_FUNC(evt_eff64) {
     s32 int9;
     s32 int10;
     s32 int11;
+    s32 int12;
+    s32 int13;
+    s32 int14;
     s32 raw3;
     f32 float2;
     f32 float3;
@@ -425,7 +429,10 @@ USER_FUNC(evt_eff64) {
     f32 float10;
     f32 float11;
     f32 float12;
+    f32 float13;
+    f32 float14;
     EffectEntry* effect;
+
     args = event->args;
     intArg = args;
     floatArg = args;
@@ -438,7 +445,7 @@ USER_FUNC(evt_eff64) {
     evtGetValue(event, *(rawArg++));
     int2 = evtGetValue(event, *(intArg++));
     int3 = evtGetValue(event, *(intArg++));
-    evtGetValue(event, *(intArg++));
+    int4 = evtGetValue(event, *(intArg++));
     int5 = evtGetValue(event, *(intArg++));
     int6 = evtGetValue(event, *(intArg++));
     int7 = evtGetValue(event, *(intArg++));
@@ -446,9 +453,9 @@ USER_FUNC(evt_eff64) {
     int9 = evtGetValue(event, *(intArg++));
     int10 = evtGetValue(event, *(intArg++));
     int11 = evtGetValue(event, *(intArg++));
-    evtGetValue(event, *(intArg++));
-    evtGetValue(event, *(intArg++));
-    evtGetValue(event, *(intArg++));
+    int12 = evtGetValue(event, *(intArg++));
+    int13 = evtGetValue(event, *(intArg++));
+    int14 = evtGetValue(event, *(intArg++));
     float2 = evtGetFloat(event, *(floatArg++));
     float3 = evtGetFloat(event, *(floatArg++));
     float4 = evtGetFloat(event, *(floatArg++));
@@ -460,8 +467,8 @@ USER_FUNC(evt_eff64) {
     float10 = evtGetFloat(event, *(floatArg++));
     float11 = evtGetFloat(event, *(floatArg++));
     float12 = evtGetFloat(event, *(floatArg++));
-    evtGetFloat(event, *(floatArg++));
-    evtGetFloat(event, *(floatArg++));
+    float13 = evtGetFloat(event, *(floatArg++));
+    float14 = evtGetFloat(event, *(floatArg++));
     raw3 = rawArg[1];
     effect = NULL;
     switch (effGetSetN64(effSet)->id) {
@@ -690,7 +697,7 @@ USER_FUNC(evt_eff64) {
             break;
 
         case 57:
-            effect = effWhirlwindN64Entry(int2, (MarioWork*)raw3, float4, int5); // the raw script word, not its value
+            effect = effWhirlwindN64Entry(int2, (MarioWork*)raw3, float4, int5);
             break;
 
         case 58:
@@ -714,6 +721,7 @@ USER_FUNC(evt_eff64) {
             break;
 
         case 63:
+            // BUG: the entry is not stored, so effName is never set on it and it cannot be found by name later.
             effMagicHoraoN64Entry(int2, float3, float4, float5, float6, int7, float8, int9, float10, int11);
             break;
 
@@ -879,7 +887,7 @@ USER_FUNC(evt_eff64) {
             effSetName(effect, effName);
         }
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Ends the effect named args[0], letting it finish its fade-out when it supports soft deletion. */
@@ -906,9 +914,6 @@ USER_FUNC(evt_eff_delete_ptr) {
     return EVT_RETURN_DONE;
 }
 
-#pragma push
-// FAKE: turns off copy propagation so the temporaries and registers match the target; removing it changes the code
-#pragma opt_propagation off
 /**
  * Shows an emote bubble (!, ?, ...) of type args[3] over Mario (args[0] 0),
  * NPC args[2] (1, "me" = the owner NPC), point args[5..7] (2), the partner (3) or the follower (4);
@@ -919,70 +924,63 @@ USER_FUNC(evt_eff_fukidashi) {
     s32 mode = evtGetValue(event, args[0]);
     const char* effName = (const char*)evtGetValue(event, args[1]);
     const char* npcName = (const char*)evtGetValue(event, args[2]);
-    s32 a = evtGetValue(event, args[3]);
-    s32 b = evtGetValue(event, args[4]);
+    s32 type = evtGetValue(event, args[3]);
+    s32 number = evtGetValue(event, args[4]);
     f32 x = evtGetFloat(event, args[5]);
     f32 y = evtGetFloat(event, args[6]);
     f32 z = evtGetFloat(event, args[7]);
     f32 w = evtGetFloat(event, args[8]);
-    f32 e = evtGetFloat(event, args[9]);
-    s32 d = evtGetValue(event, args[10]);
+    f32 angle = evtGetFloat(event, args[9]);
+    s32 duration = evtGetValue(event, args[10]);
     EffectEntry* entry = NULL;
-    void* p;
-    f32 h;
+    NpcEntry* npc;
+    PartyEntry* party;
+    f32 yy;
+    f32 ww;
 
     switch (mode) {
-        case 0:
-            h = marioGetPtr()->wPlayerCollisionBox.y;
-            {
-                f32 yy = 2.0f * h / 3.0f;
-                f32 ww = h / 3.0f;
-                entry = effFukidashiEntry(a, b, (NpcEntry*)-1, 0.0f, yy, 0.0f, ww, e, d);
-            }
+        case FUKIDASHI_AT_MARIO: {
+            MarioWork* mario = marioGetPtr();
+            yy = 2.0f * mario->wPlayerCollisionBox.y / 3.0f;
+            ww = mario->wPlayerCollisionBox.y / 3.0f;
+            entry = effFukidashiEntry(type, number, (NpcEntry*)FUKIDASHI_MARIO, 0.0f, yy, 0.0f, ww, angle, duration);
+        } break;
+        case FUKIDASHI_AT_NPC:
+            npc = !strcmp(npcName, "me") ? event->ownerNPC : npcNameToPtr(npcName);
+            yy = 2.0f * npc->height / 3.0f;
+            ww = npc->height / 3.0f;
+            entry = effFukidashiEntry(type, number, npc, 0.0f, yy, 0.0f, ww, angle, duration);
             break;
-        case 1:
-            p = !strcmp(npcName, "me") ? (void*)event->ownerNPC : (void*)npcNameToPtr(npcName);
-            {
-                f32 yy = 2.0f * ((NpcEntry*)p)->height / 3.0f;
-                f32 ww = ((NpcEntry*)p)->height / 3.0f;
-                entry = effFukidashiEntry(a, b, (NpcEntry*)p, 0.0f, yy, 0.0f, ww, e, d);
-            }
+        case FUKIDASHI_AT_POS:
+            entry = effFukidashiEntry(type, number, NULL, x, y, z, w, angle, duration);
             break;
-        case 2:
-            entry = effFukidashiEntry(a, b, NULL, x, y, z, w, e, d);
-            break;
-        case 3:
-            p = partyGetPtr(marioGetPartyId());
-            if (p) {
+        case FUKIDASHI_AT_PARTNER:
+            party = partyGetPtr(marioGetPartyId());
+            if (party) {
 #if VERSION >= VERSION_US
-                // US: the Flurrie bubble sits at a fixed height
+                // US and later: the Flurrie bubble sits at a fixed height
                 {
-                    f32 yy = 2.0f * ((PartyEntry*)p)->height / 3.0f;
+                    f32 yy = 2.0f * party->height / 3.0f;
                     f32 ww;
-                    if (((PartyEntry*)p)->currentMemberId == PARTY_MEMBER_FLURRIE)
+                    if (party->currentMemberId == PARTY_FLURRIE) {
                         yy = 30.0f;
-                    ww = ((PartyEntry*)p)->height / 3.0f;
-                    entry = effFukidashiEntry(a, b, (NpcEntry*)-2, 0.0f, yy, 0.0f, ww, e, d);
+                    }
+                    ww = party->height / 3.0f;
+                    entry = effFukidashiEntry(type, number, (NpcEntry*)FUKIDASHI_PARTY, 0.0f, yy, 0.0f, ww, angle, duration);
                 }
 #else
-                h = ((PartyEntry*)p)->height;
-                {
-                    f32 yy = 2.0f * h / 3.0f;
-                    f32 ww = h / 3.0f;
-                    entry = effFukidashiEntry(a, b, (NpcEntry*)-2, 0.0f, yy, 0.0f, ww, e, d);
-                }
+                yy = 2.0f * party->height / 3.0f;
+                ww = party->height / 3.0f;
+                entry = effFukidashiEntry(type, number, (NpcEntry*)FUKIDASHI_PARTY, 0.0f, yy, 0.0f, ww, angle, duration);
 #endif
             }
             break;
-        case 4:
-            p = partyGetPtr(marioGetExtraPartyId());
-            if (p) {
-                h = ((PartyEntry*)p)->height;
-                {
-                    f32 yy = 2.0f * h / 3.0f;
-                    f32 ww = h / 3.0f;
-                    entry = effFukidashiEntry(a, b, (NpcEntry*)-3, 0.0f, yy, 0.0f, ww, e, d);
-                }
+        case FUKIDASHI_AT_FOLLOWER:
+            party = partyGetPtr(marioGetExtraPartyId());
+            if (party) {
+                yy = 2.0f * party->height / 3.0f;
+                ww = party->height / 3.0f;
+                entry = effFukidashiEntry(type, number, (NpcEntry*)FUKIDASHI_EXTRA_PARTY, 0.0f, yy, 0.0f, ww, angle, duration);
             }
             break;
     }
@@ -992,4 +990,3 @@ USER_FUNC(evt_eff_fukidashi) {
     }
     return EVT_RETURN_DONE;
 }
-#pragma pop

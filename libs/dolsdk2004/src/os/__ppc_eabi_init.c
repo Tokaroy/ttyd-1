@@ -27,6 +27,7 @@ __declspec(section ".init") asm void __init_hardware(void)
 __declspec(section ".init") asm void __flush_cache(void *address, unsigned int size)
 { // clang-format off
     nofralloc
+    // The mask 0xFFFFFFF1 clears bits 1-3 of the start address (bit 0 stays); the loop steps 8 bytes.
     lis     r5, 0xffff
     ori     r5, r5, 0xfff1
     and     r5, r5, r3
@@ -43,52 +44,43 @@ rept:
     blr
 }
 
-/** User-level start-up hook called from __start before main; here it only runs the C++ static constructors. */
 void __init_user(void) {
     __init_cpp();
 }
 
-/** Calls every function in the _ctors table (C++ static constructors) in order. */
 static void __init_cpp(void) {
-	void (* * constructor)();
+    void (**constructor)();
 
-	/*
-	 *	call static initializers
-	 */
-	for (constructor = _ctors; *constructor; constructor++) {
-		(*constructor)();
-	}
+    /*
+     * call static initializers
+     */
+    for (constructor = _ctors; *constructor; constructor++) {
+        (*constructor)();
+    }
 }
 
-/** Calls every function in the _dtors table (C++ static destructors); run from exit. */
 static void __fini_cpp(void) {
-    void (* * destructor)();
+    void (**destructor)();
 
-	/*
-	 *	call destructors
-	 */
+    /*
+     * call destructors
+     */
     for (destructor = _dtors; *destructor; destructor++) {
         (*destructor)();
     }
 }
 
 __declspec(weak)
-/** Standard C abort: ends the program through _ExitProcess. */
 void abort(void) {
     _ExitProcess();
 }
 
 __declspec(weak)
-/**
- * Standard C exit: runs the static destructors and then ends the program through _ExitProcess.
- * Weak, so a program can override it.
- */
 void exit(int status) {
     __fini_cpp();
     _ExitProcess();
 }
 
-/** Halts the processor with PPCHalt; nothing returns from here. */
 void _ExitProcess(void) {
     PPCHalt();
 }

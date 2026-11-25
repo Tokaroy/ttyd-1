@@ -6,15 +6,13 @@ typedef struct __va_list_struct {
     char* reg_save_area;
 } _va_list[1];
 
-/**
- * Runtime helper behind va_arg for the EABI: returns the address of the next variadic argument of the given type
- * (0 = struct passed by reference, 2 = 64-bit integer, 3 = double, otherwise a 32-bit word),
- * taking it from the register save area while registers remain and from the overflow stack area after that.
- */
+/* Returns the address of the next variable argument. type 3 = a floating-point argument (taken from the FPR
+   save area, which starts after the 8 GPR slots of 4 bytes: fpr_offset 32), 2 = an 8-byte integer (an aligned
+   GPR pair), 0 = an argument passed by address (the slot holds a pointer to it); other values take one GPR. */
 void* __va_arg(_va_list v_list, int type) {
     char* addr;
     char* reg = &(v_list->gpr);
-    int g_reg = v_list->gpr;
+    int registerIndex = v_list->gpr;
     int maxsize = 8;
     int size = 4;
     int increment = 1;
@@ -24,7 +22,7 @@ void* __va_arg(_va_list v_list, int type) {
 
     if (type == 3) {
         reg = &(v_list->fpr);
-        g_reg = v_list->fpr;
+        registerIndex = v_list->fpr;
         size = 8;
         fpr_offset = 32;
         regsize = 8;
@@ -33,15 +31,15 @@ void* __va_arg(_va_list v_list, int type) {
     if (type == 2) {
         size = 8;
         maxsize--;
-        if (g_reg & 1)
+        if (registerIndex & 1)
             even = 1;
         increment = 2;
     }
 
-    if (g_reg < maxsize) {
-        g_reg += even;
-        addr = v_list->reg_save_area + fpr_offset + (g_reg * regsize);
-        *reg = g_reg + increment;
+    if (registerIndex < maxsize) {
+        registerIndex += even;
+        addr = v_list->reg_save_area + fpr_offset + (registerIndex * regsize);
+        *reg = registerIndex + increment;
     } else {
         *reg = 8;
         addr = v_list->input_arg_area;

@@ -1,17 +1,26 @@
 // X-Naut Fortress (aji) battle unit: Magnus von Grapple 2.0 (magnum_battender_mkII): its parts, defence/status tables,
 // and attack events.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_audience.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_sub.h"
+#include "libc_decls.h"
+#include "eff/n64/eff_kumokumo_n64.h"
+#include "eff/n64/eff_kameki_tornade_n64.h"
+#include "system.h"
+#include "eff/eff_batten.h"
+#include "eff/eff_kemutest.h"
 
 #include "manager/evtmgr_cmd.h"
 #include "driver/effdrv.h"
 #include "battle/battle.h"
-#include "battle/battle_unit.h"
 #include "manager/evtmgr.h"
 #include "dolphin/mtx.h"
 #include "eff/n64/eff_akari_charge_n64.h"
 #include "battle/battle_audience.h"
-#include "evt/evt_cmd.h"
 #include "eff/eff_kemu_test.h"
 #include "driver/animdrv.h"
 #include "driver/camdrv.h"
@@ -22,62 +31,50 @@
 #include "battle/battle_weapon_power.h"
 #include "evt/evt_batstage.h"
 #include "evt/evt_eff.h"
-#include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "battle/battle_database_common.h"
 #include "battle/battle_sub.h"
-#include "eff/eff_batten.h"
-#include "eff/n64/eff_kameki_tornade_n64.h"
-#include "eff/n64/eff_kumokumo_n64.h"
-#include "evt/evt_audience.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_sub.h"
 #include "pmario_sound.h"
+#include "battle/battle_damage.h"
+
+// BattleUnit.work slots of the boss (btlevtcmd_Get/Set/AddUnitWork)
+#define UNIT_WORK_ARMS_OUT 0         // 1 while the arms fly as rocket punch units (arm_bunri_event sets it, arm_return_event clears it)
+#define UNIT_WORK_ARM_RETURN_TURNS 1 // set to 2 at launch; once arm_check finds no arm left, attack_event counts it down and at 0 runs arm_return_event
+#define UNIT_WORK_ARMS_LAUNCHED 2    // 1 after the first arm_bunri_event (its line plays only once)
+#define UNIT_WORK_ARM_0_UNUSED 3     // unit id of the rocket punch launched as arm 0; never read
+#define UNIT_WORK_ARM_1_UNUSED 4     // unit id of the rocket punch launched as arm 1; never read
+#define UNIT_WORK_DRILL_TALK_DONE 5  // 1 after the first drill_attack_event showed stg7_aji_41_02; while 0 attack_event always picks the drill
+#define UNIT_WORK_LOW_HP_TALK_DONE 6 // 1 once damage_event showed its low-HP line (dead_event sets it too)
+#define UNIT_WORK_AUD_TALK_DONE 7    // 1 after the first aud_attack_event (stg7_aji_41_04/05); at 35 HP or less with 20 or more audience it goes first while 0
+#define UNIT_WORK_AUD_HIT 8          // 1 once a machine-gun shot of aud_attack_event has hit; the 10th shot then hits without a new check
+// ... and of the rocket punch units it launches (unit_boss_rocket_punch_mkII below; the *_r and arm_event* events)
+#define ROCKET_PUNCH_WORK_SIDE 0 // which arm: 0/1, or 2/3 for an arm spawned by arm_return_event (no fly-in); arm_check reads it
+// attack_event_r subtracts 1 and waits while the result is 1 or more; set to 1 at launch and after each attack
+#define ROCKET_PUNCH_WORK_WAIT 1
+
 #include "unit/unit_boss_magnum_battender.h"
-#include "system.h"
-#include "version.h"
-#include "libc_decls.h"
-
-// Unit work slots of Magnus von Grapple 2.0 (btlevtcmd_SetUnitWork / GetUnitWork).
-enum {
-    UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT = 0,         // 1 while its fists are detached
-    UW_BOSS_MAGNUM_BATTENDER_MKII_ARM_RETURN_TIMER = 1, // turns left before the fists are called back once both are gone
-    UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_SEPARATED = 2,   // 1 once the arms have been split off (the close-up plays only the first time)
-    UW_BOSS_MAGNUM_BATTENDER_MKII_LEFT_FIST = 3,        // unit id of the left rocket punch
-    UW_BOSS_MAGNUM_BATTENDER_MKII_RIGHT_FIST = 4,       // unit id of the right rocket punch
-    UW_BOSS_MAGNUM_BATTENDER_MKII_DRILL_USED = 5,       // 1 once the drill attack has been used
-    UW_BOSS_MAGNUM_BATTENDER_MKII_LOW_HP_TALK_DONE = 6, // 1 once the 14 HP line has played, or once it is defeated
-    UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_USED = 7,  // 1 once the audience attack has been used
-    UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_HIT = 8,   // 1 once a round of the audience attack has hit
-};
-
-// Unit work slots of a rocket punch fist (unit_boss_rocket_punch_mkII).
-enum {
-    UW_ROCKET_PUNCH_MKII_SIDE = 0,      // 0 left, 1 right; 2 left and 3 right for fists that come back
-    UW_ROCKET_PUNCH_MKII_TURN_WAIT = 1, // counts down each turn; it attacks only when this reaches 0 (every other turn)
-};
-
 typedef struct TargetWork {
     s32 state;
     s32 count;
     EffectEntry* eff;
 } TargetWork;
-extern EvtWord aud_hit_event[];
-static void aud_get_pod_pos(BattleUnit* unit, f32* x, f32* y, f32* z);
-static void aud_fire_eff(f32 x, f32 y, f32 z);
-EffectEntry* eff_tor;
-s32 torCount;
-EffectEntry* eff_jet[2];
-s32 jetCount;
+static EvtWord aud_hit_event[24];
+static EffectEntry* eff_tor;
+static s32 torCount;
+static EffectEntry* eff_jet[2];
+static s32 jetCount;
 static s32* list;
-EffectEntry* eff_suikomi;
-s32 screamId;
+static EffectEntry* eff_suikomi;
+static s32 screamId;
+
 #if VERSION >= VERSION_JP
 s32 scream_fade_timer;
 u8 scream_fade_start_vol;
 u8 scream_fade_vol;
 #endif
-TargetWork* wp_target;
-s32 targetSoundId;
+
+static TargetWork* wp_target;
+static s32 targetSoundId;
 static EffectEntry* eff_charge;
 static ArmWork* work[2];
 
@@ -85,12 +82,20 @@ static USER_FUNC(arm_check);
 static USER_FUNC(arm_end);
 static USER_FUNC(arm_init);
 static USER_FUNC(arm_main);
+static USER_FUNC(get_aud_num);
 static USER_FUNC(waku_main);
 static USER_FUNC(arm_init2);
 static USER_FUNC(eff_dead_delete);
 static USER_FUNC(eff_dead);
-static void aud_fire_eff(f32 x, f32 y, f32 z);
-static void aud_get_pod_pos(BattleUnit* unit, f32* x, f32* y, f32* z);
+static USER_FUNC(aud_target_mark);
+static USER_FUNC(aud_fire_no_hit);
+static USER_FUNC(aud_fire_hit);
+USER_FUNC(aud_scream_fadeout);
+USER_FUNC(aud_suikomi);
+static USER_FUNC(aud_jet_end);
+static USER_FUNC(aud_jet);
+static USER_FUNC(drill_jet);
+static USER_FUNC(drill_tor);
 
 BattleUnitKind unit_boss_magnum_battender_mkII;
 static BattleUnitDefense defence;
@@ -100,26 +105,34 @@ static PoseTableEntry pose_table[17];
 static PoseTableEntry pose_table_no_arm[16];
 static BattleDataEntry data_table[2];
 static BattleUnitKindPart parts[4];
-BattleWeapon weapon_batten_drill_attack;
-BattleWeapon weapon_batten_boomerang_attack;
-BattleWeapon weapon_batten_aud_attack;
+static BattleWeapon weapon_batten_drill_attack;
+static BattleWeapon weapon_batten_boomerang_attack;
+static BattleWeapon weapon_batten_aud_attack;
 static BattleUnitSetup entry_rocket_punch;
-extern EvtWord aud_hit_event[];
-extern EvtWord aud_no_hit_event[];
+static EvtWord aud_hit_event[24];
+static EvtWord aud_no_hit_event[16];
 static EvtWord init_event[92];
 static EvtWord waku_event[23];
 static EvtWord damage_event[111];
+
 #if VERSION <= VERSION_DEMO_JP
 static EvtWord dead_event[216];
 #else
 static EvtWord dead_event[234];
 #endif
+
 static EvtWord entry_event[78];
 static EvtWord attack_event[320];
-extern EvtWord drill_attack_event[];
-extern EvtWord boomerang_attack_event[];
+static EvtWord drill_attack_event[392];
+static EvtWord boomerang_attack_event[324];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord aud_attack_event[];
-extern EvtWord aud_attack_event_sub[];
+#else
+EvtWord aud_attack_event[823];
+#endif
+
+static EvtWord aud_attack_event_sub[139];
 static EvtWord arm_bunri_event[199];
 static EvtWord arm_return_event[151];
 static EvtWord wait_event[6];
@@ -140,21 +153,22 @@ static EvtWord wait_event_r[18];
 
 /** Unit data of Magnus von Grapple 2.0: 70 HP, level 84; the battle starts it from init_event. */
 BattleUnitKind unit_boss_magnum_battender_mkII = {
-    121,
-    "btl_un_magnum_battender_mkii",
-    70,
-    0,
-    1,
-    1,
-    84,
-    0,
-    0,
-    100,
-    0,
-    50,
-    6,
-    120,
-    160,
+    UNIT_MAGNUS2_0, // unitType
+    "btl_un_magnum_battender_mkii", // name
+    70, // maxHp
+    0, // maxFp
+    1, // dangerHP
+    1, // perilHP
+    84, // level
+    0, // bonusExp
+    0, // bonusCoin
+    100, // bonusCoinRate
+    0, // baseCoin
+    50, // runRate
+    6, // pbSoftCap
+    120, // width
+    160, // height
+#if VERSION <= VERSION_DEMO_JP
     30,
     100,
     0.0f,
@@ -162,13 +176,17 @@ BattleUnitKind unit_boss_magnum_battender_mkII = {
     0.0f,
     0,
     0,
-#if VERSION <= VERSION_DEMO_JP
-    0.0f,
-    0.0f,
 #else
-    30.0f,
-    115.0f,
+    {30, 100}, // hitOffset
+    {0.0f, 80.0f, 0.0f}, // centerOffset
+    {0, 0}, // hpGaugeOffset
+    {30.0f, 115.0f, 0.0f}, // talkTogeBaseOffset
+    {60.0f, 0.0f, -10.0f}, // heldItemBaseOffset
+    {0.0f, 0.0f, 0.0f}, // burnFlameOffset
 #endif
+    0.0f, // vivianOffsetX
+    0.0f, // vivianOffsetZ
+#if VERSION <= VERSION_DEMO_JP
     0.0f,
     60.0f,
     0.0f,
@@ -187,49 +205,65 @@ BattleUnitKind unit_boss_magnum_battender_mkII = {
     0.0f,
     80.0f,
     0.0f,
-    120.0f,
-    160.0f,
-    0,
-    0,
-    -1,
-    0,
-    100,
-    20,
-    0.0f,
-    0.0f,
-    0.0f,
-    "SFX_BOSS_MBTN_DAMAGED1",
-    "SFX_BTL_DAMAGE_FIRE1",
-    "SFX_BTL_DAMAGE_ICE1",
-    "SFX_BTL_DAMAGE_BIRIBIRI1",
-    0,
-    &regist,
-    4,
-    parts,
-    init_event,
-    data_table,
+#else
+    {52.0f, 0.0f, 0.0f}, // bintaHitOffset
+    {30.0f, 110.0f, 20.0f}, // kissHitOffset
+    {0.0f, 80.0f, 0.0f}, // cutBaseOffset
+#endif
+    120.0f, // cutWidth
+    160.0f, // cutHeight
+    0, // turnOrder
+    0, // turnOrderVariance
+    -1, // swallowChance
+    0, // swallowAttributes
+    100, // hammerKnockbackChance
+    20, // itemStealParam
+    {0.0f, 0.0f, 0.0f}, // starPointDispOffset
+    "SFX_BOSS_MBTN_DAMAGED1", // damageSfxName
+    "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
+    "SFX_BTL_DAMAGE_ICE1", // iceDamageSfxName
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    0, // attributeFlags
+    &regist, // statusVulnerability
+    4, // numParts
+    parts, // parts
+    init_event, // initEventCode
+    data_table, // dataTable
 };
 
 /** Defence of Magnus von Grapple 2.0: 2 against every element. */
 static BattleUnitDefense defence = {{2, 2, 2, 2, 2}};
 
 /** Elemental reactions of Magnus von Grapple 2.0: none, every element hurts it normally. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 #if VERSION <= VERSION_DEMO_JP
-/**
- * Status vulnerability of Magnus von Grapple 2.0 (percent, 100 is normal) in the demo builds: immune to
- * sleep, poison, electric, Huge, Tiny, Attack Down, fright, Gale Force, Dodgy, Invisible and instant KO;
- * resists most statuses (20-40%).
- */
 static StatusVulnerability regist = {0, 40, 40, 0, 40, 0, 100, 20, 0, 0, 100, 0, 100, 40, 40, 0, 0, 100, 30, 0, 0, 0};
 #else
-/**
- * Status vulnerability of Magnus von Grapple 2.0 (percent, 100 is normal) in the retail builds: immune to
- * sleep, poison, electric, Huge, Tiny, Attack Down, fright, Gale Force, Dodgy, Invisible and instant KO;
- * resists most statuses (20-80%).
- */
-static StatusVulnerability regist = {0, 40, 40, 0, 40, 0, 100, 20, 0, 0, 100, 0, 100, 80, 40, 0, 0, 100, 30, 0, 0, 0};
+static StatusVulnerability regist = {
+    0, // sleep
+    40, // stop
+    40, // dizzy
+    0, // poison
+    40, // confuse
+    0, // electric
+    100, // burn
+    20, // freeze
+    0, // huge
+    0, // tiny
+    100, // attackUp
+    0, // attackDown
+    100, // defenseUp
+    80, // defenseDown
+    40, // allergic
+    0, // fright
+    0, // galeForce
+    100, // fast
+    30, // slow
+    0, // dodgy
+    0, // invisible
+    0, // ohko
+};
 #endif
 
 /**
@@ -237,58 +271,58 @@ static StatusVulnerability regist = {0, 40, 40, 0, 40, 0, 100, 20, 0, 0, 100, 0,
  * plays.
  */
 static PoseTableEntry pose_table[] = {
-    {1, "MGN_S_1"},
-    {2, "MGN_2D_1"},
-    {9, "MGN_2D_1"},
-    {5, "MGN_X_1"},
+    {POSE_TYPE_SLEEP, "MGN_S_1"},
+    {POSE_TYPE_STOP, "MGN_2D_1"},
+    {POSE_TYPE_FREEZE, "MGN_2D_1"},
+    {POSE_TYPE_CONFUSE, "MGN_X_1"},
 #if VERSION <= VERSION_DEMO_JP
-    {4, "MGN_S_1"},
-    {3, "MGN_S_1"},
+    {POSE_TYPE_POISON, "MGN_S_1"},
+    {POSE_TYPE_DIZZY, "MGN_S_1"},
 #else
-    {4, "MGN_X_1"},
-    {3, "MGN_X_1"},
+    {POSE_TYPE_POISON, "MGN_X_1"},
+    {POSE_TYPE_DIZZY, "MGN_X_1"},
 #endif
-    {BTL_POSE_NORMAL, "MGN_S_1"},
-    {29, "MGN_Q_1"},
-    {30, "MGN_Q_1"},
-    {31, "MGN_S_1"},
-    {BTL_POSE_DAMAGE, "MGN_D_1"},
-    {BTL_POSE_WALK, "MGN_W_1"},
-    {41, "MGN_W_2"},
-    {BTL_POSE_DANGER, "MGN_S_1"},
-    {BTL_POSE_PERIL, "MGN_S_1"},
-    {BTL_POSE_TALK, "MGN_T_1"},
-    {BTL_POSE_STAY_DEFAULT, "MGN_S_1"},
+    {POSE_TYPE_NORMAL, "MGN_S_1"},
+    {POSE_TYPE_DAMAGE_FIRE, "MGN_Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "MGN_Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "MGN_S_1"},
+    {POSE_TYPE_DAMAGE, "MGN_D_1"},
+    {POSE_TYPE_WALK, "MGN_W_1"},
+    {POSE_TYPE_RUN_HOME, "MGN_W_2"},
+    {POSE_TYPE_DANGER, "MGN_S_1"},
+    {POSE_TYPE_PERIL, "MGN_S_1"},
+    {POSE_TYPE_TALK, "MGN_T_1"},
+    {POSE_TYPE_ACTION, "MGN_S_1"},
 };
 
 /** Pose table of Magnus von Grapple 2.0 once his arms have split off (poses without the fists). */
 static PoseTableEntry pose_table_no_arm[] = {
-    {1, "MGN_S_2"},
-    {2, "MGN_2D_2"},
-    {9, "MGN_2D_2"},
-    {5, "MGN_X_2"},
+    {POSE_TYPE_SLEEP, "MGN_S_2"},
+    {POSE_TYPE_STOP, "MGN_2D_2"},
+    {POSE_TYPE_FREEZE, "MGN_2D_2"},
+    {POSE_TYPE_CONFUSE, "MGN_X_2"},
 #if VERSION <= VERSION_DEMO_JP
-    {4, "MGN_S_2"},
-    {3, "MGN_S_2"},
+    {POSE_TYPE_POISON, "MGN_S_2"},
+    {POSE_TYPE_DIZZY, "MGN_S_2"},
 #else
-    {4, "MGN_X_2"},
-    {3, "MGN_X_2"},
+    {POSE_TYPE_POISON, "MGN_X_2"},
+    {POSE_TYPE_DIZZY, "MGN_X_2"},
 #endif
-    {BTL_POSE_NORMAL, "MGN_S_2"},
-    {29, "MGN_Q_2"},
-    {30, "MGN_Q_2"},
-    {31, "MGN_S_2"},
-    {BTL_POSE_DAMAGE, "MGN_D_2"},
-    {BTL_POSE_WALK, "MGN_W_3"},
-    {BTL_POSE_DANGER, "MGN_S_2"},
-    {BTL_POSE_PERIL, "MGN_S_2"},
-    {BTL_POSE_TALK, "MGN_T_2"},
-    {BTL_POSE_STAY_DEFAULT, "MGN_S_2"},
+    {POSE_TYPE_NORMAL, "MGN_S_2"},
+    {POSE_TYPE_DAMAGE_FIRE, "MGN_Q_2"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "MGN_Q_2"},
+    {POSE_TYPE_DAMAGE_GUARDED, "MGN_S_2"},
+    {POSE_TYPE_DAMAGE, "MGN_D_2"},
+    {POSE_TYPE_WALK, "MGN_W_3"},
+    {POSE_TYPE_DANGER, "MGN_S_2"},
+    {POSE_TYPE_PERIL, "MGN_S_2"},
+    {POSE_TYPE_TALK, "MGN_T_2"},
+    {POSE_TYPE_ACTION, "MGN_S_2"},
 };
 
-/** Event table of Magnus von Grapple 2.0: its defeat (dead_event, tag 49). */
+/** Event table of Magnus von Grapple 2.0: its defeat (dead_event). */
 static BattleDataEntry data_table[] = {
-    {49, dead_event},
+    {UNIT_DATA_DEAD_EVENT, dead_event},
     {0, NULL},
 };
 
@@ -298,17 +332,17 @@ static BattleDataEntry data_table[] = {
  */
 static BattleUnitKindPart parts[] = {
 #if VERSION >= VERSION_US
-    {1, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 37.0f, 103.0f, 30.0f, 37.0f, 113.0f, 61.0f, 106, 174, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER | PART_ATTR_NOT_ANY_PART_TARGET | PART_ATTR_HAMMERLIKE_CANNOT_TARGET | PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET, 0, pose_table},
+    {1, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 37.0f, 103.0f, 30.0f, 37.0f, 113.0f, 61.0f, 106, 174, 255, &defence, &defence_attr, 0x600019, 0, pose_table},
 #else
-    {1, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 37.0f, 103.0f, 30.0f, 37.0f, 113.0f, 61.0f, 106, 174, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER | PART_ATTR_HAMMERLIKE_CANNOT_TARGET | PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET, 0, pose_table},
+    {1, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 37.0f, 103.0f, 30.0f, 37.0f, 113.0f, 61.0f, 106, 174, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart | kHammerlikeCannotTarget | kShellTosslikeCannotTarget, 0, pose_table},
 #endif
-    {2, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 10.0f, 10.0f, 30.0f, 10.0f, 20.0f, 61.0f, 106, 174, 255, &defence, &defence_attr, PART_ATTR_IMPORTANT | PART_ATTR_JUMPLIKE_CANNOT_TARGET | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW, 0, pose_table},
-    {3, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {4, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
+    {2, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 10.0f, 10.0f, 30.0f, 10.0f, 20.0f, 61.0f, 106, 174, 255, &defence, &defence_attr, kImportantPart | kJumplikeCannotTarget | kHidden | kNoShadow, 0, pose_table},
+    {3, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30, 30, 255, &defence, &defence_attr, kNotTargetable | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {4, "btl_un_magnum_battender_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 30, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
 };
 
 /** Weapon data for Magnus von Grapple 2.0's drill attack: 6 damage, a jump-type hit, one target. */
-BattleWeapon weapon_batten_drill_attack = {
+static BattleWeapon weapon_batten_drill_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -328,15 +362,15 @@ BattleWeapon weapon_batten_drill_attack = {
     {6, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_JUMPLIKE | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_JUMPLIKE | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -349,7 +383,7 @@ BattleWeapon weapon_batten_drill_attack = {
 };
 
 /** Weapon data for Magnus von Grapple 2.0's boomerang: 6 damage, every target. */
-BattleWeapon weapon_batten_boomerang_attack = {
+static BattleWeapon weapon_batten_boomerang_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -369,15 +403,15 @@ BattleWeapon weapon_batten_boomerang_attack = {
     {6, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -390,7 +424,7 @@ BattleWeapon weapon_batten_boomerang_attack = {
 };
 
 /** Weapon data for Magnus von Grapple 2.0's audience attack: 3 damage, one target. */
-BattleWeapon weapon_batten_aud_attack = {
+static BattleWeapon weapon_batten_aud_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -410,15 +444,15 @@ BattleWeapon weapon_batten_aud_attack = {
     {3, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -433,7 +467,7 @@ BattleWeapon weapon_batten_aud_attack = {
 /** Setup for the X-Punch fists that Magnus von Grapple 2.0 spawns when he splits off his arms. */
 static BattleUnitSetup entry_rocket_punch = {
     &unit_boss_rocket_punch_mkII, // unitKindParams
-    1, // alliance
+    ALLIANCE_ENEMY, // alliance
     {0}, // pad_05
     BATTLE_PHASE_ENEMY, // attackPhase
     {-1000.0f, -1000.0f, -1000.0f}, // position
@@ -447,7 +481,7 @@ static BattleUnitSetup entry_rocket_punch = {
  * moves it to the hit position over LW(5) frames, makes it jump away along an arc,
  * deletes it and lowers the audience size by one.
  */
-EVT_BEGIN(aud_hit_event)
+static EVT_BEGIN(aud_hit_event)
     CALL(evt_audience_move_position_frame, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5))
     CALL(evt_audience_jump_position_gravity, LW(0), LW(6), LW(7), LW(8), LW(9), LW(10))
     CALL(evt_audience_delete, LW(0))
@@ -459,7 +493,7 @@ EVT_END()
  * Event run on a thrown audience member that missed:
  * moves it over LW(5) frames to the miss position, deletes it and lowers the audience size by one.
  */
-EVT_BEGIN(aud_no_hit_event)
+static EVT_BEGIN(aud_no_hit_event)
     CALL(evt_audience_move_position_frame, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5))
     CALL(evt_audience_delete, LW(0))
     CALL(evt_audience_num_updown_in_event, FLOAT(-1.0f))
@@ -481,6 +515,7 @@ static USER_FUNC(waku_main) {
     AnimationPose* pose;
     s32 idx;
     f32 yaw;
+    Vec* positions;
 
     animGetPtr();
     id = BattleTransID(event, id);
@@ -492,8 +527,9 @@ static USER_FUNC(waku_main) {
     animPoseGetAnimBaseDataPtr(poseId);
     pose = animPoseGetAnimPosePtr(poseId);
     idx = animPoseGetGroupIdx(poseId, "locator17");
-    BtlUnit_SetPartsPos(waku, (*pose->worldPositions)[idx].x, (*pose->worldPositions)[idx].y,
-                        (*pose->worldPositions)[idx].z);
+    positions = pose->worldPositions->address;
+    BtlUnit_SetPartsPos(waku, positions[idx].x, positions[idx].y,
+                        positions[idx].z);
     yaw = camGetPtr(CAMERA_3D)->viewYaw;
     BtlUnit_SetPartsRotate(waku, 0.0f, -yaw, 0.0f);
     return EVT_RETURN_DONE;
@@ -515,11 +551,11 @@ static USER_FUNC(arm_check) {
     for (i = 0; i < 64; i++) {
         unit = wp->units[i];
         if (unit != NULL && (unit->currentKind == UNIT_X_FIST || unit->currentKind == UNIT_X_PUNCH)) {
-            if (side == 0 && (unit->work[UW_ROCKET_PUNCH_MKII_SIDE] == 0 || unit->work[UW_ROCKET_PUNCH_MKII_SIDE] == 2)) {
+            if (side == 0 && (unit->work[ROCKET_PUNCH_WORK_SIDE] == 0 || unit->work[ROCKET_PUNCH_WORK_SIDE] == 2)) {
                 found = i;
                 break;
             }
-            if (side == 1 && (unit->work[UW_ROCKET_PUNCH_MKII_SIDE] == 1 || unit->work[UW_ROCKET_PUNCH_MKII_SIDE] == 3)) {
+            if (side == 1 && (unit->work[ROCKET_PUNCH_WORK_SIDE] == 1 || unit->work[ROCKET_PUNCH_WORK_SIDE] == 3)) {
                 found = i;
                 break;
             }
@@ -547,9 +583,9 @@ static USER_FUNC(drill_tor) {
         torCount = 0;
     }
     if (y <= 300.0f) {
-        ((EffBattenWork*)eff_tor->userdata)->position.x = x;
-        ((EffBattenWork*)eff_tor->userdata)->position.y = y - 240.0f;
-        ((EffBattenWork*)eff_tor->userdata)->position.z = z;
+        ((BattenEffWork*)eff_tor->userdata)->pos.x = x;
+        ((BattenEffWork*)eff_tor->userdata)->pos.y = y - 240.0f;
+        ((BattenEffWork*)eff_tor->userdata)->pos.z = z;
     }
     if (++torCount >= 70) {
         effDelete(eff_tor);
@@ -569,7 +605,7 @@ static USER_FUNC(drill_jet) {
     f32 y;
     f32 z;
     s32 i;
-    EffBattenWork* ew;
+    BattenEffWork* ew;
 
     BtlUnit_GetPos(unit, &x, &y, &z);
     if (isFirstCall) {
@@ -579,13 +615,13 @@ static USER_FUNC(drill_jet) {
         jetCount = 0;
     }
     ew = eff_jet[0]->userdata;
-    ew->position.x = x - 20.0f;
-    ew->position.y = y;
-    ew->position.z = z - 20.0f;
+    ew->pos.x = x - 20.0f;
+    ew->pos.y = y;
+    ew->pos.z = z - 20.0f;
     ew = eff_jet[1]->userdata;
-    ew->position.x = 20.0f + x;
-    ew->position.y = y;
-    ew->position.z = 20.0f + z;
+    ew->pos.x = 20.0f + x;
+    ew->pos.y = y;
+    ew->pos.z = 20.0f + z;
     if (++jetCount >= 90) {
         for (i = 0; i < 2; i++) {
             effDelete(eff_jet[i]);
@@ -607,7 +643,7 @@ static USER_FUNC(aud_jet) {
     f32 y;
     f32 z;
     s32 i;
-    EffBattenWork* ew;
+    BattenEffWork* ew;
 
     BtlUnit_GetPos(unit, &x, &y, &z);
     if (isFirstCall) {
@@ -618,15 +654,15 @@ static USER_FUNC(aud_jet) {
     }
     PSMTXRotRad(mtx, 'z', -0.34906584f);
     ew = eff_jet[0]->userdata;
-    ew->position.x = x - 60.0f;
-    ew->position.y = 22.5f + y;
-    ew->position.z = z;
-    PSMTXCopy(mtx, ((EffBattenWork*)eff_jet[0]->userdata)->mtx);
+    ew->pos.x = x - 60.0f;
+    ew->pos.y = 22.5f + y;
+    ew->pos.z = z;
+    PSMTXCopy(mtx, ((BattenEffWork*)eff_jet[0]->userdata)->mtx);
     ew = eff_jet[1]->userdata;
-    ew->position.x = x - 15.0f;
-    ew->position.y = 22.5f + y;
-    ew->position.z = 70.0f + z;
-    PSMTXCopy(mtx, ((EffBattenWork*)eff_jet[1]->userdata)->mtx);
+    ew->pos.x = x - 15.0f;
+    ew->pos.y = 22.5f + y;
+    ew->pos.z = 70.0f + z;
+    PSMTXCopy(mtx, ((BattenEffWork*)eff_jet[1]->userdata)->mtx);
     if (jetCount == 1) {
         for (i = 0; i < 2; i++) {
             effDelete(eff_jet[i]);
@@ -657,7 +693,12 @@ static USER_FUNC(get_aud_num) {
  * and removes each when it arrives. The list of 20 is kept for the shots that follow.
  * Blocks until all 20 arrived.
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(aud_suikomi) {
+#else
+USER_FUNC(aud_suikomi) {
+#endif
+
     s32 id = BattleTransID(event, evtGetValue(event, event->args[0]));
     s32 done = 0;
     BattleAudienceMember* mem;
@@ -678,12 +719,14 @@ static USER_FUNC(aud_suikomi) {
             BattleFree(list);
         }
         list = BattleAlloc(sizeof(s32) * 20);
-        for (i = 0; i < 200; i++) {
-            if ((u8)BattleAudience_GetExist(i) == TRUE) {
+        for (i = 0; i < AUDIENCE_MEMBER_MAX; i++) {
+            if (BattleAudience_GetExist(i) == TRUE) {
                 ids[n] = i;
                 n++;
             }
         }
+
+        // Shuffle the occupied-seat IDs before taking the first twenty.
         for (i = 0; i < 1000; i++) {
             s32 a = irand(n);
             s32 b = irand(n);
@@ -694,8 +737,8 @@ static USER_FUNC(aud_suikomi) {
         }
         for (i = 0; i < 20; i++) {
             mem = BattleAudienceGetPtr(ids[i]);
-            mem->flags |= MEMBER_FLAG_EVT_CTRL;
-            BattleAudience_SetAnim(ids[i], 9, FALSE);
+            mem->flags |= AUDIENCE_MEMBER_FLAG_NO_SYS_CTRL;
+            BattleAudience_SetAnim(ids[i], AUD_ANIM_DAMAGE_FRONT, FALSE);
             mem->interpFramesTotal = i * 3 + 60;
             mem->counter = 0;
             mem->rotation.y = 0.0f;
@@ -707,28 +750,27 @@ static USER_FUNC(aud_suikomi) {
     }
     BtlUnit_GetPos(BattleGetUnitPtr(_battleWorkPointer, id), &x2, &y2, &z2);
     y2 += 5.0f;
-    for (i = 0; i < 200; i++) {
+    for (i = 0; i < AUDIENCE_MEMBER_MAX; i++) {
         for (j = 0; j < 20; j++) {
             if (i == list[j]) {
                 mem = BattleAudienceGetPtr(i);
                 mem->rotation.y += 19.0f;
-                if (mem->interpFramesLeft < mem->interpFramesTotal) {
-                    mem->interpFramesLeft++;
+                if (mem->interpFrameCounter < mem->interpFramesTotal) {
+                    mem->interpFrameCounter++;
                 } else {
                     done++;
-                    mem->flags &= ~MEMBER_FLAG_VISIBLE;
-                    mem->flags |= MEMBER_FLAG_REMOVED;
+                    mem->flags &= ~AUDIENCE_MEMBER_FLAG_DISP;
+                    mem->flags |= AUDIENCE_MEMBER_FLAG_NOT_EXIST;
                 }
-                mem->position.x = intplGetValue(4, mem->homePosition.x, x2, mem->interpFramesLeft, mem->interpFramesTotal);
-                mem->position.y = intplGetValue(2, mem->homePosition.y, y2, mem->interpFramesLeft, mem->interpFramesTotal);
-                mem->position.z = intplGetValue(4, mem->homePosition.z, z2, mem->interpFramesLeft, mem->interpFramesTotal);
-                mem->baseScale.x = mem->baseScale.y = intplGetValue(4, 1.0f, 0.65f, mem->interpFramesLeft, mem->interpFramesTotal);
+                mem->position.x = intplGetValue(EASING_QUADRATIC_OUT, mem->homePosition.x, x2, mem->interpFrameCounter, mem->interpFramesTotal);
+                mem->position.y = intplGetValue(EASING_CUBIC_IN, mem->homePosition.y, y2, mem->interpFrameCounter, mem->interpFramesTotal);
+                mem->position.z = intplGetValue(EASING_QUADRATIC_OUT, mem->homePosition.z, z2, mem->interpFrameCounter, mem->interpFramesTotal);
+                mem->baseScale.x = mem->baseScale.y = intplGetValue(EASING_QUADRATIC_OUT, 1.0f, 0.65f, mem->interpFrameCounter, mem->interpFramesTotal);
                 break;
             }
         }
     }
 #if VERSION <= VERSION_DEMO_JP
-    // The audience scream stops as soon as the last member is pulled in.
     if (done < 20) {
         return EVT_RETURN_BLOCK;
     }
@@ -739,15 +781,17 @@ static USER_FUNC(aud_suikomi) {
 #endif
 }
 
+// Descriptive name (not in the symbol maps); placeholder unk_aji_00007668, JP aji .text+0x75A4. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
+
 /** Script function (JP and later): fades the audience scream sound (screamId) out over 120 frames after the suction. */
-static USER_FUNC(aud_scream_fadeout) {
+USER_FUNC(aud_scream_fadeout) {
     if (isFirstCall) {
         scream_fade_timer = 120;
         scream_fade_start_vol = psndSFX_get_vol(screamId);
     }
     scream_fade_timer--;
-    scream_fade_vol = intplGetValue(0, scream_fade_start_vol, 0.0f, 120 - scream_fade_timer, 120);
+    scream_fade_vol = intplGetValue(EASING_LINEAR, scream_fade_start_vol, 0.0f, 120 - scream_fade_timer, 120);
     psndSFX_vol(screamId, scream_fade_vol);
     if (scream_fade_timer <= 0) {
         return EVT_RETURN_DONE;
@@ -798,14 +842,14 @@ static USER_FUNC(aud_fire_hit) {
         BtlUnit_GetHitPos(unit, part, &hx, &hy, &hz);
         for (i = start; i < start + 2; i++) {
             mem = BattleAudienceGetPtr(list[i]);
-            BattleAudience_SetAnim(list[i], 9, FALSE);
+            BattleAudience_SetAnim(list[i], AUD_ANIM_DAMAGE_FRONT, FALSE);
             mem->position = (Vec){x, y, z};
             mem->interpFramesTotal = 0;
             mem->counter = 0;
             mem->rotation.y = 0.0f;
             mem->baseScale.x = mem->baseScale.y = 1.0f;
-            mem->flags |= MEMBER_FLAG_VISIBLE;
-            evt = evtEntry(aud_hit_event, 0, 0x20);
+            mem->flags |= AUDIENCE_MEMBER_FLAG_DISP;
+            evt = evtEntry(aud_hit_event, 0, EVENT_START_IMMEDIATE);
             evt->lwData[0] = list[i];
             evt->lwData[1] = (s32)(1024.0f * hx) - EVTDAT_FLOAT_BASE;
             evt->lwData[2] = (s32)(1024.0f * hy) - EVTDAT_FLOAT_BASE;
@@ -851,15 +895,17 @@ static USER_FUNC(aud_fire_no_hit) {
         BtlUnit_GetHitPos(unit, part, &hx, &hy, &hz);
         for (i = start; i < start + 2; i++) {
             mem = BattleAudienceGetPtr(list[i]);
-            BattleAudience_SetAnim(list[i], 9, FALSE);
+            BattleAudience_SetAnim(list[i], AUD_ANIM_DAMAGE_FRONT, FALSE);
             mem->position = (Vec){x, y, z};
             mem->interpFramesTotal = 0;
             mem->counter = 0;
             mem->rotation.y = 0.0f;
             mem->baseScale.x = mem->baseScale.y = 1.0f;
-            mem->flags |= MEMBER_FLAG_VISIBLE;
-            evt = evtEntry(aud_hit_event, 0, 0x20);
+            mem->flags |= AUDIENCE_MEMBER_FLAG_DISP;
+            evt = evtEntry(aud_hit_event, 0, EVENT_START_IMMEDIATE);
             evt->lwData[0] = list[i];
+
+            // This miss path also starts aud_hit_event; only its first six arguments are set here.
             evt->lwData[1] = FLOAT(-275.0f);
             evt->lwData[2] = (s32)(1024.0f * (hy - 20.0f)) - EVTDAT_FLOAT_BASE;
             evt->lwData[3] = (s32)(1024.0f * hz) - EVTDAT_FLOAT_BASE;
@@ -880,7 +926,7 @@ static USER_FUNC(aud_target_mark) {
     f32 x = evtGetValue(event, args[0]);
     f32 y = evtGetValue(event, args[1]);
     f32 z = evtGetValue(event, args[2]);
-    EffBattenWork* ew;
+    BattenEffWork* ew;
 
     if (isFirstCall) {
         wp_target = BattleAlloc(sizeof(TargetWork));
@@ -893,9 +939,9 @@ static USER_FUNC(aud_target_mark) {
     switch (wp_target->state) {
         case 0:
             wp_target->count++;
-            ew->position.x = intplGetValue(4, 60.0f + x, x - 5.0f, wp_target->count, 60);
-            ew->position.y = intplGetValue(4, 20.0f + y, 60.0f + y, wp_target->count, 60);
-            ew->position.z = 20.0f + z;
+            ew->pos.x = intplGetValue(EASING_QUADRATIC_OUT, 60.0f + x, x - 5.0f, wp_target->count, 60);
+            ew->pos.y = intplGetValue(EASING_QUADRATIC_OUT, 20.0f + y, 60.0f + y, wp_target->count, 60);
+            ew->pos.z = 20.0f + z;
             if (wp_target->count >= 60) {
                 wp_target->state = 5;
                 wp_target->count = 0;
@@ -903,9 +949,9 @@ static USER_FUNC(aud_target_mark) {
             break;
         case 5:
             wp_target->count++;
-            ew->position.x = intplGetValue(4, x - 5.0f, x - 25.0f, wp_target->count, 40);
-            ew->position.y = intplGetValue(4, 60.0f + y, 20.0f + y, wp_target->count, 40);
-            ew->position.z = 20.0f + z;
+            ew->pos.x = intplGetValue(EASING_QUADRATIC_OUT, x - 5.0f, x - 25.0f, wp_target->count, 40);
+            ew->pos.y = intplGetValue(EASING_QUADRATIC_OUT, 60.0f + y, 20.0f + y, wp_target->count, 40);
+            ew->pos.z = 20.0f + z;
             if (wp_target->count >= 40) {
                 wp_target->state = 10;
                 wp_target->count = 0;
@@ -913,9 +959,9 @@ static USER_FUNC(aud_target_mark) {
             break;
         case 10:
             wp_target->count++;
-            ew->position.x = intplGetValue(4, x - 25.0f, x, wp_target->count, 20);
-            ew->position.y = intplGetValue(4, 20.0f + y, y, wp_target->count, 20);
-            ew->position.z = 20.0f + z;
+            ew->pos.x = intplGetValue(EASING_QUADRATIC_OUT, x - 25.0f, x, wp_target->count, 20);
+            ew->pos.y = intplGetValue(EASING_QUADRATIC_OUT, 20.0f + y, y, wp_target->count, 20);
+            ew->pos.z = 20.0f + z;
             if (wp_target->count >= 20) {
                 wp_target->state = 15;
                 wp_target->count = 0;
@@ -956,30 +1002,30 @@ static USER_FUNC(eff_dead_delete) {
 
 /**
  * Battle init for Magnus von Grapple 2.0: registers its wait, entry, attack, damage and confusion events,
- * sets the part 3 pose MGN_L_1, starts the frame event (waku_event) and the arm physics (arm_init)
+ * sets the part 3 pose MGN_L_1, starts the frame event (waku_event), allocates the two arm trail records (arm_init)
  * and clears its unit work flags: 0 = arms detached, 1 = turns until the fists return,
- * 2 = arms have separated once, 5 and 6 are phase flags (6 is set when the boss is defeated).
+ * 2 = arms have separated once, and 5 = the drill announcement has played.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_OnUnitFlag, BTL_UNIT_SELF, UNIT_FLAG_NO_BACKFACE_FLIP)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventEntry, BTL_UNIT_SELF, PTR(entry_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 3, STRING("MGN_L_1"))
+    CALL(btlevtcmd_OnUnitFlag, UNIT_ID_SELF, BATTLE_UNIT_FLAG_SOLID_MODEL)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventEntry, UNIT_ID_SELF, PTR(entry_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 3, STRING("MGN_L_1"))
     SPAWN_EVENT(waku_event)
     CALL(arm_init)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARM_RETURN_TIMER, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_SEPARATED, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_DRILL_USED, 0)
-    CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, 125, 0, 0)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, 125, 0, 0)
-    CALL(btlevtcmd_SetBaseRotate, BTL_UNIT_SELF, 0, -55, 0)
-    CALL(btlevtcmd_SetWalkSound, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), STRING("SFX_BOSS_MBTN_MOVE1"), 26, 26, 26)
-    CALL(btlevtcmd_SetRunSound, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), STRING("SFX_BOSS_MBTN_MOVE1"), 20, 20, 20)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_RETURN_TURNS, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_LAUNCHED, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_DRILL_TALK_DONE, 0)
+    CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, 125, 0, 0)
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, 125, 0, 0)
+    CALL(btlevtcmd_SetBaseRotate, UNIT_ID_SELF, 0, -55, 0)
+    CALL(btlevtcmd_SetWalkSound, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), STRING("SFX_BOSS_MBTN_MOVE1"), 26, 26, 26)
+    CALL(btlevtcmd_SetRunSound, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), STRING("SFX_BOSS_MBTN_MOVE1"), 20, 20, 20)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -990,11 +1036,11 @@ EVT_END()
 static EVT_BEGIN(waku_event)
     LABEL(0)
     WAIT_FRAMES(1)
-    CALL(btlevtcmd_GetUnitId, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetUnitId, UNIT_ID_SELF, LW(0))
     IF_INT_EQUAL(LW(0), -1)
         GOTO(99)
     END_IF
-    CALL(waku_main, BTL_UNIT_SELF)
+    CALL(waku_main, UNIT_ID_SELF)
     GOTO(0)
     LABEL(99)
     RETURN
@@ -1007,33 +1053,33 @@ EVT_END()
  * zooms the camera on it and speaks stg7_aji_41_06.
  */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
-    CALL(btlevtcmd_CheckDamagePattern, BTL_UNIT_SELF, 10, LW(0))
+    CALL(btlevtcmd_CheckDamagePattern, UNIT_ID_SELF, ATTACKPATTERN_PRESS, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 3, PART_ATTR_HIDDEN)
+        CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 3, kHidden)
     END_IF
     CALL_CHILD(btldefaultevt_Damage)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 3, PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_LOW_HP_TALK_DONE, LW(0))
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 3, kHidden)
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_LOW_HP_TALK_DONE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_GetHp, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_GetHp, UNIT_ID_SELF, LW(0))
         IF_INT_LESS_OR_EQUAL(LW(0), 14)
             CALL(btlevtcmd_WaitAttackEnd)
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_LOW_HP_TALK_DONE, 1)
-            CALL(btlevtcmd_StatusWindowOnOff, 0)
-            CALL(evt_btl_camera_set_prilimit, 1)
-            CALL(evt_btl_camera_set_mode, 1, 3)
-            CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_LOW_HP_TALK_DONE, 1)
+            CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+            CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_EVENT)
+            CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_EVENT, BTL_CAM_MODE_FREE)
+            CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
             SUBTRACT(LW(0), 20)
             CALL(evt_btl_camera_set_moveto, 1, LW(0), 160, 600, LW(0), 110, -100, 20, 11)
             WAIT_FRAMES(20)
-            CALL(btlevtcmd_SetTalkPoseType, BTL_UNIT_SELF, BTL_POSE_TALK)
-            CALL(btlevtcmd_SetStayPoseType, BTL_UNIT_SELF, BTL_POSE_STAY_DEFAULT)
-            CALL(evt_msg_print, 2, STRING("stg7_aji_41_06"), 0, BTL_UNIT_SELF)
-            CALL(evt_btl_camera_set_prilimit, 0)
-            CALL(evt_btl_camera_set_mode, 0, 0)
-            CALL(btlevtcmd_StatusWindowOnOff, 1)
+            CALL(btlevtcmd_SetTalkPoseType, UNIT_ID_SELF, POSE_TYPE_TALK)
+            CALL(btlevtcmd_SetStayPoseType, UNIT_ID_SELF, POSE_TYPE_ACTION)
+            CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("stg7_aji_41_06"), 0, -2)
+            CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_NORMAL)
+            CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+            CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
             WAIT_MS(500)
         END_IF
     END_IF
@@ -1041,66 +1087,80 @@ static EVT_BEGIN(damage_event)
 EVT_END()
 
 /**
- * Defeat sequence of Magnus von Grapple 2.0: sets the defeated flag (unit work 6),
- * plays the explosion effect over the body, zooms the camera,
- * speaks stg7_aji_41_07 and runs the common defeat handling (subsetevt_dead_core).
+ * Defeat sequence of Magnus von Grapple 2.0: sets the low-HP dialogue flag (unit work 6),
+ * starts the charge-up glow over the body (eff_dead), zooms the camera,
+ * speaks stg7_aji_41_07, runs subsetevt_dead_core for surviving fists, and handles the boss's rewards and removal locally.
  */
 static EVT_BEGIN(dead_event)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_LOW_HP_TALK_DONE, 1)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_LOW_HP_TALK_DONE, 1)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(1), 70)
     ADD(LW(2), 10)
     CALL(eff_dead, LW(0), LW(1), LW(2))
     CALL(btlevtcmd_WaitAttackEnd)
-    CALL(btlevtcmd_StatusWindowOnOff, 0)
-    CALL(evt_btl_camera_set_prilimit, 1)
-    CALL(evt_btl_camera_set_mode, 1, 3)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+    CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_EVENT)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_EVENT, BTL_CAM_MODE_FREE)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     SUBTRACT(LW(0), 20)
     CALL(evt_btl_camera_set_moveto, 1, LW(0), 160, 600, LW(0), 110, -100, 20, 11)
     WAIT_FRAMES(20)
-    CALL(btlevtcmd_SetTalkPoseType, BTL_UNIT_SELF, BTL_POSE_DAMAGE)
-    CALL(btlevtcmd_SetStayPoseType, BTL_UNIT_SELF, BTL_POSE_DAMAGE)
-    CALL(evt_msg_print, 2, STRING("stg7_aji_41_07"), 0, BTL_UNIT_SELF)
-    CALL(evt_btl_camera_set_prilimit, 0)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_StatusWindowOnOff, 1)
+    CALL(btlevtcmd_SetTalkPoseType, UNIT_ID_SELF, POSE_TYPE_DAMAGE)
+    CALL(btlevtcmd_SetStayPoseType, UNIT_ID_SELF, POSE_TYPE_DAMAGE)
+    CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("stg7_aji_41_07"), 0, -2)
+    CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_NORMAL)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
     WAIT_MS(500)
     CALL(arm_check, 0, LW(0))
-    IF_INT_NOT_EQUAL(LW(0), -1)
 #if VERSION >= VERSION_JP
-        CALL(btlevtcmd_CheckDamageCode, LW(0), DAMAGE_FLAG_KO, LW(1))
+    IF_INT_NOT_EQUAL(LW(0), -1)
+        CALL(btlevtcmd_CheckDamageCode, LW(0), DAMAGE_RESULT_ZERO_HP, LW(1))
         IF_INT_EQUAL(LW(1), 0)
-#endif
             SET_VALUE(LW(10), LW(0))
             BEGIN_INLINE_EVENT
                 CALL_CHILD(subsetevt_dead_core)
                 CALL(arm_end, 0)
-                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, PART_ATTR_HIDDEN)
-                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, PART_ATTR_NO_SHADOW)
+                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kHidden)
+                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kNoShadow)
             END_INLINE_EVENT
-#if VERSION >= VERSION_JP
         END_IF
-#endif
     END_IF
+#else
+    IF_INT_NOT_EQUAL(LW(0), -1)
+        SET_VALUE(LW(10), LW(0))
+        BEGIN_INLINE_EVENT
+            CALL_CHILD(subsetevt_dead_core)
+            CALL(arm_end, 0)
+            CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kHidden)
+            CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kNoShadow)
+        END_INLINE_EVENT
+    END_IF
+#endif
     CALL(arm_check, 1, LW(0))
     IF_INT_NOT_EQUAL(LW(0), -1)
 #if VERSION >= VERSION_JP
-        CALL(btlevtcmd_CheckDamageCode, LW(0), DAMAGE_FLAG_KO, LW(1))
+        CALL(btlevtcmd_CheckDamageCode, LW(0), DAMAGE_RESULT_ZERO_HP, LW(1))
         IF_INT_EQUAL(LW(1), 0)
-#endif
             SET_VALUE(LW(10), LW(0))
             BEGIN_INLINE_EVENT
                 CALL_CHILD(subsetevt_dead_core)
                 CALL(arm_end, 1)
-                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, PART_ATTR_HIDDEN)
-                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, PART_ATTR_NO_SHADOW)
+                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kHidden)
+                CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kNoShadow)
             END_INLINE_EVENT
-#if VERSION >= VERSION_JP
         END_IF
+#else
+        SET_VALUE(LW(10), LW(0))
+        BEGIN_INLINE_EVENT
+            CALL_CHILD(subsetevt_dead_core)
+            CALL(arm_end, 1)
+            CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kHidden)
+            CALL(btlevtcmd_OnPartsAttribute, LW(10), 1, kNoShadow)
+        END_INLINE_EVENT
 #endif
     END_IF
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     CALL(btlevtcmd_snd_se, LW(10), STRING("SFX_BTL_ENEMY_DIE1_2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(btlevtcmd_GetCoin, LW(10), LW(0))
     CALL(btlevtcmd_StoreCoin, LW(0))
@@ -1129,23 +1189,23 @@ EVT_END()
  */
 static EVT_BEGIN(entry_event)
     WAIT_FRAMES(120)
-    CALL(btlevtcmd_StatusWindowOnOff, 0)
-    CALL(evt_btl_camera_set_prilimit, 1)
-    CALL(evt_btl_camera_set_mode, 1, 3)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+    CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_EVENT)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_EVENT, BTL_CAM_MODE_FREE)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     SUBTRACT(LW(0), 20)
     CALL(evt_btl_camera_set_moveto, 1, LW(0), 160, 600, LW(0), 110, -100, 20, 11)
     WAIT_FRAMES(20)
-    CALL(evt_msg_print, 2, STRING("stg7_aji_41_00"), 0, BTL_UNIT_SELF)
+    CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("stg7_aji_41_00"), 0, -2)
     CALL(evt_btl_camera_set_moveto, 1, -102, 83, 334, -102, 59, 0, 20, 11)
     WAIT_FRAMES(20)
     CALL(evt_msg_print_battle_party, STRING("stg7_aji_41_01"))
-    CALL(evt_btl_camera_set_prilimit, 0)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_StatusWindowOnOff, 1)
+    CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_NORMAL)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
     WAIT_MS(500)
-    CALL(btlevtcmd_GetBodyId, BTL_UNIT_PARTNER, LW(0))
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_PARTNER, LW(0))
+    CALL(btlevtcmd_GetBodyId, UNIT_ID_PARTNER, LW(0))
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_PARTNER, LW(0))
     RETURN
 EVT_END()
 
@@ -1164,47 +1224,50 @@ EVT_END()
 static EVT_BEGIN(attack_event)
     // If the fists are out (unit work 0 is 1), it counts down how long they stay away and calls them back
     // when none are left.
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 1)
         CALL(arm_check, 0, LW(0))
         IF_INT_EQUAL(LW(0), -1)
             CALL(arm_check, 1, LW(0))
             IF_INT_EQUAL(LW(0), -1)
-                CALL(btlevtcmd_AddUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARM_RETURN_TIMER, -1)
-                CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARM_RETURN_TIMER, LW(0))
+                CALL(btlevtcmd_AddUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_RETURN_TURNS, -1)
+                CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_RETURN_TURNS, LW(0))
                 IF_INT_LESS_OR_EQUAL(LW(0), 0)
                     CALL_CHILD(arm_return_event)
                 END_IF
             END_IF
         END_IF
     END_IF
+
     // It uses an item instead of attacking when one is ready.
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
+
     // Arms on: it uses the drill on its first attack and while its HP is above 63.
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_DRILL_USED, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_DRILL_TALK_DONE, LW(0))
         IF_INT_EQUAL(LW(0), 0)
             CALL_CHILD(drill_attack_event)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_GetHp, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_GetHp, UNIT_ID_SELF, LW(0))
         IF_INT_GREATER(LW(0), 63)
             CALL_CHILD(drill_attack_event)
             GOTO(99)
         ELSE
             // After that the first thing it does is split its arms off into two fists (arm_bunri_event).
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_SEPARATED, LW(0))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_LAUNCHED, LW(0))
             IF_INT_EQUAL(LW(0), 0)
                 CALL_CHILD(arm_bunri_event)
                 GOTO(99)
             END_IF
-            CALL(btlevtcmd_GetHp, BTL_UNIT_SELF, LW(0))
+            CALL(btlevtcmd_GetHp, UNIT_ID_SELF, LW(0))
+
             // Above 35 HP: drill or splitting the arms off, 40 weight each.
             IF_INT_GREATER(LW(0), 35)
                 SET_VALUE(LW(0), 0)
@@ -1223,7 +1286,7 @@ static EVT_BEGIN(attack_event)
             ELSE
                 // 35 HP or less: the audience attack comes first if it is unused and there are 20 audience
                 // members; then drill 40, separation 40, audience attack 25.
-                CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_USED, LW(0))
+                CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_TALK_DONE, LW(0))
                 IF_INT_EQUAL(LW(0), 0)
                     CALL(get_aud_num, LW(0))
                     IF_INT_GREATER_OR_EQUAL(LW(0), 20)
@@ -1261,13 +1324,13 @@ static EVT_BEGIN(attack_event)
         END_IF
     ELSE
         // Fists out: above 35 HP it throws the boomerang.
-        CALL(btlevtcmd_GetHp, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_GetHp, UNIT_ID_SELF, LW(0))
         IF_INT_GREATER(LW(0), 35)
             CALL_CHILD(boomerang_attack_event)
             GOTO(99)
         ELSE
             // 35 HP or less: the audience attack first if unused, then boomerang 75 or audience attack 20.
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_USED, LW(0))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_TALK_DONE, LW(0))
             IF_INT_EQUAL(LW(0), 0)
                 CALL(get_aud_num, LW(0))
                 IF_INT_GREATER_OR_EQUAL(LW(0), 20)
@@ -1298,9 +1361,10 @@ static EVT_BEGIN(attack_event)
         END_IF
     END_IF
     LABEL(99)
+
     // The facing is reset and it goes back to waiting.
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -1312,76 +1376,83 @@ EVT_END()
  * through the floor with a camera shake, deals the damage with the usual dodge and guard checks,
  * then reappears at the right edge and walks home.
  */
-EVT_BEGIN(drill_attack_event)
+static EVT_BEGIN(drill_attack_event)
     // Choose a target.
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_batten_drill_attack))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_batten_drill_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_batten_drill_attack), LW(3), LW(4))
+
     // No valid target: a confused boss is flustered, otherwise the turn is skipped.
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
         END_IF
         RETURN
     END_IF
+
     // The first time (unit work 5), Crump announces the drill attack over a close-up of the boss
     // (stg7_aji_41_02).
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_DRILL_USED, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_DRILL_TALK_DONE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_DRILL_USED, 1)
-        CALL(btlevtcmd_StatusWindowOnOff, 0)
-        CALL(evt_btl_camera_set_prilimit, 1)
-        CALL(evt_btl_camera_set_mode, 1, 3)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_DRILL_TALK_DONE, 1)
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_EVENT)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_EVENT, BTL_CAM_MODE_FREE)
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         SUBTRACT(LW(0), 20)
         CALL(evt_btl_camera_set_moveto, 1, LW(0), 160, 600, LW(0), 110, -100, 20, 11)
         WAIT_FRAMES(20)
-        CALL(evt_msg_print, 2, STRING("stg7_aji_41_02"), 0, BTL_UNIT_SELF)
-        CALL(evt_btl_camera_set_prilimit, 0)
-        CALL(evt_btl_camera_set_mode, 0, 0)
-        CALL(btlevtcmd_StatusWindowOnOff, 1)
+        CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("stg7_aji_41_02"), 0, -2)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_NORMAL)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
         WAIT_MS(500)
     END_IF
-    // The attack is declared and the guard window opens.
+
+    // The attack is declared and the script waits for any guard movement to finish.
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_batten_drill_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_batten_drill_attack))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_batten_drill_attack))
+
     // Wind-up: it crouches and fires its jets (MGN_A3_1, MGN_A3_2).
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_DRILL_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A3_1"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_DRILL_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A3_1"))
     WAIT_MS(800)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_DRILL_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A3_2"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_DRILL_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A3_2"))
     BEGIN_SIBLING_EVENT
-        CALL(drill_jet, BTL_UNIT_SELF)
+        CALL(drill_jet, UNIT_ID_SELF)
     END_SIBLING_EVENT
     WAIT_MS(300)
+
     // It jets straight up and off the top of the screen.
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(1), 300)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 0, 1, 0, -1)
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 0, EASING_QUADRATIC_IN, 0, MOVE_SOUND_FROM_TABLE)
     WAIT_MS(300)
+
     // It reappears high above the stage upside down and plunges back down in a tornado, drill first
     // (MGN_A3_3).
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, -125, 500, 0)
-    CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 180, 0, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A3_3"))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, -125, 500, 0)
+    CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 180, 0, 0)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A3_3"))
     BEGIN_SIBLING_EVENT
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_DRILL_ATTACK3"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, -125, -200, 0, 60, 0, 0, 0, -1)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_DRILL_ATTACK3"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, -125, -200, 0, 60, 0, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
     END_SIBLING_EVENT
     BEGIN_INLINE_EVENT
-        CALL(drill_tor, BTL_UNIT_SELF)
+        CALL(drill_tor, UNIT_ID_SELF)
     END_INLINE_EVENT
     LOOP(0)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         IF_INT_LESS_OR_EQUAL(LW(1), 200)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // The camera shakes as the drill bores through the floor.
     CALL(evt_btl_camera_shake_h, 0, 7, 0, 80, 0)
     SET_VALUE(LW(6), 0)
@@ -1390,26 +1461,29 @@ EVT_BEGIN(drill_attack_event)
     IF_INT_EQUAL(LW(3), -1)
         GOTO(97)
     END_IF
+
     // Each target in turn gets the hit check and then the damage; the action-command result is read once.
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_drill_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_drill_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
+        // BUG: this script has no LABEL(98): evtSearchLabel resumes at this GOTO's argument word, which runs
+        // as SET_SPD with the next command word as its value, and the script goes on after the GOTO.
         GOTO(98)
         CASE_END
     END_SWITCH
@@ -1420,95 +1494,102 @@ EVT_BEGIN(drill_attack_event)
         CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_batten_drill_attack))
         SET_VALUE(LW(6), 1)
     END_IF
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_drill_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_drill_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     GOTO(95)
     LABEL(95)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
     GOTO(10)
     LABEL(97)
+
     // It keeps drilling until it has passed below the floor out of sight.
     LOOP(0)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         IF_INT_LESS_OR_EQUAL(LW(1), -200)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // The camera returns to normal.
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_MS(200)
+
     // It reappears upright at the right edge of the stage and walks back to its home position.
-    CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, 400, LW(1), LW(2))
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_WALK)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, -1, 0)
+    CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, 400, LW(1), LW(2))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_WALK)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, MOVE_SOUND_FROM_TABLE, 0)
     RETURN
 EVT_END()
 
 /**
- * Boomerang attack of Magnus von Grapple 2.0 (weapon_batten_boomerang_attack, which hits every target):
- * the boss splits off its boomerang part (part 4; poses MGN_A6_1, MGN_A4_2 and 3, SFX_BOSS_MBTN_BOOME_*),
- * which swings in two short arcs in front of it and then flies across the party to x = -400,
- * damaging each target
- * with the usual dodge and guard checks; the part is hidden again afterwards.
+ * Boomerang attack of Magnus von Grapple 2.0 (weapon_batten_boomerang_attack): the boss splits off its
+ * boomerang (part 4; poses MGN_A6_1, MGN_A4_2 and MGN_A4_3, the SFX_BOSS_MBTN_BOOME_* sounds), which swings
+ * in two short arcs in front of it and then flies across the party to x = -400, checking and damaging
+ * each selected target in turn (the guard result is read once); the part is hidden again afterwards.
  */
-EVT_BEGIN(boomerang_attack_event)
+static EVT_BEGIN(boomerang_attack_event)
     // Choose a target; the boomerang flies across every target.
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_batten_boomerang_attack))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_batten_boomerang_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_batten_boomerang_attack), LW(3), LW(4))
+
     // No valid target: a confused boss is flustered, otherwise the turn is skipped.
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
         END_IF
         RETURN
     END_IF
-    // The attack is declared and the guard window opens.
+
+    // The attack is declared and the script waits for any guard movement to finish.
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_batten_boomerang_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_batten_boomerang_attack))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_batten_boomerang_attack))
+
     // The boss splits its boomerang part (part 4) off its body (MGN_A6_1).
     BEGIN_SIBLING_EVENT
         WAIT_MS(900)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_BOOME_DIVIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_BOOME_DIVIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A6_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A6_1"))
     WAIT_MS(1160)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_BOOME_ROUND1"), EVT_NULLPTR, 0, LW(15))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 70)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_BOOME_ROUND1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 70)
     ADD(LW(1), 70)
-    CALL(btlevtcmd_SetPartsPos, BTL_UNIT_SELF, 4, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, 4, 0, 55, 65)
+    CALL(btlevtcmd_SetPartsPos, UNIT_ID_SELF, 4, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, 4, 0, 55, 65)
     BEGIN_SIBLING_EVENT
         WAIT_MS(1600)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_BOOME_ACTIVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_BOOME_ACTIVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 4, STRING("MGN_A4_2"))
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 4, PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 4, PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 4, STRING("MGN_A4_2"))
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 4, kHidden)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 4, kNoShadow)
     BEGIN_SIBLING_EVENT
         WAIT_MS(2500)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 4, STRING("MGN_A4_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 4, STRING("MGN_A4_3"))
     END_SIBLING_EVENT
+
     // The boomerang swings in two short arcs in front of the boss.
-    CALL(btlevtcmd_GetPartsPos, BTL_UNIT_SELF, 4, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPartsPos, UNIT_ID_SELF, 4, LW(0), LW(1), LW(2))
     ADD(LW(1), 30)
-    CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 25)
-    CALL(btlevtcmd_DivePartsPosition, BTL_UNIT_SELF, 4, LW(0), LW(1), LW(2), 80, -40, 0, 0, -1)
-    CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 25)
-    CALL(btlevtcmd_DivePartsPosition, BTL_UNIT_SELF, 4, LW(0), LW(1), LW(2), 80, 40, 0, 0, -1)
+    CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 25)
+    CALL(btlevtcmd_DivePartsPosition, UNIT_ID_SELF, 4, LW(0), LW(1), LW(2), 80, -40, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 25)
+    CALL(btlevtcmd_DivePartsPosition, UNIT_ID_SELF, 4, LW(0), LW(1), LW(2), 80, 40, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
+
     // Then it sails across the whole party to the far side of the stage.
     BEGIN_SIBLING_EVENT
-        CALL(btlevtcmd_DivePartsPosition, BTL_UNIT_SELF, 4, -400, 120, LW(2), 40, -20, 1, 0, -1)
+        CALL(btlevtcmd_DivePartsPosition, UNIT_ID_SELF, 4, -400, 120, LW(2), 40, -20, EASING_QUADRATIC_IN, 0, MOVE_SOUND_FROM_TABLE)
     END_SIBLING_EVENT
     CALL(evt_snd_sfxoff, LW(15))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_BOOME_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_BOOME_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     WAIT_FRAMES(20)
     SET_VALUE(LW(6), 0)
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
@@ -1516,27 +1597,30 @@ EVT_BEGIN(boomerang_attack_event)
     IF_INT_EQUAL(LW(3), -1)
         GOTO(97)
     END_IF
+
     // Each target in turn gets the hit check and then the damage as the boomerang passes; the action-command
     // result is read once.
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_boomerang_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_boomerang_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
+        // BUG: this script has no LABEL(98): evtSearchLabel resumes at this GOTO's argument word, which runs
+        // as SET_SPD with the next command word as its value, and the script goes on after the GOTO.
         GOTO(98)
         CASE_END
     END_SWITCH
@@ -1547,17 +1631,18 @@ EVT_BEGIN(boomerang_attack_event)
         CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_batten_boomerang_attack))
         SET_VALUE(LW(6), 1)
     END_IF
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_boomerang_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_boomerang_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     GOTO(95)
     LABEL(95)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
     GOTO(10)
     LABEL(97)
     WAIT_MS(700)
+
     // The boomerang part is hidden again and the camera returns to normal.
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 4, PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 4, PART_ATTR_NO_SHADOW)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 4, kHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 4, kNoShadow)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_MS(200)
     RETURN
 EVT_END()
@@ -1570,207 +1655,218 @@ EVT_END()
  */
 EVT_BEGIN(aud_attack_event)
     // Choose a target.
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_batten_aud_attack))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_batten_aud_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_batten_aud_attack), LW(3), LW(4))
+
     // No valid target: a confused boss is flustered, otherwise the turn is skipped.
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
         END_IF
         RETURN
     END_IF
+
     // The first time (unit work 7), Crump talks over a close-up of the boss before the attack
     // (stg7_aji_41_04).
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_USED, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_TALK_DONE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_StatusWindowOnOff, 0)
-        CALL(evt_btl_camera_set_prilimit, 1)
-        CALL(evt_btl_camera_set_mode, 1, 3)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_EVENT)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_EVENT, BTL_CAM_MODE_FREE)
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         SUBTRACT(LW(0), 20)
         CALL(evt_btl_camera_set_moveto, 1, LW(0), 160, 600, LW(0), 110, -100, 20, 11)
         WAIT_FRAMES(20)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
         IF_INT_EQUAL(LW(0), 0)
-            CALL(btlevtcmd_SetTalkPose, BTL_UNIT_SELF, STRING("MGN_T_1"))
-            CALL(btlevtcmd_SetStayPose, BTL_UNIT_SELF, STRING("MGN_S_1"))
+            CALL(btlevtcmd_SetTalkPose, UNIT_ID_SELF, STRING("MGN_T_1"))
+            CALL(btlevtcmd_SetStayPose, UNIT_ID_SELF, STRING("MGN_S_1"))
         ELSE
-            CALL(btlevtcmd_SetTalkPose, BTL_UNIT_SELF, STRING("MGN_T_2"))
-            CALL(btlevtcmd_SetStayPose, BTL_UNIT_SELF, STRING("MGN_S_2"))
+            CALL(btlevtcmd_SetTalkPose, UNIT_ID_SELF, STRING("MGN_T_2"))
+            CALL(btlevtcmd_SetStayPose, UNIT_ID_SELF, STRING("MGN_S_2"))
         END_IF
-        CALL(evt_msg_print, 2, STRING("stg7_aji_41_04"), 0, BTL_UNIT_SELF)
-        CALL(evt_btl_camera_set_prilimit, 0)
-        CALL(evt_btl_camera_set_mode, 0, 0)
-        CALL(btlevtcmd_StatusWindowOnOff, 1)
+        CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("stg7_aji_41_04"), 0, -2)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_NORMAL)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
         WAIT_MS(500)
     END_IF
-    // The attack is declared and the guard window opens.
+
+    // The attack is declared and the script waits for any guard movement to finish.
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_batten_aud_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_batten_aud_attack))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_batten_aud_attack))
     WAIT_FRAMES(30)
     BEGIN_SIBLING_EVENT
         WAIT_MS(200)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, LW(15))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, LW(15))
         WAIT_MS(300)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, LW(15))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, LW(15))
         WAIT_MS(300)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOTOR_ACTIVE1"), EVT_NULLPTR, 0, LW(15))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOTOR_ACTIVE1"), EVT_NULLPTR, 0, LW(15))
         WAIT_MS(700)
         CALL(evt_snd_sfxoff, LW(15))
     END_SIBLING_EVENT
+
     // Wind-up: the boss opens its pod and fires its jets (a different pose set is used with the fists out).
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_1"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_1"))
     END_IF
     WAIT_MS(1600)
     BEGIN_SIBLING_EVENT
-        CALL(drill_jet, BTL_UNIT_SELF)
+        CALL(drill_jet, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_2"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_2"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_2"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_2"))
     END_IF
     WAIT_MS(300)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_JUMP1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_JUMP1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+
     // It rises on its jets while the camera moves to the audience and the audience area darkens.
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(1), 300)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 0, 1, 0, -1)
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 0, EASING_QUADRATIC_IN, 0, MOVE_SOUND_FROM_TABLE)
     WAIT_MS(300)
-    CALL(evt_btl_camera_set_mode, 0, 6)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_AUDIENCE)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_batstage_set_aud_dark, 0, 30, 0)
     BEGIN_SIBLING_EVENT
-        CALL(aud_jet, BTL_UNIT_SELF)
+        CALL(aud_jet, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_7"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_7"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_7"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_7"))
     END_IF
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_FALL1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_FALL1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(2), 150)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(1), 300)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), 25, LW(2), 60, 0, 4, 0, -1)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), 25, LW(2), 60, 0, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_3"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_3"))
     END_IF
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_INHALE1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_INHALE1"), EVT_NULLPTR, 0, LW(15))
+
     // It sucks 20 audience members into its pod.
-    CALL(aud_suikomi, BTL_UNIT_SELF)
+    CALL(aud_suikomi, UNIT_ID_SELF)
 #if VERSION >= VERSION_JP
     BEGIN_SIBLING_EVENT
         CALL(aud_scream_fadeout)
     END_SIBLING_EVENT
 #endif
     CALL(evt_snd_sfxoff, LW(15))
-    // It sinks back down and the jets shut off.
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+
+    // It jets back up off the screen and the pod jets shut off.
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_7"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_7"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_7"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_7"))
     END_IF
     WAIT_MS(300)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_JUMP1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_JUMP1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(1), 300)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 0, 1, 0, -1)
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 0, EASING_QUADRATIC_IN, 0, MOVE_SOUND_FROM_TABLE)
     CALL(aud_jet_end)
     WAIT_MS(300)
+
     // The audience lighting comes back, the camera returns and the boss goes back to its home position.
     CALL(evt_batstage_return_aud_dark_base, 30, 0)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     BEGIN_SIBLING_EVENT
-        CALL(drill_jet, BTL_UNIT_SELF)
+        CALL(drill_jet, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_2"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_2"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_2"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_2"))
     END_IF
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_FALL1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_FALL1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(1), 300)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 0, 4, 0, -1)
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 0, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
     BEGIN_SIBLING_EVENT
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOTOR_ACTIVE1"), EVT_NULLPTR, 0, LW(15))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOTOR_ACTIVE1"), EVT_NULLPTR, 0, LW(15))
         WAIT_MS(600)
         CALL(evt_snd_sfxoff, LW(15))
         WAIT_MS(400)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_CHEST_OPEN1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_CHEST_OPEN1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_4"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_4"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_4"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_4"))
     END_IF
     WAIT_MS(1200)
+
     // The first time (unit work 7 is 0), Crump speaks again before the shots (stg7_aji_41_05).
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_USED, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_TALK_DONE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_USED, 1)
-        CALL(btlevtcmd_StatusWindowOnOff, 0)
-        CALL(evt_btl_camera_set_prilimit, 1)
-        CALL(evt_btl_camera_set_mode, 1, 3)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_TALK_DONE, 1)
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_EVENT)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_EVENT, BTL_CAM_MODE_FREE)
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         SUBTRACT(LW(0), 20)
         CALL(evt_btl_camera_set_moveto, 1, LW(0), 160, 600, LW(0), 110, -100, 20, 11)
         WAIT_FRAMES(20)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
         IF_INT_EQUAL(LW(0), 0)
-            CALL(btlevtcmd_SetTalkPose, BTL_UNIT_SELF, STRING("MGN_T_3"))
-            CALL(btlevtcmd_SetStayPose, BTL_UNIT_SELF, STRING("MGN_A2_8"))
+            CALL(btlevtcmd_SetTalkPose, UNIT_ID_SELF, STRING("MGN_T_3"))
+            CALL(btlevtcmd_SetStayPose, UNIT_ID_SELF, STRING("MGN_A2_8"))
         ELSE
-            CALL(btlevtcmd_SetTalkPose, BTL_UNIT_SELF, STRING("MGN_T_4"))
-            CALL(btlevtcmd_SetStayPose, BTL_UNIT_SELF, STRING("MGN_A5_8"))
+            CALL(btlevtcmd_SetTalkPose, UNIT_ID_SELF, STRING("MGN_T_4"))
+            CALL(btlevtcmd_SetStayPose, UNIT_ID_SELF, STRING("MGN_A5_8"))
         END_IF
-        CALL(evt_msg_print, 2, STRING("stg7_aji_41_05"), 0, BTL_UNIT_SELF)
-        CALL(btlevtcmd_SetTalkPoseType, BTL_UNIT_SELF, BTL_POSE_TALK)
-        CALL(btlevtcmd_SetStayPoseType, BTL_UNIT_SELF, BTL_POSE_STAY_DEFAULT)
-        CALL(evt_btl_camera_set_prilimit, 0)
-        CALL(evt_btl_camera_set_mode, 0, 0)
-        CALL(btlevtcmd_StatusWindowOnOff, 1)
+        CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("stg7_aji_41_05"), 0, -2)
+        CALL(btlevtcmd_SetTalkPoseType, UNIT_ID_SELF, POSE_TYPE_TALK)
+        CALL(btlevtcmd_SetStayPoseType, UNIT_ID_SELF, POSE_TYPE_ACTION)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_NORMAL)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
         WAIT_MS(500)
     END_IF
+
     // It takes aim at the target (aud_target_mark).
     CALL(btlevtcmd_GetPartsPos, LW(3), LW(4), LW(0), LW(1), LW(2))
     ADD(LW(1), 20)
     CALL(aud_target_mark, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_5"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_5"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_5"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_5"))
     END_IF
     SET_VALUE(LW(10), 0)
+
     // It fires the audience members at the target in ten rounds of two (aud_attack_event_sub).
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_HIT, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_HIT, 0)
     LOOP(10)
         WAIT_MS(250)
         CALL_CHILD(aud_attack_event_sub)
     END_LOOP
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(0), -10)
     ADD(LW(1), 78)
     WAIT_MS(250)
@@ -1779,86 +1875,89 @@ EVT_BEGIN(aud_attack_event)
     CALL(evt_eff, STRING(""), STRING("machingegun"), 0, LW(0), LW(1), LW(2), 170, FLOAT(8.0f), FLOAT(2.0996094f), 0, 0, 0, 0, 0)
     WAIT_MS(250)
     CALL(evt_eff, STRING(""), STRING("machingegun"), 0, LW(0), LW(1), LW(2), 185, FLOAT(8.0f), FLOAT(2.0996094f), 0, 0, 0, 0, 0)
+
     // The boss closes its pod again and the camera returns to normal.
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_8"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_8"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_8"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_8"))
     END_IF
     WAIT_MS(1000)
     BEGIN_SIBLING_EVENT
         WAIT_MS(100)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_CHEST_OPEN1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_CHEST_OPEN1"), EVT_NULLPTR, 0, EVT_NULLPTR)
         WAIT_MS(300)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
         WAIT_MS(300)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A2_6"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A2_6"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A5_6"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A5_6"))
     END_IF
     WAIT_MS(1000)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_MS(200)
     RETURN
 EVT_END()
 
 /**
- * One round (LW(10), 0 to 9) of the audience attack: plays SFX_BOSS_MBTN_MACHINEGUN1,
- * pre-checks the damage on the target (dodging, guarding or taking it), fires two audience members with
- * aud_fire_hit or aud_fire_no_hit, and on a hit applies the damage, with DAMAGE_FLAG_LAST_HIT only in the last
- * round. Once a round has hit (unit work 8), the last round hits without a new check.
+ * One round (LW(10), 0 to 9) of the audience attack: plays SFX_BOSS_MBTN_MACHINEGUN1, pre-checks the damage on
+ * the target (intangible, Lucky, Dodgy, a miss or a hit), fires two audience members with aud_fire_hit or
+ * aud_fire_no_hit, and on a hit applies the damage, with DAMAGE_RESULT_FINAL_HIT only in the last round. Once a
+ * round has hit (UNIT_WORK_AUD_HIT), the last round skips the sound and the pre-check and hits.
  */
-EVT_BEGIN(aud_attack_event_sub)
+static EVT_BEGIN(aud_attack_event_sub)
     IF_INT_EQUAL(LW(10), 9)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_HIT, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_HIT, LW(0))
         IF_INT_EQUAL(LW(0), 1)
             GOTO(91)
         END_IF
     END_IF
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_MACHINEGUN1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_aud_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_MACHINEGUN1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_aud_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
+        // BUG: this script has no LABEL(98): evtSearchLabel resumes at this GOTO's argument word, which runs
+        // as SET_SPD with the next command word as its value, and the script goes on after the GOTO.
         GOTO(98)
         CASE_END
     END_SWITCH
     LABEL(90)
     SET_VALUE(LW(11), LW(10))
     MULTIPLY(LW(11), 2)
-    CALL(aud_fire_no_hit, BTL_UNIT_SELF, LW(3), LW(11))
+    CALL(aud_fire_no_hit, UNIT_ID_SELF, LW(3), LW(11))
     GOTO(95)
     LABEL(91)
     SET_VALUE(LW(11), LW(10))
     MULTIPLY(LW(11), 2)
-    CALL(aud_fire_hit, BTL_UNIT_SELF, LW(3), LW(11))
+    CALL(aud_fire_hit, UNIT_ID_SELF, LW(3), LW(11))
     CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_batten_aud_attack))
     IF_INT_EQUAL(LW(10), 9)
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_aud_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_aud_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     ELSE
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_aud_attack), 0, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_aud_attack), 0, LW(5))
     END_IF
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_AUD_ATTACK_HIT, 1)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_AUD_HIT, 1)
     GOTO(95)
     LABEL(95)
     ADD(LW(10), 1)
@@ -1873,51 +1972,51 @@ EVT_END()
  * and 4, and switches to the pose table without arms.
  */
 static EVT_BEGIN(arm_bunri_event)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_SEPARATED, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_LAUNCHED, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_StatusWindowOnOff, 0)
-        CALL(evt_btl_camera_set_prilimit, 1)
-        CALL(evt_btl_camera_set_mode, 1, 3)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_EVENT)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_EVENT, BTL_CAM_MODE_FREE)
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         SUBTRACT(LW(0), 20)
         CALL(evt_btl_camera_set_moveto, 1, LW(0), 160, 600, LW(0), 110, -100, 20, 11)
         WAIT_FRAMES(20)
-        CALL(evt_msg_print, 2, STRING("stg7_aji_41_03"), 0, BTL_UNIT_SELF)
-        CALL(evt_btl_camera_set_prilimit, 0)
-        CALL(evt_btl_camera_set_mode, 0, 0)
-        CALL(btlevtcmd_StatusWindowOnOff, 1)
+        CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("stg7_aji_41_03"), 0, -2)
+        CALL(evt_btl_camera_set_prilimit, BTL_CAM_PRI_NORMAL)
+        CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
         WAIT_MS(500)
     END_IF
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, 1)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_SEPARATED, 1)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARM_RETURN_TIMER, 2)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_ACTIVE1"), EVT_NULLPTR, 0, LW(15))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_1"))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, 1)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_LAUNCHED, 1)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_RETURN_TURNS, 2)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_ACTIVE1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_1"))
     WAIT_MS(600)
     CALL(evt_snd_sfxoff, LW(15))
     WAIT_MS(200)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_STOP1"), EVT_NULLPTR, 0, LW(15))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_2"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_STOP1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_2"))
     WAIT_MS(500)
     CALL(evt_snd_sfxoff, LW(15))
     WAIT_MS(100)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_3"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_3"))
     WAIT_MS(100)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_IGNITE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_IGNITE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(evt_btl_camera_shake_w, 0, 3, 0, 20, 0)
     WAIT_MS(100)
     CALL(btlevtcmd_SpawnUnit, LW(3), PTR(&entry_rocket_punch), 0)
-    CALL(btlevtcmd_SetUnitWork, LW(3), UW_ROCKET_PUNCH_MKII_SIDE, 0)
-    CALL(btlevtcmd_SetUnitWork, LW(3), UW_ROCKET_PUNCH_MKII_TURN_WAIT, 1)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_LEFT_FIST, LW(3))
-    CALL(btlevtcmd_AnimeChangePoseType, LW(3), 1, BTL_POSE_STAY_DEFAULT)
+    CALL(btlevtcmd_SetUnitWork, LW(3), ROCKET_PUNCH_WORK_SIDE, 0)
+    CALL(btlevtcmd_SetUnitWork, LW(3), ROCKET_PUNCH_WORK_WAIT, 1)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_0_UNUSED, LW(3))
+    CALL(btlevtcmd_AnimeChangePoseType, LW(3), 1, POSE_TYPE_ACTION)
     CALL(btlevtcmd_SpawnUnit, LW(4), PTR(&entry_rocket_punch), 0)
-    CALL(btlevtcmd_SetUnitWork, LW(4), UW_ROCKET_PUNCH_MKII_SIDE, 1)
-    CALL(btlevtcmd_SetUnitWork, LW(4), UW_ROCKET_PUNCH_MKII_TURN_WAIT, 1)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_RIGHT_FIST, LW(4))
-    CALL(btlevtcmd_AnimeChangePoseType, LW(4), 1, BTL_POSE_STAY_DEFAULT)
-    CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table_no_arm))
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY_DEFAULT)
+    CALL(btlevtcmd_SetUnitWork, LW(4), ROCKET_PUNCH_WORK_SIDE, 1)
+    CALL(btlevtcmd_SetUnitWork, LW(4), ROCKET_PUNCH_WORK_WAIT, 1)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_1_UNUSED, LW(4))
+    CALL(btlevtcmd_AnimeChangePoseType, LW(4), 1, POSE_TYPE_ACTION)
+    CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table_no_arm))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ACTION)
     WAIT_MS(1500)
     RETURN
 EVT_END()
@@ -1928,43 +2027,43 @@ EVT_END()
  * and switches back to the pose table with arms.
  */
 static EVT_BEGIN(arm_return_event)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_ARMS_OUT, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_6"))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARMS_OUT, 0)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_6"))
     WAIT_MS(600)
     CALL(btlevtcmd_SpawnUnit, LW(3), PTR(&entry_rocket_punch), 0)
-    CALL(btlevtcmd_SetUnitWork, LW(3), UW_ROCKET_PUNCH_MKII_SIDE, 2)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_LEFT_FIST, LW(3))
-    CALL(btlevtcmd_AnimeChangePoseType, LW(3), 1, BTL_POSE_STAY_DEFAULT)
+    CALL(btlevtcmd_SetUnitWork, LW(3), ROCKET_PUNCH_WORK_SIDE, 2)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_0_UNUSED, LW(3))
+    CALL(btlevtcmd_AnimeChangePoseType, LW(3), 1, POSE_TYPE_ACTION)
     CALL(btlevtcmd_SpawnUnit, LW(4), PTR(&entry_rocket_punch), 0)
-    CALL(btlevtcmd_SetUnitWork, LW(4), UW_ROCKET_PUNCH_MKII_SIDE, 3)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_MAGNUM_BATTENDER_MKII_RIGHT_FIST, LW(4))
-    CALL(btlevtcmd_AnimeChangePoseType, LW(4), 1, BTL_POSE_STAY_DEFAULT)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_SetUnitWork, LW(4), ROCKET_PUNCH_WORK_SIDE, 3)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ARM_1_UNUSED, LW(4))
+    CALL(btlevtcmd_AnimeChangePoseType, LW(4), 1, POSE_TYPE_ACTION)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     BEGIN_SIBLING_EVENT
         CALL(btlevtcmd_SetPos, LW(3), 300, 40, -100)
-        CALL(btlevtcmd_DivePosition, LW(3), 30, 100, -40, 30, -10, 0, 0, -1)
+        CALL(btlevtcmd_DivePosition, LW(3), 30, 100, -40, 30, -10, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
     END_SIBLING_EVENT
     CALL(btlevtcmd_SetPos, LW(4), 350, 40, 100)
-    CALL(btlevtcmd_DivePosition, LW(4), 80, 100, 40, 30, -10, 0, 0, -1)
+    CALL(btlevtcmd_DivePosition, LW(4), 80, 100, 40, 30, -10, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
     CALL(arm_end, 0)
     CALL(arm_end, 1)
     CALL(btlevtcmd_KillUnit, LW(3), 0)
     CALL(btlevtcmd_KillUnit, LW(4), 0)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_IGNITE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_IGNITE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(evt_btl_camera_shake_w, 0, 3, 0, 20, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_7"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_7"))
     WAIT_MS(300)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_8"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_8"))
     WAIT_MS(600)
-    CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table))
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY_DEFAULT)
+    CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ACTION)
     WAIT_MS(500)
     RETURN
 EVT_END()
 
 /** Idle script of Magnus von Grapple 2.0: sets the idle pose from the pose table. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()
 
@@ -1973,7 +2072,7 @@ EVT_END()
  * init_event_r.
  */
 BattleUnitKind unit_boss_rocket_punch_mkII = {
-    122,
+    UNIT_X_PUNCH,
     "btl_un_rocket_punch_mkii",
     5,
     0,
@@ -2030,7 +2129,7 @@ BattleUnitKind unit_boss_rocket_punch_mkII = {
     "SFX_BTL_DAMAGE_FIRE1",
     "SFX_BTL_DAMAGE_ICE1",
     "SFX_BTL_DAMAGE_BIRIBIRI1",
-    UNIT_ATTR_FLOATING,
+    kFloating,
     &regist_r,
     1,
     parts_r,
@@ -2044,40 +2143,53 @@ static BattleUnitDefense defence_r = {{0, 0, 0, 0, 0}};
 /**
  * Elemental reactions of the X-Punch fist of Magnus von Grapple 2.0: none, every element hurts it normally.
  */
-static BattleUnitDefenseAttr defence_attr_r = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr_r = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 #if VERSION <= VERSION_DEMO_JP
-/**
- * Status vulnerability of the X-Punch fist of Magnus von Grapple 2.0 (percent, 100 is normal) in the demo
- * builds: immune to sleep, Huge, Tiny, Attack Down, fright, Dodgy, Invisible and instant KO; resists most
- * statuses (70-90%).
- */
 static StatusVulnerability regist_r = {0, 70, 70, 70, 70, 70, 100, 70, 0, 0, 100, 0, 100, 70, 70, 0, 90, 100, 70, 0, 0, 0};
 #else
-/**
- * Status vulnerability of the X-Punch fist of Magnus von Grapple 2.0 (percent, 100 is normal) in the retail
- * builds: immune to sleep, Huge, Tiny, Attack Down, fright, Dodgy, Invisible and instant KO; resists most
- * statuses (70-85%).
- */
-static StatusVulnerability regist_r = {0, 70, 70, 100, 70, 100, 100, 70, 0, 0, 100, 0, 100, 85, 70, 0, 100, 100, 70, 0, 0, 0};
+static StatusVulnerability regist_r = {
+    0, // sleep
+    70, // stop
+    70, // dizzy
+    100, // poison
+    70, // confuse
+    100, // electric
+    100, // burn
+    70, // freeze
+    0, // huge
+    0, // tiny
+    100, // attackUp
+    0, // attackDown
+    100, // defenseUp
+    85, // defenseDown
+    70, // allergic
+    0, // fright
+    100, // galeForce
+    100, // fast
+    70, // slow
+    0, // dodgy
+    0, // invisible
+    0, // ohko
+};
 #endif
 
 /** Pose table of the X-Punch fist: its flying and stay poses. */
 static PoseTableEntry pose_table_r[] = {
-    {1, "MGN_A1_9"},
-    {2, "MGN_A1_4"},
-    {9, "MGN_A1_4"},
-    {5, "MGN_A1_9"},
-    {4, "MGN_A1_9"},
-    {3, "MGN_A1_9"},
-    {BTL_POSE_NORMAL, "MGN_A1_9"},
-    {29, "MGN_A1_9"},
-    {30, "MGN_A1_9"},
-    {31, "MGN_A1_9"},
-    {BTL_POSE_DAMAGE, "MGN_A1_9"},
-    {BTL_POSE_DANGER, "MGN_A1_9"},
-    {BTL_POSE_PERIL, "MGN_A1_9"},
-    {BTL_POSE_STAY_DEFAULT, "MGN_A1_9"},
+    {POSE_TYPE_SLEEP, "MGN_A1_9"},
+    {POSE_TYPE_STOP, "MGN_A1_4"},
+    {POSE_TYPE_FREEZE, "MGN_A1_4"},
+    {POSE_TYPE_CONFUSE, "MGN_A1_9"},
+    {POSE_TYPE_POISON, "MGN_A1_9"},
+    {POSE_TYPE_DIZZY, "MGN_A1_9"},
+    {POSE_TYPE_NORMAL, "MGN_A1_9"},
+    {POSE_TYPE_DAMAGE_FIRE, "MGN_A1_9"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "MGN_A1_9"},
+    {POSE_TYPE_DAMAGE_GUARDED, "MGN_A1_9"},
+    {POSE_TYPE_DAMAGE, "MGN_A1_9"},
+    {POSE_TYPE_DANGER, "MGN_A1_9"},
+    {POSE_TYPE_PERIL, "MGN_A1_9"},
+    {POSE_TYPE_ACTION, "MGN_A1_9"},
 };
 
 /** Event table of the X-Punch fist of Magnus von Grapple 2.0: empty, it has no special reactions. */
@@ -2087,7 +2199,7 @@ static BattleDataEntry data_table_r[] = {
 
 /** Part of the X-Punch fist: its single flying fist part (the target). */
 static BattleUnitKindPart parts_r[] = {
-    {1, "btl_un_rocket_punch_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f, 10.0f, 0.0f, 106, 174, 255, &defence_r, &defence_attr_r, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER | PART_ATTR_HAMMERLIKE_CANNOT_TARGET | PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET, COUNTER_ATTR_PREEMPTIVE_FRONT_SPIKY, pose_table_r},
+    {1, "btl_un_rocket_punch_mkii", "c_mb_robo_2b", 0.0f, 0.0f, 0.0f, 0.0f, 10.0f, 0.0f, 0.0f, 10.0f, 0.0f, 106, 174, 255, &defence_r, &defence_attr_r, kMainPart | kGuardTargetPart | kHammerlikeCannotTarget | kShellTosslikeCannotTarget, kCounterPreemptiveFrontSpiky, pose_table_r},
 };
 
 /**
@@ -2110,19 +2222,20 @@ static BattleWeapon weapon_batten_rocket_attack = {
     {9, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_JUMPLIKE | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_JUMPLIKE | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
 #if VERSION <= VERSION_DEMO_JP
-    COUNTER_RESIST_ALL & ~(COUNTER_RESIST_ELECTRIC | COUNTER_RESIST_PREEMPTIVE_SPIKY), // counterResistFlags
+    COUNTER_RESIST_ALL & ~(COUNTER_RESIST_ELECTRIC | COUNTER_RESIST_PREEMPTIVE_SPIKY),
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
 #else
     COUNTER_RESIST_ALL, // counterResistFlags
+    0x2004, // targetWeightFlags
 #endif
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -2137,18 +2250,18 @@ static BattleWeapon weapon_batten_rocket_attack = {
 /**
  * Battle init for a rocket punch fist of Magnus von Grapple 2.0 (unit work 0: 0 and 2 are the left fist,
  * 1 and 3 the right): registers its wait, attack, damage and confusion events, turns it sideways,
- * sets up the arm physics (arm_init2), starts arm_event and, for the freshly separated fists (work 0 or 1),
+ * creates its trail effect (arm_init2), starts arm_event and, for the freshly separated fists (work 0 or 1),
  * makes it fly out in an arc with SFX_BOSS_MBTN_PUNCH_FLY1 and settle at its hovering home position.
  */
 static EVT_BEGIN(init_event_r)
-    CALL(btlevtcmd_OnUnitFlag, BTL_UNIT_SELF, UNIT_FLAG_NO_BACKFACE_FLIP)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_4"))
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event_r))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event_r))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event_r))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_SetBaseRotate, BTL_UNIT_SELF, 0, -90, 0)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_SIDE, LW(0))
+    CALL(btlevtcmd_OnUnitFlag, UNIT_ID_SELF, BATTLE_UNIT_FLAG_SOLID_MODEL)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_4"))
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event_r))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event_r))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event_r))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_SetBaseRotate, UNIT_ID_SELF, 0, -90, 0)
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_SIDE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
         CALL(arm_init2, 0)
     END_IF
@@ -2162,61 +2275,61 @@ static EVT_BEGIN(init_event_r)
         CALL(arm_init2, 1)
     END_IF
     SPAWN_EVENT(arm_event)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_SIDE, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_SIDE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, 30, 100, -40)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, -100, 150, -60, 20, 0, 4, 0, -1)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, 350, 110, -80, 30, 50, 0, 0, -1)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, 30, 60, -40, 25, -30, 4, 0, -1)
-        CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, 30, 60, -40)
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_SetPos, UNIT_ID_SELF, 30, 100, -40)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, -100, 150, -60, 20, 0, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, 350, 110, -80, 30, 50, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, 30, 60, -40, 25, -30, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, 30, 60, -40)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     END_IF
     IF_INT_EQUAL(LW(0), 1)
-        CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, 80, 100, 40)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, -50, 150, 60, 20, 0, 4, 0, -1)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, 300, 120, 80, 30, 50, 0, 0, -1)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, 80, 60, 40, 30, -30, 4, 0, -1)
-        CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, 80, 60, 40)
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_SetPos, UNIT_ID_SELF, 80, 100, 40)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, -50, 150, 60, 20, 0, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, 300, 120, 80, 30, 50, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, 80, 60, 40, 30, -30, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, 80, 60, 40)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Per-frame loop for a fist: calls arm_main to animate its chain (left arm for work 0 and 2, right arm for 1 and
- * 3) until the unit is gone, then runs arm_event_end.
+ * Per-frame loop of a rocket fist of Magnus von Grapple 2.0, spawned by init_event_r: updates the trail of its side
+ * (arm_main; sides 0 and 2 use trail slot 0, 1 and 3 slot 1) until the fist unit is gone, then runs arm_event_end.
  */
 static EVT_BEGIN(arm_event)
     LABEL(0)
     WAIT_FRAMES(1)
-    CALL(btlevtcmd_GetUnitId, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetUnitId, UNIT_ID_SELF, LW(0))
     IF_INT_EQUAL(LW(0), -1)
         CALL_CHILD(arm_event_end)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_SIDE, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_SIDE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(arm_main, BTL_UNIT_SELF, 0)
+        CALL(arm_main, UNIT_ID_SELF, 0)
     END_IF
     IF_INT_EQUAL(LW(0), 2)
-        CALL(arm_main, BTL_UNIT_SELF, 0)
+        CALL(arm_main, UNIT_ID_SELF, 0)
     END_IF
     IF_INT_EQUAL(LW(0), 1)
-        CALL(arm_main, BTL_UNIT_SELF, 1)
+        CALL(arm_main, UNIT_ID_SELF, 1)
     END_IF
     IF_INT_EQUAL(LW(0), 3)
-        CALL(arm_main, BTL_UNIT_SELF, 1)
+        CALL(arm_main, UNIT_ID_SELF, 1)
     END_IF
     GOTO(0)
     LABEL(99)
     RETURN
 EVT_END()
 
-/** Frees the arm physics of a fist (arm_end for the left or right arm, chosen by unit work 0). */
+/** Removes the trail effect of the rocket fist's side (arm_end; slot 0 for sides 0 and 2, slot 1 for 1 and 3). */
 static EVT_BEGIN(arm_event_end)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_SIDE, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_SIDE, LW(0))
     IF_INT_EQUAL(LW(0), 0)
         CALL(arm_end, 0)
     END_IF
@@ -2233,16 +2346,16 @@ static EVT_BEGIN(arm_event_end)
 EVT_END()
 
 /**
- * Damage event of a fist: runs the default damage handler and,
- * when the hit carries damage code 512 (and not 2048), ends the arm event.
+ * Damage event of the rocket fist: btldefaultevt_Damage; when the hit leaves it at 0 HP and it is not revived
+ * (DAMAGE_RESULT_ZERO_HP without DAMAGE_RESULT_REVIVAL), removes its trail (arm_event_end).
  */
 static EVT_BEGIN(damage_event_r)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
-    CALL(btlevtcmd_CheckDamageCode, BTL_UNIT_SELF, DAMAGE_FLAG_KO, LW(0))
+    CALL(btlevtcmd_CheckDamageCode, UNIT_ID_SELF, DAMAGE_RESULT_ZERO_HP, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_CheckDamageCode, BTL_UNIT_SELF, DAMAGE_FLAG_LIFE_SHROOM, LW(0))
+        CALL(btlevtcmd_CheckDamageCode, UNIT_ID_SELF, DAMAGE_RESULT_REVIVAL, LW(0))
         IF_INT_EQUAL(LW(0), 0)
             CALL_CHILD(arm_event_end)
         END_IF
@@ -2251,78 +2364,75 @@ static EVT_BEGIN(damage_event_r)
 EVT_END()
 
 /**
- * Attack script of a fist: acts only every other turn (unit work 1 counts down);
- * when it acts it picks a target for the rocket attack (weapon_batten_rocket_attack) and flies at it.
+ * Attack event of the rocket fist: skips the turn while ROCKET_PUNCH_WORK_WAIT, counted down each turn, is still 1 or
+ * more; otherwise sets it back to 1 and flies at one target (weapon_batten_rocket_attack) on one of two random paths
+ * with SFX_BOSS_MBTN_PUNCH_FLY1, dealing the damage and a camera shake as it passes the target on a hit (the target
+ * dodges on a lucky, dodgy or miss result), then flies in from the side back to its home position. A confused fist with
+ * no target flusters (subsetevt_confuse_flustered). See the BUG note on the precheck's default case.
  */
 static EVT_BEGIN(attack_event_r)
-    // A fist only acts every other turn (unit work 1 counts down).
-    CALL(btlevtcmd_AddUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_TURN_WAIT, -1)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_TURN_WAIT, LW(0))
+    CALL(btlevtcmd_AddUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_WAIT, -1)
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_WAIT, LW(0))
     IF_INT_GREATER_OR_EQUAL(LW(0), 1)
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    // When it acts it picks a target for the rocket punch.
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_TURN_WAIT, 1)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_batten_rocket_attack))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_WAIT, 1)
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_batten_rocket_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_batten_rocket_attack), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
         END_IF
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    // A coin flip decides how it flies on after the punch.
     CALL(evt_sub_random, 1, LW(6))
-    // The attack is declared and the guard window opens.
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_batten_rocket_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_batten_rocket_attack))
-    CALL(evt_btl_camera_set_mode, 0, 8)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, LW(3))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_batten_rocket_attack))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT_TO_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, LW(3))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
-    // Wind-up: the fist points at the target (MGN_A1_4).
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("MGN_A1_4"))
-    // Hit check: a miss or dodge flies past the target, a hit goes on to the damage.
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_rocket_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("MGN_A1_4"))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_rocket_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
+        // BUG: this script has no LABEL(98): evtSearchLabel resumes at this GOTO's argument word, which runs
+        // as SET_SPD with the next command word as its value, and the script goes on after the GOTO.
         GOTO(98)
         CASE_END
     END_SWITCH
     LABEL(90)
     GOTO(95)
     LABEL(91)
-    // A side event watches the fist and deals the damage as it reaches the target's position, shaking the
-    // camera.
     BEGIN_SIBLING_EVENT
         LOOP(0)
             CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
-            CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(10), LW(11), LW(12))
+            CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(10), LW(11), LW(12))
             IF_INT_LESS_OR_EQUAL(LW(10), LW(0))
                 CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_batten_rocket_attack))
-                CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_batten_rocket_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+                CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_batten_rocket_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
                 CALL(evt_btl_camera_shake_w, 0, 3, 0, 10, 0)
                 BREAK_LOOP
             END_IF
@@ -2331,56 +2441,52 @@ static EVT_BEGIN(attack_event_r)
     END_SIBLING_EVENT
     GOTO(95)
     LABEL(95)
-    // Depending on the coin flip it flies on through the target and off the far side of the stage, or
-    // rebounds off it.
     IF_INT_EQUAL(LW(6), 0)
         CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
         CALL(btlevtcmd_FaceDirectionAdd, LW(3), LW(0), 110)
         SET_VALUE(LW(1), 120)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 30, 10, 4, 0, -1)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 30, 10, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
         WAIT_FRAMES(5)
         CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
         CALL(btlevtcmd_FaceDirectionAdd, LW(3), LW(0), -20)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, -250, 0, LW(2), 20, -10, 0, 0, -1)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, -250, 0, LW(2), 20, -10, EASING_LINEAR, 0, MOVE_SOUND_FROM_TABLE)
     ELSE
         CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
         CALL(btlevtcmd_FaceDirectionAdd, LW(3), LW(0), -200)
         ADD(LW(1), 140)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 40, -80, 1, 0, -1)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 40, -80, EASING_QUADRATIC_IN, 0, MOVE_SOUND_FROM_TABLE)
     END_IF
     WAIT_MS(250)
-    // The fist reappears at the edge of the stage (a different spot for each fist) and flies back to its home
-    // position.
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_ROCKET_PUNCH_MKII_SIDE, LW(10))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, ROCKET_PUNCH_WORK_SIDE, LW(10))
     IF_INT_EQUAL(LW(10), 0)
-        CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, 300, LW(1), -100)
+        CALL(btlevtcmd_SetPos, UNIT_ID_SELF, 300, LW(1), -100)
     ELSE
-        CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, 300, LW(1), 100)
+        CALL(btlevtcmd_SetPos, UNIT_ID_SELF, 300, LW(1), 100)
     END_IF
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 30, 0, 4, 0, -1)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MBTN_PUNCH_FLY1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 30, 0, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
     LABEL(99)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
-/** Idle script of a fist: resets its rotation, sets the idle pose from the pose table and then idles forever. */
+/** Wait event of the rocket fist: clears its rotation, sets its pose from the pose table and idles. */
 static EVT_BEGIN(wait_event_r)
-    CALL(btlevtcmd_SetRotate, BTL_UNIT_SELF, 0, 0, 0)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_SetRotate, UNIT_ID_SELF, 0, 0, 0)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     LABEL(0)
     WAIT_FRAMES(1)
     GOTO(0)
     RETURN
 EVT_END()
 
-/** Script function: allocates the work areas for the boss's two arms (position and previous position cleared). */
+/** Script helper (no arguments): allocates the work of the two arms and zeroes their pos and prevPos. */
 static USER_FUNC(arm_init) {
     s32 i;
 
@@ -2412,7 +2518,7 @@ static USER_FUNC(arm_main) {
     s32 id = evtGetValue(event, args[0]);
     s32 idx = evtGetValue(event, args[1]);
     ArmWork* arm = work[idx];
-    EffBattenWork* eff;
+    BattenEffWork* eff;
     f32 x, y, z;
     f32 rx, ry, rz;
     f32 bx, by, bz;
@@ -2464,9 +2570,9 @@ static USER_FUNC(arm_main) {
     PSMTXCopy(m, eff->mtx);
     ofs = (Vec){0.0f, -18.0f, 0.0f};
     PSMTXMultVec(m, &ofs, &ofs);
-    eff->position.x = arm->pos.x + ofs.x;
-    eff->position.y = arm->pos.y + ofs.y;
-    eff->position.z = arm->pos.z + ofs.z;
+    eff->pos.x = arm->pos.x + ofs.x;
+    eff->pos.y = arm->pos.y + ofs.y;
+    eff->pos.z = arm->pos.z + ofs.z;
     return EVT_RETURN_DONE;
 }
 

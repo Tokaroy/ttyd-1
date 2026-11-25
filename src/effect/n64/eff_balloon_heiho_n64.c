@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: balloon with a Shy Guy (heiho); types 0-2 pick one of three textures, moved by speed and accel.
+
 #include "eff/n64/eff_balloon_heiho_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -19,7 +20,7 @@ typedef struct EffBalloonHeihoN64Work {
 } EffBalloonHeihoN64Work;
 
 /** Camera-facing 32x64 balloon Shy Guy sprite, split into four horizontal strips. */
-static effN64Vtx size32x64_tex32x64_vtx[] = {
+static effN64Vtx size32x64_tex32x64_vtx[] ATTRIBUTE_ALIGN(8) = {
     {-16, 64, 0, 0, 2048, 0, 0, 0, 255},
     {16, 64, 0, 1024, 2048, 0, 0, 0, 255},
     {-16, 32, 0, 0, 1024, 0, 0, 0, 255},
@@ -31,7 +32,7 @@ static effN64Vtx size32x64_tex32x64_vtx[] = {
 };
 
 static void effBalloonHeihoMain(EffectEntry* effect);
-static void effBalloonHeihoDisp(CameraId cameraId, EffectEntry* effect);
+static void effBalloonHeihoDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns a rising balloon Shy Guy (heiho) at (x, y, z) for `lifetime` frames.
@@ -81,11 +82,12 @@ static void effBalloonHeihoMain(EffectEntry* effect) {
         work->speed = 2.0f;
     }
     work->position.y += work->speed;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBalloonHeihoDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effBalloonHeihoDisp, effect);
 }
 
 /** Draws a camera-facing 32x64 sprite, split into four strips, with the colour's texture and map fog applied. */
-static void effBalloonHeihoDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBalloonHeihoDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffBalloonHeihoN64Work* work;
     s32 type;
@@ -117,6 +119,8 @@ static void effBalloonHeihoDisp(CameraId cameraId, EffectEntry* effect) {
             effGetTexObjN64(0x62, &texObj);
             break;
     }
+
+    // texObj is set only for type 0..2 above; any other type loads it uninitialized.
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetNumChans(0);
     GXSetNumTexGens(1);

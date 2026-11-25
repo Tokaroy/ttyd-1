@@ -1,4 +1,6 @@
-// Paper Mario 64 effect: bomb blast, a flash and burst that spawns smoke and confetti; types 0-2 pick the size.
+// Paper Mario 64 effect: bomb blast, a flash and burst that spawns smoke and confetti; types 0-2 pick the size,
+// types 3-5 are the same sizes with the other smoke (effKemuri8N64Entry type + 3).
+
 #include "eff/n64/eff_bomb_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -6,8 +8,8 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "eff/n64/eff_confetti_n64.h"
 #include "eff/n64/eff_kemuri8_n64.h"
+#include "eff/n64/eff_confetti_n64.h"
 
 typedef struct EffBombN64Work {
     s32 type;          // 0x0
@@ -20,8 +22,8 @@ typedef struct EffBombN64Work {
     s32 camId;         // 0x40
     s32 texId;         // 0x44
     u8 pad_48[0x1C];   // 0x48
-    f32 flashScale;    // 0x64
-    f32 flashScaleVel; // 0x68
+    f32 flashScale;    // 0x64, scale of the texture 0x18 flash quad (PSMTXScale in the disp); grows by flashScaleAdd
+    f32 flashScaleAdd; // 0x68, per-frame growth of flashScale; increases until frame 8, then *= 0.6
     u8 pad_6c[0x10];   // 0x6C
     s32 alpha;         // 0x7C
     u8 pad_80[8];      // 0x80
@@ -45,19 +47,16 @@ static effN64Vtx size8x8_tex32x32_vtx[] = {
 };
 
 static void effBombMain(EffectEntry* effect);
-static void effBombDisp(CameraId cameraId, EffectEntry* effect);
+static void effBombDisp(CameraId cameraId, void* payload);
 
 /** Changes which camera the bomb effect is drawn with (the default is CAMERA_3D). */
 void effBombN64SetCamId(EffectEntry* effect, s32 camId) {
-    EffBombN64Work* work = effect->userdata;
-
-    work->camId = camId;
+    ((EffBombN64Work*)effect->userdata)->camId = camId;
 }
 
 /**
- * Spawns an explosion at (x, y, z).
- * Type 0, 1 or 2 is small, medium or large; adding 3 uses the alternate smoke style.
- * Callers: effSandars, Bobbery's party unit (sanders) and Rampell's fight (las) via evt_eff64 "bomb_n64".
+ * Spawns a bomb blast at (x, y, z) on the 3D camera for 60 frames: types 0-2 small to large, 3-5 the same sizes with
+ * the other smoke.
  */
 EffectEntry* effBombN64Entry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
@@ -82,11 +81,11 @@ EffectEntry* effBombN64Entry(s32 type, f32 x, f32 y, f32 z) {
     work->lifetime = 60;
     work->type = type;
     work->flag = flag;
-    work->camId = 4;
+    work->camId = CAMERA_3D;
     work->texId = type != 0 ? type : -1;
     work->alpha = 0;
     work->flashScale = type == 1 ? 1.0f : 3.0f;
-    work->flashScaleVel = type == 1 ? 1.0f : 3.0f;
+    work->flashScaleAdd = type == 1 ? 1.0f : 3.0f;
     work->type2 = type;
     work->alpha2 = 255;
     switch (type) {
@@ -142,12 +141,12 @@ static void effBombMain(EffectEntry* effect) {
     } else if (frame == 1) {
         effConfettiN64SetCamId(effConfettiN64Entry(type + 4, 50, work->position.x, work->position.y, work->position.z, 1.0f), camId);
     }
-    work->flashScale += work->flashScaleVel;
+    work->flashScale += work->flashScaleAdd;
     if (frame < 8) {
-        work->flashScaleVel += type == 2 ? 1.0f : 0.4f;
+        work->flashScaleAdd += type == 2 ? 1.0f : 0.4f;
         work->alpha = (s32)(0.6f * (255.0f - work->alpha));
     } else {
-        work->flashScaleVel *= 0.6f;
+        work->flashScaleAdd *= 0.6f;
         work->alpha *= 0.9f;
     }
     if (frame >= 3) {
@@ -165,21 +164,21 @@ static void effBombMain(EffectEntry* effect) {
         }
     }
     work->rot += work->rotAdd;
-    dispEntry(camId, dispCalcZ(&position), 2, (DispCallback)effBombDisp, effect);
+    dispEntry(camId, dispCalcZ(&position), DISP_MODE_XLU, effBombDisp, effect);
 }
 
 /** Draws the flash quad for types 1-2, then the burst sprite which cycles through three textures frame by frame. */
-static void effBombDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBombDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffBombN64Work* work;
-
     Mtx mtx;
     Mtx scale;
     Mtx rot;
     Mtx base;
     GXTexObj texObj;
-    u32 a;
-    u32 b;
+    u32 alpha;
+    u32 blue;
     s32 frame;
 
     camera = camGetPtr(cameraId);
@@ -214,22 +213,22 @@ static void effBombDisp(CameraId cameraId, EffectEntry* effect) {
         tri2(0, 1, 2, 0, 0, 2, 3, 0);
     }
     if (frame == 1) {
-        a = 0xC0;
+        alpha = 0xC0;
     } else if (frame == 2) {
-        a = 0xFF;
+        alpha = 0xFF;
     } else {
-        a = work->alpha2;
+        alpha = work->alpha2;
     }
     if (frame > 2) {
         s32 t = 0x7F;
         if (frame < 8) {
             t = frame << 4;
         }
-        b = t + 0x80;
+        blue = t + 0x80;
     } else {
-        b = 0xFF;
+        blue = 0xFF;
     }
-    GXSetTevColor(GX_TEVREG0, (GXColor){0xFF, 0xFF, b, a});
+    GXSetTevColor(GX_TEVREG0, (GXColor){0xFF, 0xFF, blue, alpha});
     PSMTXScale(scale, work->scale, work->scale, work->scale);
     PSMTXRotRad(rot, 'z', 0.017453292f * work->rot);
     PSMTXConcat(rot, scale, scale);

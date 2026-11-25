@@ -1,9 +1,28 @@
 // Script commands for the battle audience: audience flags, positions and reactions.
+
 #include "evt/evt_audience.h"
 #include "battle/battle_audience.h"
 #include "system.h"
 #include "manager/evtmgr_cmd.h"
 #include "libc_decls.h"
+
+/** s32* mask, s32 retIndex */
+// Original name and size (0x80) from the JP demo map (UNUSED there: no script uses it); evt_audience_flag_check for
+// the flags evt_audience_base_flag_on sets.
+USER_FUNC(evt_audience_base_flag_check) {
+    EvtWord* args = event->args;
+    s32 flags;
+    u32 fl;
+
+    flags = evtGetValue(event, args[0]);
+    fl = BattleAudienceBaseGetPtr()->flags;
+    if (fl & flags) {
+        evtSetValue(event, args[1], TRUE);
+    } else {
+        evtSetValue(event, args[1], FALSE);
+    }
+    return EVT_RETURN_DONE;
+}
 
 /** s32* mask */
 USER_FUNC(evt_audience_base_flag_on) {
@@ -13,6 +32,19 @@ USER_FUNC(evt_audience_base_flag_on) {
     mask = evtGetValue(event, *event->args);
     audience = BattleAudienceBaseGetPtr();
     audience->flags |= mask;
+    return EVT_RETURN_DONE;
+}
+
+/** s32* mask */
+// Original name and size (0x48) from the JP demo map (UNUSED there: no script uses it); evt_audience_base_flag_on's
+// counterpart.
+USER_FUNC(evt_audience_base_flag_off) {
+    BattleAudience* audience;
+    s32 mask;
+
+    mask = evtGetValue(event, *event->args);
+    audience = BattleAudienceBaseGetPtr();
+    audience->flags &= ~mask;
     return EVT_RETURN_DONE;
 }
 
@@ -52,6 +84,44 @@ USER_FUNC(evt_audience_flag_off) {
     id = evtGetValue(event, args[0]);
     flags = evtGetValue(event, args[1]);
     BattleAudienceGetPtr(id)->flags &= ~flags;
+    return EVT_RETURN_DONE;
+}
+
+/** s32* flags: sets the flags on every member in use */
+// evt_audience_flag_on_all and evt_audience_flag_off_all: original names and sizes (0x100, 0x104) from the JP demo
+// map (UNUSED there: no script uses them), between evt_audience_flag_off and evt_audience_set_position in this order.
+// Both sizes are evt_audience_flag_on / _off's change over evt_audience_reflesh_natural_all's member loop with its
+// in-use test (without the test 0xc8 / 0xcc).
+USER_FUNC(evt_audience_flag_on_all) {
+    EvtWord* args = event->args;
+    BattleAudienceMember* member;
+    s32 flags, i;
+
+    flags = evtGetValue(event, args[0]);
+    i = 0;
+    member = BattleAudienceGetPtr(0);
+    for (; i < AUDIENCE_MEMBER_MAX; i++, member++) {
+        if (member->flags & AUDIENCE_MEMBER_FLAG_USED) {
+            member->flags |= flags;
+        }
+    }
+    return EVT_RETURN_DONE;
+}
+
+/** s32* flags: clears the flags on every member in use */
+USER_FUNC(evt_audience_flag_off_all) {
+    EvtWord* args = event->args;
+    BattleAudienceMember* member;
+    s32 flags, i;
+
+    flags = evtGetValue(event, args[0]);
+    i = 0;
+    member = BattleAudienceGetPtr(0);
+    for (; i < AUDIENCE_MEMBER_MAX; i++, member++) {
+        if (member->flags & AUDIENCE_MEMBER_FLAG_USED) {
+            member->flags &= ~flags;
+        }
+    }
     return EVT_RETURN_DONE;
 }
 
@@ -97,6 +167,22 @@ USER_FUNC(evt_audience_set_rotate) {
     return EVT_RETURN_DONE;
 }
 
+/** s32* memberId, s32 retX, s32 retY, s32 retZ */
+// Original name and size (0x80) from the JP demo map (UNUSED there: no script uses it), as
+// evt_audience_get_rotate_offset below; evt_audience_get_position for the rotation and the rotation offset.
+USER_FUNC(evt_audience_get_rotate) {
+    BattleAudienceMember* member;
+    EvtWord* args = event->args;
+    s32 id;
+
+    id = evtGetValue(event, args[0]);
+    member = BattleAudienceGetPtr(id);
+    evtSetFloat(event, args[1], member->rotation.x);
+    evtSetFloat(event, args[2], member->rotation.y);
+    evtSetFloat(event, args[3], member->rotation.z);
+    return EVT_RETURN_DONE;
+}
+
 /** s32* memberId, f32* x, f32* y, f32* z */
 USER_FUNC(evt_audience_set_rotate_offset) {
     EvtWord* args = event->args;
@@ -108,6 +194,20 @@ USER_FUNC(evt_audience_set_rotate_offset) {
     y = evtGetFloat(event, args[2]);
     z = evtGetFloat(event, args[3]);
     BattleAudience_SetRotateOffset(id, x, y, z);
+    return EVT_RETURN_DONE;
+}
+
+/** s32* memberId, s32 retX, s32 retY, s32 retZ */
+USER_FUNC(evt_audience_get_rotate_offset) {
+    BattleAudienceMember* member;
+    EvtWord* args = event->args;
+    s32 id;
+
+    id = evtGetValue(event, args[0]);
+    member = BattleAudienceGetPtr(id);
+    evtSetFloat(event, args[1], member->rotationOffset.x);
+    evtSetFloat(event, args[2], member->rotationOffset.y);
+    evtSetFloat(event, args[3], member->rotationOffset.z);
     return EVT_RETURN_DONE;
 }
 
@@ -134,7 +234,7 @@ USER_FUNC(evt_audience_move_position_frame) {
         member->targetPosY = targetY;
         member->targetPosZ = targetZ;
         member->interpType = mode;
-        member->interpFramesLeft = frames;
+        member->interpFrameCounter = frames;
         member->interpFramesTotal = frames;
     }
     compare = member->targetPosX - member->startPosX;
@@ -143,12 +243,12 @@ USER_FUNC(evt_audience_move_position_frame) {
     } else if (compare < 0.0f) {
         member->angle = 0.0f;
     }
-    x = intplGetValue(member->interpType, member->startPosX, member->targetPosX, member->interpFramesTotal - member->interpFramesLeft, member->interpFramesTotal);
-    y = intplGetValue(member->interpType, member->startPosY, member->targetPosY, member->interpFramesTotal - member->interpFramesLeft, member->interpFramesTotal);
-    z = intplGetValue(member->interpType, member->startPosZ, member->targetPosZ, member->interpFramesTotal - member->interpFramesLeft, member->interpFramesTotal);
+    x = intplGetValue(member->interpType, member->startPosX, member->targetPosX, member->interpFramesTotal - member->interpFrameCounter, member->interpFramesTotal);
+    y = intplGetValue(member->interpType, member->startPosY, member->targetPosY, member->interpFramesTotal - member->interpFrameCounter, member->interpFramesTotal);
+    z = intplGetValue(member->interpType, member->startPosZ, member->targetPosZ, member->interpFramesTotal - member->interpFrameCounter, member->interpFramesTotal);
     BattleAudience_SetPosition(id, x, y, z);
-    member->interpFramesLeft--;
-    if (member->interpFramesLeft <= 0) {
+    member->interpFrameCounter--;
+    if (member->interpFrameCounter <= 0) {
         BattleAudience_SetPosition(id, member->targetPosX, member->targetPosY, member->targetPosZ);
         return EVT_RETURN_DONE;
     }
@@ -197,7 +297,7 @@ USER_FUNC(evt_audience_move_position_speed) {
         } else {
             member->interpDelta.z = 0.0f;
         }
-        member->interpFramesLeft = frames;
+        member->interpFrameCounter = frames;
         member->interpFramesTotal = frames;
     }
 
@@ -214,14 +314,14 @@ USER_FUNC(evt_audience_move_position_speed) {
         member->position.y + member->interpDelta.y,
         member->position.z + member->interpDelta.z);
 
-    if (member->interpFramesLeft > 0) {
-        member->interpFramesLeft--;
+    if (member->interpFrameCounter > 0) {
+        member->interpFrameCounter--;
     }
-    if (member->interpFramesLeft < 0) {
-        member->interpFramesLeft++;
+    if (member->interpFrameCounter < 0) {
+        member->interpFrameCounter++;
     }
 
-    if (member->interpFramesLeft == 0) {
+    if (member->interpFrameCounter == 0) {
         BattleAudience_SetPosition(id, member->targetPosX, member->targetPosY, member->targetPosZ);
         return EVT_RETURN_DONE;
     }
@@ -255,7 +355,7 @@ USER_FUNC(evt_audience_jump_position_firstsp) {
         member->interpDelta.y = deltaY;
         member->interpDelta.z = amountZ / (f32)frames;
         member->interpGravity = (2.0f * -((deltaY * (f32)frames) - amountY)) / (f32)(frames * frames);
-        member->interpFramesLeft = frames;
+        member->interpFrameCounter = frames;
         member->interpFramesTotal = frames;
     }
 
@@ -266,8 +366,8 @@ USER_FUNC(evt_audience_jump_position_firstsp) {
         member->position.z + member->interpDelta.z);
 
     member->interpDelta.y += member->interpGravity;
-    member->interpFramesLeft--;
-    if (member->interpFramesLeft <= 0) {
+    member->interpFrameCounter--;
+    if (member->interpFrameCounter <= 0) {
         BattleAudience_SetPosition(id, member->targetPosX, member->targetPosY, member->targetPosZ);
         return EVT_RETURN_DONE;
     }
@@ -302,7 +402,7 @@ USER_FUNC(evt_audience_jump_position_gravity) {
         member->interpDelta.y = amountY / (f32)frames - (deltaY * (f32)frames);
         member->interpDelta.z = amountZ / (f32)frames;
         member->interpGravity = gravity;
-        member->interpFramesLeft = frames;
+        member->interpFrameCounter = frames;
         member->interpFramesTotal = frames;
     }
 
@@ -313,8 +413,8 @@ USER_FUNC(evt_audience_jump_position_gravity) {
         member->position.z + member->interpDelta.z);
 
     member->interpDelta.y += member->interpGravity;
-    member->interpFramesLeft--;
-    if (member->interpFramesLeft <= 0) {
+    member->interpFrameCounter--;
+    if (member->interpFrameCounter <= 0) {
         BattleAudience_SetPosition(id, member->targetPosX, member->targetPosY, member->targetPosZ);
         return EVT_RETURN_DONE;
     }
@@ -340,14 +440,13 @@ USER_FUNC(evt_audience_set_animpose) {
  */
 USER_FUNC(evt_audience_entry) {
     EvtWord* args = event->args;
-    AudienceMemberType type;
+    u8 type;
     s32 id;
 
-    args = event->args;
     id = evtGetValue(event, args[0]);
-    type = (AudienceMemberType)evtGetValue(event, args[1]);
-    if (BattleAudience_Entry(id, type, 0) == 1) {
-        BattleAudience_SetAnim(id, 1, TRUE);
+    type = evtGetValue(event, args[1]);
+    if (BattleAudience_Entry(id, type, AUDIENCE_STATUS_WAIT) == TRUE) {
+        BattleAudience_SetAnim(id, AUD_ANIM_WAIT_BACK, TRUE);
     }
     return EVT_RETURN_DONE;
 }
@@ -359,9 +458,25 @@ USER_FUNC(evt_audience_delete) {
     return EVT_RETURN_DONE;
 }
 
+/** s32* memberId, s32 retIndex: whether the member exists (BattleAudience_GetExist) */
+// Original name and size (0x74) from the JP demo map (UNUSED there: no script uses it); the size is the call its
+// name gives compared with TRUE (as evt_audience_entry does) and the two results of evt_audience_flag_check.
+USER_FUNC(evt_audience_exist) {
+    EvtWord* args = event->args;
+    s32 id;
+
+    id = evtGetValue(event, args[0]);
+    if (BattleAudience_GetExist(id) == TRUE) {
+        evtSetValue(event, args[1], TRUE);
+    } else {
+        evtSetValue(event, args[1], FALSE);
+    }
+    return EVT_RETURN_DONE;
+}
+
 /**
- * Does nothing in every version, though Mario's battle scripts still call it after his attacks.
- * Guess: a leftover hook for crowd-driven Star Power refills.
+ * Does nothing in every version, though Mario's, the partners' and the items' battle scripts still call it
+ * after their moves.
  */
 USER_FUNC(evt_audience_ap_recovery) {
     return EVT_RETURN_DONE;
@@ -382,8 +497,8 @@ USER_FUNC(evt_audience_reflesh_natural_all) {
     evtGetValue(event, args[2]); // unused
     i = 0;
     member = BattleAudienceGetPtr(0);
-    for (; i < 200; i++, member++) {
-        if (member->flags & MEMBER_FLAG_ACTIVE && member->status == 13 && member->step == 1 && irand(100) < chance) {
+    for (; i < AUDIENCE_MEMBER_MAX; i++, member++) {
+        if (member->flags & AUDIENCE_MEMBER_FLAG_USED && member->status == AUDIENCE_STATUS_SLEEP && member->step == 1 && irand(100) < chance) {
             member->step = 2;
         }
     }
@@ -406,14 +521,48 @@ USER_FUNC(evt_audience_abnormal_natural_all) {
     evtGetValue(event, args[2]); // unused
     i = 0;
     member = BattleAudienceGetPtr(0);
-    for (; i < 200; i++, member++) {
-        if ((u8)BattleAudience_GetSysCtrl(i)) {
+    for (; i < AUDIENCE_MEMBER_MAX; i++, member++) {
+        if (BattleAudience_GetSysCtrl(i)) {
             status = member->status;
-            if ((status <= 3 || (u8)(status - 4) <= 2 || status == 7) && irand(100) < chance) {
-                BattleAudience_ChangeStatus(i, 13);
+            if ((status <= AUDIENCE_STATUS_WAIT_JUMP || (u8)(status - AUDIENCE_STATUS_JOY_RAISE_ARM) <= 2 || status == AUDIENCE_STATUS_ITEM_ON) && irand(100) < chance) {
+                BattleAudience_ChangeStatus(i, AUDIENCE_STATUS_SLEEP);
             }
         }
     }
+    return EVT_RETURN_DONE;
+}
+
+/** Starts the crowd's booing (BattleAudienceSoundBooing). */
+// evt_audience_sound_booing, _clap, _handbeat, _whistle, _set_vol, _set_vol_all and _stop: original names and sizes
+// from the JP demo map (UNUSED there: no script uses them). Each passes its arguments to the BattleAudienceSound
+// function its name gives, in the form of evt_audience_sound_cheer (two arguments, 0x60), evt_audience_joy_ending
+// (none, 0x24) or evt_audience_delete (one, 0x30).
+USER_FUNC(evt_audience_sound_booing) {
+    BattleAudienceSoundBooing();
+    return EVT_RETURN_DONE;
+}
+
+/** Plays the crowd clapping (BattleAudienceSoundClap): args[0] duration, args[1] fade time. */
+USER_FUNC(evt_audience_sound_clap) {
+    EvtWord* args = event->args;
+    s32 a, b;
+
+    a = evtGetValue(event, args[0]);
+    b = evtGetValue(event, args[1]);
+    BattleAudienceSoundClap(a, b);
+    return EVT_RETURN_DONE;
+}
+
+/** Plays the crowd's background noise once (BattleAudienceSoundNoise): args[0] duration, args[1] fade time. */
+// Original name and size (0x60) from the JP demo map (UNUSED there: no script uses it), between _clap and _cheer:
+// evt_audience_sound_clap's form for BattleAudienceSoundNoise.
+USER_FUNC(evt_audience_sound_noise) {
+    EvtWord* args = event->args;
+    s32 a, b;
+
+    a = evtGetValue(event, args[0]);
+    b = evtGetValue(event, args[1]);
+    BattleAudienceSoundNoise(a, b);
     return EVT_RETURN_DONE;
 }
 
@@ -431,6 +580,47 @@ USER_FUNC(evt_audience_sound_cheer) {
     return EVT_RETURN_DONE;
 }
 
+/** Starts the crowd's rhythmic clapping loop (BattleAudienceSoundHandBeat). */
+USER_FUNC(evt_audience_sound_handbeat) {
+    BattleAudienceSoundHandBeat();
+    return EVT_RETURN_DONE;
+}
+
+/** Plays a whistle from a random idle member (BattleAudienceSoundWhistle). */
+USER_FUNC(evt_audience_sound_whistle) {
+    BattleAudienceSoundWhistle();
+    return EVT_RETURN_DONE;
+}
+
+/** Fades crowd sound channel args[0] to args[1] percent over args[2] frames (BattleAudienceSoundSetVol). */
+USER_FUNC(evt_audience_sound_set_vol) {
+    EvtWord* args = event->args;
+    s32 id, vol, length;
+
+    id = evtGetValue(event, args[0]);
+    vol = evtGetValue(event, args[1]);
+    length = evtGetValue(event, args[2]);
+    BattleAudienceSoundSetVol(id, vol, length);
+    return EVT_RETURN_DONE;
+}
+
+/** Fades all crowd sound channels to args[0] percent over args[1] frames (BattleAudienceSoundSetVolAll). */
+USER_FUNC(evt_audience_sound_set_vol_all) {
+    EvtWord* args = event->args;
+    s32 vol, length;
+
+    vol = evtGetValue(event, args[0]);
+    length = evtGetValue(event, args[1]);
+    BattleAudienceSoundSetVolAll(vol, length);
+    return EVT_RETURN_DONE;
+}
+
+/** Stops the sound on crowd channel args[0] if it is playing (BattleAudienceSoundStop). */
+USER_FUNC(evt_audience_sound_stop) {
+    BattleAudienceSoundStop(evtGetValue(event, event->args[0]));
+    return EVT_RETURN_DONE;
+}
+
 /**
  * Adds the float args[0] to the audience's added-member count (BattleAudienceAddTargetNum with no direct
  * change), so events can raise or lower how many spectators turn up.
@@ -443,7 +633,7 @@ USER_FUNC(evt_audience_num_updown_in_event) {
 
 /**
  * Run when Mario skips the Stylish command.
- * Up to the US demo it clears AUDIENCE_FLAG_STYLISH_MISSED; the later releases do nothing here.
+ * In the early demos it clears AUDIENCE_FLAG_STYLISH_MISSED; JP and later do nothing here.
  */
 USER_FUNC(evt_audience_acrobat_notry) {
     BattleAudience_Case_AcrobatNoTry();

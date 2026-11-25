@@ -1,24 +1,42 @@
 // jin_01 (ダイム寺院, Creepy Steeple): side room with a red switch and a Golden Leaf item; doors to jin_00 and jin_03.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
 #include "jin.h"
 #include "data_tables.h"
-#include "evt/evt_story.h"
-#include "driver/camdrv.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_party.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mobj.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
+static EvtWord s1_close[12];
+static EvtWord s1_open[12];
+static EvtWord s2_close[12];
+static EvtWord s2_open[12];
 static BeroEntry bero_entry_data[3];
+static EvtWord cam_shake[62];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord evt_kaidan_oku[];
+#else
+EvtWord evt_kaidan_oku[144];
+#endif
+
+static EvtWord ki_data_evt_01[20];
 static TreeAccess ki_data[2];
+EvtWord jin_01_init_evt[41];
 
 /**
  * Door animation callback: closes door00 as Mario arrives through s_bero_1 (from jin_00);
@@ -108,7 +126,7 @@ static BeroEntry bero_entry_data[] = {
  */
 static EVT_BEGIN(cam_shake)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_KAIDAN_MOVE1"), 300, 100, 200, LW(9))
-    CALL(evt_sub_intpl_init, 11, 0, 10, 30)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 0, 10, 30)
     LABEL(0)
     CALL(evt_sub_intpl_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -116,7 +134,7 @@ static EVT_BEGIN(cam_shake)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    CALL(evt_sub_intpl_init, 11, 10, 0, 30)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 10, 0, 30)
     LABEL(1)
     CALL(evt_sub_intpl_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -131,19 +149,20 @@ EVT_END()
 /**
  * Red-switch script that moves the endless staircase one stage on:
  * Mario and his partner react in confusion (exclamation mark and random turning the first time),
- * the camera shakes and the stage counter LSW(1) is lowered by 1.
+ * the camera shakes and the stage counter LSW_JIN_STAIRCASE_POS is lowered by 1.
  */
+// The rear switch decrements the staircase position when the current value is at most 1.
 EVT_BEGIN(evt_kaidan_oku)
-    IF_INT_LESS_OR_EQUAL(LSW(1), 1)
+    IF_INT_LESS_OR_EQUAL(LSW_JIN_STAIRCASE_POS, 1)
         CALL(evt_mario_key_onoff, 0)
 #if VERSION >= VERSION_JP
         CALL(evt_mario_normalize)
 #endif
         CALL(evt_party_stop, 0)
-        IF_INT_EQUAL(GSWF(GSWF_JIN_ENDLESS_STAIRS_REACTION_SEEN), 0)
+        IF_INT_EQUAL(GSWF_JIN_STAIRS_SWITCH_FIRST_USE_SEEN, 0)
             BEGIN_INLINE_EVENT_GET_ID(LW(3))
                 WAIT_MS(500)
-                CALL(evt_eff_fukidashi, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
                 WAIT_MS(1000)
                 LOOP(0)
                     CALL(evt_sub_random, 200, LW(0))
@@ -158,7 +177,7 @@ EVT_BEGIN(evt_kaidan_oku)
             END_INLINE_EVENT
             BEGIN_INLINE_EVENT_GET_ID(LW(4))
                 WAIT_MS(500)
-                CALL(evt_eff_fukidashi, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+                CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
                 WAIT_MS(1000)
                 LOOP(0)
                     CALL(evt_sub_random, 200, LW(0))
@@ -173,13 +192,13 @@ EVT_BEGIN(evt_kaidan_oku)
             END_INLINE_EVENT
         END_IF
         CALL_CHILD(cam_shake)
-        IF_INT_EQUAL(GSWF(GSWF_JIN_ENDLESS_STAIRS_REACTION_SEEN), 0)
+        IF_INT_EQUAL(GSWF_JIN_STAIRS_SWITCH_FIRST_USE_SEEN, 0)
             WAIT_MS(500)
             DELETE_EVENT(LW(3))
             DELETE_EVENT(LW(4))
-            SET_VALUE(GSWF(GSWF_JIN_ENDLESS_STAIRS_REACTION_SEEN), 1)
+            SET_VALUE(GSWF_JIN_STAIRS_SWITCH_FIRST_USE_SEEN, 1)
         END_IF
-        SUBTRACT(LSW(1), 1)
+        SUBTRACT(LSW_JIN_STAIRCASE_POS, 1)
         CALL(evt_mario_key_onoff, 1)
         CALL(evt_party_run, 0)
     END_IF
@@ -187,13 +206,13 @@ EVT_BEGIN(evt_kaidan_oku)
 EVT_END()
 
 /**
- * Reward script for the golden tree: if the item has not been taken yet,
- * drops a Golden Leaf from it (flag LSWF(2)) when Mario hits the tree.
+ * Reward script for the golden tree: if no item named item_ki01 is present,
+ * drops a Golden Leaf from it (flag LSWF_JIN_01_GOLDEN_LEAF_TREE) when Mario hits the tree.
  */
 static EVT_BEGIN(ki_data_evt_01)
     CALL(evt_item_delete_check, STRING("item_ki01"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ki01"), ITEM_GOLDEN_LEAF, 798, 188, -40, ITEM_ENTRY_FALL_THROWN, LSWF(2), 0)
+        CALL(evt_item_entry, STRING("item_ki01"), ITEM_GOLDEN_LEAF, 798, 188, -40, ITEM_TYPE_FALL_NO_PICKUP, LSWF_JIN_01_GOLDEN_LEAF_TREE, 0)
     END_IF
     RETURN
 EVT_END()
@@ -209,8 +228,8 @@ static TreeAccess ki_data[] = {
  * the red switch for the endless staircase and the golden tree that drops a Golden Leaf.
  */
 EVT_BEGIN(jin_01_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_JIN1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_JIN2"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_JIN1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_JIN2"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
@@ -218,7 +237,7 @@ EVT_BEGIN(jin_01_init_evt)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_usu_kagemario_party_kill)
     CALL(evt_mobj_switch_red, 0, STRING("mobj_switch1"), 485, 30, 10, PTR(evt_kaidan_oku), 0)
-    SET_VALUE(LSWF(2), 0)
+    SET_VALUE(LSWF_JIN_01_GOLDEN_LEAF_TREE, 0)
     SET_VALUE(LW(0), PTR(ki_data))
     CALL_CHILD(evt_sub_tree_access_entry)
     RETURN

@@ -1,6 +1,6 @@
 // Up/down number pop-up: a signed number drawn from icon textures that bounces in and fades;
-// used in battle for status strength changes (types 0 and 1 choose the style).
-#include "eff/eff_updown.h"
+// used in battle for attack/defense changes (types 0-3: attack, defense, and their non-bouncing forms).
+
 #include "icon_ids.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,7 +9,9 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
+#include "eff/eff_updown.h"
+#include "driver/icondrv.h"
 
 typedef struct EffUpdownWork {
     s32 type;     // 0x0
@@ -22,13 +24,11 @@ typedef struct EffUpdownWork {
     u8 alpha;     // 0x24
 } EffUpdownWork;
 
-// FAKE: local prototype: iconGetTexObj takes the icon id as u16 (icondrv.h: s16/s32 by version); this file was compiled with it and the header prototype changes the code.
-extern void iconGetTexObj(GXTexObj* texObj, u16 iconId);
 static void effUpdownMain(EffectEntry* effect);
-static void effUpdownDisp(CameraId cameraId, EffectEntry* effect);
+static void effUpdownDisp(CameraId cameraId, void* param);
 
 /** Digit icons 0-9 used to draw the number. */
-static u16 icon_id[10] = {ICON_1DA, ICON_1DC, ICON_1DE, ICON_1E0, ICON_1E2, ICON_1E4, ICON_1E6, ICON_1E8, ICON_1EA, ICON_1EC};
+static u16 icon_id[10] = {ICON_NUMBER_SMALL_0, ICON_NUMBER_SMALL_1, ICON_NUMBER_SMALL_2, ICON_NUMBER_SMALL_3, ICON_NUMBER_SMALL_4, ICON_NUMBER_SMALL_5, ICON_NUMBER_SMALL_6, ICON_NUMBER_SMALL_7, ICON_NUMBER_SMALL_8, ICON_NUMBER_SMALL_9};
 
 /**
  * Bounce-in keys: width and height percentages per frame, starting wide and flat and settling
@@ -53,7 +53,7 @@ EffectEntry* effUpdownEntry(s32 type, f32 x, f32 y, f32 z, s32 number, s32 timer
     work = __memAlloc(HEAP_EFFECT, sizeof(EffUpdownWork));
     effect->userdata = work;
     effect->callback = effUpdownMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -77,8 +77,8 @@ static void effUpdownMain(EffectEntry* effect) {
     s32 type = work->type;
     s32 mode;
 
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -99,6 +99,7 @@ static void effUpdownMain(EffectEntry* effect) {
             f32 arg = (s32)(work->frame - 15);
             f32 sv;
             work->scaleX = 1.0f;
+
             sv = (f32)sin(arg *= 0.25f);
             work->scaleY = 1.0f - 0.1f * sv;
         }
@@ -108,13 +109,14 @@ static void effUpdownMain(EffectEntry* effect) {
     {
         Vec position = {0.0f, 0.0f, 0.0f};
         Vec* p = &position;
+
         p->x = work->position.x;
         p->y = work->position.y;
         p->z = work->position.z;
         if (work->alpha != 0xFF) {
-            mode = 2;
+            mode = DISP_MODE_XLU;
         }
-        dispEntry(CAMERA_3D, dispCalcZ(p), mode, (DispCallback)effUpdownDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(p), mode, effUpdownDisp, effect);
     }
 }
 
@@ -166,8 +168,12 @@ static void polygon(s32 type, s32 alpha, f32 x, f32 y, f32 w, f32 h, f32 s, f32 
     GXTexCoord2f32(0.0f, t);
 }
 
-/** Draws a coloured square background, the last digit of |number| (an icon texture) and the up or down arrow icon. */
-static void effUpdownDisp(CameraId cameraId, EffectEntry* effect) {
+/**
+ * Draws a coloured background quad (effect texture 0x1D, rotated 180 degrees for negative numbers),
+ * the last digit of |number| (an icon texture) and a plus or minus sign icon.
+ */
+static void effUpdownDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffUpdownWork* work = effect->userdata;
     CameraEntry* camera = camGetPtr(cameraId);
     s32 number = work->number;
@@ -217,7 +223,7 @@ static void effUpdownDisp(CameraId cameraId, EffectEntry* effect) {
     iconGetTexObj(&texObj, icon_id[abs(number) % 10]);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     if (number >= 0) {
         PSMTXTrans(m5, 5.0f, 0.0f, 1.0f);
     } else {
@@ -233,11 +239,11 @@ static void effUpdownDisp(CameraId cameraId, EffectEntry* effect) {
     polygon(0, alpha, -8.0f, 16.0f, 16.0f, 16.0f, 1.0f, 1.0f);
 
     if (number >= 0) {
-        iconGetTexObj(&texObj, ICON_1ED);
+        iconGetTexObj(&texObj, ICON_PLUS);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
         PSMTXTrans(m5, -5.0f, 0.0f, 1.0f);
     } else {
-        iconGetTexObj(&texObj, ICON_1EE);
+        iconGetTexObj(&texObj, ICON_MINUS);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
         PSMTXTrans(m5, -5.0f, 7.0f, 1.0f);
     }

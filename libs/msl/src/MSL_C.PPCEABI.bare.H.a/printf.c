@@ -1,27 +1,14 @@
 #include "ansi_files.h"
 #include <stdarg.h>
 
-#define SIGDIGLEN 36
+#include "ansi_fp.h"
+
 #define NULL 0
 
-typedef struct decimal {
-    char sign;
-    char unused;
-    short exp;
-    struct {
-        unsigned char length;
-        unsigned char text[SIGDIGLEN];
-        unsigned char unused;
-    } sig;
-} decimal;
+#define conversion_buff_size 512 /* size of the conversion buffer in __pformatter */
+#define conversion_max 509       /* longest field width or precision a conversion accepts */
+#define bad_conversion 0xFF      /* conversion_char of an invalid conversion (as in scanf.c) */
 
-typedef struct decform {
-    char style;
-    char unused;
-    short digits;
-} decform;
-
-void __num2dec(const decform* f, double x, decimal* d);
 int fwide(FILE* stream, int orientation);
 size_t fwrite(const void* ptr, size_t memb_size, size_t num_memb, FILE* file);
 void* memcpy(void* dst, const void* src, size_t n);
@@ -31,9 +18,9 @@ size_t strlen(const char* s);
 char* strcpy(char* dst, const char* src);
 size_t wcstombs(char* s, const wchar_t* pwcs, size_t n);
 
-extern unsigned char __ctype_map[];
-#define isdigit(c) ((int)(__ctype_map[(unsigned char)(c)] & 0x10))
-#define isupper(c) ((int)(__ctype_map[(unsigned char)(c)] & 0x80))
+#include "ctype_map.h"
+#define isdigit(c) ((int)(__ctype_map[(unsigned char)(c)] & __digit))
+#define isupper(c) ((int)(__ctype_map[(unsigned char)(c)] & __upper_case))
 
 #define stdout (&__files[1])
 #define stdout_access 2
@@ -69,10 +56,6 @@ typedef struct {
     int precision;
 } print_format;
 
-/**
- * Parses one printf conversion specification (flags, width, precision, length modifier,
- * conversion character) into a print_format.
- */
 static const char* parse_format(const char* format_string, va_list* arg, print_format* format) {
     print_format f;
     const char* s = format_string;
@@ -142,8 +125,8 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
         }
     }
 
-    if (f.field_width > 509) {
-        f.conversion_char = 0xFF;
+    if (f.field_width > conversion_max) {
+        f.conversion_char = bad_conversion;
         *format = f;
         return s + 1;
     }
@@ -211,7 +194,7 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
     case 'x':
     case 'X':
         if (f.argument_options == long_double_argument) {
-            f.conversion_char = 0xFF;
+            f.conversion_char = bad_conversion;
             break;
         }
 
@@ -225,7 +208,7 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
     case 'f':
     case 'F':
         if (f.argument_options == short_argument || f.argument_options == long_long_argument) {
-            f.conversion_char = 0xFF;
+            f.conversion_char = bad_conversion;
             break;
         }
 
@@ -243,7 +226,7 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
         if (f.argument_options == short_argument || f.argument_options == long_long_argument ||
             f.argument_options == char_argument)
         {
-            f.conversion_char = 0xFF;
+            f.conversion_char = bad_conversion;
         }
 
         break;
@@ -259,7 +242,7 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
         if (f.argument_options == short_argument || f.argument_options == long_long_argument ||
             f.argument_options == char_argument)
         {
-            f.conversion_char = 0xFF;
+            f.conversion_char = bad_conversion;
             break;
         }
 
@@ -279,7 +262,7 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
         if (f.argument_options == long_argument) {
             f.argument_options = wchar_argument;
         } else if (f.precision_specified || f.argument_options != normal_argument) {
-            f.conversion_char = 0xFF;
+            f.conversion_char = bad_conversion;
         }
         break;
 
@@ -287,18 +270,18 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
         if (f.argument_options == long_argument) {
             f.argument_options = wchar_argument;
         } else if (f.argument_options != normal_argument) {
-            f.conversion_char = 0xFF;
+            f.conversion_char = bad_conversion;
         }
         break;
 
     case 'n':
         if (f.argument_options == long_double_argument) {
-            f.conversion_char = 0xFF;
+            f.conversion_char = bad_conversion;
         }
         break;
 
     default:
-        f.conversion_char = 0xFF;
+        f.conversion_char = bad_conversion;
         break;
     }
 
@@ -306,11 +289,7 @@ static const char* parse_format(const char* format_string, va_list* arg, print_f
     return s + 1;
 }
 
-/**
- * Formats a long as text for %d/%i/%u/%o/%x/%X in the given print_format:
- * digits are written backwards from the end of buff, padded to the precision,
- * with the 0/0x prefix for the # flag and the sign (- + or space); returns a pointer to the start of the text.
- */
+/* long2str and longlong2str are twins that differ only in the value type. */
 static char* long2str(long num, char* buff, print_format format) {
     unsigned long unsigned_num, base;
     char* p;
@@ -394,7 +373,7 @@ static char* long2str(long num, char* buff, print_format format) {
         }
     }
 
-    if (buff - p + format.precision > 509) {
+    if (buff - p + format.precision > conversion_max) {
         return 0;
     }
 
@@ -419,7 +398,6 @@ static char* long2str(long num, char* buff, print_format format) {
     return p;
 }
 
-/** Same as long2str for long long (%lld and friends). */
 static char* longlong2str(long long num, char* buff, print_format format) {
     unsigned long long unsigned_num, base;
     char* p;
@@ -503,7 +481,7 @@ static char* longlong2str(long long num, char* buff, print_format format) {
         }
     }
 
-    if (buff - p + format.precision > 509) {
+    if (buff - p + format.precision > conversion_max) {
         return 0;
     }
 
@@ -528,10 +506,6 @@ static char* longlong2str(long long num, char* buff, print_format format) {
     return p;
 }
 
-/**
- * Formats a double as hexadecimal floating point (%a/%A, e.g. 0x1.8p+3) into buff;
- * returns null if the precision exceeds 509, and prints inf/nan text for non-finite values.
- */
 static char* double2hex(long double num, char* buff, print_format format) {
     char* p;
     unsigned char* q;
@@ -547,12 +521,12 @@ static char* double2hex(long double num, char* buff, print_format format) {
     p = buff;
     ld = num;
 
-    if (format.precision > 509) {
+    if (format.precision > conversion_max) {
         return 0;
     }
 
     form.style = 0;
-    form.digits = 0x20;
+    form.digits = 0x20; // 32 significant digits from __num2dec
     __num2dec(&form, num, &dec);
 
     if (*dec.sig.text == 'I') {
@@ -656,12 +630,10 @@ static char* double2hex(long double num, char* buff, print_format format) {
     return p;
 }
 
-/**
- * Rounds the decimal digit string in place to new_length digits (round half to even, carry through 9s,
- * a carry out of the top digit becomes 1 with exp + 1);
- * a negative length or a result of all zeros gives a single 0 digit.
- */
-void round_decimal(decimal* dec, int new_length) {
+/* Rounds dec to new_length digits (ties to even). A negative length, or a carry that consumes every digit,
+   gives 0; the second case jumps back into the first branch through return_zero. Not static, but no header
+   declares it: only this file calls it. */
+static void round_decimal(decimal* dec, int new_length) {
     char c;
     char* p;
     int carry;
@@ -713,12 +685,6 @@ void round_decimal(decimal* dec, int new_length) {
     dec->sig.length = new_length;
 }
 
-/**
- * Formats a double for %f/%e/%g (and uppercase):
- * converts with __num2dec, trims trailing zeros,
- * rounds to the precision with round_decimal and lays out the digits, exponent and sign;
- * returns null if the precision exceeds 509, and prints inf/nan text for non-finite values.
- */
 static char* float2str(long double num, char* buff, print_format format) {
     decimal dec;
     decform form;
@@ -727,12 +693,12 @@ static char* float2str(long double num, char* buff, print_format format) {
     int n, digits, sign;
     int int_digits, frac_digits;
 
-    if (format.precision > 509) {
+    if (format.precision > conversion_max) {
         return 0;
     }
 
     form.style = 0;
-    form.digits = 0x20;
+    form.digits = 0x20; // 32 significant digits from __num2dec
     __num2dec(&form, num, &dec);
     p = (char*)dec.sig.text + dec.sig.length;
 
@@ -821,119 +787,119 @@ static char* float2str(long double num, char* buff, print_format format) {
 
     case 'e':
     case 'E':
-    e_format:
-        if (dec.sig.length > format.precision + 1) {
-            round_decimal(&dec, format.precision + 1);
-        }
-
-        n = dec.exp;
-        sign = '+';
-
-        if (n < 0) {
-            n = -n;
-            sign = '-';
-        }
-
-        for (digits = 0; n || digits < 2; ++digits) {
-            *--p = n % 10 + '0';
-            n /= 10;
-        }
-
-        *--p = sign;
-        *--p = format.conversion_char;
-
-        if (buff - p + format.precision > 509) {
-            return 0;
-        }
-
-        if (dec.sig.length < format.precision + 1) {
-            for (n = format.precision + 1 - dec.sig.length + 1; --n;) {
-                *--p = '0';
+        e_format:
+            if (dec.sig.length > format.precision + 1) {
+                round_decimal(&dec, format.precision + 1);
             }
-        }
 
-        for (n = dec.sig.length, q = (char*)dec.sig.text + dec.sig.length; --n;) {
-            *--p = *--q;
-        }
+            n = dec.exp;
+            sign = '+';
 
-        if (format.precision || format.alternate_form) {
-            *--p = '.';
-        }
+            if (n < 0) {
+                n = -n;
+                sign = '-';
+            }
 
-        *--p = *dec.sig.text;
+            for (digits = 0; n || digits < 2; ++digits) {
+                *--p = n % 10 + '0';
+                n /= 10;
+            }
 
-        if (dec.sign) {
-            *--p = '-';
-        } else if (format.sign_options == sign_always) {
-            *--p = '+';
-        } else if (format.sign_options == space_holder) {
-            *--p = ' ';
-        }
+            *--p = sign;
+            *--p = format.conversion_char;
 
-        break;
+            if (buff - p + format.precision > conversion_max) {
+                return 0;
+            }
+
+            if (dec.sig.length < format.precision + 1) {
+                for (n = format.precision + 1 - dec.sig.length + 1; --n;) {
+                    *--p = '0';
+                }
+            }
+
+            for (n = dec.sig.length, q = (char*)dec.sig.text + dec.sig.length; --n;) {
+                *--p = *--q;
+            }
+
+            if (format.precision || format.alternate_form) {
+                *--p = '.';
+            }
+
+            *--p = *dec.sig.text;
+
+            if (dec.sign) {
+                *--p = '-';
+            } else if (format.sign_options == sign_always) {
+                *--p = '+';
+            } else if (format.sign_options == space_holder) {
+                *--p = ' ';
+            }
+
+            break;
 
     case 'f':
     case 'F':
-    f_format:
-        if ((frac_digits = -dec.exp + dec.sig.length - 1) < 0) {
-            frac_digits = 0;
-        }
-
-        if (frac_digits > format.precision) {
-            round_decimal(&dec, dec.sig.length - (frac_digits - format.precision));
-
+        f_format:
             if ((frac_digits = -dec.exp + dec.sig.length - 1) < 0) {
                 frac_digits = 0;
             }
-        }
 
-        if ((int_digits = dec.exp + 1) < 0) {
-            int_digits = 0;
-        }
+            if (frac_digits > format.precision) {
+                round_decimal(&dec, dec.sig.length - (frac_digits - format.precision));
 
-        if (int_digits + frac_digits > 509) {
-            return 0;
-        }
+                if ((frac_digits = -dec.exp + dec.sig.length - 1) < 0) {
+                    frac_digits = 0;
+                }
+            }
 
-        q = (char*)dec.sig.text + dec.sig.length;
+            if ((int_digits = dec.exp + 1) < 0) {
+                int_digits = 0;
+            }
 
-        for (digits = 0; digits < (format.precision - frac_digits); ++digits) {
-            *--p = '0';
-        }
+            if (int_digits + frac_digits > conversion_max) {
+                return 0;
+            }
 
-        for (digits = 0; digits < frac_digits && digits < dec.sig.length; ++digits) {
-            *--p = *--q;
-        }
+            q = (char*)dec.sig.text + dec.sig.length;
 
-        for (; digits < frac_digits; ++digits) {
-            *--p = '0';
-        }
-
-        if (format.precision || format.alternate_form) {
-            *--p = '.';
-        }
-
-        if (int_digits) {
-            for (digits = 0; digits < int_digits - dec.sig.length; ++digits) {
+            for (digits = 0; digits < (format.precision - frac_digits); ++digits) {
                 *--p = '0';
             }
 
-            for (; digits < int_digits; ++digits) {
+            for (digits = 0; digits < frac_digits && digits < dec.sig.length; ++digits) {
                 *--p = *--q;
             }
-        } else {
-            *--p = '0';
-        }
 
-        if (dec.sign) {
-            *--p = '-';
-        } else if (format.sign_options == sign_always) {
-            *--p = '+';
-        } else if (format.sign_options == space_holder) {
-            *--p = ' ';
-        }
+            for (; digits < frac_digits; ++digits) {
+                *--p = '0';
+            }
 
-        break;
+            if (format.precision || format.alternate_form) {
+                *--p = '.';
+            }
+
+            if (int_digits) {
+                for (digits = 0; digits < int_digits - dec.sig.length; ++digits) {
+                    *--p = '0';
+                }
+
+                for (; digits < int_digits; ++digits) {
+                    *--p = *--q;
+                }
+            } else {
+                *--p = '0';
+            }
+
+            if (dec.sign) {
+                *--p = '-';
+            } else if (format.sign_options == sign_always) {
+                *--p = '+';
+            } else if (format.sign_options == space_holder) {
+                *--p = ' ';
+            }
+
+            break;
     }
 
     return p;
@@ -948,7 +914,7 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
     long long_num;
     long long long_long_num;
     long double long_double_num;
-    char buff[512];
+    char buff[conversion_buff_size];
     char* buff_ptr;
     char* string_end;
     char fill_char = ' ';
@@ -999,16 +965,16 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
             }
 
             if (format.argument_options == long_long_argument) {
-                if (!(buff_ptr = longlong2str(long_long_num, buff + 512, format))) {
+                if (!(buff_ptr = longlong2str(long_long_num, buff + conversion_buff_size, format))) {
                     goto conversion_error;
                 }
             } else {
-                if (!(buff_ptr = long2str(long_num, buff + 512, format))) {
+                if (!(buff_ptr = long2str(long_num, buff + conversion_buff_size, format))) {
                     goto conversion_error;
                 }
             }
 
-            num_chars = buff + 512 - 1 - buff_ptr;
+            num_chars = buff + conversion_buff_size - 1 - buff_ptr;
             break;
 
         case 'o':
@@ -1032,16 +998,16 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
             }
 
             if (format.argument_options == long_long_argument) {
-                if (!(buff_ptr = longlong2str(long_long_num, buff + 512, format))) {
+                if (!(buff_ptr = longlong2str(long_long_num, buff + conversion_buff_size, format))) {
                     goto conversion_error;
                 }
             } else {
-                if (!(buff_ptr = long2str(long_num, buff + 512, format))) {
+                if (!(buff_ptr = long2str(long_num, buff + conversion_buff_size, format))) {
                     goto conversion_error;
                 }
             }
 
-            num_chars = buff + 512 - 1 - buff_ptr;
+            num_chars = buff + conversion_buff_size - 1 - buff_ptr;
             break;
 
         case 'f':
@@ -1056,11 +1022,11 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
                 long_double_num = va_arg(arg, double);
             }
 
-            if (!(buff_ptr = float2str(long_double_num, buff + 512, format))) {
+            if (!(buff_ptr = float2str(long_double_num, buff + conversion_buff_size, format))) {
                 goto conversion_error;
             }
 
-            num_chars = buff + 512 - 1 - buff_ptr;
+            num_chars = buff + conversion_buff_size - 1 - buff_ptr;
             break;
 
         case 'a':
@@ -1071,11 +1037,11 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
                 long_double_num = va_arg(arg, double);
             }
 
-            if (!(buff_ptr = double2hex(long_double_num, buff + 512, format))) {
+            if (!(buff_ptr = double2hex(long_double_num, buff + conversion_buff_size, format))) {
                 goto conversion_error;
             }
 
-            num_chars = buff + 512 - 1 - buff_ptr;
+            num_chars = buff + conversion_buff_size - 1 - buff_ptr;
             break;
 
         case 's':
@@ -1083,9 +1049,10 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
                 wchar_t* wcs_ptr = va_arg(arg, wchar_t*);
 
                 if (wcs_ptr == NULL) {
-                    wcs_ptr = L"\0";
+                    wcs_ptr = L"";
                 }
 
+                // wcstombs returns a byte count (0..n), never a negative value: this error branch is never taken
                 if ((num_chars = wcstombs(buff, wcs_ptr, sizeof(buff))) < 0) {
                     goto conversion_error;
                 }
@@ -1149,17 +1116,17 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
             num_chars = 1;
             break;
 
-        case 0xFF:
+        case bad_conversion:
         default:
-        conversion_error:
-            num_chars = strlen(curr_format);
-            chars_written += num_chars;
+            conversion_error:
+                num_chars = strlen(curr_format);
+                chars_written += num_chars;
 
-            if (num_chars && !(*WriteProc)(WriteProcArg, curr_format, num_chars)) {
-                return -1;
-            }
+                if (num_chars && !(*WriteProc)(WriteProcArg, curr_format, num_chars)) {
+                    return -1;
+                }
 
-            return chars_written;
+                return chars_written;
         }
 
         field_width = num_chars;
@@ -1207,19 +1174,10 @@ static int __pformatter(void* (*WriteProc)(void*, const char*, size_t), void* Wr
     return chars_written;
 }
 
-/**
- * __pformatter output callback: fwrite()s the chunk to the FILE and returns the FILE pointer on success or null
- * if it wrote fewer bytes.
- */
 void* __FileWrite(void* pFile, const char* pBuffer, size_t char_num) {
     return (fwrite(pBuffer, 1, char_num, (FILE*)pFile) == char_num ? pFile : 0);
 }
 
-/**
- * __pformatter output callback: copies the chunk into the destination string at the running count,
- * clipped to MaxCharCount (the count still advances so vsnprintf can report the full length);
- * always returns non-null.
- */
 void* __StringWrite(void* pCtrl, const char* pBuffer, size_t char_num) {
     size_t chars;
     __OutStrCtrl* ctrl = (__OutStrCtrl*)pCtrl;
@@ -1231,11 +1189,6 @@ void* __StringWrite(void* pCtrl, const char* pBuffer, size_t char_num) {
     return (void*)1;
 }
 
-/**
- * Standard printf(): returns -1 if stdout is wide-oriented,
- * otherwise runs __pformatter with __FileWrite on stdout inside the stdout critical region
- * and returns the character count.
- */
 int printf(const char* format, ...) {
     int res;
 
@@ -1254,7 +1207,24 @@ int printf(const char* format, ...) {
     return res;
 }
 
-/** Standard vprintf(): same as printf() with the arguments already in a va_list. */
+int fprintf(FILE* file, const char* format, ...) {
+    int res;
+
+    if (fwide(file, -1) >= 0) {
+        return -1;
+    }
+
+    {
+        va_list args;
+        __begin_critical_region(stdout_access);
+        va_start(args, format);
+        res = __pformatter(&__FileWrite, (void*)file, format, args);
+        __end_critical_region(stdout_access);
+    }
+
+    return res;
+}
+
 int vprintf(const char* format, va_list arg) {
     int ret;
 
@@ -1268,12 +1238,20 @@ int vprintf(const char* format, va_list arg) {
     return ret;
 }
 
-/**
- * Formats into s with __pformatter and __StringWrite,
- * writing at most n characters and always placing the terminator at min(length, n - 1);
- * returns the length the full output would have had.
- */
-static inline int vsnprintf(char* s, size_t n, const char* format, va_list arg) {
+int vfprintf(FILE* file, const char* format, va_list arg) {
+    int ret;
+
+    if (fwide(file, -1) >= 0) {
+        return -1;
+    }
+
+    __begin_critical_region(stdout_access);
+    ret = __pformatter(&__FileWrite, (void*)file, format, arg);
+    __end_critical_region(stdout_access);
+    return ret;
+}
+
+int vsnprintf(char* s, size_t n, const char* format, va_list arg) {
     int end;
     __OutStrCtrl osc;
 
@@ -1290,14 +1268,18 @@ static inline int vsnprintf(char* s, size_t n, const char* format, va_list arg) 
     return end;
 }
 
-/** Standard vsprintf(): vsnprintf with an effectively unlimited size (0xFFFFFFFF). */
 int vsprintf(char* s, const char* format, va_list arg) {
-    return vsnprintf(s, 0xFFFFFFFF, format, arg);
+    return vsnprintf(s, 0xFFFFFFFF, format, arg); // no size limit
 }
 
-/** Standard sprintf(): vsnprintf with an effectively unlimited size (0xFFFFFFFF); returns the character count. */
+int snprintf(char* s, size_t n, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    return vsnprintf(s, n, format, args);
+}
+
 int sprintf(char* s, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    return vsnprintf(s, 0xFFFFFFFF, format, args);
+    return vsnprintf(s, 0xFFFFFFFF, format, args); // no size limit
 }

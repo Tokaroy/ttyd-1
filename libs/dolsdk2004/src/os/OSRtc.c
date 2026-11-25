@@ -3,21 +3,13 @@
 
 #include "__os.h"
 
+// Copy of the SRAM. Scb.offset is the first byte that still has to be written back; SRAM_SIZE means
+// the copy and the SRAM agree (set after a successful read or write).
 static SramControl Scb ATTRIBUTE_ALIGN(DOLPHIN_ALIGNMENT);
 
 // prototypes
-static int GetRTC(u32* rtc);
-static int ReadSram(void* buffer);
-static void WriteSramCallback(s32, OSContext*);
 static int WriteSram(void* buffer, u32 offset, u32 size);
-static void* LockSram(u32 offset);
-static int UnlockSram(int commit, u32 offset);
-static void __OSReadROMCallback(s32 chan);
 
-/**
- * One attempt to read the 32-bit real-time-clock counter from the RTC chip (EXI channel 0, device 1, command
- * 0x20000000); returns nonzero on success.
- */
 static int GetRTC(u32* rtc) {
     int err;
     u32 cmd;
@@ -25,15 +17,15 @@ static int GetRTC(u32* rtc) {
     if (EXILock(0, 1, NULL) == 0) {
         return 0;
     }
-    if (EXISelect(0, 1, 3) == 0) {
+    if (EXISelect(0, 1, EXI_FREQ_8M) == 0) {
         EXIUnlock(0);
         return 0;
     }
     cmd = 0x20000000;
     err = 0;
-    err |= !EXIImm(0, &cmd, 4, 1, 0);
+    err |= !EXIImm(0, &cmd, 4, EXI_WRITE, 0);
     err |= !EXISync(0);
-    err |= !EXIImm(0, &cmd, 4, 0, 0);
+    err |= !EXIImm(0, &cmd, 4, EXI_READ, 0);
     err |= !EXISync(0);
     err |= !EXIDeselect(0);
     EXIUnlock(0);
@@ -41,10 +33,7 @@ static int GetRTC(u32* rtc) {
     return !err;
 }
 
-/**
- * Reads the RTC counter twice in a row, up to 16 times, until both reads agree,
- * so a tick in the middle of a read is not returned. Returns nonzero on success.
- */
+// Reads the RTC twice and accepts the value only when both reads agree; up to 16 tries.
 int __OSGetRTC(u32* rtc) {
     int err;
     u32 t0;
@@ -66,10 +55,6 @@ int __OSGetRTC(u32* rtc) {
     return 0;
 }
 
-/**
- * Writes a new 32-bit counter value to the RTC chip over EXI (command 0xA0000000);
- * used when the console time is changed.
- */
 int __OSSetRTC(u32 rtc) {
     int err;
     u32 cmd;
@@ -77,25 +62,21 @@ int __OSSetRTC(u32 rtc) {
     if (EXILock(0, 1, NULL) == 0) {
         return 0;
     }
-    if (EXISelect(0, 1, 3) == 0) {
+    if (EXISelect(0, 1, EXI_FREQ_8M) == 0) {
         EXIUnlock(0);
         return 0;
     }
     cmd = 0xA0000000;
     err = 0;
-    err |= !EXIImm(0, &cmd, 4, 1, 0);
+    err |= !EXIImm(0, &cmd, 4, EXI_WRITE, 0);
     err |= !EXISync(0);
-    err |= !EXIImm(0, &rtc, 4, 1, 0);
+    err |= !EXIImm(0, &rtc, 4, EXI_WRITE, 0);
     err |= !EXISync(0);
     err |= !EXIDeselect(0);
     EXIUnlock(0);
     return !err;
 }
 
-/**
- * Reads the SRAM block (SRAM_SIZE bytes, command 0x20000100) from the RTC chip over EXI channel 0 by DMA into
- * buffer; returns nonzero on success.
- */
 static int ReadSram(void* buffer) {
     int err;
     u32 cmd;
@@ -104,25 +85,21 @@ static int ReadSram(void* buffer) {
     if (!EXILock(0, 1, NULL) ) {
         return 0;
     }
-    if (!EXISelect(0, 1, 3)) {
+    if (!EXISelect(0, 1, EXI_FREQ_8M)) {
         EXIUnlock(0);
         return 0;
     }
     cmd = 0x20000100;
     err = 0;
-    err |= !EXIImm(0, &cmd, 4, 1, 0);
+    err |= !EXIImm(0, &cmd, 4, EXI_WRITE, 0);
     err |= !EXISync(0);
-    err |= !EXIDma(0, buffer, SRAM_SIZE, 0, NULL);
+    err |= !EXIDma(0, buffer, SRAM_SIZE, EXI_READ, NULL);
     err |= !EXISync(0);
     err |= !EXIDeselect(0);
     EXIUnlock(0);
     return !err;
 }
 
-/**
- * EXI unlock callback that retries the pending SRAM write (from Scb.offset to the end of the block)
- * after the EXI channel became free.
- */
 static void WriteSramCallback(s32, OSContext*) {
     ASSERTLINE(258, !Scb.locked);
     Scb.sync = WriteSram(&Scb.sram[Scb.offset], Scb.offset, SRAM_SIZE - Scb.offset);
@@ -132,10 +109,6 @@ static void WriteSramCallback(s32, OSContext*) {
     ASSERTLINE(264, Scb.sync);
 }
 
-/**
- * Writes size bytes of the SRAM image to the RTC chip at offset over EXI channel 0 (device 1).
- * If the channel is busy, WriteSramCallback retries it later.
- */
 static int WriteSram(void* buffer, u32 offset, u32 size) {
     int err;
     u32 cmd;
@@ -143,25 +116,21 @@ static int WriteSram(void* buffer, u32 offset, u32 size) {
     if (!EXILock(0, 1, WriteSramCallback)) {
         return 0;
     }
-    if (!EXISelect(0, 1, 3)) {
+    if (!EXISelect(0, 1, EXI_FREQ_8M)) {
         EXIUnlock(0);
         return 0;
     }
     offset <<= 6;
     cmd = ((offset + 0x100) | 0xA0000000);
     err = 0;
-    err |= !EXIImm(0, &cmd, 4, 1, 0);
+    err |= !EXIImm(0, &cmd, 4, EXI_WRITE, 0);
     err |= !EXISync(0);
-    err |= !EXIImmEx(0, buffer, size, 1);
+    err |= !EXIImmEx(0, buffer, size, EXI_WRITE);
     err |= !EXIDeselect(0);
     EXIUnlock(0);
     return !err;
 }
 
-/**
- * Reads the SRAM block into the OS's cached copy at start-up,
- * then re-sets the GBS mode so invalid values are cleared.
- */
 void __OSInitSram(void) {
     Scb.locked = Scb.enabled = FALSE;
     Scb.sync = ReadSram(&Scb);
@@ -171,10 +140,6 @@ void __OSInitSram(void) {
     OSSetGbsMode(OSGetGbsMode());
 }
 
-/**
- * Disables interrupts and takes the lock on the cached SRAM image,
- * returning a pointer offset bytes into it (NULL if already locked); pair with UnlockSram.
- */
 static void* LockSram(u32 offset) {
     BOOL enabled;
 
@@ -189,25 +154,14 @@ static void* LockSram(u32 offset) {
     return &Scb.sram[offset];
 }
 
-/** Locks the SRAM cache and returns it as the standard OSSram layout (flags, language, display offset and so on). */
 OSSram* __OSLockSram(void) {
     return (OSSram*)LockSram(0);
 }
 
-/**
- * Locks the SRAM cache and returns the extended OSSramEx part that follows the standard OSSram (GBS mode,
- * wireless pad IDs).
- */
 OSSramEx* __OSLockSramEx(void) {
     return (OSSramEx*)LockSram(sizeof(OSSram));
 }
 
-/**
- * Releases the SRAM lock.
- * With commit set it fixes the flags and recomputes the checksums of the standard block (if offset is 0),
- * clears an invalid GBS mode, starts writing the changed bytes back to the RTC chip,
- * and restores the interrupt state saved by the lock.
- */
 static int UnlockSram(int commit, u32 offset) {
     u16* p;
 
@@ -215,12 +169,12 @@ static int UnlockSram(int commit, u32 offset) {
     if (commit != 0) {
         if (offset == 0) {
             OSSram* sram  = (OSSram*)Scb.sram;
-            if (2u < (sram->flags & 3)) {
+            if (2u < (sram->flags & 3)) { // above OS_VIDEO_MODE_MPAL; the int name changes the compare
                 sram->flags &= ~3;
             }
 
             sram->checkSum = sram->checkSumInv = 0;
-            for(p = (u16*)&sram->counterBias; p < ((u16*)&Scb.sram[0x14]); p++) {
+            for(p = (u16*)&sram->counterBias; p < ((u16*)&Scb.sram[sizeof(OSSram)]); p++) {
                 sram->checkSum += *p;
                 sram->checkSumInv += ~(*p);
             }
@@ -229,7 +183,7 @@ static int UnlockSram(int commit, u32 offset) {
             Scb.offset = offset;
         }
 
-        if (Scb.offset <= 0x14) {
+        if (Scb.offset <= sizeof(OSSram)) {
             OSSramEx* sram = (OSSramEx*)(Scb.sram + sizeof(OSSram));
             if (((u32)sram->gbs & 0x7c00) == 0x5000 || ((u32)sram->gbs & 0xc0) == 0xc0) {
                 sram->gbs = 0;
@@ -246,31 +200,23 @@ static int UnlockSram(int commit, u32 offset) {
     return Scb.sync;
 }
 
-/** Unlocks the standard SRAM block, optionally committing the changes to the chip. */
 int __OSUnlockSram(int commit) {
     return UnlockSram(commit, 0);
 }
 
-/** Unlocks the extended SRAM block, optionally committing the changes to the chip. */
 int __OSUnlockSramEx(int commit) {
     return UnlockSram(commit, sizeof(OSSram));
 }
 
-/** Returns the result of the last SRAM write (nonzero when it was accepted). */
 int __OSSyncSram(void) {
     return Scb.sync;
 }
 
-/**
- * Recomputes the checksum and inverse checksum over the standard SRAM block and returns nonzero
- * when they match the stored values. SRAM must be locked.
- */
 int __OSCheckSram(void) {
     u16* p;
     u16 checkSum;
     u16 checkSumInv;
     OSSram* sram;
-    int unused;
 
     ASSERTLINE(466, Scb.locked);
 
@@ -278,7 +224,7 @@ int __OSCheckSram(void) {
 
     sram = (OSSram*)Scb.sram;
 
-    for (p = (void*)&sram->counterBias; p < (u16*)&Scb.sram[0x14]; p++) {
+    for (p = (void*)&sram->counterBias; p < (u16*)&Scb.sram[sizeof(OSSram)]; p++) {
         checkSum += *p;
         checkSumInv += ~(*p);
     }
@@ -286,10 +232,6 @@ int __OSCheckSram(void) {
     return (sram->checkSum == checkSum && sram->checkSumInv == checkSumInv);
 }
 
-/**
- * Reads length bytes (at most 1024) from the console's boot ROM at offset over EXI channel 0 (device 1) by DMA,
- * blocking until done.
- */
 int __OSReadROM(void * buffer, s32 length, s32 offset) {
     int err;
     u32 cmd;
@@ -299,22 +241,21 @@ int __OSReadROM(void * buffer, s32 length, s32 offset) {
     if (EXILock(0, 1, NULL) == 0) {
         return 0;
     }
-    if (EXISelect(0, 1, 3) == 0) {
+    if (EXISelect(0, 1, EXI_FREQ_8M) == 0) {
         EXIUnlock(0);
         return 0;
     }
     cmd = offset << 6;
     err = 0;
-    err |= !EXIImm(0, &cmd, 4, 1, 0);
+    err |= !EXIImm(0, &cmd, 4, EXI_WRITE, 0);
     err |= !EXISync(0);
-    err |= !EXIDma(0, buffer, length, 0, NULL);
+    err |= !EXIDma(0, buffer, length, EXI_READ, NULL);
     err |= !EXISync(0);
     err |= !EXIDeselect(0);
     EXIUnlock(0);
     return !err;
 }
 
-/** EXI DMA completion callback: releases the EXI channel and calls the callback saved by __OSReadROMAsync. */
 static void __OSReadROMCallback(s32 chan) {
     void (*callback)();
 
@@ -327,7 +268,6 @@ static void __OSReadROMCallback(s32 chan) {
     }
 }
 
-/** Starts a non-blocking boot-ROM read of at most 1024 bytes over EXI; callback runs when the DMA finishes. */
 int __OSReadROMAsync(void* buffer, s32 length, s32 offset, void (*callback)()) {
     int err;
     u32 cmd;
@@ -339,31 +279,29 @@ int __OSReadROMAsync(void* buffer, s32 length, s32 offset, void (*callback)()) {
     if (EXILock(0, 1, NULL) == 0) {
         return 0;
     }
-    if (EXISelect(0, 1, 3) == 0) {
+    if (EXISelect(0, 1, EXI_FREQ_8M) == 0) {
         EXIUnlock(0);
         return 0;
     }
     cmd = offset << 6;
     err = 0;
-    err |= !EXIImm(0, &cmd, 4, 1, 0);
+    err |= !EXIImm(0, &cmd, 4, EXI_WRITE, 0);
     err |= !EXISync(0);
-    err |= !EXIDma(0, buffer, length, 0, (void*)__OSReadROMCallback);
+    err |= !EXIDma(0, buffer, length, EXI_READ, (void*)__OSReadROMCallback);
     return !err;
 }
 
-/** Returns the console's sound setting from SRAM flags bit 2: 0 for mono, 1 for stereo. */
 u32 OSGetSoundMode(void) {
     OSSram* sram = __OSLockSram();
-    u32 mode = (sram->flags & 4) ? 1 : 0;
+    u32 mode = (sram->flags & 4) ? OS_SOUND_MODE_STEREO : OS_SOUND_MODE_MONO;
 
     __OSUnlockSram(0);
     return mode;
 }
 
-/** Stores the sound setting (0 mono, 1 stereo) in SRAM flags bit 2, writing back only when it changed. */
 void OSSetSoundMode(u32 mode) {
     OSSram* sram;
-    int unused;
+    int unused; // unused; the original had it too (its stack space is in the retail code)
 
     ASSERTLINE(617, mode == OS_SOUND_MODE_MONO || mode == OS_SOUND_MODE_STEREO);
     mode *= 4;
@@ -373,12 +311,11 @@ void OSSetSoundMode(u32 mode) {
         __OSUnlockSram(0);
         return;
     }
-    sram->flags &= 0xFFFFFFFB;
+    sram->flags &= ~4;
     sram->flags |= mode;
     __OSUnlockSram(1);
 }
 
-/** Returns whether progressive-scan output is enabled (SRAM flags bit 7). */
 u32 OSGetProgressiveMode(void) {
     OSSram* sram;
     u32 on;
@@ -389,10 +326,9 @@ u32 OSGetProgressiveMode(void) {
     return on;
 }
 
-/** Stores the progressive-scan flag in SRAM flags bit 7, writing back only when it changed. */
 void OSSetProgressiveMode(u32 on) {
 #ifndef DEBUG
-    u32 padding[1];
+    u32 padding[1]; // unused; the original had it too (its stack space is in the retail code)
 #endif
     OSSram* sram;
 
@@ -412,32 +348,27 @@ void OSSetProgressiveMode(u32 on) {
     __OSUnlockSram(TRUE);
 }
 
-/** Returns the video mode in the low two bits of the SRAM flags (0 if the stored value is above 2). */
 u32 OSGetVideoMode(void) {
     OSSram* sram = __OSLockSram();
     u32 mode = sram->flags & 3;
 
     __OSUnlockSram(0);
 
-    if (mode > 2) {
-        mode = 0;
+    if (mode > OS_VIDEO_MODE_MPAL) {
+        mode = OS_VIDEO_MODE_NTSC;
     }
 
     return mode;
 }
 
-/**
- * Stores the video mode in the low two bits of the SRAM flags (values above 2 become 0),
- * writing back only when it changed.
- */
 void OSSetVideoMode(u32 mode) {
     OSSram* sram;
-    int unused;
+    int unused; // unused; the original had it too (its stack space is in the retail code)
 
     ASSERTLINE(731, OS_VIDEO_MODE_NTSC <= mode && mode <= OS_VIDEO_MODE_MPAL);
 
-    if (mode > 2) {
-        mode = 0;
+    if (mode > OS_VIDEO_MODE_MPAL) {
+        mode = OS_VIDEO_MODE_NTSC;
     }
 
     sram = __OSLockSram();
@@ -446,12 +377,11 @@ void OSSetVideoMode(u32 mode) {
         __OSUnlockSram(0);
         return;
     }
-    sram->flags &= 0xFFFFFFFC;
+    sram->flags &= ~3;
     sram->flags |= mode;
     __OSUnlockSram(1);
 }
 
-/** Returns the console language selected in the system menu, from SRAM. */
 u8 OSGetLanguage(void) {
     OSSram* sram = __OSLockSram();
     u8 language = sram->language;
@@ -460,10 +390,9 @@ u8 OSGetLanguage(void) {
     return language;
 }
 
-/** Stores the console language in SRAM, writing back only when it changed. */
 void OSSetLanguage(u8 language) {
     OSSram* sram = __OSLockSram();
-    int unused;
+    int unused; // unused; the original had it too (its stack space is in the retail code)
 
     if (language == sram->language) {
         __OSUnlockSram(0);
@@ -473,7 +402,6 @@ void OSSetLanguage(u8 language) {
     __OSUnlockSram(1);
 }
 
-/** Returns bit 0x80 of the SRAM ntd byte (the boot-mode flag). */
 u8 __OSGetBootMode(void) {
     OSSram* sram = __OSLockSram();
     u8 ntd = sram->ntd;
@@ -481,10 +409,9 @@ u8 __OSGetBootMode(void) {
     return ntd & 0x80;
 }
 
-/** Writes the boot-mode flag (bit 0x80 of the SRAM ntd byte), writing back only when it changed. */
 void __OSSetBootMode(u8 ntd) {
     OSSram* sram;
-    int unused;
+    int unused; // unused; the original had it too (its stack space is in the retail code)
 
     ntd &= 0x80;
     sram = __OSLockSram();
@@ -492,12 +419,11 @@ void __OSSetBootMode(u8 ntd) {
         __OSUnlockSram(0);
         return;
     }
-    sram->ntd &= 0xFFFFFF7F;
+    sram->ntd &= ~0x80;
     sram->ntd |= ntd;
     __OSUnlockSram(1);
 }
 
-/** Returns whether EuRGB60 (60 Hz PAL) video is enabled (bit 0x40 of the SRAM ntd byte). */
 u32 OSGetEuRgb60Mode(void) {
     OSSram* sram;
     u32 on;
@@ -508,10 +434,9 @@ u32 OSGetEuRgb60Mode(void) {
     return on;
 }
 
-/** Stores the EuRGB60 flag (bit 0x40 of the SRAM ntd byte), writing back only when it changed. */
 void OSSetEuRgb60Mode(u32 on) {
 #ifndef DEBUG
-    u32 padding[1];
+    u32 padding[1]; // unused; the original had it too (its stack space is in the retail code)
 #endif
     OSSram* sram;
 
@@ -529,7 +454,6 @@ void OSSetEuRgb60Mode(u32 on) {
     }
 }
 
-/** Returns the wireless controller ID stored in extended SRAM for controller port chan. */
 u16 OSGetWirelessID(s32 chan) {
     OSSramEx* sram;
     u16 id;
@@ -540,7 +464,6 @@ u16 OSGetWirelessID(s32 chan) {
     return id;
 }
 
-/** Stores the wireless controller ID for port chan in extended SRAM, writing back only when it changed. */
 void OSSetWirelessID(s32 chan, u16 id) {
     OSSramEx* sram;
 
@@ -554,7 +477,6 @@ void OSSetWirelessID(s32 chan, u16 id) {
     __OSUnlockSramEx(FALSE);
 }
 
-/** Returns the Game Boy Player (GBS) mode word from extended SRAM. */
 u16 OSGetGbsMode(void) {
     OSSramEx* sram;
     u16 mode;
@@ -565,13 +487,9 @@ u16 OSGetGbsMode(void) {
     return mode;
 }
 
-/**
- * Stores the Game Boy Player mode word in extended SRAM (values with invalid bit patterns become 0),
- * writing back only when it changed.
- */
 void OSSetGbsMode(u16 mode) {
 #ifndef DEBUG
-    u32 padding[1];
+    u32 padding[1]; // unused; the original had it too (its stack space is in the retail code)
 #endif
     OSSramEx* sram;
 

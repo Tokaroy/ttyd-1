@@ -1,26 +1,44 @@
 // filemgr.c: the file manager (FileEntry, FileManagerWork): loads files into the smart heap and caches them by name.
+
 #pragma once
 
 #include "manager/dvdmgr.h"
 #include <dolphin/types.h>
 
-typedef struct FileEntry FileEntry;
+typedef void (*FileCallback)(struct FileEntry* file);
 
-typedef void (*FileCallback)(FileEntry* file);
+// FileEntry.type, the fileAlloc/fileAsync type: which pointers fileGarbageDataAdrSet relocates after loading
+// (types 3 and 6..10 relocate one to three pointers of a file layout with no other use in the code)
+typedef enum FileType {
+    FILE_TYPE_RAW = 0,              // nothing to relocate (rel, .bin, .dat files)
+    FILE_TYPE_POSE_UNUSED = 1,      // AnimationPoseData without its animation table; no caller asks for it
+    FILE_TYPE_ANIM_DATA_UNUSED = 2, // one AnimData; no caller asks for it
+    FILE_TYPE_TPL = 4,              // texture palette (TEXPalette)
+    FILE_TYPE_ANIM = 5,             // animation model in a/: AnimationPoseData and its AnimData table
+    FILE_TYPE_CANCELED = 11,        // the DVD read was canceled (dvdReadDoneCallBack)
+} FileType;
 
-struct FileEntry {
-    u8 state;               // 0x0
-    s8 type;                // 0x1, fileAlloc(name, type); passed to fileGarbageDataAdrSet
-    s16 references;         // 0x2
+// FileEntry.state
+enum {
+    FILE_STATE_FREE = 0,
+    FILE_STATE_LOADED = 1,    // loaded and referenced (fileAlloc)
+    FILE_STATE_RELEASED = 2,  // to be freed by _fileGarbage
+    FILE_STATE_PRELOADED = 3, // loaded by fileAsync without a reference
+};
+
+typedef struct FileEntry {
+    u8 state;               // 0x0, FILE_STATE_*
+    s8 type;                // 0x1, FileType
+    s16 references;         // 0x2, holders: fileAlloc adds one, fileFree drops one (0 marks it released); 0 after fileAsync
     void* dataSlot;         // 0x4, data points here unless the data is in a smart block
     u8 pad_8[0x20 - 0x8];   // 0x8
-    char filename[64];      // 0x20
+    char filename[64];      // 0x20, path it was loaded from; fileAlloc and fileAsync find cached files by it
     u8 pad_60[0xA0 - 0x60]; // 0x60
-    void** data;            // 0xA0
-    FileEntry* next;        // 0xA4
-    FileCallback callback;  // 0xA8
-    DVDEntry* entry;        // 0xAC
-};
+    void** data;            // 0xA0, &dataSlot or the smart block's address field; *data is the file's data
+    struct FileEntry* next; // 0xA4, next entry in the used or the free list
+    FileCallback callback;  // 0xA8, fileAsync's callback, run when the read ends
+    DVDEntry* entry;        // 0xAC, fileAsync's DVD read while it runs, then NULL
+} FileEntry;
 
 typedef struct FileManagerWork {
     FileEntry* entries;        // 0x0
@@ -32,18 +50,11 @@ typedef struct FileManagerWork {
 } FileManagerWork;
 
 void fileInit(void);
+FileManagerWork* fileGetWorkPtr(void);
 void fileGarbageMoveMem(void* data, FileEntry* file);
-void _fileGarbage(BOOL mode);
+void _fileGarbage(BOOL agePreloadedEntries);
 FileEntry* fileAllocf(s32 type, const char* format, ...);
 FileEntry* fileAlloc(const char* filename, s32 type);
 void fileFree(FileEntry* handle);
-// fileAsync/fileAsyncf start an asynchronous read and return the file once it is loaded, NULL while the read
-// is pending, or FILE_ASYNC_MISSING when the file does not exist
-#define FILE_ASYNC_MISSING ((FileEntry*)-1)
-// The game tests the -1 as a signed word (cmpwi), so callers use this rather than comparing pointers.
-static inline BOOL fileAsyncMissing(FileEntry* file) {
-    return (s32)file == -1;
-}
 FileEntry* fileAsyncf(s32 type, FileCallback callback, const char* format, ...);
-FileEntry* fileAsync(const char* filename, s32 type, FileCallback callback);
 void fileSetCurrentArchiveType(s32 type);

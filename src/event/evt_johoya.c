@@ -1,13 +1,13 @@
 // Script commands for the information seller (johoya): the rumour tables and message labels
 // by story progress.
+
+#include "version.h"
 #include "evt/evt_johoya.h"
 #include "driver/msgdrv.h"
 #include <string.h>
 #include "libc_decls.h"
 #include "evt/evt_word.h"
 #include "manager/evtmgr_cmd.h"
-#include "version.h"
-#include "evt/evt_story.h"
 
 //.data
 InformantWork _jdt = {0};
@@ -67,9 +67,8 @@ const char* evtNoLabel[] = {
 s32 johoya_data_make(const char* prefix, s32 type);
 
 /**
- * Builds the rumour list for the message prefix in args[0] (for example "<prefix>_0003"):
- * counts the rumours the story has reached, allocates the InformantInfo array from the map heap (plus room for a
- * label) and fills it.
+ * Builds the rumour list for the message prefix in args[0]: counts the rumours the story has reached,
+ * allocates the InformantInfo array on the map heap (with room for a label after it) and fills it.
  */
 USER_FUNC(johoya_data_alloc) {
     InformantWork* wp = &_jdt;
@@ -78,9 +77,9 @@ USER_FUNC(johoya_data_alloc) {
     wp->count = johoya_data_make(wp->prefix, 0);
     wp->info = _mapAlloc(wp->count * sizeof(InformantInfo) + (sizeof(InformantInfo) * 4));
     memset(wp->info, 0, wp->count * sizeof(InformantInfo) + (sizeof(InformantInfo) * 4));
-    wp->infoEnd = &wp->info[wp->count];
+    wp->infoEnd = (char*)&wp->info[wp->count];
     johoya_data_make(wp->prefix, 1);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Frees the rumour list from johoya_data_alloc and clears the count and prefix; safe to call twice. */
@@ -88,13 +87,13 @@ USER_FUNC(johoya_data_free) {
     InformantWork* wp = &_jdt;
 
     if (wp->info == NULL) {
-        return 2;
+        return EVT_RETURN_DONE;
     }
     _mapFree(wp->info);
     wp->info = NULL;
     wp->count = 0;
     wp->prefix = NULL;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -110,27 +109,25 @@ USER_FUNC(johoya_keti_newjoho_check) {
     s32 i;
 
     for (i = 0; i < wp->count; i++) {
-        if (johoya_get(table, wp->info[i].storyId) == 0) {
+        if (johoya_get(table, wp->info[i].msgIndex) == 0) {
             count++;
         }
     }
     evtSetValue(event, args[0], count);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
  * Picks the args[0]-th unbought rumour: writes its message label to args[1], the title text to args[2],
  * its length to args[3] and the cost to args[4], and remembers it for setreadflag.
  * Empty label and zeros when there is none.
- * Retail reads the title from the "jketi_title_%04d" message;
- * the demos use the text inside the rumour's own tag.
+ * JP and later read the title from the "jketi_title_%04d" message;
+ * the early demos use the text inside the rumour's own tag.
  */
 USER_FUNC(johoya_keti_newjoho_makelabel) {
     EvtWord* args = event->args;
-#if VERSION >= VERSION_JP
     char tmp[64];
     const char* msg;
-#endif
     s32 target = evtGetValue(event, args[0]);
     InformantWork* wp = &_jdt;
     u8* table = wp->readFlags.ketiRead;
@@ -138,33 +135,36 @@ USER_FUNC(johoya_keti_newjoho_makelabel) {
     s32 i;
 
     for (i = 0; i < wp->count; i++) {
-        if (johoya_get(table, wp->info[i].storyId) == 0) {
+        if (johoya_get(table, wp->info[i].msgIndex) == 0) {
             if (target == n) {
-                sprintf((char*)wp->infoEnd, "%s_%04d", wp->prefix, wp->info[i].storyId);
 #if VERSION <= VERSION_DEMO_JP
+                sprintf((char*)wp->infoEnd, "%s_%04d", wp->prefix, wp->info[i].msgIndex);
+#else
+                sprintf(wp->infoEnd, "%s_%04d", wp->prefix, wp->info[i].msgIndex);
+                sprintf(tmp, "jketi_title_%04d", wp->info[i].msgIndex);
+                msg = msgSearch(tmp);
+#endif
                 evtSetValue(event, args[1], (EvtWord)wp->infoEnd);
+#if VERSION <= VERSION_DEMO_JP
                 evtSetValue(event, args[2], (EvtWord)wp->info[i].initEndPos);
                 evtSetValue(event, args[3], wp->info[i].tagEndPos);
 #else
-                sprintf(tmp, "jketi_title_%04d", wp->info[i].storyId);
-                msg = msgSearch(tmp);
-                evtSetValue(event, args[1], (EvtWord)wp->infoEnd);
                 evtSetValue(event, args[2], (EvtWord)msg);
                 evtSetValue(event, args[3], strlen(msg));
 #endif
                 evtSetValue(event, args[4], wp->info[i].cost);
                 wp->curIndex = i;
-                return 2;
+                return EVT_RETURN_DONE;
             }
             n++;
         }
     }
-    *(char*)wp->infoEnd = 0;
+    *wp->infoEnd = 0;
     evtSetValue(event, args[1], (EvtWord)wp->infoEnd);
     evtSetValue(event, args[2], (EvtWord)wp->infoEnd);
     evtSetValue(event, args[3], 0);
     evtSetValue(event, args[4], 0);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -173,9 +173,9 @@ USER_FUNC(johoya_keti_newjoho_makelabel) {
  */
 USER_FUNC(johoya_keti_newjoho_setreadflag) {
     s32 cur = _jdt.curIndex;
-    johoya_set(_jdt.readFlags.ketiRead, _jdt.info[cur].storyId, 1);
+    johoya_set(_jdt.readFlags.ketiRead, _jdt.info[cur].msgIndex, 1);
     _jdt.info[cur].flags |= INFORMANT_FLAG_HEARD;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Counts the rumours already bought but not yet heard again on this visit, and writes the count to args[0]. */
@@ -187,12 +187,12 @@ USER_FUNC(johoya_keti_oldspeak_check) {
     s32 i;
 
     for (i = 0; i < wp->count; i++) {
-        if (johoya_get(table, wp->info[i].storyId) != 0 && (wp->info[i].flags & INFORMANT_FLAG_HEARD) == 0) {
+        if (johoya_get(table, wp->info[i].msgIndex) != 0 && (wp->info[i].flags & INFORMANT_FLAG_HEARD) == 0) {
             count++;
         }
     }
     evtSetValue(event, args[0], count);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -209,31 +209,31 @@ USER_FUNC(johoya_keti_oldspeak_makelabel) {
     s32 i;
 
     for (i = 0; i < wp->count; i++) {
-        if (johoya_get(table, wp->info[i].storyId) != 0 && (wp->info[i].flags & INFORMANT_FLAG_HEARD) == 0) {
+        if (johoya_get(table, wp->info[i].msgIndex) != 0 && (wp->info[i].flags & INFORMANT_FLAG_HEARD) == 0) {
             if (target == n) {
-                sprintf((char*)wp->infoEnd, "%s_%04d", wp->prefix, wp->info[i].storyId);
+                sprintf(wp->infoEnd, "%s_%04d", wp->prefix, wp->info[i].msgIndex);
                 evtSetValue(event, args[1], (EvtWord)wp->infoEnd);
                 evtSetValue(event, args[2], (EvtWord)wp->info[i].initEndPos);
                 evtSetValue(event, args[3], wp->info[i].tagEndPos);
                 evtSetValue(event, args[4], 0);
                 wp->curIndex = i;
-                return 2;
+                return EVT_RETURN_DONE;
             }
             n++;
         }
     }
-    *(char*)wp->infoEnd = 0;
+    *wp->infoEnd = 0;
     evtSetValue(event, args[1], (EvtWord)wp->infoEnd);
     evtSetValue(event, args[2], (EvtWord)wp->infoEnd);
     evtSetValue(event, args[3], 0);
     evtSetValue(event, args[4], 0);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Marks the rumour picked by the last makelabel as heard on this visit (InformantInfo flag 1). */
 USER_FUNC(johoya_keti_oldspeak_setreadflag) {
     _jdt.info[_jdt.curIndex].flags |= INFORMANT_FLAG_HEARD;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -242,8 +242,8 @@ USER_FUNC(johoya_keti_oldspeak_setreadflag) {
  * (johoyaperfect_00/01).
  */
 USER_FUNC(johoya_perfect_newjoho_setreadflag) {
-    johoya_set(_jdt.readFlags.perfectRead, _jdt.info[_jdt.curIndex].storyId, 1);
-    return 2;
+    johoya_set(_jdt.readFlags.perfectRead, _jdt.info[_jdt.curIndex].msgIndex, 1);
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -251,14 +251,14 @@ USER_FUNC(johoya_perfect_newjoho_setreadflag) {
  * Called by luigi_gor_first_talk (gor.c) after Mario picks one of Luigi's adventure stories (gor_luigi_talk).
  */
 USER_FUNC(johoya_luigi_newjoho_setreadflag) {
-    johoya_set(_jdt.readFlags.luigiRead, _jdt.info[_jdt.curIndex].storyId, 1);
-    return 2;
+    johoya_set(_jdt.readFlags.luigiRead, _jdt.info[_jdt.curIndex].msgIndex, 1);
+    return EVT_RETURN_DONE;
 }
 
 /**
- * Scans messages "<prefix>_0000", "_0001", ... until one lacks a "<!label,...>" tag or the tag is "enddata".
- * Counts those whose story label (evtNoLabel) the story has reached;
- * with type bit 0 also fills InformantInfo (cost 5).
+ * Scans the messages "<prefix>_0000", "_0001", ... until one lacks a "<!label,...>" tag or the tag is "enddata".
+ * Counts those whose story label (search_evt_no) the story has reached;
+ * with type bit 0 also fills InformantInfo (cost 5). Returns the count.
  */
 s32 johoya_data_make(const char* prefix, s32 type) {
     InformantWork* wp = &_jdt;
@@ -266,7 +266,7 @@ s32 johoya_data_make(const char* prefix, s32 type) {
     char tag[64];
     s32 mbbpos;
     s32 maxLabel;
-    s32 storyId;
+    s32 msgIndex;
     s32 tagNum;
     BOOL tagdone;
     s32 infoId;
@@ -277,19 +277,19 @@ s32 johoya_data_make(const char* prefix, s32 type) {
     s32 count;
     s32 labelId;
 
-    maxLabel = evtGetValue(NULL, GSW(GSW_STORY_PROGRESS));
+    maxLabel = evtGetValue(NULL, GSW_STORY_PROGRESS);
 
     count = 0;
-    storyId = 0;
+    msgIndex = 0;
     infoId = 0;
     while (1) {
-        sprintf(label, "%s_%04d", prefix, storyId);
+        sprintf(label, "%s_%04d", prefix, msgIndex);
         msg = (const s8*)msgSearch(label);
         if (msg[0] != '<') {
             break;
         }
         tagdata = msg + 2;
-        if (msg[1] != '!') { // we need to first parse a tag for the story name
+        if (msg[1] != '!') { // the message must start with a "<!" tag
             break;
         }
 
@@ -297,12 +297,12 @@ s32 johoya_data_make(const char* prefix, s32 type) {
         mbbpos = 0;
         tagdone = FALSE;
         while (!tagdone) {
-            if (_ismbblead(*tagdata)) { // we need to read a multibyte sequence
-                if (tagNum == 0) {      // write to the array
+            if (_ismbblead(*tagdata)) { // two-byte character
+                if (tagNum == 0) {      // first field (the label): copy it into tag
                     tag[mbbpos++] = tagdata[0];
                     tag[mbbpos++] = tagdata[1];
                     tagdata += 2;
-                } else { // just increment to new character
+                } else { // later fields: only count their length
                     mbbpos += 2;
                     tagdata += 2;
                 }
@@ -310,8 +310,10 @@ s32 johoya_data_make(const char* prefix, s32 type) {
                 switch (tagdata[0]) {
                     case '>': // done reading the tag
                         tagdone = TRUE;
+
                         // fallthrough
 
+                    // fallthrough
                     case ',': // found new tag data
                         tagdata++;
                         if (tagNum == 0) {
@@ -347,24 +349,24 @@ s32 johoya_data_make(const char* prefix, s32 type) {
                     wp->info[infoId].initEndPos = (char*)initEndPos;
                     wp->info[infoId].tagEndPos = tagEndPos;
                     wp->info[infoId].cost = 5;
-                    wp->info[infoId].storyId = (s16)storyId;
+                    wp->info[infoId].msgIndex = (s16)msgIndex;
                 }
                 infoId++;
                 count++;
             }
         }
-        storyId++;
+        msgIndex++;
     }
     return count;
 }
 
-/** Clears the three rumour read-flag tables. Runs on a new game (stg0_00_init in event.c). */
+/** Clears the three rumour read-flag tables. Runs at boot (mariost.c) and on a new game (stg0_00_init in event.c). */
 void johoya_init(void) {
-    InformantUnknown* unk = &_jdt.readFlags;
+    InformantReadFlags* readFlags = &_jdt.readFlags;
 
-    memset(&unk->ketiRead, 0, 0xD);
-    memset(&unk->perfectRead, 0, 0xD);
-    memset(&unk->luigiRead, 0, 0xD);
+    memset(&readFlags->ketiRead, 0, sizeof(readFlags->ketiRead));
+    memset(&readFlags->perfectRead, 0, sizeof(readFlags->perfectRead));
+    memset(&readFlags->luigiRead, 0, sizeof(readFlags->luigiRead));
 }
 
 /**
@@ -477,7 +479,7 @@ s32 search_evt_no(const char* label) {
     return -1;
 }
 
-/** Returns the story label string in evtNoLabel for an index (no bounds check). No caller in the C code. */
+/** Returns the story label string in evtNoLabel for an index (no bounds check). Called from gor_01.c and tik_00.c. */
 const char* search_evt_moji(s32 id) {
     return evtNoLabel[id];
 }

@@ -1,5 +1,7 @@
-// Smoke puff (kemuri: smoke) spread in a ring around a point; types 0-2 pick the size and how long it lasts.
+// Smoke puff (kemuri: smoke) at a point (type 0: two puffs sliding apart sideways); types 0-2 pick the size and
+// how long it lasts.
 // Also holds effKemuri2Entry, a second smoke effect that drifts along a direction (dx, dz).
+
 #include "eff/eff_kemuri.h"
 #include "driver/dispdrv.h"
 #include "driver/camdrv.h"
@@ -9,8 +11,8 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <string.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-
 static void effKemuriMain(EffectEntry* effect);
 
 static void effKemuriDisp(CameraId camId, void* param);
@@ -21,7 +23,7 @@ static void effKemuri2Disp(CameraId camId, void* param);
  * Per-frame X and Y stretch (out of 128) of a type 0 landing puff over its first 30 frames: it spreads
  * to 1.5 wide while flattening to 0.8 tall. Read by effKemuriMain.
  */
-u8 touchdown_scale[30][2] = {
+static u8 touchdown_scale[30][2] = {
     {0x80, 0x80}, {0x82, 0x7F}, {0x84, 0x7E}, {0x87, 0x7D}, {0x89, 0x7C}, {0x8C, 0x7A},
     {0x8F, 0x79}, {0x92, 0x78}, {0x95, 0x77}, {0x98, 0x76}, {0x9B, 0x75}, {0x9D, 0x74},
     {0xA0, 0x72}, {0xA3, 0x71}, {0xA6, 0x70}, {0xA9, 0x6F}, {0xAC, 0x6E}, {0xAE, 0x6D},
@@ -33,7 +35,7 @@ u8 touchdown_scale[30][2] = {
  * Per-frame X and Y stretch (out of 128) of the bigger type 2 puff over its first 30 frames: it billows
  * to 2.0 wide and 1.2 tall. Read by effKemuriMain.
  */
-u8 heavy_scale[30][2] = {
+static u8 heavy_scale[30][2] = {
     {0x80, 0x80}, {0x84, 0x80}, {0x89, 0x81}, {0x8E, 0x82}, {0x93, 0x83}, {0x99, 0x85},
     {0x9E, 0x86}, {0xA4, 0x87}, {0xAA, 0x88}, {0xB0, 0x89}, {0xB6, 0x8A}, {0xBB, 0x8B},
     {0xC1, 0x8D}, {0xC7, 0x8E}, {0xCD, 0x8F}, {0xD2, 0x90}, {0xD8, 0x91}, {0xDD, 0x92},
@@ -42,11 +44,10 @@ u8 heavy_scale[30][2] = {
 };
 
 /**
- * Spawns smoke puffs around (x, y, z): type 0 touchdown (2 puffs), 1 and 2 (1 puff); dir biases the spread.
+ * Spawns smoke puffs around (x, y, z): type 0 touchdown (2 puffs), 1 and 2 (1 puff); dir is not read.
  * Spawned when Mario lands or moves (mario_kemuri.c, evt_mario.c) and by event scripts.
  */
 EffectEntry* effKemuriEntry(s32 type, f32 x, f32 y, f32 z, f32 dir) {
-    effKemuriData* d;
     effKemuriData* data;
     s32 numEffects, i;
 
@@ -79,45 +80,46 @@ EffectEntry* effKemuriEntry(s32 type, f32 x, f32 y, f32 z, f32 dir) {
     data->scaleX = 1.0f;
     data->scaleY = 1.0f;
     data->scale = 1.0f;
-    for (i = 1, d = data + 1; i < entry->count; i++, d++) {
-        d->x = 0.0f;
-        d->y = 0.0f;
-        d->z = 0.0f;
+    for (i = 1, data++; i < entry->count; i++, data++) {
+        data->x = 0.0f;
+        data->y = 0.0f;
+        data->z = 0.0f;
 
-        d->scaleX = 1.0f;
-        d->scaleY = 1.0f;
-        d->scale = 1.0f;
+        data->scaleX = 1.0f;
+        data->scaleY = 1.0f;
+        data->scale = 1.0f;
 
-        d->offsetX = 0.0f;
-        d->reserved_5C = 0.0f;
+        data->offsetX = 0.0f;
+        data->reserved_5C = 0.0f;
 
-        d->frame = 0;
-        d->texFrame0 = 0;
-        d->texFrame1 = 0;
+        data->frame = 0;
+        data->texFrame0 = 0;
+        data->texFrame1 = 0;
 
         switch (type) {
             case 0:
-                d->velX = i & 1 ? 3.0f : -3.0f;
-                d->lifetime = 32;
+                data->velX = i & 1 ? 3.0f : -3.0f;
+                data->lifetime = 32;
                 break;
             case 1:
-                d->velX = 0.0f;
-                d->lifetime = 32;
+                data->velX = 0.0f;
+                data->lifetime = 32;
                 break;
             case 2:
-                d->velX = 0.0f;
-                d->lifetime = 64;
+                data->velX = 0.0f;
+                data->lifetime = 64;
                 break;
         }
     }
     return entry;
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
+// FAKE: opt_propagation off for effKemuri2Entry only; the spare temporaries below only make sense under it
 #pragma opt_propagation off
 /**
  * Spawns one smoke puff at (x, y, z) that drifts along (dx, dz) while rising and spinning.
- * Spawned by Mario and partner movement code (mario_kemuri.c).
+ * Spawned by Mario and partner movement code (mario_kemuri.c), which pass 0 for type; type is not read here
+ * (the parameter list of effKemuriEntry).
  */
 EffectEntry* effKemuri2Entry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dz) {
     EffectEntry* entry;
@@ -161,7 +163,10 @@ EffectEntry* effKemuri2Entry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dz) {
 }
 #pragma opt_propagation reset
 
-/** Steps each puff's texture frame, scales it from the touchdown/heavy tables, slides it outward, and deletes it. */
+/**
+ * Steps each puff's texture frame, scales it from the touchdown/heavy tables, slides type 0 puffs outward, and
+ * deletes the effect once a puff reaches its lifetime.
+ */
 static void effKemuriMain(EffectEntry* effect) {
     effKemuriData* data = effect->userdata;
     Vec pos2;
@@ -183,7 +188,7 @@ static void effKemuriMain(EffectEntry* effect) {
         }
         switch (type) {
             case 0:
-                if ((u32)data->frame < 30) {
+                if (data->frame < sizeof(touchdown_scale) / sizeof(touchdown_scale[0])) {
                     data->scaleX = touchdown_scale[data->frame][0] / 128.0f;
                     data->scaleY = touchdown_scale[data->frame][1] / 128.0f;
                 } else {
@@ -198,7 +203,7 @@ static void effKemuriMain(EffectEntry* effect) {
                 data->frame++;
                 break;
             case 2:
-                if ((u32)data->frame < 30) {
+                if (data->frame < sizeof(heavy_scale) / sizeof(heavy_scale[0])) {
                     data->scaleX = heavy_scale[data->frame][0] / 128.0f;
                     data->scaleY = heavy_scale[data->frame][1] / 128.0f;
                 } else {
@@ -213,23 +218,24 @@ static void effKemuriMain(EffectEntry* effect) {
             return;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&pos2), 2, effKemuriDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_XLU, effKemuriDisp, effect);
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_propagation off
-/** Moves the puff along its direction with friction, spins it, and deletes it after 30 frames. */
+/**
+ * Moves the puff along its direction at a constant speed while its rise and spin slow down, grows then shrinks it,
+ * fades it after frame 15, and deletes it after 30 frames.
+ */
 static void effKemuri2Main(EffectEntry* entry) {
+    effKemuri2Data* const first = entry->userdata;
     effKemuri2Data* data;
-    effKemuri2Data* p = entry->userdata;
     Vec pos2;
     Vec pos = {0.0f, 0.0f, 0.0f};
     f32 s;
     s32 i;
-    pos.x = p->x;
-    pos.y = p->y;
-    pos.z = p->z;
-    data = p;
+    pos.x = first->x;
+    pos.y = first->y;
+    pos.z = first->z;
+    data = first;
     pos2 = pos;
     s = sin(3.1415927f * data->timer / 30.0f);
     data->timer++;
@@ -238,21 +244,19 @@ static void effKemuri2Main(EffectEntry* entry) {
         return;
     }
     for (i = 0; i < entry->count; i++, data++) {
-        p = data;
-        p->x += p->speed * p->dirX;
-        p->z += p->speed * p->dirZ;
-        p->vy *= 0.9f;
-        p->y += p->vy;
-        p->rotVel *= 0.95f;
-        p->rot += p->rotVel;
-        p->scale = s;
+        data->x += data->speed * data->dirX;
+        data->z += data->speed * data->dirZ;
+        data->vy *= 0.9f;
+        data->y += data->vy;
+        data->rotVel *= 0.95f;
+        data->rot += data->rotVel;
+        data->scale = s;
         if (data->timer > 15) {
-            p->alpha *= 0.8f;
+            data->alpha *= 0.8f;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&pos2), 2, effKemuri2Disp, entry);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_XLU, effKemuri2Disp, entry);
 }
-#pragma opt_propagation reset
 
 /** Draws the smoke puffs as camera-facing quads with an animated texture. */
 static void effKemuriDisp(CameraId camId, void* param) {
@@ -285,7 +289,7 @@ static void effKemuriDisp(CameraId camId, void* param) {
     PSMTXConcat(t, r, m);
     PSMTXConcat(m, s, m);
     PSMTXConcat(cam->view, m, m);
-    GXSetCurrentMtx(0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetChanMatColor(GX_COLOR0A0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
@@ -327,7 +331,7 @@ static void effKemuriDisp(CameraId camId, void* param) {
             PSMTXScale(s, 20.0f * data->scaleX, 20.0f * data->scaleY, 20.0f);
             PSMTXConcat(m, t, m2);
             PSMTXConcat(m2, s, m2);
-            GXLoadPosMtxImm(m2, 0);
+            GXLoadPosMtxImm(m2, GX_PNMTX0);
             PSMTXScale(s, 0.0625f, 1.0f, 1.0f);
             PSMTXTrans(t, data->texFrame0, -0.2f, 0.0f);
             PSMTXConcat(s, t, t);
@@ -347,6 +351,20 @@ static void effKemuriDisp(CameraId camId, void* param) {
             GXTexCoord2f32(0.0f, 1.0f);
         }
     }
+}
+
+/** One textured quad: top-left corner (x, y), width w, height h, texture repeat (s, t). */
+// Original name and size (0x120) from the JP demo map (UNUSED there: nothing in this unit calls it).
+static void polygon(f32 x, f32 y, f32 w, f32 h, f32 s, f32 t) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(x, y, 0.0f);
+    GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(x + w, y, 0.0f);
+    GXTexCoord2f32(s, 0.0f);
+    GXPosition3f32(x + w, y - h, 0.0f);
+    GXTexCoord2f32(s, t);
+    GXPosition3f32(x, y - h, 0.0f);
+    GXTexCoord2f32(0.0f, t);
 }
 
 /** Draws the drifting puff, with an offset darker copy as shadow. */
@@ -405,8 +423,8 @@ static void effKemuri2Disp(CameraId camId, void* param) {
             PSMTXConcat(cam->view, m, m);
             PSMTXTrans(t, 6.0f, -4.0f, 0.0f);
             PSMTXConcat(m, t, m);
-            GXLoadPosMtxImm(m, 0);
-            GXSetCurrentMtx(0);
+            GXLoadPosMtxImm(m, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             effGetTexObj(0xd, &tex);
             GXLoadTexObj(&tex, GX_TEXMAP0);
             if (i == 0) {
@@ -415,18 +433,14 @@ static void effKemuri2Disp(CameraId camId, void* param) {
                 GXSetTevColor(GX_TEVREG0, (GXColor){0xFF, 0xFF, 0xFF, data->alpha});
             }
             GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-            {
-                f32 nw = -w / 2.0f;
-                f32 nh = -h / 2.0f;
-                GXPosition3f32(nw, h * 0.5f, 0.0f);
-                GXTexCoord2f32(0.0f, 0.0f);
-                GXPosition3f32(w * 0.5f, h * 0.5f, 0.0f);
-                GXTexCoord2f32(1.0f, 0.0f);
-                GXPosition3f32(w * 0.5f, nh, 0.0f);
-                GXTexCoord2f32(1.0f, 1.0f);
-                GXPosition3f32(nw, nh, 0.0f);
-                GXTexCoord2f32(0.0f, 1.0f);
-            }
+            GXPosition3f32(-w / 2.0f, h * 0.5f, 0.0f);
+            GXTexCoord2f32(0.0f, 0.0f);
+            GXPosition3f32(w * 0.5f, h * 0.5f, 0.0f);
+            GXTexCoord2f32(1.0f, 0.0f);
+            GXPosition3f32(w * 0.5f, -h / 2.0f, 0.0f);
+            GXTexCoord2f32(1.0f, 1.0f);
+            GXPosition3f32(-w / 2.0f, -h / 2.0f, 0.0f);
+            GXTexCoord2f32(0.0f, 1.0f);
         }
         off = 1 - i;
         PSMTXTrans(t, data->x + off, data->y - off, data->z);
@@ -447,8 +461,8 @@ static void effKemuri2Disp(CameraId camId, void* param) {
         PSMTXConcat(m, rz, m);
         PSMTXConcat(m, s, m);
         PSMTXConcat(cam->view, m, m);
-        GXLoadPosMtxImm(m, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(m, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         if (i == 0) {
             effGetTexObj(0xc, &tex);
             GXLoadTexObj(&tex, GX_TEXMAP0);

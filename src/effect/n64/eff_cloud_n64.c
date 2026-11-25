@@ -1,4 +1,6 @@
-// Paper Mario 64 effect: cloud puff sprite scaled by the given scale; types 0-3 pick the colours.
+// Paper Mario 64 effect: cloud trail, a ribbon drawn along the path of a moving head (only type 3 moves it);
+// types 0-3 pick the colours.
+
 #include "eff/n64/eff_cloud_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -14,7 +16,7 @@
 #include <math.h>
 
 static void effCloudMain(EffectEntry* effect);
-static void effCloudDisp(CameraId cameraId, EffectEntry* effect);
+static void effCloudDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a ribbon-like cloud trail whose head starts at (x, y, z) and keeps a 30-point history of its path.
@@ -30,7 +32,7 @@ EffectEntry* effCloudN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 s
     work = __memAlloc(HEAP_EFFECT, sizeof(EffCloudN64Work));
     effect->userdata = work;
     effect->callback = effCloudMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -120,7 +122,7 @@ EffectEntry* effCloudN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 s
     work->active[0] = 1;
     work->age[0] = 0;
     work->len[0] = 0.0f;
-    work->vel.x = (f32)(s32)(rand() % 30 + 10);
+    work->vel.x = (f32)(rand() % 30 + 10);
     work->vel.y = 0.0f;
     work->vel.z = 0.0f;
     return effect;
@@ -147,8 +149,8 @@ static void effCloudMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -164,8 +166,8 @@ static void effCloudMain(EffectEntry* effect) {
         work->fade = work->lifetime * 16;
     }
     if (type == 3) {
-        work->vel.x += (f32)(s32)(rand() % 10 - 5);
-        work->vel.y += (f32)(s32)(rand() % 10 - 5);
+        work->vel.x += (f32)(rand() % 10 - 5);
+        work->vel.y += (f32)(rand() % 10 - 5);
         work->pos.x += work->vel.x;
         work->pos.y += work->vel.y;
         work->pos.z += work->vel.z;
@@ -198,15 +200,17 @@ static void effCloudMain(EffectEntry* effect) {
         }
         work->len[idx] = prev + d;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effCloudDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effCloudDisp, effect);
 }
 
 /**
  * Builds a camera-facing triangle strip along the trail (width grows with the age of each point)
- * and draws it with texture 0x83 scrolling along the path length;
- * older points shift in colour toward the second tint.
+ * and draws it with texture 0x83 scrolling along the path length. Types 0-1 blend the second tint into the
+ * first by the texture; types 2-3 blend it into the vertex colour instead, so older points shift from white
+ * through yellow and red toward black.
  */
-static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
+static void effCloudDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffCloudN64Work* work;
     f32 scale;
     s32 frame;
@@ -232,7 +236,7 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
     effN64Vtx* v;
     s32 c;
     s32 idx;
-    f32 zero, ang, a1, a2, diff, x, y, z, w, sn, cs;
+    f32 dz, ang, a1, a2, x, y, z, w, sn, cs;
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
@@ -241,7 +245,7 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
     type = work->type;
     scale = work->scale;
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     if (type >= 2) {
         GXSetNumTevStages(2);
         GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
@@ -275,15 +279,15 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetTevColor(GX_TEVREG0, (GXColor){work->r, work->g, work->b, fade});
     GXSetTevColor(GX_TEVREG1, (GXColor){work->r2, work->g2, work->b2});
-    GXLoadPosMtxImm(camera->view, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_NONE);
-    vtx = (effN64Vtx*)smartAlloc(0x690, 3)->address;
+    vtx = (effN64Vtx*)smartAlloc(0x690, SMART_GROUP_TEMP)->address;
     memset(vtx, 0, 0x690);
     effSetVtxDescN64(vtx);
     uo = (frame & 0x3F) << 5;
     first = -1;
-    zero = 0.0f;
+
     count = 0;
     for (i = 0; i < 30; i++) {
         if (work->active[(1 + work->head + i) % 30] != 0) {
@@ -291,7 +295,6 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
         }
     }
     if (count - 1 > 0) {
-
         n = 0;
         for (i = 0; i < 30; i++) {
             v = &vtx[i * 2];
@@ -335,6 +338,8 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
                 sn = (f32)sin(6.2831855f * (f32)((frame - work->age[idx] * 80) * 4) / 360.0f);
                 w = (f32)k + (3.0f * sn + 16.0f);
                 w *= scale;
+
+                // both branches assign the same value (so does the Paper Mario 64 original of this effect)
                 if (type == 0) {
                     u = (s32)(24.0f * work->len[idx]) + uo;
                 } else {
@@ -357,9 +362,10 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
                 a1 = 6.2831855f * ang / 360.0f;
                 sn = w * (f32)sin(a1);
                 cs = w * (f32)cos(a1);
+                dz = 0.0f;
                 v[0].x = (s16)(x + sn);
                 v[0].y = (s16)(y + cs);
-                v[0].z = (s16)(z + zero);
+                v[0].z = (s16)(z + dz);
                 v[0].s = u;
                 v[0].t = 0x400;
                 v[0].r = g;
@@ -368,7 +374,7 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
                 v[0].a = alpha;
                 v[1].x = (s16)(x - sn);
                 v[1].y = (s16)(y - cs);
-                v[1].z = (s16)(z + zero);
+                v[1].z = (s16)(z + dz);
                 v[1].s = u;
                 v[1].t = 0;
                 v[1].r = g;
@@ -380,7 +386,8 @@ static void effCloudDisp(CameraId cameraId, EffectEntry* effect) {
         }
         DCFlushRange(vtx, 0x690);
         GXInvalidateVtxCache();
-        for (j = first, k = first * 2; j < 29; k += 2, j++) {
+        for (j = first; j < 29; j++) {
+            k = j * 2;
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(k, k + 2, k + 1, k, k + 1, k + 2, k + 3, k);
         }

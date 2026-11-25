@@ -1,5 +1,6 @@
 // Window manager: menu windows built from descriptors, and the selection lists of shops, partners,
 // level-ups, badges and the informant (winMgrSelect*).
+
 #include "version.h"
 #include "icon_ids.h"
 #include "manager/winmgr.h"
@@ -23,63 +24,61 @@
 #include <stdio.h>
 #include <string.h>
 #include "win/win_item.h"
-#include "statuswindow.h"
-#include "win/win_main.h"
-#include "evt/evt_story.h"
 #include <dolphin/pad.h>
 #include <demo/DEMOPad.h>
-// FAKE: winmgr.c calls L_pouchEquipBadge through this prototype (the types it was compiled with) instead of the one in mario/mario_pouch.h; same registers, behaviour-identical.
-typedef u16 (*L_pouchEquipBadgeRetU16Fn)(s32);
+#include "sfx_name_word.h"
+#include "statuswindow.h"
+#include "win/win_main.h"
 
 typedef struct WinMgrSelectTbl {
-    u16 numDescriptors; // 0x0
-
+    u16 numDescriptors;      // 0x0
     WinMgrDesc* descriptors; // 0x4
 } WinMgrSelectTbl;
 
 #if VERSION >= VERSION_US
+u16 pouchEquipBadge(s32 index);
 s32 select_comp_bteresa(const void* a, const void* b);
 #endif
 
-// iconDispGx flags for the 2D window icons and the list cursor (the demo's icon flag bits differ).
-
-// local prototypes
 static void select_main(WinMgrEntry* entry);
-static void select_disp(WinMgrEntry* entry);
 
+static void select_disp(WinMgrEntry* entry);
 static void select_disp_party(WinMgrEntry* entry);
+
 static void select_disp_mario(WinMgrEntry* entry);
+
 static void select_disp_luigi(WinMgrEntry* entry);
+
 static void select_disp2(WinMgrEntry* entry);
 static void select_main3(WinMgrEntry* entry);
 static void select_disp3(WinMgrEntry* entry);
 static void select_disp3_party(WinMgrEntry* entry);
+
 static void select_disp3_mario(WinMgrEntry* entry);
-static void winMgrDisp(CameraId camId, void* param);
+
 static void winMgrSeq(WinMgrEntry* entry);
 s32 select_comp_type(const void* a, const void* b);
 s32 select_comp_starpiece(const void* a, const void* b);
 
-//.data
-
+//.sbss
 static WinMgrWork work;
 static s16* mario_status_point_table[3];
 
 //.sdata
 static WinMgrWork* wp = &work;
-#if VERSION <= VERSION_DEMO_JP
-// Unreferenced; the early demos carry a copy at the start of this TU's .data (the September US demo one in
-// mariost.c).
-static f32 unusedSignTbl[16] = {-1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f};
-#endif
-static u16 party_id_table[] = {1, 2, 5, 4, 6, 3, 7, 0};
-static u16 party_icon_table[] = {ICON_155, ICON_156, ICON_15F, ICON_158, ICON_160, ICON_157, ICON_161};
+
+static u16 party_id_table[] = {
+    PARTY_GOOMBELLA, PARTY_KOOPS, PARTY_FLURRIE, PARTY_YOSHI,
+    PARTY_VIVIAN, PARTY_BOBBERY, PARTY_MS_MOWZ, PARTY_NONE
+};
+static u16 party_icon_table[] = {ICON_PARTY_GOOMBELLA, ICON_PARTY_KOOPS, ICON_PARTY_FLURRIE, ICON_PARTY_YOSHI, ICON_PARTY_VIVIAN, ICON_PARTY_BOBBERY, ICON_PARTY_MS_MOWZ};
 static const char* party_labelname_table[] = {"_kur", "_nok", "_win", "_yos", "_viv", "_bom", "_chu"};
-static s32 mario_status_icon_table[] = {ICON_19F, ICON_1A0, ICON_1A1};
+static s32 mario_status_icon_table[] = {ICON_HP, ICON_FP, ICON_BP};
 static const char* mario_status_labelname_table[] = {"_hp", "_fp", "_bp"};
+
 #if VERSION >= VERSION_US
 static const char* mario_status_name_table[][3] = {
-    {"\x82\x67\x82\x6F", "\x82\x65\x82\x6F", "\x82\x61\x82\x6F"},
+    {"ＨＰ", "ＦＰ", "ＢＰ"},
     {"HP", "FP", "BP"},
     {"KP", "BP", "OP"},
     {"PC", "PF", "PB"},
@@ -87,30 +86,22 @@ static const char* mario_status_name_table[][3] = {
     {"PV", "PF", "PT"},
     {"HP", "FP", "BP"},
 };
+#define MARIO_STATUS_NAME(id) mario_status_name_table[gp->language][id]
 #else
-static const char* mario_status_name_table[] = {"\x82\x67\x82\x6F", "\x82\x65\x82\x6F", "\x82\x61\x82\x6F"};
+static const char* mario_status_name_table[] = {"ＨＰ", "ＦＰ", "ＢＰ"};
+#define MARIO_STATUS_NAME(id) mario_status_name_table[id]
 #endif
 
-/** the short name of a level-up stat (HP, FP, BP); US has one per language */
-static inline const char* mario_status_name(s32 id) {
-#if VERSION >= VERSION_US
-    return mario_status_name_table[gp->language][id];
-#else
-    return mario_status_name_table[id];
-#endif
-}
 /** What a level-up adds to Mario's HP, FP and BP: 5, 5 and 3. */
 static s32 mario_status_henka_table[] = {5, 5, 3};
-#if VERSION >= VERSION_JP
+
 /** The ceiling of Mario's HP, FP and BP (200, 200 and 99). */
+#if VERSION >= VERSION_JP
 s32 mario_status_max_table[] = {200, 200, 99};
 #endif
 
-/**
- * Windows of the standard selection menu (items, badges and so on):
- * the list, the small side window and the help box.
- */
-WinMgrDesc select_desc[] = {
+//.data
+static WinMgrDesc select_desc[] = {
     {0, 1, 8, -24, 116, 300, 240, {0xFF, 0xFF, 0xFF, 0xFF}, select_main, select_disp},
     {2, 0, 8, -280, 120, 240, 45, {0xFF, 0xFF, 0xFF, 0xFF}, NULL, select_disp2},
     {0, 0, 8, -240, -130, 500, 80, {0xFF, 0xFF, 0xFF, 0xFF}, select_main3, select_disp3},
@@ -122,27 +113,26 @@ WinMgrDesc select_desc[] = {
 };
 
 /** Windows of the partner selection menu: the list, the side window and the help box. */
-WinMgrDesc select_party_desc[] = {
+static WinMgrDesc select_party_desc[] = {
     {0, 4, 8, -24, 116, 300, 240, {0xFF, 0xFF, 0xFF, 0xFF}, select_main, select_disp_party},
     {2, 0, 8, -280, 120, 240, 69, {0xFF, 0xFF, 0xFF, 0xFF}, NULL, select_disp2},
     {0, 0, 8, -240, -130, 500, 80, {0xFF, 0xFF, 0xFF, 0xFF}, select_main3, select_disp3_party},
 };
 
 /** Windows of the Mario status selection menu (HP, FP, BP): the list, the side window and the help box. */
-WinMgrDesc select_mario_desc[] = {
+static WinMgrDesc select_mario_desc[] = {
     {0, 5, 8, -24, 116, 300, 240, {0xFF, 0xFF, 0xFF, 0xFF}, select_main, select_disp_mario},
     {2, 0, 8, -280, 120, 240, 69, {0xFF, 0xFF, 0xFF, 0xFF}, NULL, select_disp2},
     {0, 0, 8, -240, -130, 500, 80, {0xFF, 0xFF, 0xFF, 0xFF}, select_main3, select_disp3_mario},
 };
 
 /** Windows of the menu type drawn by select_disp_luigi: the list and the side window (no help box). */
-WinMgrDesc select_luigi_desc[] = {
+static WinMgrDesc select_luigi_desc[] = {
     {0, 1, 8, -24, 116, 300, 240, {0xFF, 0xFF, 0xFF, 0xFF}, select_main, select_disp_luigi},
     {2, 0, 8, -280, 120, 240, 45, {0xFF, 0xFF, 0xFF, 0xFF}, NULL, select_disp2},
 };
 
-/** Windows of the johoya_perfect menu type: the same layout as select_luigi_desc. */
-WinMgrDesc select_johoya_perfect_desc[] = {
+static WinMgrDesc select_johoya_perfect_desc[] = {
     {0, 1, 8, -24, 116, 300, 240, {0xFF, 0xFF, 0xFF, 0xFF}, select_main, select_disp_luigi},
     {2, 0, 8, -280, 120, 240, 45, {0xFF, 0xFF, 0xFF, 0xFF}, NULL, select_disp2},
 };
@@ -151,7 +141,7 @@ WinMgrDesc select_johoya_perfect_desc[] = {
  * Window set (count and descriptors) of each selection menu type,
  * indexed by the type passed to winMgrSelectEntry.
  */
-WinMgrSelectTbl select_desc_tbl[] = {
+static WinMgrSelectTbl select_desc_tbl[] = {
     {3, select_desc},
     {3, select_desc},
     {3, select_desc},
@@ -163,25 +153,24 @@ WinMgrSelectTbl select_desc_tbl[] = {
     {3, select_party_desc},
     {3, select_mario_desc},
     {3, select_mario_desc},
+    {3, select_desc},
+    {3, select_desc},
+#if VERSION >= VERSION_JP
+    {3, &select_desc[3]},
+#endif
     {3, select_desc},
     {3, select_desc},
 #if VERSION <= VERSION_DEMO_JP
     {3, select_desc},
     {3, select_desc},
-    {3, select_desc},
-    {3, select_desc},
 #else
-    {3, &select_desc[3]},
-    {3, select_desc},
-    {3, select_desc},
     {3, &select_desc[3]},
 #endif
     {2, select_johoya_perfect_desc},
     {2, select_luigi_desc},
 };
 
-//.sbss
-
+//.rodata (defined at the end of the file)
 static const char name_party0[12];
 static const char name_party1[12];
 static const char name_party4[12];
@@ -189,19 +178,16 @@ static const char name_party5[12];
 static const char name_party2[12];
 static const char name_party6[12];
 
-// The party list helpers, defined at the end of the file. The demo has them as plain functions (deferred
-// inlining still inlines them, and their out-of-line copies stay); later versions made them static inline,
-// which also narrows the party index to u16.
-#if VERSION <= VERSION_DEMO_JP
+// Defined at the end of the file.
 static const char* party_name_table_rtn(s32 id);
 static s32 iconid_conv(s32 icon);
-#else
-static inline const char* party_name_table_rtn(u16 id);
-static inline s32 iconid_conv(s32 icon);
-#endif
 
-/** The demo has no party rank checks. */
 #if VERSION >= VERSION_JP
+/**
+ * Sets args[0] to 1 when a joined partner can still be ranked up (rank below 1, or below 2 once
+ * GSWF_GOR_UP_ARROW_USED is set), otherwise 0.
+ */
+// Descriptive name (not in the symbol maps); placeholder unk_80239b2c, JP 0x80239B2C. See docs/NAME_PROVENANCE.md.
 USER_FUNC(evt_win_party_lankup_chk) {
     PouchData* pouch;
     u16* p;
@@ -211,18 +197,16 @@ USER_FUNC(evt_win_party_lankup_chk) {
     pouch = pouchGetPtr();
     for (p = party_id_table; *p != 0; p++) {
         if (partyChkJoin(*p)) {
-            if (!evtGetValue(event, GSWF(GSWF_MERLON_FIRST_UPGRADE_DONE))) {
+            if (!evtGetValue(event, GSWF_GOR_UP_ARROW_USED)) {
                 if (pouch->partyData[*p].techLevel < 1) {
                     max = 0;
                 } else {
                     max = 1;
                 }
+            } else if (pouch->partyData[*p].techLevel < 2) {
+                max = 0;
             } else {
-                if (pouch->partyData[*p].techLevel < 2) {
-                    max = 0;
-                } else {
-                    max = 2;
-                }
+                max = 2;
             }
             if (max == 0) {
                 evtSetValue(event, args[0], 1);
@@ -233,13 +217,16 @@ USER_FUNC(evt_win_party_lankup_chk) {
     evtSetValue(event, args[0], 0);
     return EVT_RETURN_DONE;
 }
+#endif
 
 /**
  * The power-down shop's check (Rogueport Sewers, tik_11) before trading partner ranks:
  * sets args[0] to 1 when at least two partners have joined,
  * one of them can still be ranked up (same limit as evt_win_party_lankup_chk) and one has a rank to give;
  * otherwise 0.
+ * Descriptive name (not in the symbol maps); placeholder unk_802399f8, JP 0x802399F8. See docs/NAME_PROVENANCE.md.
  */
+#if VERSION >= VERSION_JP
 USER_FUNC(evt_win_party_lankdown_chk) {
     PouchData* pouch;
     u16* p;
@@ -257,18 +244,16 @@ USER_FUNC(evt_win_party_lankdown_chk) {
             if (pouch->partyData[*p].techLevel != 0) {
                 hasRank = 1;
             }
-            if (!evtGetValue(event, GSWF(GSWF_MERLON_FIRST_UPGRADE_DONE))) {
+            if (!evtGetValue(event, GSWF_GOR_UP_ARROW_USED)) {
                 if (pouch->partyData[*p].techLevel < 1) {
                     max = 0;
                 } else {
                     max = 1;
                 }
+            } else if (pouch->partyData[*p].techLevel < 2) {
+                max = 0;
             } else {
-                if (pouch->partyData[*p].techLevel < 2) {
-                    max = 0;
-                } else {
-                    max = 2;
-                }
+                max = 2;
             }
             if (max == 0) {
                 canRank = 1;
@@ -344,38 +329,35 @@ void winMgrMain(void) {
 
     entry = wp->entries;
     for (i = 0; i < wp->numEntries; i++, entry++) {
-        if (entry->flags & WINMGR_ENTRY_IN_USE) {
+        if (entry->flags & WINMGR_FLAG_ACTIVE) {
             winMgrSeq(entry);
             if (entry->description->main) {
                 entry->description->main(entry);
             }
-            if (entry->flags & WINMGR_ENTRY_VISIBLE) {
-                dispEntry((CameraId)entry->description->camId, entry->priority + 300, 0, winMgrDisp, entry);
+            if (entry->flags & WINMGR_FLAG_VISIBLE) {
+                dispEntry((CameraId)entry->description->camId, entry->priority + 300, DISP_MODE_OPAQUE, winMgrDisp, entry);
             }
         }
     }
 }
 
 /**
- * The open/close animation of a window over FPS_FRAMES(8) frames.
- * Type 0 spins and grows from 30 degrees and zero size, type 1 grows and fades in,
- * type 2 appears and disappears at once.
- * WINMGR_ENTRY_ANIMATING stays set while animating; closing clears WINMGR_ENTRY_VISIBLE and, with
- * WINMGR_ENTRY_AUTO_DELETE,
- * frees the slot.
+ * Runs one frame of window entry's open (state 1) or close (state 2) animation in its description's style: spin, fade
+ * or pop (WINMGR_SEQ_*). Sets WINMGR_FLAG_ANIMATING while one runs; closing hides the window and frees the slot of an
+ * auto-delete window.
  */
 static void winMgrSeq(WinMgrEntry* entry) {
-    entry->flags |= WINMGR_ENTRY_ANIMATING;
+    entry->flags |= WINMGR_FLAG_ANIMATING;
     switch (entry->description->type) {
-        case 0:
+        case WINMGR_SEQ_SPIN:
             switch (entry->state) {
                 case 0:
-                    entry->flags &= ~WINMGR_ENTRY_ANIMATING;
+                    entry->flags &= ~WINMGR_FLAG_ANIMATING;
                     break;
                 case 1:
-                    entry->flags |= WINMGR_ENTRY_VISIBLE;
-                    entry->rotation = intplGetValue(12, 30.0f, 0.0f, entry->timer, FPS_FRAMES(8));
-                    entry->scale = intplGetValue(12, 0.0f, 1.0f, entry->timer, FPS_FRAMES(8));
+                    entry->flags |= WINMGR_FLAG_VISIBLE;
+                    entry->rotation = intplGetValue(EASING_SINE_OUT, 30.0f, 0.0f, entry->timer, FPS_FRAMES(8));
+                    entry->scale = intplGetValue(EASING_SINE_OUT, 0.0f, 1.0f, entry->timer, FPS_FRAMES(8));
                     entry->alpha = 255;
                     entry->timer++;
                     if (entry->timer > FPS_FRAMES(8)) {
@@ -383,30 +365,30 @@ static void winMgrSeq(WinMgrEntry* entry) {
                     }
                     break;
                 case 2:
-                    entry->rotation = intplGetValue(12, 0.0f, 30.0f, entry->timer, FPS_FRAMES(8));
-                    entry->scale = intplGetValue(12, 1.0f, 0.0f, entry->timer, FPS_FRAMES(8));
+                    entry->rotation = intplGetValue(EASING_SINE_OUT, 0.0f, 30.0f, entry->timer, FPS_FRAMES(8));
+                    entry->scale = intplGetValue(EASING_SINE_OUT, 1.0f, 0.0f, entry->timer, FPS_FRAMES(8));
                     entry->alpha = 255;
                     entry->timer++;
                     if (entry->timer > FPS_FRAMES(8)) {
                         entry->state = 0;
-                        entry->flags &= ~WINMGR_ENTRY_VISIBLE;
-                        if (entry->flags & WINMGR_ENTRY_AUTO_DELETE) {
-                            entry->flags &= ~WINMGR_ENTRY_IN_USE;
+                        entry->flags &= ~WINMGR_FLAG_VISIBLE;
+                        if (entry->flags & WINMGR_FLAG_AUTO_DELETE) {
+                            entry->flags &= ~WINMGR_FLAG_ACTIVE;
                         }
                     }
                     break;
             }
             break;
-        case 1:
+        case WINMGR_SEQ_FADE:
             switch (entry->state) {
                 case 0:
-                    entry->flags &= ~WINMGR_ENTRY_ANIMATING;
+                    entry->flags &= ~WINMGR_FLAG_ANIMATING;
                     break;
                 case 1:
-                    entry->flags |= WINMGR_ENTRY_VISIBLE;
+                    entry->flags |= WINMGR_FLAG_VISIBLE;
                     entry->rotation = 0.0f;
-                    entry->scale = intplGetValue(12, 0.0f, 1.0f, entry->timer, FPS_FRAMES(8));
-                    entry->alpha = intplGetValue(12, 0.0f, 255.0f, entry->timer, FPS_FRAMES(8));
+                    entry->scale = intplGetValue(EASING_SINE_OUT, 0.0f, 1.0f, entry->timer, FPS_FRAMES(8));
+                    entry->alpha = intplGetValue(EASING_SINE_OUT, 0.0f, 255.0f, entry->timer, FPS_FRAMES(8));
                     entry->timer++;
                     if (entry->timer > FPS_FRAMES(8)) {
                         entry->state = 0;
@@ -415,38 +397,38 @@ static void winMgrSeq(WinMgrEntry* entry) {
                 case 2:
                     entry->rotation = 0.0f;
                     entry->scale = 1.0f;
-                    entry->alpha = intplGetValue(12, 255.0f, 0.0f, entry->timer, FPS_FRAMES(8));
+                    entry->alpha = intplGetValue(EASING_SINE_OUT, 255.0f, 0.0f, entry->timer, FPS_FRAMES(8));
                     entry->timer++;
                     if (entry->timer > FPS_FRAMES(8)) {
                         entry->state = 0;
-                        entry->flags &= ~WINMGR_ENTRY_VISIBLE;
-                        if (entry->flags & WINMGR_ENTRY_AUTO_DELETE) {
-                            entry->flags &= ~WINMGR_ENTRY_IN_USE;
+                        entry->flags &= ~WINMGR_FLAG_VISIBLE;
+                        if (entry->flags & WINMGR_FLAG_AUTO_DELETE) {
+                            entry->flags &= ~WINMGR_FLAG_ACTIVE;
                         }
                     }
                     break;
             }
             break;
-        case 2:
+        case WINMGR_SEQ_POP:
             switch (entry->state) {
                 case 0:
-                    entry->flags &= ~WINMGR_ENTRY_ANIMATING;
+                    entry->flags &= ~WINMGR_FLAG_ANIMATING;
                     break;
                 case 1:
-                    entry->flags |= WINMGR_ENTRY_VISIBLE;
+                    entry->flags |= WINMGR_FLAG_VISIBLE;
                     entry->rotation = 0.0f;
                     entry->scale = 1.0f;
                     entry->alpha = 255;
                     entry->state = 0;
                     break;
                 case 2:
-                    entry->flags &= ~WINMGR_ENTRY_VISIBLE;
+                    entry->flags &= ~WINMGR_FLAG_VISIBLE;
                     entry->rotation = 0.0f;
                     entry->scale = 1.0f;
                     entry->alpha = 255;
                     entry->state = 0;
-                    if (entry->flags & WINMGR_ENTRY_AUTO_DELETE) {
-                        entry->flags &= ~WINMGR_ENTRY_IN_USE;
+                    if (entry->flags & WINMGR_FLAG_AUTO_DELETE) {
+                        entry->flags &= ~WINMGR_FLAG_ACTIVE;
                     }
                     break;
             }
@@ -464,12 +446,12 @@ s32 winMgrEntry(WinMgrDesc* desc) {
 
     entry = wp->entries;
     for (i = 0; i < wp->numEntries; i++, entry++) {
-        if (!(entry->flags & WINMGR_ENTRY_IN_USE)) {
+        if (!(entry->flags & WINMGR_FLAG_ACTIVE)) {
             break;
         }
     }
     entry->flags = 0;
-    entry->flags |= WINMGR_ENTRY_IN_USE;
+    entry->flags |= WINMGR_FLAG_ACTIVE;
     entry->state = 0;
     entry->timer = 0;
     entry->description = desc;
@@ -489,7 +471,7 @@ void winMgrSetParam(s32 id, void* param) {
     WinMgrEntry* entry;
 
     entry = &wp->entries[id];
-    if (entry->flags & WINMGR_ENTRY_IN_USE) {
+    if (entry->flags & WINMGR_FLAG_ACTIVE) {
         entry->param = param;
     }
 }
@@ -499,12 +481,10 @@ void winMgrOpen(s32 id) {
     WinMgrEntry* entry;
 
     entry = &wp->entries[id];
-    if (entry->flags & WINMGR_ENTRY_IN_USE) {
+    if (entry->flags & WINMGR_FLAG_ACTIVE) {
         entry->state = 1;
         entry->timer = 0;
-        entry->scroll = 0;
-        entry->lines = 0;
-        entry->msg = NULL;
+        winMgrHelpInit(entry);
     }
 }
 
@@ -513,7 +493,7 @@ void winMgrClose(s32 id) {
     WinMgrEntry* entry;
 
     entry = &wp->entries[id];
-    if (entry->flags & WINMGR_ENTRY_IN_USE) {
+    if (entry->flags & WINMGR_FLAG_ACTIVE) {
         entry->state = 2;
         entry->timer = 0;
     }
@@ -524,19 +504,19 @@ void winMgrCloseAutoDelete(s32 id) {
     WinMgrEntry* entry;
 
     entry = &wp->entries[id];
-    if (entry->flags & WINMGR_ENTRY_IN_USE) {
+    if (entry->flags & WINMGR_FLAG_ACTIVE) {
         entry->state = 2;
         entry->timer = 0;
-        entry->flags |= WINMGR_ENTRY_AUTO_DELETE;
+        entry->flags |= WINMGR_FLAG_AUTO_DELETE;
     }
 }
 
 /** Frees a window slot at once, without an animation. */
 void winMgrDelete(s32 id) {
-    wp->entries[id].flags &= ~WINMGR_ENTRY_IN_USE;
+    wp->entries[id].flags &= ~WINMGR_FLAG_ACTIVE;
 }
 
-/** TRUE while the window is still opening or closing (WINMGR_ENTRY_ANIMATING), so callers wait before reading input or drawing. */
+/** TRUE while window id's open or close animation runs (WINMGR_FLAG_ANIMATING). */
 BOOL winMgrAction(s32 id) {
     return (wp->entries[id].flags >> 2) & 1;
 }
@@ -546,7 +526,7 @@ void winMgrSetSize(s32 id, s32 x, s32 y, s32 width, s32 height) {
     WinMgrEntry* entry;
 
     entry = &wp->entries[id];
-    if (entry->flags & WINMGR_ENTRY_IN_USE) {
+    if (entry->flags & WINMGR_FLAG_ACTIVE) {
         entry->x = x;
         entry->y = y;
         entry->width = width;
@@ -559,7 +539,7 @@ void winMgrSetPriority(s32 id, s32 priority) {
     WinMgrEntry* entry;
 
     entry = &wp->entries[id];
-    if (entry->flags & WINMGR_ENTRY_IN_USE) {
+    if (entry->flags & WINMGR_FLAG_ACTIVE) {
         entry->priority = priority;
     }
 }
@@ -580,12 +560,12 @@ void winMgrHelpInit(WinMgrEntry* entry) {
  * Per-frame input of a help (description) window:
  * counts the lines of entry->msg and, when it has more than two, scrolls two lines at a time with the C stick.
  * Used by the select lists, the item and shop windows and evt_win.
- * PAL computes the last scroll position differently.
+ * PAL and the PAL demo compute the last scroll position differently.
  */
 void winMgrHelpMain(WinMgrEntry* entry) {
     u16 lines = 0;
 
-    if (!(entry->flags & WINMGR_ENTRY_ANIMATING)) {
+    if (!(entry->flags & WINMGR_FLAG_ANIMATING)) {
         if (entry->msg) {
             FontGetMessageWidthLine(entry->msg, &lines);
             entry->lines = lines + 1;
@@ -619,7 +599,7 @@ void winMgrHelpDraw(WinMgrEntry* entry) {
     Mtx scale;
     char buf[0x400];
 
-    if (!(entry->flags & WINMGR_ENTRY_ANIMATING)) {
+    if (!(entry->flags & WINMGR_FLAG_ANIMATING)) {
         GXSetScissor(0, 384, 608, 56);
         if (!strcmp(entry->msg, msgSearch("msg_lottery_number"))) {
             sprintf(buf, entry->msg, lotteryGetPtr()->number);
@@ -632,39 +612,39 @@ void winMgrHelpDraw(WinMgrEntry* entry) {
         GXSetScissor(0, 0, 608, 480);
         if (entry->lines > 2) {
             s32 scroll = entry->scroll;
+
             if (scroll == 0) {
                 if ((gp->retraceCount & 31) < 20) {
                     PSMTXTrans(mtx, entry->x + entry->width - 12, entry->y - entry->height - 4, 0.0f);
                     PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                     PSMTXConcat(mtx, scale, mtx);
-                    iconDispGx2(mtx, ICON_DISP_2D, ICON_1B6);
+                    iconDispGx2(mtx, ICON_FLAG_2D, ICON_ARROW_DOWN);
                 }
-            }
 #if VERSION >= VERSION_DEMO_EU
-            else if (entry->scroll / 2 == (entry->lines + 1) / 2 - 1) {
+            } else if (entry->scroll / 2 == (entry->lines + 1) / 2 - 1) {
 #else
-            else if (entry->scroll + 2 == entry->lines) {
+            } else if (entry->scroll + 2 == entry->lines) {
 #endif
                 if ((gp->retraceCount & 31) < 20) {
                     PSMTXTrans(mtx, entry->x + entry->width - 12, entry->y - entry->height + 44, 0.0f);
                     PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                     PSMTXConcat(mtx, scale, mtx);
-                    iconDispGx2(mtx, ICON_DISP_2D, ICON_1B5);
+                    iconDispGx2(mtx, ICON_FLAG_2D, ICON_ARROW_UP);
                 }
             } else if ((gp->retraceCount & 31) < 20) {
                 PSMTXTrans(mtx, entry->x + entry->width - 12, entry->y - entry->height + 44, 0.0f);
                 PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                 PSMTXConcat(mtx, scale, mtx);
-                iconDispGx2(mtx, ICON_DISP_2D, ICON_1B5);
+                iconDispGx2(mtx, ICON_FLAG_2D, ICON_ARROW_UP);
                 PSMTXTrans(mtx, entry->x + entry->width - 12, entry->y - entry->height - 4, 0.0f);
                 PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                 PSMTXConcat(mtx, scale, mtx);
-                iconDispGx2(mtx, ICON_DISP_2D, ICON_1B6);
+                iconDispGx2(mtx, ICON_FLAG_2D, ICON_ARROW_DOWN);
             }
             PSMTXTrans(mtx, entry->x + entry->width - 12, entry->y - entry->height + 10, 0.0f);
             PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
             PSMTXConcat(mtx, scale, mtx);
-            iconDispGx2(mtx, ICON_DISP_2D, ICON_070);
+            iconDispGx2(mtx, ICON_FLAG_2D, ICON_SUBSTICK_NEUTRAL);
         }
     }
 }
@@ -673,13 +653,13 @@ void winMgrHelpDraw(WinMgrEntry* entry) {
  * Opens a selection list (list, title and help windows) and fills it by type:
  * 0 key items, 1/3/4 items (use, sell, store), 2 badges, 5 stored items, 6/7 partners to rank up,
  * 8 partner to rank down, 9/10 HP/FP/BP to raise or lower,
- * 11-16 shop stock (badge shop, sell badges, Star Piece badges, bargains, the Pit's trader, Pianta Parlor),
+ * 11-16 shop stock (badge shop, sell badges, Star Piece badges, Charlieton, Charlieton in the Pit, Pianta Parlor),
  * 17/18 the informant's lists; a negative type is a -1-terminated item id list.
  * Rows flagged 3 are greyed and refused.
  * newItem is shown first, above a divider (the item being picked up when the bag is full).
  * Free with winMgrSelectDelete.
  */
-WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable) {
+WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelOk) {
     s32 n;
     WinMgrDesc* desc;
     WinMgrSelect* sel;
@@ -705,8 +685,8 @@ WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable) {
     sel->cursorX = 0.0f;
     sel->scrollY = 0.0f;
     sel->newItem = newItem;
-    if (cancelable) {
-        sel->flags |= WINMGR_SELECT_CANCELABLE;
+    if (cancelOk) {
+        sel->flags |= SELECT_CANCEL_OK;
     }
     if (n < 0) {
         n = 0;
@@ -722,16 +702,17 @@ WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable) {
     sel->cursorY = desc->y - 54;
 
     switch (m = sel->type) {
-        case 0:
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x1E8);
-            memset(sel->items, 0, 0x1E8);
+        case SELECT_TYPE_KEY_ITEM:
+            sel->items = __memAlloc(HEAP_DEFAULT, (MAX_KEY_ITEMS + 1) * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, (MAX_KEY_ITEMS + 1) * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             if (newItem) {
                 sel->items[sel->numItems++].id = newItem;
             }
-            for (i = 0; i < 121; i++) {
+            for (i = 0; i < MAX_KEY_ITEMS; i++) {
                 id = (u16)pouchKeyItem(i);
                 if (id) {
+                    // BUG: from JP on menu_skip_list has 18 entries (the early demos' 19), so this also reads the u16 after it.
                     for (j = 0; j < 19; j++) {
                         if (id == menu_skip_list[j]) {
                             break;
@@ -743,99 +724,95 @@ WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable) {
                 }
             }
             break;
-        case 1:
-        case 3:
-        case 4:
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x54);
-            memset(sel->items, 0, 0x54);
+        case SELECT_TYPE_ITEM:
+        case SELECT_TYPE_ITEM_SELL:
+        case SELECT_TYPE_ITEM_STORE:
+            sel->items = __memAlloc(HEAP_DEFAULT, (MAX_HELD_ITEMS + 1) * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, (MAX_HELD_ITEMS + 1) * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             if (newItem) {
                 sel->items[sel->numItems++].id = newItem;
             }
-            for (i = 0; i < 20; i++) {
+            for (i = 0; i < MAX_HELD_ITEMS; i++) {
                 id = (u16)pouchHaveItem(i);
                 if (id) {
                     sel->items[sel->numItems++].id = id;
                 }
             }
             break;
-        case 2:
-        case 12:
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x324);
-            memset(sel->items, 0, 0x324);
+        case SELECT_TYPE_BADGE:
+        case SELECT_TYPE_BADGE_SELL:
+            sel->items = __memAlloc(HEAP_DEFAULT, (MAX_BADGES + 1) * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, (MAX_BADGES + 1) * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             if (newItem) {
                 sel->items[sel->numItems++].id = newItem;
             }
-            for (i = 0; i < 200; i++) {
+            for (i = 0; i < MAX_BADGES; i++) {
                 id = (u16)pouchHaveBadge(i);
                 if (id) {
 #if VERSION >= VERSION_US
-                    if (sel->type == 12 && id == ((L_pouchEquipBadgeRetU16Fn)L_pouchEquipBadge)(i)) {
-                        sel->items[sel->numItems].flags |= WINMGR_ITEM_EQUIPPED;
+                    if (sel->type == SELECT_TYPE_BADGE_SELL && id == pouchEquipBadge(i)) {
+                        sel->items[sel->numItems].flags |= SELECT_ITEM_EQUIPPED;
                     }
 #endif
                     sel->items[sel->numItems++].id = id;
                 }
             }
             break;
-        case 5:
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x84);
-            memset(sel->items, 0, 0x84);
+        case SELECT_TYPE_ITEM_RETRIEVE:
+            sel->items = __memAlloc(HEAP_DEFAULT, (MAX_STORED_ITEMS + 1) * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, (MAX_STORED_ITEMS + 1) * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             if (newItem) {
                 sel->items[sel->numItems++].id = newItem;
             }
-            for (i = 0; i < 32; i++) {
+            for (i = 0; i < MAX_STORED_ITEMS; i++) {
                 id = (u16)pouchKeepItem(i);
                 if (id) {
                     sel->items[sel->numItems++].id = id;
                 }
             }
             break;
-        case 6:
-        case 7: {
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x1C);
-            memset(sel->items, 0, 0x1C);
+        case SELECT_TYPE_PARTY_RANK_UP:
+        case SELECT_TYPE_PARTY_SWAP_RANK_UP:
+            sel->items = __memAlloc(HEAP_DEFAULT, 7 * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, 7 * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             for (i = 0; party_id_table[i] != 0; i++) {
                 if (partyChkJoin(party_id_table[i])) {
                     sel->items[sel->numItems].id = i;
-                    if (!evtGetValue(NULL, GSWF(GSWF_MERLON_FIRST_UPGRADE_DONE))) {
+                    if (!evtGetValue(NULL, GSWF_GOR_UP_ARROW_USED)) {
                         if (pouch->partyData[party_id_table[i]].techLevel >= 1) {
-                            sel->items[sel->numItems].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED);
+                            sel->items[sel->numItems].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED);
                         }
-                    } else {
-                        if (pouch->partyData[party_id_table[i]].techLevel >= 2) {
-                            sel->items[sel->numItems].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED);
-                        }
+                    } else if (pouch->partyData[party_id_table[i]].techLevel >= 2) {
+                        sel->items[sel->numItems].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED);
                     }
                     sel->numItems++;
                 }
             }
             break;
-        }
-        case 8: {
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x1C);
-            memset(sel->items, 0, 0x1C);
+        case SELECT_TYPE_PARTY_SWAP_RANK_DOWN:
+            sel->items = __memAlloc(HEAP_DEFAULT, 7 * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, 7 * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             for (i = 0; party_id_table[i] != 0; i++) {
                 if (partyChkJoin(party_id_table[i]) && party_id_table[i] != evtGetValue(NULL, GW(1))) {
                     sel->items[sel->numItems].id = i;
                     if (pouch->partyData[party_id_table[i]].techLevel == 0) {
-                        sel->items[sel->numItems].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED);
+                        sel->items[sel->numItems].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED);
                     }
                     sel->numItems++;
                 }
             }
             break;
-        }
-        case 9:
+        case SELECT_TYPE_STAT_SWAP_UP:
             mario_status_point_table[0] = &pouchGetPtr()->baseMaxHP;
             mario_status_point_table[1] = &pouchGetPtr()->baseMaxFP;
             mario_status_point_table[2] = &pouchGetPtr()->maximumBP;
-            sel->items = __memAlloc(HEAP_DEFAULT, 0xC);
-            memset(sel->items, 0, 0xC);
+            sel->items = __memAlloc(HEAP_DEFAULT, 3 * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, 3 * sizeof(WinMgrSelectItem));
             for (i = 0; i < 3; i++) {
                 sel->items[i].id = i;
                 cnt = 0;
@@ -845,132 +822,135 @@ WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable) {
                         if (*mario_status_point_table[j] - mario_status_henka_table[j] <= 0) {
                             cnt++;
                         }
+#if VERSION <= VERSION_DEMO_JP
                     }
-#if VERSION >= VERSION_JP
-                    else if (*mario_status_point_table[j] + mario_status_henka_table[j] > mario_status_max_table[j]) {
+                }
+                if (cnt == 2) {
+                    sel->items[i].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED);
+#else
+                    } else if (*mario_status_point_table[j] + mario_status_henka_table[j] > mario_status_max_table[j]) {
                         over = 1;
                     }
-#endif
                 }
-#if VERSION <= VERSION_DEMO_JP
-                // the demo has no stat cap check
-                if (cnt == 2) {
-                    sel->items[i].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED);
-                }
-#else
                 if (cnt == 2 || over) {
                     if (over) {
-                        sel->items[i].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED | WINMGR_ITEM_OVER_CAP);
+                        sel->items[i].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED | SELECT_ITEM_OVER_MAX);
                     } else {
-                        sel->items[i].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED);
+                        sel->items[i].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED);
                     }
-                }
 #endif
+                }
             }
             sel->numItems = 3;
             break;
-        case 10:
+        case SELECT_TYPE_STAT_SWAP_DOWN:
             mario_status_point_table[0] = &pouchGetPtr()->baseMaxHP;
             mario_status_point_table[1] = &pouchGetPtr()->baseMaxFP;
             mario_status_point_table[2] = &pouchGetPtr()->maximumBP;
-            sel->items = __memAlloc(HEAP_DEFAULT, 8);
-            memset(sel->items, 0, 8);
+            sel->items = __memAlloc(HEAP_DEFAULT, 2 * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, 2 * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             for (i = 0; i < 3; i++) {
                 if (i != evtGetValue(NULL, GW(1))) {
                     sel->items[sel->numItems].id = i;
                     if (*mario_status_point_table[i] - mario_status_henka_table[i] <= 0) {
-                        sel->items[sel->numItems].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED);
+                        sel->items[sel->numItems].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED);
                     }
                     sel->numItems++;
                 }
             }
             break;
-        case 11:
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x18C);
-            memset(sel->items, 0, 0x18C);
+        case SELECT_TYPE_BADGE_BUY:
+            sel->items = __memAlloc(HEAP_DEFAULT, BADGE_COUNT * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, BADGE_COUNT * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
-            for (i = 0; i < 99; i++) {
-                m = (s16)badgeShop_get(bdsw->bargain_table, i + 240);
-                if (m - badgeShop_ThrowCheck(i + 240) > 0) {
-                    sel->items[sel->numItems++].id = i + 240;
+            for (i = 0; i < BADGE_COUNT; i++) {
+                m = (s16)badgeShop_get(bdsw->bargain_table, i + BADGE_MIN);
+                if (m - badgeShop_ThrowCheck(i + BADGE_MIN) > 0) {
+                    sel->items[sel->numItems++].id = i + BADGE_MIN;
                 }
             }
 #if VERSION >= VERSION_JP
-            qqsort(sel->items, sel->numItems, 4, select_comp_type);
+            qqsort(sel->items, sel->numItems, sizeof(WinMgrSelectItem), select_comp_type);
 #endif
             break;
-        case 13:
+        case SELECT_TYPE_BADGE_STAR_PIECE:
             m = getBadgeStarmaniacTableMaxCount();
-            sel->items = __memAlloc(HEAP_DEFAULT, m * 4);
-            memset(sel->items, 0, m * 4);
+            sel->items = __memAlloc(HEAP_DEFAULT, m * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, m * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
-            for (i = 0; i < 99; i++) {
-                m = (s16)badgeShop_get(bdsw->starmaniac_table, i + 240);
-                if (m - badgeShop_ThrowCheck(i + 240) > 0) {
+            for (i = 0; i < BADGE_COUNT; i++) {
+                m = (s16)badgeShop_get(bdsw->starmaniac_table, i + BADGE_MIN);
+                if (m - badgeShop_ThrowCheck(i + BADGE_MIN) > 0) {
 #if VERSION <= VERSION_DEMO_JP
-                    sel->items[sel->numItems++].id = i + 240;
+                    sel->items[sel->numItems++].id = i + BADGE_MIN;
                 }
             }
+            break;
+        case SELECT_TYPE_BADGE_CHARLIETON:
+            sel->items = __memAlloc(HEAP_DEFAULT, 0x10);
+            memset(sel->items, 0, 0x10);
 #else
-                    sel->items[sel->numItems].id = i + 240;
-                    if (itemDataTable[i + 240].star_piece_price > pouchGetStarPiece()) {
-                        sel->items[sel->numItems].flags |= (WINMGR_ITEM_GRAY | WINMGR_ITEM_DISABLED);
+                    sel->items[sel->numItems].id = i + BADGE_MIN;
+                    if (itemDataTable[i + BADGE_MIN].star_piece_price > pouchGetStarPiece()) {
+                        sel->items[sel->numItems].flags |= (SELECT_ITEM_GRAY | SELECT_ITEM_DISABLED);
                     }
                     sel->numItems++;
                 }
             }
-            qqsort(sel->items, sel->numItems, 4, select_comp_starpiece);
-#endif
+            qqsort(sel->items, sel->numItems, sizeof(WinMgrSelectItem), select_comp_starpiece);
             break;
-        case 14:
-            sel->items = __memAlloc(HEAP_DEFAULT, 0x10);
-            memset(sel->items, 0, 0x10);
+        case SELECT_TYPE_BADGE_CHARLIETON:
+            sel->items = __memAlloc(HEAP_DEFAULT, 4 * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, 4 * sizeof(WinMgrSelectItem));
+#endif
             sel->numItems = 0;
             for (i = 0; i < 4; i++) {
-                m = badge_bottakuru_table[evtGetValue(NULL, GSW(GSW_BADGESHOP_BARGAIN_SLOTS) + i)];
+                m = badge_bottakuru_table[evtGetValue(NULL, GSW_BADGESHOP_CHARLIETON_STOCK + i)];
                 if (m) {
                     sel->items[sel->numItems++].id = m;
                 }
             }
             break;
-        case 15:
+        case SELECT_TYPE_BADGE_CHARLIETON_PIT:
             m = getBadgeBottakuru100TableMaxCount();
-            sel->items = __memAlloc(HEAP_DEFAULT, m * 4);
-            memset(sel->items, 0, m * 4);
+            sel->items = __memAlloc(HEAP_DEFAULT, m * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, m * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
             for (i = 0; i < m; i++) {
                 sel->items[sel->numItems++].id = badge_bottakuru100_table[i];
             }
             break;
-        case 16:
+        case SELECT_TYPE_BADGE_PIANTA_TOKEN:
             m = getBadgeBteresaTableMaxCount();
-            sel->items = __memAlloc(HEAP_DEFAULT, m * 4);
-            memset(sel->items, 0, m * 4);
+            sel->items = __memAlloc(HEAP_DEFAULT, m * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, m * sizeof(WinMgrSelectItem));
             sel->numItems = 0;
-            for (i = 0; i < 338; i++) {
+            for (i = 0; i < BADGE_MAX - KEY_ITEM_MIN; i++) {
                 if ((s16)badgeShop_get(bdsw->bteresa_table, i + 1) > 0) {
                     sel->items[sel->numItems++].id = i + 1;
                 }
             }
+
 #if VERSION >= VERSION_US
-            qqsort(sel->items, sel->numItems, 4, select_comp_bteresa);
+            qqsort(sel->items, sel->numItems, sizeof(WinMgrSelectItem), select_comp_bteresa);
 #endif
+
             break;
-        case 17:
-        case 18:
-            if (m == 17) {
+        case SELECT_TYPE_INFORMANT_PERFECT:
+        case SELECT_TYPE_INFORMANT_LUIGI:
+            if (m == SELECT_TYPE_INFORMANT_PERFECT) {
                 tbl = jdt->readFlags.perfectRead;
             } else {
                 tbl = jdt->readFlags.luigiRead;
             }
             sel->numItems = jdt->count;
-            sel->items = __memAlloc(HEAP_DEFAULT, (sel->numItems + 1) * 4);
-            memset(sel->items, 0, (sel->numItems + 1) * 4);
+            sel->items = __memAlloc(HEAP_DEFAULT, (sel->numItems + 1) * sizeof(WinMgrSelectItem));
+            memset(sel->items, 0, (sel->numItems + 1) * sizeof(WinMgrSelectItem));
             for (i = 0; i < sel->numItems; i++) {
                 sel->items[i].id = i;
-                if (johoya_get(tbl, jdt->info[i].storyId)) {
-                    sel->items[i].flags |= WINMGR_ITEM_GRAY;
+                if (johoya_get(tbl, jdt->info[i].msgIndex)) {
+                    sel->items[i].flags |= SELECT_ITEM_GRAY;
                 }
             }
             break;
@@ -982,8 +962,8 @@ WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable) {
                 count = 0;
                 while (list[count++] != -1) {
                 }
-                sel->items = __memAlloc(HEAP_DEFAULT, (count + 1) * 4);
-                memset(sel->items, 0, (count + 1) * 4);
+                sel->items = __memAlloc(HEAP_DEFAULT, (count + 1) * sizeof(WinMgrSelectItem));
+                memset(sel->items, 0, (count + 1) * sizeof(WinMgrSelectItem));
                 sel->numItems = 0;
                 if (newItem) {
                     sel->items[sel->numItems++].id = newItem;
@@ -1000,68 +980,91 @@ WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable) {
     return sel;
 }
 
-#if VERSION <= VERSION_DEMO_JP
-/** the demo does not sort the badge shop lists */
-#elif VERSION >= VERSION_DEMO_EU
+// Descriptive name (not in the symbol maps); placeholder unk_80237a2c, JP 0x80237A2C. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
+/**
+ * qsort comparator for selection list items: by Star Piece price (PAL and the PAL demo: then by type order). Not in the
+ * early demos.
+ */
+// PAL and the PAL demo: equal prices fall back to the type order
 s32 select_comp_starpiece(const void* a, const void* b) {
-    // PAL: equal prices fall back to the type order
-    if (itemDataTable[((const WinMgrSelectItem*)a)->id].star_piece_price > itemDataTable[((const WinMgrSelectItem*)b)->id].star_piece_price) {
+    const WinMgrSelectItem* itemA = a;
+    const WinMgrSelectItem* itemB = b;
+#if VERSION >= VERSION_DEMO_EU
+    if (itemDataTable[itemA->id].star_piece_price > itemDataTable[itemB->id].star_piece_price) {
         return 1;
     }
-    if (itemDataTable[((const WinMgrSelectItem*)a)->id].star_piece_price < itemDataTable[((const WinMgrSelectItem*)b)->id].star_piece_price) {
+    if (itemDataTable[itemA->id].star_piece_price < itemDataTable[itemB->id].star_piece_price) {
         return -1;
     }
-    if (itemDataTable[((const WinMgrSelectItem*)a)->id].type_sort_order > itemDataTable[((const WinMgrSelectItem*)b)->id].type_sort_order) {
+    if (itemDataTable[itemA->id].type_sort_order > itemDataTable[itemB->id].type_sort_order) {
         return 1;
     }
-    return -(itemDataTable[((const WinMgrSelectItem*)a)->id].type_sort_order < itemDataTable[((const WinMgrSelectItem*)b)->id].type_sort_order);
-}
+    if (itemDataTable[itemA->id].type_sort_order < itemDataTable[itemB->id].type_sort_order) {
+        return -1;
+    }
+    return 0;
 #else
-            s32 select_comp_starpiece(const void* a, const void* b) {
-                u16 x = itemDataTable[((const WinMgrSelectItem*)a)->id].star_piece_price;
-                u16 y = itemDataTable[((const WinMgrSelectItem*)b)->id].star_piece_price;
-                if (x > y) {
-                    return 1;
-                }
-                return -(x < y);
-            }
-#endif
-
-/** qsort comparator ordering items by their item-table type_sort_order; used for the badge shop list. */
-#if VERSION >= VERSION_JP
-s32 select_comp_type(const void* a, const void* b) {
-    s16 x = itemDataTable[((const WinMgrSelectItem*)a)->id].type_sort_order;
-    s16 y = itemDataTable[((const WinMgrSelectItem*)b)->id].type_sort_order;
+    u16 x = itemDataTable[itemA->id].star_piece_price;
+    u16 y = itemDataTable[itemB->id].star_piece_price;
     if (x > y) {
         return 1;
     }
-    return -(x < y);
+    if (x < y) {
+        return -1;
+    }
+    return 0;
+#endif
+}
+#endif
+
+// Descriptive name (not in the symbol maps); placeholder unk_802379e4, JP 0x802379E4. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
+/** qsort comparator for selection list items: by item type order. Not in the early demos. */
+s32 select_comp_type(const void* a, const void* b) {
+    const WinMgrSelectItem* itemA = a;
+    const WinMgrSelectItem* itemB = b;
+    s16 x = itemDataTable[itemA->id].type_sort_order;
+    s16 y = itemDataTable[itemB->id].type_sort_order;
+    if (x > y) {
+        return 1;
+    }
+    if (x < y) {
+        return -1;
+    }
+    return 0;
 }
 #endif
 
 #if VERSION >= VERSION_US
-/** US: badge list sorted by (buy price * 2 + 2) / 3 */
+/** US and later: the Pianta Parlor badge list sorted by its token price, (buy price * 2 + 2) / 3 */
 s32 select_comp_bteresa(const void* a, const void* b) {
-    s32 x = (itemDataTable[((const WinMgrSelectItem*)a)->id].buy_price * 2 + 2) / 3;
-    s32 y = (itemDataTable[((const WinMgrSelectItem*)b)->id].buy_price * 2 + 2) / 3;
+    const WinMgrSelectItem* itemA = a;
+    const WinMgrSelectItem* itemB = b;
+    s32 x = (itemDataTable[itemA->id].buy_price * 2 + 2) / 3;
+    s32 y = (itemDataTable[itemB->id].buy_price * 2 + 2) / 3;
     if (x > y) {
         return 1;
     }
-    return -(x < y);
+    if (x < y) {
+        return -1;
+    }
+    return 0;
 }
-
 #endif
+
 /**
  * The result of an item-style selection list: 0 while it is still open,
- * -1 if cancelled (or, from JP on, if the new item at the top was chosen), otherwise the chosen item id.
+ * -1 if cancelled (or, from JP on, if the new item at the top was chosen in a list that allows cancelling),
+ * otherwise the chosen item id.
  */
 s32 winMgrSelect(WinMgrSelect* sel) {
-    if (sel->flags & WINMGR_SELECT_DONE) {
-        if (sel->flags & WINMGR_SELECT_CANCELED) {
+    if (sel->flags & SELECT_DONE) {
+        if (sel->flags & SELECT_CANCELLED) {
             return -1;
         }
 #if VERSION >= VERSION_JP
-        if (sel->newItem && sel->cursor == 0 && (sel->flags & WINMGR_SELECT_CANCELABLE)) {
+        if (sel->newItem && sel->cursor == 0 && (sel->flags & SELECT_CANCEL_OK)) {
             return -1;
         }
 #endif
@@ -1082,43 +1085,43 @@ s32 winMgrSelectOther(WinMgrSelect* sel, EventEntry* evt) {
     const char* name;
     char buf[0x40];
 
-    if (sel->flags & WINMGR_SELECT_DONE) {
-        if (sel->flags & WINMGR_SELECT_CANCELED) {
+    if (sel->flags & SELECT_DONE) {
+        if (sel->flags & SELECT_CANCELLED) {
             return -1;
         }
         id = sel->items[sel->cursor].id;
         switch (sel->type) {
-            case 6:
-            case 7:
+            case SELECT_TYPE_PARTY_RANK_UP:
+            case SELECT_TYPE_PARTY_SWAP_RANK_UP:
                 evt->lwData[1] = party_id_table[id];
                 name = party_name_table_rtn(id);
                 evt->lwData[3] = (EvtWord)name;
                 break;
-            case 8:
+            case SELECT_TYPE_PARTY_SWAP_RANK_DOWN:
                 evt->lwData[2] = party_id_table[id];
                 name = party_name_table_rtn(id);
                 evt->lwData[4] = (EvtWord)name;
                 break;
-            case 9:
+            case SELECT_TYPE_STAT_SWAP_UP:
                 evt->lwData[1] = id;
-                evt->lwData[2] = (EvtWord)mario_status_name(id);
+                evt->lwData[2] = (EvtWord)MARIO_STATUS_NAME(id);
                 evt->lwData[5] = *mario_status_point_table[0];
                 evt->lwData[6] = *mario_status_point_table[1];
                 evt->lwData[7] = *mario_status_point_table[2];
                 evt->lwData[5 + id] += mario_status_henka_table[id];
                 break;
-            case 10:
+            case SELECT_TYPE_STAT_SWAP_DOWN:
                 evt->lwData[1] = id;
-                evt->lwData[3] = (EvtWord)mario_status_name(id);
+                evt->lwData[3] = (EvtWord)MARIO_STATUS_NAME(id);
                 evt->lwData[5 + id] -= mario_status_henka_table[id];
                 break;
-            case 11:
+            case SELECT_TYPE_BADGE_BUY:
                 evt->lwData[1] = id;
                 evt->lwData[2] = (EvtWord)VERSION_PICK(itemDataTable[id].id, msgSearch(itemDataTable[id].name));
                 evt->lwData[3] = itemDataTable[id].buy_price;
                 evt->lwData[4] = itemDataTable[id].bp_cost;
                 break;
-            case 12:
+            case SELECT_TYPE_BADGE_SELL:
                 evt->lwData[1] = id;
                 evt->lwData[2] = (EvtWord)VERSION_PICK(itemDataTable[id].id, msgSearch(itemDataTable[id].name));
                 evt->lwData[3] = itemDataTable[id].sell_price;
@@ -1126,51 +1129,51 @@ s32 winMgrSelectOther(WinMgrSelect* sel, EventEntry* evt) {
                 evt->lwData[4] = sel->cursor;
 #endif
                 break;
-            case 13:
+            case SELECT_TYPE_BADGE_STAR_PIECE:
                 evt->lwData[1] = id;
                 evt->lwData[2] = (EvtWord)VERSION_PICK(itemDataTable[id].id, msgSearch(itemDataTable[id].name));
                 evt->lwData[3] = itemDataTable[id].star_piece_price;
                 evt->lwData[4] = itemDataTable[id].bp_cost;
                 break;
-            case 14:
+            case SELECT_TYPE_BADGE_CHARLIETON:
                 evt->lwData[1] = id;
                 evt->lwData[2] = (EvtWord)VERSION_PICK(itemDataTable[id].id, msgSearch(itemDataTable[id].name));
                 evt->lwData[3] = (itemDataTable[id].buy_price * 12) / 10;
                 evt->lwData[4] = itemDataTable[id].bp_cost;
                 break;
-            case 15:
+            case SELECT_TYPE_BADGE_CHARLIETON_PIT:
                 evt->lwData[1] = id;
                 evt->lwData[2] = (EvtWord)VERSION_PICK(itemDataTable[id].id, msgSearch(itemDataTable[id].name));
-                evt->lwData[3] = ((evtGetValue(NULL, GSW(GSW_JON_FLOOR)) + 11) * itemDataTable[id].buy_price) / 10;
+                evt->lwData[3] = ((evtGetValue(NULL, GSW_PIT_FLOOR) + 11) * itemDataTable[id].buy_price) / 10;
                 evt->lwData[4] = itemDataTable[id].bp_cost;
                 break;
-            case 16:
+            case SELECT_TYPE_BADGE_PIANTA_TOKEN:
                 evt->lwData[1] = id;
                 evt->lwData[2] = (EvtWord)VERSION_PICK(itemDataTable[id].id, msgSearch(itemDataTable[id].name));
                 evt->lwData[3] = (itemDataTable[id].buy_price * 2 + 2) / 3;
                 evt->lwData[4] = itemDataTable[id].bp_cost;
                 break;
-            case 17:
-                sprintf((char*)jdt->infoEnd, "%s_%04d", jdt->prefix, jdt->info[id].storyId);
-                sprintf(buf, "jperfect_title_%04d", jdt->info[id].storyId);
+            case SELECT_TYPE_INFORMANT_PERFECT:
+                sprintf(jdt->infoEnd, "%s_%04d", jdt->prefix, jdt->info[id].msgIndex);
+                sprintf(buf, "jperfect_title_%04d", jdt->info[id].msgIndex);
                 jdt->curIndex = id;
                 name = msgSearch(buf);
                 evt->lwData[1] = (EvtWord)jdt->infoEnd;
                 evt->lwData[2] = (EvtWord)name;
                 evt->lwData[3] = strlen(name);
-                if (johoya_get(jdt->readFlags.perfectRead, jdt->info[id].storyId)) {
+                if (johoya_get(jdt->readFlags.perfectRead, jdt->info[id].msgIndex)) {
                     evt->lwData[4] = 0;
                 } else {
                     evt->lwData[4] = jdt->info[id].cost;
                 }
                 break;
-            case 18:
-                sprintf((char*)jdt->infoEnd, "%s_%04d", jdt->prefix, jdt->info[id].storyId);
+            case SELECT_TYPE_INFORMANT_LUIGI:
+                sprintf(jdt->infoEnd, "%s_%04d", jdt->prefix, jdt->info[id].msgIndex);
                 jdt->curIndex = id;
                 evt->lwData[1] = (EvtWord)jdt->infoEnd;
                 evt->lwData[2] = (EvtWord)jdt->info[id].initEndPos;
                 evt->lwData[3] = jdt->info[id].tagEndPos;
-                if (johoya_get(jdt->readFlags.luigiRead, jdt->info[id].storyId)) {
+                if (johoya_get(jdt->readFlags.luigiRead, jdt->info[id].msgIndex)) {
                     evt->lwData[4] = 0;
                 } else {
                     evt->lwData[4] = 1;
@@ -1182,35 +1185,26 @@ s32 winMgrSelectOther(WinMgrSelect* sel, EventEntry* evt) {
     return 0;
 }
 
-// FAKE: the copy chain makes the target copy sel through r0 before the heap id; the plain
-// __memFree(HEAP_DEFAULT, sel->items); __memFree(HEAP_DEFAULT, sel); loads the heap id after. See FAKES.md
+/** Frees a selection list made by winMgrSelectEntry and its item array. */
 void winMgrSelectDelete(WinMgrSelect* sel) {
-    WinMgrSelectItem* items;
-    int heap;
-    WinMgrSelect* sel3;
-    WinMgrSelectItem* items2;
-    WinMgrSelectItem* items3;
-    WinMgrSelect* sel2;
-    items3 = (sel2 = (sel3 = sel))->items;
-    items2 = items3;
-    heap = HEAP_DEFAULT;
-    items = items2;
-    __memFree(HEAP_DEFAULT, items);
-    __memFree(heap, sel3);
+    WinMgrSelect* const s = sel;
+    __memFree(HEAP_DEFAULT, s->items);
+    __memFree(HEAP_DEFAULT, s);
 }
 
-/** The row index chosen in a selection list (evt_win_item_select returns it as its extra value). */
+// Descriptive name (not in the symbol maps); placeholder unk_80237448, JP 0x80237448. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
+/** Returns the cursor row of selection list sel. Not in the early demos. */
 s32 winMgrSelectGetCursor(WinMgrSelect* sel) {
     return sel->cursor;
 }
 #endif
 
 /**
- * The selection list's state machine: opens its windows and the status bar with a sound,
- * moves the cursor with repeat and wrap-around (scrolling 8 visible rows), A picks (greyed rows buzz),
- * B cancels if allowed, then closes the windows and sets WINMGR_SELECT_DONE.
- * Cursor and scroll ease toward their targets by 1/6 a frame.
+ * Main function of a selection list: opens its windows, then moves the cursor with the stick (wrapping on a fresh
+ * press, scrolling an eight-row view), confirms an enabled row with A and cancels with B when SELECT_CANCEL_OK is set;
+ * then closes and deletes its windows and sets SELECT_DONE. PAL and the PAL demo reset the help text when the cursor
+ * moves.
  */
 static void select_main(WinMgrEntry* entry) {
     WinMgrSelect* sel = entry->param;
@@ -1225,12 +1219,12 @@ static void select_main(WinMgrEntry* entry) {
             if (3 <= sel->numDescriptors) {
                 winMgrHelpInit(winMgrGetPtr(sel->descriptorId[2]));
             }
-            psndSFXOn((const char*)0x2002A);
+            psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_OPEN1 | PSND_SFX_BYPASS_MUTE));
             statusWinForceOpen();
             sel->state++;
             break;
         case 1:
-            if ((wp->entries[sel->descriptorId[0]].flags & WINMGR_ENTRY_ANIMATING)) {
+            if (wp->entries[sel->descriptorId[0]].flags & WINMGR_FLAG_ANIMATING) {
                 break;
             }
             prev = sel->cursor;
@@ -1268,25 +1262,27 @@ static void select_main(WinMgrEntry* entry) {
                 }
             }
             if (prev != sel->cursor) {
-                psndSFXOn((const char*)0x20005);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
             }
+
 #if VERSION >= VERSION_DEMO_EU
-            // PAL: moving the cursor resets the help window's text
+            // PAL and the PAL demo: moving the cursor resets the help window's text
             if (prev != sel->cursor && sel->numDescriptors >= 3) {
                 winMgrHelpInit(&wp->entries[sel->descriptorId[2]]);
             }
 #endif
+
             if (keyGetButtonTrg(0) & PAD_BUTTON_A) {
-                if (sel->items[sel->cursor].flags & WINMGR_ITEM_DISABLED) {
-                    psndSFXOn((const char*)0x20014);
+                if (sel->items[sel->cursor].flags & SELECT_ITEM_DISABLED) {
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_NOT_CHOICE1 | PSND_SFX_BYPASS_MUTE));
                 } else {
-                    psndSFXOn((const char*)0x20012);
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
                     sel->state++;
                 }
             } else if (keyGetButtonTrg(0) & PAD_BUTTON_B) {
-                if (sel->flags & WINMGR_SELECT_CANCELABLE) {
-                    psndSFXOn((const char*)0x20013);
-                    sel->flags |= WINMGR_SELECT_CANCELED;
+                if (sel->flags & SELECT_CANCEL_OK) {
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
+                    sel->flags |= SELECT_CANCELLED;
                     sel->state++;
                 }
             }
@@ -1298,18 +1294,18 @@ static void select_main(WinMgrEntry* entry) {
             for (i = 0; i < sel->numDescriptors; i++) {
                 winMgrClose(sel->descriptorId[i]);
             }
-            psndSFXOn((const char*)0x2002B);
+            psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_CLOSE1 | PSND_SFX_BYPASS_MUTE));
             statusWinForceOff();
             sel->state++;
             break;
         case 3:
-            if ((wp->entries[sel->descriptorId[0]].flags & WINMGR_ENTRY_ANIMATING)) {
+            if (wp->entries[sel->descriptorId[0]].flags & WINMGR_FLAG_ANIMATING) {
                 break;
             }
             for (i = 0; i < sel->numDescriptors; i++) {
                 winMgrDelete(sel->descriptorId[i]);
             }
-            sel->flags |= WINMGR_SELECT_DONE;
+            sel->flags |= SELECT_DONE;
             sel->state++;
             break;
         case 4:
@@ -1318,16 +1314,38 @@ static void select_main(WinMgrEntry* entry) {
 }
 
 /**
+ * Layout of the selection list windows (select_disp, select_disp_party, select_disp_mario, select_disp_luigi;
+ * the list window is 300 x 240 at (-24, 116), see select_desc). Screen coordinates have the origin at the centre
+ * and y growing upwards; entry->x / entry->y are the window's top-left corner. Row i has its icon at
+ * entry->y - 44 - i * SELECT_ROW_H and its text line 12 higher (entry->y - 32 - ...), both moved up by
+ * sel->scrollY; select_main eases scrollY toward 24 * scrollTop and the hand cursor toward
+ * (entry->x, entry->y - 54 - 24 * (cursor - scrollTop)), and scrolls so that SELECT_ROWS_SHOWN rows fit.
+ */
+enum SelectListLayout {
+    SELECT_ICON_X = 35,    // icon centre, from the window's left edge
+    SELECT_NAME_X = 60,    // name
+    SELECT_ROW_H = 24,     // one row
+    SELECT_ROWS_SHOWN = 8, // rows in view; more than this gets the scroll arrows
+};
+
+/**
  * Draws an item or badge list: icon, name and (for the sell and shop types) price per row,
  * the divider under a new item, the title by type,
- * a currency icon above the price column (one for 13, another for 16), the hand cursor and scroll arrows.
+ * a currency icon above the price column (coin; Star Piece for 13, Pianta token for 16), the hand cursor and scroll arrows.
  * From US on, worn badges in the sell list get a mark.
+ *
+ * Rows: the equipped mark (US and later) at entry->x + 15 and the icon (scale 0.5) at SELECT_ICON_X, then on the
+ * text line the name at SELECT_NAME_X (US and later: squeezed to at most 185 pixels) and the price ending 10
+ * pixels inside the window's right edge. Gray rows (SELECT_ITEM_GRAY, JP and later) draw a gray icon and gray
+ * (0xA0) text.
  */
 static void select_disp(WinMgrEntry* entry) {
     WinMgrSelect* sel = entry->param;
     u32 left, top, wd, ht;
     GXColor black = {0x00, 0x00, 0x00, 0xFF};
+#if VERSION >= VERSION_JP
     GXColor gray = {0xA0, 0xA0, 0xA0, 0xFF};
+#endif
     GXColor tmp;
     GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
     GXColor iconcol;
@@ -1343,131 +1361,178 @@ static void select_disp(WinMgrEntry* entry) {
     char buf[0x20];
     Mtx mtx;
     Mtx scale;
+
+    // white is copied through tmp into iconcol (both copies are in the retail code)
     tmp = white;
     iconcol = tmp;
 
-    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_ENTRY_ANIMATING)) {
+    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_FLAG_ANIMATING)) {
         GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+
+        // Clip the rows to the window: the scissor box (in frame pixels, which have (304, 240) at the screen
+        // centre and y growing downwards) is the window's width and starts 34 below its top edge; height - 50
+        // tall, it ends 16 above the bottom edge. The previous scissor box is put back after the rows.
         GXGetScissor(&left, &top, &wd, &ht);
         GXSetScissor(entry->x + 304, 274 - entry->y, entry->width, entry->height - 50);
         ofs = 0.0f;
         for (i = 0; i < sel->numItems; i++) {
             f32 py;
             item = &itemDataTable[sel->items[i].id];
-            py = sel->scrollY + (ofs + (entry->y - 44 - i * 24));
+
+            // py: the row's icon y; rows more than 32 above the top edge or 32 below the bottom edge are skipped
+            py = sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H));
             if ((f32)entry->y < py - 32.0f || (f32)(entry->y - entry->height) > py + 32.0f) {
                 continue;
             }
+
+            // Retail code: ofs (always 0.0f) stays in a register and is added to every row y, and sel->newItem is loaded and
+            // tested here; the zero add below is the smallest statement that keeps both
             if (sel->newItem == 0) {
                 ofs = ofs + 0.0f;
             }
+#if VERSION <= VERSION_DEMO_JP
+            winIconInit();
+            winIconSet(item->icon_id,
+                       (Vec){entry->x + SELECT_ICON_X,
+                             sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)),
+                             0.0f},
+                       (Vec){0.5f, 0.5f, 0.5f}, iconcol);
+            winFontInit();
+            winFontSet((Vec){entry->x + SELECT_NAME_X, sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, black, msgSearch(item->name));
+#else
 #if VERSION >= VERSION_US
-            if (sel->items[i].flags & WINMGR_ITEM_EQUIPPED) {
-                if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+            // an equipped badge: the lamp icon, three-quarters opaque, left of the badge's icon
+            if (sel->items[i].flags & SELECT_ITEM_EQUIPPED) {
+                if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                     winIconGrayInit();
                 } else {
                     winIconInit();
                 }
-                winIconSet(ICON_092, (Vec){entry->x + 15, sel->scrollY + (ofs + (entry->y - 44 - i * 24)), 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, (GXColor){0xFF, 0xFF, 0xFF, 0xC0});
+                winIconSet(ICON_AC_LAMP_1,
+                           (Vec){entry->x + 15,
+                                 sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)),
+                                 0.0f},
+                           (Vec){0.6f, 0.6f, 0.6f}, (GXColor){0xFF, 0xFF, 0xFF, 0xC0});
             }
 #endif
-#if VERSION <= VERSION_DEMO_JP
-            winIconInit();
-#else
-            if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+            if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                 winIconGrayInit();
             } else {
                 winIconInit();
             }
-#endif
-            winIconSet(item->icon_id, (Vec){entry->x + 35, sel->scrollY + (ofs + (entry->y - 44 - i * 24)), 0.0f}, (Vec){0.5f, 0.5f, 0.5f}, iconcol);
+            winIconSet(item->icon_id,
+                       (Vec){entry->x + SELECT_ICON_X,
+                             sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)),
+                             0.0f},
+                       (Vec){0.5f, 0.5f, 0.5f}, iconcol);
             winFontInit();
 #if VERSION >= VERSION_US
-            winFontSetWidth((Vec){entry->x + 60, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                            *((sel->items[i].flags & WINMGR_ITEM_GRAY) ? &gray : &black), 185.0f, msgSearch(item->name));
-#elif VERSION <= VERSION_DEMO_JP
-            winFontSet((Vec){entry->x + 60, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                       black, msgSearch(item->name));
+            winFontSetWidth((Vec){entry->x + SELECT_NAME_X,
+                                  sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)),
+                                  0.0f},
+                            (Vec){1.0f, 1.0f, 1.0f}, *((sel->items[i].flags & SELECT_ITEM_GRAY) ? &gray : &black),
+                            185.0f, msgSearch(item->name));
 #else
-                        winFontSet((Vec){entry->x + 60, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                                   *((sel->items[i].flags & WINMGR_ITEM_GRAY) ? &gray : &black), msgSearch(item->name));
+            winFontSet((Vec){entry->x + SELECT_NAME_X, sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, *((sel->items[i].flags & SELECT_ITEM_GRAY) ? &gray : &black),
+                       msgSearch(item->name));
 #endif
+#endif
+            // the price column: only the shop types have one
             show = FALSE;
             switch (sel->type) {
-                case 11:
+                case SELECT_TYPE_BADGE_BUY:
                     price = item->buy_price;
                     show = TRUE;
                     break;
-                case 3:
-                case 12:
+                case SELECT_TYPE_ITEM_SELL:
+                case SELECT_TYPE_BADGE_SELL:
                     price = item->sell_price;
                     show = TRUE;
                     break;
-                case 13:
+                case SELECT_TYPE_BADGE_STAR_PIECE:
                     price = item->star_piece_price;
                     show = TRUE;
                     break;
-                case 14:
+                case SELECT_TYPE_BADGE_CHARLIETON:
+                    // 120 % of the buy price
                     price = item->buy_price * 12 / 10;
                     show = TRUE;
                     break;
-                case 15:
-                    price = item->buy_price * (evtGetValue(NULL, GSW(GSW_JON_FLOOR)) + 11) / 10;
+                case SELECT_TYPE_BADGE_CHARLIETON_PIT:
+                    // (floor + 11) tenths of the buy price
+                    price = item->buy_price * (evtGetValue(NULL, GSW_PIT_FLOOR) + 11) / 10;
                     show = TRUE;
                     break;
-                case 16:
+                case SELECT_TYPE_BADGE_PIANTA_TOKEN:
+                    // two thirds of the buy price, rounded up
                     price = (item->buy_price * 2 + 2) / 3;
                     show = TRUE;
                     break;
             }
-            if (!show) { // price is set exactly where show is
+            if (!show) {
                 continue;
             }
+
+            // the price ends 10 pixels inside the right edge (US and later: at most 30 pixels wide, squeezed)
             sprintf(buf, "%d", price);
-#if VERSION >= VERSION_US
             tw = FontGetMessageWidth(buf);
+#if VERSION <= VERSION_DEMO_JP
+            winFontInit();
+            winFontSet((Vec){entry->x + entry->width - 10 - tw,
+                             sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)),
+                             0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, black, buf);
+#elif VERSION >= VERSION_US
             if (tw > 30.0) {
                 tw = 30.0f;
             }
             winFontInit();
-            winFontSetWidth((Vec){entry->x + entry->width - 10 - tw, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                            *((sel->items[i].flags & WINMGR_ITEM_GRAY) ? &gray : &black), 30.0f, buf);
-#elif VERSION <= VERSION_DEMO_JP
-            tw = FontGetMessageWidth(buf);
-            winFontInit();
-            winFontSet((Vec){entry->x + entry->width - 10 - tw, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                       black, buf);
+            winFontSetWidth((Vec){entry->x + entry->width - 10 - tw,
+                                  sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)),
+                                  0.0f},
+                            (Vec){1.0f, 1.0f, 1.0f}, *((sel->items[i].flags & SELECT_ITEM_GRAY) ? &gray : &black),
+                            30.0f, buf);
 #else
-                        tw = FontGetMessageWidth(buf);
-                        winFontInit();
-                        winFontSet((Vec){entry->x + entry->width - 10 - tw, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                                   *((sel->items[i].flags & WINMGR_ITEM_GRAY) ? &gray : &black), buf);
+                                winFontInit();
+                                winFontSet((Vec){entry->x + entry->width - 10 - tw,
+                                                 sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)),
+                                                 0.0f},
+                                           (Vec){1.0f, 1.0f, 1.0f}, *((sel->items[i].flags & SELECT_ITEM_GRAY) ? &gray : &black), buf);
 #endif
         }
+
+        // Divider under row 0 (the new item) when there is one: 28 SP orb icons at 0.15 scale at entry->y - 56,
+        // halfway between row 0's and row 1's icons, one every width / 31 pixels from dot 2 to dot 29
         if (sel->newItem) {
             winIconInit();
             for (k = 2; k < 30; k++) {
-                winIconSet(ICON_1B7, (Vec){entry->x + k * entry->width / 31, (entry->y - 56) + sel->scrollY, 0.0f}, (Vec){0.15f, 0.15f, 0.15f}, black);
+                winIconSet(ICON_SP_ORB_1, (Vec){entry->x + k * entry->width / 31, (entry->y - 56) + sel->scrollY, 0.0f},
+                           (Vec){0.15f, 0.15f, 0.15f}, black);
             }
         }
         GXSetScissor(left, top, wd, ht);
+
+        // The title (msg_window_title_1 to _5 by type), centred across the window at entry->y + 14, in white with
+        // an edge (US and later: at most 120 pixels wide, squeezed)
         switch (sel->type) {
 #if VERSION >= VERSION_JP
-            case 2:
+            case SELECT_TYPE_BADGE:
 #endif
-            case 11:
-            case 12:
-            case 13:
+            case SELECT_TYPE_BADGE_BUY:
+            case SELECT_TYPE_BADGE_SELL:
+            case SELECT_TYPE_BADGE_STAR_PIECE:
                 msg = msgSearch("msg_window_title_2");
                 break;
 #if VERSION >= VERSION_JP
-            case 14:
+            case SELECT_TYPE_BADGE_CHARLIETON:
                 msg = msgSearch("msg_window_title_3");
                 break;
-            case 16:
+            case SELECT_TYPE_BADGE_PIANTA_TOKEN:
                 msg = msgSearch("msg_window_title_4");
                 break;
-            case 17:
+            case SELECT_TYPE_INFORMANT_PERFECT:
                 msg = msgSearch("msg_window_title_5");
                 break;
 #endif
@@ -1475,6 +1540,7 @@ static void select_disp(WinMgrEntry* entry) {
                 msg = msgSearch("msg_window_title_1");
                 break;
         }
+
 #if VERSION >= VERSION_US
         tw = FontGetMessageWidth(msg);
         if (tw > 120.0f) {
@@ -1488,45 +1554,55 @@ static void select_disp(WinMgrEntry* entry) {
         winFontInit();
         winFontSetEdge((Vec){entry->x + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, msg);
 #endif
+
+        // The currency over the price column, at entry->x + 268: ICON_CURRENCY_PLATE tinted 0xF0F0F0 at
+        // entry->y - 18, and the coin, Star Piece or Pianta token icon 6 higher, both at scale 0.6
         switch (sel->type) {
-            case 3:
-            case 11:
-            case 12:
+            case SELECT_TYPE_ITEM_SELL:
+            case SELECT_TYPE_BADGE_BUY:
+            case SELECT_TYPE_BADGE_SELL:
 #if VERSION <= VERSION_DEMO_JP
-            case 15:
-            case 17:
+            case SELECT_TYPE_BADGE_CHARLIETON_PIT:
+            case SELECT_TYPE_INFORMANT_PERFECT:
 #else
-            case 14:
-            case 15:
+            case SELECT_TYPE_BADGE_CHARLIETON:
+            case SELECT_TYPE_BADGE_CHARLIETON_PIT:
 #endif
                 PSMTXTrans(mtx, entry->x + 268, entry->y - 18, 0.0f);
                 PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                 PSMTXConcat(mtx, scale, mtx);
-                iconDispGxCol(mtx, ICON_DISP_2D, ICON_211, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
-                iconDispGx(&(Vec){entry->x + 268, entry->y - 12, 0.0f}, ICON_DISP_2D, ICON_18B, 0.6f);
+                iconDispGxCol(mtx, ICON_FLAG_2D, ICON_CURRENCY_PLATE, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
+                iconDispGx(&(Vec){entry->x + 268, entry->y - 12, 0.0f}, ICON_FLAG_2D, 0.6f, ICON_ITEM_COIN);
                 break;
-            case 13:
+            case SELECT_TYPE_BADGE_STAR_PIECE:
                 PSMTXTrans(mtx, entry->x + 268, entry->y - 18, 0.0f);
                 PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                 PSMTXConcat(mtx, scale, mtx);
-                iconDispGxCol(mtx, ICON_DISP_2D, ICON_211, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
-                iconDispGx(&(Vec){entry->x + 268, entry->y - 12, 0.0f}, ICON_DISP_2D, ICON_18D, 0.6f);
+                iconDispGxCol(mtx, ICON_FLAG_2D, ICON_CURRENCY_PLATE, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
+                iconDispGx(&(Vec){entry->x + 268, entry->y - 12, 0.0f}, ICON_FLAG_2D, 0.6f, ICON_ITEM_STAR_PIECE);
                 break;
-            case 16:
+            case SELECT_TYPE_BADGE_PIANTA_TOKEN:
                 PSMTXTrans(mtx, entry->x + 268, entry->y - 18, 0.0f);
                 PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                 PSMTXConcat(mtx, scale, mtx);
-                iconDispGxCol(mtx, ICON_DISP_2D, ICON_211, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
-                iconDispGx(&(Vec){entry->x + 268, entry->y - 12, 0.0f}, ICON_DISP_2D, ICON_13F, 0.6f);
+                iconDispGxCol(mtx, ICON_FLAG_2D, ICON_CURRENCY_PLATE, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
+                iconDispGx(&(Vec){entry->x + 268, entry->y - 12, 0.0f}, ICON_FLAG_2D, 0.6f, ICON_ITEM_PIANTA_TOKEN);
                 break;
         }
-        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, (ICON_DISP_2D | ICON_DISP_FLIP_X), ICON_1F0, 1.0f);
-        if (sel->numItems > 8 && (gp->retraceCount & 31) < 20) {
+
+        // the hand cursor (mirrored) at the position select_main eases it to
+        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, ICON_FLAG_2D | ICON_FLAG_FLIP_X, 1.0f, ICON_YUBI_CURSOR);
+
+        // Scroll arrows when the list is longer than the view, shown 20 frames in every 32: up at entry->y - 36
+        // when rows are hidden above, down 12 below the bottom edge when rows are hidden below
+        if (sel->numItems > SELECT_ROWS_SHOWN && (gp->retraceCount & 31) < 20) {
             if (sel->scrollTop != 0) {
-                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - 36, 1.0f}, ICON_DISP_2D, ICON_1B5, 0.6f);
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - 36, 1.0f}, ICON_FLAG_2D, 0.6f,
+                           ICON_ARROW_UP);
             }
-            if (sel->scrollTop != sel->numItems - 8) {
-                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - entry->height - 12, 1.0f}, ICON_DISP_2D, ICON_1B6, 0.6f);
+            if (sel->scrollTop != sel->numItems - SELECT_ROWS_SHOWN) {
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - entry->height - 12, 1.0f}, ICON_FLAG_2D,
+                           0.6f, ICON_ARROW_DOWN);
             }
         }
     }
@@ -1536,27 +1612,23 @@ static void select_disp(WinMgrEntry* entry) {
  * Draws the partner list of the rank-up and rank-swap menus:
  * name, portrait (Yoshi in his colour) and one rank icon per rank already earned, with the two column titles,
  * cursor and scroll arrows.
+ *
+ * Rows (SelectListLayout): the name on the text line at SELECT_NAME_X (JP and later: squeezed to at most 170
+ * pixels), the portrait (scale 0.55) at SELECT_ICON_X, and from entry->x + 253 one Shine Sprite icon (scale 0.55)
+ * per rank, 27 pixels apart. Gray rows draw gray (0xA0) text and a gray portrait; JP and later gray the Shine
+ * Sprites too. The two column headings (msg_window_title_7 over the partners, _8 over the ranks) sit at
+ * entry->y + 14: the first centred in a 120-pixel slot in the left three fifths of the window (two thirds of the
+ * spare room left of it), the second in an 85-pixel slot in the right two fifths (a third of the spare room left
+ * of it); US and later squeeze them to at most 100 and 65 pixels.
  */
 static void select_disp_party(WinMgrEntry* entry) {
 #if VERSION <= VERSION_DEMO_JP
-    // the demo declares the row counter first
     s32 i;
-    WinMgrSelect* sel = entry->param;
-    PouchData* pouch = pouchGetPtr();
-    u32 left, top, wd, ht;
-    GXColor black = {0x00, 0x00, 0x00, 0xFF};
-    GXColor gray = {0xA0, 0xA0, 0xA0, 0xFF};
-    GXColor iconcol;
-    GXColor tmp;
-    GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
-    s32 j;
-    const char* msg;
-    u16 w;
-    f32 ofs;
 #else
 #if VERSION >= VERSION_US
     f32 tw;
 #endif
+#endif
     WinMgrSelect* sel = entry->param;
     PouchData* pouch = pouchGetPtr();
     u32 left, top, wd, ht;
@@ -1565,59 +1637,85 @@ static void select_disp_party(WinMgrEntry* entry) {
     GXColor iconcol;
     GXColor tmp;
     GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
+
+#if VERSION >= VERSION_JP
     s32 i;
+#endif
+
     s32 j;
     const char* msg;
     u16 w;
     f32 ofs;
-#endif
+
+    // white is copied through tmp into iconcol (both copies are in the retail code)
     tmp = white;
     iconcol = tmp;
 
-    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_ENTRY_ANIMATING)) {
+    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_FLAG_ANIMATING)) {
         GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
         GXGetScissor(&left, &top, &wd, &ht);
         GXSetScissor(entry->x + 304, 274 - entry->y, entry->width, entry->height - 50);
+
+        // rows clipped and skipped as in select_disp
         ofs = 0.0f;
         for (i = 0; i < sel->numItems; i++) {
             f32 py;
-            py = sel->scrollY + (ofs + (entry->y - 44 - i * 24));
+            py = sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H));
             if ((f32)entry->y < py - 32.0f || (f32)(entry->y - entry->height) > py + 32.0f) {
                 continue;
             }
+
+            // Retail code: ofs (always 0.0f) stays in a register and is added to every row y, and sel->newItem is loaded and
+            // tested here; the zero add below is the smallest statement that keeps both
             if (sel->newItem == 0) {
                 ofs = ofs + 0.0f;
             }
             winFontInit();
 #if VERSION <= VERSION_DEMO_JP
-            winFontSet((Vec){entry->x + 60, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                       *((sel->items[i].flags & WINMGR_ITEM_GRAY) ? &gray : &black), party_name_table_rtn(sel->items[i].id));
+            winFontSet((Vec){entry->x + SELECT_NAME_X, sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f},
 #else
-            winFontSet((Vec){entry->x + 60, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f},
-                       (Vec){FontGetMessageWidth(party_name_table_rtn(sel->items[i].id)) > 170 ? 170.0f / FontGetMessageWidth(party_name_table_rtn(sel->items[i].id)) : 1.0f, 1.0f, 1.0f},
-                       *((sel->items[i].flags & WINMGR_ITEM_GRAY) ? &gray : &black), party_name_table_rtn(sel->items[i].id));
+            winFontSet((Vec){entry->x + SELECT_NAME_X, sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){FontGetMessageWidth(party_name_table_rtn(sel->items[i].id)) > 170
+                                 ? 170.0f / FontGetMessageWidth(party_name_table_rtn(sel->items[i].id))
+                                 : 1.0f,
+                             1.0f, 1.0f},
 #endif
-            if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+                       *((sel->items[i].flags & SELECT_ITEM_GRAY) ? &gray : &black), party_name_table_rtn(sel->items[i].id));
+            if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                 winIconGrayInit();
             } else {
                 winIconInit();
             }
-            winIconSet(iconid_conv(party_icon_table[sel->items[i].id]), (Vec){entry->x + 35, sel->scrollY + (ofs + (entry->y - 44 - i * 24)), 0.0f}, (Vec){0.55f, 0.55f, 0.55f}, iconcol);
+
+            // the portrait (iconid_conv: Yoshi's in his colour), then one Shine Sprite per rank (techLevel)
 #if VERSION <= VERSION_DEMO_JP
+            winIconSet(iconid_conv(party_icon_table[sel->items[i].id]),
+                       (Vec){entry->x + SELECT_ICON_X, sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){0.55f, 0.55f, 0.55f}, iconcol);
             winIconInit();
             for (j = 0; j < pouch->partyData[party_id_table[sel->items[i].id]].techLevel; j++) {
 #else
+            winIconSet(iconid_conv(party_icon_table[sel->items[i].id]),
+                       (Vec){entry->x + SELECT_ICON_X, sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){0.55f, 0.55f, 0.55f}, iconcol);
             for (j = 0; j < pouch->partyData[party_id_table[sel->items[i].id]].techLevel; j++) {
-                if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+                if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                     winIconGrayInit();
                 } else {
                     winIconInit();
                 }
 #endif
-                winIconSet(ICON_102, (Vec){entry->x + 253 + j * 27, sel->scrollY + (ofs + (entry->y - 44 - i * 24)), 0.0f}, (Vec){0.55f, 0.55f, 0.55f}, iconcol);
+                winIconSet(ICON_ITEM_SHINE_SPRITE,
+                           (Vec){entry->x + 253 + j * 27,
+                                 sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)),
+                                 0.0f},
+                           (Vec){0.55f, 0.55f, 0.55f}, iconcol);
             }
         }
         GXSetScissor(left, top, wd, ht);
+
+        // the partner column's heading: a 120-pixel slot in the left three fifths
         msg = msgSearch("msg_window_title_7");
 #if VERSION >= VERSION_US
         tw = FontGetMessageWidth(msg);
@@ -1626,12 +1724,15 @@ static void select_disp_party(WinMgrEntry* entry) {
         }
         w = (120 - tw) / 2.0f;
         winFontInit();
-        winFontSetEdgeWidth((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, 100.0f, msg);
+        winFontSetEdgeWidth((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f},
+                            (Vec){1.0f, 1.0f, 1.0f}, white, 100.0f, msg);
 #else
         w = (120 - FontGetMessageWidth(msg)) / 2;
         winFontInit();
-        winFontSetEdge((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, msg);
+        winFontSetEdge((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, white, msg);
 #endif
+        // the rank column's heading: an 85-pixel slot in the right two fifths
         msg = msgSearch("msg_window_title_8");
 #if VERSION >= VERSION_US
         tw = FontGetMessageWidth(msg);
@@ -1640,19 +1741,26 @@ static void select_disp_party(WinMgrEntry* entry) {
         }
         w = (85 - tw) / 2.0f;
         winFontInit();
-        winFontSetEdgeWidth((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, 65.0f, msg);
+        winFontSetEdgeWidth((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w,
+                                  entry->y + 14,
+                                  0.0f},
+                            (Vec){1.0f, 1.0f, 1.0f}, white, 65.0f, msg);
 #else
         w = (85 - FontGetMessageWidth(msg)) / 2;
         winFontInit();
-        winFontSetEdge((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, msg);
+        winFontSetEdge((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w, entry->y + 14, 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, white, msg);
 #endif
-        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, (ICON_DISP_2D | ICON_DISP_FLIP_X), ICON_1F0, 1.0f);
-        if (sel->numItems > 8 && (gp->retraceCount & 31) < 20) {
+        // hand cursor and scroll arrows as in select_disp
+        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, ICON_FLAG_2D | ICON_FLAG_FLIP_X, 1.0f, ICON_YUBI_CURSOR);
+        if (sel->numItems > SELECT_ROWS_SHOWN && (gp->retraceCount & 31) < 20) {
             if (sel->scrollTop != 0) {
-                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - 36, 1.0f}, ICON_DISP_2D, ICON_1B5, 0.6f);
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - 36, 1.0f}, ICON_FLAG_2D, 0.6f,
+                           ICON_ARROW_UP);
             }
-            if (sel->scrollTop != sel->numItems - 8) {
-                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - entry->height - 12, 1.0f}, ICON_DISP_2D, ICON_1B6, 0.6f);
+            if (sel->scrollTop != sel->numItems - SELECT_ROWS_SHOWN) {
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - entry->height - 12, 1.0f}, ICON_FLAG_2D,
+                           0.6f, ICON_ARROW_DOWN);
             }
         }
     }
@@ -1662,6 +1770,11 @@ static void select_disp_party(WinMgrEntry* entry) {
  * Draws the HP/FP/BP list of the power-down shop:
  * the stat's name, icon, current value and, unless refused,
  * the value after raising or lowering it by its step (5, 5, 3).
+ *
+ * Rows (SelectListLayout): the stat's name at SELECT_NAME_X and its icon (scale 0.55) at SELECT_ICON_X, the
+ * current value ("%3d") at entry->x + 160, and unless the row is SELECT_ITEM_DISABLED the ICON_ARROW icon
+ * mirrored (x scale -0.55) at entry->x + 220 and the new value at entry->x + 240. Gray rows draw gray (0xA0) text
+ * and a gray stat icon. The column headings (msg_window_title_9 and _10) are placed as in select_disp_party.
  */
 static void select_disp_mario(WinMgrEntry* entry) {
 #if VERSION >= VERSION_US
@@ -1676,78 +1789,93 @@ static void select_disp_mario(WinMgrEntry* entry) {
     GXColor tmp;
     GXColor iconcol;
     GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
-    GXColor white2 = white;
     GXColor* col;
     s32 i;
     s32 id;
     const char* msg;
     u16 w;
     f32 ofs;
+
+    // white is copied through tmp into iconcol (both copies are in the retail code)
     tmp = white;
     iconcol = tmp;
 
-    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_ENTRY_ANIMATING)) {
+    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_FLAG_ANIMATING)) {
         GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
         GXGetScissor(&left, &top, &wd, &ht);
         GXSetScissor(entry->x + 304, 274 - entry->y, entry->width, entry->height - 50);
+
+        // rows clipped and skipped as in select_disp
         ofs = 0.0f;
         for (i = 0; i < sel->numItems; i++) {
             f32 py;
-            py = sel->scrollY + (ofs + (entry->y - 44 - i * 24));
+            py = sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H));
             id = sel->items[i].id;
             if ((f32)entry->y < py - 32.0f || (f32)(entry->y - entry->height) > py + 32.0f) {
                 continue;
             }
+
+            // Retail code: ofs (always 0.0f) stays in a register and is added to every row y, and sel->newItem is loaded and
+            // tested here; the zero add below is the smallest statement that keeps both
             if (sel->newItem == 0) {
                 ofs = ofs + 0.0f;
             }
             winFontInit();
             col = &black;
-            if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+            if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                 col = &gray;
             }
-            // (written out: the mario_status_name() call allocates registers differently in US)
-            winFontSet((Vec){entry->x + 60, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, *col,
-#if VERSION >= VERSION_US
-                       mario_status_name_table[gp->language][id]);
-#else
-                       mario_status_name_table[id]);
-#endif
-            if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+            winFontSet((Vec){entry->x + SELECT_NAME_X, sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, *col, MARIO_STATUS_NAME(id));
+            if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                 winIconGrayInit();
             } else {
                 winIconInit();
             }
-            winIconSet(mario_status_icon_table[id], (Vec){entry->x + 35, sel->scrollY + (ofs + (entry->y - 44 - i * 24)), 0.0f}, (Vec){0.55f, 0.55f, 0.55f}, iconcol);
+            winIconSet(mario_status_icon_table[id],
+                       (Vec){entry->x + SELECT_ICON_X, sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){0.55f, 0.55f, 0.55f}, iconcol);
+
+            // the current value
             sprintf(buf, "%3d", *mario_status_point_table[id]);
             winFontInit();
             col = &black;
-            if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+            if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                 col = &gray;
             }
-            winFontSet((Vec){entry->x + 160, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, *col, buf);
-            if (sel->items[i].flags & WINMGR_ITEM_DISABLED) {
+            winFontSet((Vec){entry->x + 160, sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, *col, buf);
+            if (sel->items[i].flags & SELECT_ITEM_DISABLED) {
                 continue;
             }
+
+            // the value after the change: up by the stat's step for SELECT_TYPE_STAT_SWAP_UP, else down
             switch (sel->type) {
-                case 9:
+                case SELECT_TYPE_STAT_SWAP_UP:
                     sprintf(buf, "%3d", *mario_status_point_table[id] + mario_status_henka_table[id]);
                     break;
-                case 10:
+                case SELECT_TYPE_STAT_SWAP_DOWN:
                 default:
                     sprintf(buf, "%3d", *mario_status_point_table[id] - mario_status_henka_table[id]);
                     break;
             }
             winFontInit();
             col = &black;
-            if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+            if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                 col = &gray;
             }
-            winFontSet((Vec){entry->x + 240, sel->scrollY + (ofs + (entry->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, *col, buf);
+            winFontSet((Vec){entry->x + 240, sel->scrollY + (ofs + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, *col, buf);
             winIconInit();
-            winIconSet(ICON_163, (Vec){entry->x + 220, sel->scrollY + (ofs + (entry->y - 44 - i * 24)), 0.0f}, (Vec){-0.55f, 0.55f, 0.55f}, iconcol);
+            winIconSet(ICON_ARROW,
+                       (Vec){entry->x + 220,
+                             sel->scrollY + (ofs + (entry->y - 44 - i * SELECT_ROW_H)),
+                             0.0f},
+                       (Vec){-0.55f, 0.55f, 0.55f}, iconcol);
         }
         GXSetScissor(left, top, wd, ht);
+
+        // the column headings, placed as in select_disp_party
         msg = msgSearch("msg_window_title_9");
 #if VERSION >= VERSION_US
         tw = FontGetMessageWidth(msg);
@@ -1756,11 +1884,13 @@ static void select_disp_mario(WinMgrEntry* entry) {
         }
         w = (120 - tw) / 2.0f;
         winFontInit();
-        winFontSetEdgeWidth((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white2, 100.0f, msg);
+        winFontSetEdgeWidth((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f},
+                            (Vec){1.0f, 1.0f, 1.0f}, white, 100.0f, msg);
 #else
         w = (120 - FontGetMessageWidth(msg)) / 2;
         winFontInit();
-        winFontSetEdge((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white2, msg);
+        winFontSetEdge((Vec){entry->x + (entry->width * 3 / 5 - 120) * 2 / 3 + w, entry->y + 14, 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, white, msg);
 #endif
         msg = msgSearch("msg_window_title_10");
 #if VERSION >= VERSION_US
@@ -1770,19 +1900,26 @@ static void select_disp_mario(WinMgrEntry* entry) {
         }
         w = (85 - tw) / 2.0f;
         winFontInit();
-        winFontSetEdgeWidth((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white2, 65.0f, msg);
+        winFontSetEdgeWidth((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w,
+                                  entry->y + 14,
+                                  0.0f},
+                            (Vec){1.0f, 1.0f, 1.0f}, white, 65.0f, msg);
 #else
         w = (85 - FontGetMessageWidth(msg)) / 2;
         winFontInit();
-        winFontSetEdge((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white2, msg);
+        winFontSetEdge((Vec){entry->x + entry->width * 3 / 5 + (entry->width * 2 / 5 - 85) / 3 + w, entry->y + 14, 0.0f},
+                       (Vec){1.0f, 1.0f, 1.0f}, white, msg);
 #endif
-        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, (ICON_DISP_2D | ICON_DISP_FLIP_X), ICON_1F0, 1.0f);
-        if (sel->numItems > 8 && (gp->retraceCount & 31) < 20) {
+        // hand cursor and scroll arrows as in select_disp
+        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, ICON_FLAG_2D | ICON_FLAG_FLIP_X, 1.0f, ICON_YUBI_CURSOR);
+        if (sel->numItems > SELECT_ROWS_SHOWN && (gp->retraceCount & 31) < 20) {
             if (sel->scrollTop != 0) {
-                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - 36, 1.0f}, ICON_DISP_2D, ICON_1B5, 0.6f);
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - 36, 1.0f}, ICON_FLAG_2D, 0.6f,
+                           ICON_ARROW_UP);
             }
-            if (sel->scrollTop != sel->numItems - 8) {
-                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - entry->height - 12, 1.0f}, ICON_DISP_2D, ICON_1B6, 0.6f);
+            if (sel->scrollTop != sel->numItems - SELECT_ROWS_SHOWN) {
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - entry->height - 12, 1.0f}, ICON_FLAG_2D,
+                           0.6f, ICON_ARROW_DOWN);
             }
         }
     }
@@ -1790,14 +1927,18 @@ static void select_disp_mario(WinMgrEntry* entry) {
 
 /**
  * Draws the informant lists: each entry's title cut at its tag end, read ones in grey,
- * and for type 17 the price of unread entries with a coin icon. Despite the name it serves both 17 and 18.
+ * and for type 17 the price of unread entries (with a coin icon from JP on). Despite the name it serves both 17 and 18.
+ *
+ * Rows (SelectListLayout, no icon): the title on the text line at entry->x + 25, scale 0.8 (US and later: squeezed
+ * to at most 200 pixels); the price ("%3d") at entry->x + 245. The window title (msg_window_title_6; JP and later
+ * _5 for type 17), the coin, the hand cursor and the scroll arrows are drawn as in select_disp.
  */
 static void select_disp_luigi(WinMgrEntry* entry) {
 #if VERSION >= VERSION_US
     f32 tw;
 #endif
-    WinMgrEntry* ent = entry;
-    WinMgrSelect* sel = ent->param;
+    // zero (0.0f) is added to each row y (the adds are in the retail code).
+    WinMgrSelect* sel = entry->param;
     u32 left, top, wd, ht;
     GXColor black = {0x00, 0x00, 0x00, 0xFF};
     InformantWork* jdt = &_jdt;
@@ -1815,93 +1956,107 @@ static void select_disp_luigi(WinMgrEntry* entry) {
     Mtx mtx;
     Mtx scale;
 
-    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_ENTRY_ANIMATING)) {
+    if (!(wp->entries[sel->descriptorId[0]].flags & WINMGR_FLAG_ANIMATING)) {
         GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
         GXGetScissor(&left, &top, &wd, &ht);
-        GXSetScissor(ent->x + 304, 274 - ent->y, ent->width, ent->height - 50);
+        GXSetScissor(entry->x + 304, 274 - entry->y, entry->width, entry->height - 50);
+
+        // rows clipped and skipped as in select_disp
         info = jdt->info;
         for (i = 0; i < sel->numItems; i++, info++) {
-            py = sel->scrollY + (zero + (ent->y - 44 - i * 24));
-            if ((f32)ent->y < py - 32.0f || (f32)(ent->y - ent->height) > py + 32.0f) {
+            py = sel->scrollY + (zero + (entry->y - 44 - i * SELECT_ROW_H));
+            if ((f32)entry->y < py - 32.0f || (f32)(entry->y - entry->height) > py + 32.0f) {
                 continue;
             }
+
+            // the entry's text is drawn only up to its tag end: a 0 is written there for the draw and the saved
+            // character put back after it
             winFontInit();
             save = info->initEndPos[info->tagEndPos];
             info->initEndPos[info->tagEndPos] = 0;
-            if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+            if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                 col = &gray;
             } else {
                 col = &black;
             }
 #if VERSION >= VERSION_US
-            winFontSetWidth((Vec){ent->x + 25, sel->scrollY + (zero + (ent->y - 32 - i * 24)), 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, *col, 200.0f, info->initEndPos);
+            winFontSetWidth((Vec){entry->x + 25, sel->scrollY + (zero + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                            (Vec){0.8f, 0.8f, 0.8f}, *col, 200.0f, info->initEndPos);
 #else
-            winFontSet((Vec){ent->x + 25, sel->scrollY + (zero + (ent->y - 32 - i * 24)), 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, *col, info->initEndPos);
+            winFontSet((Vec){entry->x + 25, sel->scrollY + (zero + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                       (Vec){0.8f, 0.8f, 0.8f}, *col, info->initEndPos);
 #endif
             info->initEndPos[info->tagEndPos] = save;
-            if (sel->type == 17 && !(sel->items[i].flags & WINMGR_ITEM_GRAY)) {
+
+            // type 17: the price of an entry not read yet (gray rows have none)
+            if (sel->type == SELECT_TYPE_INFORMANT_PERFECT && !(sel->items[i].flags & SELECT_ITEM_GRAY)) {
                 sprintf(buf, "%3d", info->cost);
                 winFontInit();
                 col = &black;
-                if (sel->items[i].flags & WINMGR_ITEM_GRAY) {
+                if (sel->items[i].flags & SELECT_ITEM_GRAY) {
                     col = &gray;
                 }
-                winFontSet((Vec){ent->x + 245, sel->scrollY + (zero + (ent->y - 32 - i * 24)), 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, *col, buf);
+                winFontSet((Vec){entry->x + 245, sel->scrollY + (zero + (entry->y - 32 - i * SELECT_ROW_H)), 0.0f},
+                           (Vec){1.0f, 1.0f, 1.0f}, *col, buf);
             }
         }
         GXSetScissor(left, top, wd, ht);
 #if VERSION <= VERSION_DEMO_JP
         msg = msgSearch("msg_window_title_6");
+        w = (entry->width - FontGetMessageWidth(msg)) / 2;
+        winFontInit();
+        winFontSetEdge((Vec){entry->x + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, msg);
+        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, (ICON_FLAG_2D | ICON_FLAG_FLIP_X), 1.0f, ICON_YUBI_CURSOR);
 #else
         switch (sel->type) {
-            case 17:
+            case SELECT_TYPE_INFORMANT_PERFECT:
                 msg = msgSearch("msg_window_title_5");
                 break;
-            case 18:
+            case SELECT_TYPE_INFORMANT_LUIGI:
             default:
                 msg = msgSearch("msg_window_title_6");
                 break;
         }
-#endif
 #if VERSION >= VERSION_US
         tw = FontGetMessageWidth(msg);
         if (tw > 120.0f) {
             tw = 120.0f;
         }
-        w = (ent->width - tw) / 2.0f;
+        w = (entry->width - tw) / 2.0f;
         winFontInit();
-        winFontSetEdgeWidth((Vec){ent->x + w, ent->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, 120.0f, msg);
+        winFontSetEdgeWidth((Vec){entry->x + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, 120.0f, msg);
 #else
-        w = (ent->width - FontGetMessageWidth(msg)) / 2;
+        w = (entry->width - FontGetMessageWidth(msg)) / 2;
         winFontInit();
-        winFontSetEdge((Vec){ent->x + w, ent->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, msg);
+        winFontSetEdge((Vec){entry->x + w, entry->y + 14, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, msg);
 #endif
-#if VERSION >= VERSION_JP
         switch (sel->type) {
-            case 17:
-                PSMTXTrans(mtx, ent->x + 268, ent->y - 18, 0.0f);
+            case SELECT_TYPE_INFORMANT_PERFECT:
+                PSMTXTrans(mtx, entry->x + 268, entry->y - 18, 0.0f);
                 PSMTXScale(scale, 0.6f, 0.6f, 0.6f);
                 PSMTXConcat(mtx, scale, mtx);
-                iconDispGxCol(mtx, 16, ICON_211, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
-                iconDispGx(&(Vec){ent->x + 268, ent->y - 12, 0.0f}, 16, ICON_18B, 0.6f);
+                iconDispGxCol(mtx, ICON_FLAG_2D, ICON_CURRENCY_PLATE, (GXColor){0xF0, 0xF0, 0xF0, 0xFF});
+                iconDispGx(&(Vec){entry->x + 268, entry->y - 12, 0.0f}, ICON_FLAG_2D, 0.6f, ICON_ITEM_COIN);
                 break;
         }
+        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, ICON_FLAG_2D | ICON_FLAG_FLIP_X, 1.0f, ICON_YUBI_CURSOR);
 #endif
-        iconDispGx(&(Vec){sel->cursorX, sel->cursorY, 1.0f}, (ICON_DISP_2D | ICON_DISP_FLIP_X), ICON_1F0, 1.0f);
-        if (sel->numItems > 8 && (gp->retraceCount & 31) < 20) {
+        if (sel->numItems > SELECT_ROWS_SHOWN && (gp->retraceCount & 31) < 20) {
             if (sel->scrollTop != 0) {
-                iconDispGx(&(Vec){ent->x + ent->width / 2.0f, ent->y - 36, 1.0f}, ICON_DISP_2D, ICON_1B5, 0.6f);
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - 36, 1.0f}, ICON_FLAG_2D, 0.6f,
+                           ICON_ARROW_UP);
             }
-            if (sel->scrollTop != sel->numItems - 8) {
-                iconDispGx(&(Vec){ent->x + ent->width / 2.0f, ent->y - ent->height - 12, 1.0f}, ICON_DISP_2D, ICON_1B6, 0.6f);
+            if (sel->scrollTop != sel->numItems - SELECT_ROWS_SHOWN) {
+                iconDispGx(&(Vec){entry->x + entry->width / 2.0f, entry->y - entry->height - 12, 1.0f}, ICON_FLAG_2D,
+                           0.6f, ICON_ARROW_DOWN);
             }
         }
     }
 }
 
 /**
- * Draws the prompt window beside a selection list (msg_window_select_* by type), centred.
- * From US on the text is squeezed to fit and the window grows with the prompt's line count.
+ * Draws the prompt of a selection list (msg_window_select_* by list type) centred in its window, once the window
+ * has finished opening. US and later squeeze the text to fit and resize the window to the prompt's line count.
  */
 static void select_disp2(WinMgrEntry* entry) {
     WinMgrSelect* sel = entry->param;
@@ -1911,51 +2066,50 @@ static void select_disp2(WinMgrEntry* entry) {
 
     msg = msgSearch("msg_window_select_1");
     switch (sel->type) {
-        case 3:
-        case 12:
+        case SELECT_TYPE_ITEM_SELL:
+        case SELECT_TYPE_BADGE_SELL:
             msg = msgSearch("msg_window_select_2");
             break;
-        case 4:
+        case SELECT_TYPE_ITEM_STORE:
             msg = msgSearch("msg_window_select_3");
             break;
-        case 5:
+        case SELECT_TYPE_ITEM_RETRIEVE:
             msg = msgSearch("msg_window_select_4");
             break;
-        case 6:
-        case 7:
+        case SELECT_TYPE_PARTY_RANK_UP:
+        case SELECT_TYPE_PARTY_SWAP_RANK_UP:
             msg = msgSearch("msg_window_select_11");
             break;
-        case 8:
+        case SELECT_TYPE_PARTY_SWAP_RANK_DOWN:
             msg = msgSearch("msg_window_select_12");
             break;
-        case 9:
+        case SELECT_TYPE_STAT_SWAP_UP:
             msg = msgSearch("msg_window_select_9");
             break;
-        case 10:
+        case SELECT_TYPE_STAT_SWAP_DOWN:
             msg = msgSearch("msg_window_select_9_1");
             break;
-        case 11:
-        case 14:
-        case 15:
+        case SELECT_TYPE_BADGE_BUY:
+        case SELECT_TYPE_BADGE_CHARLIETON:
+        case SELECT_TYPE_BADGE_CHARLIETON_PIT:
             msg = msgSearch("msg_window_select_6");
             break;
-        case 13:
-        case 16:
+        case SELECT_TYPE_BADGE_STAR_PIECE:
+        case SELECT_TYPE_BADGE_PIANTA_TOKEN:
             msg = msgSearch("msg_window_select_10");
             break;
-        case 17:
+        case SELECT_TYPE_INFORMANT_PERFECT:
             msg = msgSearch("msg_window_select_8");
             break;
-        case 18:
+        case SELECT_TYPE_INFORMANT_LUIGI:
             msg = msgSearch("msg_window_select_7");
             break;
     }
+    if (!(wp->entries[sel->descriptorId[1]].flags & WINMGR_FLAG_ANIMATING)) {
 #if VERSION >= VERSION_US
-    if (!(wp->entries[sel->descriptorId[1]].flags & WINMGR_ENTRY_ANIMATING)) {
         Mtx trans;
         Mtx scale;
         f32 tw;
-        WinMgrEntry* e;
 
         tw = FontGetMessageWidthLine(msg, &lines);
         if (tw > entry->width - 30) {
@@ -1969,31 +2123,14 @@ static void select_disp2(WinMgrEntry* entry) {
         PSMTXConcat(trans, scale, trans);
         FontDrawStart();
         FontDrawMessageMtx(trans, msg);
-        {
-            s32 ey, eh, ex, ew;
-            s32 h;
-            WinMgrDesc* d = entry->description;
-            h = lines * 22;
-            e = &wp->entries[sel->descriptorId[1]];
-            eh = d->height + h;
-            ew = entry->width;
-            ex = entry->x;
-            ey = d->y + h / 2;
-            if (e->flags & WINMGR_ENTRY_IN_USE) {
-                e->x = ex;
-                e->y = ey;
-                e->width = ew;
-                e->height = eh;
-            }
-        }
-    }
+        winMgrSetSize(sel->descriptorId[1], entry->x, entry->description->y + lines * 22 / 2, entry->width,
+                      entry->description->height + lines * 22);
 #else
-    if (!(wp->entries[sel->descriptorId[1]].flags & WINMGR_ENTRY_ANIMATING)) {
         w = (entry->width - FontGetMessageWidthLine(msg, &lines)) / 2;
         FontDrawStart();
         FontDrawMessage(entry->x + w, entry->y - (entry->height - (lines + 1) * 24) / 2, msg);
-    }
 #endif
+    }
 }
 
 /** Main function of a selection list's help window: scrolls its text (winMgrHelpMain). */
@@ -2005,7 +2142,7 @@ static void select_main3(WinMgrEntry* entry) {
 static void select_disp3(WinMgrEntry* entry) {
     WinMgrSelect* sel = entry->param;
 
-    if (!(wp->entries[sel->descriptorId[2]].flags & WINMGR_ENTRY_ANIMATING)) {
+    if (!(wp->entries[sel->descriptorId[2]].flags & WINMGR_FLAG_ANIMATING)) {
         ItemData* item = &itemDataTable[sel->items[sel->cursor].id];
         entry->msg = msgSearch(item->description);
         winMgrHelpDraw(entry);
@@ -2013,9 +2150,8 @@ static void select_disp3(WinMgrEntry* entry) {
 }
 
 /**
- * Help window of the partner list: shows the rank-up
- * or rank-down text for the partner's next rank (help_lankup_lank2_kur and the like;
- * helperr_ when the row is refused).
+ * Help window of a partner rank list: shows the help message named from help (helperr for a disabled row), lankup or
+ * lankdown by list type, the partner's rank (techLevel + 1) and its label, for the partner under the cursor.
  */
 static void select_disp3_party(WinMgrEntry* entry) {
     WinMgrSelect* sel = entry->param;
@@ -2026,13 +2162,13 @@ static void select_disp3_party(WinMgrEntry* entry) {
     s32 id;
 
     pouch = pouchGetPtr();
-    if (!(wp->entries[sel->descriptorId[2]].flags & WINMGR_ENTRY_ANIMATING)) {
-        if (sel->items[sel->cursor].flags & WINMGR_ITEM_DISABLED) {
+    if (!(wp->entries[sel->descriptorId[2]].flags & WINMGR_FLAG_ANIMATING)) {
+        if (sel->items[sel->cursor].flags & SELECT_ITEM_DISABLED) {
             help = "helperr";
         } else {
             help = "help";
         }
-        if (sel->type == 6 || sel->type == 7) {
+        if (sel->type == SELECT_TYPE_PARTY_RANK_UP || sel->type == SELECT_TYPE_PARTY_SWAP_RANK_UP) {
             lank = "lankup";
         } else {
             lank = "lankdown";
@@ -2046,8 +2182,8 @@ static void select_disp3_party(WinMgrEntry* entry) {
 }
 
 /**
- * Help window of the HP/FP/BP list: shows help_levelup_hp / help_leveldown_fp and the like,
- * or the refusal text (helperr2_ when raising would pass the cap; not in the demos).
+ * Help window of Mario's stat list: shows the levelup or leveldown help of the stat under the cursor (helperr for a
+ * disabled row; JP and later helperr2 for a row over the maximum).
  */
 static void select_disp3_mario(WinMgrEntry* entry) {
     WinMgrSelect* sel = entry->param;
@@ -2055,26 +2191,26 @@ static void select_disp3_mario(WinMgrEntry* entry) {
     const char* help;
 
     pouchGetPtr();
-    if (!(wp->entries[sel->descriptorId[2]].flags & WINMGR_ENTRY_ANIMATING)) {
-        if (sel->items[sel->cursor].flags & WINMGR_ITEM_DISABLED) {
-#if VERSION <= VERSION_DEMO_JP
-            help = "helperr";
-#else
-            if (sel->items[sel->cursor].flags & WINMGR_ITEM_OVER_CAP) {
+    if (!(wp->entries[sel->descriptorId[2]].flags & WINMGR_FLAG_ANIMATING)) {
+        if (sel->items[sel->cursor].flags & SELECT_ITEM_DISABLED) {
+#if VERSION >= VERSION_JP
+            if (sel->items[sel->cursor].flags & SELECT_ITEM_OVER_MAX) {
                 help = "helperr2";
             } else {
                 help = "helperr";
             }
+#else
+            help = "helperr";
 #endif
         } else {
             help = "help";
         }
         switch (sel->type) {
-            case 9:
+            case SELECT_TYPE_STAT_SWAP_UP:
                 sprintf(buf, "%s_levelup%s", help, mario_status_labelname_table[sel->items[sel->cursor].id]);
                 break;
             default:
-            case 10:
+            case SELECT_TYPE_STAT_SWAP_DOWN:
                 sprintf(buf, "%s_leveldown%s", help, mario_status_labelname_table[sel->items[sel->cursor].id]);
                 break;
         }
@@ -2095,35 +2231,34 @@ static const char name_party2[] = "name_party2";
 static const char name_party6[] = "name_party6";
 
 /** Swaps Yoshi's portrait icon for the one in the colour he hatched with; other icons pass through. */
-#if VERSION <= VERSION_DEMO_JP
-static s32 iconid_conv(s32 icon) {
-#else
-/** The release versions make it static inline (see the prototypes near the top of the file). */
+#if VERSION >= VERSION_JP
 static inline s32 iconid_conv(s32 icon) {
+#else
+static s32 iconid_conv(s32 icon) {
 #endif
-    if (icon == ICON_158) {
-        switch (pouchGetPartyColor(4)) {
+    if (icon == ICON_PARTY_YOSHI) {
+        switch (pouchGetPartyColor(PARTY_YOSHI)) {
             case 0:
-                icon = ICON_158;
+                icon = ICON_PARTY_YOSHI;
                 break;
             case 1:
-                icon = ICON_159;
+                icon = ICON_PARTY_YOSHI_1;
                 break;
             case 2:
-                icon = ICON_15A;
+                icon = ICON_PARTY_YOSHI_2;
                 break;
             case 3:
-                icon = ICON_15B;
+                icon = ICON_PARTY_YOSHI_3;
                 break;
             case 4:
-                icon = ICON_15C;
+                icon = ICON_PARTY_YOSHI_4;
                 break;
             case 5:
-                icon = ICON_15D;
+                icon = ICON_PARTY_YOSHI_5;
                 break;
             case 6:
             default:
-                icon = ICON_15E;
+                icon = ICON_PARTY_YOSHI_6;
                 break;
         }
     }
@@ -2131,14 +2266,12 @@ static inline s32 iconid_conv(s32 icon) {
 }
 
 /** A partner's display name by party_id_table index (Yoshi's is the name the player gave him). */
-#if VERSION <= VERSION_DEMO_JP
-static const char* party_name_table_rtn(s32 id) {
+#if VERSION >= VERSION_JP
+static inline const char* party_name_table_rtn(s32 id) {
 #else
-/** The release versions make it static inline (see the prototypes near the top of the file). */
-static inline const char* party_name_table_rtn(u16 id) {
+static const char* party_name_table_rtn(s32 id) {
 #endif
     const char* name;
-    // id is a party_id_table index (0-6); there is no default, another value would return name unset
     switch (id) {
         case 0:
             name = msgSearch(name_party0);

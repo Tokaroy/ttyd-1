@@ -1,15 +1,31 @@
 // muj_20 (無人島, Keelhaul Key): the voyage from Rogueport (gor_muj_ship): the ship at sea by day
 // and night, the Embers in the mist (onryo_event) and the sinking ship (marcoship_shizumu); also a Bowser interlude.
+
 #include "version.h"
+#include "driver/fadedrv.h"
 #include "eff/eff_funemizu.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
+#include "eff/eff_mist.h"
+#include "eff/eff_splash.h"
+#include "eff/n64/eff_water_damage_n64.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_light.h"
+#include "evt/evt_map.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "evt/evt_snd.h"
+#include "pmario_sound.h"
+#include "mario/mario.h"
 
 #include "driver/npcdrv.h"
 #include "mario/mariost.h"
 #include "dolphin/os.h"
 #include "system.h"
-#include <dolphin/pad.h>
 #include "memory.h"
 #include "manager/evtmgr_cmd.h"
 #include "driver/mapdrv.h"
@@ -29,21 +45,11 @@
 #include "evt/evt_npc.h"
 #include "evt/evt_nannpc.h"
 #include "driver/extdrv.h"
-#include "eff/eff_mist.h"
-#include "eff/eff_splash.h"
-#include "eff/n64/eff_water_damage_n64.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_light.h"
-#include "evt/evt_map.h"
-#include "evt/evt_party.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
+#include "party/party_motion.h"
 #include "muj.h"
 #include "data_tables.h"
-#include "libc_decls.h"
-#include "evt/evt_story.h"
+#include <dolphin/pad.h>
+#include "driver/seqdrv.h"
 
 typedef struct MarcoShip {
     f32 angle;
@@ -51,80 +57,111 @@ typedef struct MarcoShip {
     f32 max;
     s32 stopped;
     s32 state;
-    s32 pad_14;
     OSTime time;
 } MarcoShip;
-MarcoShip* marcoship;
+static MarcoShip* marcoship;
 typedef struct MapAnimRate {
     f32 fune;
     f32 funeTarget;
     f32 nami;
     f32 namiTarget;
 } MapAnimRate;
-MapAnimRate mapAnimRate;
+static MapAnimRate mapAnimRate;
 static u8* _ap;
-typedef struct TitleLogoWork {
+typedef struct MujLogoWork {
     FileEntry* tpl;
     f32 y;
     s32 alpha;
     s32 state;
     s32 counter;
-} TitleLogoWork;
+} MujLogoWork;
 static void draw(CameraId camera, void* param);
 
 static USER_FUNC(alpha_init_func);
 static USER_FUNC(alpha_set_func);
+static USER_FUNC(elmos1000tai_init);
 static USER_FUNC(fune_eff);
+static USER_FUNC(kaizoku_fune_eff);
 static USER_FUNC(logo);
+static USER_FUNC(marcoship_shizumu_func);
+static USER_FUNC(marcoship_yure_func);
 static USER_FUNC(marcoship_yure_init_func);
+static USER_FUNC(mist_func);
+static USER_FUNC(splash_eff);
+USER_FUNC(fune_curve_pos);
 static USER_FUNC(urouro_func);
-static void draw(CameraId camera, void* param);
-static void pressStartGX(TitleLogoWork* wp, s32 alpha, f32 x, f32 y);
+static USER_FUNC(urouro_fuwafuwa_func);
+static void pressStartGX(MujLogoWork* wp, s32 alpha, f32 x, f32 y);
 static void elmos1000tai_seq00(NanNPC* npc);
+static USER_FUNC(elmos1000tai_start);
 static void alpha_tev(MapTevCallbackInfo* info);
+static USER_FUNC(evt_set_nami_anim_rate);
+static USER_FUNC(evt_set_fune_anim_rate);
+static USER_FUNC(evt_map_anim_rate);
+static USER_FUNC(marcoship_stop_wait_func);
+static USER_FUNC(marcoship_stop_func);
 
-extern EvtWord hiru_yoru_event[];
-extern EvtWord yoru_hiru_event[];
-extern EvtWord urouro[];
-extern EvtWord urouro_fuwafuwa[];
-extern EvtWord buruburu[];
-extern EvtWord fuwafuwa[];
-extern EvtWord kirimomi[];
-extern EvtWord marco_ship_yure[];
-extern EvtWord moya_effect01[];
-extern EvtWord moya_effect02[];
-extern EvtWord moya_effect03[];
-extern EvtWord moya_effect04[];
-extern EvtWord moya_effect05[];
-extern EvtWord nami_alpha[];
-extern EvtWord moonout_effect[];
-extern EvtWord moya_effect[];
-extern EvtWord _kakushuku[];
-extern EvtWord elmos_a_kakushuku[];
-extern EvtWord elmos_a_kaku[];
-extern EvtWord elmos_a_shuku[];
+static EvtWord hiru_yoru_event[46];
+static EvtWord yoru_hiru_event[46];
+static EvtWord urouro[61];
+static EvtWord urouro_fuwafuwa[35];
+static EvtWord buruburu[23];
+static EvtWord fuwafuwa[15];
+static EvtWord kirimomi[29];
+static EvtWord marco_ship_yure[29];
+static EvtWord moya_effect01[52];
+static EvtWord moya_effect02[52];
+static EvtWord moya_effect03[52];
+static EvtWord moya_effect04[52];
+static EvtWord moya_effect05[52];
+static EvtWord nami_alpha[41];
+static EvtWord moonout_effect[53];
+static EvtWord moya_effect[19];
+static EvtWord _kakushuku[32];
+static EvtWord elmos_a_kakushuku[63];
+static EvtWord elmos_a_kaku[13];
+static EvtWord elmos_a_shuku[13];
 static ExtTexInfo ext_entry_data[21];
-#if VERSION <= VERSION_DEMO_JP
+
 static s16 elmos_animtbl[21];
+
+static EvtWord nannpc_mode_setup[35];
+static s32 mist_pos[91];
+static EvtWord mist_setup[45];
+static EvtWord marcoship_shizumu[156];
+EvtWord onryo_event[];
+static EvtWord muj_20_koopa_evt[133];
+static EvtWord kaizoku_hata[65];
+static EvtWord gor_muj_ship[195];
+static EvtWord muj_gor_ship[195];
+EvtWord anm_kaji[61];
+EvtWord anm_wakka[40];
+EvtWord anm_entotsu[33];
+EvtWord anm_neji[33];
+EvtWord anm_yure[];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord evt_prologue[172];
 #else
-static s16 elmos_animtbl[22];
+static EvtWord evt_prologue[182];
 #endif
-s32 mist_pos[91];
-extern EvtWord mist_setup[];
-extern EvtWord marcoship_shizumu[];
-extern EvtWord onryo_event[];
-extern EvtWord muj_20_koopa_evt[];
-extern EvtWord kaizoku_hata[];
-extern EvtWord gor_muj_ship[];
-extern EvtWord anm_yure[];
-extern EvtWord fune_move[];
+
+static EvtWord epilogue_npc_entry[25];
+static EvtWord fune_move[136];
+static EvtWord epilogue_evt[97];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord muj_20_init_evt[];
+#else
+EvtWord muj_20_init_evt[362];
+#endif
 
 /**
  * Day turns to night: plays the "hiru_yoru" map animation (sky, lights and sea colours) at 4x speed
  * and slows it down in steps until it finishes. Used on the ship voyages.
  */
-EVT_BEGIN(hiru_yoru_event)
-    CALL(evt_map_playanim, STRING("hiru_yoru"), 0, 0)
+static EVT_BEGIN(hiru_yoru_event)
+    CALL(evt_map_playanim, STRING("hiru_yoru"), MAP_ANIM_PLAY_ONCE, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_map_set_playrate, STRING("hiru_yoru"), FLOAT(4.0f))
         WAIT_MS(750)
@@ -144,9 +181,9 @@ EVT_BEGIN(hiru_yoru_event)
     RETURN
 EVT_END()
 
-/** Night turns to day: the same slowdown applied to the "yoru_hiru" map animation. */
-EVT_BEGIN(yoru_hiru_event)
-    CALL(evt_map_playanim, STRING("yoru_hiru"), 0, 0)
+/** Night turns to day: the same slowdown (second step 100 ms instead of 200 ms) applied to the "yoru_hiru" map animation. */
+static EVT_BEGIN(yoru_hiru_event)
+    CALL(evt_map_playanim, STRING("yoru_hiru"), MAP_ANIM_PLAY_ONCE, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_map_set_playrate, STRING("yoru_hiru"), FLOAT(4.0f))
         WAIT_MS(750)
@@ -167,9 +204,8 @@ EVT_BEGIN(yoru_hiru_event)
 EVT_END()
 
 /**
- * Script helper: moves the named NPC in a straight line on the deck from (args[1], args[2]) to (args[3],
- * args[4]) over args[6] ms using interpolation mode args[7],
- * turning it to face its direction of travel unless args[5] is set. Blocks until it arrives.
+ * Script helper: moves NPC args[0] in x and z from (args[1], args[2]) to (args[3], args[4]) over args[6] ms with
+ * interpolation mode args[7], turning it left or right with the motion unless args[5] is set; blocks until done.
  */
 static USER_FUNC(urouro_func) {
     int t;
@@ -304,15 +340,15 @@ static USER_FUNC(urouro_fuwafuwa_func) {
  * Makes the NPC in LW(0) pace back and forth between two deck points (LW(11), LW(13) and LW(1), LW(3)) forever
  * using urouro_func.
  */
-EVT_BEGIN(urouro)
+static EVT_BEGIN(urouro)
     CALL(evt_npc_get_position, LW(0), LW(11), LW(12), LW(13))
     LOOP(0)
-        CALL(urouro_func, LW(0), LW(11), LW(13), LW(1), LW(3), LW(4), LW(5), 0)
+        CALL(urouro_func, LW(0), LW(11), LW(13), LW(1), LW(3), LW(4), LW(5), EASING_LINEAR)
         BEGIN_INLINE_EVENT
             CALL(evt_npc_get_position, LW(0), LW(11), LW(12), LW(13))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_NPC_ESCAPE1"), LW(11), LW(12), LW(13), 0)
         END_INLINE_EVENT
-        CALL(urouro_func, LW(0), LW(1), LW(3), LW(11), LW(13), LW(4), LW(5), 0)
+        CALL(urouro_func, LW(0), LW(1), LW(3), LW(11), LW(13), LW(4), LW(5), EASING_LINEAR)
         BEGIN_INLINE_EVENT
             CALL(evt_npc_get_position, LW(0), LW(11), LW(12), LW(13))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_NPC_ESCAPE1"), LW(11), LW(12), LW(13), 0)
@@ -322,8 +358,8 @@ EVT_BEGIN(urouro)
 EVT_END()
 
 /**
- * Script helper: allocates and initialises the pirate ship's rocking state (angle 0,
- * speed 0.02 degrees per frame, limit 1.5 degrees).
+ * Script helper: allocates the ship sway work (marcoship) with angle 0, speed 0.02, maximum 1.5 and everything else
+ * cleared.
  */
 static USER_FUNC(marcoship_yure_init_func) {
     MarcoShip* ms;
@@ -403,7 +439,7 @@ static USER_FUNC(marcoship_stop_wait_func) {
 }
 
 /**
- * Script helper that eases the playback speed of the ship's flag
+ * Script helper that eases the playback speed of the ship
  * and sea animations ("fune", "fune_01" and "nami", "nami_02") toward their target rates by at most 0.005 per
  * frame; runs forever (always blocks).
  */
@@ -454,21 +490,18 @@ static USER_FUNC(evt_set_nami_anim_rate) {
  * Makes the NPC in LW(0) float back and forth between two 3D deck points (LW(11) to LW(13) and LW(1) to LW(3))
  * forever; used for the Embers.
  */
-EVT_BEGIN(urouro_fuwafuwa)
+static EVT_BEGIN(urouro_fuwafuwa)
     CALL(evt_npc_get_position, LW(0), LW(11), LW(12), LW(13))
     LOOP(0)
-        CALL(urouro_fuwafuwa_func, LW(0), LW(11), LW(12), LW(13), LW(1), LW(2), LW(3), LW(4), LW(5), 0)
-        CALL(urouro_fuwafuwa_func, LW(0), LW(1), LW(2), LW(3), LW(11), LW(12), LW(13), LW(4), LW(5), 0)
+        CALL(urouro_fuwafuwa_func, LW(0), LW(11), LW(12), LW(13), LW(1), LW(2), LW(3), LW(4), LW(5), EASING_LINEAR)
+        CALL(urouro_fuwafuwa_func, LW(0), LW(1), LW(2), LW(3), LW(11), LW(12), LW(13), LW(4), LW(5), EASING_LINEAR)
     END_LOOP
     RETURN
 EVT_END()
 
-/**
- * Makes the NPC in LW(0) shiver (muj_npc_buruburu, 1 unit every 10 ms) after a short random delay,
- * with its walk animation turned off.
- */
-EVT_BEGIN(buruburu)
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+/** After a random 100 to 300 ms, shakes NPC LW(0) (muj_npc_buruburu); spawned by onryo_event for two sailors. */
+static EVT_BEGIN(buruburu)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_sub_random, 200, LW(10))
     ADD(LW(10), 100)
     WAIT_MS(LW(10))
@@ -476,22 +509,19 @@ EVT_BEGIN(buruburu)
     RETURN
 EVT_END()
 
-/** Makes the NPC in LW(0) bob up and down forever (muj_npc_fuwafuwa), with its walk animation turned off. */
-EVT_BEGIN(fuwafuwa)
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+/** Makes NPC LW(0) float up and down for good (muj_npc_fuwafuwa); spawned by onryo_event. */
+static EVT_BEGIN(fuwafuwa)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     LOOP(0)
         CALL(muj_npc_fuwafuwa, LW(0), 0, 10000)
     END_LOOP
     RETURN
 EVT_END()
 
-/**
- * Spins the NPC named in LW(10) around its Y axis, a full turn every 500 ms,
- * forever (a frightened sailor spinning).
- */
-EVT_BEGIN(kirimomi)
+/** Spins NPC LW(10) one full turn every 500 ms for good; spawned by onryo_event. */
+static EVT_BEGIN(kirimomi)
     LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 0, 0, 360, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 360, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_ry, LW(10), LW(0))
@@ -505,10 +535,10 @@ EVT_BEGIN(kirimomi)
 EVT_END()
 
 /**
- * Rocks the pirate ship (map object S_a1) with the roll from marcoship_yure_func, keeping its hit box bound,
- * until the ship is told to stop.
+ * Rocks the ship S_a1 (its hit object A_a1 bound to it) by marcoship_yure_func until that reports the end; spawned by
+ * onryo_event.
  */
-EVT_BEGIN(marco_ship_yure)
+static EVT_BEGIN(marco_ship_yure)
     CALL(marcoship_yure_init_func)
     CALL(evt_hit_bind_mapobj, STRING("A_a1"), STRING("S_a1"))
     LOOP(0)
@@ -523,13 +553,13 @@ EVT_BEGIN(marco_ship_yure)
 EVT_END()
 
 /**
- * Mist bank 1: slides the left and right mist objects S_hai_l_01
- * and S_hai_r_01 in from 1500 units to the centre over 7 seconds, so the ghost fog closes around the ship.
+ * Shows mist bank 01 (S_hai_l_01, S_hai_r_01) and slides its halves in from 1500 units out over 7 s; spawned by
+ * moya_effect with banks 02 to 05.
  */
-EVT_BEGIN(moya_effect01)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_01"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_01"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_msec_init, 11, 1500, 0, 7000)
+static EVT_BEGIN(moya_effect01)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_01"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_01"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1500, 0, 7000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(2), 0)
@@ -544,11 +574,11 @@ EVT_BEGIN(moya_effect01)
     RETURN
 EVT_END()
 
-/** Mist bank 2: same as moya_effect01 for S_hai_l_02 and S_hai_r_02. */
-EVT_BEGIN(moya_effect02)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_02"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_02"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_msec_init, 11, 1500, 0, 7000)
+/** moya_effect01 for mist bank 02 (S_hai_l_02, S_hai_r_02). */
+static EVT_BEGIN(moya_effect02)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_02"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_02"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1500, 0, 7000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(2), 0)
@@ -563,11 +593,11 @@ EVT_BEGIN(moya_effect02)
     RETURN
 EVT_END()
 
-/** Mist bank 3: same as moya_effect01 for S_hai_l_03 and S_hai_r_03. */
-EVT_BEGIN(moya_effect03)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_03"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_03"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_msec_init, 11, 1500, 0, 7000)
+/** moya_effect01 for mist bank 03 (S_hai_l_03, S_hai_r_03). */
+static EVT_BEGIN(moya_effect03)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_03"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_03"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1500, 0, 7000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(2), 0)
@@ -582,11 +612,11 @@ EVT_BEGIN(moya_effect03)
     RETURN
 EVT_END()
 
-/** Mist bank 4: same as moya_effect01 for S_hai_l_04 and S_hai_r_04. */
-EVT_BEGIN(moya_effect04)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_04"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_04"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_msec_init, 11, 1500, 0, 7000)
+/** moya_effect01 for mist bank 04 (S_hai_l_04, S_hai_r_04). */
+static EVT_BEGIN(moya_effect04)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_04"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_04"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1500, 0, 7000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(2), 0)
@@ -601,11 +631,11 @@ EVT_BEGIN(moya_effect04)
     RETURN
 EVT_END()
 
-/** Mist bank 5: same as moya_effect01 for S_hai_l_05 and S_hai_r_05. */
-EVT_BEGIN(moya_effect05)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_05"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_05"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_msec_init, 11, 1500, 0, 7000)
+/** moya_effect01 for mist bank 05 (S_hai_l_05, S_hai_r_05). */
+static EVT_BEGIN(moya_effect05)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_l_05"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hai_r_05"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1500, 0, 7000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(2), 0)
@@ -620,10 +650,7 @@ EVT_BEGIN(moya_effect05)
     RETURN
 EVT_END()
 
-/**
- * Map TEV callback that multiplies the water surface alpha by the byte at _ap;
- * used to fade the foam layer and the moon.
- */
+/** Map TEV callback: adds a stage that multiplies the previous alpha by the alpha at _ap; the colour passes through. */
 static void alpha_tev(MapTevCallbackInfo* info) {
     s32 stage = info->tevStage;
     u8* alpha = _ap;
@@ -667,10 +694,10 @@ static USER_FUNC(elmos1000tai_init) {
     f32 dist;
     f32 fdeg;
 
-    wp->flags |= 1;
+    wp->flags |= NANNPC_WORK_DEPTH_SORT;
     for (i = 0; i < wp->num; i++) {
         npc = &wp->npc[i];
-        npc->pose->flags |= 4;
+        npc->pose->flags |= EXT_POSE_FLAG_NO_SHADOW;
         npc->color.a = 0;
         npc->dir = 90.0f;
         npc->index = i;
@@ -736,8 +763,9 @@ static void elmos1000tai_seq00(NanNPC* npc) {
         case 2:
             t = OSTicksToMilliseconds((u32)gp->renderTime - (u32)npc->startTime);
             if (t < npc->duration) {
-                npc->color.a = intplGetValue(0, 0.0f, 255.0f, t, npc->duration);
+                npc->color.a = intplGetValue(EASING_LINEAR, 0.0f, 255.0f, t, npc->duration);
             } else {
+                // Keep the last interpolated alpha; there is no forced 255 endpoint.
                 npc->state = 3;
             }
             break;
@@ -748,7 +776,7 @@ static void elmos1000tai_seq00(NanNPC* npc) {
 
 /**
  * Script helper that places a drifting mist effect near (args[0], args[1], args[2]) with a random offset of up
- * to 75 units, and keeps fading it in and out with random 3 to 4 second durations.
+ * to 75 units, then requests its deletion after a random 3 to 4 second wait.
  */
 static USER_FUNC(mist_func) {
     EvtWord* args = event->args;
@@ -839,7 +867,7 @@ static USER_FUNC(kaizoku_fune_eff) {
     ((EffFunemizuWork*)eff->userdata)->position.x = 140.0f * dir + pos.x;
     ((EffFunemizuWork*)eff->userdata)->position.y = pos.y - 160.0f;
     ((EffFunemizuWork*)eff->userdata)->position.z = 40.0f + pos.z;
-    ((EffFunemizuWork*)eff->userdata)->speed = speed;
+    ((EffFunemizuWork*)eff->userdata)->size = speed;
     if (angle < 180.0f) {
         ((EffFunemizuWork*)eff->userdata)->yaw = 135.0f + angle;
     } else {
@@ -852,12 +880,12 @@ static USER_FUNC(kaizoku_fune_eff) {
  * Fades the foam layer of the sea (S_umi_l_siro_b) from opaque to clear over 500 ms through the water alpha
  * callback.
  */
-EVT_BEGIN(nami_alpha)
+static EVT_BEGIN(nami_alpha)
     CALL(alpha_init_func)
     CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_umi_l_siro_b"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_umi_l_siro_b"), MAPOBJ_FLAG_DISPLAY_LIST)
-    CALL(evt_sub_intpl_msec_init, 11, 255, 0, 500)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_umi_l_siro_b"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_umi_l_siro_b"), MAP_OBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(alpha_set_func, LW(0))
@@ -873,14 +901,14 @@ EVT_END()
  * Fades the sky models S_hai02 and S_hai03_moon (the moon) from opaque to clear over 1.5 seconds through
  * alpha_tev; moya_effect starts it together with the five mist banks.
  */
-EVT_BEGIN(moonout_effect)
+static EVT_BEGIN(moonout_effect)
     CALL(alpha_init_func)
     CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_hai02"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_hai03_moon"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hai02"), MAPOBJ_FLAG_DISPLAY_LIST)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hai03_moon"), MAPOBJ_FLAG_DISPLAY_LIST)
-    CALL(evt_sub_intpl_msec_init, 11, 255, 0, 1500)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_hai02"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_hai03_moon"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hai02"), MAP_OBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hai03_moon"), MAP_OBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 1500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(alpha_set_func, LW(0))
@@ -893,20 +921,20 @@ EVT_BEGIN(moonout_effect)
 EVT_END()
 
 /** Starts all five mist banks (moya_effect01 to 05) and the "onryou" (ghost) map animation. */
-EVT_BEGIN(moya_effect)
+static EVT_BEGIN(moya_effect)
     SPAWN_EVENT(moya_effect01)
     SPAWN_EVENT(moya_effect02)
     SPAWN_EVENT(moya_effect03)
     SPAWN_EVENT(moya_effect04)
     SPAWN_EVENT(moya_effect05)
-    CALL(evt_map_playanim, STRING("onryou"), 0, 0)
+    CALL(evt_map_playanim, STRING("onryou"), MAP_ANIM_PLAY_ONCE, 0)
     SPAWN_EVENT(moonout_effect)
     RETURN
 EVT_END()
 
 /** Scales the Ember Elmos A from LW(0) to LW(1) percent over LW(2) ms; helper of the grow and shrink scripts. */
-EVT_BEGIN(_kakushuku)
-    CALL(evt_sub_intpl_msec_init, 0, LW(0), LW(1), LW(2))
+static EVT_BEGIN(_kakushuku)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, LW(0), LW(1), LW(2))
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_FLOAT_VALUE(LW(2), LW(0))
@@ -921,7 +949,7 @@ EVT_BEGIN(_kakushuku)
 EVT_END()
 
 /** Makes Elmos A throb: shrinks and grows its size repeatedly until GF(10) is cleared, then clears GF(11). */
-EVT_BEGIN(elmos_a_kakushuku)
+static EVT_BEGIN(elmos_a_kakushuku)
     SET_VALUE(LW(0), 100)
     SET_VALUE(LW(1), 0)
     SET_VALUE(LW(2), 150)
@@ -951,7 +979,7 @@ EVT_BEGIN(elmos_a_kakushuku)
 EVT_END()
 
 /** Grows Elmos A from 0 to 100 percent over 150 ms. */
-EVT_BEGIN(elmos_a_kaku)
+static EVT_BEGIN(elmos_a_kaku)
     SET_VALUE(LW(0), 0)
     SET_VALUE(LW(1), 100)
     SET_VALUE(LW(2), 150)
@@ -960,7 +988,7 @@ EVT_BEGIN(elmos_a_kaku)
 EVT_END()
 
 /** Shrinks Elmos A from 100 to 0 percent over 150 ms. */
-EVT_BEGIN(elmos_a_shuku)
+static EVT_BEGIN(elmos_a_shuku)
     SET_VALUE(LW(0), 100)
     SET_VALUE(LW(1), 0)
     SET_VALUE(LW(2), 150)
@@ -1000,11 +1028,7 @@ static ExtTexInfo ext_entry_data[] = {
 static s16 elmos_animtbl[] = {
     0, 1, 2, 3, 4, 5, 6, 7,
     8, 9, 10, 11, 12, 13, 14, 15,
-#if VERSION <= VERSION_DEMO_JP
     16, 17, 18, 19, -1,
-#else
-    16, 17, 18, 19, -1, 0,
-#endif
 };
 
 /**
@@ -1027,7 +1051,7 @@ static EVT_BEGIN(nannpc_mode_setup)
 EVT_END()
 
 /** Positions (x, y, z) of the mist clouds drifting around the ship, ended by -10000. */
-s32 mist_pos[] = {
+static s32 mist_pos[] = {
     -400, 30, -200, -400, 30, -400, -400, 30,
     -600, -400, 30, -800, -400, 30, -1000, -400,
     30, -1200, -200, 30, -200, -200, 30, -400,
@@ -1046,7 +1070,7 @@ s32 mist_pos[] = {
  * Spawns the mist clouds: walks the mist_pos table until the -10000 terminator
  * and starts mist_func at each position, then repeats.
  */
-EVT_BEGIN(mist_setup)
+static EVT_BEGIN(mist_setup)
     LOOP(0)
         SET_VALUE(LW(10), 0)
         LOOP(0)
@@ -1070,14 +1094,14 @@ EVT_BEGIN(mist_setup)
 EVT_END()
 
 /**
- * The pirate ship sinks: plays the quake sound and lowers the ship S_a1 by 300 units over 8 seconds,
- * carrying along Marco, the sailors and the shopkeepers, and rebinding the ship's hit box each frame.
+ * The ship sinks 300 units over 8 s with SFX_STG5_SHIP_QUAKE1 (marcoship_shizumu_func), carrying Flavio, the sailors
+ * and the shop and inn clerks down with it; spawned at the end of onryo_event.
  */
-EVT_BEGIN(marcoship_shizumu)
+static EVT_BEGIN(marcoship_shizumu)
     CALL(evt_snd_sfxon, STRING("SFX_STG5_SHIP_QUAKE1"), LW(10))
     SET_FLOAT_VALUE(LW(2), FLOAT(0.0f))
     CALL(evt_hit_bind_mapobj, STRING("A_a1"), STRING("S_a1"))
-    CALL(evt_sub_intpl_msec_init, 1, 0, -300, 8000)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 0, -300, 8000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(marcoship_shizumu_func, LW(0))
@@ -1116,21 +1140,20 @@ EVT_BEGIN(marcoship_shizumu)
 EVT_END()
 
 /**
- * The voyage from Rogueport to Keelhaul Key (STORY_STG5_00_LOGBOOK):
- * day turns to night (stg5_sea_00, 28, 29), Marco
- * and the sailors talk (stg5_sea_01 and on) as the sea turns eerie with mist
- * and the Embers appear around the ship and attack, sinking the pirate ship.
+ * The voyage to Keelhaul Key, spawned by the map's init script: unless GSW_STORY_PROGRESS is already STG5_00_LOGBOOK,
+ * three days and nights pass with messages stg5_sea_00, 28 and 29 and the story value is set to STG5_00_LOGBOOK. Then
+ * the crew talk, the mist rises (moya_effect) and the Embers attack, ending with the ship sinking (marcoship_shizumu),
+ * GSW_STORY_PROGRESS STG5_10_HAUNTED and a map change to muj_00.
  */
 EVT_BEGIN(onryo_event)
     BEGIN_INLINE_EVENT
         CALL(evt_map_anim_rate)
     END_INLINE_EVENT
-    // The voyage begins: the ship rocks on the waves and the sailors are placed.
     SPAWN_EVENT(marco_ship_yure)
     SPAWN_EVENT(nannpc_mode_setup)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_b"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_b"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_b"), 1, 0)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_00_LOGBOOK)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_00_LOGBOOK)
         CALL(evt_mario_key_onoff, 0)
         CALL(evt_mario_cont_onoff, 0)
         CALL(evt_party_cont_onoff, 0, 0)
@@ -1145,39 +1168,38 @@ EVT_BEGIN(onryo_event)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
 #endif
-    CALL(evt_cam3d_evt_set, 0, 600, 2155, 0, 350, -108, 0, 11)
-    CALL(evt_map_playanim, STRING("yoru_hiru"), 2, 0)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 0, 600, 2155, 0, 350, -108, 0, EASING_SINE_IN_OUT)
+    CALL(evt_map_playanim, STRING("yoru_hiru"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(4000)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
-    // The ship's log tells of the days at sea as day turns to night.
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg5_sea_00"), 0, 0)
     CALL_CHILD(hiru_yoru_event)
     WAIT_MS(3000)
     CALL_CHILD(yoru_hiru_event)
     WAIT_MS(1000)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg5_sea_28"), 0, 0)
     CALL_CHILD(hiru_yoru_event)
     WAIT_MS(3000)
     CALL_CHILD(yoru_hiru_event)
     WAIT_MS(1000)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg5_sea_29"), 0, 0)
     CALL_CHILD(hiru_yoru_event)
     WAIT_MS(1000)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_00_LOGBOOK)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_00_LOGBOOK)
     LABEL(100)
     CALL(evt_mario_cont_onoff, 1)
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
     CALL(evt_party_cont_onoff, 0, 0)
 #endif
     CALL(evt_mario_set_pos, 5, 90, -100)
     CALL(evt_mario_set_dir, 90, 0, 0)
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
 #endif
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_a1"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_a1"), MAP_OBJ_FLAG_CLIP)
     CALL(evt_npc_set_position, STRING("マルコ"), 116, 116, -100)
     CALL(evt_npc_set_ry, STRING("マルコ"), 90)
     CALL(evt_npc_set_position, STRING("オドオド水夫"), 25, 90, -163)
@@ -1190,22 +1212,22 @@ EVT_BEGIN(onryo_event)
     CALL(evt_npc_set_ry, STRING("めがね水夫"), 90)
     CALL(evt_npc_set_position, STRING("水夫A"), -65, 114, -145)
     CALL(evt_npc_set_ry, STRING("水夫A"), 90)
-    CALL(evt_npc_flag_onoff, 0, STRING("水夫A"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("水夫A"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_stay_anim, STRING("水夫A"))
     CALL(evt_npc_set_position, STRING("水夫ボム兵"), -65, 114, -44)
     CALL(evt_npc_set_ry, STRING("水夫ボム兵"), 90)
-    CALL(evt_npc_flag_onoff, 0, STRING("水夫ボム兵"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("水夫ボム兵"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_stay_anim, STRING("水夫ボム兵"))
     CALL(evt_npc_set_position, STRING("店員"), -115, 163, -153)
     CALL(evt_npc_set_ry, STRING("店員"), 90)
-    CALL(evt_npc_flag_onoff, 0, STRING("店員"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("店員"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_stay_anim, STRING("店員"))
     CALL(evt_npc_set_position, STRING("宿店員"), -119, 163, -62)
     CALL(evt_npc_set_ry, STRING("宿店員"), 90)
-    CALL(evt_npc_flag_onoff, 0, STRING("宿店員"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("宿店員"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_stay_anim, STRING("宿店員"))
-    CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_INSTANT_TURN)
@@ -1216,7 +1238,7 @@ EVT_BEGIN(onryo_event)
     CALL(evt_npc_flag_onoff, 1, STRING("店員"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 1, STRING("宿店員"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_sound_data_set, STRING("マルコ"), STRING("SFX_STG5_MARCO_MOVE1L"), STRING("SFX_STG5_MARCO_MOVE1R"), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
-    CALL(evt_cam3d_evt_set, -10, 340, 558, -11, 131, -108, 0, 11)
+    CALL(evt_cam3d_evt_set, -10, 340, 558, -11, 131, -108, 0, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_npc_flag_onoff, 0, STRING("マルコ"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_INSTANT_TURN)
@@ -1230,17 +1252,17 @@ EVT_BEGIN(onryo_event)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg5_sea_01"), 0, STRING("マルコ"))
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 480, 352, 214, 58, 150, -96, 0, 11)
+    CALL(evt_cam3d_evt_set, 480, 352, 214, 58, 150, -96, 0, EASING_SINE_IN_OUT)
     WAIT_MS(1500)
     CALL(evt_npc_set_ry, STRING("マルコ"), 270)
     WAIT_MS(500)
     CALL(evt_npc_move_position, STRING("マルコ"), 107, -100, 0, FLOAT(60.0f), 0)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg5_sea_02"), 0, STRING("マルコ"))
-    CALL(evt_cam3d_evt_set, 0, 300, 985, 0, 175, -108, 0, 11)
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    CALL(evt_cam3d_evt_set, 0, 300, 985, 0, 175, -108, 0, EASING_SINE_IN_OUT)
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     SET_VALUE(GW(0), 0)
-    CALL(evt_npc_flag_onoff, 0, STRING("マルコ"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("マルコ"), NPC_FLAG_TALK_POSE)
     CALL(evt_npc_set_anim, STRING("マルコ"), STRING("S_2"))
     BEGIN_INLINE_EVENT
         CALL(evt_msg_print, 0, STRING("small_01"), 0, STRING("マルコ"))
@@ -1254,36 +1276,34 @@ EVT_BEGIN(onryo_event)
     CALL(evt_set_fune_anim_rate, FLOAT(0.69921875f))
     CALL(evt_set_nami_anim_rate, FLOAT(0.69921875f))
     WAIT_MS(1000)
-#if VERSION >= VERSION_DEMO_EU // PAL: NPC flag 0x200 on the two sailors for this part of the scene
-    CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_TALK_ANIM)
+#if VERSION >= VERSION_DEMO_EU
+    CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_TALK_POSE)
+    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_TALK_POSE)
 #endif
     WAIT_MS(1500)
-    // Flavio starts a story and the sailors groan.
     CALL(evt_msg_print, 0, STRING("stg5_sea_03"), 0, STRING("ガラの悪い水夫"))
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg5_sea_04"), 0, STRING("オドオド水夫"))
     CALL(marcoship_stop_func)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
         WAIT_MS(2000)
-        CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_EVT_STG5_GHOST1"), 2000)
-        CALL(evt_snd_envoff, PSND_FADE_DIP_TO(50))
+        CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_EVT_STG5_GHOST1"), 2000)
+        CALL(evt_snd_envoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
     END_INLINE_EVENT
     CALL(evt_set_fune_anim_rate, FLOAT(0.39941406f))
     CALL(evt_set_nami_anim_rate, FLOAT(0.39941406f))
     CALL(evt_msg_print_add, 0, STRING("stg5_sea_04_01"))
-    CALL(evt_cam3d_evt_set, 0, 295, 370, 0, 145, -108, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 295, 370, 0, 145, -108, 0, EASING_SINE_IN_OUT)
     SPAWN_EVENT(nami_alpha)
     CALL(evt_set_fune_anim_rate, FLOAT(0.0f))
     CALL(evt_set_nami_anim_rate, FLOAT(0.099609375f))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_fne_nami"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_fne_nami"), MAP_OBJ_FLAG_HIDDEN)
     WAIT_MS(500)
-    // The rough sailor sheepishly interrupts Flavio.
     CALL(evt_msg_print, 0, STRING("stg5_sea_05"), 0, STRING("ガラの悪い水夫"))
     WAIT_MS(1000)
     SET_VALUE(GW(0), 1)
-    CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_TALK_POSE)
     CALL(evt_msg_close, STRING("small_01"))
     CALL(evt_npc_set_anim, STRING("マルコ"), STRING("T_1"))
     WAIT_MS(2000)
@@ -1295,7 +1315,7 @@ EVT_BEGIN(onryo_event)
     CALL(evt_msg_print, 0, STRING("stg5_sea_06"), 0, STRING("マルコ"))
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg5_sea_07"), 0, STRING("ガラの悪い水夫"))
-    CALL(evt_cam3d_evt_set, -50, 470, 588, -50, 390, -107, 500, 11)
+    CALL(evt_cam3d_evt_set, -50, 470, 588, -50, 390, -107, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_npc_set_anim, STRING("ガラの悪い水夫"), STRING("R_1"))
     CALL(evt_npc_set_position, STRING("ガラの悪い水夫"), -12, 90, -80)
@@ -1318,7 +1338,6 @@ EVT_BEGIN(onryo_event)
     CALL(evt_npc_set_rotate, STRING("ガラの悪い水夫"), 0, 180, 0)
     WAIT_MS(1000)
     CALL(evt_npc_set_position, STRING("エルモスA"), -45, 336, -73)
-    // Eerie lights and ghostly sounds appear on the ship.
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_ELMOS_APPEAR1_2"), -45, 336, -73, 0)
     CALL(evt_npc_set_ry, STRING("エルモスA"), 90)
     WAIT_MS(1000)
@@ -1339,7 +1358,7 @@ EVT_BEGIN(onryo_event)
     CALL(evt_msg_print, 0, STRING("stg5_sea_08"), 0, STRING("ガラの悪い水夫"))
     CALL(evt_npc_set_position, STRING("エルモスA"), 0, -1000, 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, 180, 0, 200)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 180, 0, 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_rotate, STRING("ガラの悪い水夫"), 0, LW(0), 0)
@@ -1355,7 +1374,7 @@ EVT_BEGIN(onryo_event)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("ガラの悪い水夫"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_NPC_QUESTION_MARK1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, LW(0), LW(1), LW(2), 30, 0, 90)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, LW(0), LW(1), LW(2), 30, 0, 90)
     END_INLINE_EVENT
     WAIT_MS(1000)
     CALL(evt_npc_set_ry, STRING("ガラの悪い水夫"), 90)
@@ -1369,38 +1388,37 @@ EVT_BEGIN(onryo_event)
     CALL(evt_npc_glide_position, STRING("エルモスA"), LW(13), LW(14), LW(15), 0, FLOAT(120.0f), 0, 0, 0)
     CALL(evt_npc_glide_position, STRING("エルモスA"), LW(10), LW(11), LW(12), 0, FLOAT(120.0f), 0, 0, 0)
     WAIT_MS(500)
-    // The rough sailor snaps at someone shoving him.
     CALL(evt_msg_print, 0, STRING("stg5_sea_09"), 0, STRING("ガラの悪い水夫"))
     WAIT_MS(1000)
     CALL(evt_npc_set_ry, STRING("ガラの悪い水夫"), 270)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -50, 412, 340, -50, 360, -108, 100, 11)
+    CALL(evt_cam3d_evt_set, -50, 412, 340, -50, 360, -108, 100, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("ガラの悪い水夫"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_NPC_BIKKURI_MARK1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 30, 0, 60)
     END_INLINE_EVENT
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER2"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER2"))
     END_INLINE_EVENT
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
         LOOP(5)
-            CALL(evt_cam3d_evt_set, -50, 412, 340, -50, 360, -108, 100, 11)
+            CALL(evt_cam3d_evt_set, -50, 412, 340, -50, 360, -108, 100, EASING_SINE_IN_OUT)
             WAIT_MS(100)
-            CALL(evt_cam3d_evt_set, -50, 423, 438, -50, 360, -108, 100, 11)
+            CALL(evt_cam3d_evt_set, -50, 423, 438, -50, 360, -108, 100, EASING_SINE_IN_OUT)
             WAIT_MS(100)
         END_LOOP
-        CALL(evt_cam3d_evt_set, -50, 412, 340, -50, 360, -108, 100, 11)
+        CALL(evt_cam3d_evt_set, -50, 412, 340, -50, 360, -108, 100, EASING_SINE_IN_OUT)
         WAIT_MS(100)
         SET_VALUE(GF(0), 0)
     END_INLINE_EVENT
     CALL(evt_msg_print, 0, STRING("stg5_sea_11"), 0, STRING("ガラの悪い水夫"))
     WAIT_WHILE(GF(0))
 #if VERSION >= VERSION_DEMO_EU
-    CALL(evt_npc_flag_onoff, 0, STRING("ガラの悪い水夫"), NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("ガラの悪い水夫"), NPC_FLAG_TALK_POSE)
+    CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_TALK_POSE)
 #endif
     CALL(evt_npc_set_anim, STRING("ガラの悪い水夫"), STRING("R_1"))
     CALL(muj_npc_guruguru, STRING("ガラの悪い水夫"), -52, -90, 0, FLOAT(-12.0f), 3000)
@@ -1416,14 +1434,12 @@ EVT_BEGIN(onryo_event)
         SET_VALUE(GF(0), 0)
     END_INLINE_EVENT
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, -10, 340, 558, -11, 131, -108, 1000, 11)
+    CALL(evt_cam3d_evt_set, -10, 340, 558, -11, 131, -108, 1000, EASING_SINE_IN_OUT)
     WAIT_WHILE(GF(0))
-    // The rough sailor cries out that the ghosts are here.
     CALL(evt_msg_print, 0, STRING("stg5_sea_12"), 0, STRING("ガラの悪い水夫"))
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg5_sea_13"), 0, STRING("マルコ"))
     WAIT_MS(500)
-    // Mist rolls in around the ship.
     SPAWN_EVENT(mist_setup)
     CALL(evt_npc_set_position, STRING("エルモスA"), 168, 160, -84)
     CALL(evt_npc_set_position, STRING("エルモスB"), 105, 100, -200)
@@ -1447,7 +1463,7 @@ EVT_BEGIN(onryo_event)
     CALL(evt_npc_set_color, STRING("エルモスF"), 255, 255, 255, 0)
     CALL(evt_npc_set_color, STRING("エルモスG"), 255, 255, 255, 0)
     CALL(evt_snd_sfxon, STRING("SFX_STG5_ELMOS_APPEAR1_2"), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_npc_set_color, STRING("エルモスA"), 255, 255, 255, LW(0))
@@ -1501,23 +1517,22 @@ EVT_BEGIN(onryo_event)
     SET_VALUE(LW(4), 1)
     SET_VALUE(LW(5), 900)
     SPAWN_EVENT(urouro_fuwafuwa)
-    CALL(evt_cam3d_evt_set, 2, 700, 1614, -1, 261, -108, 0, 11)
+    CALL(evt_cam3d_evt_set, 2, 700, 1614, -1, 261, -108, 0, EASING_SINE_IN_OUT)
     CALL(evt_npc_set_position, STRING("マルコ"), 116, 116, -100)
     WAIT_MS(500)
     CALL(evt_snd_sfxon, STRING("SFX_STG5_ELMOS_VOICE1"), 0)
     CALL(evt_snd_sfxon, STRING("SFX_STG5_KORTESS_VOICE1"), 0)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
-    // Ghostly moaning rolls over the ship and the sailors panic.
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg5_sea_14"), 0, 0)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 0, 358, 572, -1, 145, -108, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 358, 572, -1, 145, -108, 0, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg5_sea_15"), 0, 0)
     WAIT_MS(500)
     SET_VALUE(LW(0), STRING("オドオド水夫"))
     CALL(evt_npc_set_anim, LW(0), STRING("R_2"))
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_get_position, LW(0), LW(1), LW(2), LW(3))
     ADD(LW(1), -20)
     SET_VALUE(LW(4), 0)
@@ -1525,7 +1540,7 @@ EVT_BEGIN(onryo_event)
     SPAWN_EVENT(urouro)
     SET_VALUE(LW(0), STRING("ガラの悪い水夫"))
     CALL(evt_npc_set_run_anim, LW(0))
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_get_position, LW(0), LW(1), LW(2), LW(3))
     ADD(LW(1), -25)
     SET_VALUE(LW(4), 0)
@@ -1533,7 +1548,7 @@ EVT_BEGIN(onryo_event)
     SPAWN_EVENT(urouro)
     SET_VALUE(LW(0), STRING("サンダース"))
     CALL(evt_npc_set_run_anim, LW(0))
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_get_position, LW(0), LW(1), LW(2), LW(3))
     ADD(LW(1), -30)
     SET_VALUE(LW(4), 0)
@@ -1541,7 +1556,7 @@ EVT_BEGIN(onryo_event)
     SPAWN_EVENT_GET_ID(PTR(urouro), GW(2))
     SET_VALUE(LW(0), STRING("めがね水夫"))
     CALL(evt_npc_set_run_anim, LW(0))
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_get_position, LW(0), LW(1), LW(2), LW(3))
     ADD(LW(1), -22)
     SET_VALUE(LW(4), 0)
@@ -1549,7 +1564,7 @@ EVT_BEGIN(onryo_event)
     SPAWN_EVENT_GET_ID(PTR(urouro), GW(3))
     SET_VALUE(LW(0), STRING("店員"))
     CALL(evt_npc_set_run_anim, LW(0))
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_get_position, LW(0), LW(1), LW(2), LW(3))
     ADD(LW(1), -22)
     SET_VALUE(LW(4), 0)
@@ -1557,7 +1572,7 @@ EVT_BEGIN(onryo_event)
     SPAWN_EVENT(urouro)
     SET_VALUE(LW(0), STRING("宿店員"))
     CALL(evt_npc_set_run_anim, LW(0))
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_get_position, LW(0), LW(1), LW(2), LW(3))
     ADD(LW(1), -24)
     SET_VALUE(LW(4), 0)
@@ -1567,14 +1582,14 @@ EVT_BEGIN(onryo_event)
     SPAWN_EVENT(buruburu)
     SET_VALUE(LW(0), STRING("水夫ボム兵"))
     SPAWN_EVENT(buruburu)
-    CALL(evt_npc_flag_onoff, 0, STRING("マルコ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("マルコ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_anim, STRING("マルコ"), STRING("O_1"))
     CALL(evt_mario_set_pose, STRING("M_I_O"))
-    CALL(evt_npc_flag_onoff, 0, STRING("ガラの悪い水夫"), NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("ガラの悪い水夫"), NPC_FLAG_TALK_POSE)
+    CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_TALK_POSE)
     CALL(evt_msg_print, 0, STRING("stg5_sea_16"), 0, STRING("ガラの悪い水夫"))
     CALL(evt_msg_print, 0, STRING("stg5_sea_17"), 0, STRING("オドオド水夫"))
-    CALL(evt_cam3d_evt_set, 115, 300, 323, 115, 165, -105, 500, 11)
+    CALL(evt_cam3d_evt_set, 115, 300, 323, 115, 165, -105, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg5_sea_18"), 0, STRING("マルコ"))
     CALL(elmos1000tai_start)
@@ -1582,9 +1597,8 @@ EVT_BEGIN(onryo_event)
         WAIT_MS(1000)
         CALL(evt_snd_sfxon, STRING("SFX_STG5_ELMOS_APPEAR2"), 0)
     END_INLINE_EVENT
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_snd_sfxon, STRING("SFX_STG5_KORTESS_VOICE1"), 0)
-    // The moaning grows louder and Flavio screams.
     CALL(evt_msg_print, 0, STRING("stg5_sea_19"), 0, 0)
     DELETE_EVENT(GW(1))
     SET_VALUE(GF(10), 1)
@@ -1599,7 +1613,7 @@ EVT_BEGIN(onryo_event)
         CALL(evt_npc_get_position, STRING("マルコ"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_NPC_BIKKURI_MARK1"), LW(0), LW(1), LW(2), 0)
         ADD(LW(1), 20)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 30, 0, 90)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 30, 0, 90)
     END_INLINE_EVENT
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg5_sea_20"), 0, STRING("マルコ"))
@@ -1627,16 +1641,15 @@ EVT_BEGIN(onryo_event)
     SPAWN_EVENT(fuwafuwa)
     SET_VALUE(LW(0), STRING("マルコ"))
     CALL(evt_npc_set_anim, LW(0), STRING("R_2"))
-    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_MOVE_ANIM)
-    CALL(evt_npc_flag_onoff, 1, LW(0), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, LW(0), NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, LW(0), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_get_position, LW(0), LW(1), LW(2), LW(3))
     ADD(LW(1), -20)
     SET_VALUE(LW(4), 0)
     SET_VALUE(LW(5), 340)
     SPAWN_EVENT_GET_ID(PTR(urouro), GW(0))
-    CALL(evt_cam3d_evt_set, 0, 358, 572, -1, 145, -108, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 358, 572, -1, 145, -108, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
-    // Bobbery tries to calm everyone; the ship starts to shake.
     CALL(evt_msg_print, 0, STRING("stg5_sea_22"), 0, STRING("サンダース"))
     CALL(evt_msg_print, 0, STRING("stg5_sea_23"), 0, STRING("サンダース"))
     CALL(evt_msg_print, 0, STRING("stg5_sea_24"), 0, STRING("サンダース"))
@@ -1650,7 +1663,6 @@ EVT_BEGIN(onryo_event)
     END_INLINE_EVENT
     CALL(evt_npc_jump_position_nohit, STRING("サンダース"), -20, -100, -300, 600, 100)
     CALL(evt_eff, 0, STRING("splash"), 0, -20, 30, -150, FLOAT(1.5f), 0, 0, 0, 0, 0, 0, 0)
-    // The bespectacled sailor tries to get everyone's attention as sailors fall overboard.
     CALL(evt_msg_print, 0, STRING("stg5_sea_25"), 0, STRING("めがね水夫"))
     DELETE_EVENT(GW(3))
     SET_VALUE(LW(10), STRING("めがね水夫"))
@@ -1662,7 +1674,6 @@ EVT_BEGIN(onryo_event)
     END_INLINE_EVENT
     CALL(evt_npc_jump_position_nohit, STRING("めがね水夫"), -30, -100, 100, 600, 100)
     CALL(evt_eff, 0, STRING("splash"), 0, -30, 30, 0, FLOAT(1.5f), 0, 0, 0, 0, 0, 0, 0)
-    // Flavio calls to Bobbery as the ship tosses everyone about.
     CALL(evt_msg_print, 0, STRING("stg5_sea_26"), 0, STRING("マルコ"))
     BEGIN_INLINE_EVENT
         DELETE_EVENT(GW(0))
@@ -1671,34 +1682,32 @@ EVT_BEGIN(onryo_event)
     END_INLINE_EVENT
     WAIT_MS(500)
     CALL(evt_mapobj_get_position, STRING("S_a1"), LW(0), LW(1), LW(2))
-    // The ship sinks.
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_SHIP_SINK1"), LW(0), LW(1), LW(2), LW(10))
     SPAWN_EVENT(marcoship_shizumu)
     WAIT_MS(4500)
     CALL(evt_fade_entry, FADE_OUT_IRIS, 500, 0, 0, 0)
     CALL(evt_fade_end_wait)
     CALL(evt_snd_sfxoff, LW(10))
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    // The story advances and the castaways wash up on Keelhaul Key (muj_00).
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_10_HAUNTED)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_10_HAUNTED)
     CALL(evt_fade_set_mapchange_type, 0, FADE_OUT_BLACK, 0, FADE_IN_BLACK, 300)
     CALL(evt_bero_mapchange, STRING("muj_00"), STRING(""))
     RETURN
 EVT_END()
 
 /**
- * Bowser's flyover (STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT):
- * the flying Koopa (飛クッパ) swoops across the sky past the ship,
- * then the story becomes STORY_STG4_15_06_BOWSER_BLIMP and the map changes to kpa_03.
+ * Bowser interlude at STG4_15_05_PEACH_X_NAUT_PHD_REPORT, spawned by the map's init script: Bowser's airship NPC falls
+ * from y 500 into the sea with SFX_KUPPA_AIRSHIP_FALL1 / SFX_KUPPA_AIRSHIP_DOWN_SEA1 and a splash, then
+ * GSW_STORY_PROGRESS becomes STG4_15_06_BOWSER_BLIMP_AREA and the map changes to kpa_03.
  */
-EVT_BEGIN(muj_20_koopa_evt)
+static EVT_BEGIN(muj_20_koopa_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_npc_set_position, STRING("飛クッパ"), 0, 500, -700)
     CALL(evt_npc_set_rotate, STRING("飛クッパ"), 0, 0, 180)
     CALL(evt_npc_set_anim, STRING("飛クッパ"), STRING("HKPA_O_3"))
-    CALL(evt_cam3d_evt_set, 0, 322, 480, 0, 218, -113, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 0, 322, 480, 0, 218, -113, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(2000)
     SET_VALUE(GF(0), 0)
     CALL(evt_snd_sfxon, STRING("SFX_KUPPA_AIRSHIP_FALL1"), GW(0))
@@ -1723,7 +1732,7 @@ EVT_BEGIN(muj_20_koopa_evt)
         END_LOOP
         CALL(splash_eff, LW(0), LW(1), LW(2))
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 1, 500, -100, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 500, -100, 1000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_npc_set_position, STRING("飛クッパ"), 0, LW(0), -700)
@@ -1733,16 +1742,19 @@ EVT_BEGIN(muj_20_koopa_evt)
     END_IF
     SET_VALUE(GF(0), 1)
     WAIT_MS(2000)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_06_BOWSER_BLIMP)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_15_06_BOWSER_BLIMP_AREA)
     CALL(evt_bero_mapchange, STRING("kpa_03"), STRING(""))
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
-/** Waves the pirate flag (S_b_02_hata) back and forth by 40 degrees every 2.5 seconds, forever. */
-EVT_BEGIN(kaizoku_hata)
+/**
+ * Waves the ship's flag S_b_02_hata 40 degrees each way every 2.5 s, with half-second pauses, for good; spawned by
+ * gor_muj_ship and muj_gor_ship.
+ */
+static EVT_BEGIN(kaizoku_hata)
     LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 11, -4000, 4000, 2500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -4000, 4000, 2500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1753,7 +1765,7 @@ EVT_BEGIN(kaizoku_hata)
             WAIT_FRAMES(1)
         END_LOOP
         WAIT_MS(500)
-        CALL(evt_sub_intpl_msec_init, 11, 4000, -4000, 2500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 4000, -4000, 2500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1769,10 +1781,11 @@ EVT_BEGIN(kaizoku_hata)
 EVT_END()
 
 /**
- * The voyage to Keelhaul Key from Rogueport: control is taken,
- * the ship sails (kaizoku_hata, day-night cycle, ship bob) and the map changes to muj_00.
+ * Sailing scene toward Keelhaul Key (GSWF_GOR_SAILING_TO_KEELHAUL), spawned by the map's init script: hides Mario and
+ * the partners, shows ship S_b crossing the sea from x -1000 to 1000 over 15 s with its flag (kaizoku_hata) and a
+ * day-night cycle; the map changes to muj_00 at the end, or at once when A is pressed.
  */
-EVT_BEGIN(gor_muj_ship)
+static EVT_BEGIN(gor_muj_ship)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
@@ -1782,19 +1795,19 @@ EVT_BEGIN(gor_muj_ship)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_party_set_pos, 1, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set, 0, 600, 2155, 0, 350, -108, 0, 11)
-    CALL(evt_map_playanim, STRING("yoru_hiru"), 2, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_cam3d_evt_set, 0, 600, 2155, 0, 350, -108, 0, EASING_SINE_IN_OUT)
+    CALL(evt_map_playanim, STRING("yoru_hiru"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_trans, 1, STRING("S_b"), -1000, 0, 0)
     CALL(evt_mapobj_rotate, 1, STRING("S_b"), 0, 0, 0)
     CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), -1000, 0, 0)
     CALL(evt_mapobj_rotate, 1, STRING("S_umi_l_siro_b"), 0, 0, 0)
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_umi_l_siro_b"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_umi_l_siro_b"), MAP_OBJ_FLAG_HIDDEN)
     BEGIN_INLINE_EVENT
         CALL(kaizoku_fune_eff)
     END_INLINE_EVENT
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     SPAWN_EVENT(kaizoku_hata)
     BEGIN_INLINE_EVENT
         WAIT_MS(3500)
@@ -1815,7 +1828,7 @@ EVT_BEGIN(gor_muj_ship)
     SET_RAW_VALUE(LW(0), GW(1))
     SET_FLOAT_VALUE(LW(1), FLOAT(5.0f))
     SPAWN_EVENT(muj_ship_puka)
-    CALL(evt_sub_intpl_msec_init, 0, -1000, 1000, 15000)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -1000, 1000, 15000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_mapobj_trans, 1, STRING("S_b"), LW(0), GW(1), 0)
@@ -1832,10 +1845,8 @@ EVT_BEGIN(gor_muj_ship)
 EVT_END()
 
 /**
- * The voyage back from Keelhaul Key to Rogueport (GSWF_GOR00_SHIP_ARRIVAL_PENDING,
- * set in muj_00 when Mario asks to sail): the mirror of gor_muj_ship with the ship turned 180 degrees,
- * sailing right to left over 15 seconds through day and night, bobbed by muj_ship_puka;
- * the map changes to gor_00 at the end or when A is pressed.
+ * gor_muj_ship in the other direction (GSWF_MUJ_SAILING_TO_ROGUEPORT): the ship faces the other way and crosses from x
+ * 1000 to -1000; the map changes to gor_00 at the end or when A is pressed.
  */
 static EVT_BEGIN(muj_gor_ship)
     CALL(evt_mario_key_onoff, 0)
@@ -1847,19 +1858,19 @@ static EVT_BEGIN(muj_gor_ship)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_party_set_pos, 1, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set, 0, 600, 2155, 0, 350, -108, 0, 11)
-    CALL(evt_map_playanim, STRING("yoru_hiru"), 2, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_cam3d_evt_set, 0, 600, 2155, 0, 350, -108, 0, EASING_SINE_IN_OUT)
+    CALL(evt_map_playanim, STRING("yoru_hiru"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_trans, 1, STRING("S_b"), -1000, 0, 0)
     CALL(evt_mapobj_rotate, 1, STRING("S_b"), 0, 180, 0)
     CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), -1000, 0, 0)
     CALL(evt_mapobj_rotate, 1, STRING("S_umi_l_siro_b"), 0, 180, 0)
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_umi_l_siro_b"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_umi_l_siro_b"), MAP_OBJ_FLAG_HIDDEN)
     BEGIN_INLINE_EVENT
         CALL(kaizoku_fune_eff)
     END_INLINE_EVENT
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     SPAWN_EVENT(kaizoku_hata)
     BEGIN_INLINE_EVENT
         WAIT_MS(3500)
@@ -1880,7 +1891,7 @@ static EVT_BEGIN(muj_gor_ship)
     SET_RAW_VALUE(LW(0), GW(1))
     SET_FLOAT_VALUE(LW(1), FLOAT(5.0f))
     SPAWN_EVENT(muj_ship_puka)
-    CALL(evt_sub_intpl_msec_init, 0, 1000, -1000, 15000)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 1000, -1000, 15000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_mapobj_trans, 1, STRING("S_b"), LW(0), GW(1), 0)
@@ -1896,10 +1907,10 @@ static EVT_BEGIN(muj_gor_ship)
     RETURN
 EVT_END()
 
-/** Swings the paddle S_f_drin back and forth by 5 degrees every 2 seconds, forever. */
+/** Rocks map object S_f_drin 5 degrees each way about X every 2 s for good; spawned for the prologue. */
 EVT_BEGIN(anm_kaji)
     LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 11, 500, -500, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 500, -500, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1909,7 +1920,7 @@ EVT_BEGIN(anm_kaji)
                 BREAK_LOOP
             END_IF
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, -500, 500, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -500, 500, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1923,7 +1934,9 @@ EVT_BEGIN(anm_kaji)
     RETURN
 EVT_END()
 
-/** Spins the ship's wheel pair (S_f_wa_l, S_f_wa_r) around Z forever. */
+/**
+ * Turns the wheels S_f_wa_l and S_f_wa_r about Z at 2 times GW(10) degrees a frame for good; spawned for the prologue.
+ */
 EVT_BEGIN(anm_wakka)
     SET_FLOAT_VALUE(LW(1), FLOAT(0.0f))
     LOOP(0)
@@ -1940,7 +1953,7 @@ EVT_BEGIN(anm_wakka)
     RETURN
 EVT_END()
 
-/** Spins the chimney (S_f_en01) around Y forever. */
+/** Turns map object S_f_en01 about Y at 2 times GW(10) degrees a frame for good; spawned for the prologue. */
 EVT_BEGIN(anm_entotsu)
     SET_FLOAT_VALUE(LW(1), FLOAT(0.0f))
     LOOP(0)
@@ -1956,7 +1969,7 @@ EVT_BEGIN(anm_entotsu)
     RETURN
 EVT_END()
 
-/** Spins the screw (S_skr) around X forever. */
+/** Turns the screw S_skr about X at 2 times GW(10) degrees a frame for good; spawned for the prologue. */
 EVT_BEGIN(anm_neji)
     SET_FLOAT_VALUE(LW(1), FLOAT(0.0f))
     LOOP(0)
@@ -1973,8 +1986,9 @@ EVT_BEGIN(anm_neji)
 EVT_END()
 
 /**
- * Script helper, one per frame: keeps two wake effects (funemizu) beside the ship S_fune_m, sized by its speed,
- * and spawns a water-damage splash every 15 frames when it is moving fast. Always blocks.
+ * Script helper (never finishes): keeps two wake effects (effFunemizuEntry types 0 and 2) at the ship map object
+ * S_fune_m, sized by how far it moved since the last frame (2 at STG0_02_MARIOS_HOUSE), and adds a water splash every
+ * 15 frames while it moves faster than 1.
  */
 static USER_FUNC(fune_eff) {
     EffectEntry* eff1;
@@ -1999,19 +2013,19 @@ static USER_FUNC(fune_eff) {
     speed = distABf(oldX, oldZ, pos.x, pos.z);
     angleABf(oldX, oldZ, pos.x, pos.z);
     off85 = 85.0f;
-    if (evtGetValue(event, GSW(GSW_STORY_PROGRESS)) == STORY_STG0_02_MARIOS_HOUSE) {
+    if (evtGetValue(event, GSW_STORY_PROGRESS) == STG0_02_MARIOS_HOUSE) {
         speed = 2.0f;
     }
     ((EffFunemizuWork*)eff1->userdata)->scale = 3.0f;
     ((EffFunemizuWork*)eff1->userdata)->position.x = pos.x + off85;
     ((EffFunemizuWork*)eff1->userdata)->position.y = pos.y - 51.0f;
     ((EffFunemizuWork*)eff1->userdata)->position.z = 30.0f + pos.z;
-    ((EffFunemizuWork*)eff1->userdata)->speed = speed;
+    ((EffFunemizuWork*)eff1->userdata)->size = speed;
     ((EffFunemizuWork*)eff1->userdata)->yaw = 225.0f;
     ((EffFunemizuWork*)eff2->userdata)->position.x = pos.x - 15.0f;
     ((EffFunemizuWork*)eff2->userdata)->position.y = pos.y - 51.0f;
     ((EffFunemizuWork*)eff2->userdata)->position.z = 90.0f + pos.z;
-    ((EffFunemizuWork*)eff2->userdata)->speed = speed;
+    ((EffFunemizuWork*)eff2->userdata)->size = speed;
     ((EffFunemizuWork*)eff2->userdata)->yaw = 180.0f;
     if (speed > 1.0f && gp->retraceCount % 15 == 0) {
         effWaterDamageN64Entry(5, 30, pos.x - 150.0f, pos.y - 50.0f, pos.z, 2.0f);
@@ -2019,13 +2033,14 @@ static USER_FUNC(fune_eff) {
     return EVT_RETURN_BLOCK;
 }
 
-#if VERSION >= VERSION_JP
 /**
  * Script helper: bends a ship position (GW(0), GW(1), GW(2)) onto a large circle of radius 6000
  * so the ship follows the curve of the horizon,
  * writing the result to LW(7) to LW(9) and the added heading to LW(0).
+ * Descriptive name (not in the symbol maps); placeholder unk_muj_00004328, JP muj .text+0x4264. See docs/NAME_PROVENANCE.md.
  */
-static USER_FUNC(fune_curve_pos) {
+#if VERSION >= VERSION_JP
+USER_FUNC(fune_curve_pos) {
     f32 x = evtGetFloat(event, GW(0));
     f32 y = evtGetFloat(event, GW(1));
     f32 z = evtGetFloat(event, GW(2));
@@ -2052,7 +2067,7 @@ static USER_FUNC(fune_curve_pos) {
 
 /**
  * Rocks the ship S_fune_m of the opening scene:
- * rolls it from +5 to -5 degrees and back every 2 seconds forever (on later versions along the curved horizon
+ * rolls it from +5 to -5 degrees and back, 2 seconds each way, forever (on later versions along the curved horizon
  * from fune_curve_pos), moving its foam layer and a ship sound with it.
  */
 EVT_BEGIN(anm_yure)
@@ -2062,19 +2077,21 @@ EVT_BEGIN(anm_yure)
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_OPN_SHIP_MOVE1"), GW(0), GW(1), GW(2), GW(4))
     CALL(evt_snd_sfx_dist, GW(4), 60)
     LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 11, 500, -500, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 500, -500, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
 #if VERSION <= VERSION_DEMO_JP
             CALL(evt_mapobj_trans, 1, STRING("S_fune_m"), GW(0), GW(1), GW(2))
-            CALL(evt_mapobj_rotate, 1, STRING("S_fune_m"), 0, 180, LW(0))
-            CALL(evt_snd_sfx_pos, GW(4), GW(0), GW(1), GW(2))
-            CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), GW(0), GW(1), GW(2))
 #else
             CALL(fune_curve_pos)
             CALL(evt_mapobj_trans, 1, STRING("S_fune_m"), LW(7), LW(8), LW(9))
+#endif
             CALL(evt_mapobj_rotate, 1, STRING("S_fune_m"), 0, 180, LW(0))
+#if VERSION <= VERSION_DEMO_JP
+            CALL(evt_snd_sfx_pos, GW(4), GW(0), GW(1), GW(2))
+            CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), GW(0), GW(1), GW(2))
+#else
             CALL(evt_snd_sfx_pos, GW(4), LW(7), LW(8), LW(9))
             CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), LW(7), LW(8), LW(9))
 #endif
@@ -2083,19 +2100,21 @@ EVT_BEGIN(anm_yure)
                 BREAK_LOOP
             END_IF
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, -500, 500, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -500, 500, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
 #if VERSION <= VERSION_DEMO_JP
             CALL(evt_mapobj_trans, 1, STRING("S_fune_m"), GW(0), GW(1), GW(2))
-            CALL(evt_mapobj_rotate, 1, STRING("S_fune_m"), 0, 180, LW(0))
-            CALL(evt_snd_sfx_pos, GW(4), GW(0), GW(1), GW(2))
-            CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), GW(0), GW(1), GW(2))
 #else
             CALL(fune_curve_pos)
             CALL(evt_mapobj_trans, 1, STRING("S_fune_m"), LW(7), LW(8), LW(9))
+#endif
             CALL(evt_mapobj_rotate, 1, STRING("S_fune_m"), 0, 180, LW(0))
+#if VERSION <= VERSION_DEMO_JP
+            CALL(evt_snd_sfx_pos, GW(4), GW(0), GW(1), GW(2))
+            CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), GW(0), GW(1), GW(2))
+#else
             CALL(evt_snd_sfx_pos, GW(4), LW(7), LW(8), LW(9))
             CALL(evt_mapobj_trans, 1, STRING("S_umi_l_siro_b"), LW(7), LW(8), LW(9))
 #endif
@@ -2109,10 +2128,10 @@ EVT_BEGIN(anm_yure)
 EVT_END()
 
 /**
- * Draws the "Press Start" text on the title logo with a two-stage TEV blend (text texture and gradient) at (x,
- * y) and the given alpha. The texture indices differ per version.
+ * Draws the PRESS START text of the title screen at (x, y) with the given alpha, its gradient texture scrolling over it
+ * with the retrace count; the texture numbers differ between versions.
  */
-static void pressStartGX(TitleLogoWork* wp, s32 alpha, f32 x, f32 y) {
+static void pressStartGX(MujLogoWork* wp, s32 alpha, f32 x, f32 y) {
     CameraEntry* camera = camGetCurPtr();
     GXTexObj startText, gradient;
     Mtx v17, v16;
@@ -2144,7 +2163,7 @@ static void pressStartGX(TitleLogoWork* wp, s32 alpha, f32 x, f32 y) {
     MTXScale(v16, 1.0f, 1.0f, 1.0f);
     MTXTrans(v17, (f32)gp->retraceCount / -200.0f, 0.0f, 0.0f);
     MTXConcat(v16, v17, v17);
-    GXLoadTexMtxImm(v17, 30, GX_MTX2x4);
+    GXLoadTexMtxImm(v17, GX_TEXMTX0, GX_MTX2x4);
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
@@ -2159,8 +2178,8 @@ static void pressStartGX(TitleLogoWork* wp, s32 alpha, f32 x, f32 y) {
     MTXScale(v16, (f32)GXGetTexObjWidth(&startText), (f32)GXGetTexObjHeight(&startText), 1.0f);
     MTXConcat(v17, v16, v17);
     MTXConcat(camera->view, v17, v17);
-    GXLoadPosMtxImm(v17, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(v17, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
@@ -2174,21 +2193,22 @@ static void pressStartGX(TitleLogoWork* wp, s32 alpha, f32 x, f32 y) {
 }
 
 /**
- * Display callback for the title logo: draws the logo texture for the current language
- * and the Press Start text with the wp alpha.
+ * Display callback for the title logo: draws the logo texture (per language in US and PAL, texture 5 otherwise)
+ * and, in the early demos, the Press Start text using the wp alpha.
  */
 static void draw(CameraId camera, void* param) {
-    TitleLogoWork* wp = param;
+    MujLogoWork* wp = param;
     CameraEntry saved;
     f32 viewport[6];
     f32 projection[7];
     CameraEntry* cam;
+#if VERSION >= VERSION_US
+    // US and PAL: logo texture per language (indexed by gp->language)
 #if VERSION >= VERSION_DEMO_EU
-    // PAL: logo texture per language (indexed by gp->language)
     s32 logoTex[6] = {0x13, 0x13, 0x14, 0x15, 0x16, 0x17};
-#elif VERSION >= VERSION_US
-    // US: logo texture per language (indexed by gp->language)
+#else
     s32 logoTex[6] = {0x15, 0x15, 0x16, 0x17, 0x18, 0x19};
+#endif
 #endif
 
     GXGetViewportv(viewport);
@@ -2199,12 +2219,9 @@ static void draw(CameraId camera, void* param) {
     cam = camGetPtr(CAMERA_2D);
     *camGetCurPtr() = *cam;
     winTexInit(*(TEXPalette**)wp->tpl->data);
-#if VERSION >= VERSION_US
-    winTexSetNearest(logoTex[gp->language], (Vec){0.0f, 100.0f + wp->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, wp->alpha});
-#elif VERSION >= VERSION_JP
-    winTexSetNearest(5, (Vec){0.0f, 100.0f + wp->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, wp->alpha});
-#else
+#if VERSION <= VERSION_DEMO_JP
     winTexSet(5, (Vec){0.0f, 100.0f + wp->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, wp->alpha});
+
     // the demo blinks PRESS START under the logo once the ship has arrived (GF(0))
     if (evtGetValue(NULL, GF(0))) {
         f32 s = (f32)sin((f32)gp->retraceCount / 15.0f);
@@ -2218,6 +2235,10 @@ static void draw(CameraId camera, void* param) {
         }
         pressStartGX(wp, alpha, 0.0f, -100.0f);
     }
+#elif VERSION >= VERSION_US
+    winTexSetNearest(logoTex[gp->language], (Vec){0.0f, 100.0f + wp->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, wp->alpha});
+#else
+    winTexSetNearest(5, (Vec){0.0f, 100.0f + wp->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, wp->alpha});
 #endif
     *camGetCurPtr() = saved;
     GXSetViewport(viewport[0], viewport[1], viewport[2], viewport[3], viewport[4], viewport[5]);
@@ -2226,7 +2247,7 @@ static void draw(CameraId camera, void* param) {
 
 /**
  * The title scene of the opening (entered as "prologue" from aaa_00 after the Mario's house prologue):
- * plays BGM_OPENING1 (the init starts it on the US demo and earlier), starts the title logo,
+ * plays BGM_OPENING1 (in the two early demos the init starts it instead), starts the title logo,
  * sails the steamship S_fune_m in over 10 seconds and waits for Press Start (GF(1)),
  * switching to BGM_EVT_SAILING1 if nothing is pressed within 5 seconds.
  * After the press it plays SFX_PRESS_START1, sails the ship on out and fades to white into sys_01 ("prologue").
@@ -2236,9 +2257,10 @@ static EVT_BEGIN(evt_prologue)
     WAIT_MS(4000)
 #else
     WAIT_MS(500)
+
     // The opening title scene: music starts and the logo appears.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_OPENING1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_OPN_MUJ1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_OPENING1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_OPN_MUJ1"))
     WAIT_MS(3500)
 #endif
     SET_VALUE(GF(0), 0)
@@ -2249,7 +2271,7 @@ static EVT_BEGIN(evt_prologue)
     END_INLINE_EVENT
     SET_FLOAT_VALUE(GW(10), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(-1800.0f))
-    CALL(evt_sub_intpl_msec_init, 11, -1800, 0, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -1800, 0, 10000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_FLOAT_VALUE(LW(3), LW(0))
@@ -2271,7 +2293,7 @@ static EVT_BEGIN(evt_prologue)
             END_IF
         END_LOOP
         IF_INT_EQUAL(GF(1), 0)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_SAILING1"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_SAILING1"))
         END_IF
     END_INLINE_EVENT
     LOOP(0)
@@ -2280,12 +2302,13 @@ static EVT_BEGIN(evt_prologue)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // After Press Start the steamship sails off and the screen fades to white into the chapter card.
     CALL(evt_snd_sfxon, STRING("SFX_PRESS_START1"), 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(4000)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 6000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 6000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 6000)
+        CALL(evt_snd_envoff_f, PSND_FADEOUT, 6000)
         CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
         CALL(evt_bero_mapchange, STRING("sys_01"), STRING("prologue"))
     END_INLINE_EVENT
@@ -2295,7 +2318,7 @@ static EVT_BEGIN(evt_prologue)
     END_INLINE_EVENT
     SET_FLOAT_VALUE(GW(10), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(0.0f))
-    CALL(evt_sub_intpl_msec_init, 11, 0, 1800, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1800, 10000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_FLOAT_VALUE(LW(3), LW(0))
@@ -2317,9 +2340,12 @@ static EVT_BEGIN(evt_prologue)
     RETURN
 EVT_END()
 
-/** Adds Cortez (model c_korutesu3) on the deck of the pirate ship for the epilogue (epilogue_evt). */
+/**
+ * Epilogue (STG8_END_AFTER_THE_BATTLE): creates Cortez (c_korutesu3) on the ship at (-830, 147, -98) facing 90; run by
+ * the map's init script before epilogue_evt.
+ */
 static EVT_BEGIN(epilogue_npc_entry)
-    CALL(evt_npc_entry, STRING("コルテス"), STRING("c_korutesu3"))
+    CALL(evt_npc_entry, STRING("コルテス"), STRING("c_korutesu3")) // Cortez
     CALL(evt_npc_set_tribe, STRING("コルテス"), STRING("コルテス"))
     CALL(evt_npc_set_position, STRING("コルテス"), FLOAT(-830.0f), FLOAT(147.0f), FLOAT(-98.0f))
     CALL(evt_npc_set_ry, STRING("コルテス"), 90)
@@ -2327,8 +2353,11 @@ static EVT_BEGIN(epilogue_npc_entry)
     RETURN
 EVT_END()
 
-/** Epilogue: the pirate ship S_b sails across the screen at 2 units per frame with a wake effect and a moving sound. */
-EVT_BEGIN(fune_move)
+/**
+ * Epilogue: moves ship S_b (and its wake S_umi_l_siro_b) 2 units a frame from x -700 with a gentle roll and its moving
+ * sound, carrying Cortez, Bobbery and two sailors along; spawned by epilogue_evt.
+ */
+static EVT_BEGIN(fune_move)
     BEGIN_INLINE_EVENT
         CALL(kaizoku_fune_eff)
     END_INLINE_EVENT
@@ -2368,19 +2397,17 @@ EVT_BEGIN(fune_move)
 EVT_END()
 
 /**
- * Bobbery's epilogue scene on the ship (STORY_STG8_END_AFTER_THE_BATTLE):
- * BGM_STG5_MUJ1 and the ENV_END_MUJ3 ambience start,
- * Bobbery (サンダース) and the two sailors are placed on the pirate ship S_b
- * and fune_move sails it left to right with them and Cortez aboard.
- * After 10 seconds the scene fades to black and the map changes to muj_01.
+ * Epilogue (STG8_END_AFTER_THE_BATTLE), spawned by the map's init script: BGM_STG5_MUJ1 and ENV_END_MUJ3, Mario hidden,
+ * Bobbery and two sailors placed on the ship, which sails off (fune_move); after 10 s the map changes to muj_01 with a
+ * black fade.
  */
 static EVT_BEGIN(epilogue_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_MUJ1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_MUJ1"))
     CALL(evt_snd_bgm_scope, 0, 1)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_END_MUJ3"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_END_MUJ3"))
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_mario_dispflag_onoff, 1, 1)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
     CALL(evt_npc_set_position, STRING("サンダース"), FLOAT(-655.0f), FLOAT(90.0f), FLOAT(-50.0f))
     CALL(evt_npc_set_ry, STRING("サンダース"), 90)
     CALL(evt_npc_flag_onoff, 1, STRING("サンダース"), NPC_FLAG_INSTANT_TURN)
@@ -2390,8 +2417,8 @@ static EVT_BEGIN(epilogue_evt)
     CALL(evt_npc_set_position, STRING("水夫ボム兵"), FLOAT(-806.0f), FLOAT(160.0f), FLOAT(-18.0f))
     CALL(evt_npc_set_ry, STRING("水夫ボム兵"), 270)
     CALL(evt_npc_flag_onoff, 1, STRING("水夫ボム兵"), NPC_FLAG_INSTANT_TURN)
-    CALL(evt_cam3d_evt_set, 25, 305, 1091, 25, 150, -108, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 25, 305, 1091, 25, 150, -108, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     SPAWN_EVENT(fune_move)
     WAIT_MS(10000)
     CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_BLACK, 900, FADE_IN_BLACK, 900)
@@ -2400,9 +2427,10 @@ static EVT_BEGIN(epilogue_evt)
 EVT_END()
 
 /**
- * Map init for muj_20 (the ship at sea): binds the ship lights and picks the scene from the story stage:
- * the voyage from Rogueport (gor_muj_ship), the return (muj_gor_ship), the Ember attack (onryo_event),
- * Bowser's flyover, the opening scene when entered as "prologue" (with the title logo) and the epilogue.
+ * Init script of muj_20: binds the ship's six point lights to S_b, hides the mist banks and S_fune_m, and by story
+ * state starts the Bowser interlude (STG4_15_05, muj_20_koopa_evt), the sailing scenes (gor_muj_ship, muj_gor_ship),
+ * the voyage (onryo_event), the prologue (enter name "prologue": the opening ship and its animations, evt_prologue) or
+ * the epilogue (STG8_END_AFTER_THE_BATTLE).
  */
 EVT_BEGIN(muj_20_init_evt)
     BEGIN_INLINE_EVENT
@@ -2423,77 +2451,73 @@ EVT_BEGIN(muj_20_init_evt)
     BEGIN_INLINE_EVENT
         CALL(evt_light_bind_mapobj, STRING("fune_b_pointLight6"), STRING("S_b"), 1)
     END_INLINE_EVENT
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_01"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_02"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_03"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_04"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_05"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_01"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_02"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_03"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_04"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_05"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_m"), MAPOBJ_FLAG_HIDE)
-    // A Bowser interlude plays at this point of the story.
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_01"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_02"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_03"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_04"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_l_05"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_01"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_02"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_03"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_04"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hai_r_05"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_m"), MAP_OBJ_FLAG_HIDDEN)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
         CALL(evt_mario_set_mode, 2)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_umi_l_siro_b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_map_playanim, STRING("nami"), 1, 0)
-        CALL(evt_map_playanim, STRING("nami_02"), 1, 0)
-        CALL(evt_map_playanim, STRING("fune_01"), 1, 0)
-        CALL(evt_map_playanim, STRING("kumo"), 1, 0)
-        CALL(evt_map_playanim, STRING("yoru_hiru"), 2, 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_umi_l_siro_b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_map_playanim, STRING("nami"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("nami_02"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("fune_01"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("kumo"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("yoru_hiru"), MAP_ANIM_PLAY_AT_END, 0)
         SPAWN_EVENT(muj_20_koopa_evt)
         RETURN
     END_IF
-    CALL(evt_map_playanim, STRING("nami"), 1, 0)
-    CALL(evt_map_playanim, STRING("nami_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("fune_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("kumo"), 1, 0)
-    // Pick the music and scene for the ship's crossing to or from Rogueport.
-    IF_INT_EQUAL(GSWF(GSWF_GOR00_SAIL_TO_KEELHAUL), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_MUJ1_1"))
+    CALL(evt_map_playanim, STRING("nami"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("nami_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("fune_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kumo"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_EQUAL(GSWF_GOR_SAILING_TO_KEELHAUL, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_MUJ1_1"))
         SPAWN_EVENT(gor_muj_ship)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_GOR00_SHIP_ARRIVAL_PENDING), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_MUJ1_1"))
+    IF_INT_EQUAL(GSWF_MUJ_SAILING_TO_ROGUEPORT, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_MUJ1_1"))
         SPAWN_EVENT(muj_gor_ship)
     END_IF
-    // The voyage to Keelhaul Key begins.
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_SAILING1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_MUJ1_1"))
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_SAILING1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_MUJ1_1"))
         SPAWN_EVENT(onryo_event)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_00_LOGBOOK)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_SAILING1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_MUJ1_1"))
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_00_LOGBOOK)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_SAILING1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_MUJ1_1"))
         SPAWN_EVENT(onryo_event)
     END_IF
-    // When entered as the prologue, the ship animations start and the opening title scene runs.
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("prologue"))
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_OPENING1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_OPN_MUJ1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_OPENING1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_OPN_MUJ1"))
 #endif
-        CALL(evt_cam3d_evt_set, 0, 367, 2093, 0, 343, -115, 0, 11)
+        CALL(evt_cam3d_evt_set, 0, 367, 2093, 0, 343, -115, 0, EASING_SINE_IN_OUT)
         CALL(evt_mario_cont_onoff, 0)
         CALL(evt_party_cont_onoff, 0, 0)
         CALL(evt_mario_set_pos, 0, -1000, 0)
         CALL(evt_party_set_pos, 0, 0, -1000, 0)
-        CALL(evt_map_playanim, STRING("yoru_hiru"), 2, 0)
+        CALL(evt_map_playanim, STRING("yoru_hiru"), MAP_ANIM_PLAY_AT_END, 0)
 #if VERSION >= VERSION_JP
         CALL(evt_mapobj_trans, 1, STRING("S_hai03_sun"), 0, -260, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_umi_l_siro_b"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_umi_l_siro_b"), MAP_OBJ_FLAG_HIDDEN)
 #endif
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_m"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_m"), MAP_OBJ_FLAG_HIDDEN)
         BEGIN_INLINE_EVENT
             CALL(fune_eff)
         END_INLINE_EVENT
@@ -2507,11 +2531,10 @@ EVT_BEGIN(muj_20_init_evt)
         SPAWN_EVENT(anm_yure)
         SPAWN_EVENT(evt_prologue)
     END_IF
-    // At the end of the game the epilogue scene on the ship starts.
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_END_AFTER_THE_BATTLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAPOBJ_FLAG_HIDE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a1"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_a1"), 1, 0)
-        CALL(evt_map_playanim, STRING("yoru_hiru"), 2, 0)
+        CALL(evt_map_playanim, STRING("yoru_hiru"), MAP_ANIM_PLAY_AT_END, 0)
         CALL(evt_mario_kill_party, 0)
         CALL_CHILD(epilogue_npc_entry)
         SPAWN_EVENT(epilogue_evt)
@@ -2520,28 +2543,29 @@ EVT_BEGIN(muj_20_init_evt)
 EVT_END()
 
 /**
- * Script helper that shows the title logo (and "Press Start") on the opening scene:
- * loads the logo textures from mariost.tpl, fades the logo in over 180 frames, waits for A,
- * B or Start and then fades it out over 120 frames,
- * setting GF(1) when the button is pressed and GF(2) when done.
+ * Script helper: shows the title logo from mariost.tpl. It fades the logo in while its y goes from -50 to 0, waits once
+ * GF(0) is set for A, B or START (A or START in the early demos) and sets GF(1), fades it out while y goes to 100, then
+ * frees it, sets GF(2) and returns. The counter steps twice per frame, so each fade takes half its frame count.
  */
 static USER_FUNC(logo) {
-    TitleLogoWork* wp;
+
+    MujLogoWork* wp;
 
     if (isFirstCall) {
-        wp = _mapAlloc(sizeof(TitleLogoWork));
-        memset(wp, 0, sizeof(TitleLogoWork));
+        wp = _mapAlloc(sizeof(MujLogoWork));
+        memset(wp, 0, sizeof(MujLogoWork));
         event->userdatap[0] = wp;
     }
     wp = event->userdatap[0];
 #if VERSION >= VERSION_JP
-    if (fileAsyncf(4, NULL, "%s/mariost.tpl", getMarioStDvdRoot()) == NULL) {
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/mariost.tpl", getMarioStDvdRoot()) == NULL) {
         return EVT_RETURN_BLOCK;
     }
 #endif
+    // Fade states increment the same counter once for alpha and again for vertical position.
     switch (wp->state) {
         case 0:
-            wp->tpl = fileAllocf(4, "%s/mariost.tpl", getMarioStDvdRoot());
+            wp->tpl = fileAllocf(FILE_TYPE_TPL, "%s/mariost.tpl", getMarioStDvdRoot());
             wp->alpha = 0;
             wp->y = 0.0f;
             wp->counter = 0;
@@ -2549,8 +2573,12 @@ static USER_FUNC(logo) {
             break;
         case 1:
             if (wp->counter < VERSION_PICK(180, FPS_FRAMES(180))) {
-                wp->alpha = intplGetValue(11, 0.0f, 255.0f, ++wp->counter, VERSION_PICK(180, FPS_FRAMES(180)));
-                wp->y = intplGetValue(11, -50.0f, 0.0f, ++wp->counter, VERSION_PICK(180, FPS_FRAMES(180)));
+                wp->alpha = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 255.0f, ++wp->counter, VERSION_PICK(180, FPS_FRAMES(180)));
+#if VERSION >= VERSION_US
+                wp->y = intplGetValue(EASING_SINE_IN_OUT, -50.0f, 0.0f, ++wp->counter, FPS_FRAMES(180));
+#else
+                wp->y = intplGetValue(EASING_SINE_IN_OUT, -50.0f, 0.0f, ++wp->counter, 180);
+#endif
             } else if (gp->retraceCount % 15 == 0) {
                 wp->state++;
             }
@@ -2568,8 +2596,12 @@ static USER_FUNC(logo) {
             break;
         case 3:
             if (wp->counter < VERSION_PICK(120, FPS_FRAMES(120))) {
-                wp->alpha = intplGetValue(11, 255.0f, 0.0f, ++wp->counter, VERSION_PICK(120, FPS_FRAMES(120)));
-                wp->y = intplGetValue(11, 0.0f, 100.0f, ++wp->counter, VERSION_PICK(120, FPS_FRAMES(120)));
+                wp->alpha = intplGetValue(EASING_SINE_IN_OUT, 255.0f, 0.0f, ++wp->counter, VERSION_PICK(120, FPS_FRAMES(120)));
+#if VERSION >= VERSION_US
+                wp->y = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 100.0f, ++wp->counter, FPS_FRAMES(120));
+#else
+                wp->y = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 100.0f, ++wp->counter, 120);
+#endif
             } else {
                 wp->state++;
             }
@@ -2582,7 +2614,7 @@ static USER_FUNC(logo) {
             return EVT_RETURN_DONE;
     }
     if (wp->tpl) {
-        dispEntry(CAMERA_2D, 1000.0f, 0, draw, wp);
+        dispEntry(CAMERA_2D, 1000.0f, DISP_MODE_OPAQUE, draw, wp);
     }
     return EVT_RETURN_BLOCK;
 }

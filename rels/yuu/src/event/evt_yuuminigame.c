@@ -1,5 +1,7 @@
 // evt_yuuminigame: Pianta Parlor minigame framework: shared work alloc/free, main and display callbacks.
 
+#include "version.h"
+#include "eff/eff_minigame.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 
@@ -9,16 +11,18 @@
 #include "string.h"
 #include "driver/dispdrv.h"
 #include "yuu.h"
-#include "eff/eff_minigame.h"
 
 static s32 dataadr[32];
-s32 stackt[4];
-s32 stackp;
+static s32 stackt[4];
+static s32 stackp;
 static void evt_yuuminigame_disp_func(CameraId camera, void* param);
+
+static USER_FUNC(evt_yuuminigame_main_func);
+USER_FUNC(evt_yuuminigame_free);
 
 static EvtWord main_evt[4];
 
-/** Empties the small value stack used to pass values between scripts (yuu_atai means "value"). */
+/** Script helper (no arguments): resets the value stack pointer (stackp) to 0. */
 USER_FUNC(yuu_atai_init) {
     stackp = 0;
     return EVT_RETURN_DONE;
@@ -108,7 +112,7 @@ USER_FUNC(evt_yuuminigame_free) {
     if (isFirstCall) {
         wp->flags |= MINIGAME_FLAG_QUIT;
     }
-    if (!(wp->flags & MINIGAME_FLAG_STOPPED)) {
+    if (!(wp->flags & MINIGAME_FLAG_QUIT_DONE)) {
         return EVT_RETURN_BLOCK;
     }
     switch (wp->type) {
@@ -188,7 +192,7 @@ static USER_FUNC(evt_yuuminigame_main_func) {
     MiniGameWork* wp = (MiniGameWork*)event->lwData[0];
 
     if (wp->flags & MINIGAME_FLAG_QUIT) {
-        wp->flags |= MINIGAME_FLAG_STOPPED;
+        wp->flags |= MINIGAME_FLAG_QUIT_DONE;
         return EVT_RETURN_DONE;
     }
     if (wp->subEvent != NULL) {
@@ -199,7 +203,7 @@ static USER_FUNC(evt_yuuminigame_main_func) {
     }
     wp->main(event, isFirstCall);
 disp:
-    dispEntry(CAMERA_2D, 1000.0f, 0, evt_yuuminigame_disp_func, wp);
+    dispEntry(CAMERA_2D, 1000.0f, DISP_MODE_OPAQUE, evt_yuuminigame_disp_func, wp);
     return EVT_RETURN_BLOCK;
 }
 

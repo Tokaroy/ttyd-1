@@ -1,35 +1,49 @@
 // Pianta Parlor (yuu, yugijo "amusement hall"): types and data of its minigames (Monte, MonteTable, SlitWork).
+
 #pragma once
 
-#include "dolphin/types.h"
 #include "version.h"
+#include "dolphin/types.h"
 #include "dolphin/mtx.h"
 #include "manager/evtmgr.h"
 #include "driver/camdrv.h"
-#include "evt/evt_cmd.h"
-#include "evt/evt_yuuminigame.h"
-#include "driver/icondrv.h"
+#include "evt/evt_yuugijou.h"
 
-// A Pianta token lying in a minigame room (yuu_00 .. yuu_03), drawn as an icon.
+struct EventEntry;
+
+// Pianta Parlor minigame piece (yuu_00..yuu_03)
+typedef struct MonteSub {
+    s32 unk0;
+    Vec pos;
+    f32 scale;
+    u8 unk14[0x38 - 0x14];
+} MonteSub;
 typedef struct Monte {
-    u8 hidden;        // 0x00
-    u8 pad_1;         // 0x01
-    s16 num;          // 0x02
-    u8 state;         // 0x04
-    u8 pad_5[3];      // 0x05
-    IconEntry icon;   // 0x08, only position and scale are used
-    MiniGameWork* wp; // 0x40
+    u8 hidden;
+    s16 num;
+    u8 state;
+    MonteSub sub;
+    MiniGameWork* wp;
 } Monte;
 
-// Area of a room where tokens are scattered (yuu_00, yuu_01); a zero num ends the table.
+// Spawn bands of the minigame pieces (Monte) in yuu_00 and yuu_01 (montetable): num pieces in the x0..x1,
+// y0..y1 box. yuu_02 has its own x/z table (MonteTableXZ).
 typedef struct MonteTable {
-    f32 x0, x1; // 0x00, x range
-    f32 y0, y1; // 0x08, second range (y in the 2D rooms, z in yuu_01)
-    s32 num;    // 0x10, tokens placed in this area
+    f32 x0;
+    f32 x1;
+    f32 y0;
+    f32 y1;
+    s32 num;
 } MonteTable;
+
 // minigame 4 (yuu_03) work
+// SlitWork.flags
+enum {
+    SLIT_FLAG_OPENING = 1, // set at init; the opening cutscene is still pending
+};
+
 typedef struct SlitWork {
-    u32 flags;
+    u32 flags; // SLIT_FLAG_*
     s32 phase;
     s32 coins;
     s32 result;
@@ -39,7 +53,7 @@ typedef struct SlitWork {
     f32 rot2;
     s32 monteCount;
 #if VERSION >= VERSION_JP
-    EventEntry* viewEvent; // the demo has no token view event in this minigame
+    EventEntry* viewEvent;
 #endif
 } SlitWork;
 
@@ -54,55 +68,61 @@ extern EvtWord yuu_03_init_evt[];
 extern MiniGameWork* yuunpc_yuuminigame4_ptr;
 extern f32 yuusintbl[];
 
-extern const char* a_nametbl[];
-extern Vec fukkipoint[];
-extern signed char hitdata[];
-extern s32 hoko_tbl[];
-extern EvtWord minigame01_end[];
-extern EvtWord minigame01_start[];
 extern EvtWord minigame02_end[];
 extern EvtWord minigame02_start[];
 extern EvtWord minigame03_end[];
 extern EvtWord minigame03_start[];
 extern EvtWord minigame04_end[];
 extern EvtWord minigame04_start[];
-extern EvtWord ryushi_event[];
-extern const char* s_nametbl[];
-extern s32 turn_tbl[];
 extern EvtWord yuu_02_icon_monte_entry_evt[];
 extern EvtWord yuu_02_jumpret[];
 extern EvtWord yuu_03_icon_monte_entry_evt[];
 
 extern EvtWord minigame01_floor_delete[];
 
-USER_FUNC(evt_yuucounter_free);
+// Display flags of the minigame counter (yuucounter_flag_on / _off / yuucounter_flag; yuucounter_disp_flag_onoff)
+enum {
+    YUUCOUNTER_FLAG_HIDE = 1,              // the counter is not drawn
+    YUUCOUNTER_FLAG_FREEZE = 1 << 1,       // the value is no longer updated (set when a round ends)
+    YUUCOUNTER_FLAG_RESTART_TIME = 1 << 2, // JP and later: the timer restarts its time baseline
+                                           // (after the pause window)
+};
+
+void yuucounter_flag_on(u32 mask);
+void yuucounter_flag_off(u32 mask);
+u32 yuucounter_flag(u32 mask);
+s32 yuucounter_get_data(void);
+void yuucounter_set_data(s32 data);
+void yuuminigame_disp_4slit(CameraId camera, void* param);
+void yuuminigame_disp_3roll(CameraId camera, void* param);
+void yuuminigame_disp_2fune(CameraId camera, void* param);
+void yuuminigame_disp_1hikoki(CameraId camera, void* param);
+void ext_yuunpc_minigame4_init_sub(void);
+s32 yuunpc_juni(Vec* pos);
+
+// yuunpc_wp_flag_on/off/check
+#define YUUNPC_WP_FLAG_WAIT 1 // race NPCs hold their start until yuunpc_go
+void yuunpc_wp_flag_on(u16 flag);
+void yuunpc_wp_flag_off(u16 flag);
+u16 yuunpc_wp_flag_check(u16 flag);
+void yuuminigame_init_1hikoki(struct EventEntry* event, BOOL isFirstCall);
+void yuuminigame_main_1hikoki(struct EventEntry* event, BOOL isFirstCall);
+void yuuminigame_init_2fune(struct EventEntry* event, BOOL isFirstCall);
+void yuuminigame_main_2fune(struct EventEntry* event, BOOL isFirstCall);
+void yuuminigame_init_3roll(struct EventEntry* event, BOOL isFirstCall);
+void yuuminigame_main_3roll(struct EventEntry* event, BOOL isFirstCall);
+void yuuminigame_init_4slit(struct EventEntry* event, BOOL isFirstCall);
+void yuuminigame_main_4slit(struct EventEntry* event, BOOL isFirstCall);
+
+USER_FUNC(eff_call_minigame);
 USER_FUNC(evt_yuucounter_alloc);
+USER_FUNC(evt_yuucounter_free);
+USER_FUNC(evt_yuuminigame_alloc);
+USER_FUNC(evt_yuutitle_alloc);
+USER_FUNC(evt_yuutitle_free);
 USER_FUNC(yuu_atai_init);
 USER_FUNC(yuu_atai_pop);
 USER_FUNC(yuu_atai_push);
-USER_FUNC(eff_call_minigame);
-USER_FUNC(yuuminigame_set_dataadr);
 USER_FUNC(yuuminigame_get_dataadr);
-USER_FUNC(evt_yuuminigame_alloc);
+USER_FUNC(yuuminigame_set_dataadr);
 USER_FUNC(yuuranking_get_monte);
-USER_FUNC(evt_yuutitle_alloc);
-USER_FUNC(evt_yuutitle_free);
-s32 yuucounter_get_data(void);
-void ext_yuunpc_minigame4_init_sub(void);
-s32 yuunpc_juni(Vec* pos);
-void yuuminigame_disp_1hikoki(CameraId camera, void* param);
-void yuuminigame_disp_2fune(CameraId camera, void* param);
-void yuuminigame_disp_3roll(CameraId camera, void* param);
-void yuuminigame_disp_4slit(CameraId camera, void* param);
-void yuucounter_flag_on(u32 mask);
-void yuunpc_wp_flag_off(u16 flag);
-
-// the minigame init/main callbacks of yuu_00 .. yuu_03 (evt_yuuminigame.c starts them)
-void yuuminigame_init_1hikoki(EventEntry* event, BOOL isFirstCall);
-void yuuminigame_main_1hikoki(EventEntry* event, BOOL isFirstCall);
-void yuuminigame_init_2fune(EventEntry* event, BOOL isFirstCall);
-void yuuminigame_main_2fune(EventEntry* event, BOOL isFirstCall);
-void yuuminigame_init_3roll(EventEntry* event, BOOL isFirstCall);
-void yuuminigame_main_3roll(EventEntry* event, BOOL isFirstCall);
-void yuuminigame_init_4slit(EventEntry* event, BOOL isFirstCall);
-void yuuminigame_main_4slit(EventEntry* event, BOOL isFirstCall);

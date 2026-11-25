@@ -1,14 +1,15 @@
 // tou_11 (闘技場, Glitz Pit): an empty minor-league locker room, hidden behind the tou_09 lockers, where Mario is
 // shut in before the title match; exits to tou_04 and tou_09 (the shut-in scenes iris out to tou_03).
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "driver/fadedrv.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "tou.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_cloud.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_fade.h"
 #include "evt/evt_hit.h"
@@ -16,12 +17,30 @@
 #include "evt/evt_mario.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_party.h"
+#include "evt/evt_case.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "driver/npcdrv.h"
 #include "driver/mapdrv.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "driver/seqdrv.h"
+#include "pmario_sound.h"
+
+static EvtWord n_door_open[12];
+static EvtWord n_door_close[12];
+static EvtWord e_door_open[12];
+static EvtWord e_door_close[12];
+static BeroEntry bero_data[3];
+static NpcSetupInfo npcEnt[2];
+static EvtWord evt_tojikome[296];
+static EvtWord evt_tojikome_nidome[104];
+static EvtWord evt_tojikome_sandome[37];
+static EvtWord evt_tojikome_msg[30];
+static EvtWord evt_postar[23];
+EvtWord tou_11_init_evt[178];
 
 /**
  * Door animation callback for the north door (door_1), opening: LW(0) is the swing angle;
@@ -107,8 +126,8 @@ static BeroEntry bero_data[] = {
 /** NPCs of this room: the guard who brings Mario here before the title match (evt_tojikome). */
 static NpcSetupInfo npcEnt[] = {
     {
-        "ガードマン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ガードマン", // name (a Glitz Pit security guard)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // reactionFlags..returnEvent
         NULL, 0, // blowEvent..territoryType
         {0}, // territoryBase
@@ -119,30 +138,29 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /**
- * Arrival before the title match (GSWF_TOU_TITLE_MATCH_RESERVED), played once (GSWF_TOU11_LOCKED_IN_SEEN):
- * a guard (ガードマン) brings Mario and the partner in,
- * tells them to wait here (stg3_tou_409) and leaves through the door.
- * The partner wonders why they were brought to a locker room and where everyone is,
- * worried they will miss the match (stg3_tou_409_01), then the screen irises out to tou_03.
+ * Arrival before the title match (spawned while GSWF_GLITZ_PIT_TITLE_MATCH_BOOKED is set), once
+ * (GSWF_TOU_11_LOCKED_IN_SEEN, set first): with the music stopped a guard leads Mario and the partner in, says
+ * stg3_tou_409 and leaves through the door; the partner speaks stg3_tou_409_01 and the scene irises out to tou_03.
  */
-EVT_BEGIN(evt_tojikome)
+static EVT_BEGIN(evt_tojikome)
     // Plays only once, with the music stopped.
-    IF_INT_EQUAL(GSWF(GSWF_TOU11_LOCKED_IN_SEEN), 1)
+    IF_INT_EQUAL(GSWF_TOU_11_LOCKED_IN_SEEN, 1)
         RETURN
     END_IF
-    SET_VALUE(GSWF(GSWF_TOU11_LOCKED_IN_SEEN), 1)
+    SET_VALUE(GSWF_TOU_11_LOCKED_IN_SEEN, 1)
     CALL(evt_snd_bgm_scope, 0, 0)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
     CALL(evt_mario_set_pos, 0, 0, -170)
     CALL(evt_party_set_pos, 0, 0, 0, -200)
     CALL(evt_npc_set_position, STRING("ガードマン"), 0, 0, -160)
-    CALL(evt_npc_status_onoff, 1, STRING("ガードマン"), 2)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_npc_status_onoff, 1, STRING("ガードマン"), NPC_STATUS_FACE_MOVE_DIR)
+    CALL(evt_seq_wait, SEQ_GAME)
+
     // The guard opens the door and leads Mario and the partner into the room.
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL_CHILD(n_door_open)
@@ -154,7 +172,7 @@ EVT_BEGIN(evt_tojikome)
         WAIT_MS(4000)
         SET_VALUE(LW(1), 0)
         SPAWN_EVENT(bero_close_door_play_se)
-        CALL(evt_sub_intpl_msec_init, 11, -180, 0, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -180, 0, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL_CHILD(n_door_open)
@@ -182,19 +200,21 @@ EVT_BEGIN(evt_tojikome)
     CALL(evt_mario_mov_pos2, 0, -80, FLOAT(60.0f))
     CALL(evt_mario_mov_pos2, 30, -80, FLOAT(60.0f))
     CALL(evt_mario_set_dir_npc, STRING("ガードマン"))
+
     // The guard tells them to wait here and they look puzzled.
     CALL(evt_msg_print, 0, STRING("stg3_tou_409"), 0, STRING("ガードマン"))
     WAIT_MS(300)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_QUESTION1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_eff_fukidashi, 0, STRING("m"), 0, 1, 0, 0, 0, 0, 0, 0, 0)
-    CALL(evt_eff_fukidashi, 3, STRING("p"), 0, 1, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING("m"), 0, 1, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING("p"), 0, 1, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(500)
+
     // He leaves through the door, which shuts behind him.
     CALL(evt_npc_move_position, STRING("ガードマン"), 0, -100, 0, FLOAT(70.0f), 1)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL_CHILD(n_door_open)
@@ -206,7 +226,7 @@ EVT_BEGIN(evt_tojikome)
         WAIT_MS(1000)
         SET_VALUE(LW(1), 0)
         SPAWN_EVENT(bero_close_door_play_se)
-        CALL(evt_sub_intpl_msec_init, 11, 180, 0, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 0, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL_CHILD(n_door_open)
@@ -216,6 +236,7 @@ EVT_BEGIN(evt_tojikome)
         END_LOOP
     END_INLINE_EVENT
     CALL(evt_npc_move_position, STRING("ガードマン"), 0, -200, 0, FLOAT(70.0f), 1)
+
     // The partner wonders why they are in a minor-league locker room, then the scene irises to the arena.
     CALL(evt_party_stop, 0)
     CALL(evt_msg_print_party, STRING("stg3_tou_409_01"))
@@ -230,11 +251,11 @@ EVT_END()
  * and goes to check (stg3_tou_409_02), the door will not open (locked-door sound),
  * the partner panics that they are locked in (stg3_tou_410), and the screen irises out to tou_03.
  */
-EVT_BEGIN(evt_tojikome_nidome)
+static EVT_BEGIN(evt_tojikome_nidome)
     CALL(evt_snd_bgm_scope, 0, 0)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(1000)
     CALL(evt_msg_print_party, STRING("stg3_tou_409_02"))
     CALL(evt_party_move_pos2, 0, 10, -140, FLOAT(60.0f))
@@ -242,9 +263,9 @@ EVT_BEGIN(evt_tojikome_nidome)
     CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG3_DOOR_NOTOPEN1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(500)
-    CALL(evt_eff_fukidashi, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 0, 107, 351, 0, 45, -1, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 107, 351, 0, 45, -1, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print_party, STRING("stg3_tou_410"))
     WAIT_MS(300)
@@ -258,16 +279,16 @@ EVT_BEGIN(evt_tojikome_nidome)
 EVT_END()
 
 /** Third shut-in scene: the partner's remark stg3_tou_421_01 and the normal Glitz Pit music and ambience return. */
-EVT_BEGIN(evt_tojikome_sandome)
+static EVT_BEGIN(evt_tojikome_sandome)
     CALL(evt_snd_bgm_scope, 0, 0)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(1000)
     CALL(evt_msg_print_party, STRING("stg3_tou_421_01"))
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
     RETURN
@@ -285,23 +306,26 @@ static EVT_BEGIN(evt_tojikome_msg)
     RETURN
 EVT_END()
 
-/** Poster blown away by the cloud-blowing mechanic: a success jingle plays and GSWF_TOU11_POSTER_BLOWN is set. */
-EVT_BEGIN(evt_postar)
+/**
+ * Blow-away event of the poster pos_1 (evt_cloud_ent: Flurrie blows it away): plays the success jingle and
+ * sets GSWF_TOU_11_POSTER_BLOWN_AWAY, after which the map init hides the poster.
+ */
+static EVT_BEGIN(evt_postar)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(2000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
-    SET_VALUE(GSWF(GSWF_TOU11_POSTER_BLOWN), 1)
+    SET_VALUE(GSWF_TOU_11_POSTER_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
 /**
  * Map init for tou_11, the empty minor-league locker room:
  * NPCs, the blowable poster (pos_1), the shut-in message at n_bero, music,
- * and Mario's and the partner's entry positions (and the title match entry if reserved).
+ * and Mario's and the partner's entry positions (and the shut-in scene if the title match is booked).
  */
 EVT_BEGIN(tou_11_init_evt)
     SET_VALUE(LW(0), PTR(bero_data))
@@ -309,39 +333,41 @@ EVT_BEGIN(tou_11_init_evt)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_tou_locker_init)
     CALL(evt_npc_setup, PTR(npcEnt))
-    IF_INT_EQUAL(GSWF(GSWF_TOU11_POSTER_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_TOU_11_POSTER_BLOWN_AWAY, 0)
         CALL(evt_cloud_init)
         CALL(evt_cloud_ent, 0, STRING("pos_1"), STRING("a_pos_1"), PTR(evt_postar))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("pos_1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("pos_1"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_pos_1"), 1, 0)
     END_IF
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kuro_1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kuro_1"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(0), 0)
     CALL_CHILD(bero_case_switch_off)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("n_bero"), 0, PTR(evt_tojikome_msg), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("n_bero"), 0, PTR(evt_tojikome_msg), 0)
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("nidome"))
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU2"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU2"))
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU2"))
-#else
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
-#endif
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU2"))
         SPAWN_EVENT(evt_tojikome_nidome)
+#else
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
+        SPAWN_EVENT(evt_tojikome_nidome)
+#endif
         CALL(evt_mario_set_pos, 30, 0, -100)
         CALL(evt_party_set_pos, 0, 60, 0, -100)
         CALL(evt_cam_road_reset)
         RETURN
     END_IF
     IF_STR_EQUAL(LW(0), STRING("sandome"))
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU2"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU2"))
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU2"))
-#else
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
-#endif
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU2"))
         SPAWN_EVENT(evt_tojikome_sandome)
+#else
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
+        SPAWN_EVENT(evt_tojikome_sandome)
+#endif
         CALL(evt_mario_set_pos, 30, 0, -100)
         CALL(evt_party_set_pos, 0, 60, 0, -100)
         CALL(evt_mario_set_dir, 90, 0, 0)
@@ -349,32 +375,32 @@ EVT_BEGIN(tou_11_init_evt)
         CALL(evt_cam_road_reset)
         RETURN
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_TOU_TITLE_MATCH_RESERVED), 1)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
+    IF_INT_EQUAL(GSWF_GLITZ_PIT_TITLE_MATCH_BOOKED, 1)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
+        CALL(evt_snd_envoff, PSND_FADEOUT)
         SPAWN_EVENT(evt_tojikome)
         RETURN
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG3_00_WELCOME_TO_GLITZVILLE, STORY_STG3_12_MINI_YOSHI_EGG)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU2"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG3_00_WELCOME_TO_GLITZVILLE, STG3_12_THE_MINI_YOSHI_EGG)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU2"))
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU2"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU2"))
 #else
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
 #endif
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-        CASE_GREATER_OR_EQUAL(STORY_STG3_33_PEACH_THE_SECRET_WEAPON)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU2"))
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
+        CASE_GREATER_OR_EQUAL(STG3_33_PEACH_THE_SECRET_WEAPON)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU2"))
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU2"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU2"))
 #else
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
 #endif
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
     END_SWITCH
     RETURN
 EVT_END()

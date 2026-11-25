@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: curtain of water (wcurtain) at a point with a scale and lifetime.
-#include "eff/n64/eff_opuku_wcurtain_n64.h"
+
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -9,6 +9,7 @@
 #include <dolphin/os/OSFastCast.h>
 #include <stdlib.h>
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_opuku_wcurtain_n64.h"
 
 typedef struct EffOpukuWcurtainN64Work {
     s32 type;       // 0x0
@@ -25,7 +26,7 @@ typedef struct EffOpukuWcurtainN64Work {
 } EffOpukuWcurtainN64Work;
 
 static void effOpukuWcurtainMain(EffectEntry* effect);
-static void effOpukuWcurtainDisp(CameraId cameraId, EffectEntry* effect);
+static void effOpukuWcurtainDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a water curtain at (x, y, z) scaled by scale, lasting lifetime frames (<= 0 means until deleted):
@@ -42,7 +43,7 @@ EffectEntry* effOpukuWcurtainN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffOpukuWcurtainN64Work));
     effect->userdata = work;
     effect->callback = effOpukuWcurtainMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -67,21 +68,22 @@ EffectEntry* effOpukuWcurtainN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
 }
 
 /**
- * Fades the curtain in and out and accelerates each strip downward (speed gains -0.05 per frame, with a cap near
- * 5).
+ * Fades the curtain in and out and accelerates each strip downward (speed gains -0.05 per frame; the easing
+ * toward 5 above a speed of 5 never applies, as the speed only falls).
  */
 static void effOpukuWcurtainMain(EffectEntry* effect) {
     EffOpukuWcurtainN64Work* work = effect->userdata;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 i;
+    s32 frame;
 
     tmp.x = work->position.x;
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -92,12 +94,12 @@ static void effOpukuWcurtainMain(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    i = work->frame;
+    frame = work->frame;
     if (work->lifetime < 16) {
         work->alpha = work->lifetime << 4;
     }
-    if (i < 16) {
-        work->alpha = (i << 4) + 15;
+    if (frame < 16) {
+        work->alpha = (frame << 4) + 15;
     }
     for (i = 0; i < 12; i++) {
         work->offset[i] += work->speed[i];
@@ -106,29 +108,44 @@ static void effOpukuWcurtainMain(EffectEntry* effect) {
             work->speed[i] += 0.1f * (5.0f - work->speed[i]);
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effOpukuWcurtainDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effOpukuWcurtainDisp, effect);
+}
+
+/** Transforms vertex `src`'s position by `mtx` into `dst` (fast-cast s16 <-> f32 conversions). */
+// Original name and size (0x110) from the JP demo map (UNUSED there: every call is inlined).
+static void vtx_copy(effN64Vtx* dst, effN64Vtx* src, Mtx mtx) {
+    Vec v;
+
+    OSInitFastCast();
+    OSs16tof32(&src->x, &v.x);
+    OSs16tof32(&src->y, &v.y);
+    OSs16tof32(&src->z, &v.z);
+    PSMTXMultVec(mtx, &v, &v);
+    OSInitFastCast();
+    OSf32tos16(&v.x, &dst->x);
+    OSf32tos16(&v.y, &dst->y);
+    OSf32tos16(&v.z, &dst->z);
 }
 
 /**
- * Builds twelve vertical strips (texture 0x8F, alpha dropping 20 per strip),
- * scales and positions them in world space, and draws them as a row of quads.
+ * Builds twelve vertical vertex columns (texture 0x8F, alpha dropping 20 per column),
+ * scales and positions them in world space, and draws them as a row of 11 quads.
  */
-static void effOpukuWcurtainDisp(CameraId cameraId, EffectEntry* effect) {
+static void effOpukuWcurtainDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffOpukuWcurtainN64Work* work;
     Mtx mtx;
     Mtx scale;
     GXTexObj texObj;
-    Vec v;
     f32 s;
     s32 i;
     effN64Vtx* vtx;
     effN64Vtx* p;
     s32 j;
     s32 frame;
-    s32 m;
-    s32 n;
     s32 t;
+    s32 n;
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
@@ -150,7 +167,7 @@ static void effOpukuWcurtainDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXScale(scale, 0.03125f, 0.03125f, 0.0f);
     GXLoadTexMtxImm(scale, GX_TEXMTX0, GX_MTX2x4);
     GXSetCullMode(GX_CULL_NONE);
-    p = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 48, 3)->address;
+    p = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 48, SMART_GROUP_TEMP)->address;
     vtx = p;
     for (i = 0; i < 12; i++) {
         t = (frame + i * 4) << 5;
@@ -178,15 +195,7 @@ static void effOpukuWcurtainDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXScale(scale, s, s, s);
     PSMTXConcat(mtx, scale, mtx);
     for (j = 0; j < i * 2; j++) {
-        OSInitFastCast();
-        OSs16tof32(&vtx[j].x, &v.x);
-        OSs16tof32(&vtx[j].y, &v.y);
-        OSs16tof32(&vtx[j].z, &v.z);
-        PSMTXMultVec(mtx, &v, &v);
-        OSInitFastCast();
-        OSf32tos16(&v.x, &vtx[j].x);
-        OSf32tos16(&v.y, &vtx[j].y);
-        OSf32tos16(&v.z, &vtx[j].z);
+        vtx_copy(&vtx[j], &vtx[j], mtx);
     }
     DCFlushRange(vtx, sizeof(effN64Vtx) * 48);
     GXInvalidateVtxCache();
@@ -196,7 +205,7 @@ static void effOpukuWcurtainDisp(CameraId cameraId, EffectEntry* effect) {
 
     for (j = 0; j < i - 1; j++) {
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
-        frame = j << 1;
-        tri2(frame, frame + 2, frame + 1, frame, frame + 1, frame + 2, frame + 3, frame);
+        n = j << 1;
+        tri2(n, n + 2, n + 1, n, n + 1, n + 2, n + 3, n);
     }
 }

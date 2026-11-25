@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: hit flash made of radiating pieces; size sets the piece count and the type the colour.
+
 #include "eff/n64/eff_hit_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -11,11 +12,11 @@
 typedef struct EffHitN64Work {
     s32 type;        // 0x0
     Vec position;    // 0x4
-    f32 vel10;       // 0x10
-    f32 vel14;       // 0x14
+    f32 reserved_10; // 0x10, only set to 0
+    f32 reserved_14; // 0x14, only set to 0
     f32 pad18;       // 0x18
     f32 rotZ;        // 0x1C
-    f32 reserved_20; // 0x20, cleared at entry, never read
+    f32 reserved_20; // 0x20, only set to 0
     f32 rotY;        // 0x24
     f32 scale;       // 0x28
     s32 alpha;       // 0x2C
@@ -23,7 +24,6 @@ typedef struct EffHitN64Work {
     s32 frame;       // 0x34
     f32 progress;    // 0x38
     u8 color[6];     // 0x3C
-    u8 pad_42[2];    // 0x42
 } EffHitN64Work;
 
 /** Radiating pieces of the hit flash: five quads, each on its own row of the texture. */
@@ -52,10 +52,13 @@ static effN64Vtx size32x32_tex32x32_vtx[] = {
 
 /** Length in frames of the hit flash for each type (13 for all four). */
 static u8 cnt_table[4] = {13, 13, 13, 13};
+
 /** Animation progress of the hit flash on each of its 13 frames, easing toward the end. */
 static u8 anim_data[13] = {0x40, 0x68, 0x90, 0xA4, 0xB8, 0xC0, 0xD0, 0xD8, 0xE0, 0xE8, 0xF0, 0xF8, 0xFF};
+
 /** How far out the flash's pieces have spread on each of its 13 frames. */
 static u8 radius_data[13] = {10, 20, 28, 35, 42, 48, 53, 57, 60, 62, 63, 64, 65};
+
 /** Fire-type colour blend on each frame: full fire colour for two frames, then fading out over three. */
 static u8 fire_data[13] = {255, 255, 200, 130, 60};
 
@@ -66,12 +69,11 @@ static void main_dl(EffectEntry* effect, Mtx mtx);
 /**
  * Spawns a hit flash at (x, y, z). type is the damage flavour: 0 white, 1 fire, 2 electric, 3 ice.
  * size sets the number of radiating pieces ((size * 5 + 20) / 3).
- * Called through effHitEntry by battle damage code.
+ * Called through effHitEntry (battle damage, Special Moves, the audience, a few effects) and directly by evt_eff64.
  */
 EffectEntry* effHitN64Entry(s32 type, s32 size, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffHitN64Work* work;
-    EffHitN64Work* p;
     s32 i;
     s32 count;
     f32 r;
@@ -126,20 +128,20 @@ EffectEntry* effHitN64Entry(s32 type, s32 size, f32 x, f32 y, f32 z, f32 scale) 
             break;
     }
     work->scale = scale;
-    p = work + 1;
-    for (i = 1; i < count; i++, p++) {
+    work++;
+    for (i = 1; i < count; i++, work++) {
         r = rand() % 360;
-        p->position.x = 0.0f;
-        p->position.y = 0.0f;
-        p->position.z = 0.0f;
-        p->vel10 = 0.0f;
-        p->vel14 = 0.0f;
-        p->reserved_20 = 0.0f;
-        p->type = 0;
-        p->rotZ = (f32)(i * 360 / (count - 1));
-        p->rotY = r;
-        p->vel10 = 0.0f;
-        p->alpha = 255;
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->reserved_10 = 0.0f;
+        work->reserved_14 = 0.0f;
+        work->reserved_20 = 0.0f;
+        work->type = 0;
+        work->rotZ = (f32)(i * 360 / (count - 1));
+        work->rotY = r;
+        work->reserved_10 = 0.0f;
+        work->alpha = 255;
     }
     return effect;
 }
@@ -154,7 +156,6 @@ static void effHitMain(EffectEntry* effect) {
     Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 i;
     s32 idx;
-    EffHitN64Work* p;
     s32 frame;
     s32 type;
 
@@ -186,7 +187,7 @@ static void effHitMain(EffectEntry* effect) {
         work->position.y = 0.0f;
         work->position.z = 0.0f;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effHitDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effHitDisp, effect);
 }
 
 /**
@@ -310,10 +311,9 @@ static void main_dl(EffectEntry* effect, Mtx mtx) {
     Mtx trans;
     Mtx rotZ;
     Mtx rotY;
-    EffHitN64Work* work = effect->userdata;
     effN64Vtx* vtx;
+    EffHitN64Work* work = effect->userdata;
     s32 idx;
-    EffHitN64Work* p;
     s32 flag;
     s32 i;
     f32 f;
@@ -336,11 +336,11 @@ static void main_dl(EffectEntry* effect, Mtx mtx) {
         GXLoadTexMtxImm(texMtx, GX_TEXMTX1, GX_MTX2x4);
     }
     vtx = size32x32_tex32x32_vtx + idx * 4;
-    p = work + 1;
-    for (i = 1; i < effect->count; i++, p++) {
-        PSMTXRotRad(rotY, 'y', 0.017453292f * p->rotY);
-        PSMTXRotRad(rotZ, 'z', 0.017453292f * p->rotZ);
-        PSMTXTrans(trans, p->position.x, p->position.y, p->position.z);
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        PSMTXRotRad(rotY, 'y', 0.017453292f * work->rotY);
+        PSMTXRotRad(rotZ, 'z', 0.017453292f * work->rotZ);
+        PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
         PSMTXConcat(rotY, rotZ, rotZ);
         PSMTXConcat(rotZ, trans, trans);
         PSMTXConcat(mtx, trans, trans);

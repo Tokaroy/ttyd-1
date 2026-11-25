@@ -4,10 +4,8 @@
 #include "__ar.h"
 
 #ifdef DEBUG
-/** Library version string kept in the binary (debug build). */
 const char* __ARQVersion = "<< Dolphin SDK - ARQ\tdebug build: Apr  5 2004 03:56:20 (0x2301) >>";
 #else
-/** Library version string kept in the binary (release build). */
 const char* __ARQVersion = "<< Dolphin SDK - ARQ\trelease build: Apr  5 2004 04:15:04 (0x2301) >>";
 #endif
 
@@ -24,13 +22,9 @@ static ARQCallback __ARQCallbackLo;
 static u32 __ARQChunkSize;
 static BOOL __ARQ_init_flag;
 
-/**
- * Takes the next request off the high-priority queue, if any, and starts its DMA as a single transfer,
- * remembering its callback and making it the pending high-priority request.
- */
 void __ARQPopTaskQueueHi(void) {
     if (__ARQRequestQueueHi) {
-        if (__ARQRequestQueueHi->type == 0) {
+        if (__ARQRequestQueueHi->type == ARQ_TYPE_MRAM_TO_ARAM) {
             ARStartDMA(__ARQRequestQueueHi->type, __ARQRequestQueueHi->source, __ARQRequestQueueHi->dest, __ARQRequestQueueHi->length);
         } else {
             ARStartDMA(__ARQRequestQueueHi->type, __ARQRequestQueueHi->dest, __ARQRequestQueueHi->source, __ARQRequestQueueHi->length);
@@ -41,13 +35,6 @@ void __ARQPopTaskQueueHi(void) {
     }
 }
 
-/**
- * Advances the low-priority queue by one chunk: if no low-priority request is in progress it takes the next one;
- * then it starts a DMA of at most the chunk size (4 KB by default) from that request,
- * shrinking its remaining length and moving its addresses.
- * Only the last chunk sets the completion callback,
- * so a large transfer is split so that high-priority requests can run in between.
- */
 void __ARQServiceQueueLo(void) {
     if (__ARQRequestPendingLo == 0 && __ARQRequestQueueLo) {
         __ARQRequestPendingLo = __ARQRequestQueueLo;
@@ -56,32 +43,27 @@ void __ARQServiceQueueLo(void) {
 
     if (__ARQRequestPendingLo) {
         if (__ARQRequestPendingLo->length <= __ARQChunkSize) {
-            if (__ARQRequestPendingLo->type == 0) {
+            if (__ARQRequestPendingLo->type == ARQ_TYPE_MRAM_TO_ARAM) {
                 ARStartDMA(__ARQRequestPendingLo->type, __ARQRequestPendingLo->source, __ARQRequestPendingLo->dest, __ARQRequestPendingLo->length);
             } else {
                 ARStartDMA(__ARQRequestPendingLo->type, __ARQRequestPendingLo->dest, __ARQRequestPendingLo->source, __ARQRequestPendingLo->length);
             }
             __ARQCallbackLo = __ARQRequestPendingLo->callback;
-        } else if (__ARQRequestPendingLo->type == 0) {
+        } else if (__ARQRequestPendingLo->type == ARQ_TYPE_MRAM_TO_ARAM) {
             ARStartDMA(__ARQRequestPendingLo->type, __ARQRequestPendingLo->source, __ARQRequestPendingLo->dest, __ARQChunkSize);
         } else {
             ARStartDMA(__ARQRequestPendingLo->type, __ARQRequestPendingLo->dest, __ARQRequestPendingLo->source, __ARQChunkSize);
         }
 
+        // after the last chunk (length <= chunk size) the unsigned length wraps below zero; the request is done then
         __ARQRequestPendingLo->length -= __ARQChunkSize;
         __ARQRequestPendingLo->source += __ARQChunkSize;
         __ARQRequestPendingLo->dest += __ARQChunkSize;
     }
 }
 
-/** Empty callback substituted for requests posted without one. */
 void __ARQCallbackHack(u32 unused) {}
 
-/**
- * DMA-complete handler of the ARQ (installed by ARQInit):
- * calls the finished request's callback (high priority first), clears the pending request,
- * then starts the next high-priority request or, if there is none, the next chunk of the low-priority one.
- */
 void __ARQInterruptServiceRoutine() {
     if (__ARQCallbackHi) {
         __ARQCallbackHi((u32)__ARQRequestPendingHi);
@@ -100,13 +82,11 @@ void __ARQInterruptServiceRoutine() {
     }
 }
 
-/** Empties the temporary queue used while removing requests. */
 void __ARQInitTempQueue(void) {
     __ARQRequestQueueTemp = NULL;
     __ARQRequestTailTemp = NULL;
 }
 
-/** Appends a request to the temporary queue used while removing requests. */
 void __ARQPushTempQueue(ARQRequest* task) {
     if (!__ARQRequestQueueTemp) {
         __ARQRequestQueueTemp = task;
@@ -117,16 +97,12 @@ void __ARQPushTempQueue(ARQRequest* task) {
     }
 }
 
-/**
- * Initialises the ARAM request queue once: empties both priority queues,
- * sets the chunk size to 4 KB and installs __ARQInterruptServiceRoutine as the ARAM DMA-complete callback.
- */
 void ARQInit(void) {
     if (__ARQ_init_flag != TRUE) {
         OSRegisterVersion(__ARQVersion);
 
         __ARQRequestQueueHi = __ARQRequestQueueLo = NULL;
-        __ARQChunkSize = 0x1000;
+        __ARQChunkSize = 0x1000; // default DMA chunk size
         ARRegisterDMACallback(__ARQInterruptServiceRoutine);
         __ARQRequestPendingHi = NULL;
         __ARQRequestPendingLo = NULL;
@@ -136,17 +112,10 @@ void ARQInit(void) {
     }
 }
 
-/** Clears the initialised flag so ARQInit can run again. */
 void ARQReset(void) {
     __ARQ_init_flag = FALSE;
 }
 
-/**
- * Queues an ARAM DMA request (type 0 main memory to ARAM, 1 ARAM to main memory; priority 0 low,
- * 1 high) tagged with an owner, with the source,
- * destination and length (a multiple of 32) and a completion callback.
- * If the DMA engine is idle it starts the request immediately.
- */
 void ARQPostRequest(ARQRequest* request, u32 owner, u32 type, u32 priority, u32 source, u32 dest, u32 length, ARQCallback callback) {
     BOOL level;
 
@@ -197,7 +166,7 @@ void ARQPostRequest(ARQRequest* request, u32 owner, u32 type, u32 priority, u32 
     OSRestoreInterrupts(level);
 }
 
-/** Removes one request from both queues; a request whose transfer has already started is not affected. */
+/* Removes the request from the queues; a request already pending (being transferred) is not touched. */
 void ARQRemoveRequest(ARQRequest* request) {
     ARQRequest* thisRequest;
     BOOL level;
@@ -226,7 +195,6 @@ void ARQRemoveRequest(ARQRequest* request) {
     OSRestoreInterrupts(level);
 }
 
-/** Removes every queued request belonging to the given owner from both queues. */
 void ARQRemoveOwnerRequest(u32 owner) {
     ARQRequest* thisRequest;
     BOOL level;
@@ -255,7 +223,6 @@ void ARQRemoveOwnerRequest(u32 owner) {
     OSRestoreInterrupts(level);
 }
 
-/** Discards all queued requests in both priority queues. */
 void ARQFlushQueue(void) {
     BOOL level;
 
@@ -268,24 +235,21 @@ void ARQFlushQueue(void) {
     OSRestoreInterrupts(level);
 }
 
-/** Sets the size that low-priority transfers are split into, rounded up to a multiple of 32 bytes. */
 void ARQSetChunkSize(u32 size) {
     u32 i;
 
-    i = size & 0x1F;
+    i = size & (ARQ_DMA_ALIGNMENT - 1);
     if (i) {
-        __ARQChunkSize = size + (0x20 - i);
+        __ARQChunkSize = size + (ARQ_DMA_ALIGNMENT - i);
         return;
     }
     __ARQChunkSize = size;
 }
 
-/** Returns the current chunk size in bytes. */
 u32 ARQGetChunkSize(void) {
     return __ARQChunkSize;
 }
 
-/** Returns whether ARQInit has been called. */
 BOOL ARQCheckInit(void) {
     return __ARQ_init_flag;
 }

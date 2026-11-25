@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: a rubble chunk thrown with velocity and gravity until it lands, then kicks up dust (hokori).
+
 #include "eff/n64/eff_rubble_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,8 +8,8 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "eff/n64/eff_hokori_n64.h"
 #include <stdlib.h>
+#include "eff/n64/eff_hokori_n64.h"
 
 typedef struct EffRubbleN64Work {
     s32 type;     // 0x0
@@ -25,7 +26,7 @@ typedef struct EffRubbleN64Work {
     f32 rotVelZ;  // 0x34
     f32 rotVelY;  // 0x38
     f32 scale;    // 0x3C
-    s32 counter;  // 0x40, only cleared at entry
+    s32 counter;  // 0x40
     s32 alpha;    // 0x44
     s32 lifetime; // 0x48
     s32 frame;    // 0x4C
@@ -35,7 +36,7 @@ typedef struct EffRubbleN64Work {
  * Shaded meshes of the three rubble chunk shapes (hahen, "fragment"): a small cube for types 2 and 5,
  * a low wedge from vertex 23 for types 1 and 4, and a faceted rock from vertex 28 for types 0 and 3.
  */
-effN64Vtx stg_hahen_v[58] = {
+static effN64Vtx stg_hahen_v[58] ATTRIBUTE_ALIGN(8) = {
     {3, 3, -3, 0, 0, 50, 50, 50, 255},
     {-3, -3, -3, -579, 0, 50, 50, 50, 255},
     {-3, 3, 3, -290, -502, 50, 50, 50, 255},
@@ -97,11 +98,11 @@ effN64Vtx stg_hahen_v[58] = {
 };
 
 static void effRubbleMain(EffectEntry* effect);
-static void effRubbleDisp(CameraId cameraId, EffectEntry* effect);
+static void effRubbleDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a rubble chunk at (x, y, z) thrown with velY and gravity toward groundY.
- * Spawned by event scripts through evt_eff.
+ * Reached only through evt_eff64 "rubble_n64"; no script callers found.
  */
 EffectEntry* effRubbleN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 groundY, f32 velY, f32 gravity, f32 scale) {
     EffectEntry* effect;
@@ -173,14 +174,15 @@ static void effRubbleMain(EffectEntry* effect) {
     if (lifetime < 10) {
         work->alpha *= 0.8f;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effRubbleDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effRubbleDisp, effect);
 }
 
 /**
  * Draws the chunk as an untextured shard mesh from stg_hahen_v (three shapes: types 0/3, 1/4, 2/5),
  * tumbled by its X/Y/Z rotation and scaled, in khaki (D7,D7,6E) shaded by the vertex colours.
  */
-static void effRubbleDisp(CameraId cameraId, EffectEntry* effect) {
+static void effRubbleDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffRubbleN64Work* work;
     s32 alpha;

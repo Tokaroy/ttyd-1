@@ -1,47 +1,62 @@
 // shadowdrv.c: the shadow driver (DepthShadowWork, ProjShadowWork): blob, cylinder, projected and depth shadows.
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "memory.h"
-#include "version.h"
+#include "driver/camdrv.h"
 
-// flags of DepthShadowWork, ProjShadowWork and CharShadowWork
-#define SHADOW_WORK_DRAWN 0x1     // the shadow texture was rendered this frame
-#define SHADOW_WORK_ALLOC_TEX 0x2 // the texture buffer is allocated afresh each frame (set by the init)
-#define SHADOW_WORK_HALF_SIZE 0x4 // projected shadow: copied at half size
-typedef struct DepthShadowWork {
-    s32 flags;             // 0x0, SHADOW_WORK_*
-    s32 drawCount;         // 0x4
-    s32 configIdx;         // 0x8, index into shadowConfig
-    Mtx view;              // 0xC
-    Mtx44 proj;            // 0x3C
-    Mtx texMtx;            // 0x7C
-    Mtx depthMtx;          // 0xAC
-    GXTexObj texObj;       // 0xDC
-    smartEntry* texBuffer; // 0xFC, shadow texture memory
-    GXColor color;         // 0x100
-} DepthShadowWork;
-
-typedef struct ProjShadowWork {
-    s32 flags;             // 0x0, SHADOW_WORK_*
-    s32 drawCount;         // 0x4
-    s32 configIdx;         // 0x8, index into shadowConfig
-    Mtx view;              // 0xC
-    Mtx44 proj;            // 0x3C
-    Mtx texMtx;            // 0x7C
-    Mtx depthMtx;          // 0xAC
-    GXTexObj texObj;       // 0xDC
-    smartEntry* texBuffer; // 0xFC, shadow texture memory
-    GXColor color;         // 0x100
-} ProjShadowWork;
+// DepthShadowWork / ProjShadowWork / CharShadowWork .flags
+typedef enum ShadowWorkFlags {
+    SHADOW_WORK_READY = (1 << 0),            // 0x1, the shadow texture was made this frame
+    SHADOW_WORK_ALLOC = (1 << 1),            // 0x2, allocate the texture buffer when capturing
+    SHADOW_WORK_HALF_SIZE_UNUSED = (1 << 2), // 0x4, half-size texture; nothing sets it
+} ShadowWorkFlags;
 
 // ShadowEntry.flags (shadowFlagOn)
-#define SHADOW_FLAG_COLLISION 0x1 // placed on the floor below by a ray (shadowSetCollision; default from defaultEnabled)
-#define SHADOW_FLAG_PLACED 0x2    // matrix computed this frame: drawn
-#define SHADOW_FLAG_NO_DECAY 0x4  // cylinder shadow drawn with color_tbl_nodecay
+typedef enum ShadowEntryFlags {
+    SHADOW_ENTRY_GROUND = (1 << 0),   // 0x1, placed on the ground found below (hit check)
+    SHADOW_ENTRY_PLACED = (1 << 1),   // 0x2, matrix set up this frame
+    SHADOW_ENTRY_NO_DECAY = (1 << 2), // 0x4, drawn without the decay colours
+} ShadowEntryFlags;
+
+typedef struct ShadowWork {
+    s32 flags;             // 0x0, ShadowWorkFlags
+    s32 drawCount;         // 0x4
+    s32 configIdx;         // 0x8, index into shadowConfig
+    Mtx view;              // 0xC
+    Mtx44 proj;            // 0x3C
+    Mtx texMtx;            // 0x7C
+    Mtx depthMtx;          // 0xAC
+    GXTexObj texObj;       // 0xDC
+    smartEntry* texBuffer; // 0xFC, shadow texture memory
+    GXColor color;         // 0x100
+} ShadowWork;
+typedef ShadowWork DepthShadowWork;
+
+typedef ShadowWork ProjShadowWork;
+
+// ShadowEntry.mode: which pass of shadowCharShadowDisp draws the character shadow.
+// Character shadows per frame; shadowEntry and shadowEntryMode do not check it.
+#define SHADOW_ENTRY_MAX 64
+
+typedef enum ShadowMode {
+    SHADOW_MODE_POLYGON = 0,    // flat polygon on the ground
+    SHADOW_MODE_TEXTURE = 1,    // textured
+    SHADOW_MODE_CYLINDER = 2,   // volume (the default); shape from ShadowEntry.type
+    SHADOW_MODE_PROJECTION = 3, // projected from the owner's model
+} ShadowMode;
+
+// ShadowEntry.type: volume shape (shadowDrawVolume).
+typedef enum ShadowType {
+    SHADOW_TYPE_CYLINDER = 0,
+    SHADOW_TYPE_CUBE = 1,
+} ShadowType;
+
 typedef struct ShadowEntry {
-    u16 flags;       // 0x0
+    u16 flags;       // 0x0, ShadowEntryFlags
     u8 mode;         // 0x2
     u8 type;         // 0x3
     Vec pos;         // 0x4
@@ -52,32 +67,20 @@ typedef struct ShadowEntry {
     f32 volume;      // 0x1C
     f32 decay;       // 0x20
     f32 decay2;      // 0x24
-#if VERSION <= VERSION_DEMO_JP
-    Mtx mtx; // 0x28, the demo has no per-shadow alpha
-#else
-    u8 alpha;     // 0x28
-    u8 pad_29[3]; // 0x29
-    Mtx mtx;      // 0x2C
+#if VERSION >= VERSION_JP
+    u8 alpha; // 0x28
 #endif
+    Mtx mtx; // 0x2C
 } ShadowEntry;
 
 typedef struct CharShadowWork {
-    s32 flags;             // 0x0, SHADOW_WORK_*
-    s32 drawCount;         // 0x4
-    s32 configIdx;         // 0x8, index into shadowConfig
-    Mtx view;              // 0xC
-    Mtx44 proj;            // 0x3C
-    Mtx texMtx;            // 0x7C
-    Mtx depthMtx;          // 0xAC
-    GXTexObj texObj;       // 0xDC
-    smartEntry* texBuffer; // 0xFC, shadow texture memory
-    GXColor color;         // 0x100
-    s32 numEntries;        // 0x104, ShadowEntry count this frame
-    ShadowEntry* entries;  // 0x108
-    s32 projection;        // 0x10C, shadowGetCharShadowProjection
-    s32 defaultMode;       // 0x110, mode given to new entries
-    f32 defaultSizeY;      // 0x114, sizeY given to new entries
-    s32 defaultEnabled;    // 0x118, 1 at init: new shadow entries start with flag 1
+    ShadowWork base;
+    s32 numEntries;       // 0x104, ShadowEntry count this frame
+    ShadowEntry* entries; // 0x108
+    s32 projection;       // 0x10C, shadowGetCharShadowProjection
+    s32 defaultMode;      // 0x110, mode given to new entries
+    f32 defaultSizeY;     // 0x114, sizeY given to new entries
+    s32 defaultEnabled;   // 0x118, 1 at init: new shadow entries start with flag 1
 } CharShadowWork;
 
 typedef struct ShadowConfig {
@@ -96,27 +99,51 @@ typedef struct ShadowConfig {
 } ShadowConfig;
 
 void shadowInit(void);
+void shadowCharShadowInit(void);
 void shadowMain(void);
+void shadowCharShadowMain(void);
+void shadowDepthShadowMain(void);
+void shadowProjShadowMain(void);
 
 void shadowDepthShadowDrawCountUp(void);
 s32 shadowEntry(f32 x, f32 y, f32 z, f32 size);
 void shadowProjShadowDrawCountUp(void);
 void shadowSetSize(s32 id, f32 size);
+f32 shadowGetSize(s32 id);
+void shadowSetVolumeHeight(s32 id, f32 height);
+s32 shadowEntryOffscreen(s32 offscreenId, f32 x, f32 y, f32 z, f32 size);
+void shadowSetPos(s32 id, f32 x, f32 y, f32 z);
+void shadowGetPos(s32 id, Vec* pos);
+u16 shadowGetConfig_ShadowTexSize(s32 idx);
 
-void U_shadowSetMode(s32 id, u8 alpha);
-
+void shadowSetMode(s32 id, u8 alpha);
+s32 shadowGetCharShadowProjection(void);
+void shadowSetCharShadowProjection(s32 projection);
+ShadowConfig* shadowGetDepthShadowConfig(void);
+ShadowConfig* shadowGetProjShadowConfig(void);
 s32 shadowEntryMode(s32 mode, f32 x, f32 y, f32 z, f32 size);
 void shadowSetVolumeDecay(s32 id, f32 volume, f32 decay, f32 decay2);
+void shadowGetVolumeDecay(s32 id, f32* volume, f32* decay, f32* decay2);
+void shadowFlagOn(s32 id, u16 flags);
+void shadowFlagOff(s32 id, u16 flags);
 void shadowSetCollision(s32 id, BOOL enable);
-GXTexObj* shadowGetCharShadowTexObj(void);
-GXColor shadowGetCharShadowColor(void);
-s32 shadowGetCharShadowProjection(void);
-GXTexObj* shadowGetRamp8TexObj(void);
-GXTexObj* shadowGetRamp16TexObj(void);
-GXTexObj* shadowGetDepthShadowTexObj(void);
-GXColor shadowGetDepthShadowColor(void);
-ShadowConfig* shadowGetDepthShadowConfig(void);
-GXTexObj* shadowGetProjShadowTexObj(void);
-GXColor shadowGetProjShadowColor(void);
-ShadowConfig* shadowGetProjShadowConfig(void);
 void shadowSetType(s32 id, u8 type);
+void shadowSetCamId(s32 id, s32 camId);
+GXColor shadowGetCharShadowColor(void);
+GXTexObj* shadowGetCharShadowTexObj(void);
+GXColor shadowGetDepthShadowColor(void);
+GXTexObj* shadowGetDepthShadowTexObj(void);
+GXColor shadowGetProjShadowColor(void);
+GXTexObj* shadowGetProjShadowTexObj(void);
+GXTexObj* shadowGetRamp16TexObj(void);
+GXTexObj* shadowGetRamp8TexObj(void);
+f32 (*shadowGetCharShadowProjTexMtx(void))[4];
+f32 (*shadowGetDepthShadowDepthMtx(void))[4];
+f32 (*shadowGetDepthShadowProjTexMtx(void))[4];
+f32 (*shadowGetProjShadowProjTexMtx(void))[4];
+ProjShadowWork* shadowGetProjShadowWork(void);
+DepthShadowWork* shadowGetDepthShadowWork(void);
+s32 shadowGetConfigNum(void);
+s32 shadowGetConfig_ShadowTexSizeNum(void);
+const char** shadowGetConfig_DispMode(void);
+s32 shadowGetConfig_DispModeNum(void);

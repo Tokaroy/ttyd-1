@@ -1,4 +1,6 @@
 // Battle unit data for the switch stage object (unit_object_switch).
+
+#include "version.h"
 #include "battle/battle.h"
 #include "battle/battle_event_cmd.h"
 #include "battle/battle_event_default.h"
@@ -8,7 +10,6 @@
 #include "evt/evt_cmd.h"
 #include "evt/evt_map.h"
 #include "manager/evtmgr_cmd.h"
-#include "version.h"
 
 static USER_FUNC(_rumble_switch);
 
@@ -60,8 +61,8 @@ BattleUnitKind unit_object_switch = {
     "SFX_BTL_DAMAGE1",      // damageSfxName
     "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
     "SFX_BTL_DAMAGE_ICE1",  // iceDamageSfxName
-    "SFX_BTL_DAMAGE_BIRIBIRI1", // explosionDamageSfxName
-    UNIT_ATTR_TARGET_SORT_OFFSET | UNIT_ATTR_NO_GRAVITY_BOB | UNIT_ATTR_ACTS_IN_ZERO_GRAVITY | UNIT_ATTR_NO_HP_GAUGE | UNIT_ATTR_IGNORE_FOR_CLEAR,             // attributeFlags
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    kUnitMapObject | kNoGravityBob | kActsInZeroGravity | kUnitNoHpGauge | kUnitNoncombatant, // attributeFlags
     &regist,                // statusVulnerability
     1,                      // numParts
     parts,                  // parts
@@ -70,10 +71,12 @@ BattleUnitKind unit_object_switch = {
 };
 
 /**
- * The switch takes no damage reduction and has no elemental defence; every hit just triggers its wobble.
+ * The switch takes no damage reduction and has no elemental defence; a hit wobbles it, a final hit plays the
+ * map's switch_a animation (damage_event).
  */
 static BattleUnitDefense defence = {{0, 0, 0, 0, 0}};
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
+
 /** The switch has no status vulnerabilities (all zero). */
 static StatusVulnerability regist = {0};
 
@@ -82,10 +85,10 @@ static StatusVulnerability regist = {0};
  * apart from one slot that uses M_O_1.
  */
 static PoseTableEntry pose_table[] = {
-    {BTL_POSE_NORMAL, "M_S_1"},
-    {31, "M_S_1"},
-    {BTL_POSE_DAMAGE, "M_O_1"},
-    {BTL_POSE_STAY_DEFAULT, "M_S_1"},
+    {POSE_TYPE_NORMAL, "M_S_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "M_S_1"},
+    {POSE_TYPE_DAMAGE, "M_O_1"},
+    {POSE_TYPE_ACTION, "M_S_1"},
 };
 
 /**
@@ -105,7 +108,7 @@ static BattleUnitKindPart parts[] = {
         255,                  // baseAlpha
         &defence,             // defense
         &defence_attr,        // defenseAttr
-        PART_ATTR_MAIN | PART_ATTR_GUARD_COVER | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW,           // attributes
+        kMainPart | kGuardTargetPart | kHidden | kNoShadow, // attributes
         0,                    // counterAttributes
         pose_table,           // poseTable
     },
@@ -116,6 +119,7 @@ static BattleDataEntry data_table[] = {
     {0, NULL},
 };
 
+static EvtWord phase_event[2];
 static EvtWord attack_event[5];
 static EvtWord wait_event[2];
 static EvtWord damage_event[22];
@@ -125,33 +129,42 @@ static EvtWord damage_event[22];
  * registers the wait, attack and damage scripts, never moves, and idles.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_SetMaxMoveCount, BTL_UNIT_SELF, 0)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_SetMaxMoveCount, UNIT_ID_SELF, 0)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
- * Hit reaction: on earlier hits of a move it just wobbles the switch object (_rumble_switch);
- * on the last hit (DAMAGE_FLAG_LAST_HIT) it plays the stage's "switch_a" map animation and waits half a second.
+ * Hit reaction: on earlier hits of a move it only wobbles the switch object (_rumble_switch); on the last hit
+ * (DAMAGE_RESULT_FINAL_HIT) it plays the stage's "switch_a" map animation and waits half a second.
  */
 static EVT_BEGIN(damage_event)
-    CALL(btlevtcmd_CheckDamageCode, BTL_UNIT_SELF, DAMAGE_FLAG_LAST_HIT, LW(0))
+    CALL(btlevtcmd_CheckDamageCode, UNIT_ID_SELF, DAMAGE_RESULT_FINAL_HIT, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(_rumble_switch, BTL_UNIT_SELF)
+        CALL(_rumble_switch, UNIT_ID_SELF)
         RETURN
     END_IF
-    CALL(evt_map_playanim, STRING("switch_a"), 0, 0)
+    CALL(evt_map_playanim, STRING("switch_a"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_MS(500)
+    RETURN
+EVT_END()
+
+/**
+ * Phase event: nothing. No unit data registers it, so the linker strips it (JP demo map: UNUSED, 8 bytes, in
+ * .sdata between data_table and wait_event); 8 bytes leave room only for RETURN and the end word, the empty
+ * phase_event of the other units.
+ */
+static EVT_BEGIN(phase_event)
     RETURN
 EVT_END()
 
 /** The switch never acts on its own turn; it just returns to its (empty) idle script. */
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 

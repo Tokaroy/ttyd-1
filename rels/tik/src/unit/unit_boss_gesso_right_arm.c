@@ -1,8 +1,10 @@
 // Rogueport Sewers (tik) battle unit: R. Tentacle (gesso_right_arm), Blooper's right tentacle: its parts, defence/status tables, and
 // attack events.
+
 #include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "unit_boss_gesso.h"
 
 #include "battle/battle.h"
 #include "battle/battle_sub.h"
@@ -15,107 +17,95 @@
 #include "evt/evt_sub.h"
 #include "battle/battle_database_common.h"
 #include "manager/evtmgr_cmd.h"
-#include "tik.h"
-
-// Unit work slots of the Blooper's right tentacle (slots read on the Blooper body stay raw).
-enum {
-    UW_BOSS_GESSO_RIGHT_ARM_BODY = 0, // unit id of the Blooper body, -1 if none
-};
+#include "battle/battle_damage.h"
 
 static USER_FUNC(_check_zenei_kouei);
+extern BattleUnitDefenseAttr gesso_defence_attr_turn;
+extern BattleUnitDefense gesso_defence_turn;
+extern StatusVulnerability gesso_regist_turn;
+extern PoseTableEntry gesso_pose_table_turn[];
 
 BattleUnitKind unit_boss_gesso_right_arm;
 static BattleUnitDefense defence;
 static BattleUnitDefenseAttr defence_attr;
 static StatusVulnerability regist;
 static PoseTableEntry pose_table[4];
+
 #if VERSION >= VERSION_JP
 BattleDataEntry gesso_right_arm_data_table[13];
 #endif
+
 static BattleDataEntry data_table[3];
 static BattleUnitKindPart parts[1];
 static EvtWord init_event[25];
 static EvtWord damage_event[31];
+
 #if VERSION >= VERSION_JP
-extern EvtWord gesso_right_arm_damage_event[];
+EvtWord gesso_right_arm_damage_event[93];
 #endif
-BattleWeapon weapon_gesso_right_arm_front_attack;
-BattleWeapon weapon_gesso_right_arm_rear_attack;
+
+static EvtWord phase_event[2];
+static BattleWeapon weapon_gesso_right_arm_front_attack;
+static BattleWeapon weapon_gesso_right_arm_rear_attack;
 static EvtWord attack_event[273];
 static EvtWord wait_event[6];
-extern EvtWord gesso_fall_check[];
+EvtWord gesso_arm_dead_event[130];
+EvtWord gesso_fall_check[219];
+EvtWord gesso_arm_damage_pose_event[35];
 
 /**
  * Unit kind of the R. Tentacle (HP 3, level 0):
  * its size, offsets, damage sounds, status vulnerability, parts and init event.
  */
 BattleUnitKind unit_boss_gesso_right_arm = {
-    10,
-    "btl_un_gesso_right_arm",
-    3,
-    0,
-    1,
-    1,
-    0,
-    0,
-    0,
-    100,
-    0,
-    50,
-    9,
-    60,
-    110,
-    -68,
-    -100,
-    0.0f,
-    0.0f,
-    0.0f,
-    -85,
-    -140,
-    0.0f,
-    0.0f,
-    0.0f,
-    30.0f,
-    0.0f,
-    -10.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    30.0f,
-    0.0f,
-    0.0f,
-    30.0f,
-    71.5f,
-    0.0f,
-    -60.0f,
-    -60.0f,
-    0.0f,
-    60.0f,
-    100.0f,
-    0,
-    0,
-    -1,
-    0,
-    0,
-    0,
-    0.0f,
-    0.0f,
-    0.0f,
-    "SFX_BOSS_GESSO_DAMAGED1",
-    "SFX_BTL_DAMAGE_FIRE1",
-    "SFX_BTL_DAMAGE_ICE1",
-    "SFX_BTL_DAMAGE_BIRIBIRI1",
-    UNIT_ATTR_NO_KNOCKBACK_POSE,
-    &regist,
-    1,
-    parts,
-    init_event,
+    UNIT_BLOOPER_RIGHT_TENTACLE, // unitType
+    "btl_un_gesso_right_arm", // name
+    3, // maxHp
+    0, // maxFp
+    1, // dangerHP
+    1, // perilHP
+    0, // level
+    0, // bonusExp
+    0, // bonusCoin
+    100, // bonusCoinRate
+    0, // baseCoin
+    50, // runRate
+    9, // pbSoftCap
+    60, // width
+    110, // height
+    {-68, -100}, // hitOffset
+    {0.0f, 0.0f, 0.0f}, // centerOffset
+    {-85, -140}, // hpGaugeOffset
+    {0.0f, 0.0f, 0.0f}, // talkTogeBaseOffset
+    {30.0f, 0.0f, -10.0f}, // heldItemBaseOffset
+    {0.0f, 0.0f, 0.0f}, // burnFlameOffset
+    0.0f, // vivianOffsetX
+    0.0f, // vivianOffsetZ
+    {30.0f, 0.0f, 0.0f}, // bintaHitOffset
+    {30.0f, 71.5f, 0.0f}, // kissHitOffset
+    {-60.0f, -60.0f, 0.0f}, // cutBaseOffset
+    60.0f, // cutWidth
+    100.0f, // cutHeight
+    0, // turnOrder
+    0, // turnOrderVariance
+    -1, // swallowChance
+    0, // swallowAttributes
+    0, // hammerKnockbackChance
+    0, // itemStealParam
+    {0.0f, 0.0f, 0.0f}, // starPointDispOffset
+    "SFX_BOSS_GESSO_DAMAGED1", // damageSfxName
+    "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
+    "SFX_BTL_DAMAGE_ICE1", // iceDamageSfxName
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    kUnitNoSpin, // attributeFlags
+    &regist, // statusVulnerability
+    1, // numParts
+    parts, // parts
+    init_event, // initEventCode
 #if VERSION <= VERSION_DEMO_JP
     data_table,
 #else
-    gesso_right_arm_data_table,
+    gesso_right_arm_data_table, // dataTable
 #endif
 };
 
@@ -123,47 +113,69 @@ BattleUnitKind unit_boss_gesso_right_arm = {
 static BattleUnitDefense defence = {{0, 0, 0, 0, 0}};
 
 /** Element reactions of the R. Tentacle: no special reaction to any element. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 /**
- * Status vulnerability of the R. Tentacle (percent chance to take each status):
+ * Status vulnerability of the R. Tentacle (multipliers for each status's base chance):
  * immune to sleep, stop, dizzy, poison, confusion, electric shock, freeze, growing huge, shrinking, attack up,
  * attack down, defence up, defence down, allergy, fright, gale force, speed up, slow, dodgy,
  * invisibility and instant kill.
  */
-static StatusVulnerability regist = {0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
-
-/** Pose table of the R. Tentacle: maps each battle pose to the animation it plays (GSO_* animations). */
-static PoseTableEntry pose_table[] = {
-    {BTL_POSE_NORMAL, "GSO_S1_1"},
-    {31, "GSO_S1_1"},
-    {BTL_POSE_DAMAGE, "GSO_D1_1"},
-    {BTL_POSE_STAY_DEFAULT, "GSO_S1_1"},
+static StatusVulnerability regist = {
+    0, // sleep
+    0, // stop
+    0, // dizzy
+    0, // poison
+    0, // confuse
+    0, // electric
+    100, // burn
+    0, // freeze
+    0, // huge
+    0, // tiny
+    0, // attackUp
+    0, // attackDown
+    0, // defenseUp
+    0, // defenseDown
+    0, // allergic
+    0, // fright
+    0, // galeForce
+    0, // fast
+    0, // slow
+    0, // dodgy
+    0, // invisible
+    0, // ohko
 };
 
-#if VERSION >= VERSION_JP
+static PoseTableEntry pose_table[] = {
+    {POSE_TYPE_NORMAL, "GSO_S1_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "GSO_S1_1"},
+    {POSE_TYPE_DAMAGE, "GSO_D1_1"},
+    {POSE_TYPE_ACTION, "GSO_S1_1"},
+};
+
 /** Data table of the Blooper's R. Tentacle: its damage reaction for the hit tags 24 to 36. */
+#if VERSION >= VERSION_JP
 BattleDataEntry gesso_right_arm_data_table[] = {
-    {24, gesso_right_arm_damage_event},
-    {25, gesso_right_arm_damage_event},
-    {26, gesso_right_arm_damage_event},
-    {27, gesso_right_arm_damage_event},
-    {28, gesso_right_arm_damage_event},
-    {29, gesso_right_arm_damage_event},
-    {30, gesso_right_arm_damage_event},
-    {31, gesso_right_arm_damage_event},
-    {32, gesso_right_arm_damage_event},
-    {33, gesso_right_arm_damage_event},
-    {34, gesso_right_arm_damage_event},
-    {35, gesso_right_arm_damage_event},
-    {36, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_TOP_SPIKY_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_PREEMPTIVE_SPIKY_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_FRONT_SPIKY_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_FIERY_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_ICY_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_ELECTRIC_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_EXPLOSIVE_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_VOLATILE_EXPLOSIVE_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_POISON_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_ELECTRIFIED_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_PAYBACK_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_HOLD_FAST_EVENT, gesso_right_arm_damage_event},
+    {UNIT_DATA_COUNTER_SUPERGUARD_EVENT, gesso_right_arm_damage_event},
 };
 #endif
 
 /** Data table of the R. Tentacle: event handlers for its arm hit pose and being defeated. */
 static BattleDataEntry data_table[] = {
     {10, gesso_arm_damage_pose_event},
-    {49, gesso_arm_dead_event},
+    {UNIT_DATA_DEAD_EVENT, gesso_arm_dead_event},
     {0},
 };
 
@@ -174,15 +186,15 @@ static BattleUnitKindPart parts[] = {
 
 /**
  * Init script of the Blooper's right tentacle.
- * Registers its damage, phase and attack scripts and starts it waiting.
+ * Registers its damage, wait and attack scripts and starts it waiting.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_OnAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_OnAttribute, UNIT_ID_SELF, kUnitHidden)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -191,12 +203,12 @@ EVT_END()
  * then tells the body (unit work 0) to go back to its wait script if it is idle.
  */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
     IF_INT_NOT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_GetUnitWork, LW(3), 4, LW(0))
+        CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_BUSY, LW(0))
         IF_INT_LESS_OR_EQUAL(LW(0), 0)
             CALL(btlevtcmd_StartWaitEvent, LW(3))
         END_IF
@@ -205,37 +217,40 @@ static EVT_BEGIN(damage_event)
 EVT_END()
 
 #if VERSION >= VERSION_JP
-/** Damage reaction of the Blooper's right tentacle (JP and later); the same as the left tentacle's damage event. */
+/**
+ * Counter-damage event (tags 24 to 36, see gesso_right_arm_data_table) of the Blooper's right tentacle (JP and
+ * later); the same as the left tentacle's gesso_left_arm_damage_event.
+ */
 EVT_BEGIN(gesso_right_arm_damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
-    CALL(btlevtcmd_OnUnitFlag, LW(10), UNIT_FLAG_SHOW_HP_GAUGE)
-    SET_VALUE(LW(14), 39)
+    CALL(btlevtcmd_OnUnitFlag, LW(10), BATTLE_UNIT_FLAG_SHOW_HP)
+    SET_VALUE(LW(14), POSE_TYPE_DAMAGE)
     SET_VALUE(LW(15), -1)
-    CALL(btlevtcmd_CheckDamagePattern, LW(10), 1, LW(0))
+    CALL(btlevtcmd_CheckDamagePattern, LW(10), ATTACKPATTERN_DAMAGE_SURPRISE, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        SET_VALUE(LW(14), 38)
+        SET_VALUE(LW(14), POSE_TYPE_DAMAGE_SURPRISED)
     END_IF
     BEGIN_SIBLING_EVENT
-        CALL(btlevtcmd_RunDataEventChild, LW(10), 10)
+        CALL(btlevtcmd_RunDataEventChild, LW(10), UNIT_DATA_DAMAGE_POSE_EVENT)
     END_SIBLING_EVENT
     CALL_CHILD(subsetevt_damage)
-    CALL(btlevtcmd_CheckDamageCode, LW(10), DAMAGE_FLAG_DEFEATED, LW(1))
+    CALL(btlevtcmd_CheckDamageCode, LW(10), DAMAGE_RESULT_DEATH, LW(1))
     IF_INT_NOT_EQUAL(LW(1), 0)
         WAIT_FRAMES(30)
         CALL_CHILD(subsetevt_dead)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_CheckDamageCode, LW(10), DAMAGE_FLAG_LAST_HIT, LW(1))
+    CALL(btlevtcmd_CheckDamageCode, LW(10), DAMAGE_RESULT_FINAL_HIT, LW(1))
     IF_INT_EQUAL(LW(1), 0)
         CALL(btlevtcmd_WaitAttackEnd)
     END_IF
     CALL(btlevtcmd_ResetFaceDirection, LW(10))
     CALL(btlevtcmd_StartWaitEvent, LW(10))
     LABEL(99)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
     IF_INT_NOT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_GetUnitWork, LW(3), 4, LW(0))
+        CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_BUSY, LW(0))
         IF_INT_LESS_OR_EQUAL(LW(0), 0)
             CALL(btlevtcmd_StartWaitEvent, LW(3))
         END_IF
@@ -244,13 +259,13 @@ EVT_BEGIN(gesso_right_arm_damage_event)
 EVT_END()
 #endif
 
-/** Phase script of the right tentacle; does nothing. */
+/** Empty phase script of the right tentacle; nothing references it (init_event installs no phase event). */
 static EVT_BEGIN(phase_event)
     RETURN
 EVT_END()
 
 /** Weapon of the R. Tentacle's front swat: 1 damage. */
-BattleWeapon weapon_gesso_right_arm_front_attack = {
+static BattleWeapon weapon_gesso_right_arm_front_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -266,15 +281,15 @@ BattleWeapon weapon_gesso_right_arm_front_attack = {
     {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT, // targetWeightFlags
+    TARGET_WEIGHT_FRONT, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -287,7 +302,7 @@ BattleWeapon weapon_gesso_right_arm_front_attack = {
 };
 
 /** Weapon of the R. Tentacle's rear swat: 1 damage. */
-BattleWeapon weapon_gesso_right_arm_rear_attack = {
+static BattleWeapon weapon_gesso_right_arm_rear_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -303,15 +318,15 @@ BattleWeapon weapon_gesso_right_arm_rear_attack = {
     {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_BACK, // targetWeightFlags
+    TARGET_WEIGHT_BACK, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -324,21 +339,22 @@ BattleWeapon weapon_gesso_right_arm_rear_attack = {
 };
 
 /**
- * Attack script of the right tentacle: uses an enemy item if it has one;
+ * Attack script of the right tentacle: may use an enemy item;
  * otherwise picks the front or rear weapon
  * at random (they prefer front or back targets) and samples a target. The first time it targets Mario (unit kind
  * 0xDE, tracked in the Blooper's unit work 5) the Blooper asks whether Mario thinks it would taste good, with a
- * yes/no answer (tik_02_gs_04). It then swings with GSO_A1_1 or GSO_A1_3 depending on the target's side of the
+ * yes/no answer (tik_02_gs_04_1 to _3, then _3_y or _3_n). It then swings with GSO_A1_1 or GSO_A1_3 depending on the target's side of the
  * stage (_check_zenei_kouei) and damage-checks the targets.
  */
 static EVT_BEGIN(attack_event)
     // The tentacle may use an item instead of attacking.
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
+
     // Pick the front or rear swat at random and choose a target.
     CALL(evt_sub_random, 1, LW(0))
     IF_INT_EQUAL(LW(0), 0)
@@ -346,63 +362,66 @@ static EVT_BEGIN(attack_event)
     ELSE
         SET_VALUE(LW(12), PTR(&weapon_gesso_right_arm_rear_attack))
     END_IF
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), LW(12))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), LW(12))
     CALL(btlevtcmd_ChoiceSamplingEnemy, LW(12), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
-    // The attack is announced and the guard timing is awaited.
+
+    // The attack is announced and bodyguard movement is awaited.
     CALL(btlevtcmd_WeaponAftereffect, LW(12))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, LW(12))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, LW(12))
+
     // The first time the target is Mario, the Blooper stops to ask whether he thinks it would taste good (yes
     // or no).
     SET_VALUE(LW(11), 0)
     CALL(btlevtcmd_GetUnitKind, LW(3), LW(0))
     IF_INT_EQUAL(LW(0), UNIT_MARIO)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(9))
-        CALL(btlevtcmd_GetUnitWork, LW(9), 5, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(9))
+        CALL(btlevtcmd_GetUnitWork, LW(9), GESSO_UNIT_WORK_ARM_TALK_DONE, LW(0))
         IF_INT_EQUAL(LW(0), 0)
             SET_VALUE(LW(11), 1)
-            CALL(btlevtcmd_SetUnitWork, LW(9), 5, 1)
+            CALL(btlevtcmd_SetUnitWork, LW(9), GESSO_UNIT_WORK_ARM_TALK_DONE, 1)
         END_IF
     END_IF
     IF_INT_NOT_EQUAL(LW(11), 0)
-        CALL(btlevtcmd_StatusWindowOnOff, 0)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(9))
-        CALL(evt_msg_print, 2, STRING("tik_02_gs_04_1"), 0, LW(9))
-        CALL(evt_msg_print, 2, STRING("tik_02_gs_04_2"), 0, LW(9))
+        CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(9))
+        CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("tik_02_gs_04_1"), 0, LW(9))
+        CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("tik_02_gs_04_2"), 0, LW(9))
         CALL(evt_msg_select, 0, STRING("tik_02_gs_04_3"))
         CALL(evt_msg_continue)
         IF_INT_EQUAL(LW(0), 0)
             BEGIN_INLINE_EVENT
-                CALL(evt_msg_print, 2, STRING("tik_02_gs_04_3_y"), 0, LW(9))
-                CALL(btlevtcmd_StatusWindowOnOff, 1)
+                CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("tik_02_gs_04_3_y"), 0, LW(9))
+                CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
             END_INLINE_EVENT
         ELSE
             BEGIN_INLINE_EVENT
-                CALL(evt_msg_toge, 2, 110, 120, 30)
-                CALL(evt_msg_print, 2, STRING("tik_02_gs_04_3_n"), 0, LW(9))
-                CALL(btlevtcmd_StatusWindowOnOff, 1)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS, 110, 120, 30)
+                CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("tik_02_gs_04_3_n"), 0, LW(9))
+                CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
             END_INLINE_EVENT
         END_IF
     END_IF
+
     // The tentacle swings across the stage, from the near or far side depending on where the target stands.
     CALL(_check_zenei_kouei, LW(3), LW(13))
     IF_INT_EQUAL(LW(13), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("GSO_A1_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("GSO_A1_1"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("GSO_A1_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("GSO_A1_3"))
     END_IF
     BEGIN_SIBLING_EVENT
         CALL(btlevtcmd_ftof, 32, LW(0))
         WAIT_FRAMES(LW(0))
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_GESSO_ARM_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_GESSO_ARM_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
         CALL(btlevtcmd_ftof, 55, LW(0))
         WAIT_FRAMES(LW(0))
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_GESSO_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_GESSO_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_SIBLING_EVENT
 #if VERSION >= VERSION_US
     CALL(btlevtcmd_ftof, 97, LW(0))
@@ -410,73 +429,81 @@ static EVT_BEGIN(attack_event)
     CALL(btlevtcmd_ftof, 94, LW(0))
 #endif
     WAIT_FRAMES(LW(0))
-    // The swat lands unless the target dodges; then the damage is dealt.
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(12), DAMAGE_FLAG_LAST_HIT, LW(5))
-    IF_INT_NOT_EQUAL(LW(5), 1)
+
+    // Check whether the swat hits; only a hit reaches damage handling.
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
+    IF_INT_NOT_EQUAL(LW(5), PRECHECK_HIT)
         SWITCH(LW(5))
-            CASE_EQUAL(3)
-            CALL(btlevtcmd_StartAvoid, LW(3), 38)
-            CASE_EQUAL(6)
-            CALL(btlevtcmd_StartAvoid, LW(3), 39)
-            CASE_EQUAL(2)
-            CALL(btlevtcmd_StartAvoid, LW(3), 40)
+            CASE_EQUAL(PRECHECK_LUCKY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
+            CASE_EQUAL(PRECHECK_DODGY)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
+            CASE_EQUAL(PRECHECK_MISS)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         END_SWITCH
     ELSE
         CALL(btlevtcmd_ResultACDefence, LW(3), LW(12))
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(12), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
     END_IF
+
     // The swing finishes and the tentacle returns to waiting.
-    CALL(btlevtcmd_AnimeWaitPlayComplete, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeWaitPlayComplete, UNIT_ID_SELF, 1)
     LABEL(99)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /** Wait script of the right tentacle: shows its idle pose from the pose table. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()
 
 /**
  * Death script shared by the two tentacles.
  * Plays the arm's retreat sound and pose (GSO_F1_1),
- * clears the body's slot that pointed to this arm (the left arm waits 50 frames, the right 80) and
+ * clears the body's slot that pointed to this arm (the left arm waits 80 frames, the right 50) and
  * then runs the fall check; finally kills the arm unit.
  */
 EVT_BEGIN(gesso_arm_dead_event)
-    CALL(btlevtcmd_GetUnitKind, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetUnitKind, UNIT_ID_SELF, LW(0))
     IF_INT_EQUAL(LW(0), UNIT_BLOOPER_RIGHT_TENTACLE)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_GESSO_ARM_GOOUT1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("GSO_F1_1"))
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_GESSO_ARM_GOOUT1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("GSO_F1_1"))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
         IF_INT_NOT_EQUAL(LW(3), -1)
-            CALL(btlevtcmd_SetUnitWork, LW(3), 2, -1)
+            CALL(btlevtcmd_SetUnitWork, LW(3), GESSO_UNIT_WORK_RIGHT_ARM, -1)
         END_IF
         WAIT_FRAMES(50)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
         IF_INT_NOT_EQUAL(LW(3), -1)
-            CALL(btlevtcmd_SetUnitWork, LW(3), 2, -1)
+            CALL(btlevtcmd_SetUnitWork, LW(3), GESSO_UNIT_WORK_RIGHT_ARM, -1)
         END_IF
     ELSE
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_GESSO_ARM_GOOUT1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("GSO_F1_1"))
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_GESSO_ARM_GOOUT1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("GSO_F1_1"))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
         IF_INT_NOT_EQUAL(LW(3), -1)
-            CALL(btlevtcmd_SetUnitWork, LW(3), 1, -1)
+            CALL(btlevtcmd_SetUnitWork, LW(3), GESSO_UNIT_WORK_LEFT_ARM, -1)
         END_IF
+        // BUG: the body's id from GESSO_ARM_WORK_BODY is used without checking that the body still exists. When
+        // one hit defeats the body and this tentacle (an item that hits every enemy at once, such as Ice Storm),
+        // both death scripts start in the same frame; the body's dead_subevent finds this tentacle's slot already
+        // cleared and leaves it alone, and the body's defeat frees it 80 frames later, the frame this wait ends.
+        // btlevtcmd_SetUnitWork then writes through a NULL unit pointer and the game crashes. (The right
+        // tentacle's 50-frame wait ends while the body still exists.)
         WAIT_FRAMES(80)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
         IF_INT_NOT_EQUAL(LW(3), -1)
-            CALL(btlevtcmd_SetUnitWork, LW(3), 1, -1)
+            CALL(btlevtcmd_SetUnitWork, LW(3), GESSO_UNIT_WORK_LEFT_ARM, -1)
         END_IF
     END_IF
     LABEL(10)
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_GetUnitWork, LW(3), 4, LW(0))
+    CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_BUSY, LW(0))
     IF_INT_GREATER_OR_EQUAL(LW(0), 2)
         GOTO(99)
     END_IF
@@ -486,38 +513,43 @@ EVT_BEGIN(gesso_arm_dead_event)
     END_IF
     CALL_CHILD(gesso_fall_check)
     LABEL(99)
-    CALL(btlevtcmd_KillUnit, BTL_UNIT_SELF, 0)
+    CALL(btlevtcmd_KillUnit, UNIT_ID_SELF, 0)
     RETURN
 EVT_END()
 
 /**
- * Called when a tentacle has died.
- * If both tentacles are gone and the Blooper is not already falling, it makes the Blooper fall:
- * it plays the fall poses with the fall and down sounds, shakes the camera,
- * then switches the Blooper to the "turned" state with its own defence table,
- * status resistances and hit offsets so it can be attacked from the front.
+ * Run by a dying tentacle with the Blooper's body in LW(3): once both tentacles are gone, no fall is under way
+ * (GESSO_UNIT_WORK_BUSY 2) and the body is still up (GESSO_UNIT_WORK_STATE not 1), the Blooper falls to the floor
+ * (GSO_F_1, GSO_F_2, SFX_BOSS_GESSO_FALL1 and SFX_BOSS_GESSO_DOWN1) and switches to its fallen tables (poses, defence,
+ * statuses, offsets), with a camera shake; GESSO_UNIT_WORK_STATE becomes 1 and its wait event restarts. See the BUG
+ * note on the icon offset.
  */
+// Start the body fall only after both arms are gone and no fall is already in progress.
 EVT_BEGIN(gesso_fall_check)
-    CALL(btlevtcmd_GetUnitWork, LW(3), 1, LW(0))
+    CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_LEFT_ARM, LW(0))
     CALL(btlevtcmd_GetUnitId, LW(0), LW(0))
     IF_INT_NOT_EQUAL(LW(0), -1)
         RETURN
     END_IF
-    CALL(btlevtcmd_GetUnitWork, LW(3), 2, LW(0))
+    CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_RIGHT_ARM, LW(0))
     CALL(btlevtcmd_GetUnitId, LW(0), LW(0))
     IF_INT_NOT_EQUAL(LW(0), -1)
         RETURN
     END_IF
-    CALL(btlevtcmd_GetUnitWork, LW(3), 4, LW(0))
+    CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_BUSY, LW(0))
     IF_INT_EQUAL(LW(0), 2)
         RETURN
     END_IF
-    CALL(btlevtcmd_GetUnitWork, LW(3), 0, LW(0))
+    CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_STATE, LW(0))
     IF_INT_EQUAL(LW(0), 1)
         RETURN
     END_IF
-    CALL(btlevtcmd_SetUnitWork, LW(3), 4, 2)
-    CALL(btlevtcmd_GetUnitWork, LW(3), 3, 0)
+    CALL(btlevtcmd_SetUnitWork, LW(3), GESSO_UNIT_WORK_BUSY, 2)
+
+    // BUG: GetUnitWork where SetUnitWork was meant: the target is the number 0, which evtSetValue does not write,
+    // so GESSO_UNIT_WORK_STATE_TURNS is not reset here. Harmless as shipped: the tentacles only exist while the body
+    // is on the ceiling (state 0), and phase_event resets the counter when it climbs back up, so it is already 0.
+    CALL(btlevtcmd_GetUnitWork, LW(3), GESSO_UNIT_WORK_STATE_TURNS, 0)
     CALL(btlevtcmd_StopWaitEvent, LW(3))
     CALL(btlevtcmd_AnimeChangePose, LW(3), 1, STRING("GSO_F_1"))
     WAIT_FRAMES(1)
@@ -535,33 +567,36 @@ EVT_BEGIN(gesso_fall_check)
         CALL(btlevtcmd_snd_se, LW(3), STRING("SFX_BOSS_GESSO_DOWN1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_SIBLING_EVENT
     CALL(btlevtcmd_AnimeWaitPlayComplete, LW(3), 1)
-    CALL(btlevtcmd_OffAttribute, LW(3), UNIT_ATTR_CEILING)
-    CALL(btlevtcmd_OffPartsAttribute, LW(3), 1, PART_ATTR_HAMMERLIKE_CANNOT_TARGET | PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET)
+    CALL(btlevtcmd_OffAttribute, LW(3), kCeiling)
+    CALL(btlevtcmd_OffPartsAttribute, LW(3), 1, (kHammerlikeCannotTarget | kShellTosslikeCannotTarget))
     CALL(btlevtcmd_AnimeSetPoseTable, LW(3), 1, PTR(gesso_pose_table_turn))
     CALL(btlevtcmd_SetHpGaugeOffset, LW(3), 0, 0)
     CALL(btlevtcmd_SetStatusIconOffset, LW(3), 46, 118)
-    CALL(btlevtcmd_SetPartsDefenceTable, LW(3), 1, PTR(gesso_defence_turn))
-    CALL(btlevtcmd_SetPartsDefenceAttrTable, LW(3), 1, PTR(gesso_defence_attr_turn))
-    CALL(btlevtcmd_SetRegistStatus, LW(3), PTR(gesso_regist_turn))
+    CALL(btlevtcmd_SetPartsDefenceTable, LW(3), 1, PTR(&gesso_defence_turn))
+    CALL(btlevtcmd_SetPartsDefenceAttrTable, LW(3), 1, PTR(&gesso_defence_attr_turn))
+    CALL(btlevtcmd_SetRegistStatus, LW(3), PTR(&gesso_regist_turn))
     CALL(btlevtcmd_SetHitOffset, LW(3), 1, -15, -90, 0)
-    CALL(btlevtcmd_SetStatusIconOffset, BTL_UNIT_SELF, 55, 113)
-    CALL(evt_btl_camera_shake_h, 0, 6, 0, 30, 4)
-    CALL(btlevtcmd_SetUnitWork, LW(3), 0, 1)
+
+    // BUG: sets the icon offset of UNIT_ID_SELF (the dying tentacle running this) instead of the body LW(3),
+    // so the fallen Blooper keeps the 46, 118 offset set above.
+    CALL(btlevtcmd_SetStatusIconOffset, UNIT_ID_SELF, 55, 113)
+    CALL(evt_btl_camera_shake_h, BTL_CAM_PRI_NORMAL, 6, 0, 30, 4)
+    CALL(btlevtcmd_SetUnitWork, LW(3), GESSO_UNIT_WORK_STATE, 1)
     CALL(btlevtcmd_SetHitOffset, LW(3), 1, 51, 38, 30)
     CALL(btlevtcmd_SetHitCursorOffset, LW(3), 1, 51, 38, 30)
-    CALL(btlevtcmd_SetUnitWork, LW(3), 4, 0)
+    CALL(btlevtcmd_SetUnitWork, LW(3), GESSO_UNIT_WORK_BUSY, 0)
     CALL(btlevtcmd_StartWaitEvent, LW(3))
     RETURN
 EVT_END()
 
 /** When a tentacle is hit, makes the Blooper body (unit work 0) stop waiting and take the same damage pose (LW(14)). */
 EVT_BEGIN(gesso_arm_damage_pose_event)
-    CALL(btlevtcmd_GetUnitKind, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetUnitKind, UNIT_ID_SELF, LW(0))
     IF_INT_EQUAL(LW(0), UNIT_BLOOPER_RIGHT_TENTACLE)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
     ELSE
         IF_INT_EQUAL(LW(0), UNIT_BLOOPER_LEFT_TENTACLE)
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_GESSO_RIGHT_ARM_BODY, LW(3))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, GESSO_ARM_WORK_BODY, LW(3))
         ELSE
             RETURN
         END_IF
@@ -572,10 +607,8 @@ EVT_BEGIN(gesso_arm_damage_pose_event)
 EVT_END()
 
 /**
- * Script helper.
- * Sets args[1] to 0 if the unit args[0] stands at X >= -120 and to 1 if it is farther to the left.
- * zenei and kouei mean front and rear (row), matching the right tentacle's front and rear weapons, whose target
- * weights prefer front and back targets.
+ * Script helper (args[0] = battle unit): returns 0 in args[1] when the unit stands at x >= -120 (the front side), else
+ * 1.
  */
 static USER_FUNC(_check_zenei_kouei) {
     BattleWork* wp = _battleWorkPointer;

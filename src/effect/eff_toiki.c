@@ -1,13 +1,15 @@
 // Shadow Queen's breath (toiki, 影の女王・吐息): a cloud that drifts and slows while its texture scrolls, releasing
-// mist puffs along the way; type 0 dark breath, 1 confusion breath, 2 poison breath.
+// mist puffs along the way; type 0 sigh, 1 temptation, 2 poison breath (the Shadow Queen's three breath attacks).
+
 #include "eff/eff_toiki.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include "eff/eff_mist.h"
-
+#include "driver/effdrv.h"
 static void effToikiDisp(CameraId cameraId, EffectEntry* effect);
 static void effToikiMain(EffectEntry* effect);
 
@@ -23,9 +25,6 @@ typedef struct EffToikiWork {
     s32 timer;     // 0x30
 } EffToikiWork;
 
-// Model data in the exporter's layout: indexed vertex arrays (positions, normals, colours, texture coordinates),
-// display lists of GX commands (each padded to 32 bytes with GX_NOP) and, per list table, the list sizes in
-// 32-byte units for GXCallDisplayList.
 static s16 queen_toiki_vertex_tbl[] __attribute__((aligned(32))) = {
     -20614, -6729, 0, -20385, -6698, 0, -19918, -6319,
     0, -19960, -6208, 0, -20494, -6254, 0, -22117,
@@ -135,14 +134,39 @@ static u8 queen_toiki_dl_0_13[] __attribute__((aligned(32))) = {
     0x98, 0x00, 0x04, 0x15, 0x00, 0x01, 0x1A, 0x1E, 0x00, 0x00, 0x1B, 0x0A, 0x00, 0x01, 0x19, 0x1D,
     0x00, 0x00, 0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
+
 /** Display lists of the Shadow Queen's breath cloud model, drawn with the sizes below. */
 static u8* queen_toiki_dl_0_tbl[] = {queen_toiki_dl_0_0, queen_toiki_dl_0_1, queen_toiki_dl_0_2, queen_toiki_dl_0_3, queen_toiki_dl_0_4, queen_toiki_dl_0_5, queen_toiki_dl_0_6, queen_toiki_dl_0_7, queen_toiki_dl_0_8, queen_toiki_dl_0_9, queen_toiki_dl_0_10, queen_toiki_dl_0_11, queen_toiki_dl_0_12, queen_toiki_dl_0_13};
+
 /** Display-list sizes (32-byte units) of the Shadow Queen's breath cloud model. */
 static u8 queen_toiki_dl_0_size_tbl[] = {3, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
 
+/** Sets up the breath cloud model's vertex formats and arrays and calls its 14 display lists. */
+// Original name and size (0x140) from the JP demo map (UNUSED there: every call is inlined).
+static void queen_toiki_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 6);
+    GXSetArray(GX_VA_POS, queen_toiki_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, queen_toiki_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, queen_toiki_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, queen_toiki_texcoord0_tbl, 4);
+    for (i = 0; i < 14; i++) {
+        GXCallDisplayList(queen_toiki_dl_0_tbl[i], queen_toiki_dl_0_size_tbl[i] << 5);
+    }
+}
+
 /**
  * Spawns the breath cloud at (x, y, z) lasting `duration` frames (1000 or more: until removed).
- * Type 0 dark breath, 1 confusion, 2 poison; it drifts up and left at an initial speed of 2.5.
+ * Type 0 sigh, 1 temptation, 2 poison; it drifts left and slightly down (200 degrees) at an initial speed of 2.5.
  */
 EffectEntry* effToikiEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
@@ -154,7 +178,7 @@ EffectEntry* effToikiEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffToikiWork));
     effect->userdata = work;
     effect->callback = effToikiMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -173,8 +197,8 @@ EffectEntry* effToikiEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
 
 /**
  * Moves the cloud with 5% damping per frame, scrolls its texture,
- * and every 20 frames drops a mist puff (effMistEntry of type + 1) near its leading edge
- * while the scroll is between 1 and 4.
+ * and drops a mist puff (effMistEntry of type + 1) near its leading edge on frames where the timer
+ * is a multiple of 20, while the scroll is between 1 and 4.
  */
 static void effToikiMain(EffectEntry* effect) {
     EffToikiWork* work = effect->userdata;
@@ -191,8 +215,8 @@ static void effToikiMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -226,11 +250,14 @@ static void effToikiMain(EffectEntry* effect) {
     if (work->texOffset > 4.0f) {
         work->texOffset = 4.0f;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effToikiDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effToikiDisp, effect);
 }
 
-/** Breath tint per type: blue-black for the dark breath, magenta for confusion, dark green for poison. */
-static u8 color_tbl[3][4] = {{0x03, 0x02, 0x21, 0xFF}, {0xD8, 0x0F, 0x51, 0xFF}, {0x0B, 0x1B, 0x00, 0xFF}};
+static GXColor color_tbl[3] = {
+    {0x03, 0x02, 0x21, 0xFF},
+    {0xD8, 0x0F, 0x51, 0xFF},
+    {0x0B, 0x1B, 0x00, 0xFF}
+};
 
 /**
  * Draws the breath model (an indexed display-list cloud) tinted by a per-type colour,
@@ -243,9 +270,6 @@ static void effToikiDisp(CameraId cameraId, EffectEntry* effect) {
     Mtx rot;
     Mtx scale;
     CameraEntry* camera;
-    u8** dl;
-    u32 i;
-    u8* sz;
     s32 type;
 
     camera = camGetPtr(cameraId);
@@ -254,7 +278,7 @@ static void effToikiDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
-    GXSetTevColor(GX_TEVREG0, (GXColor){color_tbl[type][0], color_tbl[type][1], color_tbl[type][2],
+    GXSetTevColor(GX_TEVREG0, (GXColor){color_tbl[type].r, color_tbl[type].g, color_tbl[type].b,
                                         (u8)work->alpha});
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
@@ -277,22 +301,5 @@ static void effToikiDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadPosMtxImm(mtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_NONE);
-    GXClearVtxDesc();
-    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 6);
-    GXSetArray(GX_VA_POS, queen_toiki_vertex_tbl, 6);
-    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
-    GXSetArray(GX_VA_NRM, queen_toiki_normal_tbl, 3);
-    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
-    GXSetArray(GX_VA_CLR0, queen_toiki_color0_tbl, 4);
-    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
-    GXSetArray(GX_VA_TEX0, queen_toiki_texcoord0_tbl, 4);
-    {
-        for (i = 0, sz = queen_toiki_dl_0_size_tbl, dl = queen_toiki_dl_0_tbl; i < 14; i++, sz++, dl++) {
-            GXCallDisplayList(*dl, *sz << 5);
-        }
-    }
+    queen_toiki_polygon_0();
 }

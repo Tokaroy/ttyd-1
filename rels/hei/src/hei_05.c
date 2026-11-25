@@ -1,5 +1,6 @@
 // hei_05 (平原, Petal Meadows): second gate room (hei_04 to hei_06).
-// Two Shinemon enemies guard a gate (mon) that opens (story 30).
+// Two enemies named シンエモン (they fight as Bristles) guard a gate (mon) that opens (story progress STG1_05_BRISTLE).
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -10,13 +11,21 @@
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
-#include "hei.h"
-#include "evt/evt_story.h"
+#include "driver/npcdrv.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[3];
+static EvtWord dead_evt1[10];
+static EvtWord dead_evt2[10];
 static NpcSetupInfo npcEnt[3];
+static EvtWord door_open[98];
+static EvtWord shake_evt[39];
+static EvtWord hashira_evt_sub[52];
+static EvtWord hashira_evt[128];
+EvtWord hei_05_init_evt[151];
 
 /** Doors of this room: the west exit (w_bero) to hei_04 and the east exit (e_bero) to hei_06. */
 static BeroEntry bero_entry_data[] = {
@@ -56,36 +65,31 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Death event of the first guard of the second gate (シンエモン1):
- * marks both pillar guards as defeated (GSWF_HEI05_PILLAR_ENEMY_A/B_DEFEATED, since they are linked)
- * and runs the common enemy death handling.
+ * Dead event of the first gate-pillar guard: sets both GSWF_HEI_05_PILLAR_ENEMY_1_DEFEATED and
+ * GSWF_HEI_05_PILLAR_ENEMY_2_DEFEATED, then the common enemy death (enemy_common_dead_event).
  */
 static EVT_BEGIN(dead_evt1)
-    SET_VALUE(GSWF(GSWF_HEI05_PILLAR_ENEMY_A_DEFEATED), 1)
-    SET_VALUE(GSWF(GSWF_HEI05_PILLAR_ENEMY_B_DEFEATED), 1)
+    SET_VALUE(GSWF_HEI_05_PILLAR_ENEMY_1_DEFEATED, 1)
+    SET_VALUE(GSWF_HEI_05_PILLAR_ENEMY_2_DEFEATED, 1)
     CALL_CHILD(enemy_common_dead_event)
     RETURN
 EVT_END()
 
-/**
- * Death event of the second guard of the second gate (シンエモン2):
- * marks both pillar guards as defeated (GSWF_HEI05_PILLAR_ENEMY_A/B_DEFEATED, since they are linked)
- * and runs the common enemy death handling.
- */
+/** Dead event of the second gate-pillar guard: like dead_evt1, both pillar flags are set. */
 static EVT_BEGIN(dead_evt2)
-    SET_VALUE(GSWF(GSWF_HEI05_PILLAR_ENEMY_B_DEFEATED), 1)
-    SET_VALUE(GSWF(GSWF_HEI05_PILLAR_ENEMY_A_DEFEATED), 1)
+    SET_VALUE(GSWF_HEI_05_PILLAR_ENEMY_2_DEFEATED, 1)
+    SET_VALUE(GSWF_HEI_05_PILLAR_ENEMY_1_DEFEATED, 1)
     CALL_CHILD(enemy_common_dead_event)
     RETURN
 EVT_END()
 
 /**
- * The two Shinemon guards of the second gate (Goomba enemies that stand beside the pillars); defeating
- * either marks both as beaten.
+ * The two guards of the second gate, named シンエモン but fighting as Bristles (battle BTLNO_HEI_05_01, using the
+ * Goomba field events), that sit on the pillars; defeating either marks both as beaten.
  */
 static NpcSetupInfo npcEnt[] = {
     {
-        "シンエモン1", // name
+        "シンエモン1", // name (a Bristle gate guard (named as a Moon Cleft))
         0, 0, // flags..reactionFlags
         kuriboo_init_event, // initEvent
         kuriboo_move_event, // regularEvent
@@ -104,7 +108,7 @@ static NpcSetupInfo npcEnt[] = {
         11, // battleInfoId
     },
     {
-        "シンエモン2", // name
+        "シンエモン2", // name (a Bristle gate guard (named as a Moon Cleft))
         0, 0, // flags..reactionFlags
         kuriboo_init_event, // initEvent
         kuriboo_move_event, // regularEvent
@@ -128,19 +132,19 @@ static NpcSetupInfo npcEnt[] = {
 /**
  * Opens the second gate once both guards are beaten:
  * the ground quakes (SFX_STG1_QUAKE3) and the camera looks at the gate, the grid rises (anm_mon),
- * its collision turns off and, if the story was before STORY_STG1_05_BRISTLE,
- * story progress becomes STORY_STG1_05_BRISTLE.
+ * its collision turns off and, if the story was before STG1_05_BRISTLE,
+ * story progress becomes STG1_05_BRISTLE.
  */
 static EVT_BEGIN(door_open)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_05_BRISTLE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_05_BRISTLE)
         CALL(evt_mario_key_onoff, 0)
         WAIT_MS(800)
         BEGIN_INLINE_EVENT
-            CALL(evt_cam_shake, 4, FLOAT(0.0048828125f), FLOAT(0.0f), 6000)
+            CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0f), 6000)
         END_INLINE_EVENT
         CALL(evt_snd_sfxon, STRING("SFX_STG1_QUAKE3"), LW(10))
         WAIT_MS(1000)
-        CALL(evt_cam3d_evt_set, -144, 61, 226, 276, 74, -43, 1000, 11)
+        CALL(evt_cam3d_evt_set, -144, 61, 226, 276, 74, -43, 1000, EASING_SINE_IN_OUT)
         WAIT_MS(1200)
         BEGIN_INLINE_EVENT
             CALL(evt_mapobj_get_position, STRING("MON"), LW(0), LW(1), LW(2))
@@ -151,14 +155,14 @@ static EVT_BEGIN(door_open)
             WAIT_MS(280)
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_GRID_UP1"), LW(0), LW(1), LW(2), 0)
         END_INLINE_EVENT
-        CALL(evt_map_playanim, STRING("anm_mon"), 0, 0)
+        CALL(evt_map_playanim, STRING("anm_mon"), MAP_ANIM_PLAY_ONCE, 0)
         CALL(evt_map_checkanim, STRING("anm_mon"), LW(0), LW(1))
         WAIT_MS(LW(1))
         CALL(evt_snd_sfxoff, LW(10))
-        CALL(evt_cam3d_evt_off, 1000, 11)
+        CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
         WAIT_MS(1000)
         CALL(evt_hitobj_onoff, STRING("a_mon"), 0, 0)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_05_BRISTLE)
+        SET_VALUE(GSW_STORY_PROGRESS, STG1_05_BRISTLE)
         CALL(evt_mario_key_onoff, 1)
     END_IF
     RETURN
@@ -168,6 +172,7 @@ EVT_END()
  * Shakes the NPC named in LW(0) from side to side by one unit every two frames, forever;
  * deleted by hashira_evt when the shaking should stop.
  */
+// Alternate between the initial X plus one and the initial X; the decremented temporary is not used.
 static EVT_BEGIN(shake_evt)
     CALL(evt_npc_get_position, LW(0), LW(10), LW(11), LW(12))
     LOOP(0)
@@ -198,16 +203,15 @@ static EVT_BEGIN(hashira_evt_sub)
     END_IF
     CALL(evt_npc_jump_position_nohit, LW(0), LW(10), 0, 100, 700, 30)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_TOGEDA_LANDING1"), LW(10), 0, 100, 0)
-    CALL(evt_cam_shake, 4, FLOAT(0.009765625f), FLOAT(0.0f), 100)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 100)
     RETURN
 EVT_END()
 
 /**
- * Case script run when Mario hits a pillar of the second gate (LW(0) is the guard on it, LW(1) the other):
- * the pillar shakes with a quake (SFX_STG1_QUAKE6) while the camera looks at it,
+ * Case script run when Mario presses A at a pillar of the second gate (LW(0) is the guard on it, LW(1) the other):
+ * the guard shakes with a quake (SFX_STG1_QUAKE6) while the camera looks at it,
  * the guard jumps down (hashira_evt_sub), the other guard too unless it was already beaten,
  * then both guards are set up as linked enemies and the battle mode is switched on.
- * The original tests hei_03's pillar-defeated flags rather than this map's own.
  */
 static EVT_BEGIN(hashira_evt)
     CALL(evt_mario_key_onoff, 0)
@@ -216,22 +220,22 @@ static EVT_BEGIN(hashira_evt)
     SPAWN_EVENT_GET_ID(PTR(shake_evt), LW(15))
     WAIT_MS(500)
     CALL(evt_npc_get_position, LW(0), LW(10), LW(11), LW(12))
-    CALL(evt_cam3d_evt_set_at, LW(10), LW(11), LW(12), 50, 600, 11)
+    CALL(evt_cam3d_evt_set_at, LW(10), LW(11), LW(12), 50, 600, EASING_SINE_IN_OUT)
     WAIT_MS(600)
     WAIT_MS(1000)
     DELETE_EVENT(LW(15))
     CALL(evt_snd_sfxoff, LW(14))
-    CALL(evt_cam3d_evt_off, 800, 11)
+    CALL(evt_cam3d_evt_off, 800, EASING_SINE_IN_OUT)
     SET_VALUE(LW(0), LW(0))
     SPAWN_EVENT_GET_ID(PTR(hashira_evt_sub), LW(15))
     IF_INT_EQUAL(LW(2), 0)
-        // BUG: tests hei_03's pillar-enemy flags, not this map's GSWF_HEI05_PILLAR_ENEMY_A/B_DEFEATED (original game)
-        IF_INT_EQUAL(GSWF(GSWF_HEI03_PILLAR_ENEMY_B_DEFEATED), 0)
+        // BUG: tests hei_03's pillar-enemy flags, not this map's GSWF_HEI_05_PILLAR_ENEMY_1/2_DEFEATED
+        IF_INT_EQUAL(GSWF_HEI_03_PILLAR_ENEMY_2_DEFEATED, 0)
             SET_VALUE(LW(0), LW(1))
             SPAWN_EVENT(hashira_evt_sub)
         END_IF
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_HEI03_PILLAR_ENEMY_A_DEFEATED), 0)
+        IF_INT_EQUAL(GSWF_HEI_03_PILLAR_ENEMY_1_DEFEATED, 0)
             SET_VALUE(LW(0), LW(1))
             SPAWN_EVENT(hashira_evt_sub)
         END_IF
@@ -244,7 +248,7 @@ static EVT_BEGIN(hashira_evt)
     END_IF
     CALL(evt_npc_setup, PTR(npcEnt))
     CALL(evt_npc_set_link, STRING("シンエモン1"), STRING("シンエモン2"))
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     CALL(evt_mario_key_onoff, 1)
     IF_INT_EQUAL(LW(2), 0)
         IF_INT_EQUAL(GF(1), 1)
@@ -260,21 +264,21 @@ static EVT_BEGIN(hashira_evt)
 EVT_END()
 
 /**
- * Petal Meadows hei_05 map init: puts the two Shinemon enemies on their pillars until the "Bristle" story step
+ * Petal Meadows hei_05 map init: puts the two guards on their pillars until the "Bristle" story step
  * and until each has been defeated, opens the gate when both are beaten (or at once later in the story),
- * sets the cave music and reverb.
+ * sets the silenced field music, the ambience and reverb.
  */
 EVT_BEGIN(hei_05_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI4"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(1))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI4"))
     CALL(evt_snd_set_rev_mode, 1)
-    CALL(evt_map_playanim, STRING("anm_hokori"), 1, 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_05_BRISTLE)
-        IF_INT_EQUAL(GSWF(GSWF_HEI05_PILLAR_ENEMY_A_DEFEATED), 0)
+    CALL(evt_map_playanim, STRING("anm_hokori"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_05_BRISTLE)
+        IF_INT_EQUAL(GSWF_HEI_05_PILLAR_ENEMY_1_DEFEATED, 0)
             CALL(evt_npc_set_anim, STRING("シンエモン1"), STRING("KUR_Z_1"))
             CALL(evt_npc_set_position, STRING("シンエモン1"), -119, 65, -77)
             CALL(evt_npc_set_ry, STRING("シンエモン1"), 90)
@@ -282,10 +286,10 @@ EVT_BEGIN(hei_05_init_evt)
             SET_RAW_VALUE(LW(0), STRING("シンエモン1"))
             SET_RAW_VALUE(LW(1), STRING("シンエモン2"))
             SET_VALUE(LW(2), 0)
-            CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_hasira_1"), 0, PTR(hashira_evt), GW(0))
+            CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_hasira_1"), 0, PTR(hashira_evt), GW(0))
             SET_VALUE(GF(0), 1)
         END_IF
-        IF_INT_EQUAL(GSWF(GSWF_HEI05_PILLAR_ENEMY_B_DEFEATED), 0)
+        IF_INT_EQUAL(GSWF_HEI_05_PILLAR_ENEMY_2_DEFEATED, 0)
             CALL(evt_npc_set_anim, STRING("シンエモン2"), STRING("KUR_Z_1"))
             CALL(evt_npc_set_position, STRING("シンエモン2"), 120, 62, -77)
             CALL(evt_npc_set_ry, STRING("シンエモン2"), 270)
@@ -293,16 +297,16 @@ EVT_BEGIN(hei_05_init_evt)
             SET_RAW_VALUE(LW(0), STRING("シンエモン2"))
             SET_RAW_VALUE(LW(1), STRING("シンエモン1"))
             SET_VALUE(LW(2), 1)
-            CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_hasira_2"), 0, PTR(hashira_evt), GW(1))
+            CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_hasira_2"), 0, PTR(hashira_evt), GW(1))
             SET_VALUE(GF(1), 1)
         END_IF
         BEGIN_INLINE_EVENT
             LABEL(0)
-            IF_INT_EQUAL(GSWF(GSWF_HEI05_PILLAR_ENEMY_A_DEFEATED), 0)
+            IF_INT_EQUAL(GSWF_HEI_05_PILLAR_ENEMY_1_DEFEATED, 0)
                 WAIT_FRAMES(1)
                 GOTO(0)
             END_IF
-            IF_INT_EQUAL(GSWF(GSWF_HEI05_PILLAR_ENEMY_B_DEFEATED), 0)
+            IF_INT_EQUAL(GSWF_HEI_05_PILLAR_ENEMY_2_DEFEATED, 0)
                 WAIT_FRAMES(1)
                 GOTO(0)
             END_IF
@@ -310,7 +314,7 @@ EVT_BEGIN(hei_05_init_evt)
         END_INLINE_EVENT
     ELSE
         CALL(evt_hitobj_onoff, STRING("a_mon"), 0, 0)
-        CALL(evt_map_playanim, STRING("anm_mon"), 2, 0)
+        CALL(evt_map_playanim, STRING("anm_mon"), MAP_ANIM_PLAY_AT_END, 0)
     END_IF
     RETURN
 EVT_END()

@@ -1,5 +1,9 @@
-// Paper Mario 64 effect: Magikoopa (kameki) tornado of eight spinning, scrolling layers around a point.
+// Paper Mario 64 effect: Magikoopa (kameki) tornado of seven spinning, scrolling bands (between eight rings) around
+// a point.
+
 #include "eff/n64/eff_kameki_tornade_n64.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -10,31 +14,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include "eff/eff_n64.h"
-#include "libc_decls.h"
-#include <dolphin/os.h>
-
-#define Vec2Vtx(v, o)                 \
-    do {                              \
-        OSf32tos16(&(v)->x, &(o)[0]); \
-        OSf32tos16(&(v)->y, &(o)[1]); \
-        OSf32tos16(&(v)->z, &(o)[2]); \
-    } while (0)
-
-void tri2();
+#include "dolphin/os.h"
 
 static void effKamekiTornadeMain(EffectEntry* effect);
-static void effKamekiTornadeDisp(CameraId cameraId, EffectEntry* effect);
+static void effKamekiTornadeDisp(CameraId cameraId, void* payload);
 
-/**
- * Spawns a Magikoopa (kameki) tornado at (x, y, z) of 8 spinning layers, scaled by scale;
- * life is in frames (0 = until soft-deleted).
- * battle_mario.c spawns two (life 90, scale 3); boss_magnum_battender_mkII uses one.
- */
+/** Spawns a Magikoopa tornado at (x, y, z), scale times its size, for life frames (0 or less: until soft deleted). */
 EffectEntry* effKamekiTornadeN64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffKamekiTornadeN64Work* work;
     s32 i;
-    s32 k;
 
     effect = effEntry();
     effect->type = "KamekiTornadeN64";
@@ -42,7 +31,7 @@ EffectEntry* effKamekiTornadeN64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f
     work = __memAlloc(HEAP_EFFECT, sizeof(EffKamekiTornadeN64Work));
     effect->userdata = work;
     effect->callback = effKamekiTornadeMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (life <= 0) {
@@ -89,7 +78,6 @@ static void effKamekiTornadeMain(EffectEntry* effect) {
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 i;
-    s32 k;
     s32 life;
     s32 frame;
     f32 scale;
@@ -98,8 +86,8 @@ static void effKamekiTornadeMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 16;
     }
     if (work->life < 1000) {
@@ -145,14 +133,40 @@ static void effKamekiTornadeMain(EffectEntry* effect) {
     for (i = 0; i < 8; i++) {
         work->ang[i] += work->angVel[i];
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKamekiTornadeDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effKamekiTornadeDisp, effect);
+}
+
+/** Copies vertex `src` to `dst` and transforms its position by `mtx` (fast-cast s16 <-> f32 conversions). */
+// Original name and size (0x124) from the JP demo map (UNUSED there: every call is inlined).
+static void vtx_copy(effN64Vtx* dst, effN64Vtx* src, Mtx mtx) {
+    Vec v;
+
+    memcpy(dst, src, sizeof(effN64Vtx));
+    OSInitFastCast();
+    OSs16tof32(&dst->x, &v.x);
+    OSs16tof32(&dst->y, &v.y);
+    OSs16tof32(&dst->z, &v.z);
+    PSMTXMultVec(mtx, &v, &v);
+    OSInitFastCast();
+    OSf32tos16(&v.x, &dst->x);
+    OSf32tos16(&v.y, &dst->y);
+    OSf32tos16(&v.z, &dst->z);
+}
+
+/** Sine and cosine of an angle in degrees (as in eff_kemuri3_n64.c; Paper Mario 64's whirlwind effect calls sin_deg / cos_deg here). */
+static inline f32 sind(f32 deg) {
+    return sin(6.2831855f * deg / 360.0f);
+}
+static inline f32 cosd(f32 deg) {
+    return cos(6.2831855f * deg / 360.0f);
 }
 
 /**
- * Builds a 16-segment ring of vertices and draws seven stacked, twisted layers, each tilted and scaled,
+ * Builds a 16-point ring of vertices (15 segments drawn) and draws seven stacked, twisted layers, each tilted and scaled,
  * using texture 0x6C on both texture maps.
  */
-static void effKamekiTornadeDisp(CameraId cameraId, EffectEntry* effect) {
+static void effKamekiTornadeDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     f32 scale;
     s32 i;
     EffKamekiTornadeN64Work* work;
@@ -161,21 +175,21 @@ static void effKamekiTornadeDisp(CameraId cameraId, EffectEntry* effect) {
     effN64Vtx* vtx;
     effN64Vtx* p;
     effN64Vtx* q;
-    s32 k;
     s32 j;
     CameraEntry* camera;
     s32 a;
+    f32 rad;
     f32 s;
-    f32 r;
-    f32 ang;
+    f32 dist;
+    f32 deg;
+    f32 sn;
+    f32 dist2;
     Mtx mtx;
     Mtx tex;
     Mtx rot;
     Mtx base;
     GXTexObj texObj;
     Vec axis;
-    Vec v1;
-    Vec v2;
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
@@ -208,28 +222,27 @@ static void effKamekiTornadeDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevColor(GX_TEVREG0, (GXColor){work->c0r, work->c0g, work->c0b, (s32)((f32)a * work->alphaScale)});
     GXSetTevColor(GX_TEVREG1, (GXColor){work->c1r, work->c1g, work->c1b, 32});
     GXSetCullMode(GX_CULL_NONE);
-    tmpl = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, 3)->address;
-    p = tmpl;
-    for (i = 0, k = 0; i < 16; i++, k += 128) {
+    tmpl = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, SMART_GROUP_TEMP)->address;
+    for (i = 0; i < 16; i++) {
         p = &tmpl[i];
-        r = (6.2831855f * (f32)(i * 360 / 15)) / 360.0f;
-        p->x = 100.0f * (f32)cos(r);
+        rad = (6.2831855f * (f32)(i * 360 / 15)) / 360.0f;
+        p->x = 100.0f * (f32)cos(rad);
         p->y = 0.0f;
-        p->z = 100.0f * (f32)sin(r);
-        p->s = k;
+        p->z = 100.0f * (f32)sin(rad);
+        p->s = (i * 4) << 5;
         p->t = 0;
         q = &tmpl[i + 16];
-        q->x = 100.0f * (f32)cos(r);
+        q->x = 100.0f * (f32)cos(rad);
         q->y = 0.0f;
-        q->z = 100.0f * (f32)sin(r);
-        q->s = (i * 128) << 2;
+        q->z = 100.0f * (f32)sin(rad);
+        q->s = (i * 16) << 5;
         q->t = 1024;
     }
     PSMTXRotRad(rot, 'z', 0.017453292f * work->rotZ);
     PSMTXScale(base, 0.1f, 0.1f, 0.1f);
     PSMTXConcat(rot, base, base);
     for (i = 0; i < 7; i++) {
-        vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, 3)->address;
+        vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, SMART_GROUP_TEMP)->address;
         effSetVtxDescN64(vtx);
         PSMTXTrans(mtx, 10.0f * work->px[i], 10.0f * work->py[i], 10.0f * work->pz[i]);
         PSMTXRotRad(rot, 'z', 0.017453292f * work->rot[i]);
@@ -243,22 +256,14 @@ static void effKamekiTornadeDisp(CameraId cameraId, EffectEntry* effect) {
         }
         PSMTXScale(tex, s, scale, s);
         PSMTXConcat(mtx, tex, mtx);
-        ang = 10.0f * work->radius[i];
-        s = 6.2831855f * work->ang[i] / 360.0f;
-        r = (f32)sin(s);
-        s = (f32)cos(s);
-        PSMTXTrans(tex, ang * r, 0, ang * s);
+        dist = 10.0f * work->radius[i];
+        deg = work->ang[i];
+        sn = sind(deg);
+        PSMTXTrans(tex, dist * sn, 0.0f, dist * cosd(deg));
         PSMTXConcat(mtx, tex, mtx);
         PSMTXConcat(base, mtx, mtx);
         for (j = 0; j < 16; j++) {
-            memcpy(&vtx[j], &tmpl[j], sizeof(effN64Vtx));
-            OSInitFastCast();
-            OSs16tof32(&vtx[j].x, &v1.x);
-            OSs16tof32(&vtx[j].y, &v1.y);
-            OSs16tof32(&vtx[j].z, &v1.z);
-            PSMTXMultVec(mtx, &v1, &v1);
-            OSInitFastCast();
-            Vec2Vtx(&v1, &vtx[j].x);
+            vtx_copy(&vtx[j], &tmpl[j], mtx);
         }
         PSMTXTrans(mtx, 10.0f * work->px[i + 1], 10.0f * work->py[i + 1], 10.0f * work->pz[i + 1]);
         PSMTXRotRad(rot, 'z', 0.017453292f * work->rot[i + 1]);
@@ -266,22 +271,15 @@ static void effKamekiTornadeDisp(CameraId cameraId, EffectEntry* effect) {
         axis = (Vec){0.03f, 1.0f, 0.0f};
         PSMTXRotAxisRad(rot, &axis, 0.017453292f * (work->twist + (f32)(i * i)));
         PSMTXConcat(mtx, rot, mtx);
-        PSMTXScale(tex, work->sc[i + 1] * scale, scale, scale * work->sc[i + 1]);
+        PSMTXScale(tex, work->sc[i + 1] * scale, scale, work->sc[i + 1] * scale);
         PSMTXConcat(mtx, tex, mtx);
-        r = 10.0f * work->radius[i];
-        s = (f32)sin(6.2831855f * work->ang[i] / 360.0f);
-        PSMTXTrans(tex, r * s, 0.0f, r * (f32)cos(6.2831855f * work->ang[i] / 360.0f));
+        dist2 = 10.0f * work->radius[i];
+        sn = sind(work->ang[i]);
+        PSMTXTrans(tex, dist2 * sn, 0.0f, dist2 * cosd(work->ang[i]));
         PSMTXConcat(mtx, tex, mtx);
         PSMTXConcat(base, mtx, mtx);
         for (j = 16; j < 32; j++) {
-            memcpy(&vtx[j], &tmpl[j], sizeof(effN64Vtx));
-            OSInitFastCast();
-            OSs16tof32(&vtx[j].x, &v2.x);
-            OSs16tof32(&vtx[j].y, &v2.y);
-            OSs16tof32(&vtx[j].z, &v2.z);
-            PSMTXMultVec(mtx, &v2, &v2);
-            OSInitFastCast();
-            Vec2Vtx(&v2, &vtx[j].x);
+            vtx_copy(&vtx[j], &tmpl[j], mtx);
         }
         GXInvalidateVtxCache();
         DCFlushRange(vtx, sizeof(effN64Vtx) * 32);

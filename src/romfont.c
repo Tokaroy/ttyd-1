@@ -1,20 +1,24 @@
 // ROM font: draws text with the console's built-in (IPL) font, for messages shown before the game font is loaded.
+
+#include "version.h"
 #include "romfont.h"
+#include "libc_decls.h"
 #include "dolphin/mtx.h"
 #include "dolphin/types.h"
 #include "memory.h"
-#include "version.h"
-#if VERSION != VERSION_JP
+
+#if VERSION >= VERSION_US
 #include "mario/mariost.h"
 #endif
+
+#if VERSION <= VERSION_DEMO_JP
+#include "mario/mariost.h"
 #include <dolphin/os.h>
-#include "libc_decls.h"
+#else
+#include <dolphin/os.h>
+#endif
 
 //.sbss
-/**
- * State of the system-font cache: the language of the font
- * and the glyph table built by romFontMake; wp points to it.
- */
 static RomFontWork work;
 
 //.sdata
@@ -22,25 +26,21 @@ static RomFontWork* wp = &work;
 
 //.rodata string, .sdata table
 #if VERSION >= VERSION_US
-/**
- * Japanese system messages of the retail release: the progressive-scan prompt and its replies, the disc-cover
- * and disc-read errors, the fatal error text and the language names. romFontGetMessage indexes every msg_ table alike.
- */
-const char* msg_jp[21] = {
-    "\203v\203\215\203O\203\214\203b\203V\203u\203\202\201[\203h\202\305\225\\\216\246\202\265\202\334\202\267\202\251\201H",
-    "\202\315\201@\202\242\201@\201@\201@\201@\201@\201@\202\242\202\242\202\246",
-    "\201y\201@\201@\201@\201@\201z",
-    "\211\346\226\312\225\\\216\246\203\202\201[\203h\202\315\203v\203\215\203O\203\214\203b\203V\203u\203\202\201[\203h\202\311\203Z\203b\203g\202\263\202\352\202\334\202\265\202\275\201B",
-    "\211\346\226\312\225\\\216\246\203\202\201[\203h\202\315\203C\203\223\203^\201[\203\214\201[\203X\203\202\201[\203h\202\311\203Z\203b\203g\202\263\202\352\202\334\202\265\202\275\201B",
+static const char* msg_jp[21] = {
+    "プログレッシブモードで表示しますか？",
+    "は　い　　　　　　いいえ",
+    "【　　　　】",
+    "画面表示モードはプログレッシブモードにセットされました。",
+    "画面表示モードはインターレースモードにセットされました。",
     "",
     "",
     "",
     "",
     "",
-    "\203f\203B\203X\203N\203J\203o\201[\202\252\212J\202\242\202\304\202\242\202\334\202\267\201B\n\n\203Q\201[\203\200\202\360\221\261\202\257\202\351\217\352\215\207\202\315\201A\n\203f\203B\203X\203N\203J\203o\201[\202\360\225\302\202\337\202\304\202\255\202\276\202\263\202\242\201B",
-    "\203y\201[\203p\201[\203}\203\212\203I\202q\202o\202f\202\314\n\203f\203B\203X\203N\202\360\203Z\203b\203g\202\265\202\304\202\255\202\276\202\263\202\242\201B",
-    "\203f\203B\203X\203N\202\360\223\307\202\337\202\334\202\271\202\361\202\305\202\265\202\275\201B\n\n\202\255\202\355\202\265\202\255\202\315\201A\226{\221\314\202\314\216\346\210\265\220\340\226\276\217\221\202\360\n\202\250\223\307\202\335\202\255\202\276\202\263\202\242\201B",
-    "\203G\203\211\201[\202\252\224\255\220\266\202\265\202\334\202\265\202\275\201B\n\n\226{\221\314\202\314\203p\203\217\201[\203{\203^\203\223\202\360\211\237\202\265\202\304\223d\214\271\202\360OFF\202\311\202\265\201A\n\226{\221\314\202\314\216\346\210\265\220\340\226\276\217\221\202\314\216w\216\246\202\311\217]\202\301\202\304\202\255\202\276\202\263\202\242\201B",
+    "ディスクカバーが開いています。\n\nゲームを続ける場合は、\nディスクカバーを閉めてください。",
+    "ペーパーマリオＲＰＧの\nディスクをセットしてください。",
+    "ディスクを読めませんでした。\n\nくわしくは、本体の取扱説明書を\nお読みください。",
+    "エラーが発生しました。\n\n本体のパワーボタンを押して電源をOFFにし、\n本体の取扱説明書の指示に従ってください。",
     "English",
     "Deutsch",
     "Fran\347ais",
@@ -50,11 +50,7 @@ const char* msg_jp[21] = {
     NULL,
 };
 
-/**
- * English system messages, laid out like msg_jp
- * (the progressive prompt wording differs in the PAL release).
- */
-const char* msg_us[21] = {
+static const char* msg_us[21] = {
 #if VERSION >= VERSION_DEMO_EU
     "Would you like to display\nin progressive scan mode?",
 #else
@@ -64,12 +60,9 @@ const char* msg_us[21] = {
     "[    ]",
 #if VERSION >= VERSION_DEMO_EU
     "Progressive scan mode\nhas been turned on.",
-#else
-    "Progressive Mode\nhas been turned on.",
-#endif
-#if VERSION >= VERSION_DEMO_EU
     "Progressive scan mode\nhas been turned off.",
 #else
+    "Progressive Mode\nhas been turned on.",
     "Progressive Mode\nhas been turned off.",
 #endif
     "This game is compatible with 60Hz mode.\nPlease select mode.\n\nIf your television does not display\ncorrectly in 60Hz mode,\nplease select 50Hz mode.",
@@ -217,14 +210,9 @@ const char* msg_it[21] = {
 static const char** msg_tbl[6] = {msg_jp, msg_us, msg_ge, msg_fr, msg_sp, msg_it};
 #else
 #if VERSION <= VERSION_DEMO_JP
-/** Japanese system messages: progressive-scan prompt and replies, disc-cover and disc-read errors. */
-const char* msg_jp[9] = {
+static const char* msg_jp[9] = {
 #else
-/**
- * Japanese system messages: progressive-scan prompt and replies,
- * disc-cover and disc-read errors, fatal error text.
- */
-const char* msg_jp[10] = {
+static const char* msg_jp[10] = {
 #endif
     "プログレッシブモードで表示しますか？",
     "は　い　　　　　　いいえ",
@@ -240,8 +228,7 @@ const char* msg_jp[10] = {
     NULL
 };
 
-/** English system messages, laid out like msg_jp. */
-const char* msg_us[9] = {
+static const char* msg_us[9] = {
     "Would you like to display in progressive scan mode?",
     "Yes              N o",
     "[    ]",
@@ -253,26 +240,40 @@ const char* msg_us[9] = {
     NULL
 };
 
-/** The system message tables by language number: Japanese, then English. */
-static const char** msg_tbl[2] = { msg_jp, msg_us };
+/**
+ * The system message tables by language number (gp->language):
+ * Japanese, English.
+ */
+static const char** msg_tbl[2] = {msg_jp, msg_us};
 #endif
 
 // local prototypes
+typedef enum RomFontLanguage {
+    ROM_FONT_LANGUAGE_SJIS = 0,
+    ROM_FONT_LANGUAGE_ASCII = 1,
+} RomFontLanguage;
+
 static void romFontMake(void);
 
 /**
  * Returns system message msg (progressive-scan prompt, disc errors, language names) in the console's language.
- * Non-JP releases fall back to the English table when the IPL font is ASCII but gp->language is Japanese;
+ * The early demos and US and later fall back to the English table when the IPL font is ASCII but gp->language
+ * is Japanese;
  * JP always returns the Japanese text. Used by seq_logo and the disc-error screen in mariost.
  */
 const char* romFontGetMessage(s32 msg) {
-#if VERSION != VERSION_JP
-    if (wp->language != 0 && (u32)gp->language == 0) {
+#if VERSION <= VERSION_DEMO_JP
+    if (wp->language != ROM_FONT_LANGUAGE_SJIS && gp->language == LANGUAGE_JP) {
+        return msg_tbl[1][msg];
+    }
+    return msg_tbl[gp->language][msg];
+#elif VERSION >= VERSION_US
+    if (wp->language != ROM_FONT_LANGUAGE_SJIS && gp->language == LANGUAGE_JP) {
         return msg_tbl[1][msg];
     }
     return msg_tbl[gp->language][msg];
 #else
-    return msg_tbl[0][msg]; // has eng but always returns JP
+    return msg_tbl[0][msg]; // always the Japanese table
 #endif
 }
 
@@ -281,9 +282,9 @@ void romFontInit(void) {
     wp->glyphs = 0;
     wp->uniqueChars = 0;
     if (OSGetFontEncode() == OS_FONT_ENCODE_SJIS) {
-        wp->language = 0;
+        wp->language = ROM_FONT_LANGUAGE_SJIS;
     } else {
-        wp->language = 1;
+        wp->language = ROM_FONT_LANGUAGE_ASCII;
     }
     romFontMake();
 }
@@ -321,14 +322,14 @@ static void romFontMake(void) {
     for (t = 0; t < 2; t++) {
 #endif
         for (i = 0; (str = msg_tbl[t][i]) != NULL; i++) {
-            /* ASCII mode (language != 0): only scan the English table (t != 0). */
+            /* ASCII mode (language != 0) skips the Japanese table (t == 0). */
             s32 k = 0;
-            if (wp->language == 0 || t != 0) {
+            if (wp->language == ROM_FONT_LANGUAGE_SJIS || t != 0) {
                 for (;;) {
                     u32 b = str[k];
                     u16 w = *(u16*)(str + k);
 #if VERSION >= VERSION_US
-                    if (wp->language != 0) {
+                    if (wp->language != ROM_FONT_LANGUAGE_SJIS) {
                         if (b == 0) {
                             break;
                         }
@@ -336,7 +337,7 @@ static void romFontMake(void) {
                         k++;
                     } else
 #endif
-                    if (b >= 0x20 && b < 0x80) {
+                        if (b >= 0x20 && b < 0x80) {
                         chars[numChars++] = b;
                         k++;
                     } else if ((b >= 0x80 && b < 0xA0) || b >= 0xE0) {
@@ -369,7 +370,11 @@ static void romFontMake(void) {
 
     /* 3. Deduplicate the sorted list; wp->uniqueChars = unique count. */
     wp->uniqueChars = 0;
-    uniqueChars = __memAlloc(HEAP_DEFAULT, VERSION_PICK(0x800, 0x2000));
+#if VERSION >= VERSION_US
+    uniqueChars = __memAlloc(HEAP_DEFAULT, 0x2000);
+#else
+    uniqueChars = __memAlloc(HEAP_DEFAULT, 0x800);
+#endif
     prev = 0xFFFF;
     for (i = 0; i < numChars; i++) {
         if (chars[i] != prev) {
@@ -402,7 +407,7 @@ static void romFontMake(void) {
         }
         OSGetFontTexel(c, glyph, 0, 6, &width);
         glyph->code = uniqueChars[i];
-        glyph->width = (s16)width;
+        glyph->width = width;
         glyph++;
     }
 
@@ -414,44 +419,51 @@ static void romFontMake(void) {
     __memFree(HEAP_DEFAULT, chars);
 }
 
-
 /** Looks a character code up in the glyph cache; falls back to the first glyph when the code was not baked. */
-static inline RomFontChar* romFontFindChar(u16 code) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+RomFontChar* searchRomFont(u16 code) {
     RomFontWork* w = wp;
     RomFontChar* table = w->glyphs;
     RomFontChar* cur = w->glyphs;
     s32 n;
     for (n = 0; n < w->uniqueChars; cur++, n++) {
-        if (cur->code == code)
+        if (cur->code == code) {
             return cur;
+        }
     }
     return table; // not found
 }
 
-/** Not quite matched, see: https://decomp.me/scratch/cdEUS */
+/**
+ * Draws the printf-style message in the ROM font at (x, y), scaled by scale, in *color, one unit per pixel: a 24x24
+ * glyph per character advancing by its width, '\n' starting a line 24 lower. Shift-JIS double-byte codes are one glyph
+ * except when the ASCII font is active (US and later).
+ */
 void romFontPrintGX(f32 x, f32 y, f32 scale, GXColor* color, const char* msg, ...) {
-    char buf[1024];  // 0x158
-    Mtx mtx;         // 0x128
-    Mtx scaleMtx;    // 0x0F8
-    Mtx camMtx;      // 0x0C8
-    GXTexObj texObj; // 0x0A8
-    Point3d target;  // 0x09C
-    Point3d up;      // 0x090
-    Point3d camPos;  // 0x084
+    char buf[1024];
+    Mtx mtx;
+    Mtx scaleMtx;
+    Mtx camMtx;
+    GXTexObj texObj;
+    Point3d target;
+    Point3d up;
+    Point3d camPos;
+    s16 x2;
+    s16 y2;
     va_list ap;
     s32 i = 0;
     s32 curX = 0;
-    s16 curY = 0;
+    s32 curY = 0;
     RomFontChar* glyph;
 
     // --- camera: place the eye so 1 unit == 1 px at the target plane ---
-    target = (Vec){ 0.0f, 0.0f, 0.0f };
-    up = (Vec){ 0.0f, 1.0f, 0.0f };
-    camPos = (Vec){ 0.0f, 0.0f, 240.0f / (f32)tan(0.21816612780094147) };
+    target = (Vec){0.0f, 0.0f, 0.0f};
+    up = (Vec){0.0f, 1.0f, 0.0f};
+    camPos = (Vec){0.0f, 0.0f, 240.0f / (f32)tan(0.21816612780094147)};
 
-    // --- format the message (this is where the va_list lives) ---
+    // --- format the message ---
     va_start(ap, msg);
-    vsprintf(buf, msg, ap); // no va_end in the original
+    vsprintf(buf, msg, ap); // va_end is never called
 
     C_MTXLookAt(camMtx, &camPos, &up, &target);
 
@@ -467,7 +479,7 @@ void romFontPrintGX(f32 x, f32 y, f32 scale, GXColor* color, const char* msg, ..
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
     GXSetZMode(GX_DISABLE, GX_LEQUAL, GX_DISABLE);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetChanMatColor(GX_COLOR0A0, *color);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
@@ -489,7 +501,7 @@ void romFontPrintGX(f32 x, f32 y, f32 scale, GXColor* color, const char* msg, ..
         u16 c16 = *(u16*)&buf[i]; // big-endian lead<<8 | trail, for double-byte
 
 #if VERSION >= VERSION_US
-        if (wp->language != 0) {
+        if (wp->language != ROM_FONT_LANGUAGE_SJIS) {
             if (c == 0x0A) {
                 curX = 0;
                 curY -= 24;
@@ -498,16 +510,16 @@ void romFontPrintGX(f32 x, f32 y, f32 scale, GXColor* color, const char* msg, ..
             } else if (c == 0x00) {
                 break;
             } else {
-                glyph = romFontFindChar(c & 0xFFFF);
+                glyph = searchRomFont(c & 0xFFFF);
                 i += 1;
             }
         } else
 #endif
-        if (c >= 0x20 && c < 0x80) { // ASCII
-            glyph = romFontFindChar(c & 0xFFFF);
+            if (c >= 0x20 && c < 0x80) { // ASCII
+            glyph = searchRomFont(c & 0xFFFF);
             i += 1;
         } else if ((c >= 0x80 && c < 0xA0) || c >= 0xE0) { // SJIS lead byte
-            glyph = romFontFindChar(c16);
+            glyph = searchRomFont(c16);
             i += 2;
         } else if (c == 0x00) { // NUL -> done
             break;
@@ -526,7 +538,8 @@ void romFontPrintGX(f32 x, f32 y, f32 scale, GXColor* color, const char* msg, ..
         GXLoadTexObj(&texObj, GX_TEXMAP0);
 
         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-        { s16 x2 = (s16)curX + 24; s16 y2 = (s16)curY + 24;
+        x2 = (s16)curX + 24;
+        y2 = (s16)curY + 24;
         GXPosition3s16(curX, y2, 0);
         GXTexCoord2s16(0, 0);
         GXPosition3s16(x2, y2, 0);
@@ -534,7 +547,7 @@ void romFontPrintGX(f32 x, f32 y, f32 scale, GXColor* color, const char* msg, ..
         GXPosition3s16(x2, curY, 0);
         GXTexCoord2s16(1, 1);
         GXPosition3s16(curX, curY, 0);
-        GXTexCoord2s16(0, 1); }
+        GXTexCoord2s16(0, 1);
         GXEnd();
 
         curX += glyph->width;
@@ -543,30 +556,32 @@ void romFontPrintGX(f32 x, f32 y, f32 scale, GXColor* color, const char* msg, ..
 
 /**
  * Returns the pixel width of the widest line of message (lines split on '\n'), using the cached glyph widths.
- * SJIS double-byte codes count as one glyph unless the US/PAL ASCII font is active.
+ * SJIS double-byte codes count as one glyph unless the ASCII font is active in US and later.
  */
 s32 romFontGetWidth(const char* message) {
-#if VERSION >= VERSION_US
-    s32 width = 0;
-    s32 i = 0;
-    s32 max = 0;
-    u16 c16;
-    RomFontChar* glyph;
-    u32 c;
-#else
+#if VERSION < VERSION_US
     u16 c16;
     RomFontChar* glyph;
     u32 c;
     s32 width = 0;
     s32 i = 0;
     s32 max = 0;
-#endif
 
     for (;;) {
         c = message[i];
         c16 = *(u16*)&message[i];
-#if VERSION >= VERSION_US
-        if (wp->language != 0) {
+#else
+    s32 width = 0;
+    s32 i = 0;
+    s32 max = 0;
+    u16 c16;
+    RomFontChar* glyph;
+    u32 c;
+
+    for (;;) {
+        c = message[i];
+        c16 = *(u16*)&message[i];
+        if (wp->language != ROM_FONT_LANGUAGE_SJIS) {
             if (c == 0x00) {
                 if (max < width) {
                     max = width;
@@ -579,16 +594,16 @@ s32 romFontGetWidth(const char* message) {
                 width = 0;
                 i += 1;
             } else {
-                glyph = romFontFindChar(c & 0xFFFF);
+                glyph = searchRomFont(c & 0xFFFF);
                 i += 1;
             }
         } else
 #endif
         if (c >= 0x20 && c < 0x80) {
-            glyph = romFontFindChar(c & 0xFFFF);
+            glyph = searchRomFont(c & 0xFFFF);
             i += 1;
         } else if ((c >= 0x80 && c < 0xA0) || c >= 0xE0) {
-            glyph = romFontFindChar(c16);
+            glyph = searchRomFont(c16);
             i += 2;
         } else if (c == 0x00) {
             if (max < width) {
@@ -604,6 +619,9 @@ s32 romFontGetWidth(const char* message) {
         } else {
             i += 1;
         }
+
+        // BUG: after a newline or a skipped control byte, glyph still holds the previous character (it is
+        // uninitialized if the string starts with one), and that width is added again.
         width += glyph->width;
     }
     return max;

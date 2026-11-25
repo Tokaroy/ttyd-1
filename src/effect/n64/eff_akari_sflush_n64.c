@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: akari (light) flash, a yellow flare of the given size that fades over its lifetime.
-#include "eff/n64/eff_akari_sflush_n64.h"
+
 #include "driver/effdrv.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -33,16 +33,10 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
     {-16, 0, 0, 0, 0, 255, 255, 255, 255},
 };
 
-/** White, used as the flash's second colour when drawing the flares. */
-static const GXColor kWhite = {255, 255, 255, 0};
-
 static void effAkariSflushMain(EffectEntry* effect);
-static void effAkariSflushDisp(CameraId cameraId, EffectEntry* effect);
+static void effAkariSflushDisp(CameraId cameraId, void* payload);
 
-/**
- * Spawns the flash at (x, y, z), `size` times its normal scale,
- * for `lifetime` frames (0 or less: until soft deleted). Spawned only from evt_eff ("akari_sflush_n64").
- */
+/** Spawns a yellow flash of size `size` at (x, y, z) for lifetime frames (0 or less: until soft deleted). */
 EffectEntry* effAkariSflushN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 size) {
     EffectEntry* effect;
     EffAkariSflushN64Work* work;
@@ -53,7 +47,7 @@ EffectEntry* effAkariSflushN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z,
     work = __memAlloc(HEAP_EFFECT, sizeof(EffAkariSflushN64Work));
     effect->userdata = work;
     effect->callback = effAkariSflushMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -86,8 +80,8 @@ static void effAkariSflushMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -109,14 +103,15 @@ static void effAkariSflushMain(EffectEntry* effect) {
     if (lifetime < 8) {
         work->alpha = lifetime * 32 + 31;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effAkariSflushDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effAkariSflushDisp, effect);
 }
 
 /**
  * Draws a ring of five pointed, four-corner flares that pulse in size with a cosine;
  * extra rings are added with `count` (always 0 here).
  */
-static void effAkariSflushDisp(CameraId cameraId, EffectEntry* effect) {
+static void effAkariSflushDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffAkariSflushN64Work* work;
     s32 i;
@@ -130,7 +125,6 @@ static void effAkariSflushDisp(CameraId cameraId, EffectEntry* effect) {
     Mtx viewMtx;
     Mtx m44;
     Mtx m14;
-    GXColor color2;
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
@@ -143,7 +137,7 @@ static void effAkariSflushDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx, scale, mtx);
     PSMTXConcat(camera->view, mtx, viewMtx);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTevStages(2);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -157,8 +151,7 @@ static void effAkariSflushDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
     GXSetNumTexGens(0);
     GXSetTevColor(GX_TEVREG0, (GXColor){work->r, work->g, work->b, alpha});
-    color2 = kWhite;
-    GXSetTevColor(GX_TEVREG1, color2);
+    GXSetTevColor(GX_TEVREG1, (GXColor){255, 255, 255, 0});
     GXSetCullMode(GX_CULL_NONE);
     effSetVtxDescN64(size16x16_tex32x32_vtx);
     for (i = 0; i < work->count + 1; i++) {

@@ -1,5 +1,7 @@
 // Peach speech bubble (fukidashi: speech balloon) placed next to the speaker's head; types 0-2.
-// effSetPeachFukiBatu sets the name of the cross ("batu") mark.
+// effSetPeachFukiBatu turns on the cross ("batu") mark of the bubble effect with a given name.
+
+#include "version.h"
 #include "eff/eff_peach_fukidashi.h"
 #include "driver/dispdrv.h"
 #include "driver/icondrv.h"
@@ -8,19 +10,16 @@
 #include "memory.h"
 #include <dolphin/mtx.h>
 #include "icon_ids.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-#include "version.h"
-
 static void effPeachFukidashiDisp(CameraId cameraId, EffectEntry* effect);
 static void effPeachFukidashiMain(EffectEntry* effect);
 
-#define fabsf(x) __fabsf(x)
-
-// EffPeachFukidashiWork.flags: the low two bits pick the icon; this bit adds the red cross.
-#define PEACH_FUKI_FLAG_CROSS 0x80 // effSetPeachFukiBatu: draw a red cross over the icon
+// EffPeachFukidashiWork.flags above the two icon bits: draw the cross (effSetPeachFukiBatu).
+enum { PEACH_FUKI_FLAG_CROSS = 0x80 };
 
 typedef struct EffPeachFukidashiWork {
-    u32 flags;     // 0x0, bits 0-1: icon, PEACH_FUKI_FLAG_CROSS: show a cross
+    u32 flags;     // 0x0, bits 0-1: icon, 0x80: show a cross
     Vec position;  // 0x4
     f32 angle;     // 0x10
     f32 size;      // 0x14
@@ -30,7 +29,8 @@ typedef struct EffPeachFukidashiWork {
 } EffPeachFukidashiWork;
 
 /** place the bubble next to the speaker's head, rotated around the camera's view axis */
-static inline void _setPosition(EffPeachFukidashiWork* work, f32 offset) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void calc_pos(EffPeachFukidashiWork* work, f32 offset) {
     CameraEntry* camera;
     Vec axis;
     Vec base;
@@ -75,7 +75,7 @@ EffectEntry* effPeachFukidashiEntry(s32 type, NpcEntry* npc, s32 duration, f32 x
     work->angle = angle;
     work->timer = duration;
     work->npc = npc;
-    _setPosition(work, 16.0f);
+    calc_pos(work, 16.0f);
     return effect;
 }
 
@@ -93,7 +93,7 @@ static void effPeachFukidashiMain(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, 0.0f, 2, (DispCallback)effPeachFukidashiDisp, effect);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, (DispCallback)effPeachFukidashiDisp, effect);
 }
 
 /** Draws the speech bubble next to the speaker's head, rotated around the camera view axis. */
@@ -108,7 +108,7 @@ static void effPeachFukidashiDisp(CameraId cameraId, EffectEntry* effect) {
     camGetPtr(cameraId);
 
     // bubble
-    _setPosition(work, 16.0f);
+    calc_pos(work, 16.0f);
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
     PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(mtx, rot, mtx2);
@@ -116,12 +116,12 @@ static void effPeachFukidashiDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXRotRad(rot, 'z', MTXDegToRad(work->rot));
     PSMTXConcat(mtx2, scale, out);
     PSMTXConcat(out, rot, out);
-    iconDispGx2(out, 0, ICON_1F2);
+    iconDispGx2(out, 0, ICON_FUKIDASHI);
 
     // icon inside the bubble
-    _setPosition(work, 40.0f);
+    calc_pos(work, 40.0f);
     PSMTXTrans(mtx, work->position.x,
-               7.25f + ((work->position.y - 14.0f) + fabsf(1.5f * work->angle / 90.0f)),
+               7.25f + ((work->position.y - 14.0f) + __fabsf(1.5f * work->angle / 90.0f)),
                work->position.z);
     PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(mtx, rot, mtx2);
@@ -131,29 +131,29 @@ static void effPeachFukidashiDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx2, scale, mtx2);
     switch (work->flags & 3) {
         case 0:
-            iconDispGx2(mtx2, 0, ICON_1F5);
+            iconDispGx2(mtx2, 0, ICON_BUTTON_X_ALT);
             break;
         case 1:
-            iconDispGx2(mtx2, 0, ICON_1F3);
+            iconDispGx2(mtx2, 0, ICON_BUTTON_A_ALT);
             break;
         case 2:
         default:
-            iconDispGx2(mtx2, 0, ICON_1F4);
+            iconDispGx2(mtx2, 0, ICON_BUTTON_B_ALT);
             break;
     }
 
     // red cross over the icon
     if (work->flags & PEACH_FUKI_FLAG_CROSS) {
 #if VERSION >= VERSION_US
-        char text[32] = "\xD7"; // US: Latin-1 multiplication sign
+        char text[32] = "ﾗ"; // US and later: Latin-1 multiplication sign
 #else
-        char text[32] = "\x81\x7E";
+        char text[32] = "×";
 #endif
         GXColor red = {0xFF, 0x00, 0x00, 0xFF};
 
         PSMTXScale(scale, 0.75f, 0.75f, 0.75f);
         PSMTXTrans(mtx, 6.0f + (work->position.x - 11.5f),
-                   (30.0f + ((work->position.y - 14.0f) + fabsf(1.5f * work->angle / 90.0f))) - 8.0f,
+                   (30.0f + ((work->position.y - 14.0f) + __fabsf(1.5f * work->angle / 90.0f))) - 8.0f,
                    work->position.z);
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx2);
@@ -166,7 +166,7 @@ static void effPeachFukidashiDisp(CameraId cameraId, EffectEntry* effect) {
     }
 }
 
-/** Sets the name of the cross (batu) mark; rels/aji/src/aji_17.c calls it from an event script. */
+/** Turns on the cross (batu) mark of the bubble effect named `name`; rels/aji/src/aji_17.c calls it from an event script. */
 void effSetPeachFukiBatu(const char* name) {
     ((EffPeachFukidashiWork*)effNameToPtr(name)->userdata)->flags |= PEACH_FUKI_FLAG_CROSS;
 }

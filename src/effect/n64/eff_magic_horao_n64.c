@@ -1,6 +1,7 @@
-// Paper Mario 64 magic effect (horao); types 0-5, some types spawn dust (hokori) puffs.
-#include "eff/n64/eff_magic_horao_n64.h"
+// Paper Mario 64 magic effect (horao); the type is stored but never read; on landing it spawns two dust (hokori) puffs.
+
 #include "driver/camdrv.h"
+#include "eff/eff_magic1_n64.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
 #include "memory.h"
@@ -9,25 +10,25 @@
 #include <stdlib.h>
 #include "eff/eff_n64.h"
 #include "eff/n64/eff_hokori_n64.h"
-#include "libc_decls.h"
+#include "eff/n64/eff_magic_horao_n64.h"
 
 typedef struct EffMagicHoraoN64Work {
-    s32 type;        // 0x0
-    Vec position;    // 0x4
-    f32 vy;          // 0x10
-    f32 startScale;  // 0x14
-    f32 targetScale; // 0x18
-    s32 startAlpha;  // 0x1C
-    s32 targetAlpha; // 0x20
-    f32 curScale;    // 0x24
-    f32 lerpRate;    // 0x28, eases curScale and alpha toward their targets
-    s32 state;       // 0x2C
-    s32 timer;       // 0x30
-    f32 scale;       // 0x34
-    s32 angle;       // 0x38
-    s32 alpha;       // 0x3C
-    s32 lifetime;    // 0x40
-    s32 frame;       // 0x44
+    s32 type;       // 0x0
+    Vec position;   // 0x4
+    f32 vy;         // 0x10
+    f32 startSize;  // 0x14
+    f32 endSize;    // 0x18
+    s32 startAlpha; // 0x1C
+    s32 endAlpha;   // 0x20
+    f32 size;       // 0x24
+    f32 blendRate;  // 0x28
+    s32 state;      // 0x2C
+    s32 timer;      // 0x30
+    f32 scale;      // 0x34
+    s32 angle;      // 0x38
+    s32 alpha;      // 0x3C
+    s32 lifetime;   // 0x40
+    s32 frame;      // 0x44
 } EffMagicHoraoN64Work;
 
 /** Large flat quad (6400 units wide) the horao magic draws its textures on. */
@@ -39,14 +40,16 @@ static effN64Vtx size64x64_tex64x64_vtx[] = {
 };
 
 static void effMagicHoraoMain(EffectEntry* effect);
-static void effMagicHoraoDisp(CameraId cameraId, EffectEntry* effect);
+static void effMagicHoraoDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns a "Horao" battle magic sprite at (x, y, z):
- * scale and alpha ease from (a, b) toward (c, d) at rate e, and it is deleted after f frames.
+ * size and alpha ease from (startSize, startAlpha) toward (endSize, endAlpha) at blendRate, and it is deleted
+ * after lifetime frames.
  * Via evt_eff64 "magic_horao_n64"; no script callers found.
  */
-EffectEntry* effMagicHoraoN64Entry(s32 type, f32 x, f32 y, f32 z, f32 a, s32 b, f32 c, s32 d, f32 e, s32 f) {
+EffectEntry* effMagicHoraoN64Entry(s32 type, f32 x, f32 y, f32 z, f32 startSize, s32 startAlpha, f32 endSize, s32 endAlpha,
+                                   f32 blendRate, s32 lifetime) {
     EffectEntry* effect;
     EffMagicHoraoN64Work* work;
 
@@ -60,17 +63,17 @@ EffectEntry* effMagicHoraoN64Entry(s32 type, f32 x, f32 y, f32 z, f32 a, s32 b, 
     work->position.x = x;
     work->position.y = y;
     work->position.z = z;
-    work->lerpRate = e;
-    work->startScale = a;
-    work->startAlpha = b;
-    work->targetScale = c;
-    work->targetAlpha = d;
+    work->blendRate = blendRate;
+    work->startSize = startSize;
+    work->startAlpha = startAlpha;
+    work->endSize = endSize;
+    work->endAlpha = endAlpha;
     work->scale = 1.0f;
     work->angle = rand() % 360;
-    work->lifetime = f;
+    work->lifetime = lifetime;
     work->frame = 0;
-    work->alpha = b;
-    work->curScale = a;
+    work->alpha = startAlpha;
+    work->size = startSize;
     work->vy = 0.0f;
     work->state = 0;
     return effect;
@@ -94,8 +97,8 @@ static void effMagicHoraoMain(EffectEntry* effect) {
     }
     switch (work->state) {
         case 0:
-            work->curScale += work->lerpRate * (work->targetScale - work->curScale);
-            work->alpha = work->alpha + work->lerpRate * (work->targetAlpha - work->alpha);
+            work->size += work->blendRate * (work->endSize - work->size);
+            work->alpha = work->alpha + work->blendRate * (work->endAlpha - work->alpha);
             work->scale -= 0.02f;
             if (work->scale < 0.0f) {
                 work->scale = 0.0f;
@@ -141,11 +144,20 @@ static void effMagicHoraoMain(EffectEntry* effect) {
             work->scale -= 0.05f;
             break;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMagicHoraoDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effMagicHoraoDisp, effect);
 }
 
-/** Draws a wobbling 16-strip ribbon (textures 0x56/0x57) while easing in; in the hold state draws two flat textures. */
-static void effMagicHoraoDisp(CameraId cameraId, EffectEntry* effect) {
+/** The red/green shade (200-250) pulsing with the angle. */
+static inline f32 shade(f32 ang) {
+    return 225.0f + 25.0f * (f32)sin(ang);
+}
+
+/**
+ * In the hold state (1) draws two flat quads (texture 0x56, then 0x57 fading in); in every other state draws a
+ * wobbling ribbon of 15 strips (texture 0x56 while easing in, 0x57 from state 2 on).
+ */
+static void effMagicHoraoDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     effN64Vtx* vtx;
     effN64Vtx* v;
     s32 i;
@@ -172,14 +184,13 @@ static void effMagicHoraoDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXScale(scale, 0.01f, 0.01f, 0.01f);
     PSMTXTrans(mtx, 100.0f * work->position.x, 100.0f * work->position.y, 100.0f * work->position.z);
     PSMTXConcat(scale, mtx, mtx);
-    PSMTXScale(scale, work->curScale, work->curScale, work->curScale);
+    PSMTXScale(scale, work->size, work->size, work->size);
     PSMTXConcat(mtx, scale, mtx);
     PSMTXConcat(camera->view, mtx, mtx);
     GXLoadPosMtxImm(mtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
-    // The first element sets ang and the second reads it: MWCC evaluates initialiser elements left to right (C leaves
-    // their order unspecified). Setting ang in a statement before the call changes the register allocation.
-    GXSetTevColor(GX_TEVREG0, (GXColor){(ang = 6.2831855f * (f32)(frame * 30) / 360.0f, 225.0f + 25.0f * (f32)sin(ang)), 225.0f + 25.0f * (f32)sin(ang), 0xFF, alpha});
+
+    GXSetTevColor(GX_TEVREG0, (GXColor){shade(ang = 6.2831855f * (f32)(frame * 30) / 360.0f), shade(ang), 0xFF, alpha});
     GXSetNumChans(0);
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
@@ -228,7 +239,7 @@ static void effMagicHoraoDisp(CameraId cameraId, EffectEntry* effect) {
             effGetTexObjN64(0x56, &texObj);
             GXLoadTexObj(&texObj, GX_TEXMAP0);
         }
-        vtx = smartAlloc(sizeof(effN64Vtx) * 32, 3)->address;
+        vtx = smartAlloc(sizeof(effN64Vtx) * 32, SMART_GROUP_TEMP)->address;
         for (i = 0; i < 16; i++) {
             v = vtx + i * 2;
             ang = 500.0f * (f32)sin(6.2831855f * (f32)(angle + (frame * 10 + i * 60)) / 360.0f);

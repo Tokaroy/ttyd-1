@@ -33,14 +33,12 @@ extern void __OSInitMemoryProtection(void);
 #endif
 
 #ifdef DEBUG
-/** Library version string kept in the binary (debug build). */
 const char* __OSVersion = "<< Dolphin SDK - OS\tdebug build: "BUILD_DATE" "DBUILD_TIME" (0x2301) >>";
 #else
-/** Library version string kept in the binary (release build). */
 const char* __OSVersion = "<< Dolphin SDK - OS\trelease build: "BUILD_DATE" "RBUILD_TIME" (0x2301) >>";
 #endif
 
-static DVDDriveInfo DriveInfo;
+static DVDDriveInfo DriveInfo ATTRIBUTE_ALIGN(32);
 static DVDCommandBlock DriveBlock;
 OSExecParams __OSRebootParams;
 
@@ -56,13 +54,13 @@ static OSBootInfo* BootInfo;
 static u32* BI2DebugFlag;
 static u32 BI2DebugFlagHolder;
 
+__declspec(weak) BOOL __OSIsGcam = FALSE;
+static f64 ZeroF;
+static f32 ZeroPS[2];
+static BOOL AreWeInitialized = FALSE;
+static void (**OSExceptionTable)(u8, OSContext*);
 OSTime __OSStartTime;
 BOOL __OSInIPL;
-void (**OSExceptionTable)(u8, OSContext*);
-BOOL AreWeInitialized;
-f32 ZeroPS[2];
-f64 ZeroF;
-BOOL __OSIsGcam;
 
 // prototypes
 static void __OSInitFPRs(void);
@@ -79,25 +77,20 @@ void __OSDBINTEND(void);
 void __OSDBJUMPSTART(void);
 void __OSDBJUMPEND(void);
 
-/**
- * Reads the debugger-present word the boot ROM leaves at physical address 0x40;
- * nonzero means a debugger is attached.
- */
 u32 __OSIsDebuggerPresent(void) {
     return *(u32*)OSPhysicalToCached(0x40);
 }
 
-/* clang-format off */
 #ifdef __GEKKO__
 asm void __OSFPRInit(void) {
     // clang-format off
     nofralloc
 
     mfmsr r3
-    ori r3, r3, 0x2000
+    ori r3, r3, MSR_FP
     mtmsr r3
 
-    mfspr r3, 0x398
+    mfspr r3, HID2
     rlwinm. r3, r3, 3, 0x1f, 0x1f
     beq skip_ps_init
 
@@ -176,22 +169,14 @@ skip_ps_init:
 }
 #endif
 
-/**
- * Clears the WPE bit (0x40000000) in HID2 so stores to the write-gather address are no longer gathered;
- * OSInit calls it after the other subsystems are up.
- */
 static void DisableWriteGatherPipe(void) {
     u32 hid2;
 
     hid2 = PPCMfhid2();
-    hid2 &= ~0x40000000;
+    hid2 &= ~HID2_WPE;
     PPCMthid2(hid2);
 }
 
-/**
- * Returns the console type word from the boot info at the start of memory,
- * or OS_CONSOLE_ARTHUR when there is no boot info or it is zero.
- */
 u32 OSGetConsoleType(void) {
     if (!BootInfo || BootInfo->consoleType == 0) {
         return OS_CONSOLE_ARTHUR;
@@ -199,17 +184,12 @@ u32 OSGetConsoleType(void) {
     return BootInfo->consoleType;
 }
 
-// needed for assert
+// NULL as plain 0 for the comparison in the ASSERTLINE of ClearArena
 #undef NULL
 #define NULL 0
 
-/**
- * Zeroes the arena at the end of OSInit.
- * After a reset that keeps a saved region it zeroes only the parts below and above that region,
- * so the saved memory survives.
- */
 static void ClearArena(void) {
-    if (!((OSGetResetCode() & 0x80000000) ? TRUE : FALSE)) {
+    if (!OSIsRestart()) {
         memset(OSGetArenaLo(), 0, (u32)OSGetArenaHi() - (u32)OSGetArenaLo());
         return;
     }
@@ -235,13 +215,9 @@ static void ClearArena(void) {
     }
 }
 
-/**
- * Completion callback for the DVD drive inquiry started in OSInit:
- * stores 0x8000 plus the drive's device code in __OSDeviceCode, or 1 if the inquiry failed.
- */
 static void InquiryCallback(s32, DVDCommandBlock* block) {
     switch (block->state) {
-    case 0:
+    case DVD_STATE_END:
         __OSDeviceCode = (u16)(0x8000 | DriveInfo.deviceCode);
         break;
     default:
@@ -250,14 +226,6 @@ static void InquiryCallback(s32, DVDCommandBlock* block) {
     }
 }
 
-/**
- * Boots the Dolphin OS (the game calls it first):
- * saves the exec parameters, finds the arena from the boot info or the link script,
- * installs the exception vectors, and initializes alarms, modules, interrupts, contexts, caches, EXI, SI, SRAM,
- * threads, the DSP audio system and memory protection.
- * It then prints the console type, memory size and arena range, clears the arena,
- * enables interrupts and starts DVDInit with a drive inquiry. Runs only once.
- */
 void OSInit(void) {
     u32 consoleType;
     void* bi2StartAddr;
@@ -307,7 +275,7 @@ void OSInit(void) {
         OSInitAlarm();
         __OSModuleInit();
         __OSInterruptInit();
-        __OSSetInterruptHandler(0x16, &__OSResetSWInterruptHandler);
+        __OSSetInterruptHandler(__OS_INTERRUPT_PI_RSW, &__OSResetSWInterruptHandler);
         __OSContextInit();
         __OSCacheInit();
         EXIInit();
@@ -331,13 +299,13 @@ void OSInit(void) {
         OSReport("Console Type : ");
 
         consoleType = OSGetConsoleType();
-        switch (consoleType & 0xF0000000) {
+        switch (consoleType & OS_CONSOLE_MASK) {
         case OS_CONSOLE_RETAIL:
             OSReport("Retail %d\n", consoleType);
             break;
         case OS_CONSOLE_DEVELOPMENT:
         case OS_CONSOLE_TDEV:
-            switch (consoleType & 0x0FFFFFFF) {
+            switch (consoleType & ~OS_CONSOLE_MASK) {
             case OS_CONSOLE_EMULATOR:
                 OSReport("Mac Emulator\n");
                 break;
@@ -351,7 +319,7 @@ void OSInit(void) {
                 OSReport("EPPC Minnow\n");
                 break;
             default:
-                OSReport("Development HW%d (%08x)\n", (consoleType & 0xFFFFFFF) - 3, consoleType);
+                OSReport("Development HW%d (%08x)\n", (consoleType & ~OS_CONSOLE_MASK) - 3, consoleType);
                 break;
             }
             break;
@@ -386,17 +354,12 @@ void OSInit(void) {
     }
 }
 
-/**
- * Address of each PowerPC exception vector, in OS exception number order;
- * OSExceptionInit installs a handler at each.
- */
 static u32 __OSExceptionLocations[] = {
     0x00000100, 0x00000200, 0x00000300, 0x00000400, 0x00000500, 0x00000600, 0x00000700, 0x00000800,
     0x00000900, 0x00000C00, 0x00000D00, 0x00000F00, 0x00001300, 0x00001400, 0x00001700,
 };
 
 #if DEBUG
-/** Exception names printed by debug builds. */
 char * __OSExceptionNames[17] = {
 	"System reset",
 	"MachineCheck",
@@ -418,12 +381,6 @@ char * __OSExceptionNames[17] = {
 };
 #endif
 
-/**
- * Copies the first-level exception vector code into each exception's slot in low memory,
- * patching in that slot's exception number (leaving out those TRK has claimed),
- * installs the debugger integrator stub on first boot,
- * and points every exception handler at OSDefaultExceptionHandler.
- */
 static void OSExceptionInit(void) {
     __OSException exception;
     void* destAddr;
@@ -459,7 +416,6 @@ static void OSExceptionInit(void) {
     // Copy the right vector into the table
     for (exception = 0; exception < __OS_EXCEPTION_MAX; exception++) {
         if (BI2DebugFlag && (*BI2DebugFlag >= 2) && __DBIsExceptionMarked(exception)) {
-            // this DBPrintf is suspicious.
             DBPrintf(">>> OSINIT: exception %d commandeered by TRK\n", exception);
             continue;
         }
@@ -489,6 +445,7 @@ static void OSExceptionInit(void) {
         __sync();
         ICInvalidateRange(destAddr, handlerSize);
     }
+
     // initialize pointer to exception table
     OSExceptionTable = (void*)OSPhysicalToCached(OS_EXCEPTIONTABLE_ADDR);
     
@@ -504,11 +461,6 @@ static void OSExceptionInit(void) {
     DBPrintf("Exceptions initialized...\n");
 }
 
-/**
- * Assembly stub copied to the debugger jump page:
- * saves the return address in the debugger interface,
- * turns on instruction and data address translation and returns to the debugger's destination address.
- */
 #ifdef __GEKKO__
 static asm void __OSDBIntegrator(void) {
     nofralloc
@@ -519,17 +471,13 @@ entry __OSDBINTSTART
     lwz     r3, DB_EXCEPTIONDEST_OFFSET(r5)
     oris    r3, r3, OS_CACHED_REGION_PREFIX
     mtlr    r3
-    li      r3, 0x30 // MSR_IR | MSR_DR     // turn on memory addressing
+    li      r3, MSR_IR | MSR_DR // turn on memory addressing
     mtmsr   r3
     blr
 entry __OSDBINTEND
 }
 #endif
 
-/**
- * Assembly stub copied over __DBVECTOR for an exception the debugger has claimed:
- * branches to the debugger jump point at address 0x60.
- */
 #ifdef __GEKKO__
 static asm void __OSDBJump(void) {
     nofralloc
@@ -539,7 +487,6 @@ entry __OSDBJUMPEND
 }
 #endif
 
-/** Installs a handler for one PowerPC exception number and returns the previous handler. */
 __OSExceptionHandler __OSSetExceptionHandler(__OSException exception, __OSExceptionHandler handler) {
     __OSExceptionHandler oldHandler;
     
@@ -550,18 +497,11 @@ __OSExceptionHandler __OSSetExceptionHandler(__OSException exception, __OSExcept
     return oldHandler;
 }
 
-/** Returns the handler installed for one PowerPC exception number. */
 __OSExceptionHandler __OSGetExceptionHandler(__OSException exception) {
     ASSERTMSGLINE(1228, exception < __OS_EXCEPTION_MAX, "__OSGetExceptionHandler(): unknown exception.");
     return OSExceptionTable[exception];
 }
 
-/**
- * Assembly template for every exception vector:
- * saves r3-r5, CR, LR, CTR, XER, SRR0 and SRR1 into the current OSContext,
- * turns address translation back on and jumps through the exception table to the handler (or to
- * OSDefaultExceptionHandler if the exception was not recoverable).
- */
 #ifdef __GEKKO__
 static asm void OSExceptionVector(void) {
     nofralloc
@@ -604,7 +544,7 @@ entry __DBVECTOR
     // Set SRR1[IR|DR] to turn on address
     // translation at the next RFI
     mfmsr   r3
-    ori     r3, r3, 0x30
+    ori     r3, r3, MSR_IR | MSR_DR
     mtsrr1  r3
 
     // This lets us change the exception number based on the
@@ -635,7 +575,7 @@ recoverable:
     // r4 - pointer to context
     // r5 - garbage
     // srr0 - exception handler
-    // srr1 - address translation enalbed, not yet recoverable
+    // srr1 - address translation enabled, not yet recoverable
 
     rfi
     // NOT REACHED HERE
@@ -648,10 +588,6 @@ entry __OSEVEnd
 
 void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsisr, u32 dar);
 
-/**
- * Assembly default handler for any exception nobody claimed:
- * saves the GPRs into the context and branches to __OSUnhandledException with DSISR and DAR.
- */
 #ifdef __GEKKO__
 asm void OSDefaultExceptionHandler(register __OSException exception, register OSContext* context) {
     nofralloc
@@ -664,13 +600,9 @@ asm void OSDefaultExceptionHandler(register __OSException exception, register OS
 }
 #endif
 
-/**
- * Enables paired-single mode and quantized load/store in HID2 (bits 0x80000000 and 0x20000000),
- * invalidates the instruction cache and clears the eight GQR registers.
- */
 #ifdef __GEKKO__
 void __OSPSInit(void) {
-	PPCMthid2(PPCMfhid2() | 0x80000000 | 0x20000000);
+	PPCMthid2(PPCMfhid2() | HID2_LSQE | HID2_PSE);
 	ICFlashInvalidate();
 	__sync();
 
@@ -689,12 +621,10 @@ void __OSPSInit(void) {
 }
 #endif
 
-/** Returns the low byte of DI register 9, the DVD interface configuration. */
 u32 __OSGetDIConfig(void) {
-    return (__DIRegs[9] & 0xFF);
+    return (__DIRegs[DI_CFG] & 0xFF);
 }
 
-/** Prints a library's version string to the debug console; each SDK library calls it from its init function. */
 void OSRegisterVersion(const char* id) {
     OSReport("%s\n", id);
 }

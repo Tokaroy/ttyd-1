@@ -4,16 +4,11 @@
 
 #include "__os.h"
 
-OSErrorHandler __OSErrorTable[17];
+OSErrorHandler __OSErrorTable[__OS_EXCEPTION_FLOATING_POINT_EXCEPTION + 1];
 
 #define FPSCR_ENABLE (FPSCR_VE | FPSCR_OE | FPSCR_UE | FPSCR_ZE | FPSCR_XE)
-/**
- * Floating-point exceptions enabled in each thread's FPSCR (invalid, overflow, underflow, divide by zero,
- * inexact).
- */
 u32 __OSFpscrEnableBits = FPSCR_ENABLE;
 
-/** printf to the debug console; the usual log call for game and SDK code. */
 void OSReport(const char* msg, ...) {
     va_list marker;
     va_start(marker, msg);
@@ -21,15 +16,10 @@ void OSReport(const char* msg, ...) {
     va_end(marker);
 }
 
-/** va_list version of OSReport. */
 void OSVReport(const char* msg, va_list list) {
     vprintf(msg, list);
 }
 
-/**
- * Prints a fatal message with the file and line, then up to 16 stack frames of back chain, and halts the CPU.
- * Interrupts are disabled first; this is what a failed ASSERT calls.
- */
 void OSPanic(const char* file, int line, const char* msg, ...) {
     va_list marker;
     u32 i;
@@ -49,11 +39,6 @@ void OSPanic(const char* file, int line, const char* msg, ...) {
     PPCHalt();
 }
 
-/**
- * Installs a handler for one OS error code (exception number) and returns the old one.
- * Installing or removing the floating-point exception handler also turns FP exceptions on or off in the MSR,
- * the FPSCR and every thread's saved context.
- */
 OSErrorHandler OSSetErrorHandler(OSError error, OSErrorHandler handler) {
     OSErrorHandler oldHandler;
     int enabled;
@@ -62,7 +47,7 @@ OSErrorHandler OSSetErrorHandler(OSError error, OSErrorHandler handler) {
     OSThread* thread;
     int i;
 
-    ASSERTMSGLINE(209, error < 17, "OSSetErrorHandler(): unknown error.");
+    ASSERTMSGLINE(209, error < __OS_EXCEPTION_FLOATING_POINT_EXCEPTION + 1, "OSSetErrorHandler(): unknown error.");
 
     enabled = OSDisableInterrupts();
     oldHandler = __OSErrorTable[error];
@@ -123,13 +108,6 @@ OSErrorHandler OSSetErrorHandler(OSError error, OSErrorHandler handler) {
 
 volatile OSContext* __OSFPUContext AT_ADDRESS(OS_BASE_CACHED | 0x00D8);
 
-/**
- * Called by OSDefaultExceptionHandler.
- * A program exception raised by an FP exception is turned into the FP-exception error;
- * if an error handler is installed for the exception it runs with the scheduler off and the context resumes.
- * Otherwise it prints the exception, context, DSISR/DAR, a description of the cause and the last interrupt,
- * and halts.
- */
 void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsisr, u32 dar) {
     OSTime now;
     u32 fpscr;
@@ -141,12 +119,12 @@ void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsi
         OSReport("Non-recoverable Exception %d", exception);
     } else {
         if (exception == __OS_EXCEPTION_PROGRAM && (context->srr1 & (0x80000000 >> 11)) &&
-            __OSErrorTable[__OS_EXCEPTION_FLOATING_POINT_EXCEPTION] != 0)
+            __OSErrorTable[__OS_EXCEPTION_FLOATING_POINT_EXCEPTION] != NULL)
         {
             exception = __OS_EXCEPTION_FLOATING_POINT_EXCEPTION;
 
             msr = PPCMfmsr();
-            PPCMtmsr(msr | 0x2000);
+            PPCMtmsr(msr | MSR_FP);
 
             if (__OSFPUContext) {
                 OSSaveFPUContext((OSContext*)__OSFPUContext);
@@ -163,7 +141,7 @@ void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsi
             if (__OSFPUContext == context) {
                 OSDisableScheduler();
                 __OSErrorTable[exception](exception, context, dsisr, dar);
-                context->srr1 &= ~0x2000;
+                context->srr1 &= ~MSR_FP;
                 __OSFPUContext = NULL;
 
                 context->fpscr &=
@@ -173,7 +151,7 @@ void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsi
                 OSEnableScheduler();
                 __OSReschedule();
             } else {
-                context->srr1 &= ~0x2000;
+                context->srr1 &= ~MSR_FP;
                 __OSFPUContext = NULL;
             }
 
@@ -200,7 +178,7 @@ void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsi
     OSReport("\nDSISR = 0x%08x                   DAR  = 0x%08x\n", dsisr, dar);
     OSReport("TB = 0x%016llx\n", now);
 
-    switch(exception) {
+    switch (exception) {
     case __OS_EXCEPTION_DSI:
         OSReport("\nInstruction at 0x%x (read from SRR0) attempted to access "
                     "invalid address 0x%x (read from DAR)\n",
@@ -219,7 +197,7 @@ void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsi
     case __OS_EXCEPTION_PROGRAM:
         OSReport("\nProgram exception : Possible illegal instruction/operation "
                     "at or around 0x%x (read from SRR0)\n",
-                    context->srr0, dar);
+                    context->srr0, dar); // dar is passed but the format prints one value
         break;
     case __OS_EXCEPTION_MEMORY_PROTECTION:
         OSReport("\n");
@@ -227,7 +205,7 @@ void __OSUnhandledException(__OSException exception, OSContext* context, u32 dsi
                 __DSPRegs[DSP_DMA_START_LO]);
         OSReport("ARAM DMA Address = 0x%04x%04x\n", __DSPRegs[DSP_ARAM_DMA_MM_HI],
                 __DSPRegs[DSP_ARAM_DMA_MM_LO]);
-        OSReport("DI DMA Address =   0x%08x\n", __DIRegs[5]);
+        OSReport("DI DMA Address =   0x%08x\n", __DIRegs[DI_MAR]);
         break;
     }
 

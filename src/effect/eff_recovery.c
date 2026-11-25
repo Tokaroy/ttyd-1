@@ -1,6 +1,10 @@
-// HP/FP recovery (type 0: HP heart, 1: FP flower, 4/5: large HP/FP): `amount` icons rise one after another with
-// shine sounds and sparkles; type 6 is the sparkle-only form.
+// HP/FP recovery (type 0: HP heart, 1: FP flower, 4/5: HP/FP MAX, 7/8: 0/1 without the closing stardust): a central icon with `amount` small icons that
+// spread into a ring, swirl and fall back into the centre, ending with a shine sound and stardust;
+// type 6 is the sparkle-only form.
+
+#include "version.h"
 #include "driver/camdrv.h"
+#include "eff/eff_magic1_n64.h"
 #include "eff/eff_recovery.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -11,35 +15,24 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <dolphin/os.h>
-#include "eff/eff_number.h"
-#include "pmario_sound.h"
-#include "version.h"
 #include "libc_decls.h"
+#include "pmario_sound.h"
+#include "eff/eff_number.h"
 #include "eff/eff_stardust.h"
-#include <string.h>
 
-#define QUAD(l, r, t, b, u)           \
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4); \
-    GXPosition3f32((l), (t), 0.0f);   \
-    GXTexCoord2f32(0.0f, 0.0f);       \
-    GXPosition3f32((r), (t), 0.0f);   \
-    GXTexCoord2f32((u), 0.0f);        \
-    GXPosition3f32((r), (b), 0.0f);   \
-    GXTexCoord2f32((u), 1.0f);        \
-    GXPosition3f32((l), (b), 0.0f);   \
-    GXTexCoord2f32(0.0f, 1.0f);
-
-/** Twelve pastel colours the recovery sparkles cycle through, one step per frame. */
+#if VERSION <= VERSION_DEMO_JP
 static u8 color_rotation_data[] = {
     0xFE, 0xAC, 0xAC, 0xFE, 0xAC, 0xD5, 0xFE, 0xB4, 0x9A, 0xD5, 0xB4, 0xFE,
     0xB4, 0xB4, 0xFE, 0xB4, 0xDD, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5,
     0xB4, 0xFE, 0xB4, 0xD5, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5, 0xAC,
 };
+#endif
+
 /**
  * Keyframes of the recovery icon over 79 frames: it grows from nothing while dropping into place,
  * bounces, holds, then dips and shoots upward at the end.
  */
-MayaHermitKey recovery_effHermit_0[] = {
+static MayaHermitKey recovery_effHermit_0[] = {
     {
         0, // time
         {
@@ -151,45 +144,55 @@ MayaHermitKey recovery_effHermit_0[] = {
         },
     },
 };
+
+/** Twelve pastel colours the recovery sparkles cycle through, one step per frame. */
+#if VERSION >= VERSION_JP
+static u8 color_rotation_data[] = {
+    0xFE, 0xAC, 0xAC, 0xFE, 0xAC, 0xD5, 0xFE, 0xB4, 0x9A, 0xD5, 0xB4, 0xFE,
+    0xB4, 0xB4, 0xFE, 0xB4, 0xDD, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5,
+    0xB4, 0xFE, 0xB4, 0xD5, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5, 0xAC,
+};
+#endif
+
 /** The recovery icon's square plane that carries the heart or flower texture. */
-s16 recovery_effFace_pPlane2_q007_0[] = {
+static s16 recovery_effFace_pPlane2_q007_0[] = {
     4, // vertex count
     -768, -768, 0, 0, 512,
     768, -768, 0, 512, 512,
     768, 768, 0, 512, 0,
     -768, 768, 0, 0, 0,
 };
-s16* recovery_effFaceDt_pPlane2_q007 = recovery_effFace_pPlane2_q007_0;
+static s16* recovery_effFaceDt_pPlane2_q007 = recovery_effFace_pPlane2_q007_0;
+
 /** The recovery icon's single animated part: its keyframes and plane. */
-MayaPoly recovery_effAnimRST[] = {
+static MayaPoly recovery_effAnimRST[] = {
     {10, recovery_effHermit_0, 1, &recovery_effFaceDt_pPlane2_q007},
 };
+
 /** Part list of the recovery icon animation. */
-MayaPolyList recovery_effAnimRSTDt = {1, recovery_effAnimRST};
-/** Recovery icon animation (79 frames), started by effRecoveryEntry and drawn under each icon. */
-MayaAnimData recovery_effAnimDt = {{0}, 79.0f, &recovery_effAnimRSTDt};
+static MayaKeyList recovery_effAnimRSTDt = {1, recovery_effAnimRST};
+
+/** Recovery icon animation (79 frames), started by effRecoveryEntry; moves the central icon, its number and label. */
+static MayaAnimData recovery_effAnimDt = {{0}, 79.0f, &recovery_effAnimRSTDt};
 
 static void effRecoveryMain(EffectEntry* effect);
 static void effRecoveryMain2(EffectEntry* effect);
 
-static void effRecoveryDisp(CameraId cameraId, EffectEntry* effect);
-static void effRecoveryDisp2(CameraId cameraId, EffectEntry* effect);
-static void effRecoveryDisp3(CameraId cameraId, EffectEntry* effect);
-static void effRecoveryDisp4(CameraId cameraId, EffectEntry* effect);
+static void effRecoveryDisp(CameraId cameraId, void* param);
+static void effRecoveryDisp2(CameraId cameraId, void* param);
+static void effRecoveryDisp3(CameraId cameraId, void* param);
+static void effRecoveryDisp4(CameraId cameraId, void* param);
 
 /**
  * Spawns the HP/FP recovery icons at (x, y, z);
- * type selects HP, FP, large forms or sparkle-only and `amount` the icon count.
- * Called from battle_damage.c and battle_seq.c.
+ * type selects HP, FP, the MAX forms or sparkle-only and `amount` the icon count and shown number
+ * (types 2-6 set their own count).
+ * Called from battle code (battle_damage.c, battle_seq*.c, sac_genki.c), win_main.c and evt_eff.
  */
 EffectEntry* effRecoveryEntry(s32 type, s32 amount, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     RecoveryWork* work;
-    s32 delay;
-    RecoveryWork* pp;
     s32 size;
-    f32 ang;
-    f32 zero;
     s32 i;
 
     effect = effEntry();
@@ -274,31 +277,29 @@ EffectEntry* effRecoveryEntry(s32 type, s32 amount, f32 x, f32 y, f32 z) {
             work->timer = 180;
             break;
     }
-    zero = 0.0f;
-    pp = work + 1;
-    for (i = 1, delay = 8; i < effect->count; delay += 8, i++, pp++) {
-        work = pp;
-        work->position.x = zero;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        work->position.x = 0.0f;
         switch (type) {
             case 4:
             case 5:
-                work->position.y = (i < 10) ? zero : -15.0f;
+                work->position.y = (i < 10) ? 0.0f : -15.0f;
                 break;
             default:
                 work->position.y = 0.0f;
                 break;
         }
-        work->position.z = zero;
-        work->scale.x = zero;
-        work->scale.y = zero;
-        work->scale.z = zero;
-        work->velocity.x = zero;
-        work->velocity.y = zero;
-        work->velocity.z = zero;
+        work->position.z = 0.0f;
+        work->scale.x = 0.0f;
+        work->scale.y = 0.0f;
+        work->scale.z = 0.0f;
+        work->velocity.x = 0.0f;
+        work->velocity.y = 0.0f;
+        work->velocity.z = 0.0f;
         work->timer = 0;
         work->state = 0;
         work->alpha = 255;
-        work->angle = zero;
+        work->angle = 0.0f;
         switch (type) {
             case 6:
                 if (i == 1) {
@@ -311,7 +312,7 @@ EffectEntry* effRecoveryEntry(s32 type, s32 amount, f32 x, f32 y, f32 z) {
                     work->velocity.x = 1.8f * (f32)cos(6.2831855f * work->angle / 360.0f);
                     work->velocity.y = 1.8f * (f32)sin(6.2831855f * work->angle / 360.0f);
                     work->alpha = 255;
-                    work->delay = delay;
+                    work->delay = i * 8;
                 }
                 break;
         }
@@ -319,7 +320,10 @@ EffectEntry* effRecoveryEntry(s32 type, s32 amount, f32 x, f32 y, f32 z) {
     return effect;
 }
 
-/** Per frame: releases the icons one at a time with their shine sounds and sparkles, then deletes the effect. */
+/**
+ * Per frame: after 10 frames sends the small icons out into a ring, swirls them and pulls them back into the
+ * centre; when all are back, plays the shine sound and stardust (not for types 7/8) and deletes the effect.
+ */
 static void effRecoveryMain(EffectEntry* effect) {
     RecoveryWork* work = effect->userdata;
     RecoveryWork* p;
@@ -335,8 +339,6 @@ static void effRecoveryMain(EffectEntry* effect) {
 #endif
     f32 a, d;
 
-    work = effect->userdata;
-    type = work->type;
     effCalcMayaAnim(work->anim);
     if (gp->retraceCount > work->tick) {
         n = gp->retraceCount - work->tick;
@@ -394,7 +396,7 @@ static void effRecoveryMain(EffectEntry* effect) {
                     break;
                 case 3:
                     if (p->timer < 40) {
-                        a = intplGetValue(11, 0.0f, 360.0f, ++p->timer, 40);
+                        a = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 360.0f, ++p->timer, 40);
                         d = distABf(0.0f, 0.0f, p->position.x, p->position.z);
                         d *= 0.99f;
                         a = 6.2831855f * (90.0f + (a + 360.0f * (f32)(i - 2) / (f32)amount)) / 360.0f;
@@ -414,14 +416,14 @@ static void effRecoveryMain(EffectEntry* effect) {
                 case 5:
                     if (p->timer < 16) {
                         p->timer++;
-                        p->position.x = intplGetValue(1, p->position.x, 0.0f, p->timer, 16);
+                        p->position.x = intplGetValue(EASING_QUADRATIC_IN, p->position.x, 0.0f, p->timer, 16);
 #if VERSION <= VERSION_DEMO_JP
-                        p->position.y = intplGetValue(1, p->position.y, -30.0f, p->timer, 16);
+                        p->position.y = intplGetValue(EASING_QUADRATIC_IN, p->position.y, -30.0f, p->timer, 16);
 #else
-                        p->position.y = intplGetValue(1, p->position.y, baseY, p->timer, 16);
+                        p->position.y = intplGetValue(EASING_QUADRATIC_IN, p->position.y, baseY, p->timer, 16);
 #endif
-                        p->position.z = intplGetValue(1, p->position.z, 0.0f, p->timer, 20);
-                        p->scale.x = p->scale.y = p->scale.z = intplGetValue(1, 1.0f, 0.0f, p->timer, 16);
+                        p->position.z = intplGetValue(EASING_QUADRATIC_IN, p->position.z, 0.0f, p->timer, 20);
+                        p->scale.x = p->scale.y = p->scale.z = intplGetValue(EASING_QUADRATIC_IN, 1.0f, 0.0f, p->timer, 16);
                     } else {
                         p->state++;
                     }
@@ -431,7 +433,9 @@ static void effRecoveryMain(EffectEntry* effect) {
                     break;
             }
         }
-        if (type <= 1u || type == 7 || type == 8 || type == 4 || type == 5) {
+        if (type == 0 || type == 1 || type == 7 || type == 8 || type == 4 || type == 5) {
+            // BUG: types 4/5 have 20 icons but amount is 10 here, so the effect is deleted once 10 icons are done
+            // (done is also not reset between catch-up steps, so a lagging frame counts finished icons again).
             if (done >= amount) {
                 work = effect->userdata;
                 if (type != 7 && type != 8) {
@@ -492,21 +496,21 @@ static void effRecoveryMain(EffectEntry* effect) {
         calc.x = work->position.x;
         calc.y = work->position.y;
         calc.z = work->position.z;
-        dispEntry(CAMERA_3D, dispCalcZ(&calc), 1, (DispCallback)effRecoveryDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&calc), DISP_MODE_ALPHA_TEST, effRecoveryDisp, effect);
     }
-    if (type <= 1u || type == 7 || type == 8) {
+    if (type == 0 || type == 1 || type == 7 || type == 8) {
         Vec calc = {0.0f, 0.0f, 0.0f};
         calc.x = work->position.x;
         calc.y = work->position.y;
         calc.z = work->position.z;
-        dispEntry(CAMERA_3D, dispCalcZ(&calc), 2, (DispCallback)effRecoveryDisp2, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&calc), DISP_MODE_XLU, effRecoveryDisp2, effect);
     }
     if (type == 4 || type == 5) {
         Vec calc = {0.0f, 0.0f, 0.0f};
         calc.x = work->position.x;
         calc.y = work->position.y;
         calc.z = work->position.z;
-        dispEntry(CAMERA_3D, dispCalcZ(&calc), 2, (DispCallback)effRecoveryDisp3, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&calc), DISP_MODE_XLU, effRecoveryDisp3, effect);
     }
 }
 
@@ -561,27 +565,44 @@ static void effRecoveryMain2(EffectEntry* effect) {
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&calc), 2, (DispCallback)effRecoveryDisp4, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&calc), DISP_MODE_XLU, effRecoveryDisp4, effect);
 }
 
-/** Draws the rising icons as textured quads. */
-static void effRecoveryDisp(CameraId cameraId, EffectEntry* effect) {
+/** One textured quad: top-left corner (x, y), width w, height h, texture repeat (s, t). */
+// Original name and size (0x120) from the JP demo map (UNUSED there: every call is inlined).
+static void polygon(f32 x, f32 y, f32 w, f32 h, f32 s, f32 t) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(x, y, 0.0f);
+    GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(x + w, y, 0.0f);
+    GXTexCoord2f32(s, 0.0f);
+    GXPosition3f32(x + w, y - h, 0.0f);
+    GXTexCoord2f32(s, t);
+    GXPosition3f32(x, y - h, 0.0f);
+    GXTexCoord2f32(0.0f, t);
+}
+
+/** Draws the central icon (moved by the animation) and the small icons in cycling colours as camera-facing quads. */
+static void effRecoveryDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     RecoveryWork* work = effect->userdata;
     RecoveryWork* p;
     CameraEntry* cam;
     s32 type;
     s32 i;
+    u8* c;
     GXColor color;
     GXTexObj texObj;
     Mtx transMtx;
     Mtx rotMtx;
     Mtx scaleMtx;
     Mtx base;
+    u32 k;
 
     cam = camGetPtr(cameraId);
     type = work->type;
     PSMTXTrans(transMtx, work->position.x, work->position.y, work->position.z);
-    PSMTXRotRad(rotMtx, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    PSMTXRotRad(rotMtx, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(transMtx, rotMtx, base);
     GXSetNumTexGens(2);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
@@ -615,13 +636,13 @@ static void effRecoveryDisp(CameraId cameraId, EffectEntry* effect) {
     }
     p = effect->userdata;
     PSMTXTrans(transMtx, p->position.x, p->position.y, p->position.z);
-    PSMTXRotRad(rotMtx, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    PSMTXRotRad(rotMtx, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(transMtx, rotMtx, transMtx);
     PSMTXScale(scaleMtx, 10.0f, 10.0f, 10.0f);
     PSMTXConcat(transMtx, scaleMtx, transMtx);
     PSMTXTrans(scaleMtx, 0.0f, 2.0f, 0.0f);
     PSMTXConcat(transMtx, scaleMtx, transMtx);
-    if (type <= 1u || (u32)(type - 7) <= 1u || type == 4 || type == 5) {
+    if (type == 0 || type == 1 || type == 7 || type == 8 || type == 4 || type == 5) {
         PSMTXConcat(transMtx, p->anim->joints[0].mtx, transMtx);
     }
     PSMTXConcat(cam->view, transMtx, transMtx);
@@ -635,47 +656,49 @@ static void effRecoveryDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
-    QUAD(-16.0f, 16.0f, 16.0f, -16.0f, 1.0f)
+    polygon(-16.0f, 16.0f, 32.0f, 32.0f, 1.0f, 1.0f);
     if (type == 2 || type == 3) {
         return;
     }
-    {
-        p++;
-        GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
-        GXSetZCompLoc(GX_FALSE);
-        GXSetAlphaCompare(GX_GEQUAL, 0x80, GX_AOP_OR, GX_NEVER, 0);
-        GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
-        GXSetNumTevStages(1);
-        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP1, GX_COLOR_NULL);
-        GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
-        GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
-        for (i = 1; i < effect->count; i++, p++) {
-            {
-                u32 k = (i + gp->retraceCount) % 12;
-                color = (GXColor){color_rotation_data[k * 3], color_rotation_data[k * 3 + 1], color_rotation_data[k * 3 + 2], p->alpha};
-            }
-            GXSetTevColor(GX_TEVREG0, color);
-            PSMTXTrans(transMtx, p->position.x, p->position.y, p->position.z);
-            PSMTXScale(scaleMtx, p->scale.x, p->scale.y, p->scale.z);
-            PSMTXConcat(transMtx, scaleMtx, transMtx);
-            PSMTXConcat(base, transMtx, transMtx);
-            PSMTXConcat(camGetPtr(cameraId)->view, transMtx, transMtx);
-            GXLoadPosMtxImm(transMtx, GX_PNMTX0);
-            GXSetCurrentMtx(GX_PNMTX0);
-            QUAD(-6.0f, 6.0f, 6.0f, -6.0f, 2.0f)
-        }
+    p++;
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
+    GXSetZCompLoc(GX_FALSE);
+    GXSetAlphaCompare(GX_GEQUAL, 0x80, GX_AOP_OR, GX_NEVER, 0);
+    GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP1, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
+    for (i = 1; i < effect->count; i++, p++) {
+#if VERSION <= VERSION_DEMO_JP
+        k = (i + gp->retraceCount) % 12;
+        color = (GXColor){color_rotation_data[k * 3], color_rotation_data[k * 3 + 1], color_rotation_data[k * 3 + 2], p->alpha};
+#else
+        c = &color_rotation_data[((i + gp->retraceCount) % 12) * 3];
+        color = (GXColor){c[0], c[1], c[2], p->alpha};
+#endif
+        GXSetTevColor(GX_TEVREG0, color);
+        PSMTXTrans(transMtx, p->position.x, p->position.y, p->position.z);
+        PSMTXScale(scaleMtx, p->scale.x, p->scale.y, p->scale.z);
+        PSMTXConcat(transMtx, scaleMtx, transMtx);
+        PSMTXConcat(base, transMtx, transMtx);
+        PSMTXConcat(camGetPtr(cameraId)->view, transMtx, transMtx);
+        GXLoadPosMtxImm(transMtx, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
+        polygon(-6.0f, 6.0f, 12.0f, 12.0f, 2.0f, 1.0f);
     }
 }
 
 /**
- * Draws the recovered amount above the icons for the HP/FP forms (types 0-3, 7, 8) with effNumberGX,
- * centred and facing the camera: number style 0 for HP (types 0, 2, 7), 1 for FP (types 1, 3, 8).
+ * Draws the recovered amount on the central icon for the HP/FP forms (types 0, 1, 7, 8) with effNumberGX,
+ * centred and facing the camera: number style 0 for HP, 1 for FP (the switch also lists types 2 and 3,
+ * which never register this callback).
  */
-static void effRecoveryDisp2(CameraId cameraId, EffectEntry* effect) {
+static void effRecoveryDisp2(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     RecoveryWork* work = effect->userdata;
-    CameraEntry* cam;
     s32 type;
     s32 amount;
     s32 len;
@@ -685,13 +708,13 @@ static void effRecoveryDisp2(CameraId cameraId, EffectEntry* effect) {
     Mtx tmp;
     f32 off;
 
-    cam = camGetPtr(cameraId);
+    camGetPtr(cameraId);
     amount = work->amount;
     type = work->type;
     sprintf(buf, "%d", amount);
     len = strlen(buf);
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
-    PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(mtx, rot, mtx);
     PSMTXTrans(tmp, 0.0f, 0.0f, 1.0f);
     PSMTXConcat(mtx, tmp, mtx);
@@ -721,11 +744,12 @@ static void effRecoveryDisp2(CameraId cameraId, EffectEntry* effect) {
 }
 
 /**
- * Draws the label for the large forms (types 4/5) as a camera-facing 108x40 quad, twice:
+ * Draws the label for the MAX forms (types 4/5) as a camera-facing 108x40 quad, twice:
  * a dark shadow offset by 2 units, then the label in pink for HP (type 4) or green for FP (type 5).
- * Texture 111/110 in US and PAL (173/172 when gp->language is 4), 0x8B/0x8A in JP and the demos.
+ * Texture 111/110 in US and later (173/172 for LANGUAGE_SP), 0x8B/0x8A in JP and the early demos.
  */
-static void effRecoveryDisp3(CameraId cameraId, EffectEntry* effect) {
+static void effRecoveryDisp3(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     RecoveryWork* work = effect->userdata;
     CameraEntry* cam;
     s32 type;
@@ -736,17 +760,15 @@ static void effRecoveryDisp3(CameraId cameraId, EffectEntry* effect) {
     Mtx tmp;
     Mtx base;
     f32 w;
-    f32 nw;
     f32 left;
     f32 right;
-    f32 half;
     f32 top;
     f32 bot;
 
     cam = camGetPtr(cameraId);
     type = work->type;
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
-    PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(mtx, rot, mtx);
     PSMTXTrans(tmp, 0.0f, 0.0f, 1.0f);
     PSMTXConcat(mtx, tmp, mtx);
@@ -761,7 +783,7 @@ static void effRecoveryDisp3(CameraId cameraId, EffectEntry* effect) {
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -780,7 +802,7 @@ static void effRecoveryDisp3(CameraId cameraId, EffectEntry* effect) {
     for (i = 0; i < 2; i++) {
         if (i == 0) {
 #if VERSION >= VERSION_US
-            if ((u32)gp->language == 4) {
+            if (gp->language == LANGUAGE_SP) {
                 effGetTexObj(173, &texObj);
             } else {
                 effGetTexObj(111, &texObj);
@@ -792,7 +814,7 @@ static void effRecoveryDisp3(CameraId cameraId, EffectEntry* effect) {
             GXSetChanMatColor(GX_COLOR0A0, (GXColor){0x00, 0x00, 0x00, 0xA0});
         } else {
 #if VERSION >= VERSION_US
-            if ((u32)gp->language == 4) {
+            if (gp->language == LANGUAGE_SP) {
                 effGetTexObj(172, &texObj);
             } else {
                 effGetTexObj(110, &texObj);
@@ -814,17 +836,26 @@ static void effRecoveryDisp3(CameraId cameraId, EffectEntry* effect) {
         left = -w;
         left *= 0.5f;
         right = left + w;
-        QUAD(left, right, top, bot, 1.0f)
+        GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+        GXPosition3f32(left, top, 0.0f);
+        GXTexCoord2f32(0.0f, 0.0f);
+        GXPosition3f32(right, top, 0.0f);
+        GXTexCoord2f32(1.0f, 0.0f);
+        GXPosition3f32(right, bot, 0.0f);
+        GXTexCoord2f32(1.0f, 1.0f);
+        GXPosition3f32(left, bot, 0.0f);
+        GXTexCoord2f32(0.0f, 1.0f);
     }
 }
 
 /**
  * Draws the sparkle-only form (type 6) camera-facing:
- * the first piece is a white glow (texture 18) that fades in to half alpha;
- * the others are sparkles (texture 20) pointed along their flight angle,
+ * the first piece is texture 18 (the HP heart) in white, fading in to half alpha;
+ * the others are texture 20 (the HP form's small icon) pointed along their flight angle,
  * their colour cycling through color_rotation_data.
  */
-static void effRecoveryDisp4(CameraId cameraId, EffectEntry* effect) {
+static void effRecoveryDisp4(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     RecoveryWork* work = effect->userdata;
     CameraEntry* cam;
     s32 i;
@@ -835,6 +866,7 @@ static void effRecoveryDisp4(CameraId cameraId, EffectEntry* effect) {
     Mtx scaleMtx;
     Mtx base;
     GXTexObj texObj;
+    u8* c;
     f32 w;
     f32 nw;
     f32 l;
@@ -842,16 +874,17 @@ static void effRecoveryDisp4(CameraId cameraId, EffectEntry* effect) {
     f32 v;
     f32 u;
     f32 off;
+    u32 k;
 
     cam = camGetPtr(cameraId);
     alpha = work->alpha;
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
-    PSMTXRotRad(rotMtx, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    PSMTXRotRad(rotMtx, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(mtx, rotMtx, base);
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GXSetTevOp(GX_TEVSTAGE0, GX_MODULATE);
@@ -871,10 +904,13 @@ static void effRecoveryDisp4(CameraId cameraId, EffectEntry* effect) {
                 GXLoadTexObj(&texObj, GX_TEXMAP0);
                 GXSetChanMatColor(GX_COLOR0A0, (GXColor){0xFF, 0xFF, 0xFF, alpha * work->alpha / 255});
             } else {
-                {
-                    u32 k = (i + gp->retraceCount) % 12;
-                    color = (GXColor){color_rotation_data[k * 3], color_rotation_data[k * 3 + 1], color_rotation_data[k * 3 + 2], alpha * work->alpha / 255};
-                }
+#if VERSION <= VERSION_DEMO_JP
+                k = (i + gp->retraceCount) % 12;
+                color = (GXColor){color_rotation_data[k * 3], color_rotation_data[k * 3 + 1], color_rotation_data[k * 3 + 2], alpha * work->alpha / 255};
+#else
+                c = &color_rotation_data[((i + gp->retraceCount) % 12) * 3];
+                color = (GXColor){c[0], c[1], c[2], alpha * work->alpha / 255};
+#endif
                 effGetTexObj(20, &texObj);
                 GXLoadTexObj(&texObj, GX_TEXMAP0);
                 GXSetChanMatColor(GX_COLOR0A0, color);
@@ -882,7 +918,7 @@ static void effRecoveryDisp4(CameraId cameraId, EffectEntry* effect) {
             PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
             PSMTXScale(scaleMtx, work->scale.x, work->scale.y, work->scale.z);
             if (i != 1) {
-                PSMTXRotRad(rotMtx, 'z', 0.017453292f * (work->angle - 90.0f));
+                PSMTXRotRad(rotMtx, 'z', MTXDegToRad(work->angle - 90.0f));
             } else {
                 PSMTXRotRad(rotMtx, 'z', 0.0f);
             }

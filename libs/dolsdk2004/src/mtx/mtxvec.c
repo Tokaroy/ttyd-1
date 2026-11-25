@@ -2,7 +2,6 @@
 #include <dolphin/mtx.h>
 #include "fake_tgmath.h"
 
-/** Transforms a point by a 3x4 matrix, rotation and translation (C reference version). */
 void C_MTXMultVec(const Mtx m, const Vec* src, Vec* dst) {
     Vec vTmp;
 
@@ -18,7 +17,6 @@ void C_MTXMultVec(const Mtx m, const Vec* src, Vec* dst) {
     dst->z = vTmp.z;
 }
 
-/** Transforms a point by a 3x4 matrix, rotation and translation (paired-singles version). */
 asm void PSMTXMultVec(const register Mtx m, const register Vec* src, register Vec* dst) {
     nofralloc
     psq_l f0, Vec.x(src), 0, 0
@@ -44,7 +42,6 @@ asm void PSMTXMultVec(const register Mtx m, const register Vec* src, register Ve
     blr
 }
 
-/** Transforms an array of points by a 3x4 matrix (C reference version). */
 void C_MTXMultVecArray(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count) {
     u32 i;
     Vec vTmp;
@@ -66,7 +63,6 @@ void C_MTXMultVecArray(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count)
     }
 }
 
-/** Transforms an array of points by a 3x4 matrix (paired-singles version). */
 asm void PSMTXMultVecArray(const register Mtx m, const register Vec* srcBase, register Vec* dstBase, register u32 count) {
     nofralloc
     psq_l f13, 0x0(m), 0, 0
@@ -88,7 +84,7 @@ asm void PSMTXMultVecArray(const register Mtx m, const register Vec* srcBase, re
     ps_mul f9, f4, f6
     ps_madds1 f8, f1, f6, f8
     ps_madd f10, f5, f7, f9
-L_000003C4:
+loop:
     psq_lu f6, 0x4(srcBase), 0, 0
     ps_madds0 f12, f2, f7, f8
     psq_lu f7, 0x8(srcBase), 1, 0
@@ -99,7 +95,7 @@ L_000003C4:
     ps_madds1 f8, f1, f6, f8
     psq_stu f13, 0x8(dstBase), 1, 0
     ps_madd f10, f5, f7, f9
-    bdnz L_000003C4
+    bdnz loop
     ps_madds0 f12, f2, f7, f8
     ps_sum0 f13, f10, f9, f10
     psq_stu f12, 0x4(dstBase), 0, 0
@@ -107,7 +103,6 @@ L_000003C4:
     blr
 }
 
-/** Transforms a vector by only the rotation/scale part of a 3x4 matrix (C reference version). */
 void C_MTXMultVecSR(const Mtx m, const Vec* src, Vec* dst) {
     Vec vTmp;
 
@@ -123,7 +118,6 @@ void C_MTXMultVecSR(const Mtx m, const Vec* src, Vec* dst) {
     dst->z = vTmp.z;
 }
 
-/** Transforms a vector by only the rotation/scale part of a 3x4 matrix (paired-singles version). */
 asm void PSMTXMultVecSR(const register Mtx m, const register Vec* src, register Vec* dst) {
     nofralloc
     psq_l f0, 0x0(m), 0, 0
@@ -149,7 +143,6 @@ asm void PSMTXMultVecSR(const register Mtx m, const register Vec* src, register 
     blr
 }
 
-/** Transforms an array of vectors by only the rotation/scale part of a 3x4 matrix (C reference version). */
 void C_MTXMultVecArraySR(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 count) {
     u32 i;
     Vec vTmp;
@@ -171,7 +164,6 @@ void C_MTXMultVecArraySR(const Mtx m, const Vec* srcBase, Vec* dstBase, u32 coun
     }
 }
 
-/** Transforms an array of vectors by only the rotation/scale part of a 3x4 matrix (paired-singles version). */
 asm void PSMTXMultVecArraySR(const register Mtx m, const register Vec* srcBase, register Vec* dstBase, register u32 count) {
     nofralloc
     psq_l f13, 0x0(m), 0, 0
@@ -192,7 +184,7 @@ asm void PSMTXMultVecArraySR(const register Mtx m, const register Vec* srcBase, 
     ps_mul f9, f3, f6
     ps_madds1 f8, f1, f6, f8
     ps_madd f10, f4, f7, f9
-L_000007D0:
+loop:
     psq_lu f6, 0x4(srcBase), 0, 0
     ps_madds0 f12, f2, f7, f8
     psq_lu f7, 0x8(srcBase), 1, 0
@@ -203,7 +195,7 @@ L_000007D0:
     ps_madds1 f8, f1, f6, f8
     psq_stu f13, 0x8(dstBase), 1, 0
     ps_madd f10, f4, f7, f9
-    bdnz L_000007D0
+    bdnz loop
     ps_madds0 f12, f2, f7, f8
     ps_sum0 f13, f10, f9, f9
     psq_stu f12, 0x4(dstBase), 0, 0

@@ -2,7 +2,6 @@
 #include <dolphin/mtx.h>
 #include "fake_tgmath.h"
 
-/** Transforms a 3D point by a 4x4 matrix and divides by w (C reference version). */
 void C_MTX44MultVec(const Mtx44 m, const Vec* src, Vec* dst) {
     Vec vTmp;
     f32 w;
@@ -22,7 +21,6 @@ void C_MTX44MultVec(const Mtx44 m, const Vec* src, Vec* dst) {
     dst->z = vTmp.z * w;
 }
 
-/** Transforms a 3D point by a 4x4 matrix with perspective divide (paired-singles version). */
 asm void PSMTX44MultVec(const register Mtx44 m, const register Vec* src, register Vec* dst) {
     nofralloc
     psq_l f0, 0x0(src), 0, 0
@@ -57,7 +55,6 @@ asm void PSMTX44MultVec(const register Mtx44 m, const register Vec* src, registe
     blr
 }
 
-/** Transforms an array of points by a 4x4 matrix with perspective divide (C reference version). */
 void C_MTX44MultVecArray(const Mtx44 m, const Vec* srcBase, Vec* dstBase, u32 count) {
     u32 i;
     Vec vTmp;
@@ -81,7 +78,6 @@ void C_MTX44MultVecArray(const Mtx44 m, const Vec* srcBase, Vec* dstBase, u32 co
     }
 }
 
-/** Transforms an array of points by a 4x4 matrix with perspective divide (paired-singles version). */
 asm void PSMTX44MultVecArray(const register Mtx44 m, const register Vec* srcBase, register Vec* dstBase, register u32 count) {
     nofralloc
     stwu r1, -0x10(r1)
@@ -106,7 +102,7 @@ asm void PSMTX44MultVecArray(const register Mtx44 m, const register Vec* srcBase
     psq_l f3, 0x18(m), 0, 0
     ps_sum0 f13, f13, f13, f13
     psq_l f5, 0x28(m), 0, 0
-L_00000468:
+loop:
     ps_madd f10, f1, f9, f10
     ps_madd f11, f3, f9, f11
     ps_madd f12, f5, f9, f12
@@ -128,7 +124,7 @@ L_00000468:
     ps_madd f13, f7, f9, f13
     ps_mul f12, f4, f8
     ps_sum0 f13, f13, f13, f13
-    bdnz L_00000468
+    bdnz loop
     ps_madd f10, f1, f9, f10
     ps_madd f11, f3, f9, f11
     ps_madd f12, f5, f9, f12
@@ -147,7 +143,6 @@ L_00000468:
     blr
 }
 
-/** Transforms a vector by only the 3x3 part of a 4x4 matrix (no translation, no divide) (C reference version). */
 void C_MTX44MultVecSR(const Mtx44 m, const Vec* src, Vec* dst) {
     Vec vTmp;
 
@@ -162,8 +157,7 @@ void C_MTX44MultVecSR(const Mtx44 m, const Vec* src, Vec* dst) {
     dst->z = vTmp.z;
 }
 
-/** Transforms a vector by only the 3x3 part of a 4x4 matrix (paired-singles version). */
-asm void PSMTX44MultVecSR(const register Mtx m, const register Vec* src, register Vec* dst) {
+asm void PSMTX44MultVecSR(const register Mtx44 m, const register Vec* src, register Vec* dst) {
     nofralloc
     psq_l f0, 0x0(m), 0, 0
     psq_l f6, 0x0(src), 0, 0
@@ -188,7 +182,6 @@ asm void PSMTX44MultVecSR(const register Mtx m, const register Vec* src, registe
     blr
 }
 
-/** Transforms an array of vectors by the 3x3 part of a 4x4 matrix (C reference version). */
 void C_MTX44MultVecArraySR(const Mtx44 m, const Vec* srcBase, Vec* dstBase, u32 count) {
     u32 i;
     Vec vTmp;
@@ -209,7 +202,6 @@ void C_MTX44MultVecArraySR(const Mtx44 m, const Vec* srcBase, Vec* dstBase, u32 
     }
 }
 
-/** Transforms an array of vectors by the 3x3 part of a 4x4 matrix (paired-singles version). */
 asm void PSMTX44MultVecArraySR(const register Mtx44 m, const register Vec* srcBase, register Vec* dstBase, register u32 count) {
     nofralloc
     psq_l f0, 0x0(m), 0, 0
@@ -226,7 +218,7 @@ asm void PSMTX44MultVecArraySR(const register Mtx44 m, const register Vec* srcBa
     psq_l f3, 0x18(m), 1, 0
     subi dstBase, dstBase, 0x4
     psq_l f5, 0x28(m), 1, 0
-L_00000890:
+loop:
     ps_madd f11, f1, f7, f8
     psq_lu f6, 0x4(srcBase), 0, 0
     ps_madd f12, f3, f7, f9
@@ -241,7 +233,7 @@ L_00000890:
     ps_mul f8, f0, f6
     ps_mul f9, f2, f6
     ps_mul f10, f4, f6
-    bdnz L_00000890
+    bdnz loop
     ps_madd f11, f1, f7, f8
     ps_madd f12, f3, f7, f9
     ps_madd f13, f5, f7, f10

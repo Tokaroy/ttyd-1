@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: blow, count puffs streamed from a point along a direction vector.
+
 #include "eff/eff_n64.h"
 #include "eff/n64/eff_blow_n64.h"
 #include "driver/camdrv.h"
@@ -8,6 +9,7 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include <math.h>
 
@@ -39,7 +41,7 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
 };
 
 static void effBlowMain(EffectEntry* effect);
-static void effBlowDisp(CameraId cameraId, EffectEntry* effect);
+static void effBlowDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns `count` streaks at (x, y, z) travelling along the direction (dx, dy, dz);
@@ -51,29 +53,29 @@ EffectEntry* effBlowN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 dx, f
     EffBlowN64Work* w;
     f32 px, py, pz;
     f32 inv;
-    f32 zr;
     s32 i;
     Mtx mtx;
     Vec axis;
 
+    // BUG: the slot is taken before the count and direction checks below; their early returns leave this entry without userdata or callback, and nothing releases it.
     effect = effEntry();
-    zr = 0.0f;
+
     if (count == 0) {
         return NULL;
     }
     inv = dx * dx + dy * dy + dz * dz;
-    if (inv == zr) {
+    if (!inv) {
         return NULL;
     }
     inv = -1.0f / sqrtf(inv);
     dx *= inv;
     dy *= inv;
     dz *= inv;
-    if (dx != zr) {
+    if (dx) {
         px = -dy / dx;
         py = 1.0f;
         pz = 0.0f;
-    } else if (dy != zr) {
+    } else if (dy) {
         px = 1.0f;
         py = -dx / dy;
         pz = 0.0f;
@@ -83,7 +85,7 @@ EffectEntry* effBlowN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 dx, f
         pz = -dx / dz;
     }
     inv = px * px + py * py + pz * pz;
-    if (inv == zr) {
+    if (!inv) {
         return NULL;
     }
     inv = 1.0f / sqrtf(inv);
@@ -237,11 +239,12 @@ static void effBlowMain(EffectEntry* effect) {
         work->life = 10;
         work->age = 0;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBlowDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effBlowDisp, effect);
 }
 
 /** Draws each streak as a rotated, stretched camera-facing quad tinted light cyan. */
-static void effBlowDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBlowDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffBlowN64Work* work;
     s32 i;

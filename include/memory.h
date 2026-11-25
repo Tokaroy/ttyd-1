@@ -1,27 +1,44 @@
 // memory.c: the heaps (HEAP_TYPE, __memAlloc), the map heap (_mapAlloc) and the smart heap for loaded files.
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/gx.h>
 #include "manager/filemgr.h"
-#include "version.h"
 
+// Heap indexes for __memAlloc/__memFree (sizes in memory.c size_table). JP and the early demos have a fixed battle
+// heap at index 4; US and later have none (battle memory comes from a map sub-heap, see BattleAlloc), so the last
+// heap moves from 5 to 4.
 typedef enum HEAP_TYPE {
     HEAP_DEFAULT = 0,
-    HEAP_MALLOC = 1, // for memInit/Clear to do its allocation
+    HEAP_MALLOC = 1, // memInit/memClear turn it into the map heap (_mapAlloc)
     HEAP_EXT = 2,
     HEAP_EFFECT = 3,
+#if VERSION >= VERSION_US
+    HEAP_SMART = 4, // the smart heap for loaded files (smartAlloc)
+    HEAP_COUNT = 5
+#else
     HEAP_BATTLE = 4,
-    HEAP_UNK5 = 5
+    HEAP_SMART = 5, // the smart heap for loaded files (smartAlloc); the early demos leave it unused and take the
+                    // smart heap from HEAP_DEFAULT instead
+    HEAP_COUNT = 6
+#endif
 } HEAP_TYPE;
+
+// The heap smartAlloc's block comes from.
+#if VERSION <= VERSION_DEMO_JP
+#define SMART_ALLOC_HEAP HEAP_DEFAULT
+#else
+#define SMART_ALLOC_HEAP HEAP_SMART
+#endif
 
 typedef struct smartEntry {
     void* address;           // 0x0
     u32 size;                // 0x4
     FileEntry* file;         // 0x8, file whose data lives in this block (smartGarbage checks its state)
-    u16 inUse;               // 0xC, 1 while allocated (smartAlloc), 0 once freed (smartFree); not read
-    u8 type;                 // 0xE, auto-free group: smartAutoFree(n) frees this type (3 also frees 4); smartFree turns 4 into 3
-    u8 pad_F;                // 0xF
-    u32 spaceAfter;          // 0x10, free bytes after this block (heap size - 32 at init; prev->spaceAfter += size on free)
+    u16 inUse;               // 0xC, 1 from smartAlloc, 0 when freed; written only
+    u8 type;                 // 0xE, allocation type passed to smartAlloc
+    u32 spaceAfter;          // 0x10, free bytes after this block (set from bytesLeft on allocation; prev->spaceAfter += size on free)
     struct smartEntry* next; // 0x14
     struct smartEntry* prev; // 0x18
 } smartEntry;
@@ -41,12 +58,10 @@ void memInit(void);
 void memClear(HEAP_TYPE heap);
 void* __memAlloc(HEAP_TYPE heap, u32 size);
 void __memFree(HEAP_TYPE heap, void* ptr);
-// The map heap functions take the heap base as their first argument in US and PAL, which added a second
-// map heap for battles (R_battlemapalloc_base_ptr); JP has one map heap and no argument. Game code calls
-// them with the JP argument list, and outside memory.c these macros pass the usual base (mapalloc_base_ptr)
-// in US and PAL: a deliberate per-version API shim instead of a version test at each of the ~300 call sites.
-// Calls on another heap (battle.c) write (_mapAlloc)(base, size).
-#if VERSION >= VERSION_US
+void* __memAllocDBG(HEAP_TYPE heap, u32 size);
+void __memFreeDBG(HEAP_TYPE heap, void* ptr);
+
+#if VERSION >= VERSION_US // US and later: the map heap functions take the heap base; these macros pass mapalloc_base_ptr
 extern void* mapalloc_base_ptr;
 void* _mapAlloc(void* base, u32 size);
 void* _mapAllocTail(void* base, u32 size);
@@ -59,20 +74,31 @@ void* _mapAlloc(u32 size);
 void* _mapAllocTail(u32 size);
 void _mapFree(void* alloc);
 #endif
+
 void smartInit(void);
 void smartReInit(void);
-void smartAutoFree(s32 group);
+
+// smartAlloc groups: smartAutoFree frees a whole group.
+enum {
+    SMART_GROUP_PERMANENT = 0, // never auto-freed
+    SMART_GROUP_MAP = 1,       // seq_mapchange, seq_demo
+    SMART_GROUP_BATTLE = 2,    // seq_battle
+    SMART_GROUP_TEMP = 3,      // also freed by the first smartAlloc after smartInit
+    SMART_GROUP_TEMP_KEEP = 4, // smartFree demotes it to TEMP instead of freeing
+};
+
+void smartAutoFree(s32 allocType);
 void smartFree(smartEntry* entry);
 smartEntry* smartAlloc(u32 size, u8 type);
 GXTexObj* smartTexObj(GXTexObj* obj, void** image_ptr);
+SmartWork* smartGetWorkPtr(void);
 
-void L_smartReInit(void);
 extern BOOL g_bFirstSmartAlloc;
 
 #if VERSION >= VERSION_US
 extern void* R_battlemapalloc_base_ptr;
-
-void N_battleMapAlloc(void);
-void N_battleMapFree(void);
-
 #endif
+
+void battleMapAlloc(void);
+void battleMapFree(void);
+void _mapAllocInit(void);

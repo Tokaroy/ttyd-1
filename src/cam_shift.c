@@ -1,37 +1,21 @@
-// Camera shift: pans the field camera sideways with the C stick (L/R shift) and eases it back.
+// Camera shift: eases the field camera's sideways lead from Mario's horizontal stick input.
+
 #include "driver/camdrv.h"
 #include "mario/mario.h"
 #include "mario/mariost.h"
 #include "system.h"
 #include "cam_road.h"
-#include "version.h"
+#include "cam_shift.h"
 
-typedef struct CamShiftWork {
-    f32 current;            // 0x0
-    f32 target;             // 0x4
-    f32 rate;               // 0x8
-    f32 stickAccum;         // 0xC
-    f32 active;             // 0x10
-    u8 pad_14[0x18 - 0x14]; // 0x14, aligns prevTime
-    OSTime prevTime;        // 0x18
-    f32 stickLimit;         // 0x20
-    f32 maxSpeed;           // 0x24
-    f32 accel;              // 0x28
-    f32 lastX;              // 0x2C
-    f32 lastZ;              // 0x30
-    u8 pad_34[0x38 - 0x34]; // 0x34, pads to the 8-byte alignment
-} CamShiftWork;
-
-/** The demo times the shift with the field clock (it stops in battle), retail with the render clock. */
-static inline OSTime camShiftClock(void) {
+// The early demos use the field clock; JP and later use the render clock.
 #if VERSION <= VERSION_DEMO_JP
-    return gp->renderFieldTime;
+#define CAM_SHIFT_TIME (gp->renderFieldTime)
 #else
-    return gp->renderTime;
+#define CAM_SHIFT_TIME (gp->renderTime)
 #endif
-}
 
 static CamShiftWork work;
+
 /**
  * State of the sideways camera lead
  * (the camera drifts ahead of where Mario is heading); wp is the pointer the code uses.
@@ -39,9 +23,7 @@ static CamShiftWork work;
 static CamShiftWork* wp = &work;
 
 /**
- * Clears the sideways camera lead and sets its tuning:
- * 300 units of held stick before it starts, at most 3 units per frame, easing in at 0.002 per frame.
- * Called from camRoadInit.
+ * Resets the camera shift to no lead, with its default stick threshold (300), top speed (3) and acceleration (0.002).
  */
 void camShiftInit(void) {
     wp->current = 0.0f;
@@ -57,11 +39,9 @@ void camShiftInit(void) {
 }
 
 /**
- * Per frame, from the camera driver and the door and camera scripts:
- * when Mario keeps walking left or right (stick held and actually moving) long enough,
- * eases the field camera sideways by the road's shift rate (camRoadGetCurrentShiftXRate) toward the side he
- * walks to; a camera with CAM_FLAG_ROAD_SHIFT_OFF eases back to centre. Writes the current offset to *out.
- * Speeds are scaled to 60 fps by elapsed time.
+ * Updates the sideways camera lead from Mario's horizontal stick and stores it in *out: holding the stick one way while
+ * Mario moves sets the target to the camera road's shift rate that way, and the lead eases toward it at a limited speed
+ * while the stick is held. CAMERA_FLAG_ROAD_SHIFT_OFF brings it back to 0.
  */
 void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
     f32 shiftRate;
@@ -71,7 +51,7 @@ void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
     BOOL reset = FALSE;
 
     shiftRate = camRoadGetCurrentShiftXRate();
-    if (camera->flags & CAM_FLAG_ROAD_SHIFT_OFF) {
+    if (camera->flags & CAMERA_FLAG_ROAD_SHIFT_OFF) {
         reset = TRUE;
     }
     if (reset) {
@@ -80,7 +60,7 @@ void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
         wp->target = stick;
         wp->active = 1.0f;
     } else {
-        stick = (s8)mario->wStickDir1;
+        stick = mario->wStickDir1;
         if (stick > 0.0f) {
             stick = 25.0f;
         }
@@ -97,9 +77,9 @@ void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
     if (stick) {
         if (stick < 0.0f) {
             if (wp->stickAccum > 0.0f) {
-                wp->stickAccum = getV60FPS(stick, wp->prevTime, camShiftClock());
+                wp->stickAccum = getV60FPS(stick, wp->prevTime, CAM_SHIFT_TIME);
             } else {
-                wp->stickAccum += getV60FPS(stick, wp->prevTime, camShiftClock());
+                wp->stickAccum += getV60FPS(stick, wp->prevTime, CAM_SHIFT_TIME);
             }
             if (wp->stickAccum <= -wp->stickLimit) {
                 wp->active = 1.0f;
@@ -111,9 +91,9 @@ void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
             }
         } else {
             if (wp->stickAccum < 0.0f) {
-                wp->stickAccum = getV60FPS(stick, wp->prevTime, camShiftClock());
+                wp->stickAccum = getV60FPS(stick, wp->prevTime, CAM_SHIFT_TIME);
             } else {
-                wp->stickAccum += getV60FPS(stick, wp->prevTime, camShiftClock());
+                wp->stickAccum += getV60FPS(stick, wp->prevTime, CAM_SHIFT_TIME);
             }
             if (wp->stickAccum >= wp->stickLimit) {
                 wp->active = 1.0f;
@@ -127,7 +107,7 @@ void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
     }
 
     if (wp->active) {
-        wp->rate += getV60FPS(wp->accel, wp->prevTime, camShiftClock());
+        wp->rate += getV60FPS(wp->accel, wp->prevTime, CAM_SHIFT_TIME);
         if (wp->rate > 1.0f) {
             wp->rate = 1.0f;
         }
@@ -156,15 +136,13 @@ void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
     }
 
     if (stick || reset) {
-        wp->current += getV60FPS(speed, wp->prevTime, camShiftClock());
+        wp->current += getV60FPS(speed, wp->prevTime, CAM_SHIFT_TIME);
         if (wp->target < 0.0f) {
             if (wp->current < wp->target) {
                 wp->current = wp->target;
             }
-        } else {
-            if (wp->current > wp->target) {
-                wp->current = wp->target;
-            }
+        } else if (wp->current > wp->target) {
+            wp->current = wp->target;
         }
     } else {
         wp->rate = 0.0f;
@@ -174,7 +152,14 @@ void camShiftMain(CameraEntry* camera, MarioWork* mario, f32* out) {
 
 /** Records this frame's clock so the next camShiftMain can scale by the time elapsed. */
 void camShiftPostMain(void) {
-    wp->prevTime = camShiftClock();
+    wp->prevTime = CAM_SHIFT_TIME;
+}
+
+/** The camera shift's work. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it); returns the unit's work
+// pointer, like animGetPtr.
+CamShiftWork* camShiftGetWorkPtr(void) {
+    return wp;
 }
 
 /**

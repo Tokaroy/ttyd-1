@@ -1,6 +1,7 @@
 // Paper Mario 64 effect: fire dust, count glowing particles spread within a range and height.
-#include "eff/n64/eff_fire_dust_n64.h"
+
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_fire_dust_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -9,6 +10,7 @@
 #include <dolphin/mtx.h>
 #include <stdlib.h>
 #include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 
 typedef struct EffFireDustWork {
     s32 type;       // 0x0
@@ -26,8 +28,8 @@ typedef struct EffFireDustWork {
     s32 r, g, b;    // 0x50
     s32 ca;         // 0x5c
     f32 scale;      // 0x60
-    f32 phase1;     // 0x64, random start, advanced each frame; never read
-    f32 phase2;     // 0x68, random start, advanced each frame; never read
+    f32 phase1;     // 0x64
+    f32 phase2;     // 0x68
 } EffFireDustWork;
 
 /** Fire-dust particle size over its 20-step cycle: swells to 1.5 then shrinks (the ten steps are listed twice). */
@@ -77,13 +79,12 @@ static void effFireDustDisp(CameraId cameraId, EffectEntry* effect);
 static void main_dl(EffectEntry* effect, Mtx mtx);
 
 /**
- * Spawns count particles of glowing fire dust around (x, y, z) on a ring of radius a with a vertical spread of
- * b, running for lifetime frames (0 = until soft-deleted). Each starts after a staggered delay.
+ * Spawns count particles of glowing fire dust around (x, y, z) on a ring of radius range with a vertical spread
+ * of height, running for lifetime frames (0 = until soft-deleted). Each starts after a staggered delay.
  */
-EffectEntry* effFireDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y, f32 z, f32 a, f32 b) {
+EffectEntry* effFireDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y, f32 z, f32 range, f32 height) {
     EffectEntry* effect;
     EffFireDustWork* work;
-    EffFireDustWork* p;
     f32 step;
     s32 i;
 
@@ -93,7 +94,7 @@ EffectEntry* effFireDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y
     work = __memAlloc(HEAP_EFFECT, sizeof(EffFireDustWork) * (count + 2));
     effect->userdata = work;
     effect->callback = effFireDustMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -106,8 +107,8 @@ EffectEntry* effFireDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y
     work->position.y = y;
     work->position.z = z;
     work->scale = 1.0f;
-    work->range = a;
-    work->height = b;
+    work->range = range;
+    work->height = height;
     work->cr = 255;
     work->cg = 255;
     work->cb = 255;
@@ -115,21 +116,21 @@ EffectEntry* effFireDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y
     work->g = 255;
     work->b = 127;
     work->ca = 255;
-    p = work + 1;
+    work++;
     if (lifetime < 20) {
         step = 20.0f / (count + 1);
     } else {
         step = (f32)lifetime / (count + 1);
     }
-    for (i = 1; i < count + 2; i++, p++) {
-        p->index = (s32)(-(f32)i * step) - 1;
+    for (i = 1; i < count + 2; i++, work++) {
+        work->index = (s32)(-(f32)i * step) - 1;
     }
     return effect;
 }
 
 /**
  * Each particle runs a 20-step cycle: it respawns on the ring at a random angle and height, flies outward,
- * and eases toward half its speed while its scale follows scale_data. A delete request leaves 16 frames of fade.
+ * and eases toward half its speed while its scale follows scale_data. A delete request leaves 16 more frames, fading over the last 8.
  */
 static void effFireDustMain(EffectEntry* effect) {
     s32 height;
@@ -146,8 +147,8 @@ static void effFireDustMain(EffectEntry* effect) {
     tmp.y = p->position.y;
     tmp.z = p->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         p->lifetime = 16;
     }
     if (p->lifetime < 1000) {
@@ -201,7 +202,7 @@ static void effFireDustMain(EffectEntry* effect) {
             p->vel.y += 0.04f * (p->targetVel.y - p->vel.y);
             p->vel.z += 0.04f * (p->targetVel.z - p->vel.z);
         }
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effFireDustDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effFireDustDisp, effect);
     }
 }
 
@@ -229,7 +230,7 @@ static void effFireDustDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetNumChans(0);
     GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0 + 0, GX_FALSE, GX_PTIDENTITY + 0x0);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
     PSMTXScale(scaleMtx, 0.0056818184f, 0.045454547f, 0.0f);
     GXLoadTexMtxImm(scaleMtx, GX_TEXMTX0, GX_MTX2x4);
     GXSetNumTevStages(1);

@@ -1,8 +1,12 @@
 // Map setup data: loads the per-map setup file and spawns the field enemies it lists (position, AI and
 // territory, battle setup), keeping the defeated-enemy records.
+
+#include "version.h"
 #include "database.h"
 #include "driver/arcdrv.h"
 #include "manager/evtmgr.h"
+#include "evt/evt_cmd.h"
+#include "evt/evt_story.h"
 #include "memory.h"
 #include "system.h"
 #include "driver/npcdrv.h"
@@ -13,16 +17,16 @@
 #include "libc_decls.h"
 #include "manager/evtmgr_cmd.h"
 #include "driver/animdrv.h"
-#include "version.h"
+#include "mario/mariost.h"
 
 //.sbss
-void* ptr; // but why
-u32 size;
+static void* ptr;
+static u32 size;
 
 /**
- * Loads the map's enemy setup file (m/<map>/s; setup/<map>/setup.xml in the demos) from the map archive
+ * Loads the map's enemy setup file (m/<map>/s; setup/<map>/setup.xml in the early demos) from the map archive
  * or the disc into ptr/size.
- * Skipped for muj_20 while the story progress (GSW 0, written as the raw value 0xF5DE0180) is 2,
+ * Skipped for muj_20 while the story progress (GSW_STORY_PROGRESS) is 2 (STG0_02_MARIOS_HOUSE),
  * leaving ptr NULL. Called by the map-change sequence.
  */
 void setupDataLoad(const char* mapName) {
@@ -33,10 +37,11 @@ void setupDataLoad(const char* mapName) {
     ptr = NULL;
 #if VERSION <= VERSION_DEMO_JP
     sprintf(path, "%s/setup/%s/setup.xml", getMarioStDvdRoot(), mapName);
+    if (strcmp(mapName, "muj_20") || evtGetValue(NULL, GSW_STORY_PROGRESS) != STG0_02_MARIOS_HOUSE) {
 #else
     sprintf(path, "%s/m/%s/s", getMarioStDvdRoot(), mapName);
+    if (strcmp(mapName, "muj_20") || evtGetValue(NULL, GSW_STORY_PROGRESS) != STG0_02_MARIOS_HOUSE) {
 #endif
-    if (strcmp(mapName, "muj_20") || evtGetValue(NULL, (s32)0xF5DE0180) != 2) {
         arcOpen(path, &ptr, &size);
         if (!ptr) {
             dvd = DVDMgrOpen(path, 2, 0);
@@ -53,23 +58,20 @@ void setupDataLoad(const char* mapName) {
     }
 }
 
-// MapAttrEntry.flags, read by setupDataBase. The table uses 7 (all three) for most maps and 5 (no
-// MAP_ATTR_FLAG_KEEP_AREA) for the open field maps of an area (hei, win, gra, muj, moo, ...).
-enum MapAttrFlags {
-    MAP_ATTR_FLAG_RECORD_DEFEATS = 0x1, // defeated enemies stay away; leaving the area clears the records
-    MAP_ATTR_FLAG_KEEP_AREA = 0x2,      // keep every record of the area (overrides MAP_ATTR_FLAG_TRIM_RECENT)
-    MAP_ATTR_FLAG_TRIM_RECENT = 0x4,    // keep only the records of this map and the one before it
+// MapAttrEntry.flags: how setupDataBase keeps the defeated-enemy records (every map in the table has 7 or 5)
+enum {
+    MAP_ATTR_KEEP_DEFEATED = (1 << 0), // 0x1, defeated enemies stay gone; a new area clears the records
+    MAP_ATTR_KEEP_AREA = (1 << 1),     // 0x2, the records stay for the whole area (overrides 0x4)
+    MAP_ATTR_KEEP_RECENT = (1 << 2),   // 0x4, back in the same area: only the two newest maps' records stay
 };
 
 typedef struct MapAttrEntry {
     const char* name;
     s32 area;
-    u32 flags; // MapAttrFlags
+    u32 flags; // MAP_ATTR_*
 } MapAttrEntry;
 
 extern MapAttrEntry _map_attr_data[];
-
-#include "mario/mariost.h"
 
 /**
  * Starts the async load of every enemy model the setup file names;
@@ -78,27 +80,32 @@ extern MapAttrEntry _map_attr_data[];
  */
 BOOL setupDataCheck(void) {
     char tribeName[64];
-    BOOL b;
+    BOOL group;
 
-    if (!ptr)
+    if (!ptr) {
         return TRUE;
+    }
     parseInit(ptr, size);
     while (parsePush("<Npc>")) {
         parseTagGet1("<tribe>", PARSE_STRING, tribeName);
         parsePopNext();
-        b = gp->inBattle != 0;
-        if (!animGroupBaseAsync(npcGetTribe(tribeName)->modelName, b, NULL))
+        group = gp->inBattle != 0;
+        if (!animGroupBaseAsync(npcGetTribe(tribeName)->modelName, group, NULL)) {
             return FALSE;
+        }
     }
     parsePop();
     return TRUE;
 }
-/** Looks up mapName in _map_attr_data; returns the NULL-named terminator entry when the map is not listed. */
-static inline MapAttrEntry* findMapAttr(const char* name) {
+
+/** Looks up name in _map_attr_data; returns the NULL-named terminator entry when the map is not listed. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+MapAttrEntry* mapGetAttrDataAdr(const char* name) {
     MapAttrEntry* p = _map_attr_data;
     for (;;) {
-        if (!p->name || !strcmp(p->name, name))
+        if (!p->name || !strcmp(p->name, name)) {
             break;
+        }
         p++;
     }
     return p;
@@ -134,7 +141,7 @@ void setupDataBase(const char* areaName, const char* mapName) {
     NpcTribeInfo* tribe;
     NpcEntry* npc;
     int k;
-    int isMarker;
+    int skipDefeated;
     NpcAiInfo* ai;
     AreaData* area;
     s32 btl;
@@ -142,7 +149,7 @@ void setupDataBase(const char* areaName, const char* mapName) {
     fbat = fbatGetPointer();
     dead = fbat->deadInfo;
     dead1 = &fbat->deadInfo[1];
-    attr = findMapAttr(mapName);
+    attr = mapGetAttrDataAdr(mapName);
 
     for (i = 0; i < 64; i++) {
         if (strcmp(fbat->deadInfo[i].mapName, "") == 0) {
@@ -150,31 +157,34 @@ void setupDataBase(const char* areaName, const char* mapName) {
             strcpy(fbat->deadInfo[i].mapName, mapName);
             break;
         }
-        if (strcmp(fbat->deadInfo[i].mapName, mapName) == 0)
+        if (strcmp(fbat->deadInfo[i].mapName, mapName) == 0) {
             break;
+        }
     }
     if (i > 0) {
         tmp = fbat->deadInfo[i];
-        for (j = i; j >= 1; j--)
+        for (j = i; j >= 1; j--) {
             fbat->deadInfo[j] = fbat->deadInfo[j - 1];
+        }
         fbat->deadInfo[0] = tmp;
     }
 
-    if (attr->flags & MAP_ATTR_FLAG_RECORD_DEFEATS) {
-        a = findMapAttr(mapName);
-        b = findMapAttr(dead1->mapName);
+    if (attr->flags & MAP_ATTR_KEEP_DEFEATED) {
+        a = mapGetAttrDataAdr(mapName);
+        b = mapGetAttrDataAdr(dead1->mapName);
         if (a->area != b->area) {
-            memset(dead, 0, 0x500);
+            memset(dead, 0, sizeof(fbat->deadInfo));
             strcpy(dead->mapName, mapName);
-        } else if (!(attr->flags & MAP_ATTR_FLAG_KEEP_AREA) && (attr->flags & MAP_ATTR_FLAG_TRIM_RECENT)) {
-            memset(&fbat->deadInfo[2], 0, 0x4d8);
+        } else if (!(attr->flags & MAP_ATTR_KEEP_AREA) && (attr->flags & MAP_ATTR_KEEP_RECENT)) {
+            memset(&fbat->deadInfo[2], 0, sizeof(fbat->deadInfo) - 2 * sizeof(NpcDeadInfo));
         }
     }
 
     k = 0;
-    isMarker = 0;
-    if (attr->flags & MAP_ATTR_FLAG_RECORD_DEFEATS)
-        isMarker = 1;
+    skipDefeated = 0;
+    if (attr->flags & MAP_ATTR_KEEP_DEFEATED) {
+        skipDefeated = 1;
+    }
     if (ptr) {
         parseInit(ptr, size);
         while (parsePush("<Npc>")) {
@@ -193,9 +203,9 @@ void setupDataBase(const char* areaName, const char* mapName) {
             parseTagGet1("<homing_angle>", PARSE_FLOAT, &homingAngle);
             parseTagGet1("<btl_setup_no>", PARSE_STRING, btlSetup);
             parsePopNext();
-            if (!isMarker || !(dead->mask & (1 << (u8)k))) {
+            if (!skipDefeated || !(dead->mask & (1 << (u8)k))) {
                 tribe = npcGetTribe(tribeName);
-                npcEntry(npcName, (const char*)tribe->modelName);
+                npcEntry(npcName, tribe->modelName);
                 npc = npcNameToPtr(npcName);
                 npc->setupIndex = k;
                 ai = npc_ai_type_table;
@@ -205,25 +215,24 @@ void setupDataBase(const char* areaName, const char* mapName) {
                 npc->tribe = tribe;
                 npc->width = tribe->width;
                 npc->height = tribe->height;
-                npc->flags &= ~NPC_FLAG_ACTIVE;
+                npc->flags &= ~NPC_FLAG_READY;
                 for (;;) {
-                    if (!ai->description)
+                    if (!ai->description) {
                         break;
+                    }
                     if (strcmp(ai->description, aiType) != 0) {
                         ai++;
                         continue;
                     }
-                    {
-                        npc->flags |= ai->flags;
-                        npc->initEvent = ai->initEvent;
-                        npc->moveEvent = ai->moveEvent;
-                        npc->deadEvent = ai->deadEvent;
-                        npc->findEvent = ai->findEvent;
-                        npc->lostEvent = ai->lostEvent;
-                        npc->returnEvent = ai->returnEvent;
-                        npc->blowEvent = ai->blowEvent;
-                        break;
-                    }
+                    npc->flags |= ai->flags;
+                    npc->initEvent = ai->initEvent;
+                    npc->moveEvent = ai->moveEvent;
+                    npc->deadEvent = ai->deadEvent;
+                    npc->findEvent = ai->findEvent;
+                    npc->lostEvent = ai->lostEvent;
+                    npc->returnEvent = ai->returnEvent;
+                    npc->blowEvent = ai->blowEvent;
+                    break;
                 }
                 npc->territoryType = dbGetDefData(npc_define_territory_type, terrType);
                 npc->territoryBase = base;
@@ -243,13 +252,15 @@ void setupDataBase(const char* areaName, const char* mapName) {
                 btl = -1;
                 area = areaDataPtr(areaName);
                 if (strcmp(btlSetup, "BTLNO_INVALID")) {
-                    btl = dbGetDefData((NpcTerritoryInfo*)area->btlSetupNoTbl, btlSetup);
+                    btl = dbGetDefData(area->btlSetupNoTbl, btlSetup);
                 }
                 npcSetBattleInfo(npc, btl);
-                if (tribe->stayAnim)
+                if (tribe->stayAnim) {
                     strcpy(npc->stayAnim, tribe->stayAnim);
-                if (tribe->talkAnim)
+                }
+                if (tribe->talkAnim) {
                     strcpy(npc->talkAnim, tribe->talkAnim);
+                }
                 if (tribe->initialAnim) {
                     strcpy(npc->currentAnim, tribe->initialAnim);
                     animPoseSetAnim(npc->poseId, npc->currentAnim, 1);
@@ -262,7 +273,7 @@ void setupDataBase(const char* areaName, const char* mapName) {
 }
 
 /**
- * Field-enemy attributes of each map (area group number and reset flags), ending with a NULL-named entry:
+ * Field-enemy attributes of each map (area group number and MAP_ATTR_* flags), ending with a NULL-named entry:
  * setupDataBase looks the map up here to decide when the defeated-enemy records are cleared.
  */
 MapAttrEntry _map_attr_data[] = {
@@ -400,6 +411,8 @@ MapAttrEntry _map_attr_data[] = {
     { "pik_04", 17, 7 },
     { "bom_03", 11, 5 },
     { "bom_04", 11, 5 },
+
+    // BUG: mapGetAttrDataAdr finds the earlier area-10 entries for these eki_00..eki_06 names.
     { "eki_00", 12, 7 },
     { "eki_01", 12, 7 },
     { "eki_02", 12, 7 },

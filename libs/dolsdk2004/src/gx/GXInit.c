@@ -18,31 +18,20 @@
 #endif
 
 #ifdef DEBUG
-/** Library version string kept in the binary (debug build). */
 const char* __GXVersion = "<< Dolphin SDK - GX\tdebug build: "BUILD_DATE" "DBUILD_TIME" (0x2301) >>";
 #else
-/** Library version string kept in the binary (release build). */
 const char* __GXVersion = "<< Dolphin SDK - GX\trelease build: "BUILD_DATE" "RBUILD_TIME" (0x2301) >>";
 #endif
 
 static GXFifoObj FifoObj;
 
 static GXData gxData;
-/** The GX state block (shadow registers, texture regions and so on) every GX function works on. */
 GXData* const __GXData = &gxData;
 
-// These are static locals in the SDK (the Japanese demo's map: peCount$35, time$36 and calledOnce$37 of
-// __GXShutdown, resetFuncRegistered$145 of GXInit). As static locals, or as file-scope statics, they would be
-// emitted before the registers below in .sbss, so they stay global.
-u32 resetFuncRegistered;
-u32 calledOnce;
-OSTime time;
-u32 peCount;
-
-void* __memReg;
-void* __peReg;
-void* __cpReg;
-void* __piReg;
+void* __piReg = NULL;
+void* __cpReg = NULL;
+void* __peReg = NULL;
+void* __memReg = NULL;
 
 #if DEBUG
 GXBool __GXinBegin;
@@ -53,10 +42,6 @@ static u16 DefaultTexData[] __attribute__((aligned(32))) = {
     0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF,
 };
 
-/**
- * Default vertex attribute formats GXInit sets for every vertex format:
- * float positions, normals and texture coordinates, RGBA8 colours.
- */
 static GXVtxAttrFmtList GXDefaultVATList[] = {
     {GX_VA_POS, GX_POS_XYZ, GX_F32, 0},
     {GX_VA_NRM, GX_NRM_XYZ, GX_F32, 0},
@@ -73,16 +58,8 @@ static GXVtxAttrFmtList GXDefaultVATList[] = {
     {GX_VA_NULL, 0, 0, 0},
 };
 
-/**
- * Default projection GXInit sets, in the GXSetProjectionv layout:
- * an orthographic type flag, then the six projection values.
- */
 static f32 GXDefaultProjData[] = {1.0f, 0.0f, 1.0f, 0.0f, -1.0f, -2.0f, 0.0f};
 
-/**
- * TMEM addresses for the default texture cache regions GXInit sets up:
- * for each of the three region sets, eight even-region addresses followed by eight odd-region addresses.
- */
 static u32 GXTexRegionAddrTable[] = {
     0x00000, 0x10000, 0x20000, 0x30000, 0x40000, 0x50000, 0x60000, 0x70000, 0x08000, 0x18000,
     0x28000, 0x38000, 0x48000, 0x58000, 0x68000, 0x78000, 0x00000, 0x90000, 0x20000, 0xB0000,
@@ -94,45 +71,30 @@ static u32 GXTexRegionAddrTable[] = {
 // prototypes
 static int __GXShutdown(int final);
 
-/** Registers __GXShutdown (priority 0x7F) with the OS so the graphics pipe is drained before a reset. */
 static OSResetFunctionInfo GXResetFuncInfo = {__GXShutdown, 0x7F, NULL, NULL};
 
-/**
- * Assembly: syncs, reads the write-gather pointer register (WPAR) and returns its low bit,
- * which is set while data is still buffered in the CPU's write-gather pipe.
- */
 asm BOOL IsWriteGatherBufferEmpty(void) {
     sync
     mfspr r3, WPAR
     andi. r3, r3, 1
 }
 
-/**
- * Points WPAR at the physical address of the GX FIFO window and sets the write-gather enable bit in HID2,
- * so the CPU's stores to the FIFO address are gathered into 32-byte bursts.
- */
 static void EnableWriteGatherPipe(void) {
     u32 hid2 = PPCMfhid2();
 
     PPCMtwpar(OSUncachedToPhysical((void*)GXFIFO_ADDR));
-    hid2 |= 0x40000000;
+    hid2 |= HID2_WPE;
     PPCMthid2(hid2);
 }
 
-/** Clears the write-gather enable bit in HID2. */
 static void DisableWriteGatherPipe(void) {
     u32 hid2 = PPCMfhid2();
 
-    hid2 &= ~0x40000000;
+    hid2 &= ~HID2_WPE;
     PPCMthid2(hid2);
 }
 
-/**
- * Default choice of texture cache region for a texture: map id (mod 8) picks the slot;
- * colour-indexed formats use TexRegions0, RGBA8 uses TexRegions1 (TexRegions2 when mipmapped)
- * and other formats use TexRegions0 (TexRegions1 when mipmapped).
- */
-static GXTexRegion*__GXDefaultTexRegionCallback(const GXTexObj* t_obj, GXTexMapID id) {
+static GXTexRegion* __GXDefaultTexRegionCallback(const GXTexObj* t_obj, GXTexMapID id) {
     GXTexFmt fmt;
     u8 mm;
 
@@ -158,7 +120,6 @@ static GXTexRegion*__GXDefaultTexRegionCallback(const GXTexObj* t_obj, GXTexMapI
     }
 }
 
-/** Default palette region lookup: returns TlutRegions[idx] for idx below 20 and NULL otherwise. */
 static GXTlutRegion* __GXDefaultTlutRegionCallback(u32 idx) {
     if (idx >= 20) {
         return NULL;
@@ -167,19 +128,15 @@ static GXTlutRegion* __GXDefaultTlutRegionCallback(u32 idx) {
 }
 
 #if DEBUG
-/** Default GX verifier callback in debug builds: prints "Level n, Warning id: message" with OSReport. */
 static void __GXDefaultVerifyCallback(GXWarningLevel level, u32 id, const char* msg) {
     OSReport("Level %1d, Warning %3d: %s\n", level, id, msg);
 }
 #endif
 
-/**
- * OS reset callback for GX.
- * Before the final stage it returns 0 until the memory-controller pixel counter has stopped changing for 10
- * ticks (the GPU is idle); at the final stage it removes the breakpoint, draw-sync and draw-done callbacks,
- * pushes padding into the FIFO, disables the command processor and aborts the GPU.
- */
 static int __GXShutdown(BOOL final) {
+    static u32 peCount;
+    static OSTime time;
+    static u32 calledOnce;
     u32 reg;
     u32 peCountNew;
     OSTime timeNew;
@@ -235,43 +192,31 @@ static int __GXShutdown(BOOL final) {
     return 1;
 }
 
-#define SOME_SET_REG_MACRO(reg, size, shift, val)                                                   \
-	do {                                                                                            \
-		(reg) = (u32)__rlwimi((u32)(reg), (val), (shift), (32 - (shift) - (size)), (31 - (shift))); \
-	} while (0);
-
-/**
- * Sets the revision-dependent bits (bit 30 of every VAT A register, bit 31 of every VAT B register)
- * and writes them to the CP, writes the matching XF setup registers 0 and 0x12 and the BP register 0x58,
- * for the current hardware revision.
- */
 void __GXInitRevisionBits(void) {
     u32 i;
 
     for (i = 0; i < 8; i++) {
-        s32 regAddr;
-        SOME_SET_REG_MACRO(__GXData->vatA[i], 1, 30, 1);
-        SOME_SET_REG_MACRO(__GXData->vatB[i], 1, 31, 1);
+        SET_REG_FIELD(0, __GXData->vatA[i], 1, 30, 1);
+        SET_REG_FIELD(0, __GXData->vatB[i], 1, 31, 1);
 
         GX_WRITE_U8(0x8);
         GX_WRITE_U8(i | 0x80);
         GX_WRITE_U32(__GXData->vatB[i]);
-        regAddr = i - 12;
     }
 
     {
         u32 reg1 = 0;
         u32 reg2 = 0;
 
-        SOME_SET_REG_MACRO(reg1, 1, 0, 1);
-        SOME_SET_REG_MACRO(reg1, 1, 1, 1);
-        SOME_SET_REG_MACRO(reg1, 1, 2, 1);
-        SOME_SET_REG_MACRO(reg1, 1, 3, 1);
-        SOME_SET_REG_MACRO(reg1, 1, 4, 1);
-        SOME_SET_REG_MACRO(reg1, 1, 5, 1);
+        SET_REG_FIELD(0, reg1, 1, 0, 1);
+        SET_REG_FIELD(0, reg1, 1, 1, 1);
+        SET_REG_FIELD(0, reg1, 1, 2, 1);
+        SET_REG_FIELD(0, reg1, 1, 3, 1);
+        SET_REG_FIELD(0, reg1, 1, 4, 1);
+        SET_REG_FIELD(0, reg1, 1, 5, 1);
         GX_WRITE_XF_REG(0, reg1);
 
-        SOME_SET_REG_MACRO(reg2, 1, 0, 1);
+        SET_REG_FIELD(0, reg2, 1, 0, 1);
         GX_WRITE_XF_REG(0x12, reg2);
 #if DEBUG
         __gxVerif->xfRegsDirty[0] = 0;
@@ -280,24 +225,17 @@ void __GXInitRevisionBits(void) {
 
     {
         u32 reg = 0;
-        SOME_SET_REG_MACRO(reg, 1, 0, 1);
-        SOME_SET_REG_MACRO(reg, 1, 1, 1);
-        SOME_SET_REG_MACRO(reg, 1, 2, 1);
-        SOME_SET_REG_MACRO(reg, 1, 3, 1);
-        SOME_SET_REG_MACRO(reg, 8, 24, 0x58);
+        SET_REG_FIELD(0, reg, 1, 0, 1);
+        SET_REG_FIELD(0, reg, 1, 1, 1);
+        SET_REG_FIELD(0, reg, 1, 2, 1);
+        SET_REG_FIELD(0, reg, 1, 3, 1);
+        SET_REG_FIELD(0, reg, 8, 24, 0x58);
         GX_WRITE_RAS_REG(reg);
     }
 }
 
-/**
- * Initialises the GX library with a command FIFO at base of size bytes:
- * sets the library state, maps the PI/CP/PE/memory register blocks,
- * creates the FIFO and makes it both the CPU and GP FIFO, registers the reset hook,
- * initialises the pixel engine interrupts and write-gather pipe, resets all cached BP/XF register copies,
- * sets the timing registers from the bus clock, builds the default texture cache and palette regions,
- * and finally calls __GXInitGX. Returns the FIFO object.
- */
 GXFifoObj* GXInit(void* base, u32 size) {
+    static u32 resetFuncRegistered;
     u32 i;
     u32 reg;
     u32 freqBase;
@@ -415,9 +353,6 @@ GXFifoObj* GXInit(void* base, u32 size) {
 
     {
         u32 reg = 0;
-#if DEBUG
-        s32 regAddr;
-#endif
         GX_SET_CP_REG(3, reg);
 
         SET_REG_FIELD(0, __GXData->perfSel, 4, 4, 0);
@@ -448,13 +383,6 @@ GXFifoObj* GXInit(void* base, u32 size) {
     return &FifoObj;
 }
 
-/**
- * Puts the GPU into its default state: picks a default render mode from VIGetTvFormat,
- * then sets the copy clear colour, texgens, vertex descriptor and formats, line and point size,
- * identity matrices, viewport, projection, culling, scissor, lighting channels,
- * a default white texture on all maps, a one-stage replace TEV, swap tables, no indirect stages, no fog, blend,
- * Z and dither modes, pixel format and the display copy settings.
- */
 void __GXInitGX(void) {
     GXRenderModeObj* rmode;
     GXTexObj tex_obj;
@@ -476,14 +404,14 @@ void __GXInitGX(void) {
     }
 
     GXSetCopyClear(clear, 0xFFFFFF);
-    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX1, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD2, GX_TG_MTX2x4, GX_TG_TEX2, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD3, GX_TG_MTX2x4, GX_TG_TEX3, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD4, GX_TG_MTX2x4, GX_TG_TEX4, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD5, GX_TG_MTX2x4, GX_TG_TEX5, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD6, GX_TG_MTX2x4, GX_TG_TEX6, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD7, GX_TG_MTX2x4, GX_TG_TEX7, 0x3C);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX1, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD2, GX_TG_MTX2x4, GX_TG_TEX2, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD3, GX_TG_MTX2x4, GX_TG_TEX3, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD4, GX_TG_MTX2x4, GX_TG_TEX4, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD5, GX_TG_MTX2x4, GX_TG_TEX5, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD6, GX_TG_MTX2x4, GX_TG_TEX6, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD7, GX_TG_MTX2x4, GX_TG_TEX7, GX_IDENTITY);
     GXSetNumTexGens(1);
     GXClearVtxDesc();
     GXInvalidateVtxCache();
@@ -584,8 +512,9 @@ void __GXInitGX(void) {
     GXSetTevSwapModeTable(GX_TEV_SWAP2, GX_CH_GREEN, GX_CH_GREEN, GX_CH_GREEN, GX_CH_ALPHA);
     GXSetTevSwapModeTable(GX_TEV_SWAP3, GX_CH_BLUE, GX_CH_BLUE, GX_CH_BLUE, GX_CH_ALPHA);
 
-    for (i = GX_TEVSTAGE0; i < GX_MAX_TEVSTAGE; i++)
+    for (i = GX_TEVSTAGE0; i < GX_MAX_TEVSTAGE; i++) {
         GXSetTevDirect((GXTevStageID)i);
+    }
 
     GXSetNumIndStages(0);
     GXSetIndTexCoordScale(GX_INDTEXSTAGE0, GX_ITS_1, GX_ITS_1);

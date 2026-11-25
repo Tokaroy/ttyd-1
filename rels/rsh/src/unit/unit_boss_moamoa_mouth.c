@@ -1,4 +1,6 @@
 // Smorg Miasma (moamoa_mouth), Smorg's mouth part of the boss battle unit, used on the Excess Express.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "battle/battle_event_default.h"
@@ -6,16 +8,14 @@
 #include "battle/battle_camera.h"
 #include "battle/battle_event_subset.h"
 #include "battle/battle_weapon_power.h"
-#include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "battle/battle_database_common.h"
 #include "battle/battle_sub.h"
-#include "rsh.h"
-#include "version.h"
+#include "battle/battle_damage.h"
+#include "unit_boss_moamoa.h"
 
-// Unit work slots of Mr. Moamoa's mouth (btlevtcmd_SetUnitWork / GetUnitWork).
-enum {
-    UW_BOSS_MOAMOA_MOUTH_BODY = 0 // unit id of the main body
-};
+extern PoseTableEntry moamoa1_weakness_pose_table[];
+extern BattleUnitDefense moamoa_defence_no_parts;
 
 BattleUnitKind unit_boss_moamoa_mouth;
 static BattleUnitDefense defence;
@@ -28,8 +28,10 @@ static BattleWeapon weapon_moamoa_attack;
 static EvtWord init_event[26];
 static EvtWord damage_event[10];
 static EvtWord dead_event[88];
+static EvtWord phase_event[2];
 static EvtWord attack_event[21];
-const char* mouth_Attack_front[7];
+static EvtWord evt_attack_other_arm[81];
+static const char* mouth_Attack_front[7];
 static EvtWord evt_attack[302];
 static EvtWord wait_event[6];
 
@@ -38,25 +40,35 @@ static EvtWord wait_event[6];
  * its size, offsets, damage sounds, status vulnerability, parts and init event.
  */
 BattleUnitKind unit_boss_moamoa_mouth = {
-    111,
-    "btl_un_moamoa_mouth",
-    6,
-    0,
-    1,
-    1,
-    0,
-    0,
-    0,
-    100,
-    0,
-    50,
-    10,
-    200,
-    120,
+    UNIT_SMORG_MIASMA_CLAW, // unitType
+    "btl_un_moamoa_mouth", // name
+    6, // maxHp
+    0, // maxFp
+    1, // dangerHP
+    1, // perilHP
+    0, // level
+    0, // bonusExp
+    0, // bonusCoin
+    100, // bonusCoinRate
+    0, // baseCoin
+    50, // runRate
+    10, // pbSoftCap
+    200, // width
+    120, // height
+#if VERSION <= VERSION_DEMO_JP
     40,
     100,
-    0.0f,
-    0.0f,
+#else
+    {40, 100}, // hitOffset
+    {0.0f, 0.0f, 0.0f}, // centerOffset
+    {0, 0}, // hpGaugeOffset
+    {280.0f, 40.0f, 0.0f}, // talkTogeBaseOffset
+    {100.0f, 0.0f, -10.0f}, // heldItemBaseOffset
+    {0.0f, 0.0f, 0.0f}, // burnFlameOffset
+#endif
+    0.0f, // vivianOffsetX
+    0.0f, // vivianOffsetZ
+#if VERSION <= VERSION_DEMO_JP
     0.0f,
     0,
     0,
@@ -69,11 +81,7 @@ BattleUnitKind unit_boss_moamoa_mouth = {
     0.0f,
     0.0f,
     0.0f,
-#if VERSION <= VERSION_DEMO_JP
     250.0f,
-#else
-    0.0f,
-#endif
     0.0f,
     100.0f,
     0.0f,
@@ -84,56 +92,79 @@ BattleUnitKind unit_boss_moamoa_mouth = {
     0.0f,
     120.0f,
     0.0f,
-    200.0f,
-    120.0f,
-    0,
-    0,
-    -1,
-    0,
-    0,
-    0,
-    0.0f,
-    0.0f,
-    0.0f,
-    "SFX_BOSS_MOA_G_DAMAGED1",
-    "SFX_BTL_DAMAGE_FIRE1",
-    "SFX_BTL_DAMAGE_ICE1",
-    "SFX_BTL_DAMAGE_BIRIBIRI1",
-    0x240000,
-    &regist,
-    1,
-    parts,
-    init_event,
-    data_table,
+#else
+    {100.0f, 0.0f, 0.0f}, // bintaHitOffset
+    {80.0f, 80.0f, 20.0f}, // kissHitOffset
+    {0.0f, 120.0f, 0.0f}, // cutBaseOffset
+#endif
+    200.0f, // cutWidth
+    120.0f, // cutHeight
+    0, // turnOrder
+    0, // turnOrderVariance
+    -1, // swallowChance
+    0, // swallowAttributes
+    0, // hammerKnockbackChance
+    0, // itemStealParam
+    {0.0f, 0.0f, 0.0f}, // starPointDispOffset
+    "SFX_BOSS_MOA_G_DAMAGED1", // damageSfxName
+    "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
+    "SFX_BTL_DAMAGE_ICE1", // iceDamageSfxName
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    kUnitLeader | kUnitNoSpin, // attributeFlags
+    &regist, // statusVulnerability
+    1, // numParts
+    parts, // parts
+    init_event, // initEventCode
+    data_table, // dataTable
 };
 
 /** Defence of the Smorg Miasma (mouth): 1 damage points off every hit. */
 static BattleUnitDefense defence = {{1, 1, 1, 1, 1}};
 
 /** Element reactions of the Smorg Miasma (mouth): no special reaction to any element. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 /**
- * Status vulnerability of the Smorg Miasma (mouth) (percent chance to take each status):
+ * Status vulnerability of the Smorg Miasma (mouth) (percent multiplier on each status's chance; all 0):
  * immune to sleep, stop, dizzy, poison, confusion, electric shock, burn, freeze, growing huge, shrinking,
  * attack up, attack down, defence up, defence down, allergy, fright, gale force, speed up, slow, dodgy,
  * invisibility and instant kill.
  */
-static StatusVulnerability regist = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+static StatusVulnerability regist = {
+    0, // sleep
+    0, // stop
+    0, // dizzy
+    0, // poison
+    0, // confuse
+    0, // electric
+    0, // burn
+    0, // freeze
+    0, // huge
+    0, // tiny
+    0, // attackUp
+    0, // attackDown
+    0, // defenseUp
+    0, // defenseDown
+    0, // allergic
+    0, // fright
+    0, // galeForce
+    0, // fast
+    0, // slow
+    0, // dodgy
+    0, // invisible
+    0, // ohko
+};
 
-/**
- * Pose table of the Smorg Miasma (mouth): maps each battle pose to the animation it plays (S_* animations).
- */
 static PoseTableEntry pose_table[] = {
-    {28, "S_2"},
-    {31, "D_2_1"},
-    {39, "D_2_1"},
-    {BTL_POSE_STAY_DEFAULT, "S_2"},
+    {POSE_TYPE_NORMAL, "S_2"},
+    {POSE_TYPE_DAMAGE_GUARDED, "D_2_1"},
+    {POSE_TYPE_DAMAGE, "D_2_1"},
+    {POSE_TYPE_ACTION, "S_2"},
 };
 
 /** Data table of the Smorg Miasma (mouth): event handlers for being defeated. */
 static BattleDataEntry data_table[] = {
-    {49, dead_event},
+    {UNIT_DATA_DEAD_EVENT, dead_event},
     {0, NULL},
 };
 
@@ -141,7 +172,15 @@ static BattleDataEntry data_table[] = {
  * Body part of the Smorg Miasma (mouth) (model c_g_moamoa_b): hit position, defences, attributes and pose table.
  */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_moamoa_mouth", "c_g_moamoa_b", 0.0f, 0.0f, 0.0f, 67.0f, 82.0f, 10.0f, 63.0f, 95.0f, 10.0f, 20, 30, 255, &defence, &defence_attr, 0x600001, 0, pose_table},
+    {
+        1, "btl_un_moamoa_mouth", "c_g_moamoa_b",
+        0.0f, 0.0f, 0.0f,
+        67.0f, 82.0f, 10.0f,
+        63.0f, 95.0f, 10.0f,
+        20, 30, 255,
+        &defence, &defence_attr,
+        kMainPart | kHammerlikeCannotTarget | kShellTosslikeCannotTarget, 0, pose_table,
+    },
 };
 
 /** Weapon of the Smorg Miasma (mouth)'s attack: 10 damage. */
@@ -165,13 +204,13 @@ static BattleWeapon weapon_moamoa_attack = {
     {10, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     0, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
     0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
@@ -189,18 +228,18 @@ static BattleWeapon weapon_moamoa_attack = {
  * damage and default confusion events and moves its HP gauge to offset (50, 62).
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_SetHpGaugeOffset, BTL_UNIT_SELF, 50, 62)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_SetHpGaugeOffset, UNIT_ID_SELF, 50, 62)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /** Damage event of the Smorg's mouth: runs the default damage handling with LW(10) = -2 and LW(11) = 1. */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
@@ -212,24 +251,25 @@ EVT_END()
  * gives the main body the no-parts defence table and its weakness pose table, moves its hit marker,
  * plays the BIG sounds and the V_1 pose on it, and kills the mouth unit.
  */
+// Clear the body's mouth slot and expose its weak-point defenses before removing this unit.
 static EVT_BEGIN(dead_event)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MOA_G_ARM_DOWN2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("L_2_6"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MOA_G_ARM_DOWN2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("L_2_6"))
     WAIT_FRAMES(1)
-    CALL(btlevtcmd_AnimeWaitPlayComplete, BTL_UNIT_SELF, 1)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MOAMOA_MOUTH_BODY, LW(1))
-    CALL(btlevtcmd_SetUnitWork, LW(1), 6, -1)
-    CALL(btlevtcmd_SetPartsDefenceTable, LW(1), 1, PTR(moamoa_defence_no_parts))
-    CALL(btlevtcmd_OffPartsAttribute, LW(1), 1, PART_ATTR_IMMUNE_TO_DAMAGE_OR_STATUS)
+    CALL(btlevtcmd_AnimeWaitPlayComplete, UNIT_ID_SELF, 1)
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, MOAMOA_LIMB_WORK_BODY, LW(1))
+    CALL(btlevtcmd_SetUnitWork, LW(1), MOAMOA_UNIT_WORK_MOUTH, -1)
+    CALL(btlevtcmd_SetPartsDefenceTable, LW(1), 1, PTR(&moamoa_defence_no_parts))
+    CALL(btlevtcmd_OffPartsAttribute, LW(1), 1, kImmuneToDamageAndStatus)
     CALL(btlevtcmd_AnimeSetPoseTable, LW(1), 1, PTR(moamoa1_weakness_pose_table))
     CALL(btlevtcmd_SetHitOffset, LW(1), 1, 0, 32, 0)
     CALL(btlevtcmd_SetHitCursorOffset, LW(1), 1, 0, 41, 0)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MOA_G_BIG1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MOA_G_BIG2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MOA_G_BIG1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MOA_G_BIG2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(btlevtcmd_AnimeChangePose, LW(1), 1, STRING("V_1"))
     WAIT_FRAMES(1)
     CALL(btlevtcmd_AnimeWaitPlayComplete, LW(1), 1)
-    CALL(btlevtcmd_KillUnit, BTL_UNIT_SELF, 0)
+    CALL(btlevtcmd_KillUnit, UNIT_ID_SELF, 0)
     RETURN
 EVT_END()
 
@@ -238,16 +278,16 @@ static EVT_BEGIN(phase_event)
     RETURN
 EVT_END()
 
-/** Attack event of the Smorg's mouth: uses an enemy item if it has one, otherwise runs evt_attack. */
+/** Attack event of the Smorg's mouth: uses an enemy item if the item-use check selects one, otherwise runs evt_attack. */
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
     CALL_CHILD(evt_attack)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -260,9 +300,10 @@ EVT_END()
  * Not used by the mouth: its evt_attack never spawns it (the tentacles' copies are spawned for the other two
  * tentacles).
  */
+// Consume one animation segment, wait for the body's hit signal, then consume the next segment.
 static EVT_BEGIN(evt_attack_other_arm)
     SET_INT_READ_ADDR(LW(1))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE1"), EVT_NULLPTR, 0, LW(15))
     LOOP(0)
         READ_INT(LW(2))
         IF_INT_EQUAL(LW(2), 0)
@@ -274,13 +315,13 @@ static EVT_BEGIN(evt_attack_other_arm)
     END_LOOP
     CALL(evt_snd_sfxoff, LW(15))
     LOOP(0)
-        CALL(btlevtcmd_GetUnitWork, LW(6), 0, LW(10))
+        CALL(btlevtcmd_GetUnitWork, LW(6), MOAMOA_UNIT_WORK_LIMB_HIT, LW(10))
         IF_INT_NOT_EQUAL(LW(10), 0)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE1"), EVT_NULLPTR, 0, LW(15))
     LOOP(0)
         READ_INT(LW(2))
         IF_INT_EQUAL(LW(2), 0)
@@ -294,8 +335,11 @@ static EVT_BEGIN(evt_attack_other_arm)
     RETURN
 EVT_END()
 
-/** Animation names (A_2_1, A_2_2) the Smorg mouth plays, in order, for its attack. */
-const char* mouth_Attack_front[] = {
+/**
+ * Animation names the Smorg mouth plays for its attack, in three NULL-ended sections:
+ * A_2_1 and A_2_2, then A_2_3, then A_2_4.
+ */
+static const char* mouth_Attack_front[] = {
     "A_2_1",
     "A_2_2",
     NULL,
@@ -314,54 +358,61 @@ const char* mouth_Attack_front[] = {
  */
 static EVT_BEGIN(evt_attack)
     // Choose the targets for the mouth's attack; a confused mouth is flustered when there are none.
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_moamoa_attack))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_moamoa_attack))
+
+    // BUG: no ChoiceSamplingEnemy sets LW(3)/LW(4) here, so this test never fires and the camera and
+    // AttackDeclare below get the unset LW(3)/LW(4); only GetSelectEnemy later loads the real target.
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         RETURN
     END_IF
+
     // The camera closes in on the mouth and its target, and the attack is announced.
-    CALL(evt_btl_camera_set_mode, 0, 8)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, LW(3))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT_TO_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, LW(3))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 100)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_moamoa_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_moamoa_attack))
-    // The main body freezes its idle animation while the mouth strikes.
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_MOAMOA_MOUTH_BODY, LW(6))
-    CALL(btlevtcmd_SetUnitWork, LW(6), 0, 0)
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_moamoa_attack))
+
+    // The main body's limb-hit signal (unit work 0) is cleared and the body is set to its S_1_1 pose.
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, MOAMOA_LIMB_WORK_BODY, LW(6))
+    CALL(btlevtcmd_SetUnitWork, LW(6), MOAMOA_UNIT_WORK_LIMB_HIT, 0)
     CALL(btlevtcmd_AnimeChangePose, LW(6), 1, STRING("S_1_1"))
     SET_VALUE(LW(15), 0)
+
     // The mouth rears up and gapes open.
     SET_INT_READ_ADDR(PTR(&mouth_Attack_front))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE4"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE4"), EVT_NULLPTR, 0, EVT_NULLPTR)
     LOOP(0)
         READ_INT(LW(2))
         IF_INT_EQUAL(LW(2), 0)
             BREAK_LOOP
         END_IF
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, LW(2))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, LW(2))
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AnimeWaitPlayComplete, BTL_UNIT_SELF, 1)
+        CALL(btlevtcmd_AnimeWaitPlayComplete, UNIT_ID_SELF, 1)
     END_LOOP
+
     // A pause, then the mouth snaps down (or the mouth's closing animation runs on its own).
     WAIT_MS(1000)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE5"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_MOA_G_ARM_MOVE5"), EVT_NULLPTR, 0, EVT_NULLPTR)
     IF_INT_EQUAL(LW(15), 0)
         LOOP(0)
             READ_INT(LW(2))
             IF_INT_EQUAL(LW(2), 0)
                 BREAK_LOOP
             END_IF
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, LW(2))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, LW(2))
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AnimeWaitPlayComplete, BTL_UNIT_SELF, 1)
+            CALL(btlevtcmd_AnimeWaitPlayComplete, UNIT_ID_SELF, 1)
         END_LOOP
     ELSE
         BEGIN_SIBLING_EVENT
@@ -370,41 +421,42 @@ static EVT_BEGIN(evt_attack)
                 IF_INT_EQUAL(LW(2), 0)
                     BREAK_LOOP
                 END_IF
-                CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, LW(2))
+                CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, LW(2))
                 WAIT_FRAMES(1)
-                CALL(btlevtcmd_AnimeWaitPlayComplete, BTL_UNIT_SELF, 1)
+                CALL(btlevtcmd_AnimeWaitPlayComplete, UNIT_ID_SELF, 1)
             END_LOOP
             LOOP(0)
                 READ_INT(LW(2))
                 IF_INT_EQUAL(LW(2), 0)
                     BREAK_LOOP
                 END_IF
-                CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, LW(2))
+                CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, LW(2))
                 WAIT_FRAMES(1)
-                CALL(btlevtcmd_AnimeWaitPlayComplete, BTL_UNIT_SELF, 1)
+                CALL(btlevtcmd_AnimeWaitPlayComplete, UNIT_ID_SELF, 1)
             END_LOOP
             SET_VALUE(GF(9), 0)
         END_SIBLING_EVENT
         WAIT_MS(70)
     END_IF
+
     // Every target is checked in turn: those who dodge are skipped, the rest take the bite.
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     SET_VALUE(LW(10), 0)
     LOOP(0)
-        CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_moamoa_attack), 256, LW(5))
+        CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_moamoa_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
         SWITCH(LW(5))
-            CASE_EQUAL(1)
+            CASE_EQUAL(PRECHECK_HIT)
             IF_INT_EQUAL(LW(10), 0)
                 CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_moamoa_attack))
             END_IF
-            CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_moamoa_attack), 256, LW(5))
+            CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_moamoa_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
             CASE_EQUAL(4)
             CASE_EQUAL(3)
-            CALL(btlevtcmd_StartAvoid, LW(3), 38)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
             CASE_EQUAL(6)
-            CALL(btlevtcmd_StartAvoid, LW(3), 39)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
             CASE_EQUAL(2)
-            CALL(btlevtcmd_StartAvoid, LW(3), 40)
+            CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         END_SWITCH
         CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
         IF_INT_EQUAL(LW(3), -1)
@@ -412,18 +464,19 @@ static EVT_BEGIN(evt_attack)
         END_IF
         ADD(LW(10), 1)
     END_LOOP
-    // The main body resumes idling and the mouth finishes its animation and returns.
-    CALL(btlevtcmd_SetUnitWork, LW(6), 0, 1)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+
+    // The main body's limb-hit signal is set again, the camera returns and the mouth finishes its animation.
+    CALL(btlevtcmd_SetUnitWork, LW(6), MOAMOA_UNIT_WORK_LIMB_HIT, 1)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     IF_INT_EQUAL(LW(15), 0)
         LOOP(0)
             READ_INT(LW(2))
             IF_INT_EQUAL(LW(2), 0)
                 BREAK_LOOP
             END_IF
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, LW(2))
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, LW(2))
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AnimeWaitPlayComplete, BTL_UNIT_SELF, 1)
+            CALL(btlevtcmd_AnimeWaitPlayComplete, UNIT_ID_SELF, 1)
         END_LOOP
     ELSE
         SET_VALUE(GF(9), 1)
@@ -432,8 +485,8 @@ static EVT_BEGIN(evt_attack)
     RETURN
 EVT_END()
 
-/** Idle event: shows the unit's table pose for state 1. */
+/** Idle event: selects the current-state pose for part 1 from the unit's pose table. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()

@@ -1,5 +1,7 @@
 // aji.rel (敵のアジト, X-Naut Fortress): the REL prolog/epilog and the area's map list (aji_00 to aji_19).
+
 #include "battle/battle_unit.h"
+#include "evt/evt_story.h"
 #include "evt/evt_cmd.h"
 
 #include "mario/mario.h"
@@ -8,8 +10,15 @@
 #include "mario/mario_party.h"
 #include "data/mapdata.h"
 #include "aji.h"
-#include "evt/evt_story.h"
-#include "rel_module.h"
+#include "evt/evt_save_flags.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /** Stub the linker needs for unresolved symbols; does nothing. */
 void _unresolved(void) {
@@ -18,15 +27,16 @@ void _unresolved(void) {
 /**
  * Module exit point of the X-Naut Fortress: if the pixel-Mario (Famicom mode) section of aji_09 was still active
  * when the area is left, turns Famicom mode off for Mario and his partner
- * and clears GSWF_AJI09_PIXEL_MARIO_ACTIVE; then runs the static destructors.
+ * and clears GSWF_AJI_09_DOT_MARIO_SEEN; then runs the static destructors.
  */
+// Restore normal Mario and partner rendering before running the module destructors.
 void _epilog(void) {
     voidfunctionptr* dtor;
 
-    if (swGet(GSWF_AJI09_PIXEL_MARIO_ACTIVE)) {
+    if (swGet(GSWF_ID(GSWF_AJI_09_DOT_MARIO_SEEN))) {
         marioSetFamicomMode(0);
         partySetFamicomMode(partyGetPtr(marioGetPartyId()), 0);
-        swClear(GSWF_AJI09_PIXEL_MARIO_ACTIVE);
+        swClear(GSWF_ID(GSWF_AJI_09_DOT_MARIO_SEEN));
     }
     for (dtor = _dtors; *dtor != NULL; dtor++) {
         (*dtor)();

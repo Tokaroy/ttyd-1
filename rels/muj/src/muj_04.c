@@ -1,11 +1,26 @@
 // muj_04 (無人島, Keelhaul Key): the rope bridge where Admiral Bobbery (sanders) and the Embers
 // (erumosu) attack, and the coconut palm.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "driver/fadedrv.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_case.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_mobj.h"
+#include "driver/npcdrv.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "mario/mario.h"
 #include "driver/hitdrv.h"
-#include "driver/itemdrv.h"
 #include "string.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
@@ -17,41 +32,33 @@
 #include "evt/evt_npc.h"
 #include "evt/evt_party.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_snd.h"
-#include "muj.h"
 #include "data_tables.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
 
 static USER_FUNC(mario_moveride_check);
 
 static NpcSetupInfo npcEnt[6];
+static EvtWord evt_haikei_in[16];
 static BeroEntry bero_entry_data[5];
-const char* hitname[17];
-const char* mapanim[17];
-extern EvtWord mario_hashi_anime[];
-extern EvtWord erumos00_attack[];
-extern EvtWord erumos01_attack[];
-extern EvtWord sanders_attack[];
-extern EvtWord mario_katsugi[];
-extern EvtWord sanders_funto[];
-extern EvtWord yashi_yure_init[];
-extern EvtWord yashi_yure[];
+static const char* hitname[17];
+static const char* mapanim[17];
+static EvtWord mario_hashi_anime[34];
+static EvtWord erumos00_attack[50];
+static EvtWord erumos01_attack[50];
+static EvtWord sanders_attack[88];
+static EvtWord mario_katsugi[24];
+static EvtWord sanders_funto[477];
+static EvtWord yashi_yure_init[5];
+static EvtWord yashi_yure[255];
 static HitDamageReturn hitDmgRetPoints[4];
 static TreeAccess tree_tbl[3];
 static KusaAccess kusa_tbl[5];
+EvtWord muj_04_init_evt[131];
 
-/** NPCs of the rope bridge: the nervous sailor, the bespectacled sailor and the two Embers. */
+/** NPCs of the rope bridge: Admiral Bobbery, the nervous sailor, the bespectacled sailor and the two Embers. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "サンダース", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "サンダース", // name (Admiral Bobbery)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // reactionFlags..returnEvent
         NULL, 0, // blowEvent..territoryType
         {0}, // territoryBase
@@ -59,8 +66,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "オドオド水夫", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "オドオド水夫", // name (the timid Toad sailor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -69,8 +76,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "めがね水夫", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "めがね水夫", // name (Four-Eyes, a Toad sailor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -79,8 +86,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "エルモスA", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "エルモスA", // name (an Ember attacking Bobbery on the rope bridge)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -89,8 +96,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "エルモスB", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "エルモスB", // name (an Ember attacking Bobbery on the rope bridge)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -103,12 +110,12 @@ static NpcSetupInfo npcEnt[] = {
 
 /**
  * Enter event of the pipe A_dokan: in the background it waits
- * until the entrance has finished (BeroEXEC bit 0x10000) and 10 more frames,
+ * until the entrance has finished (BERO_EXEC_ENTRY_DONE) and 10 more frames,
  * then makes the camera follow Mario's height again; returns LW(0) = 0.
  */
 static EVT_BEGIN(evt_haikei_in)
     BEGIN_INLINE_EVENT
-        CALL(evt_bero_exec_wait, 65536)
+        CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
         WAIT_FRAMES(10)
         CALL(evt_mario_cam_keep_off)
         CALL(evt_mario_cam_y_on)
@@ -175,7 +182,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)evt_haikei_in, // enterEvent
+        evt_haikei_in, // enterEvent
         6, // caseType
         NULL, 0, // exitEvent..nextMapName
         "dokan_1", // nextBeroName
@@ -187,7 +194,7 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /** Hit areas of the 17 planks of the rope bridge, in order; mapanim holds the matching map animations. */
-const char* hitname[] = {
+static const char* hitname[] = {
     "A_hasi01",
     "A_hasi02",
     "A_hasi03",
@@ -207,11 +214,7 @@ const char* hitname[] = {
     "A_hasi017",
 };
 
-/**
- * Map animations (S_hasiNN) of the 17 bridge planks, played when Mario steps onto the plank with the same
- * index in hitname.
- */
-const char* mapanim[] = {
+static const char* mapanim[] = {
     "S_hasi01",
     "S_hasi02",
     "S_hasi03",
@@ -235,14 +238,14 @@ const char* mapanim[] = {
  * Loop that makes the rope bridge sway: whenever Mario steps on a different plank (mario_moveride_check) it
  * plays a creak sound at his feet and the plank's map animation.
  */
-EVT_BEGIN(mario_hashi_anime)
+static EVT_BEGIN(mario_hashi_anime)
     SET_VALUE(LW(1), 0)
     LOOP(0)
         CALL(mario_moveride_check)
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_BRIDGE_CREAK1"), LW(10), LW(11), LW(12), 0)
-            CALL(evt_map_playanim, LW(0), 0, 0)
+            CALL(evt_map_playanim, LW(0), MAP_ANIM_PLAY_ONCE, 0)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
@@ -250,10 +253,10 @@ EVT_BEGIN(mario_hashi_anime)
 EVT_END()
 
 /**
- * First Ember (Elmos A) swoops in over the bridge toward Mario, gliding to x = -25 then -35 at height 125,
- * with its footstep sounds muted.
+ * First Ember (Elmos A) swoops in over the bridge at Bobbery, gliding to x = -25 then -35 at height 125
+ * over and over, with its footstep sounds muted.
  */
-EVT_BEGIN(erumos00_attack)
+static EVT_BEGIN(erumos00_attack)
     CALL(evt_npc_sound_data_set, STRING("エルモスA"), 0, 0, EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
     WAIT_MS(500)
     LOOP(0)
@@ -266,7 +269,7 @@ EVT_BEGIN(erumos00_attack)
 EVT_END()
 
 /** Second Ember (Elmos B) swoops in from the other side, gliding to x = 25 then 35 at height 125. */
-EVT_BEGIN(erumos01_attack)
+static EVT_BEGIN(erumos01_attack)
     CALL(evt_npc_sound_data_set, STRING("エルモスB"), 0, 0, EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
     WAIT_MS(500)
     LOOP(0)
@@ -279,10 +282,10 @@ EVT_BEGIN(erumos01_attack)
 EVT_END()
 
 /**
- * Admiral Bobbery (Sanders) lashes out at the Embers:
- * repeatedly spawns hit effects at random offsets around him and spins him round while the Embers are attacked.
+ * Admiral Bobbery (Sanders) is attacked by the Embers:
+ * repeatedly spawns hit effects at random offsets around him and spins him round while they attack him.
  */
-EVT_BEGIN(sanders_attack)
+static EVT_BEGIN(sanders_attack)
     WAIT_MS(600)
     BEGIN_INLINE_EVENT
         LOOP(0)
@@ -300,7 +303,7 @@ EVT_BEGIN(sanders_attack)
     END_INLINE_EVENT
     LOOP(0)
         WAIT_MS(100)
-        CALL(evt_sub_intpl_msec_init, 11, 0, 360, 200)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 360, 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_npc_set_rotate, STRING("サンダース"), 0, LW(0), 0)
@@ -318,7 +321,7 @@ EVT_END()
  * every frame sets Mario's position to the sailor's position plus 40 up,
  * so he appears carried (used while Bobbery rescues them).
  */
-EVT_BEGIN(mario_katsugi)
+static EVT_BEGIN(mario_katsugi)
     LOOP(0)
         CALL(evt_npc_get_position, STRING("めがね水夫"), LW(0), LW(1), LW(2))
         ADD(LW(1), 40)
@@ -330,48 +333,50 @@ EVT_BEGIN(mario_katsugi)
 EVT_END()
 
 /**
- * Bobbery's scene on the rope bridge (STORY_STG5_13_BOBBERY_AND_THE_BRIDGE):
- * Mario meets Admiral Bobbery and the two scared sailors, Bobbery tells his story (stg5_muj_23 to 28),
- * the Embers attack and are driven off, Mario is carried off by the sailors and the party moves to muj_03.
+ * Bobbery's scene on the rope bridge (runs at STG5_12_FLAVIO_PA_PATCH, sets STG5_13_BOBBERY_THE_BRIDGE):
+ * Mario meets Admiral Bobbery and the two scared sailors, Bobbery orders the sailors away (stg5_muj_23 to 28),
+ * the Embers keep attacking him, Mario is carried off by the sailors and the party moves to muj_03.
  */
-EVT_BEGIN(sanders_funto)
+static EVT_BEGIN(sanders_funto)
     CALL(evt_npc_set_position, STRING("サンダース"), 0, 112, 0)
     CALL(evt_npc_set_ry, STRING("サンダース"), 90)
     CALL(evt_npc_set_position, STRING("オドオド水夫"), -25, 112, -20)
     CALL(evt_npc_set_ry, STRING("オドオド水夫"), 270)
     CALL(evt_npc_set_position, STRING("めがね水夫"), 25, 112, -20)
     CALL(evt_npc_set_ry, STRING("めがね水夫"), 90)
-#if VERSION >= VERSION_DEMO_EU // PAL: also sets NPC flag 0x40000000 on the two sailors
-    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+#if VERSION >= VERSION_DEMO_EU
+    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_WALL_COLLISION | NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_NO_WALL_COLLISION | NPC_FLAG_NO_HIT)
 #else
-    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_NO_HIT)
 #endif
     CALL(evt_npc_sound_data_set, STRING("めがね水夫"), STRING("SFX_STG5_KANBU_GLASSES_MOVE1L"), STRING("SFX_STG5_KANBU_GLASSES_MOVE1R"), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
     CALL(evt_npc_set_ry, STRING("エルモスA"), 90)
     CALL(evt_npc_set_ry, STRING("エルモスB"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("エルモスA"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("エルモスB"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("エルモスA"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("エルモスB"), NPC_FLAG_NO_HIT)
     CALL(evt_npc_set_position, STRING("エルモスA"), -60, 125, 0)
     CALL(evt_npc_set_position, STRING("エルモスB"), 60, 125, 0)
-    // Mario arrives at the bridge: control is taken and the exit is waited out.
+
+    // Mario arrives at the bridge: control is taken and the entrance is waited out.
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     CALL(evt_mario_normalize)
     CALL(evt_party_stop, 0)
+
     // Bobbery, holding the bridge against the ghosts, curses them and spots Mario.
     CALL(evt_msg_print, 0, STRING("stg5_muj_23"), 0, STRING("サンダース"))
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
-    CALL(evt_eff_fukidashi, 0, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
-    CALL(evt_eff_fukidashi, 3, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 0, 260, 532, 0, 165, -10, 1000, 11)
+    CALL(evt_cam3d_evt_set, 0, 260, 532, 0, 165, -10, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
     BEGIN_INLINE_EVENT
         CALL(evt_mario_mov_pos2, -150, 0, FLOAT(150.0f))
     END_INLINE_EVENT
@@ -380,21 +385,22 @@ EVT_BEGIN(sanders_funto)
     END_INLINE_EVENT
     WAIT_MS(500)
     WAIT_MS(500)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("サンダース"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("サンダース"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     CALL(evt_set_dir_to_target, STRING("サンダース"), STRING("mario"))
-    CALL(evt_cam3d_evt_set, -60, 260, 532, -60, 165, -10, 500, 11)
+    CALL(evt_cam3d_evt_set, -60, 260, 532, -60, 165, -10, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg5_muj_24"), 0, STRING("サンダース"))
     CALL(evt_mario_set_pose, STRING("M_N_5B"))
     CALL(evt_set_dir_to_target, STRING("オドオド水夫"), STRING("サンダース"))
     WAIT_MS(500)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
+
     // The nervous sailor worries about the admiral; Bobbery tells them to leave the ghosts to him.
     CALL(evt_msg_print, 0, STRING("stg5_muj_25"), 0, STRING("オドオド水夫"))
     CALL(evt_msg_print, 0, STRING("stg5_muj_26"), 0, STRING("サンダース"))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, 360, 200)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 360, 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_npc_set_rotate, STRING("サンダース"), 0, LW(0), 0)
@@ -407,21 +413,23 @@ EVT_BEGIN(sanders_funto)
     WAIT_MS(200)
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
-        CALL(evt_npc_flag_onoff, 0, STRING("めがね水夫"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 0, STRING("めがね水夫"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
         CALL(evt_npc_get_position, STRING("めがね水夫"), LW(0), LW(1), LW(2))
-        // Bobbery throws a bomb at the Embers.
+
+        // The bespectacled sailor is thrown toward Mario.
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_THUNDERS_THROW1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_npc_set_ry, STRING("めがね水夫"), 270)
         CALL(evt_npc_jump_position_nohit, STRING("めがね水夫"), LW(0), LW(1), LW(2), 500, 70)
-        CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_JUMPING | NPC_FLAG_LAND_ON_FLOOR)
+        CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_GRAVITY)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
         CALL(evt_npc_set_ry, STRING("オドオド水夫"), 270)
         CALL(evt_npc_jump_position_nohit, STRING("オドオド水夫"), -105, 116, 0, 500, 70)
         CALL(evt_npc_set_anim, STRING("オドオド水夫"), STRING("F_1"))
-        CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_JUMPING | NPC_FLAG_LAND_ON_FLOOR)
+        CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_GRAVITY)
+
         // The nervous sailor screams.
         CALL(evt_msg_print, 0, STRING("stg5_muj_27"), 0, STRING("オドオド水夫"))
         SET_VALUE(GF(0), 0)
@@ -432,17 +440,19 @@ EVT_BEGIN(sanders_funto)
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_LAND_DAMAGE2"), LW(0), LW(1), LW(2), 0)
         CALL(evt_mario_set_pose, STRING("M_D_8"))
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -110, 260, 532, -110, 165, -10, 500, 11)
+    CALL(evt_cam3d_evt_set, -110, 260, 532, -110, 165, -10, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // The Embers charge and Bobbery fights back.
     SPAWN_EVENT(erumos00_attack)
     SPAWN_EVENT(erumos01_attack)
     SPAWN_EVENT(sanders_attack)
     WAIT_WHILE(GF(0))
     CALL(evt_npc_set_anim, STRING("オドオド水夫"), STRING("S_1"))
-    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_TALK_POSE)
+    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     WAIT_FRAMES(1)
+
     // The bespectacled sailor says Bobbery thinks this is the right thing to do, and the group leaves the
     // bridge.
     CALL(evt_msg_print, 0, STRING("stg5_muj_28"), 0, STRING("めがね水夫"))
@@ -465,31 +475,33 @@ EVT_BEGIN(sanders_funto)
         CALL(evt_party_move_pos2, 0, -300, -20, FLOAT(180.0f))
     END_INLINE_EVENT
     WAIT_MS(2000)
+
     // The story advances and Mario crosses to muj_03.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_13_BOBBERY_AND_THE_BRIDGE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_13_BOBBERY_THE_BRIDGE)
     CALL(evt_fade_set_mapchange_type, 0, FADE_OUT_IRIS, 500, FADE_IN_IRIS, 500)
     CALL(evt_bero_mapchange, STRING("muj_03"), STRING("e_bero"))
     RETURN
 EVT_END()
 
 /** Init event of the coconut palm: sets its state GW(10) to 0 (nothing dropped yet). */
-EVT_BEGIN(yashi_yure_init)
+static EVT_BEGIN(yashi_yure_init)
     SET_VALUE(GW(10), 0)
     RETURN
 EVT_END()
 
 /**
- * The coconut palm (S_yasi_ki): hitting it shakes the tree and drops coconuts (ITEM_COCONUT) one after another,
- * state GW(10) counting how many have fallen; each coconut can be picked up where it lands.
+ * The coconut palm (S_yasi_ki): the first and second hammer hits each shake the tree and drop one coconut
+ * (ITEM_COCONUT), state GW(10) counting the hits; each coconut can be picked up where it lands.
  */
-EVT_BEGIN(yashi_yure)
+// Only the first two shakes schedule coconut pickups; later shakes still increment the counter.
+static EVT_BEGIN(yashi_yure)
     ADD(GW(10), 1)
     IF_INT_EQUAL(GW(10), 1)
         CALL(evt_mario_key_onoff, 0)
         CALL(evt_mapobj_get_position, STRING("S_yasi_ki"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_OBJ_TREE_SHAKE1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_OBJ_LEAF_SHAKE1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_init, 1, 0, -40, 15)
+        CALL(evt_sub_intpl_init, EASING_QUADRATIC_IN, 0, -40, 15)
         LOOP(16)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_mapobj_trans, 1, STRING("S_yasi_mi02"), 0, LW(0), 0)
@@ -510,8 +522,8 @@ EVT_BEGIN(yashi_yure)
             END_LOOP
             CALL(evt_mario_key_onoff, 0)
             CALL(evt_mapobj_trans, 1, STRING("S_yasi_mi02"), 0, -1000, 0)
-            CALL(evt_item_entry, STRING("yashi00"), ITEM_COCONUT, 0, -1000, 0, ITEM_ENTRY_FIXED, -1, 0)
-            CALL(evt_item_flag_on, STRING("yashi00"), ITEM_FLAG_NO_TOUCH)
+            CALL(evt_item_entry, STRING("yashi00"), ITEM_COCONUT, 0, -1000, 0, ITEM_TYPE_STILL, -1, 0)
+            CALL(evt_item_flag_on, STRING("yashi00"), ITEM_FLAG_NO_TOUCH_GET)
             CALL(evt_item_get_item, STRING("yashi00"))
             CALL(evt_mario_key_onoff, 1)
         END_INLINE_EVENT
@@ -524,7 +536,7 @@ EVT_BEGIN(yashi_yure)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG5_OBJ_LEAF_SHAKE1"), LW(0), LW(1), LW(2), 0)
         WAIT_MS(100)
         WAIT_MS(50)
-        CALL(evt_sub_intpl_init, 1, 0, -40, 15)
+        CALL(evt_sub_intpl_init, EASING_QUADRATIC_IN, 0, -40, 15)
         LOOP(16)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_mapobj_trans, 1, STRING("S_yasi_mi01"), 0, LW(0), 0)
@@ -545,8 +557,8 @@ EVT_BEGIN(yashi_yure)
             END_LOOP
             CALL(evt_mario_key_onoff, 0)
             CALL(evt_mapobj_trans, 1, STRING("S_yasi_mi01"), 0, -1000, 0)
-            CALL(evt_item_entry, STRING("yashi01"), ITEM_COCONUT, 0, -1000, 0, ITEM_ENTRY_FIXED, -1, 0)
-            CALL(evt_item_flag_on, STRING("yashi01"), ITEM_FLAG_NO_TOUCH)
+            CALL(evt_item_entry, STRING("yashi01"), ITEM_COCONUT, 0, -1000, 0, ITEM_TYPE_STILL, -1, 0)
+            CALL(evt_item_flag_on, STRING("yashi01"), ITEM_FLAG_NO_TOUCH_GET)
             CALL(evt_item_get_item, STRING("yashi01"))
             CALL(evt_mario_key_onoff, 1)
         END_INLINE_EVENT
@@ -588,22 +600,22 @@ static KusaAccess kusa_tbl[] = {
  * starts the water animations and sets the story-dependent bridge and Ember scene.
  */
 EVT_BEGIN(muj_04_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_MUJ1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_MUJ6"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_MUJ1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_MUJ6"))
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_item_entry, STRING("item_00"), ITEM_ICE_POWER, 290, 60, 10, ITEM_ENTRY_FIXED, GSWF(GSWF_MUJ04_ICE_POWER_TAKEN), 0)
-    CALL(evt_item_entry, STRING("item_01"), ITEM_INN_COUPON, -367, 150, -73, ITEM_ENTRY_FIXED, GSWF(GSWF_MUJ04_INN_COUPON_TAKEN), 0)
-    CALL(evt_mobj_powerupblk, STRING("pblk00"), 450, 210, -90, 0, GSWF(GSWF_MUJ04_SHINE_SPRITE), 0)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_ICE_POWER, 290, 60, 10, ITEM_TYPE_STILL, GSWF_MUJ_04_ICE_POWER, 0)
+    CALL(evt_item_entry, STRING("item_01"), ITEM_INN_COUPON, -367, 150, -73, ITEM_TYPE_STILL, GSWF_MUJ_04_INN_COUPON, 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk00"), 450, 210, -90, 0, GSWF_SHINE_28, 0)
     CALL(evt_npc_setup, PTR(npcEnt))
-    CALL(evt_map_playanim, STRING("S_mizu"), 1, 0)
-    CALL(evt_map_playanim, STRING("S_mizu_02"), 1, 0)
+    CALL(evt_map_playanim, STRING("S_mizu"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("S_mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(mario_hashi_anime)
     SPAWN_EVENT(yashi_yure_init)
-    CALL(evt_run_case_evt, CASE_COND_HAMMER, 1, STRING("A_hai_yasi"), 0, PTR(yashi_yure), 0)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG5_12_FLAVIO_AND_PA_PATCH)
+    CALL(evt_run_case_evt, CASE_HAMMER, 1, STRING("A_hai_yasi"), 0, PTR(yashi_yure), 0)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG5_12_FLAVIO_PA_PATCH)
         SPAWN_EVENT(sanders_funto)
     END_SWITCH
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
@@ -620,9 +632,8 @@ EVT_BEGIN(muj_04_init_evt)
 EVT_END()
 
 /**
- * Script helper for mario_hashi_anime: looks up which of the 17 bridge hit boxes Mario stands on;
- * LW(0) gets that plank's map animation when he has just stepped onto a different plank (0 otherwise)
- * and LW(1) remembers the plank.
+ * Script helper: sets LW(0) to the map animation (mapanim) of the hitname segment Mario stands on when he has just
+ * stepped onto a new one, else 0; LW(1) keeps the current segment's name.
  */
 static USER_FUNC(mario_moveride_check) {
     s32 i;
@@ -639,6 +650,8 @@ static USER_FUNC(mario_moveride_check) {
         }
     }
     event->lwData[0] = 0;
+
+    // Compare the stable table name pointer to detect a newly occupied bridge segment.
     if (name != NULL && event->lwData[1] != (EvtWord)name) {
         event->lwData[0] = (EvtWord)anim;
     }

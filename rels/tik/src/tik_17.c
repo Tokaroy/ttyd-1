@@ -1,24 +1,37 @@
 // tik_17 (埋没した都市, Rogueport Sewers): the room with the pipes to Poshley Heights (pik_01) and Keelhaul Key (muj_02).
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_damage.h"
 #include "evt/evt_movefloor.h"
 #include "driver/hitdrv.h"
-#include "driver/itemdrv.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "tik.h"
-#include "evt/evt_story.h"
+#include "driver/mobjdrv.h"
 #include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 static BeroEntry bero_entry_data[7];
 static HitDamageReturn hitDmgRetPoints[9];
+static EvtWord evt_switch_00_init[26];
+static EvtWord evt_switch_00_after[11];
+static EvtWord evt_switch_00[56];
+static EvtWord evt_switch_01_init[26];
+static EvtWord evt_switch_01_after[11];
+static EvtWord evt_switch_01[56];
+static EvtWord mobj_box01[34];
+EvtWord tik_17_init_evt[116];
 
 /**
  * Doors of this room: two west exits to tik_18, two east exits to tik_16, and the pipes to Poshley Heights
@@ -126,7 +139,7 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
-/** Spots Mario is put back on after falling into one of this room's hazards (each object's own position). */
+/** Spots Mario is put back on after falling into this room's hazards; y -1000 uses the object's position, other entries use the listed coordinates. */
 static HitDamageReturn hitDmgRetPoints[] = {
     {"mod_1", {0.0f, -1000.0f, 0.0f}},
     {"mod_2", {-250.0f, 0.0f, 0.0f}},
@@ -140,23 +153,22 @@ static HitDamageReturn hitDmgRetPoints[] = {
 };
 
 /**
- * Map-init part for the first pipe (to Poshley Heights).
- * Binds the pipe's hit to its model and, if GSWF_TIK17_PIPE_PIK_OPEN is set,
- * puts it already risen and hides its cover.
+ * Map-init part for the Poshley Heights pipe: binds hit a_dokan_1 to S_dakan_1 and, with
+ * GSWF_TIK_17_PIK_PIPE_RAISED set, puts the pipe 30 units up and hides its cover (dokan_1_k).
  */
 static EVT_BEGIN(evt_switch_00_init)
     CALL(evt_hit_bind_mapobj, STRING("a_dokan_1"), STRING("S_dakan_1"))
-    IF_INT_EQUAL(GSWF(GSWF_TIK17_PIPE_PIK_OPEN), 1)
+    IF_INT_EQUAL(GSWF_TIK_17_PIK_PIPE_RAISED, 1)
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_1"), 0, 30, 0)
         CALL(evt_hit_bind_update, STRING("a_dokan_1"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
 
 /** Switches the first pipe's exit off if its switch has not been pressed yet. */
 static EVT_BEGIN(evt_switch_00_after)
-    IF_INT_EQUAL(GSWF(GSWF_TIK17_PIPE_PIK_OPEN), 0)
+    IF_INT_EQUAL(GSWF_TIK_17_PIK_PIPE_RAISED, 0)
         SET_VALUE(LW(0), STRING("dokan_1"))
         CALL_CHILD(bero_case_switch_off)
     END_IF
@@ -170,7 +182,7 @@ EVT_END()
 static EVT_BEGIN(evt_switch_00)
     CALL(evt_mapobj_get_position, STRING("S_dakan_1"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOKAN_APPEAR1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 30, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 30, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_1"), 0, LW(0), 0)
@@ -180,30 +192,29 @@ static EVT_BEGIN(evt_switch_00)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(0), STRING("dokan_1"))
     CALL_CHILD(bero_case_switch_on)
     RETURN
 EVT_END()
 
 /**
- * Map-init part for the second pipe (to Keelhaul Key).
- * Binds the pipe's hit to its model and, if GSWF_TIK17_PIPE_MUJ_OPEN is set,
- * puts it already risen and hides its cover.
+ * Map-init part for the Keelhaul Key pipe: binds the pipe's hit to its model and, when
+ * GSWF_TIK_17_MUJ_PIPE_RAISED is set, puts it already risen and hides its cover.
  */
 static EVT_BEGIN(evt_switch_01_init)
     CALL(evt_hit_bind_mapobj, STRING("a_dokan_2"), STRING("S_dakan_2"))
-    IF_INT_EQUAL(GSWF(GSWF_TIK17_PIPE_MUJ_OPEN), 1)
+    IF_INT_EQUAL(GSWF_TIK_17_MUJ_PIPE_RAISED, 1)
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_2"), 0, 30, 0)
         CALL(evt_hit_bind_update, STRING("a_dokan_2"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
 
 /** Switches the second pipe's exit off if its switch has not been pressed yet. */
 static EVT_BEGIN(evt_switch_01_after)
-    IF_INT_EQUAL(GSWF(GSWF_TIK17_PIPE_MUJ_OPEN), 0)
+    IF_INT_EQUAL(GSWF_TIK_17_MUJ_PIPE_RAISED, 0)
         SET_VALUE(LW(0), STRING("dokan_2"))
         CALL_CHILD(bero_case_switch_off)
     END_IF
@@ -217,7 +228,7 @@ EVT_END()
 static EVT_BEGIN(evt_switch_01)
     CALL(evt_mapobj_get_position, STRING("S_dakan_2"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOKAN_APPEAR1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 30, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 30, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_2"), 0, LW(0), 0)
@@ -227,7 +238,7 @@ static EVT_BEGIN(evt_switch_01)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(0), STRING("dokan_2"))
     CALL_CHILD(bero_case_switch_on)
     RETURN
@@ -240,11 +251,11 @@ EVT_END()
 static EVT_BEGIN(mobj_box01)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mobj_get_position, STRING("mobj_box01"), LW(0), LW(1), LW(2))
-    CALL(evt_item_entry, STRING("item01"), ITEM_FP_PLUS, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED, -1, 0)
+    CALL(evt_item_entry, STRING("item01"), ITEM_FP_PLUS, LW(0), LW(1), LW(2), ITEM_TYPE_STILL, -1, 0)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_item_flag_on, STRING("item01"), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item01"), ITEM_FLAG_NO_TOUCH_GET)
 #else
-    CALL(evt_item_flag_on, STRING("item01"), ITEM_FLAG_BADGE_RETURN | ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item01"), ITEM_FLAG_NO_TOUCH_GET | ITEM_FLAG_LOST_BADGE_TO_SHOP)
 #endif
     CALL(evt_mobj_wait_animation_end, STRING("mobj_box01"))
     CALL(evt_item_get_item, STRING("item01"))
@@ -253,13 +264,13 @@ static EVT_BEGIN(mobj_box01)
 EVT_END()
 
 /**
- * Map init script of tik_17, the room with the pipes to Poshley Heights (pik_01) and Keelhaul Key (muj_02).
- * Sets up the two tornado switches that open each pipe (GSWF_TIK17_PIPE_PIK_OPEN and GSWF_TIK17_PIPE_MUJ_OPEN),
- * the large block, the FP Plus chest and a moving floor, plus fall recovery and the water animation.
+ * Map init script of tik_17: starts the sewer music and ambience, sets up the two pipes and their tornado switches
+ * (GSWF_TIK_17_PIK_PIPE_RAISED, GSWF_TIK_17_MUJ_PIPE_RAISED), the exits, fall recovery and the Gazigazi hazard NPC,
+ * the water animation, the large block, the FP Plus chest and a moving floor.
  */
 EVT_BEGIN(tik_17_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK7"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK7"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL_CHILD(evt_switch_00_init)
     CALL_CHILD(evt_switch_01_init)
@@ -270,15 +281,15 @@ EVT_BEGIN(tik_17_init_evt)
     CALL_CHILD(evt_switch_01_after)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_map_playanim, STRING("anm_mizu"), 1, 0)
-    CALL(evt_mobj_lv_blk, STRING("block"), 0, 0, 0, 0, GSWF(GSWF_TIK17_BIG_BLOCK_BROKEN), STRING("MOBJ_Lv2BigBigBlock"))
-    IF_INT_EQUAL(GSWF(GSWF_TIK17_BIG_BLOCK_BROKEN), 0)
+    CALL(evt_map_playanim, STRING("anm_mizu"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_mobj_lv_blk, STRING("block"), 0, 0, 0, 0, GSWF_TIK_17_LV2_BIGBIG_BLOCK_BROKEN, STRING("MOBJ_Lv2BigBigBlock"))
+    IF_INT_EQUAL(GSWF_TIK_17_LV2_BIGBIG_BLOCK_BROKEN, 0)
         CALL(evt_mobj_flag_onoff, 1, STRING("block"), MOBJ_FLAG_NO_CULL)
     END_IF
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mobj_itembox, STRING("mobj_box01"), -125, 100, -125, 0, 0, PTR(mobj_box01), GSWF(GSWF_TIK17_FP_PLUS_CHEST_OPENED))
+    CALL(evt_mobj_itembox, STRING("mobj_box01"), -125, 100, -125, MOBJ_ITEMBOX_NORMAL, 0, PTR(mobj_box01), GSWF_TIK_17_FP_PLUS_CHEST)
 #else
-    CALL(evt_mobj_itembox, STRING("mobj_box01"), -125, 100, -110, 0, 0, PTR(mobj_box01), GSWF(GSWF_TIK17_FP_PLUS_CHEST_OPENED))
+    CALL(evt_mobj_itembox, STRING("mobj_box01"), -125, 100, -110, MOBJ_ITEMBOX_NORMAL, 0, PTR(mobj_box01), GSWF_TIK_17_FP_PLUS_CHEST)
 #endif
     SET_VALUE(LW(0), STRING("dai_3"))
     SET_VALUE(LW(1), STRING("a_dai_3"))
@@ -291,7 +302,7 @@ EVT_BEGIN(tik_17_init_evt)
     SET_VALUE(LW(11), 0)
     SET_VALUE(LW(12), 0)
     SPAWN_EVENT(moving_floor)
-    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch00"), -125, 0, 0, PTR(evt_switch_00), GSWF(GSWF_TIK17_PIPE_PIK_OPEN))
-    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch01"), 125, 0, 0, PTR(evt_switch_01), GSWF(GSWF_TIK17_PIPE_MUJ_OPEN))
+    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch00"), -125, 0, 0, PTR(evt_switch_00), GSWF_TIK_17_PIK_PIPE_RAISED)
+    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch01"), 125, 0, 0, PTR(evt_switch_01), GSWF_TIK_17_MUJ_PIPE_RAISED)
     RETURN
 EVT_END()

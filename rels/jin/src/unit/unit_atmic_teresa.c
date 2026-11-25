@@ -1,10 +1,17 @@
 // Atomic Boo (atmic_teresa): boss battle unit used in Creepy Steeple.
+
+#include "version.h"
+#include "system.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_ext.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_sub.h"
 
 #include "battle/battle.h"
 #include "driver/camdrv.h"
-#include "battle/battle_unit.h"
 #include "driver/dispdrv.h"
 #include "dolphin/mtx.h"
 #include "battle/battle_event_default.h"
@@ -13,28 +20,18 @@
 #include "battle/battle_event_subset.h"
 #include "battle/battle_weapon_power.h"
 #include "evt/evt_eff.h"
-#include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "battle/battle_database_common.h"
 #include "data_tables.h"
 #include "driver/extdrv.h"
 #include "manager/evtmgr_cmd.h"
 #include "battle/battle_sub.h"
-#include "unit/unit_atmic_teresa.h"
-#include "evt/evt_ext.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_sub.h"
-#include "system.h"
-#include "version.h"
-#include "libc_decls.h"
+#include "battle/battle_damage.h"
+#include "battle/unit/unit_atmic_teresa.h"
 
-// Unit work slots of the Atomic Boo (btlevtcmd_SetUnitWork / GetUnitWork)
-enum {
-    UW_ATMIC_TERESA_FACE_HIDDEN = 0, // 1 while it hides its face (pose_table_kaokakusi), 0 once it shows it again
-};
+static AtmTeresa* teresa;
+static s32 teresa_count;
 
-AtmTeresa* teresa;
-#define ATMIC_TERESA_SCALE atmic_teresa_scale
-s32 teresa_count;
 static void teresa_ext_disp(CameraId camera, void* param);
 
 static USER_FUNC(atmic_teresa_id_set);
@@ -52,37 +49,37 @@ BattleUnitKind unit_atmic_teresa;
 static BattleUnitDefense defence;
 static BattleUnitDefenseAttr defence_attr;
 static PoseTableEntry pose_table[17];
-PoseTableEntry pose_table_kaokakusi[17];
+static PoseTableEntry pose_table_kaokakusi[17];
 static BattleDataEntry data_table[1];
 static BattleUnitKindPart parts[1];
 static StatusVulnerability regist;
-BattleWeapon weapon_atmic_teresa_press;
-BattleWeapon weapon_atmic_teresa_bikkuri;
-BattleWeapon weapon_atmic_teresa_surprise;
-BattleWeapon weapon_atmic_teresa_breath;
+static BattleWeapon weapon_atmic_teresa_press;
+static BattleWeapon weapon_atmic_teresa_bikkuri;
+static BattleWeapon weapon_atmic_teresa_surprise;
+static BattleWeapon weapon_atmic_teresa_breath;
 static EvtWord init_event[26];
 static EvtWord damage_event[10];
 static EvtWord attack_event[101];
-extern EvtWord kaokakusi_event[];
-extern EvtWord press_event[];
-extern EvtWord surprise_event[];
-extern EvtWord bikkuri_event[];
-static EvtWord breath_event[254];
-extern EvtWord breath_event_sub[];
+static EvtWord kaokakusi_event[110];
+static EvtWord press_event[264];
+static EvtWord surprise_event[303];
+EvtWord bikkuri_event[285];
+EvtWord breath_event[254];
+static EvtWord breath_event_sub[102];
 static EvtWord wait_event[6];
-s32 atmic_teresa_id[1];
-s32 target_unit_id[1];
-s32 target_parts_id[1];
-f32 atmic_teresa_scale;
-ExtTexInfo teresa_ext_entry_data[17];
-extern EvtWord teresa_entry[];
+static s32 atmic_teresa_id[1];
+static s32 target_unit_id[1];
+static s32 target_parts_id[1];
+static f32 atmic_teresa_scale;
+static ExtTexInfo teresa_ext_entry_data[17];
+static EvtWord teresa_entry[19];
 
 /**
  * Unit kind of the Atomic Boo:
  * 40 HP, level 52, with its size, sounds and the links to its parts, status vulnerability and scripts.
  */
 BattleUnitKind unit_atmic_teresa = {
-    76,
+    UNIT_ATOMIC_BOO,
     "btl_un_atmic_teresa",
     40,
     0,
@@ -143,7 +140,7 @@ BattleUnitKind unit_atmic_teresa = {
     "SFX_BTL_DAMAGE_FIRE1",
     "SFX_BTL_DAMAGE_ICE1",
     "SFX_BTL_DAMAGE_BIRIBIRI1",
-    UNIT_ATTR_FLOATING,
+    kFloating,
     &regist,
     1,
     parts,
@@ -155,51 +152,51 @@ BattleUnitKind unit_atmic_teresa = {
 static BattleUnitDefense defence = {{0, 0, 0, 0, 0}};
 
 /** Defence attributes of the Atomic Boo's body: none, so every damage type is dealt normally. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 /**
  * Pose table of the Atomic Boo:
  * the animation played for each pose type (idle, hurt, walk, run, attack and so on).
  */
 static PoseTableEntry pose_table[] = {
-    {1, "N_1"},
-    {2, "Y_1"},
-    {9, "Y_1"},
-    {5, "K_1"},
-    {4, "X_1"},
-    {3, "X_1"},
-    {BTL_POSE_NORMAL, "S_1"},
-    {29, "Q_1"},
-    {30, "Q_1"},
-    {31, "S_1"},
-    {BTL_POSE_DAMAGE, "D_1"},
-    {BTL_POSE_RUN, "R_1"},
-    {BTL_POSE_WALK, "W_1"},
-    {BTL_POSE_DANGER, "X_1"},
-    {BTL_POSE_PERIL, "X_1"},
-    {BTL_POSE_TALK, "T_1"},
-    {BTL_POSE_STAY_DEFAULT, "S_1"},
+    {POSE_TYPE_SLEEP, "N_1"},
+    {POSE_TYPE_STOP, "Y_1"},
+    {POSE_TYPE_FREEZE, "Y_1"},
+    {POSE_TYPE_CONFUSE, "K_1"},
+    {POSE_TYPE_POISON, "X_1"},
+    {POSE_TYPE_DIZZY, "X_1"},
+    {POSE_TYPE_NORMAL, "S_1"},
+    {POSE_TYPE_DAMAGE_FIRE, "Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "S_1"},
+    {POSE_TYPE_DAMAGE, "D_1"},
+    {POSE_TYPE_RUN, "R_1"},
+    {POSE_TYPE_WALK, "W_1"},
+    {POSE_TYPE_DANGER, "X_1"},
+    {POSE_TYPE_PERIL, "X_1"},
+    {POSE_TYPE_TALK, "T_1"},
+    {POSE_TYPE_ACTION, "S_1"},
 };
 
 /** Pose table the Atomic Boo switches to once it has turned away and hides its face (kaokakusi). */
-PoseTableEntry pose_table_kaokakusi[] = {
-    {1, "A_1"},
-    {2, "A_1"},
-    {9, "A_1"},
-    {5, "A_1"},
-    {4, "A_1"},
-    {3, "A_1"},
-    {BTL_POSE_NORMAL, "A_1"},
-    {29, "Q_1"},
-    {30, "Q_1"},
-    {31, "A_1"},
-    {BTL_POSE_DAMAGE, "D_1"},
-    {BTL_POSE_RUN, "A_1"},
-    {BTL_POSE_WALK, "A_1"},
-    {BTL_POSE_DANGER, "A_1"},
-    {BTL_POSE_PERIL, "A_1"},
-    {BTL_POSE_TALK, "T_1"},
-    {BTL_POSE_STAY_DEFAULT, "A_1"},
+static PoseTableEntry pose_table_kaokakusi[] = {
+    {POSE_TYPE_SLEEP, "A_1"},
+    {POSE_TYPE_STOP, "A_1"},
+    {POSE_TYPE_FREEZE, "A_1"},
+    {POSE_TYPE_CONFUSE, "A_1"},
+    {POSE_TYPE_POISON, "A_1"},
+    {POSE_TYPE_DIZZY, "A_1"},
+    {POSE_TYPE_NORMAL, "A_1"},
+    {POSE_TYPE_DAMAGE_FIRE, "Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "A_1"},
+    {POSE_TYPE_DAMAGE, "D_1"},
+    {POSE_TYPE_RUN, "A_1"},
+    {POSE_TYPE_WALK, "A_1"},
+    {POSE_TYPE_DANGER, "A_1"},
+    {POSE_TYPE_PERIL, "A_1"},
+    {POSE_TYPE_TALK, "T_1"},
+    {POSE_TYPE_ACTION, "A_1"},
 };
 
 /** Event table of the Atomic Boo: empty, so it has no special reactions. */
@@ -209,27 +206,48 @@ static BattleDataEntry data_table[] = {
 
 /** Body part of the Atomic Boo: a single part using the model "c_atmic_trs". */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_atmic_teresa", "c_atmic_trs", 0.0f, 0.0f, 0.0f, 10.0f, 80.0f, 0.0f, 0.0f, 110.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER | PART_ATTR_HAMMERLIKE_CANNOT_TARGET | PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET, 0, pose_table},
+    {
+        1, "btl_un_atmic_teresa", "c_atmic_trs",
+        0.0f, 0.0f, 0.0f,
+        10.0f, 80.0f, 0.0f,
+        0.0f, 110.0f, 0.0f,
+        20, 30, 255,
+        &defence, &defence_attr,
+        kMainPart | kGuardTargetPart | kHammerlikeCannotTarget | kShellTosslikeCannotTarget, 0, pose_table,
+    },
 };
 
 #if VERSION <= VERSION_DEMO_JP
-/**
- * Status vulnerability of the Atomic Boo in the demo, as a percent of the normal chance:
- * immune to huge, tiny, attack down, fright;
- * sleep 40%, stop 40%, freeze 30%, instant kill 5% (and 8 other statuses lowered).
- */
 static StatusVulnerability regist = {40, 40, 40, 40, 40, 40, 100, 30, 0, 0, 100, 0, 100, 40, 40, 0, 10, 100, 40, 100, 100, 5};
 #else
-/**
- * Status vulnerability of the Atomic Boo in the retail versions, as a percent of the normal chance:
- * immune to huge, tiny, attack down, fright;
- * sleep 40%, stop 40%, freeze 30%, instant kill 5% (and 6 other statuses lowered).
- */
-static StatusVulnerability regist = {40, 40, 40, 100, 40, 100, 100, 30, 0, 0, 100, 0, 100, 80, 40, 0, 10, 100, 40, 100, 100, 5};
+static StatusVulnerability regist = {
+    40, // sleep
+    40, // stop
+    40, // dizzy
+    100, // poison
+    40, // confuse
+    100, // electric
+    100, // burn
+    30, // freeze
+    0, // huge
+    0, // tiny
+    100, // attackUp
+    0, // attackDown
+    100, // defenseUp
+    80, // defenseDown
+    40, // allergic
+    0, // fright
+    10, // galeForce
+    100, // fast
+    40, // slow
+    100, // dodgy
+    100, // invisible
+    5, // ohko
+};
 #endif
 
 /** Atomic Boo's press (the smoosh): 4 damage to every target; flips shelled units and shatters freeze. */
-BattleWeapon weapon_atmic_teresa_press = {
+static BattleWeapon weapon_atmic_teresa_press = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -245,13 +263,13 @@ BattleWeapon weapon_atmic_teresa_press = {
     {4, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE | SPECIAL_FLIPS_SHELLED, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH | SPECIAL_FLIP_SHELLED, // special
     COUNTER_RESIST_PREEMPTIVE_SPIKY | COUNTER_RESIST_FRONT_SPIKY | COUNTER_RESIST_ICY | COUNTER_RESIST_POISON, // counterResistFlags
     0, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
     0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
@@ -264,11 +282,7 @@ BattleWeapon weapon_atmic_teresa_press = {
     {0, 50, 50, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
 };
 
-/**
- * Atomic Boo's bikkuri (the small Boos popping out): 4 damage to every target, pierces Defense, Stop 50% for 3
- * turns (the demos also ignore the target's status vulnerability).
- */
-BattleWeapon weapon_atmic_teresa_bikkuri = {
+static BattleWeapon weapon_atmic_teresa_bikkuri = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -288,16 +302,16 @@ BattleWeapon weapon_atmic_teresa_bikkuri = {
     {4, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
 #if VERSION <= VERSION_DEMO_JP
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_PIERCES_DEFENSE | SPECIAL_IGNORE_STATUS_VULNERABILITY, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_PIERCE_DEFENSE | SPECIAL_IGNORE_VULNERABILITY,
 #else
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_PIERCES_DEFENSE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_PIERCE_DEFENSE, // special
 #endif
     COUNTER_RESIST_ALL, // counterResistFlags
     0, 0, 0, // targetWeightFlags..sleepTime
@@ -314,11 +328,7 @@ BattleWeapon weapon_atmic_teresa_bikkuri = {
     {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
 };
 
-/**
- * Atomic Boo's surprise: 4 damage to every target, less for each later target, pierces Defense, Confuse 50% for 3
- * turns (the demos also ignore the target's status vulnerability).
- */
-BattleWeapon weapon_atmic_teresa_surprise = {
+static BattleWeapon weapon_atmic_teresa_surprise = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -338,16 +348,16 @@ BattleWeapon weapon_atmic_teresa_surprise = {
     {4, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
 #if VERSION <= VERSION_DEMO_JP
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_DIMINISHING_BY_TARGET | SPECIAL_PIERCES_DEFENSE | SPECIAL_IGNORE_STATUS_VULNERABILITY, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_DIMINISH_BY_TARGET | SPECIAL_PIERCE_DEFENSE | SPECIAL_IGNORE_VULNERABILITY,
 #else
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_DIMINISHING_BY_TARGET | SPECIAL_PIERCES_DEFENSE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_DIMINISH_BY_TARGET | SPECIAL_PIERCE_DEFENSE, // special
 #endif
     COUNTER_RESIST_ALL, // counterResistFlags
     0, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
@@ -365,7 +375,7 @@ BattleWeapon weapon_atmic_teresa_surprise = {
 };
 
 /** Atomic Boo's breath: 3 damage to every target, less with each hit; shatters freeze. */
-BattleWeapon weapon_atmic_teresa_breath = {
+static BattleWeapon weapon_atmic_teresa_breath = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -385,15 +395,15 @@ BattleWeapon weapon_atmic_teresa_breath = {
     {3, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_DIMINISHING_BY_HIT | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_DIMINISH_BY_HIT | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_RANDOM, // targetWeightFlags
+    TARGET_WEIGHT_RANDOM | TARGET_WEIGHT_FRONT, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -410,38 +420,40 @@ BattleWeapon weapon_atmic_teresa_breath = {
  * registers its battle id (atmic_teresa_id_set) and runs teresa_entry, which sets up the boss.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(atmic_teresa_id_set, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(atmic_teresa_id_set, UNIT_ID_SELF)
     CALL_CHILD(teresa_entry)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /** Damage event of the Atomic Boo: runs the default damage handling. */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
 EVT_END()
 
 /**
- * Attack event of the Atomic Boo: uses an enemy item if it has one.
- * While its face is visible (unit work 0 is 0) it picks 30/70 kaokakusi_event (hides its face),
+ * Attack event of the Atomic Boo: runs a selected enemy-item script if one is returned.
+ * While its face is visible (UNIT_WORK_FACE_HIDDEN is 0) it picks 30/70 kaokakusi_event (hides its face),
  * 20/70 press_event and 20/70 bikkuri_event; while its face is hidden it picks 50/50 between surprise_event
  * and breath_event.
  */
+
+// Face exposed: choose hide/press/scare with weights 30/20/20; face hidden: choose surprise/breath equally.
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_ATMIC_TERESA_FACE_HIDDEN, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_FACE_HIDDEN, LW(0))
     IF_INT_EQUAL(LW(0), 0)
         SET_VALUE(LW(1), 30)
         ADD(LW(1), 20)
@@ -474,38 +486,38 @@ static EVT_BEGIN(attack_event)
         GOTO(99)
     END_IF
     LABEL(99)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
  * Battle script: the Atomic Boo hides its face (a Boo habit):
- * it swoops down a little, turns its back to the party and hides,
- * which sets unit work 0 to 1 and switches to the face-hiding pose table.
+ * it swoops down a little toward the party, turns its back (A_1) and glides home while spinning back round,
+ * then sets unit work 0 to 1 and switches to the face-hiding pose table.
  */
-EVT_BEGIN(kaokakusi_event)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_MOVE2"), EVT_NULLPTR, 0, LW(15))
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_WALK)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 60)
+static EVT_BEGIN(kaokakusi_event)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_MOVE2"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_WALK)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 60)
     SUBTRACT(LW(1), 10)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 10, 4, 0, -1)
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 10, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
     WAIT_FRAMES(20)
     CALL(evt_snd_sfxoff, LW(15))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_FACE_HIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("A_1"))
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, 1, 0, 180, 0)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 20, 0, 5, 0, -1)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_FACE_HIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("A_1"))
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, 1, 0, 180, 0)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 20, 0, EASING_CUBIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
     WAIT_FRAMES(10)
     LOOP(15)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_AddPartsRotate, BTL_UNIT_SELF, 1, 0, 12, 0)
+        CALL(btlevtcmd_AddPartsRotate, UNIT_ID_SELF, 1, 0, 12, 0)
     END_LOOP
     WAIT_FRAMES(20)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_ATMIC_TERESA_FACE_HIDDEN, 1)
-    CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table_kaokakusi))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_FACE_HIDDEN, 1)
+    CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table_kaokakusi))
     RETURN
 EVT_END()
 
@@ -513,12 +525,12 @@ EVT_END()
  * Attack script "press": the Atomic Boo targets the party, rises and dives to the left of the stage,
  * then drops straight down onto the targets with a camera shake, dealing 4 damage with its press weapon.
  */
-EVT_BEGIN(press_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_atmic_teresa_press))
+static EVT_BEGIN(press_event)
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_atmic_teresa_press))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_atmic_teresa_press), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
@@ -526,42 +538,42 @@ EVT_BEGIN(press_event)
         GOTO(99)
     END_IF
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_atmic_teresa_press))
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_atmic_teresa_press))
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, BTL_UNIT_NONE)
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_atmic_teresa_press))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, -1)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_MOVE2"), EVT_NULLPTR, 0, LW(15))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("R_1"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_MOVE2"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("R_1"))
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
     SUBTRACT(LW(2), 10)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, -125, 100, LW(2), 120, 10, 4, 0, -1)
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, -125, 100, LW(2), 120, 10, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
     CALL(evt_snd_sfxoff, LW(15))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("Z_1"))
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, -125, 0, LW(2), 30, 0, 1, 0, -1)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("Z_1"))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, -125, 0, LW(2), 30, 0, EASING_QUADRATIC_IN, 0, MOVE_SOUND_FROM_TABLE)
     CALL(evt_btl_camera_shake_h, 0, 10, 0, 60, 0)
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     SET_VALUE(LW(10), 0)
     LABEL(0)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_press), 0, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_press), 0, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
@@ -574,7 +586,7 @@ EVT_BEGIN(press_event)
     IF_INT_EQUAL(LW(10), 0)
         CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_atmic_teresa_press))
     END_IF
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_press), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_press), DAMAGE_RESULT_FINAL_HIT, LW(5))
     GOTO(97)
     LABEL(97)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
@@ -582,30 +594,31 @@ EVT_BEGIN(press_event)
         ADD(LW(10), 1)
         GOTO(0)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     LABEL(98)
     WAIT_FRAMES(60)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("W_1"))
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 50, 6, 0, -1)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("S_1"))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("W_1"))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 50, EASING_QUARTIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("S_1"))
     WAIT_MS(250)
     LABEL(99)
     RETURN
 EVT_END()
 
 /**
- * Attack script "surprise": the Atomic Boo hides its face, then lunges at the target from behind;
- * hits with the surprise weapon.
+ * Attack script "surprise": the Atomic Boo turns its back and backs off, then uncovers its face and lunges to
+ * x 0; hits with the surprise weapon.
  */
-EVT_BEGIN(surprise_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
+static EVT_BEGIN(surprise_event)
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+
     // Target: it picks the targets for its attack.
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_atmic_teresa_surprise))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_atmic_teresa_surprise))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_atmic_teresa_surprise), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
@@ -613,67 +626,73 @@ EVT_BEGIN(surprise_event)
         GOTO(99)
     END_IF
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_atmic_teresa_surprise))
+
     // The attack is declared.
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_atmic_teresa_surprise))
-    // It hides its face with a sound and floats toward the targets.
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_FACE_HIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_WALK)
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, 1, 0, 180, 0)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 30)
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_atmic_teresa_surprise))
+
+    // It turns its back with a sound and backs off a little.
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_FACE_HIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_WALK)
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, 1, 0, 180, 0)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 30)
     SUBTRACT(LW(1), 10)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 10, 4, 0, -1)
-    CALL(evt_btl_camera_set_mode, 0, 8)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, LW(3))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 10, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT_TO_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, LW(3))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_ATMIC_TERESA_FACE_HIDDEN, 0)
-    CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_FACE_HIDDEN, 0)
+    CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table))
+
     // Surprise: it uncovers its face with a startled cry and lunges.
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("A_2"))
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, 1, 0, 0, 0)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, 0, LW(1), LW(2), 10, 0, 5, 0, -1)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_SURPRISED1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("A_2"))
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, 1, 0, 0, 0)
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, 0, LW(1), LW(2), 10, 0, EASING_CUBIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_SURPRISED1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(evt_btl_camera_shake_w, 0, 10, 0, 60, 0)
     CALL(evt_btl_camera_shake_h, 0, 10, 0, 60, 4)
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     SET_VALUE(LW(10), 0)
     LABEL(0)
+
     // The pre-damage check decides between a dodge and a hit for each target.
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_surprise), 0, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_surprise), 0, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
         GOTO(98)
         CASE_END
     END_SWITCH
+
     // Miss: the target dodges (for some kinds of miss).
     LABEL(90)
     GOTO(97)
+
     // Hit: the surprise lands for its damage.
     LABEL(91)
     IF_INT_EQUAL(LW(10), 0)
         CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_atmic_teresa_surprise))
     END_IF
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_surprise), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_surprise), DAMAGE_RESULT_FINAL_HIT, LW(5))
     GOTO(97)
     LABEL(97)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
@@ -681,31 +700,34 @@ EVT_BEGIN(surprise_event)
         ADD(LW(10), 1)
         GOTO(0)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+
     // It floats back to its home position.
     LABEL(98)
     WAIT_FRAMES(90)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("W_1"))
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, -20, 6, 0, -1)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("S_1"))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("W_1"))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, -20, EASING_QUARTIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("S_1"))
     WAIT_MS(250)
     LABEL(99)
     RETURN
 EVT_END()
 
 /**
- * Attack script "bikkuri": eight small Boos pop out one after another around the target (teresa_appear_bikkuri),
- * the camera homes in on the target and the Boos rush it together; uses the bikkuri weapon.
+ * Attack script "bikkuri": eight small Boos pop out of the Atomic Boo one after another and circle the party's
+ * side of the stage (teresa_appear_bikkuri), the camera homes in on the target and the bikkuri weapon hits each
+ * target.
  */
 EVT_BEGIN(bikkuri_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+
     // Target: it picks the targets for its attack.
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_atmic_teresa_bikkuri))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_atmic_teresa_bikkuri))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_atmic_teresa_bikkuri), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
@@ -713,63 +735,70 @@ EVT_BEGIN(bikkuri_event)
         GOTO(99)
     END_IF
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_atmic_teresa_bikkuri))
+
     // The attack is declared.
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
+
     // The press weapon pays the cost here; both cost nothing, so it makes no difference.
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_atmic_teresa_press))
-    // Eight small Boos pop out one after another around the target while the Atomic Boo circles.
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_atmic_teresa_press))
+
+    // Eight small Boos pop out of the Atomic Boo one after another and circle the party's side of the stage.
     CALL(teresa_appear_bikkuri)
     WAIT_FRAMES(75)
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, LW(3), BTL_UNIT_NONE)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, LW(3), -1)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 5)
     CALL(evt_btl_camera_set_zoom, 0, 200)
     WAIT_FRAMES(20)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_S_ROUND1"), EVT_NULLPTR, 0, LW(15))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("S_1"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_S_ROUND1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("S_1"))
     CALL(teresa_wait_bikkuri)
     CALL(evt_snd_sfxoff, LW(15))
     WAIT_FRAMES(30)
+
     // A startled cry; the camera homes in on the target.
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_SURPRISED2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_SURPRISED2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 350)
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     SET_VALUE(LW(10), 0)
     LABEL(0)
+
     // The pre-damage check decides between a dodge and a hit for each target.
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_bikkuri), 0, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_bikkuri), 0, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
         GOTO(98)
         CASE_END
     END_SWITCH
+
     // Miss: the target dodges (for some kinds of miss).
     LABEL(90)
     GOTO(97)
-    // Hit: the Boos rush the target together for the weapon damage.
+
+    // Hit: the weapon damage is applied.
     LABEL(91)
     IF_INT_EQUAL(LW(10), 0)
         CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_atmic_teresa_bikkuri))
     END_IF
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_bikkuri), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_bikkuri), DAMAGE_RESULT_FINAL_HIT, LW(5))
     GOTO(97)
     LABEL(97)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
@@ -777,20 +806,21 @@ EVT_BEGIN(bikkuri_event)
         ADD(LW(10), 1)
         GOTO(0)
     END_IF
+
     // It whistles to call the Boos back, they merge into it with a puff of smoke
     // and the Atomic Boo settles down.
     LABEL(98)
     WAIT_FRAMES(30)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_FRAMES(60)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_WHISTLE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("A_4"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_WHISTLE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("A_4"))
     WAIT_FRAMES(30)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("S_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("S_1"))
     CALL(teresa_wait_bikkuri2)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_UNION1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_UNION1"), EVT_NULLPTR, 0, LW(15))
     LOOP(3)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         ADD(LW(1), 40)
         ADD(LW(2), 1)
         CALL(evt_eff, STRING(""), STRING("kemuri_test"), 8, LW(0), LW(1), LW(2), FLOAT(1.25f), 0, 0, 0, 0, 0, 0, 0)
@@ -798,7 +828,7 @@ EVT_BEGIN(bikkuri_event)
     END_LOOP
     CALL(evt_snd_sfxoff, LW(15))
     WAIT_MS(250)
-    CALL(btlevtcmd_SetScale, BTL_UNIT_SELF, FLOAT(1.0f), FLOAT(1.0f), FLOAT(1.0f))
+    CALL(btlevtcmd_SetScale, UNIT_ID_SELF, FLOAT(1.0f), FLOAT(1.0f), FLOAT(1.0f))
     LABEL(99)
     RETURN
 EVT_END()
@@ -809,38 +839,41 @@ EVT_END()
  * then blows on every enemy at once (breath_event_sub is spawned per target) for about two seconds with
  * SFX_BOSS_ATMTLSA_BLOW2. A whistle and three puffs of smoke follow before it settles back.
  */
-static EVT_BEGIN(breath_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_atmic_teresa_breath))
+EVT_BEGIN(breath_event)
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_atmic_teresa_breath))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_atmic_teresa_breath), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
+
+        // BUG: this script has no LABEL(99): evtSearchLabel resumes at this GOTO's argument word, which runs
+        // as SET_TYPE with the next command word as its value, and the script goes on after the GOTO.
         GOTO(99)
     END_IF
     CALL(target_id_set, LW(3), LW(4))
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_atmic_teresa_breath))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_atmic_teresa_breath))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_FACE_HIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_WALK)
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, 1, 0, 180, 0)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 30)
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_atmic_teresa_breath))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_FACE_HIDE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_WALK)
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, 1, 0, 180, 0)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 30)
     SUBTRACT(LW(1), 10)
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 60, 10, 4, 0, -1)
-    CALL(evt_btl_camera_set_mode, 0, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_ATMIC_TERESA_FACE_HIDDEN, 0)
-    CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("A_3"))
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, 1, 0, 0, 0)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_DivePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 10, 0, 5, 0, -1)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_BLOW2"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 60, 10, EASING_QUADRATIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_FACE_HIDDEN, 0)
+    CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("A_3"))
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, 1, 0, 0, 0)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_DivePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 10, 0, EASING_CUBIC_OUT, 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_BLOW2"), EVT_NULLPTR, 0, LW(15))
     CALL(teresa_appear_breath, 0)
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     LABEL(10)
@@ -852,17 +885,17 @@ static EVT_BEGIN(breath_event)
     GOTO(10)
     LABEL(20)
     WAIT_FRAMES(120)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(teresa_wait_breath)
     CALL(evt_snd_sfxoff, LW(15))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_WHISTLE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("A_4"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_WHISTLE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("A_4"))
     WAIT_FRAMES(30)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("S_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("S_1"))
     CALL(teresa_wait_breath2)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_ATMTLSA_UNION1"), EVT_NULLPTR, 0, LW(15))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_ATMTLSA_UNION1"), EVT_NULLPTR, 0, LW(15))
     LOOP(3)
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         ADD(LW(1), 40)
         ADD(LW(2), 1)
         CALL(evt_eff, STRING(""), STRING("kemuri_test"), 8, LW(0), LW(1), LW(2), FLOAT(1.25f), 0, 0, 0, 0, 0, 0, 0)
@@ -870,7 +903,7 @@ static EVT_BEGIN(breath_event)
     END_LOOP
     CALL(evt_snd_sfxoff, LW(15))
     WAIT_MS(1500)
-    CALL(btlevtcmd_SetScale, BTL_UNIT_SELF, FLOAT(1.0f), FLOAT(1.0f), FLOAT(1.0f))
+    CALL(btlevtcmd_SetScale, UNIT_ID_SELF, FLOAT(1.0f), FLOAT(1.0f), FLOAT(1.0f))
     RETURN
 EVT_END()
 
@@ -879,26 +912,30 @@ EVT_END()
  * checks whether the breath would hit, plays the avoid animation (38, 39 or 40) when the target dodges,
  * or applies the damage.
  */
-EVT_BEGIN(breath_event_sub)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), 0, LW(5))
+
+// Each selected target gets one precheck; a hit result leads to two intermediate damage calls and a final hit.
+static EVT_BEGIN(breath_event_sub)
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), 0, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
+        // BUG: this script has no LABEL(98): evtSearchLabel resumes at this GOTO's argument word, which runs
+        // as SET_SPD with the next command word as its value, and the script goes on after the GOTO.
         GOTO(98)
         CASE_END
     END_SWITCH
@@ -907,27 +944,27 @@ EVT_BEGIN(breath_event_sub)
     LABEL(91)
     WAIT_FRAMES(15)
     CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_atmic_teresa_breath))
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), 0, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), 0, LW(5))
     WAIT_FRAMES(30)
     CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_atmic_teresa_breath))
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), 0, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), 0, LW(5))
     WAIT_FRAMES(30)
     CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_atmic_teresa_breath))
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_atmic_teresa_breath), DAMAGE_RESULT_FINAL_HIT, LW(5))
     LABEL(99)
     RETURN
 EVT_END()
 
 /** Wait (idle) event of the Atomic Boo: shows the idle pose from the pose table. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()
 
 /**
  * Battle unit id of the Atomic Boo, stored by its script (-1 until then) for the small-Boo effect callbacks.
  */
-s32 atmic_teresa_id[] = {
+static s32 atmic_teresa_id[] = {
     -1,
 };
 
@@ -935,7 +972,7 @@ s32 atmic_teresa_id[] = {
  * Battle unit id of the Atomic Boo's current attack target,
  * stored by its script (-1 until then) for the small-Boo effect callbacks.
  */
-s32 target_unit_id[] = {
+static s32 target_unit_id[] = {
     -1,
 };
 
@@ -943,20 +980,20 @@ s32 target_unit_id[] = {
  * Part id of the Atomic Boo's current attack target,
  * stored by its script (-1 until then) for the small-Boo effect callbacks.
  */
-s32 target_parts_id[] = {
+static s32 target_parts_id[] = {
     -1,
 };
 
 /**
- * Size the small Boo sprites of the Atomic Boo's attacks grow or shrink toward each frame; 1.0 is full size.
+ * Size the Atomic Boo grows or shrinks toward each frame; 1.0 is full size.
  */
-f32 atmic_teresa_scale = 1.0f;
+static f32 atmic_teresa_scale = 1.0f;
 
 /**
- * Sprite entries of the small Boos the Atomic Boo spawns during its attacks:
- * the Boo model with the animation and starting frame of each.
+ * Sprite frames of the small Boos, picked by each pose's texId: 0-7 cycle the S_1 animation,
+ * 8-15 show A_1 and then A_2 frames (the bikkuri animation).
  */
-ExtTexInfo teresa_ext_entry_data[] = {
+static ExtTexInfo teresa_ext_entry_data[] = {
     {"c_teresa", "S_1", 0.0f},
     {"c_teresa", "S_1", 2.0f},
     {"c_teresa", "S_1", 4.0f},
@@ -980,28 +1017,31 @@ ExtTexInfo teresa_ext_entry_data[] = {
  * Battle-start script: creates the hidden "ext_teresa" NPC
  * and registers the 30-sprite small-Boo effect (init and per- frame update callbacks).
  */
-EVT_BEGIN(teresa_entry)
-    CALL(evt_npc_entry, STRING("ext_teresa"), STRING("c_teresa"))
+static EVT_BEGIN(teresa_entry)
+    CALL(evt_npc_entry, STRING("ext_teresa"), STRING("c_teresa")) // hidden Boo NPC behind the small-Boo sprites
     CALL(evt_npc_set_position, STRING("ext_teresa"), 0, -1000, 0)
     CALL(evt_ext_entry, 30, PTR(teresa_ext_entry_data), PTR(teresa_ext_init), PTR(teresa_ext_main), 0)
     RETURN
 EVT_END()
 
-/** Init callback of the small-Boo effect: allocates the state for 30 Boos and hides them below the floor. */
+/**
+ * Ext-pose init of the Atomic Boo's small Boos: allocates 30 AtmTeresa entries, puts every pose, visible, at y -1000
+ * with direction 90, and starts every Boo at state 0 with no velocity.
+ */
 static void teresa_ext_init(void) {
     s32 i;
     ExtdrvPose* pose = extGetPosePtr();
 
     teresa = BattleAlloc(sizeof(AtmTeresa) * 30);
     for (i = 0; i < extGetPoseNum(); i++, pose++) {
-        pose->flags = 1;
+        pose->flags = EXT_POSE_FLAG_VISIBLE;
         PSMTXIdentity(*pose->mtx);
         (*pose->mtx)[0][3] = 0.0f;
         (*pose->mtx)[1][3] = -1000.0f;
         (*pose->mtx)[2][3] = 0.0f;
         pose->dir = 90.0f;
         teresa[i].state = 0;
-        teresa[i].animType = 0;
+        teresa[i].animType = ATM_TERESA_ANIM_FLOAT;
         teresa[i].animFrame = 0;
         {
             Vec zero = {0.0f, 0.0f, 0.0f};
@@ -1012,7 +1052,7 @@ static void teresa_ext_init(void) {
 
 /**
  * Per-frame update of the 30 small Boos: runs each Boo's state machine for the bikkuri attack (8 Boos appear at
- * staggered times and move toward the target) and the breath attack (all 30 stream out of the Atomic Boo),
+ * staggered times and circle at radius 90 around x -100) and the breath attack (all 30 stream out of the Atomic Boo),
  * with scaling and animation frames.
  */
 static void teresa_ext_main(void) {
@@ -1022,7 +1062,6 @@ static void teresa_ext_main(void) {
     AtmTeresa* t;
     BattleUnit* unit = BattleGetUnitPtr(_battleWorkPointer, atmic_teresa_id[0]);
     BattleUnit* target = BattleGetUnitPtr(_battleWorkPointer, target_unit_id[0]);
-    s32 n;
     f32 angle;
     s32 waits[8] = {0, 2, 5, 7, 10, 12, 15, 17};
     f32 ofs[30][2] = {
@@ -1069,17 +1108,17 @@ static void teresa_ext_main(void) {
         BtlUnit_GetPos(unit, &x, &y, &z);
         y += 40.0f;
         BtlUnit_GetScale(unit, &sx, &sy, &sz);
-        if (sx > ATMIC_TERESA_SCALE) {
+        if (sx > atmic_teresa_scale) {
             sx -= 0.005f;
-            if (sx <= ATMIC_TERESA_SCALE) {
-                sx = ATMIC_TERESA_SCALE;
+            if (sx <= atmic_teresa_scale) {
+                sx = atmic_teresa_scale;
             }
             BtlUnit_SetScale(unit, sx, sx, sz);
         }
-        if (sx < ATMIC_TERESA_SCALE) {
+        if (sx < atmic_teresa_scale) {
             sx += 0.005f;
-            if (sx >= ATMIC_TERESA_SCALE) {
-                sx = ATMIC_TERESA_SCALE;
+            if (sx >= atmic_teresa_scale) {
+                sx = atmic_teresa_scale;
             }
             BtlUnit_SetScale(unit, sx, sx, sz);
         }
@@ -1092,7 +1131,7 @@ static void teresa_ext_main(void) {
     for (i = 0; i < extGetPoseNum(); i++, pose++) {
         t = &teresa[i];
         switch (t->animType) {
-            case 1:
+            case ATM_TERESA_ANIM_GATHER:
                 t->animFrame++;
                 if (t->animFrame <= 30) {
                     pose->texId = 8;
@@ -1131,7 +1170,7 @@ static void teresa_ext_main(void) {
                 (*pose->mtx)[0][0] = 1.0f;
                 break;
             case 1:
-                pose->flags &= ~2;
+                pose->flags &= ~EXT_POSE_FLAG_BILLBOARD;
                 (*pose->mtx)[0][3] = x;
                 (*pose->mtx)[1][3] = y;
                 (*pose->mtx)[2][3] = z - 5.0f;
@@ -1148,7 +1187,7 @@ static void teresa_ext_main(void) {
             case 5:
                 t->timer--;
                 if (t->timer == 25) {
-                    ATMIC_TERESA_SCALE -= 0.05f;
+                    atmic_teresa_scale -= 0.05f;
                     if (i % 2 == 0) {
                         Vec pos = {0.0f, 0.0f, 0.0f};
                         pos.x = (*pose->mtx)[0][3];
@@ -1160,7 +1199,7 @@ static void teresa_ext_main(void) {
                 (*pose->mtx)[0][0] += 0.02f;
                 (*pose->mtx)[1][1] += 0.02f;
                 if (t->timer <= 0) {
-                    pose->flags |= 2;
+                    pose->flags |= EXT_POSE_FLAG_BILLBOARD;
                     t->state = 10;
                     t->timer = 150;
                     t->vel.x = 0.0f;
@@ -1209,18 +1248,16 @@ static void teresa_ext_main(void) {
                 t->vel.x = (t->target.x - (*pose->mtx)[0][3]) / 20.0f;
                 t->vel.y = (t->target.y - (*pose->mtx)[1][3]) / 20.0f;
                 t->vel.z = (t->target.z - (*pose->mtx)[2][3]) / 20.0f;
-                n = 0;
                 for (j = 0; j < 8; j++) {
                     if (teresa[j].state != 15) {
                         break;
                     }
-                    n++;
                 }
-                if (n == 8) {
+                if (j == 8) {
                     for (j = 0; j < 8; j++) {
                         AtmTeresa* p = &teresa[j];
                         p->state = 20;
-                        p->animType = 1;
+                        p->animType = ATM_TERESA_ANIM_GATHER;
                         p->animFrame = 0;
                         p->vel.x = 0.0f;
                         p->vel.y = 0.0f;
@@ -1231,7 +1268,7 @@ static void teresa_ext_main(void) {
             case 20:
                 if (t->animFrame >= 180) {
                     t->state = 23;
-                    t->animType = 0;
+                    t->animType = ATM_TERESA_ANIM_FLOAT;
                     t->animFrame = 0;
                     t->timer = 60;
                     t->wait = waits[i];
@@ -1261,7 +1298,7 @@ static void teresa_ext_main(void) {
                     t->vel.x = 0.0f;
                     t->vel.y = 0.0f;
                     t->vel.z = 0.0f;
-                    pose->flags &= ~2;
+                    pose->flags &= ~EXT_POSE_FLAG_BILLBOARD;
                 }
                 t->timer--;
                 break;
@@ -1274,7 +1311,7 @@ static void teresa_ext_main(void) {
                 break;
             case 51:
             case 52:
-                pose->flags &= ~2;
+                pose->flags &= ~EXT_POSE_FLAG_BILLBOARD;
                 (*pose->mtx)[0][3] = x - 15.0f;
                 (*pose->mtx)[1][3] = y - 5.0f;
                 (*pose->mtx)[2][3] = 5.0f + z;
@@ -1303,7 +1340,7 @@ static void teresa_ext_main(void) {
                 t->intplMode = modes[irand(7)];
                 break;
             case 53:
-                ATMIC_TERESA_SCALE -= 0.015f;
+                atmic_teresa_scale -= 0.015f;
                 t->state = 55;
                 break;
             case 55:
@@ -1355,7 +1392,7 @@ static void teresa_ext_main(void) {
                 break;
         }
     }
-    dispEntry(4, 0.0f, 1, teresa_ext_disp, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, teresa_ext_disp, NULL);
 }
 
 /**
@@ -1372,8 +1409,8 @@ static void teresa_ext_disp(CameraId camera, void* param) {
 }
 
 /**
- * Battle script helper: remembers the Atomic Boo's battle unit id (translated from args[0]) in a global for the
- * effect callbacks.
+ * Battle script helper: remembers the Atomic Boo's battle unit id (translated from args[0]) in atmic_teresa_id
+ * for the effect callbacks.
  */
 static USER_FUNC(atmic_teresa_id_set) {
     s32 id = evtGetValue(event, event->args[0]);
@@ -1389,10 +1426,10 @@ static USER_FUNC(atmic_teresa_id_set) {
 static USER_FUNC(target_id_set) {
     EvtWord* args = event->args;
     s32 id = evtGetValue(event, args[0]);
-    s32 partId = evtGetValue(event, args[1]);
+    s32 parts = evtGetValue(event, args[1]);
 
     target_unit_id[0] = BattleTransID(event, id);
-    target_parts_id[0] = partId;
+    target_parts_id[0] = parts;
     return EVT_RETURN_DONE;
 }
 
@@ -1420,7 +1457,7 @@ static USER_FUNC(teresa_wait_bikkuri) {
 
 /**
  * Battle script helper: blocks until all eight small Boos have reached state 30,
- * then releases them (state 31) and resets the Atomic Boo's scale to 1.
+ * then shrinks them away (state 31) and resets the Atomic Boo's scale to 1.
  */
 static USER_FUNC(teresa_wait_bikkuri2) {
     s32 i;
@@ -1433,7 +1470,7 @@ static USER_FUNC(teresa_wait_bikkuri2) {
     for (i = 0; i < 8; i++) {
         teresa[i].state = 31;
     }
-    ATMIC_TERESA_SCALE = 1.0f;
+    atmic_teresa_scale = 1.0f;
     return EVT_RETURN_DONE;
 }
 
@@ -1474,7 +1511,7 @@ static USER_FUNC(teresa_wait_breath) {
 
 /**
  * Battle script helper: blocks until all 30 small Boos have reached state 70,
- * then releases them (state 71) and resets the Atomic Boo's scale to 1.
+ * then shrinks them away (state 71) and resets the Atomic Boo's scale to 1.
  */
 static USER_FUNC(teresa_wait_breath2) {
     s32 i;
@@ -1487,6 +1524,6 @@ static USER_FUNC(teresa_wait_breath2) {
     for (i = 0; i < 30; i++) {
         teresa[i].state = 71;
     }
-    ATMIC_TERESA_SCALE = 1.0f;
+    atmic_teresa_scale = 1.0f;
     return EVT_RETURN_DONE;
 }

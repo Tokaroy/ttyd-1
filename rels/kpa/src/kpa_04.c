@@ -4,20 +4,21 @@
 #include "evt/evt_cmd.h"
 #include "kpa.h"
 #include "evt/evt_npc.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_snd.h"
 #include "kpa_stage_data.h"
-#include "mario/mariost.h"
-#include "evt/evt_story.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_mario.h"
+#include "party/party_motion.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_cam.h"
+#include "pmario_sound.h"
 
 static EvtWord kpa_act_stg2_mobj[80];
+static EvtWord kpa_fall[41];
 static EvtWord kpa_goal[22];
 static NpcSetupInfo npcEnt[1];
+EvtWord kpa_04_init_evt[58];
 
-/** Blocks, pipes and obstacle blocks of the second half of stage 2, ending at the goal pole. */
+/** Blocks and pipes of the second half of stage 2, ending at the goal pole. */
 static EvtWord kpa_act_stg2_mobj[] = {
     KPA_OBJ_DOKAN_0(-225.0f, 0.0f), KPA_OBJ_BRICK_2(-175.0f, -50.0f), KPA_OBJ_BRICK_2(-175.0f, 0.0f),
     KPA_OBJ_BRICK_2(-125.0f, -50.0f), KPA_OBJ_BRICK_2(-125.0f, 0.0f), KPA_OBJ_BRICK_2(-125.0f, 50.0f),
@@ -59,12 +60,12 @@ EVT_END()
 
 /**
  * Goal of the second Bowser stage: locks the controls,
- * sets the story progress to STORY_STG4_15_07_BOWSER_ACTION_STAGE and changes the map to Rogueport (gor_00)
- * after a 300 ms pause that also removes the letterbox.
+ * sets the story progress to STG4_15_07_BOWSER_ACTION_STAGE and changes the map to Rogueport (gor_00)
+ * while an inline event restores normal letterbox handling after 300 ms.
  */
 static EVT_BEGIN(kpa_goal)
     CALL(evt_mario_key_onoff, 0)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_07_BOWSER_ACTION_STAGE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_15_07_BOWSER_ACTION_STAGE)
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
         CALL(evt_cam_letter_box_disable, 0)
@@ -80,10 +81,9 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /**
- * Map init for kpa_04, the second half of stage 2:
- * Bowser arrives at the top left, the blocks come from kpa_act_stg2_mobj,
- * and the clock and music controller run. Reads Bowser's power level from GSW_KPA_BOWSER_POWER.
- * The goal leads to Rogueport (gor_00).
+ * Map init for kpa_04: runs kpa_init, places Bowser at (-400, 500, -5), reads the blocks from kpa_act_stg2_mobj,
+ * spawns kpa_fall and starts the status display (stage 2), the music controller and the clock. Unless the map
+ * was entered without an entrance, Bowser's level is restored from GSW_KPA_BOWSER_LEVEL.
  */
 EVT_BEGIN(kpa_04_init_evt)
     CALL(evt_cam_letter_box_disable, 1)
@@ -94,17 +94,17 @@ EVT_BEGIN(kpa_04_init_evt)
     SET_VALUE(LW(0), PTR(kpa_act_stg2_mobj))
     CALL_CHILD(kpa_read_mobj)
     SPAWN_EVENT(kpa_fall)
-    CALL(kpa_status_init, 2, GSW(GSW_KPA_LIVES), GSW(GSW_KPA_TIME_LEFT))
-    DEBUG_PUT_REG(GSW(GSW_KPA_TIME_LEFT))
-    SET_VALUE(LSW(1), 0)
-    SET_VALUE(LSWF(2), 1)
+    CALL(kpa_status_init, 2, GSW_KPA_TRY_COUNT, GSW_KPA_TIME_LEFT)
+    DEBUG_PUT_REG(GSW_KPA_TIME_LEFT)
+    SET_VALUE(LSW_KPA_FIELD_BGM, 0)
+    SET_VALUE(LSWF_KPA_TIMER_STARTED, 1)
     SPAWN_EVENT(kpa_bgm_change)
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
+    CALL(evt_snd_envoff, PSND_FADEOUT)
     SPAWN_EVENT(kpa_time)
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_SET(LW(0), GLOBAL_FLAG_SKIP_MAP_EVENTS)
+    IF_BITS_SET(LW(0), GW_FLAG_NO_ENTRANCE)
         RETURN
     END_IF
-    CALL(evt_koopa_set_level, GSW(GSW_KPA_BOWSER_POWER))
+    CALL(evt_koopa_set_level, GSW_KPA_BOWSER_LEVEL)
     RETURN
 EVT_END()

@@ -9,9 +9,15 @@
 #include "string.h"
 #include "data/party_data.h"
 #include "gra.h"
-#include "rel_module.h"
 
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
 static void* pose_buf;
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Script helper for Vivian's pose table in Twilight Trail:
@@ -21,14 +27,14 @@ static void* pose_buf;
 USER_FUNC(evt_gra_vivian_pose_set) {
     EvtWord* args = event->args;
     s32 index = evtGetValue(event, args[0]);
-    partyPoseTbl[6][index] = (char*)evtGetValue(event, args[1]);
+    partyPoseTbl[PARTY_VIVIAN][index] = (char*)evtGetValue(event, args[1]);
     return EVT_RETURN_DONE;
 }
 
 /**
- * REL entry point of gra.rel: runs the static constructors,
- * registers each gra_NN map's init script and the area's battle setup tables,
- * and saves a copy of Vivian's pose table so that _epilog can restore it after the scripts' edits.
+ * REL entry point of gra.rel: runs the static constructors, registers the init scripts of gra_00 to gra_06
+ * and the area's battle setup tables, and saves a copy of Vivian's pose table so that _epilog can restore
+ * it after the scripts' changes (evt_gra_vivian_pose_set).
  */
 void _prolog(void) {
     voidfunctionptr* ctor;
@@ -44,8 +50,8 @@ void _prolog(void) {
     relSetEvtAddr("gra_05", gra_05_init_evt);
     relSetEvtAddr("gra_06", gra_06_init_evt);
     relSetBtlAddr("gra", btlsetup_gra_tbl, btl_gra_setup_no_tbl);
-    pose_buf = _mapAlloc(sizeof(partyPoseTbl[6]));
-    memcpy(pose_buf, partyPoseTbl[6], sizeof(partyPoseTbl[6]));
+    pose_buf = _mapAlloc(sizeof(partyPoseTbl[PARTY_VIVIAN]));
+    memcpy(pose_buf, partyPoseTbl[PARTY_VIVIAN], sizeof(partyPoseTbl[PARTY_VIVIAN]));
 }
 
 /**
@@ -58,7 +64,7 @@ void _epilog(void) {
     for (dtor = _dtors; *dtor != NULL; dtor++) {
         (*dtor)();
     }
-    memcpy(partyPoseTbl[6], pose_buf, sizeof(partyPoseTbl[6]));
+    memcpy(partyPoseTbl[PARTY_VIVIAN], pose_buf, sizeof(partyPoseTbl[PARTY_VIVIAN]));
     _mapFree(pose_buf);
 }
 

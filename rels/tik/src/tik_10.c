@@ -1,18 +1,22 @@
 // tik_10 (埋没した都市, Rogueport Sewers): a small pipe room with an item box, joining tik_06, tik_09 and tik_14.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_item.h"
-#include "driver/itemdrv.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_snd.h"
-#include "tik.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 static BeroEntry bero_entry_data[4];
+static EvtWord item_get00[34];
+EvtWord tik_10_init_evt[44];
 
 /** Doors of this room: the pipes to tik_06, tik_09 and tik_14. */
 static BeroEntry bero_entry_data[] = {
@@ -74,8 +78,8 @@ static BeroEntry bero_entry_data[] = {
 static EVT_BEGIN(item_get00)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mobj_get_position, STRING("mobj_box00"), LW(0), LW(1), LW(2))
-    CALL(evt_item_entry, STRING("item00"), ITEM_MUSHROOM, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED, -1, 0)
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_entry, STRING("item00"), ITEM_MUSHROOM, LW(0), LW(1), LW(2), ITEM_TYPE_STILL, -1, 0)
+    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET)
     CALL(evt_mobj_wait_animation_end, STRING("mobj_box00"))
     CALL(evt_item_get_item, STRING("item00"))
     CALL(evt_mario_key_onoff, 1)
@@ -83,20 +87,19 @@ static EVT_BEGIN(item_get00)
 EVT_END()
 
 /**
- * Map init script of tik_10.
- * Starts the music and ambience, sets up the exits
- * and places the item box (a Mushroom, GSWF_TIK10_CHEST_OPENED).
+ * Map init script of tik_10: raises the pipe dokan_1_s, starts the music and ambience, sets up the exits and
+ * places the chest holding a Mushroom (GSWF_TIK_10_MUSHROOM_CHEST).
  */
 EVT_BEGIN(tik_10_init_evt)
     CALL(evt_hit_bind_mapobj, STRING("a_dokan_3"), STRING("dokan_1_s"))
     CALL(evt_mapobj_trans, 1, STRING("dokan_1_s"), 0, 30, 0)
     CALL(evt_hit_bind_update, STRING("a_dokan_3"))
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK1"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_mobj_itembox, STRING("mobj_box00"), 0, 26, -110, 0, 0, PTR(item_get00), GSWF(GSWF_TIK10_CHEST_OPENED))
+    CALL(evt_mobj_itembox, STRING("mobj_box00"), 0, 26, -110, MOBJ_ITEMBOX_NORMAL, 0, PTR(item_get00), GSWF_TIK_10_MUSHROOM_CHEST)
     RETURN
 EVT_END()

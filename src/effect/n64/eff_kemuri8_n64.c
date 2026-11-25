@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 8 (kemuri: smoke) at a point; types 0 and 1.
+
 #include "eff/n64/eff_kemuri8_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -7,23 +8,23 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffKemuri8N64Work {
     u16 type;         // 0x0
-    s16 pad_2;        // 0x2
     Vec position;     // 0x4
     f32 speed;        // 0x10, along (sinAngle, cosAngle)
     f32 accel;        // 0x14, added to speed each frame
     f32 accelStep;    // 0x18, added to accel
     f32 accelStep2;   // 0x1C, added to accelStep
-    f32 velY;         // 0x20, vertical motion is set at entry but never applied
-    f32 accelY;       // 0x24
-    f32 accelStepY;   // 0x28
-    f32 accelStep2Y;  // 0x2C
+    f32 vSpeed;       // 0x20
+    f32 vAccel;       // 0x24
+    f32 vAccelStep;   // 0x28
+    f32 vAccelStep2;  // 0x2C
     f32 sinAngle;     // 0x30
     f32 cosAngle;     // 0x34
-    s32 variant;      // 0x38, only cleared at entry
+    s32 variant;      // 0x38
     s32 timer;        // 0x3C
     s32 texFrame;     // 0x40, current of 16 texture frames; >15 = done
     u8 r;             // 0x44
@@ -32,31 +33,27 @@ typedef struct EffKemuri8N64Work {
     u8 a;             // 0x47
     s32 texFrameNext; // 0x48
     s32 limit;        // 0x4C
-    BOOL flag;        // 0x50
+    BOOL colorFade;   // 0x50
     s32 counter;      // 0x54
     s32 camId;        // 0x58
 } EffKemuri8N64Work;
 
 static void effKemuri8Main(EffectEntry* effect);
-static void effKemuri8Disp(CameraId cameraId, EffectEntry* effect);
+static void effKemuri8Disp(CameraId cameraId, void* param);
 
-/** Sets the camera the smoke is drawn with (the entry defaults to camera 4). */
+/** Sets the camera the smoke is drawn with (the entry defaults to CAMERA_3D). */
 void effKemuri8N64SetCamId(EffectEntry* effect, s32 camId) {
-    EffKemuri8N64Work* work = effect->userdata;
-
-    work->camId = camId;
+    ((EffKemuri8N64Work*)effect->userdata)->camId = camId;
 }
 
-/** Returns a * -b (used for the x position of each puff in the ring). */
-inline float inline_fn(f32 a, f32 b) {
-    return a * (-b);
+/** Returns radius * -trig: one coordinate of a puff's start offset on the ring. */
+static inline f32 ringOffset(f32 radius, f32 trig) {
+    return radius * (-trig);
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_propagation off
 /**
- * Spawns a ring of smoke puffs (7/9/11 for type 0/1/other, radius 14/28/42) around (x, y, z) that fly outward in
- * the screen plane. Types 3 and up use the same sizes with a hot variant.
+ * Spawns a ring of smoke puffs (6/8/10 for type 0/1/other after the header element, radius 14/28/42) around
+ * (x, y, z) that fly outward in the screen plane. Types 3 and up use the same sizes with a hot variant.
  * Used by the bomb effect and evt_eff64 "kemuri8_n64".
  */
 EffectEntry* effKemuri8N64Entry(s32 type, f32 x, f32 y, f32 z) {
@@ -64,14 +61,14 @@ EffectEntry* effKemuri8N64Entry(s32 type, f32 x, f32 y, f32 z) {
     EffKemuri8N64Work* work;
     s32 i;
     s32 count;
-    BOOL flag;
+    BOOL colorFade;
     f32 radius;
     f32 rad;
 
     effect = effEntry();
-    flag = FALSE;
+    colorFade = FALSE;
     if (type >= 3) {
-        flag = TRUE;
+        colorFade = TRUE;
         type -= 3;
     }
     switch (type) {
@@ -102,25 +99,26 @@ EffectEntry* effKemuri8N64Entry(s32 type, f32 x, f32 y, f32 z) {
     work->texFrame = 0;
     work->texFrameNext = 0;
     work->limit = 17;
-    work->camId = 4;
+    work->camId = CAMERA_3D;
     work++;
     for (i = 1; i < count; i++, work++) {
         work->speed = -3.0f;
         work->accel = 0.19999999f;
         work->accelStep = 0.0f;
         work->accelStep2 = 0.0f;
-        work->velY = 1.75f;
-        work->accelY = -0.16f;
-        work->accelStepY = 0.0f;
-        work->accelStep2Y = 0.0f;
+        work->vSpeed = 1.75f;
+        work->vAccel = -0.16f;
+        work->vAccelStep = 0.0f;
+        work->vAccelStep2 = 0.0f;
         rad = 6.2831855f * (f32)(((i - 1) * 360) / (count - 1)) / 360.0f;
-        work->position.x = inline_fn(radius, (f32)sin(rad));
-        work->position.y = radius * -(f32)cos(rad);
+
+        work->position.x = ringOffset(radius, (f32)sin(rad));
+        work->position.y = ringOffset(radius, (f32)cos(rad));
         work->position.z = 0.0f;
         work->sinAngle = sin(rad);
         work->cosAngle = cos(rad);
-        work->flag = flag;
-        if (flag == 0) {
+        work->colorFade = colorFade;
+        if (colorFade == 0) {
             work->r = 0xEE;
             work->g = 0xDE;
             work->b = 0xD7;
@@ -136,7 +134,6 @@ EffectEntry* effKemuri8N64Entry(s32 type, f32 x, f32 y, f32 z) {
     return effect;
 }
 
-#pragma opt_propagation reset
 /** Steps the shared 16-frame texture animation over 17 frames and flies each puff outward; deletes at the end. */
 static void effKemuri8Main(EffectEntry* effect) {
     EffKemuri8N64Work* work = effect->userdata;
@@ -175,14 +172,15 @@ static void effKemuri8Main(EffectEntry* effect) {
         work->position.x += work->speed * work->sinAngle;
         work->position.y += work->speed * work->cosAngle;
     }
-    dispEntry(camId, dispCalcZ(&position), 2, (DispCallback)effKemuri8Disp, effect);
+    dispEntry(camId, dispCalcZ(&position), DISP_MODE_XLU, effKemuri8Disp, effect);
 }
 
 /**
  * Draws each puff twice as a billboarded quad (texture 0x28): a dark offset shadow, then the puff.
  * Hot puffs shift from white through yellow to red as their counter grows.
  */
-static void effKemuri8Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri8Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffKemuri8N64Work* work;
     s32 type;
@@ -247,6 +245,8 @@ static void effKemuri8Disp(CameraId cameraId, EffectEntry* effect) {
     u1 = 0.0625f * (f32)next;
     work++;
     for (i = 1; i < effect->count; i++, work++) {
+        // BUG: texFrame is only written to the header element; the puffs' copy is never set (heap not cleared),
+        // so a puff is skipped whenever that leftover value is above 15.
         if (work->texFrame > 15) {
             continue;
         }
@@ -265,27 +265,28 @@ static void effKemuri8Disp(CameraId cameraId, EffectEntry* effect) {
                 PSMTXConcat(mtxB, mtx, mtx);
                 GXLoadPosMtxImm(mtx, GX_PNMTX0);
             } else {
-                if (work->flag) {
-                    s32 c5;
-                    s32 c6;
-                    s32 c7;
-                    c6 = 255;
-                    c5 = 255;
-                    c7 = 255 - work->counter * 60;
-                    if (c7 < 0) {
-                        c6 = 255 + (s32)(0.8f * (f32)c7);
-                        c7 = 0;
-                        if (c6 < 0) {
-                            c5 = 255 + (s32)(0.4f * (f32)c6);
-                            c6 = 0;
-                            if (c5 < 0) {
-                                c5 = 0;
+                if (work->colorFade) {
+                    s32 red;
+                    s32 green;
+                    s32 blue;
+
+                    green = 255;
+                    red = 255;
+                    blue = 255 - work->counter * 60;
+                    if (blue < 0) {
+                        green = 255 + (s32)(0.8f * (f32)blue);
+                        blue = 0;
+                        if (green < 0) {
+                            red = 255 + (s32)(0.4f * (f32)green);
+                            green = 0;
+                            if (red < 0) {
+                                red = 0;
                             }
                         }
                     }
-                    work->r = c5;
-                    work->g = c6;
-                    work->b = c7;
+                    work->r = red;
+                    work->g = green;
+                    work->b = blue;
                     work->counter++;
                 }
                 GXSetChanMatColor(GX_COLOR0A0, (GXColor){work->r, work->g, work->b, work->a});

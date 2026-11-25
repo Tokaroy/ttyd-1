@@ -1,30 +1,37 @@
 // Declares the battle icon structure and its entry, update and delete functions.
+
 #pragma once
 
 #include <dolphin/types.h>
 #include "driver/icondrv.h"
 #include "evt/evt_cmd.h"
 
+// BattleIcon.flags
+enum {
+    BATTLE_ICON_FLAG_ACTIVE = 1,
+    BATTLE_ICON_FLAG_HIDDEN = 2,
+};
+
 typedef struct BattleWorkIcon {
-    u16 flags;                   // 0x0
-    u16 iconId;                  // 0x2
-    s32 index;                   // 0x4, slot index in BattleWork.icons, used as the icon id
-    Vec position;                // 0x8
-    f32 scale;                   // 0x14, init 1.0; iconSetScale(scale * scaleMul)
-    f32 scaleMul;                // 0x18, init 1.0
-    IconEntry* base;             // 0x1C
-    Vec jumpStart;               // 0x20
-    Vec jumpPos;                 // 0x2C
-    Vec jumpTarget;              // 0x38
-    s32 jumpFrames;              // 0x44
-    f32 jumpSpeed;               // 0x48
-    f32 fallAccel;               // 0x4C
-    f32 jumpVelY;                // 0x50
-    f32 jumpAngle;               // 0x54
-    f32 jumpDist;                // 0x58
-    u8 reserved_5C[4];           // 0x5C, never accessed
-    s8 jumpDir;                  // 0x60
-    u8 reserved_61[0x9C - 0x61]; // 0x61, never accessed
+    u16 flags;              // 0x0
+    u16 iconId;             // 0x2
+    s32 index;              // 0x4
+    Vec position;           // 0x8
+    f32 scale;              // 0x14, init 1.0; iconSetScale(scale * scaleMul)
+    f32 scaleMul;           // 0x18, init 1.0
+    IconEntry* base;        // 0x1C
+    Vec jumpStart;          // 0x20
+    Vec jumpPos;            // 0x2C
+    Vec jumpTarget;         // 0x38
+    s32 jumpFrames;         // 0x44
+    f32 jumpSpeed;          // 0x48
+    f32 fallAccel;          // 0x4C
+    f32 jumpVelY;           // 0x50
+    f32 jumpAngle;          // 0x54
+    f32 jumpDist;           // 0x58
+    u8 pad_5C[4];           // 0x5C, never accessed
+    s8 jumpDir;             // 0x60
+    u8 pad_61[0x9C - 0x61]; // 0x61, never accessed
 } BattleIcon;
 
 void BattleIconInit(void);
@@ -36,6 +43,10 @@ void BtlIcon_Delete(BattleIcon* icon);
 USER_FUNC(btlevtcmd_BtlIconDelete);
 USER_FUNC(btlevtcmd_BtlIconEntry);
 USER_FUNC(btlevtcmd_BtlIconEntryItemId);
+USER_FUNC(btlevtcmd_BtlIconFallPosition);
+USER_FUNC(btlevtcmd_BtlIconJumpContinue);
 USER_FUNC(btlevtcmd_BtlIconJumpPosition);
 USER_FUNC(btlevtcmd_BtlIconSetFallAccel);
 USER_FUNC(btlevtcmd_BtlIconSetPosition);
+USER_FUNC(btlevtcmd_BtlIconSetMoveSpeed);
+USER_FUNC(btlevtcmd_BtlIconSetJumpSpeed);

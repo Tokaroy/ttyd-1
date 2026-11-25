@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 7 (kemuri: smoke) at a point with an angle and a side.
+
 #include "eff/n64/eff_kemuri7_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,40 +8,51 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffKemuri7N64Work {
     BOOL active;     // 0x0
-    s16 type;        // 0x4, never read or written
+    s16 field_0x4;   // 0x4
     s16 timer;       // 0x6
     u8 alpha;        // 0x8
-    u8 pad_9[3];     // 0x9
     Vec position;    // 0xC
     Vec scale;       // 0x18
     Vec rotation;    // 0x24
     Mtx mtx;         // 0x30
     f32 side;        // 0x60
-    f32 accel;       // 0x64, motion terms mirror Kemuri3; this effect never moves
-    f32 accelStep;   // 0x68
+    f32 hSpeedScale; // 0x64
+    f32 rising;      // 0x68
     f32 accelStep2;  // 0x6C
-    f32 velY;        // 0x70
-    f32 accelY;      // 0x74
-    f32 accelStepY;  // 0x78
-    f32 accelStep2Y; // 0x7C
+    f32 vSpeed;      // 0x70
+    f32 vAccel;      // 0x74
+    f32 vJerk;       // 0x78
+    f32 vSnap;       // 0x7C
     f32 sinAngle;    // 0x80
     f32 cosAngle;    // 0x84
 } EffKemuri7N64Work;
 
 /** Flat 10x10 snow footprint quad lying on the ground. */
-effN64Vtx foot_vtx[] = {
+static effN64Vtx foot_vtx[] = {
     {-5, 0, -5, 0, 1024, 0, 0, 0, 255},
     {5, 0, -5, 1024, 1024, 0, 0, 0, 255},
     {5, 0, 5, 1024, 0, 0, 0, 0, 255},
     {-5, 0, 5, 0, 0, 0, 0, 0, 255},
 };
 
+/** Builds the footprint's model matrix from its position and y rotation. */
+// Original name and size (0x64) from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_yuki_matrix(EffKemuri7N64Work* work) {
+    Mtx trans;
+    Mtx rot;
+
+    PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
+    PSMTXRotRad(rot, 'y', 0.017453292f * work->rotation.y);
+    PSMTXConcat(trans, rot, work->mtx);
+}
+
 static void effKemuri7Main(EffectEntry* effect);
-static void effKemuri7Disp(CameraId cameraId, EffectEntry* effect);
+static void effKemuri7Disp(CameraId cameraId, void* param);
 
 /**
  * Spawns one snow footprint at (x, y, z), offset 5 units to the side given by side (0 or 1)
@@ -71,8 +83,8 @@ EffectEntry* effKemuri7N64Entry(f32 x, f32 y, f32 z, f32 angle, f32 side) {
         work->scale.z = 1.0f;
         work->alpha = 255;
         work->side = side;
-        work->velY = 0.0f;
-        work->accelY = 0.0f;
+        work->vSpeed = 0.0f;
+        work->vAccel = 0.0f;
         work->timer = 255;
         work->rotation.x = 0.0f;
         work->rotation.y = angle + 30.0f * side - 15.0f;
@@ -96,8 +108,6 @@ static void effKemuri7Main(EffectEntry* effect) {
     EffKemuri7N64Work* work = effect->userdata;
     s32 i;
     BOOL alive;
-    Mtx rot;
-    Mtx trans;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
 
@@ -115,20 +125,19 @@ static void effKemuri7Main(EffectEntry* effect) {
             continue;
         }
         alive = TRUE;
-        PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
-        PSMTXRotRad(rot, 'y', 0.017453292f * work->rotation.y);
-        PSMTXConcat(trans, rot, work->mtx);
+        kemuri_yuki_matrix(work);
         work->alpha--;
     }
     if (!alive) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKemuri7Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effKemuri7Disp, effect);
 }
 
 /** Draws the footprint as a flat 10x10 textured quad (effect texture 0x4F), mirrored when side is 0. */
-static void effKemuri7Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri7Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffKemuri7N64Work* work;
     s32 i;

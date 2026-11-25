@@ -1,5 +1,5 @@
-// Helper that draws a number (printed with "%d") from effect digit textures; the type picks the texture set.
-#include "eff/eff_number.h"
+// Helper that draws a number (printed with "%d") from effect digit textures; the type picks the colour pair.
+
 #include "driver/camdrv.h"
 #include "driver/effdrv.h"
 #include <dolphin/gx.h>
@@ -7,13 +7,12 @@
 #include <stdio.h>
 #include <string.h>
 #include "version.h"
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
+#include "eff/eff_number.h"
 
-/** Unreferenced zero constant from the original source, first in this file's read-only data. */
-static const f32 padz = 0.0f;
-
-/** Draws `number` as digit textures with the colour pair chosen by `type`, transformed by mtx and faded by `alpha`. */
+/**
+ * Draws `number` as digit textures with the colour pair chosen by `type`, transformed by mtx and faded by `alpha`;
+ * `extra` adds that many more passes with a second texture, each shifted 2 units.
+ */
 void effNumberGX(Mtx mtx, s32 type, s32 number, u8 alpha, s32 extra) {
     CameraEntry* cam;
     GXColor cols[2];
@@ -23,7 +22,6 @@ void effNumberGX(Mtx mtx, s32 type, s32 number, u8 alpha, s32 extra) {
     Mtx scaleMtx;
     s8 buf[32];
     s32 len;
-    s32 offset;
     s32 pass;
     f32 lo;
     f32 hi;
@@ -69,7 +67,7 @@ void effNumberGX(Mtx mtx, s32 type, s32 number, u8 alpha, s32 extra) {
     sprintf((char*)buf, "%d", number);
     len = strlen((char*)buf);
     half = len / 2;
-    for (pass = 0, offset = 0; pass < extra + 1; offset += 2, pass++) {
+    for (pass = 0; pass < extra + 1; pass++) {
         if (pass == 0) {
             effGetTexObj(1, &texObj);
             GXLoadTexObj(&texObj, GX_TEXMAP0);
@@ -85,8 +83,8 @@ void effNumberGX(Mtx mtx, s32 type, s32 number, u8 alpha, s32 extra) {
             GXLoadTexObj(&texObj, GX_TEXMAP0);
             GXSetNumTevStages(3);
             GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-            GXSetTevColorOp(GX_TEVSTAGE0, (GXTevOp)0xE, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-            GXSetTevAlphaOp(GX_TEVSTAGE0, (GXTevOp)0xE, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_COMP_RGB8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_COMP_A8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
             GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_TEXC, GX_CC_ZERO, GX_CC_TEXC, GX_CC_ZERO);
             GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_TEXA, GX_CA_ZERO, GX_CA_TEXA, GX_CA_ZERO);
             GXSetTevSwapModeTable(GX_TEV_SWAP1, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_RED);
@@ -107,7 +105,7 @@ void effNumberGX(Mtx mtx, s32 type, s32 number, u8 alpha, s32 extra) {
             GXSetTevSwapMode(GX_TEVSTAGE2, GX_TEV_SWAP0, GX_TEV_SWAP0);
         }
         for (i = 0; i < len; i++) {
-            PSMTXTrans(posMtx, 32.0f * (f32)(half - i) - (f32)offset, (f32)offset, 0.0f);
+            PSMTXTrans(posMtx, 32.0f * (f32)(half - i) - (f32)(pass * 2), (f32)(pass * 2), 0.0f);
             PSMTXConcat(mtx, posMtx, posMtx);
             PSMTXConcat(cam->view, posMtx, posMtx);
             GXLoadPosMtxImm(posMtx, GX_PNMTX0);

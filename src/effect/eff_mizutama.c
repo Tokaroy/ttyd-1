@@ -1,13 +1,15 @@
 // Underwater bubbles (mizutama, 水中の泡) released at an angle that slow down and drift upward; types 0-3 while
-// swimming and 4-7 after diving in, the size grows with the type (radius type + 1). Used by Bowser swimming.
+// swimming and 4-7 after diving in (effdrv's debug names); the spread (radius 10 * (type + 1)) and the bubble
+// count grow with the type. Used by Bowser swimming (type 0).
+
 #include "eff/eff_mizutama.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-
 static void effMizutamaDisp(CameraId cameraId, EffectEntry* effect);
 static void effMizutamaMain(EffectEntry* effect);
 
@@ -17,8 +19,8 @@ typedef struct EffMizutamaWork {
     f32 velX;     // 0x10
     f32 velY;     // 0x14
     f32 scale;    // 0x18
-    s32 timer;    // 0x1C, only cleared at entry
-    s32 state;    // 0x20, only cleared at entry
+    s32 timer;    // 0x1C
+    s32 state;    // 0x20
     s32 delay;    // 0x24
 } EffMizutamaWork;
 
@@ -54,6 +56,7 @@ EffectEntry* effMizutamaEntry(s32 type, f32 x, f32 y, f32 z, f32 angle) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffMizutamaWork) * effect->count);
     effect->userdata = work;
     effect->callback = effMizutamaMain;
+
     radius = type + 1;
     radius *= 10;
     work->type = type;
@@ -80,9 +83,10 @@ EffectEntry* effMizutamaEntry(s32 type, f32 x, f32 y, f32 z, f32 angle) {
             work->delay = i * 2;
         } else {
             // scattered along a line, splashing outwards
-            z = radius;
+            f32 halfWidth = radius;
+
             irand(360);
-            work->position.x = irand((s32)z * 2) - z;
+            work->position.x = irand((s32)halfWidth * 2) - halfWidth;
             work->position.y = 0.0f;
             work->position.z = 0.0f;
             angle = work->position.x < 0.0f ? 225.0f : 135.0f;
@@ -96,7 +100,7 @@ EffectEntry* effMizutamaEntry(s32 type, f32 x, f32 y, f32 z, f32 angle) {
     return effect;
 }
 
-/** Per frame: slows each bubble horizontally, lets it drift upward and deletes the effect when all are gone. */
+/** Per frame: slows each bubble, lets it drift upward while it shrinks, and deletes the effect when all are gone. */
 static void effMizutamaMain(EffectEntry* effect) {
     EffMizutamaWork* work = effect->userdata;
     Vec position;
@@ -124,7 +128,7 @@ static void effMizutamaMain(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMizutamaDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effMizutamaDisp, effect);
 }
 
 /** Draws each bubble as a camera-facing textured quad (effect texture 0x3F). */

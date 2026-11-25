@@ -1,8 +1,33 @@
 // nok_00 (ノコ村, Petalburg): the west half of the village, with the gate to Petal Meadows (hei_01).
 
 #include "version.h"
+#include "driver/fadedrv.h"
+#include "evt/evt_story.h"
+#include "evt/evt_urouro.h"
+#include "evt/evt_window.h"
+#include "kpa_act.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_kinopio.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_telop.h"
+#include "evt/evt_item.h"
+#include "evt/evt_pouch.h"
+#include "driver/mapdrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "driver/npcdrv.h"
 #include "driver/animdrv.h"
@@ -18,46 +43,53 @@
 #include "data_tables.h"
 #include "mario/mario_pouch.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
-#include "evt/evt_kinopio.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_telop.h"
-#include "evt/evt_urouro.h"
-#include "evt/evt_window.h"
-#include "kpa_act.h"
+#include "driver/seqdrv.h"
 #include "nok.h"
-#include "mario/mariost.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
+
+// PosterWork.flags
+enum {
+    POSTER_FLAG_DISP = 1, // set by pposter_nok_on; draw_poster draws the poster only with it
+};
 
 typedef struct PosterWork {
-    u32 flags;
+    u32 flags; // POSTER_FLAG_*
     s32 group;
     s32 shape;
 } PosterWork;
-PosterWork* poster;
-static void draw_poster(void* userdata, s32 group);
+static PosterWork* poster;
+static void draw_poster(void* userdata, s32 group, Mtx* modeling);
 
 static USER_FUNC(pposter_init);
+static USER_FUNC(pposter_nok_on);
 
-s32 iri_15_item_tbl1[2];
-s32 iri_15_item_tbl2[2];
+static EvtWord nokonoko_A_init[27];
+static EvtWord nokonoko_A_regl[2];
+static EvtWord nokonoko_A_talk[55];
+static EvtWord nokonoko_B_init[12];
+static EvtWord nokonoko_B_regl[19];
+static EvtWord nokonoko_B_talk[44];
+static EvtWord nokonoko_B_damage[18];
+static EvtWord nokonoko_C_regl[19];
+static EvtWord nokonoko_C_talk[44];
+static EvtWord nokonoko_D_talk[52];
+static s32 iri_15_item_tbl1[2];
+static s32 iri_15_item_tbl2[2];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord nokonoko_F_talk[];
+#else
+EvtWord nokonoko_F_talk[318];
+#endif
+
+static EvtWord init_white[24];
+static EvtWord talk_white[36];
+static EvtWord kizayarou_regl[19];
+static EvtWord kizayarou_talk[92];
+static EvtWord kizayarou_init[38];
 static NpcSetupInfo npcEnt[10];
 static BeroEntry bero_entry_data[3];
 static const char* yado_npc[2];
-const char* yado_map[2];
+static const char* yado_map[2];
 static HouseParam yado_data;
 static const char* mise_npc[2];
 static HouseParam mise_data;
@@ -69,72 +101,56 @@ static ShopItem goods_list[6];
 static ShopDb trade_list[13];
 static ShopperData35 shopper_data;
 static KinopioData kino_dt;
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord first_time_camera[];
+#else
+EvtWord first_time_camera[195];
+#endif
+
 static HitDamageReturn hitDmgRetPoints[10];
-
-/**
- * Message callback for Bowser's line kpa_stg2_013 in the Petalburg cutscene.
- * Once the text has printed past its 49th character it sets the local flag LSWF(2),
- * which releases the parallel thread waiting to switch Kammy's animation.
- */
-static void nok_stg2_013_cb(s32 type, void** work) {
-    s32* msg = *work;
-
-    switch (type) {
-        case 5:
-            if (msg[4] > 0x31) {
-                evtSetValue(NULL, LSWF(2), 1);
-            }
-            break;
-    }
-}
-
-/**
- * Makes the poster visible: sets bit 0 of the PosterWork flags,
- * which draw_poster checks before drawing the Peach poster onto the Koopa's locator.
- */
-static USER_FUNC(pposter_nok_on) {
-    poster->flags |= 1;
-    return EVT_RETURN_DONE;
-}
+static EvtWord nok_00_koopa_npc_entry[35];
+static EvtWord nok_00_koopa_evt[1250];
+EvtWord nok_00_init_evt[205];
 
 /**
  * Init for the first Petalburg Koopa (ノコノコA, the one who greets Mario):
  * turns on the move and talk animations and puts him at his post by the gate once the first visit is over;
- * during the Bowser cutscene (STORY_STG2_25_04) he stands near the shop doors.
+ * during the Bowser cutscene (STG2_25_04) he stands near the shop doors.
  */
-EVT_BEGIN(nokonoko_A_init)
-    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_01A_PETALBURG_1ST_TIME)
+static EVT_BEGIN(nokonoko_A_init)
+    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG1_01A_PETALBURG_1ST_TIME)
         CALL(evt_npc_set_position, STRING("me"), -350, 0, 65)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_04_BOWSER_ACTION_STAGE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_25_04_BOWSER_ACTION_STAGE)
         CALL(evt_npc_set_position, STRING("me"), -260, 0, 90)
     END_IF
     RETURN
 EVT_END()
 
 /** Regular script for Koopa A; he does nothing on his own. */
-EVT_BEGIN(nokonoko_A_regl)
+static EVT_BEGIN(nokonoko_A_regl)
     RETURN
 EVT_END()
 
 /**
  * Talk script for Koopa A: his dialogue changes with story progress (before the Gold Fuzzy,
- * before father and son reunite, before Frankly's house, the chapter 7 hint about white Petalburg,
- * and after the finale). In chapter 7 he sets GSWF_STG7_WHITE_PETALBURG_HINT.
+ * before father and son reunite, before Frankly's house, the chapter 7 hint about General White,
+ * and after the finale). In chapter 7 he sets GSWF_NOK_GENERAL_WHITE_HINT_HEARD.
  */
-EVT_BEGIN(nokonoko_A_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG1_06_01_GOLD_FUZZY)
+static EVT_BEGIN(nokonoko_A_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG1_06_01_GOLD_FUZZY)
         CALL(evt_msg_print, 0, STRING("stg1_nok_02"), 0, 0)
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("stg1_nok_02_01"), 0, 0)
-        CASE_LESS(STORY_STG1_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG1_31_FRANKLYS_HOUSE_STG_1)
         CALL(evt_msg_print, 0, STRING("stg1_nok_03"), 0, 0)
-        CASE_EQUAL(STORY_STG7_02_MAYOR_BOB)
-        SET_VALUE(GSWF(GSWF_STG7_WHITE_PETALBURG_HINT), 1)
+        CASE_EQUAL(STG7_02_MAYOR_BOB)
+        SET_VALUE(GSWF_NOK_GENERAL_WHITE_HINT_HEARD, 1)
         CALL(evt_msg_print, 0, STRING("stg7_nok_01"), 0, 0)
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg1_nok_03_1"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg7_nok_01_1"), 0, 0)
@@ -143,11 +159,11 @@ EVT_BEGIN(nokonoko_A_talk)
 EVT_END()
 
 /**
- * Init for Koopa B: not an encounter-style talker (talk animation off) but flagged as an enemy NPC
- * so he can be hit with the hammer (see nokonoko_B_damage).
+ * Init script written for Koopa B: talk pose off and flagged as an enemy NPC (see nokonoko_B_damage).
+ * Not used: Koopa B's entry in npcEnt has npc_init_evt as its init event.
  */
-EVT_BEGIN(nokonoko_B_init)
-    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_ANIM)
+static EVT_BEGIN(nokonoko_B_init)
+    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE)
     CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_ENEMY)
     RETURN
 EVT_END()
@@ -156,7 +172,7 @@ EVT_END()
  * Regular script for Koopa B: he wanders at random within 100 units of where he stands,
  * at speed 30 (urouro_init_func and urouro_main_func).
  */
-EVT_BEGIN(nokonoko_B_regl)
+static EVT_BEGIN(nokonoko_B_regl)
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
     CALL(urouro_main_func, STRING("me"))
@@ -167,15 +183,15 @@ EVT_END()
  * Talk script for Koopa B: story-progress dependent dialogue,
  * one line per stretch of the story up to the end of chapter 8, and a final line afterwards.
  */
-EVT_BEGIN(nokonoko_B_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG1_06_01_GOLD_FUZZY)
+static EVT_BEGIN(nokonoko_B_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG1_06_01_GOLD_FUZZY)
         CALL(evt_msg_print, 0, STRING("stg1_nok_04"), 0, 0)
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("stg1_nok_04_01"), 0, 0)
-        CASE_LESS(STORY_STG1_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG1_31_FRANKLYS_HOUSE_STG_1)
         CALL(evt_msg_print, 0, STRING("stg1_nok_05"), 0, 0)
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg1_nok_05_1"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg1_nok_05_1_1"), 0, 0)
@@ -185,19 +201,19 @@ EVT_END()
 
 /**
  * Runs when Mario hits Koopa B with the hammer:
- * he plays a startled animation and says "Eek, don't touch me!" for 200 ms,
- * then goes back to his idle animation.
+ * he plays a startled animation and says "Eek, don't touch me!",
+ * then waits 200 ms before going back to his idle animation.
  */
-EVT_BEGIN(nokonoko_B_damage)
+static EVT_BEGIN(nokonoko_B_damage)
     CALL(evt_npc_set_anim, STRING("me"), STRING("KNP_O_1"))
-    CALL(evt_msg_print, 1, STRING("イャーン　さわらないで！！<key>"), 0, 0)
+    CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, STRING("イャーン　さわらないで！！<key>"), 0, 0)
     WAIT_MS(200)
     CALL(evt_npc_set_anim, STRING("me"), STRING("KNP_S_1"))
     RETURN
 EVT_END()
 
 /** Regular script for Koopa C: wanders at random within 100 units of his spot, like Koopa B. */
-EVT_BEGIN(nokonoko_C_regl)
+static EVT_BEGIN(nokonoko_C_regl)
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
     CALL(urouro_main_func, STRING("me"))
@@ -205,15 +221,15 @@ EVT_BEGIN(nokonoko_C_regl)
 EVT_END()
 
 /** Talk script for Koopa C: story-progress dependent dialogue, same schedule as Koopa B. */
-EVT_BEGIN(nokonoko_C_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG1_06_01_GOLD_FUZZY)
+static EVT_BEGIN(nokonoko_C_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG1_06_01_GOLD_FUZZY)
         CALL(evt_msg_print, 0, STRING("stg1_nok_06"), 0, 0)
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("stg1_nok_06_01"), 0, 0)
-        CASE_LESS(STORY_STG1_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG1_31_FRANKLYS_HOUSE_STG_1)
         CALL(evt_msg_print, 0, STRING("stg1_nok_07"), 0, 0)
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg1_nok_07_1"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg1_nok_07_1_1"), 0, 0)
@@ -225,17 +241,17 @@ EVT_END()
  * Talk script for Koopa D: story-progress dependent dialogue.
  * Before Frankly's house is reached he asks a yes/no question and then continues with a follow-up line.
  */
-EVT_BEGIN(nokonoko_D_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG1_06_01_GOLD_FUZZY)
+static EVT_BEGIN(nokonoko_D_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG1_06_01_GOLD_FUZZY)
         CALL(evt_msg_print, 0, STRING("stg1_nok_08"), 0, 0)
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("stg1_nok_08_01"), 0, 0)
-        CASE_LESS(STORY_STG1_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG1_31_FRANKLYS_HOUSE_STG_1)
         CALL(evt_msg_print, 0, STRING("stg1_nok_09"), 0, 0)
         CALL(evt_msg_select, 0, STRING("stg1_nok_09_yesno"))
         CALL(evt_msg_print_add, 0, STRING("stg1_nok_09_01"))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg1_nok_09_01_1"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg1_nok_09_01_1_1"), 0, 0)
@@ -244,35 +260,36 @@ EVT_BEGIN(nokonoko_D_talk)
 EVT_END()
 
 /**
- * Items the player may hand to Bub-ulber for Trouble Center request 15 on his first ask: the Hot Dog only,
- * ended by -1.
+ * Item list with the Hot Dog only, ended by -1 (Trouble Center request 15). No script in this module uses it:
+ * nokonoko_F_talk lets Mario pick from all his items (SELECT_TYPE_ITEM).
  */
-s32 iri_15_item_tbl1[] = {
+static s32 iri_15_item_tbl1[] = {
     ITEM_HOT_DOG, -1,
 };
 
 /**
- * Items the player may hand to Bub-ulber for request 15 on his second ask: the Mousse Cake only, ended by -1.
+ * Item list with the Mousse Cake only, ended by -1 (request 15). No script in this module uses it either.
  */
-s32 iri_15_item_tbl2[] = {
+static s32 iri_15_item_tbl2[] = {
     ITEM_MOUSSE_CAKE, -1,
 };
 
 /**
- * Talk script for the Koopa who gives the Trouble Center request 15 (GSW_TROUBLE_ACTIVE 15).
- * He first asks for a Hot Dog, then for a Mousse Cake;
- * the item chosen from Mario's inventory is checked and removed,
- * and with the Mousse Cake he rewards Mario with a Dried Bouquet,
- * records the play time and marks the trouble solved.
- * After that he can be asked to repeat the swap for another Dried Bouquet by handing over a Hot Dog.
+ * Talk script of the Koopa of Trouble Center request TROUBLE_THE_FOOD_I_WANT. While it is accepted: the first
+ * talk states the request; then Mario picks an item: two Hot Dogs (GSWF_TROUBLE_WORK(1), (2)), then a Mousse
+ * Cake, which he pays with a Dried Bouquet; that saves the play time (GSW_NOK_FOOD_I_WANT_DONE_TIME) and
+ * finishes the request. Once it is done he offers another Dried Bouquet for a Hot Dog. Otherwise lines by story
+ * stage.
  */
 EVT_BEGIN(nokonoko_F_talk)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 15)
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_BASE), 0)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_THE_FOOD_I_WANT)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(0), 0)
+
             // Bub-ulber introduces himself and asks Mario to bring him something to eat.
             CALL(evt_msg_print, 0, STRING("irai_15_001"), 0, 0)
-            SET_VALUE(GSWF(GSWF_TROUBLE_WORK_BASE), 1)
+            SET_VALUE(GSWF_TROUBLE_WORK(0), 1)
         ELSE
+
             // He asks whether Mario has brought something; Mario picks an item.
             CALL(evt_msg_print, 0, STRING("irai_15_002"), 0, 0)
             SET_VALUE(LF(0), 0)
@@ -280,24 +297,25 @@ EVT_BEGIN(nokonoko_F_talk)
             IF_INT_GREATER(LW(0), 0)
                 CALL(evt_msg_continue)
 #if VERSION <= VERSION_DEMO_JP
-                CALL(evt_win_item_select, 1, LW(0))
+                CALL(evt_win_item_select, SELECT_TYPE_ITEM, LW(0))
 #else
-                CALL(evt_win_item_select, 0, 1, LW(0), 0)
+                CALL(evt_win_item_select, 0, SELECT_TYPE_ITEM, LW(0), 0)
 #endif
             ELSE
                 SET_VALUE(LW(0), -1)
                 SET_VALUE(LF(0), 1)
             END_IF
-            IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_2), 0)
+            IF_INT_EQUAL(GSWF_TROUBLE_WORK(2), 0)
                 IF_INT_EQUAL(LW(0), 159)
                     CALL(evt_pouch_remove_item, ITEM_HOT_DOG, LW(0))
-                    IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_1), 0)
-                        // A Hot Dog: Bub-ulber is delighted, then asks for a Mousse Cake.
+                    IF_INT_EQUAL(GSWF_TROUBLE_WORK(1), 0)
+
+                        // A Hot Dog: Bub-ulber is delighted; another Hot Dog is required before the Mousse Cake.
                         CALL(evt_msg_print, 0, STRING("irai_15_003"), 0, 0)
-                        SET_VALUE(GSWF(GSWF_TROUBLE_WORK_1), 1)
+                        SET_VALUE(GSWF_TROUBLE_WORK(1), 1)
                     ELSE
                         CALL(evt_msg_print, 0, STRING("irai_15_004"), 0, 0)
-                        SET_VALUE(GSWF(GSWF_TROUBLE_WORK_2), 1)
+                        SET_VALUE(GSWF_TROUBLE_WORK(2), 1)
                     END_IF
                 ELSE
                     IF_INT_EQUAL(LF(0), 0)
@@ -309,15 +327,17 @@ EVT_BEGIN(nokonoko_F_talk)
             ELSE
                 IF_INT_EQUAL(LW(0), 206)
                     CALL(evt_pouch_remove_item, ITEM_MOUSSE_CAKE, LW(0))
+
                     // A Mousse Cake: he pays Mario with a Dried Bouquet.
                     CALL(evt_msg_print, 0, STRING("irai_15_005"), 0, 0)
-                    CALL(evt_item_entry, STRING("df"), ITEM_DRIED_BOUQUET, 0, -1000, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+                    CALL(evt_item_entry, STRING("df"), ITEM_DRIED_BOUQUET, 0, -1000, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
                     CALL(evt_item_get_item, STRING("df"))
                     CALL(evt_item_get_item_end_wait, STRING("df"))
                     CALL(evt_msg_print, 0, STRING("irai_15_007"), 0, 0)
-                    CALL(evt_sub_save_playtime, GSW(GSW_NOK00_TROUBLE15_TIME))
-                    SET_VALUE(GSW(GSW_TROUBLE_ACTIVE), 0)
-                    SET_VALUE(GSWF(GSWF_TROUBLE_15_SOLVED), 1)
+                    CALL(evt_sub_save_playtime, GSW_NOK_FOOD_I_WANT_DONE_TIME)
+                    SET_VALUE(GSW_TROUBLE_ACCEPTED, TROUBLE_NONE)
+                    SET_VALUE(GSWF_TROUBLE_DONE(TROUBLE_THE_FOOD_I_WANT), 1)
+
                     // The request is recorded as solved and the play time is saved.
                     CALL(evt_msg_print, 0, STRING("sys_request_finish"), 0, 0)
                 ELSE
@@ -331,7 +351,8 @@ EVT_BEGIN(nokonoko_F_talk)
         END_IF
         RETURN
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_TROUBLE_15_SOLVED), 1)
+    IF_INT_EQUAL(GSWF_TROUBLE_DONE(TROUBLE_THE_FOOD_I_WANT), 1)
+
         // After the request, he offers to swap another Dried Bouquet for a Hot Dog.
         CALL(evt_msg_print, 0, STRING("irai_15_010"), 0, 0)
         CALL(evt_msg_select, 0, STRING("irai_15_010_sel"))
@@ -342,9 +363,9 @@ EVT_BEGIN(nokonoko_F_talk)
             IF_INT_GREATER(LW(0), 0)
                 CALL(evt_msg_continue)
 #if VERSION <= VERSION_DEMO_JP
-                CALL(evt_win_item_select, 1, LW(0))
+                CALL(evt_win_item_select, SELECT_TYPE_ITEM, LW(0))
 #else
-                CALL(evt_win_item_select, 0, 1, LW(0), 0)
+                CALL(evt_win_item_select, 0, SELECT_TYPE_ITEM, LW(0), 0)
 #endif
             ELSE
                 SET_VALUE(LW(0), -1)
@@ -353,7 +374,7 @@ EVT_BEGIN(nokonoko_F_talk)
             IF_INT_EQUAL(LW(0), 159)
                 CALL(evt_pouch_remove_item, ITEM_HOT_DOG, LW(0))
                 CALL(evt_msg_print, 0, STRING("irai_15_013"), 0, 0)
-                CALL(evt_item_entry, STRING("df"), ITEM_DRIED_BOUQUET, 0, -1000, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+                CALL(evt_item_entry, STRING("df"), ITEM_DRIED_BOUQUET, 0, -1000, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
                 CALL(evt_item_get_item, STRING("df"))
                 CALL(evt_item_get_item_end_wait, STRING("df"))
                 CALL(evt_msg_print, 0, STRING("irai_15_015"), 0, 0)
@@ -369,15 +390,16 @@ EVT_BEGIN(nokonoko_F_talk)
         END_IF
         RETURN
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG1_06_01_GOLD_FUZZY)
-        // Without a request, he chats about the weather; the lines change as the story advances.
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG1_06_01_GOLD_FUZZY)
+
+        // Without a request, he chats about flowers and the weather; the lines change as the story advances.
         CALL(evt_msg_print, 0, STRING("stg1_nok_17"), 0, 0)
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("stg1_nok_17_01"), 0, 0)
-        CASE_LESS(STORY_STG1_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG1_31_FRANKLYS_HOUSE_STG_1)
         CALL(evt_msg_print, 0, STRING("stg1_nok_18"), 0, 0)
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg1_nok_18_1"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg1_nok_18_1_1"), 0, 0)
@@ -387,18 +409,18 @@ EVT_END()
 
 /**
  * Init event of General White (ホワイト), the wandering Bob-omb:
- * does nothing in the kiosk demo or during the Bowser interlude (STORY_STG2_25_04).
- * Before STORY_STG5_59_ROGUEPORT_DOCK it moves him to (375, 50, -105);
+ * does nothing in the kiosk demo or during the Bowser interlude (STG2_25_04).
+ * Before STG5_59_ROGUEPORT_DOCK it moves him to (375, 50, -105);
  * after that he stays where the map put him.
  */
 static EVT_BEGIN(init_white)
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_SET(LW(0), GLOBAL_FLAG_KIOSK)
+    IF_BITS_SET(LW(0), GW_FLAG_E3)
         RETURN
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG2_25_04_BOWSER_ACTION_STAGE)
-        CASE_LESS(STORY_STG5_59_ROGUEPORT_DOCK)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG2_25_04_BOWSER_ACTION_STAGE)
+        CASE_LESS(STG5_59_ROGUEPORT_DOCK)
         CALL(evt_npc_set_position, STRING("me"), 375, 50, -105)
         CASE_DEFAULT
     END_SWITCH
@@ -406,18 +428,16 @@ static EVT_BEGIN(init_white)
 EVT_END()
 
 /**
- * Talk script of General White: he introduces himself as a Bob-omb who has lost his hopes and dreams
- * and asks to be left alone, with one line that changes per stretch of the story:
- * stg1_nok_19_01 before the Gold Fuzzy, _02 before the Hooktail fight, _03 until after the chapter 2 boss,
- * and _04 (he only wants to help people) afterwards.
+ * Talk script of General White: one line per stretch of the story (stg1_nok_19_01 before
+ * STG1_06_01_GOLD_FUZZY, _02 before STG1_16_HOOKTAIL, _03 before STG2_25_AFTER_THE_BOSS_BATTLE, _04 afterwards).
  */
 static EVT_BEGIN(talk_white)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG1_06_01_GOLD_FUZZY)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG1_06_01_GOLD_FUZZY)
         CALL(evt_msg_print, 0, STRING("stg1_nok_19_01"), 0, 0)
-        CASE_LESS(STORY_STG1_16_HOOKTAIL)
+        CASE_LESS(STG1_16_HOOKTAIL)
         CALL(evt_msg_print, 0, STRING("stg1_nok_19_02"), 0, 0)
-        CASE_LESS(STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
+        CASE_LESS(STG2_25_AFTER_THE_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg1_nok_19_03"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg1_nok_19_04"), 0, 0)
@@ -438,15 +458,15 @@ EVT_END()
 
 /**
  * Talk script of the Show-off Koopa, a French-accented flirt.
- * If Goombella (party id 1) is with Mario, the first talk has him woo her (stg1_nok_10),
+ * If Goombella (PARTY_GOOMBELLA) is with Mario, the first talk has him woo her (stg1_nok_10),
  * she turns him down rudely (stg1_nok_11), he retreats (stg1_nok_12) and she asks Mario to leave (stg1_nok_13),
- * setting LSWF(1); later talks play stg1_nok_14 and her reply stg1_nok_15.
+ * setting LSWF_NOK_00_KIZAYAROU_TALKED; later talks play stg1_nok_14 and her reply stg1_nok_15.
  * With any other partner he asks Mario where his Goomba companion is (stg1_nok_16).
  */
 static EVT_BEGIN(kizayarou_talk)
     CALL(evt_mario_get_party, LW(0))
-    IF_INT_EQUAL(LW(0), 1)
-        IF_INT_EQUAL(LSWF(1), 0)
+    IF_INT_EQUAL(LW(0), PARTY_GOOMBELLA)
+        IF_INT_EQUAL(LSWF_NOK_00_KIZAYAROU_TALKED, 0)
             CALL(evt_msg_print, 0, STRING("stg1_nok_10"), 0, 0)
             CALL(evt_party_set_dir_npc, 0, STRING("me"))
             CALL(evt_party_cont_onoff, 0, 0)
@@ -456,7 +476,7 @@ static EVT_BEGIN(kizayarou_talk)
             CALL(evt_party_cont_onoff, 0, 0)
             CALL(evt_msg_print, 0, STRING("stg1_nok_13"), 0, STRING("party"))
             CALL(evt_party_cont_onoff, 0, 1)
-            SET_VALUE(LSWF(1), 1)
+            SET_VALUE(LSWF_NOK_00_KIZAYAROU_TALKED, 1)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg1_nok_14"), 0, 0)
             CALL(evt_party_set_dir_npc, 0, STRING("me"))
@@ -473,7 +493,7 @@ EVT_END()
 /**
  * Entry of the Show-off Koopa (キザ野郎, model c_kiza):
  * creates the NPC at (350, 0, 175) facing 270 with the talk and wander scripts and the move/talk animations.
- * Called from the map init between STORY_STG1_00_PETAL_MEADOWS and STORY_STG1_17_FATHER_AND_SON_REUNITED.
+ * Called from the map init between STG1_00_PETAL_MEADOWS and STG1_17_FATHER_SON_REUNITED.
  */
 static EVT_BEGIN(kizayarou_init)
     SET_VALUE(LW(0), STRING("キザ野郎"))
@@ -483,14 +503,14 @@ static EVT_BEGIN(kizayarou_init)
     CALL(evt_npc_change_interrupt, LW(0), 1, PTR(kizayarou_regl))
     CALL(evt_npc_set_position, LW(0), 350, 0, 175)
     CALL(evt_npc_set_ry, LW(0), 270)
-    CALL(evt_npc_flag_onoff, 1, LW(0), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, LW(0), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     RETURN
 EVT_END()
 
-/** NPCs of the west village: General White. */
+/** NPCs of the west village, including General White. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "ノコノコA", // name
+        "ノコノコA", // name (a Petalburg Koopa)
         0, 0, // flags..reactionFlags
         nokonoko_A_init, // initEvent
         nokonoko_A_regl, // regularEvent
@@ -501,7 +521,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ノコノコB", // name
+        "ノコノコB", // name (a Petalburg Toad)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         nokonoko_B_regl, // regularEvent
@@ -513,7 +533,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ノコノコC", // name
+        "ノコノコC", // name (a Petalburg Koopa kid who loves video games)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         nokonoko_C_regl, // regularEvent
@@ -524,7 +544,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ノコノコD", // name
+        "ノコノコD", // name (a Koopa who is a Peach fan)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, // regularEvent
@@ -535,7 +555,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ノコノコF", // name
+        "ノコノコF", // name (Bub-ulber)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, // regularEvent
@@ -546,7 +566,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "宿店員", // name
+        "宿店員", // name (the Petalburg innkeeper)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -555,7 +575,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "店員", // name
+        "店員", // name (Niff T., the Petalburg shopkeeper)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -564,7 +584,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ババ", // name
+        "ババ", // name (Kammy Koopa)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -573,8 +593,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ホワイト", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ホワイト", // name (General White)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_white, // initEvent
         NULL, // regularEvent
@@ -631,7 +651,7 @@ static const char* yado_npc[] = {
 };
 
 /** Map group whose bounding-box culling is off while Mario is inside the inn: its outside front S_yad_mae. */
-const char* yado_map[] = {
+static const char* yado_map[] = {
     "S_yad_mae",
     NULL,
 };
@@ -773,12 +793,10 @@ static KinopioData kino_dt = {
 };
 
 /**
- * Cutscene on Mario's first arrival in Petalburg (story progress before STORY_STG1_01A):
- * controls are locked, the camera sweeps over the village while the "Petalburg" title card shows,
- * then the Koopa at the gate greets Mario and the partner.
- * Afterwards story progress becomes STORY_STG1_01A_PETALBURG_1ST_TIME,
- * the bottomless respawn point is set to the current position (JP and later),
- * the partner starts following again and the controls return.
+ * First-arrival scene, spawned before STG1_01A_PETALBURG_1ST_TIME: controls locked, a camera sweep with the area
+ * title (evt_telop_entry 2), Koopa A walks up and speaks (stg1_nok_01, 01_01), partner 1 (Goombella) is called
+ * out if none is out, they talk (stg1_nok_01_02 to 04), BGM_STG1_NOK1 starts and the story becomes
+ * STG1_01A_PETALBURG_1ST_TIME; JP and later set the fall respawn point to Mario's position; partner and control return.
  */
 EVT_BEGIN(first_time_camera)
     CALL(evt_mario_key_onoff, 0)
@@ -786,16 +804,16 @@ EVT_BEGIN(first_time_camera)
     CALL(evt_mario_set_pos, -545, 0, 0)
     CALL(evt_party_set_pos, 0, -555, 0, 0)
     CALL(evt_npc_set_position, STRING("ノコノコA"), -250, 0, 65)
-    CALL(evt_cam3d_evt_set, 730, 617, 915, 245, 93, 144, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 730, 617, 915, 245, 93, 144, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
         CALL(evt_telop_entry, 2)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_cam3d_evt_set, FLOAT(-450.0f), FLOAT(400.0f), FLOAT(840.0f), FLOAT(-300.0f), FLOAT(165.0f), FLOAT(255.0f), 6000, 13)
+        CALL(evt_cam3d_evt_set, FLOAT(-450.0f), FLOAT(400.0f), FLOAT(840.0f), FLOAT(-300.0f), FLOAT(165.0f), FLOAT(255.0f), 6000, EASING_SINE_IN)
         WAIT_MS(8500)
-        CALL(evt_cam3d_evt_set, FLOAT(-380.0f), FLOAT(90.0f), FLOAT(352.0f), FLOAT(-380.0f), FLOAT(35.0f), FLOAT(47.0f), 0, 13)
+        CALL(evt_cam3d_evt_set, FLOAT(-380.0f), FLOAT(90.0f), FLOAT(352.0f), FLOAT(-380.0f), FLOAT(35.0f), FLOAT(47.0f), 0, EASING_SINE_IN)
     END_INLINE_EVENT
     WAIT_MS(6000)
     CALL(evt_mario_mov_pos2, -400, 65, FLOAT(120.0f))
@@ -824,11 +842,11 @@ EVT_BEGIN(first_time_camera)
     CALL(evt_msg_print, 0, STRING("stg1_nok_01_03"), 0, STRING("ノコノコA"))
     CALL(evt_msg_print, 0, STRING("stg1_nok_01_04"), 0, STRING("party"))
     WAIT_MS(100)
-    CALL(evt_cam3d_evt_off, 500, 4)
-    CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG1_NOK1"), 2000)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_01A_PETALBURG_1ST_TIME)
+    CALL(evt_cam3d_evt_off, 500, EASING_QUADRATIC_OUT)
+    CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG1_NOK1"), 2000)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_01A_PETALBURG_1ST_TIME)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
@@ -836,7 +854,6 @@ EVT_BEGIN(first_time_camera)
     RETURN
 EVT_END()
 
-/** Return points of the hazard-water floors of the west village (the mod_NN hit areas). */
 static HitDamageReturn hitDmgRetPoints[] = {
     {"mod_00", {0.0f, -1000.0f, 0.0f}},
     {"mod_01", {0.0f, -1000.0f, 0.0f}},
@@ -851,13 +868,44 @@ static HitDamageReturn hitDmgRetPoints[] = {
 };
 
 /**
+ * Display callback of the Koopa A model: when the group drawn is the poster's locator
+ * and the poster has been switched on, draws the poster's plane shape there.
+ */
+static void draw_poster(void* userdata, s32 group, Mtx* modeling) {
+    NpcEntry* npc = npcNameToPtr("poster");
+
+    if (group != poster->group || !(poster->flags & POSTER_FLAG_DISP)) {
+        return;
+    }
+    animPoseDrawShape(npc->poseId, poster->shape);
+}
+
+/**
+ * Script helper: allocates the poster work, finds shape pPlaneShape2 of the NPC "poster" and group locator7 of the NPC
+ * ノコノコA, and gives ノコノコA's pose the draw callback draw_poster.
+ */
+static USER_FUNC(pposter_init) {
+    NpcEntry* npc;
+
+    poster = _mapAlloc(sizeof(PosterWork));
+    memset(poster, 0, sizeof(PosterWork));
+    poster->shape = animPoseGetShapeIdx(npcNameToPtr("poster")->poseId, "pPlaneShape2");
+
+    // ノコノコA
+    npc = npcNameToPtr("ノコノコA");
+    poster->group = animPoseGetGroupIdx(npc->poseId, "locator7");
+    animPoseSetDispCallBack(npc->poseId, draw_poster, NULL);
+    return EVT_RETURN_DONE;
+}
+
+/**
  * Creates the "poster" NPC (model c_p_peach, the Peach poster) used in the Bowser interlude:
  * intangible, placed just in front of the S_ie_mad02 wall object, and then hooks it up with pposter_init.
  */
-EVT_BEGIN(nok_00_koopa_npc_entry)
-    CALL(evt_npc_entry, STRING("poster"), STRING("c_p_peach"))
+static EVT_BEGIN(nok_00_koopa_npc_entry)
+    CALL(evt_npc_entry, STRING("poster"), STRING("c_p_peach")) // a Princess Peach poster (Bowser interlude prop)
     CALL(evt_npc_pera_onoff, STRING("poster"), 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("poster"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("poster"), NPC_FLAG_NO_HIT)
     CALL(evt_mapobj_get_position, STRING("S_ie_mad02"), LW(0), LW(1), LW(2))
     SUBTRACT_FLOAT(LW(1), FLOAT(25.0f))
     ADD_FLOAT(LW(2), FLOAT(8.0f))
@@ -867,16 +915,43 @@ EVT_BEGIN(nok_00_koopa_npc_entry)
 EVT_END()
 
 /**
- * Bowser interlude in Petalburg (STORY_STG2_25_04_BOWSER_ACTION_STAGE):
- * Kammy flies in over the village, Koopa A flees into the shops, and Bowser is led to the Peach poster.
- * Koopa A jumps up and hangs the poster (via pposter_nok_on), the music slows down and fades,
- * and the story advances to STORY_STG2_25_05_BOWSER_PETALBURG.
- * The game is saved and the scene continues into the next Bowser action stage (mri_00).
+ * Makes the poster visible: sets POSTER_FLAG_DISP, which draw_poster checks before drawing the Peach poster onto the
+ * Koopa's locator.
  */
-EVT_BEGIN(nok_00_koopa_evt)
+static USER_FUNC(pposter_nok_on) {
+    poster->flags |= POSTER_FLAG_DISP;
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Message callback for Kammy's line kpa_stg2_013 in the Petalburg cutscene.
+ * Once the message entry index exceeds 49 it sets the local flag LSWF_NOK_00_KOOPA_MSG_CUE,
+ * which releases the parallel thread waiting to switch Kammy's animation.
+ */
+static void nok_stg2_013_cb(s32 type, void** work) {
+    s32* msg = *work;
+
+    switch (type) {
+        case 5:
+            if (msg[4] > 0x31) {
+                evtSetValue(NULL, LSWF_NOK_00_KOOPA_MSG_CUE, 1);
+            }
+            break;
+    }
+}
+
+/**
+ * Bowser interlude in Petalburg (STG2_25_04_BOWSER_ACTION_STAGE):
+ * Kammy flies in over the village, Koopa A flees into the shops, and Bowser is led to the Peach poster.
+ * Koopa A jumps up and takes the poster down (the poster NPC is hidden and pposter_nok_on draws it on his
+ * model), runs into the house, the music slows down and fades,
+ * and the story advances to STG2_25_05_BOWSER_PETALBURG.
+ * Saving is offered and the scene continues into the next Bowser action stage (mri_00).
+ */
+static EVT_BEGIN(nok_00_koopa_evt)
     // The Bowser interlude begins in the quiet village.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_NOK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_NOK1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_NOK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_NOK1"))
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_kill_party, 0)
     CALL(evt_mario_set_pos, -500, 0, 0)
@@ -884,8 +959,8 @@ EVT_BEGIN(nok_00_koopa_evt)
     CALL(evt_npc_set_position, STRING("ババ"), -550, 50, 0)
     CALL(evt_npc_flag_onoff, 1, STRING("ノコノコA"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_set_ry, STRING("ノコノコA"), 90)
-    CALL(evt_cam3d_evt_set, -315, 146, 529, -315, 50, -13, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, -315, 146, 529, -315, 50, -13, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
@@ -905,15 +980,16 @@ EVT_BEGIN(nok_00_koopa_evt)
     END_INLINE_EVENT
     CALL(evt_mario_mov_pos2, -342, 80, 60)
     WAIT_MS(500)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ノコノコA"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ノコノコA"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1200)
     CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_set_ry, STRING("ノコノコA"), 270)
     WAIT_MS(300)
+
     // Koopa A greets the arrival and runs in panic when he sees Bowser.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_004"), 0, STRING("ノコノコA"))
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_KUPPA1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_NOK1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_KUPPA1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_NOK1"))
     CALL(evt_npc_get_position, STRING("ノコノコA"), LW(0), LW(1), LW(2))
     SET_VALUE(LW(3), LW(0))
     ADD(LW(3), 1)
@@ -928,7 +1004,7 @@ EVT_BEGIN(nok_00_koopa_evt)
     CALL(evt_npc_set_position, STRING("ノコノコA"), LW(0), LW(1), LW(2))
     CALL(evt_npc_set_autotalkpose, STRING("ノコノコA"), STRING("NOK_S_2"), STRING("NOK_T_2"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_004_1"), 0, STRING("ノコノコA"))
-    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_anim, STRING("ノコノコA"), STRING("NOK_R_2"))
     WAIT_MS(1000)
     CALL(evt_npc_set_ry, STRING("ノコノコA"), 90)
@@ -944,16 +1020,17 @@ EVT_BEGIN(nok_00_koopa_evt)
     SET_VALUE(LW(0), -200)
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(500)
-    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコA"), NPC_FLAG_HIDDEN)
-    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコB"), NPC_FLAG_HIDDEN)
-    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコC"), NPC_FLAG_HIDDEN)
-    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコD"), NPC_FLAG_HIDDEN)
-    CALL(evt_cam3d_evt_set, -335, 133, 430, -335, 55, -13, 800, 11)
+    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコA"), NPC_FLAG_NO_DRAW)
+    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコB"), NPC_FLAG_NO_DRAW)
+    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコC"), NPC_FLAG_NO_DRAW)
+    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコD"), NPC_FLAG_NO_DRAW)
+    CALL(evt_cam3d_evt_set, -335, 133, 430, -335, 55, -13, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
+
     // Bowser scoffs at the cowardly Koopa.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_007"), 0, STRING("mario"))
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
@@ -966,25 +1043,27 @@ EVT_BEGIN(nok_00_koopa_evt)
             WAIT_FRAMES(10)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_cam3d_evt_set, -280, 133, 430, -280, 55, -13, 2000, 11)
+    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_HIT)
+    CALL(evt_cam3d_evt_set, -280, 133, 430, -280, 55, -13, 2000, EASING_SINE_IN_OUT)
     CALL(evt_npc_kamek_move_position, STRING("ババ"), -275, 135, 10, 0, 80, 0)
     SET_VALUE(GF(0), 1)
     WAIT_FRAMES(1)
-    CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_NO_HIT)
+
     // Kammy shouts that Peach is over there.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_008"), 0, STRING("ババ"))
-    CALL(evt_cam3d_evt_set, 290, 144, 479, 290, 57, -13, 2000, 11)
+    CALL(evt_cam3d_evt_set, 290, 144, 479, 290, 57, -13, 2000, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 350, 166, 162, 350, 115, -134, 1000, 11)
+    CALL(evt_cam3d_evt_set, 350, 166, 162, 350, 115, -134, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_snd_sfxon, STRING("SFX_KUPPA_FIND_PEACH1"), 0)
     WAIT_MS(400)
     CALL(evt_mario_set_pos, 200, 0, 40)
     WAIT_FRAMES(1)
+
     // Bowser spots the poster of Princess Peach and declares he has found her.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_009"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 300, 192, 363, 300, 105, -130, 0, 11)
+    CALL(evt_cam3d_evt_set, 300, 192, 363, 300, 105, -130, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_mario_set_pos, 130, 0, 40)
     CALL(evt_mario_mov_pos2, 190, -37, 120)
@@ -993,15 +1072,15 @@ EVT_BEGIN(nok_00_koopa_evt)
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_LAUGH2_1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_3"), STRING("KPA_T_2"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_010"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 350, 166, 162, 350, 115, -134, 0, 11)
+    CALL(evt_cam3d_evt_set, 350, 166, 162, 350, 115, -134, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
-    CALL(evt_msg_toge, 3, 355, 100, -150)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS_FAR, 355, 100, -150)
     CALL(evt_msg_print, 0, STRING("kpa_stg2_011"), 0, 0)
-    CALL(evt_cam3d_evt_set, 300, 192, 363, 300, 105, -130, 0, 11)
+    CALL(evt_cam3d_evt_set, 300, 192, 363, 300, 105, -130, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_012"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 190, 176, 363, 190, 90, -130, 800, 11)
+    CALL(evt_cam3d_evt_set, 190, 176, 363, 190, 90, -130, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_npc_set_position, STRING("ババ"), 30, 70, -35)
     SET_VALUE(GF(0), 0)
@@ -1018,28 +1097,30 @@ EVT_BEGIN(nok_00_koopa_evt)
     CALL(evt_npc_kamek_move_position, STRING("ババ"), 150, -35, 20, 0, 60, 0)
     SET_VALUE(GF(0), 1)
     WAIT_FRAMES(1)
-    SET_VALUE(LSWF(2), 0)
+    SET_VALUE(LSWF_NOK_00_KOOPA_MSG_CUE, 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(200)
         CALL(evt_mario_set_dir, 270, 300, 0)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(2), 0)
+            IF_INT_NOT_EQUAL(LSWF_NOK_00_KOOPA_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
         CALL(evt_npc_set_anim, STRING("ババ"), STRING("A_4"))
     END_INLINE_EVENT
+
     // Kammy explains that Peach is speechless with joy; Bowser laughs along.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_013"), PTR(nok_stg2_013_cb), STRING("ババ"))
     CALL(evt_mario_set_dir, 90, 300, 0)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_3"), STRING("KPA_T_2"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_014"), 0, STRING("mario"))
-    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_HIDDEN)
+    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_NO_DRAW)
     CALL(evt_npc_set_position, STRING("ノコノコA"), 420, 0, 0)
     CALL(evt_npc_set_ry, STRING("ノコノコA"), 270)
+
     // Koopa A cries out: the poster is his life's treasure.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_015"), 0, STRING("ノコノコA"))
     CALL(kpa_chg_pose, STRING("KPA_S_1"))
@@ -1061,22 +1142,22 @@ EVT_BEGIN(nok_00_koopa_evt)
         END_LOOP
         CALL(evt_npc_set_position, STRING("ノコノコA"), LW(0), LW(1), LW(2))
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, 324, 189, 551, 324, 85, -44, 1000, 11)
+    CALL(evt_cam3d_evt_set, 324, 189, 551, 324, 85, -44, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_SURPRISED1_2"), LW(0), LW(1), LW(2), 0)
     ADD(LW(1), 65)
-    CALL(evt_eff_fukidashi, 2, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 0, 0, 60)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 403, 104, 331, 403, 43, -17, 0, 11)
+    CALL(evt_cam3d_evt_set, 403, 104, 331, 403, 43, -17, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_mario_set_dir, 90, 300, 0)
     CALL(evt_msg_print, 0, STRING("kpa_stg2_016"), 0, STRING("ノコノコA"))
     SET_VALUE(GW(0), 1)
     WAIT_MS(100)
-    CALL(evt_cam3d_evt_set, 306, 168, 344, 306, 85, -130, 1000, 11)
-    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_cam3d_evt_set, 306, 168, 344, 306, 85, -130, 1000, EASING_SINE_IN_OUT)
+    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_anim, STRING("ノコノコA"), STRING("NOK_R_4"))
     CALL(evt_npc_move_position, STRING("ノコノコA"), 408, -46, 500, 0, 0)
     CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_NOKO_JUMP1"), 408, 0, -46, 0)
@@ -1091,10 +1172,10 @@ EVT_BEGIN(nok_00_koopa_evt)
         WAIT_MS(750)
         CALL(evt_npc_set_anim, STRING("ノコノコA"), STRING("NOK_S_3"))
         CALL(evt_npc_set_anim, STRING("poster"), STRING("Z_2"))
-        CALL(evt_npc_flag_onoff, 1, STRING("poster"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("poster"), NPC_FLAG_NO_DRAW)
         CALL(pposter_nok_on)
     END_INLINE_EVENT
-    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("ノコノコA"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_get_position, STRING("ノコノコA"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_NOKO_JUMP1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_snd_sfxon_3d_ex, STRING("SFX_KUPPA_NOKO_POSTER1"), LW(0), LW(1), LW(2), 255, 255, 750, 16, 0)
@@ -1103,15 +1184,15 @@ EVT_BEGIN(nok_00_koopa_evt)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_SURPRISED1_1"), LW(0), LW(1), LW(2), 0)
     ADD(LW(1), 65)
-    CALL(evt_eff_fukidashi, 2, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 0, 0, 60)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 0, 0, LW(0), LW(1), LW(2), 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     CALL(kpa_chg_pose, STRING("KPA_S_5"))
     CALL(evt_npc_set_anim, STRING("ノコノコA"), STRING("NOK_R_3"))
     CALL(evt_npc_move_position, STRING("ノコノコA"), 316, -154, 500, 0, 0)
     CALL(evt_npc_move_position, STRING("ノコノコA"), 280, -199, 500, 0, 0)
     CALL(evt_npc_set_ry, STRING("ノコノコA"), 90)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_ie_in_kabe"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_ie_in_kabe"), MAP_OBJ_FLAG_HIDDEN)
     BEGIN_INLINE_EVENT
         WAIT_MS(100)
         CALL(evt_mapobj_get_position, STRING("S_ie_doa"), LW(0), LW(1), LW(2))
@@ -1132,13 +1213,14 @@ EVT_BEGIN(nok_00_koopa_evt)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコA"), NPC_FLAG_NO_WALL_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("ノコノコA"), NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_move_position, STRING("ノコノコA"), 258, -179, 500, 0, 0)
     CALL(evt_npc_move_position, STRING("ノコノコA"), 335, -231, 500, 0, 0)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 208, 177, 333, 208, 97, -134, 800, 11)
+    CALL(evt_cam3d_evt_set, 208, 177, 333, 208, 97, -134, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_5"), STRING("KPA_T_5"))
+
     // Bowser realizes it is only a poster.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_017"), 0, STRING("mario"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_018"), 0, STRING("ババ"))
@@ -1153,10 +1235,11 @@ EVT_BEGIN(nok_00_koopa_evt)
             CALL(evt_snd_bgm_freq, 0, LW(0))
             WAIT_MS(50)
         END_LOOP
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
         SET_VALUE(GF(1), 1)
     END_INLINE_EVENT
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_2"), STRING("KPA_T_4"))
+
     // Bowser, embarrassed, complains that he looks like a fool.
     CALL(evt_msg_print, 0, STRING("kpa_stg2_019"), 0, STRING("mario"))
     LABEL(99)
@@ -1164,8 +1247,9 @@ EVT_BEGIN(nok_00_koopa_evt)
     IF_INT_EQUAL(GF(1), 0)
         GOTO(99)
     END_IF
-    // The story advances and the game is saved.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_05_BOWSER_PETALBURG)
+
+    // The story advances and saving is offered.
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_25_05_BOWSER_PETALBURG)
     CALL(evt_fade_entry, FADE_OUT_SPOT_3D, 300, 0, 0, 0)
     CALL(evt_fade_end_wait)
     WAIT_MS(2000)
@@ -1178,6 +1262,7 @@ EVT_BEGIN(nok_00_koopa_evt)
 #endif
     CALL(evt_mario_set_mode, 0)
     CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_BOWSER_A1, 0, FADE_STORY_BOWSER_A3, 0)
+
     // The scene continues into the next Bowser stage (mri_00).
     CALL(evt_bero_mapchange, STRING("mri_00"), STRING(""))
     RETURN
@@ -1188,20 +1273,20 @@ EVT_END()
  * or the Bowser interlude when that is the story state), the NPCs, doors of the inn, shop and house,
  * the item shop, the inn's Kinopio, the save block, ambient butterflies,
  * the pit-fall return points and the star piece panel.
- * During the Trouble Center era before the father-and-son reunion it also starts the Kizayarou-style
- * running-around sequence.
+ * Between STG1_00_PETAL_MEADOWS and STG1_17_FATHER_SON_REUNITED (inclusive), it also starts the
+ * Show-off Koopa's talk and wander scripts.
  */
 EVT_BEGIN(nok_00_init_evt)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_04_BOWSER_ACTION_STAGE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_25_04_BOWSER_ACTION_STAGE)
         CALL(evt_mario_set_mode, 2)
         CALL_CHILD(nok_00_koopa_npc_entry)
         SPAWN_EVENT(nok_00_koopa_evt)
     ELSE
         SET_VALUE(LW(0), PTR(bero_entry_data))
         CALL(evt_bero_get_info)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_NOK1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_NOK1"))
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_01A_PETALBURG_1ST_TIME)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_NOK1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_NOK1"))
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG1_01A_PETALBURG_1ST_TIME)
             SPAWN_EVENT(bero_case_entry)
             SPAWN_EVENT(first_time_camera)
         ELSE
@@ -1209,22 +1294,22 @@ EVT_BEGIN(nok_00_init_evt)
         END_IF
     END_IF
     CALL(evt_npc_setup, PTR(npcEnt))
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_00_PETAL_MEADOWS)
-        IF_INT_LESS_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_17_FATHER_AND_SON_REUNITED)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG1_00_PETAL_MEADOWS)
+        IF_INT_LESS_OR_EQUAL(GSW_STORY_PROGRESS, STG1_17_FATHER_SON_REUNITED)
             CALL_CHILD(kizayarou_init)
         END_IF
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_NOK00_VISITED), 0)
-        SET_VALUE(GSWF(GSWF_NOK00_VISITED), 1)
+    IF_INT_EQUAL(GSWF_NOK_00_VISITED_UNUSED, 0)
+        SET_VALUE(GSWF_NOK_00_VISITED_UNUSED, 1)
     END_IF
-    CALL(evt_map_playanim, STRING("S_kawa"), 1, 0)
+    CALL(evt_map_playanim, STRING("S_kawa"), MAP_ANIM_PLAY_LOOP, 0)
     SET_VALUE(LW(0), PTR(&yado_data))
     CALL_CHILD(evt_door_setup)
     SET_VALUE(LW(0), PTR(&mise_data))
     CALL_CHILD(evt_door_setup)
     SET_VALUE(LW(0), PTR(&ie_data))
     CALL_CHILD(evt_door_setup)
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_04_BOWSER_ACTION_STAGE)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG2_25_04_BOWSER_ACTION_STAGE)
         CALL(evt_mobj_save_blk, STRING("mobj_save"), 155, 60, -60, 0, 0)
     END_IF
     CALL(evt_shop_setup, PTR(obj_list), PTR(goods_list), PTR(&shopper_data), PTR(trade_list))
@@ -1247,36 +1332,6 @@ EVT_BEGIN(nok_00_init_evt)
     END_LOOP
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_mobj_kururing_floor, STRING("kururin1"), -70, 0, 350, STRING("S_ground03"), 125, GSWF(GSWF_NOK00_STAR_PIECE_PANEL))
+    CALL(evt_mobj_kururing_floor, STRING("kururin1"), -70, 0, 350, STRING("S_ground03"), 125, GSWF_STARPIECE_34)
     RETURN
 EVT_END()
-
-/**
- * Allocates the PosterWork and finds the poster NPC's shape and the Koopa's "locator7" group
- * so draw_poster can draw the poster on top of Koopa A.
- */
-static USER_FUNC(pposter_init) {
-    NpcEntry* npc;
-
-    poster = _mapAlloc(sizeof(PosterWork));
-    memset(poster, 0, sizeof(PosterWork));
-    poster->shape = animPoseGetShapeIdx(npcNameToPtr("poster")->poseId, "pPlaneShape2");
-    // ノコノコA
-    npc = npcNameToPtr("\x83\x6D\x83\x52\x83\x6D\x83\x52\x41");
-    poster->group = animPoseGetGroupIdx(npc->poseId, "locator7");
-    animPoseSetDispCallBack(npc->poseId, draw_poster, NULL);
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Display callback of the Koopa A model: when the group drawn is the poster's locator
- * and the poster has been switched on, draws the poster's plane shape there.
- */
-static void draw_poster(void* userdata, s32 group) {
-    NpcEntry* npc = npcNameToPtr("poster");
-
-    if (group != poster->group || !(poster->flags & 1)) {
-        return;
-    }
-    animPoseDrawShape(npc->poseId, poster->shape);
-}

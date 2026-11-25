@@ -1,4 +1,6 @@
 // Bowser's collision in the side-scrolling interludes: ground, head, walls, and enemy and flame hits.
+
+#include "version.h"
 #include "eff/eff_gonbaba_breath.h"
 #include "driver/camdrv.h"
 #include "driver/hitdrv.h"
@@ -11,46 +13,15 @@
 #include <dolphin/types.h>
 #include <string.h>
 #include "mario/mario_sbr.h"
-#include "koopa.h"
 #include "libc_decls.h"
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 #include "koopa_hit.h"
 #include <math.h>
-#include "version.h"
+
 #if VERSION <= VERSION_DEMO_JP
 #include "mario/mario_balloon.h"
 #include "mario/mario_hit.h"
-
-// wall-slide offset: half of the move vector minus its component along the wall normal
-// FAKE: the normal components are passed as values in the order vx, nx, vz, nz, which gives the demo's float
-// register order in kpaSearchWallFront; taking Vec* n and reading n->x, n->z in the body swaps nx and nz.
-static inline void kpaWallSlide(f32 vx, f32 nx, f32 vz, f32 nz, f32* mx, f32* mz) {
-    f32 dot = vx * nx + vz * nz;
-    *mx = 0.5f * (vx - dot * nx);
-    *mz = 0.5f * (vz - dot * nz);
-}
 #endif
-s32 kpaEnemyFireHitChk(f32 x, f32 y, f32 z, f32 h, f32 w);
-static BOOL kpaFlameHitFilter(HitCheckQuery* query, HitEntry* entry);
-
-#define KPW (marioGetPtr()->kpaWork)
-#define KHEAD(i) (KPW->headHit[i])
-#define KHEADD(i) (KPW->headDist[i])
-#define KRIDE(i) (KPW->rideHit[i])
-#define KRIDED(i) (KPW->rideDist[i])
-
-/** Slope of a floor normal: its angle from vertical in degrees. */
-static inline f32 kpa_nrmToAngle(f32 x, f32 y, f32 z) {
-    return angleABf(0.0f, 0.0f, sqrtf(x * x + z * z), -y);
-}
-
-/** Tilts Bowser's groundRot to match the floor normal (x, y, z) and returns the floor's slope in degrees. */
-static inline f32 kpa_nrmSet(MarioWork* mario, f32 x, f32 y, f32 z) {
-    mario->groundRot.x = (s32)(angleABf(0.0f, 0.0f, 100.0f * z, 100.0f * y) - 180.0f);
-    mario->groundRot.y = 0.0f;
-    mario->groundRot.z = (s32)(angleABf(0.0f, 0.0f, 100.0f * x, 100.0f * y) - 180.0f);
-    return kpa_nrmToAngle(x, y, z);
-}
 
 /**
  * TRUE when any active puff of Bowser's fire breath touches the box centre of an object at (x, y, z) with height
@@ -129,9 +100,10 @@ s32 kpaEnemyHitChk(f32 x, f32 y, f32 z, f32 h, f32 w) {
     mario = marioGetPtr();
 
     if (kpaEnemyFireHitChk(x, y, z, h, w)) {
-        return 2;
+        return KPA_ENEMY_HIT_FIRE;
     }
-    // FAKE: no-op self-assignment; fixes the scheduling of the position.y load (permuter)
+
+    // FAKE: no-op self-assignment; fixes the scheduling of the position.y load
     mario->wPlayerCollisionBox.y = mario->wPlayerCollisionBox.y;
     dh = 0.5f * (mario->wPlayerCollisionBox.y + h);
     dw = 0.5f * (mario->wPlayerCollisionBox.x + w);
@@ -142,43 +114,48 @@ s32 kpaEnemyHitChk(f32 x, f32 y, f32 z, f32 h, f32 w) {
             if (kpaGetLevel() == 0 && kpaGetStageType() != 1 && mario->mutekiTimer == 0 && z < 50.0f) {
                 marioChgMot(MARIO_MOTION_JUMP_NPC);
             }
-            return 1;
+            return KPA_ENEMY_HIT_STOMP;
         }
         if (kpaMutekiCheck() == 1) {
-            return 3;
+            return KPA_ENEMY_HIT_STAR;
         }
         if (mario->mutekiTimer != 0) {
-            return 3;
+            return KPA_ENEMY_HIT_STAR;
         }
         if (mario->kpaNoHitTimer == 0) {
-            return 4;
+            return KPA_ENEMY_HIT_BOWSER;
         }
     }
-    return 0;
+    return KPA_ENEMY_HIT_NONE;
 }
 
-/** Clears the ten ceiling-hit slots (headHit/headDist). */
-static inline void kpa_headClear(void) {
-    s32 i;
-    for (i = 0; i < 10; i++) {
-        KHEAD(i) = NULL;
-        KHEADD(i) = 1000.0f;
-    }
+/**
+ * Tilts Bowser's groundRot to match the floor normal (nx, ny, nz) (whole degrees) and returns the floor's slope in
+ * degrees from horizontal (0 = flat floor).
+ */
+// Original name and size (0x218) from the JP demo map (UNUSED there: kpaSearchGround's calls are inlined). Like
+// mario_hit.c's _ABCtoAngleY, without its 0.01-degree rounding.
+static f32 ABCtoAngleY(f32 nx, f32 ny, f32 nz) {
+    MarioWork* mario = marioGetPtr();
+    mario->groundRot.x = (s32)(angleABf(0.0f, 0.0f, 100.0f * nz, 100.0f * ny) - 180.0f);
+    mario->groundRot.y = 0.0f;
+    mario->groundRot.z = (s32)(angleABf(0.0f, 0.0f, 100.0f * nx, 100.0f * ny) - 180.0f);
+    return angleABf(0.0f, 0.0f, sqrtf(nx * nx + nz * nz), -ny);
 }
 
-// Bowser's floor probe for mario_hit: casts rays down from several points under him (3, or 7 for giant Bowser, spread
-// along his facing), skipping slopes of 50 degrees or more. Returns the floor hit and its height in *outY; for a drop
-// of 2 or more units returns NULL with the depth and its direction in *outDepth/*outAng. Also records each probe's hit
-// as a ride object and sets the floor tilt.
-HitEntry* kpaSearchGround(f32* outY, f32* outDepth, f32* outAng, f32 range) {
+/**
+ * Bowser's floor probe for mario_hit: casts rays down from three points (seven at level 3) to range below his feet,
+ * ignoring floors of 50 degrees or more; a floor 2 or more below him gives the drop in *outDepth instead. Returns the
+ * last floor hit with its height in *outY (else his own y) and records each probe's hit for riding.
+ */
+HitEntry* kpaSearchGround(f32 range, f32* outY, f32* outDepth, f32* outAng) {
     s32 n, i;
     MarioWork* m;
-    MarioWork* m2;
     HitEntry* hit;
     HitEntry* best;
     Vec zero = {0.0f, 0.0f, 0.0f};
     f32 hx, hy, hz, dist, nx, ny, nz, nv;
-    f32 h, deg, ex, ez, fx, fz, ang;
+    f32 h, deg, ang;
     f32 rad, r2b, r3, bd, yh, r2, px, py, pz, ox, oz;
 
     m = marioGetPtr();
@@ -207,9 +184,9 @@ HitEntry* kpaSearchGround(f32* outY, f32* outDepth, f32* outAng, f32 range) {
     px = m->position.x;
     py = m->position.y;
     pz = m->position.z;
-    for (i = 0; i < 10; i++) {
-        KRIDE(i) = NULL;
-        KRIDED(i) = 1000.0f;
+    for (i = 0; i < KPA_HIT_SLOTS; i++) {
+        marioGetPtr()->kpaWork->rideHit[i] = NULL;
+        marioGetPtr()->kpaWork->rideProbeX[i] = 1000.0f;
     }
     switch (kpaGetLevel()) {
         case 0:
@@ -269,15 +246,15 @@ HitEntry* kpaSearchGround(f32* outY, f32* outDepth, f32* outAng, f32 range) {
                 break;
         }
         dist = bd;
-        hit = hitCheckFilter(NULL, &hx, &hy, &hz, &dist, &nx, &ny, &nz, px + ox, yh, pz + oz, 0.0f, -1.0f, 0.0f);
+        hit = hitCheckFilter(NULL, px + ox, yh, pz + oz, 0.0f, -1.0f, 0.0f, &hx, &hy, &hz, &dist, &nx, &ny, &nz);
         if (hit) {
-            if (kpa_nrmSet(marioGetPtr(), nx, ny, nz) >= 50.0f) {
+            if (ABCtoAngleY(nx, ny, nz) >= 50.0f) {
                 hit = NULL;
             }
         }
         hy = (s32)(100.0f * hy + 0.5f) / 100.0f;
         if (hit) {
-            m->groundSlope = kpa_nrmSet(marioGetPtr(), nx, ny, nz);
+            m->groundSlope = ABCtoAngleY(nx, ny, nz);
             if (hy < py && __fabsf(hy - py) >= 2.0f) {
                 *outDepth = py - hy;
                 *outAng = angleABf(px, pz, hx, hz);
@@ -292,32 +269,39 @@ HitEntry* kpaSearchGround(f32* outY, f32* outDepth, f32* outAng, f32 range) {
                 best = hit;
             }
         }
-        KRIDE(i) = hit;
-        KRIDED(i) = ox;
+        kpaSetHitobjRide(i, hit);
+        kpaSetHitofsRide(i, ox);
     }
     return best;
 }
 
-/**
- * Bowser's ceiling probe for mario_hit: casts rays up from a per-level set of points over his head (some only
- * while jumping), at a reach set by level and motion.
- * Returns the ceiling hit and puts its height in pos->y, or the gap in *h; records each hit in headHit.
- * Not used while falling.
- */
-HitEntry* kpaSearchHead(Vec* pos, f32* h, f32 hgt) {
+/** The ceiling probe points of Bowser's size level: a count, then x, y and a jump-only mark for each point. */
+// Original name and size (0x14) from the JP demo map (UNUSED there: kpaSearchHead's call is inlined). The map lists
+// the tables as this unit's only function statics (_ofs0$577 .. headchkofs$581), reached from kpaSearchHead.
+s32* kpaGetHeadchkofs(s32 level) {
     static s32 _ofs0[] = {3, 12, 16, 1, 0, 16, 0, -9, 16, 0};
     static s32 _ofs1[] = {4, 25, 74, 0, 50, 65, 1, 0, 67, 0, -25, 62, 0};
     static s32 _ofs2[] = {6, 50, 102, 0, 76, 90, 1, 25, 100, 0, 0, 94, 0, -25, 90, 0, -45, 68, 0};
     static s32 _ofs3[] = {13, 170, 194, 1, 145, 204, 0, 120, 232, 0, 95, 227, 0, 70, 232, 0, 55, 232, 0,
                           30, 194, 0, 5, 187, 0, -20, 210, 0, -45, 201, 0, -70, 181, 0, -95, 153, 0, -120, 56, 0};
     static s32* headchkofs[] = {_ofs0, _ofs1, _ofs2, _ofs3};
-    s32 i, j, n;
+    return headchkofs[level];
+}
+
+/**
+ * Bowser's ceiling probe for mario_hit: casts rays up from a per-level set of points over his head (some only
+ * while jumping), at a reach set by level and motion.
+ * Returns the ceiling hit and puts its height in pos->y, or the gap in *outB; records each hit in headHit.
+ * Not used while falling.
+ */
+HitEntry* kpaSearchHead(f32 hgt, Vec* pos, f32* outB) {
+    s32 i, n;
     s32* tbl;
     HitEntry* hit;
     HitEntry* best;
     MarioWork* mario;
     f32 deg, rad, off, c, s_, x, y, z, hx, hy, hz, nx, ny, nz, d;
-    f32 oy, oz, mode;
+    f32 oy, oz;
     s32 md;
 
     mario = marioGetPtr();
@@ -330,10 +314,10 @@ HitEntry* kpaSearchHead(Vec* pos, f32* h, f32 hgt) {
     } else {
         deg = toMovedir(mario->displayDirection);
     }
-    off = *h;
-    *h = -1.0f;
-    kpa_headClear();
-    tbl = headchkofs[kpaGetLevel()];
+    off = *outB;
+    *outB = -1.0f;
+    kpaClearHitobjHead();
+    tbl = kpaGetHeadchkofs(kpaGetLevel());
     n = *tbl++;
     if (!(mario->flags & MARIO_FLAG_IS_JUMPING)) {
         switch (kpaGetLevel()) {
@@ -379,16 +363,16 @@ HitEntry* kpaSearchHead(Vec* pos, f32* h, f32 hgt) {
         y = mario->position.y + oy;
         z = mario->position.z + oz;
         d = off;
-        hit = hitCheckFilter(NULL, &hx, &hy, &hz, &d, &nx, &ny, &nz, x, y, z, 0.0f, 1.0f, 0.0f);
+        hit = hitCheckFilter(NULL, x, y, z, 0.0f, 1.0f, 0.0f, &hx, &hy, &hz, &d, &nx, &ny, &nz);
         if (hit) {
             hy = (s32)(100.0f * hy + 0.5f) / 100.0f;
             if (y + off >= hy) {
                 pos->y = hy;
                 best = hit;
-                *h = 0.0f;
-                KHEAD(i) = hit;
+                *outB = 0.0f;
+                kpaSetHitobjHead(i, hit);
             } else {
-                *h = hy - pos->y - off;
+                *outB = hy - pos->y - off;
             }
         }
     }
@@ -400,20 +384,28 @@ HitEntry* kpaSearchFrontUnder(void) {
     return NULL;
 }
 
+/** Records the object ceiling probe i hit (kpaGetHitobjHead reads it). */
+// Original name and size (0x48) from the JP demo map (UNUSED there: every call is inlined).
+void kpaSetHitobjHead(s32 i, HitEntry* hit) {
+    marioGetPtr()->kpaWork->headHit[i] = hit;
+}
+
 /** The object ceiling probe i hit this frame (mobjdrv uses it for blocks hit from below). */
 HitEntry* kpaGetHitobjHead(s32 i) {
-    HitEntry** e = &KPW->headHit[i];
+    // FAKE: address temporary; the plain return of headHit[i] changes the object
+    HitEntry** e = &marioGetPtr()->kpaWork->headHit[i];
     return *e;
 }
 
-/** The first object any ceiling probe hit; JP and the demo check only the first probe. */
+/** The first object any ceiling probe hit; JP and the early demos check only the first probe. */
 HitEntry* kpaGetHitobjHead2(void) {
 #if VERSION >= VERSION_US
     s32 i;
     HitEntry* hit;
+
     HitEntry* ret;
-    for (i = 0; i < 10; i++) {
-        hit = KHEAD(i);
+    for (i = 0; i < KPA_HIT_SLOTS; i++) {
+        hit = marioGetPtr()->kpaWork->headHit[i];
         ret = hit;
         if (hit) {
             break;
@@ -421,19 +413,48 @@ HitEntry* kpaGetHitobjHead2(void) {
     }
     return ret;
 #else
-    return KPW->headHit[0];
+    return marioGetPtr()->kpaWork->headHit[0];
 #endif
+}
+
+/** Clears the ten ceiling-hit slots (headHit/headDist). */
+// Original name and size (0x84) from the JP demo map (UNUSED there: every call is inlined).
+void kpaClearHitobjHead(void) {
+    s32 i;
+    for (i = 0; i < KPA_HIT_SLOTS; i++) {
+        marioGetPtr()->kpaWork->headHit[i] = NULL;
+        marioGetPtr()->kpaWork->headDist[i] = 1000.0f;
+    }
+}
+
+/** Records ceiling probe i's offset (the head counterpart of kpaSetHitofsRide). */
+// Original names and sizes (0x48, 0x3c) from the JP demo map (UNUSED there: nothing calls them): the head forms of
+// kpaSetHitofsRide and kpaGetHitofsRide, on the float array kpaClearHitobjHead resets next to headHit.
+void kpaSetHitofsHead(s32 i, f32 ofs) {
+    marioGetPtr()->kpaWork->headDist[i] = ofs;
+}
+
+/** Ceiling probe i's recorded offset (1000.0f when clear). */
+f32 kpaGetHitofsHead(s32 i) {
+    return marioGetPtr()->kpaWork->headDist[i];
+}
+
+/** Records the object floor probe i stands on (kpaGetHitobjRide reads it). */
+// Original name and size (0x48) from the JP demo map (UNUSED there: every call is inlined).
+void kpaSetHitobjRide(s32 i, HitEntry* hit) {
+    marioGetPtr()->kpaWork->rideHit[i] = hit;
 }
 
 /** The floor object floor probe i is standing on (mobjdrv uses it for blocks stood on). */
 HitEntry* kpaGetHitobjRide(s32 i) {
-    HitEntry** e = &KPW->rideHit[i];
+    // FAKE: address temporary; the plain return of rideHit[i] changes the object
+    HitEntry** e = &marioGetPtr()->kpaWork->rideHit[i];
     return *e;
 }
 
 /** The first floor object any floor probe is standing on, or NULL. */
 HitEntry* kpaChkHitobjRide(void) {
-    KpaWork* w = KPW;
+    KpaWork* w = marioGetPtr()->kpaWork;
     HitEntry* r;
     r = w->rideHit[0];
     if (!r) {
@@ -454,6 +475,8 @@ HitEntry* kpaChkHitobjRide(void) {
                                     r = w->rideHit[8];
                                     if (!r) {
                                         r = w->rideHit[9];
+
+                                        // Both branches return r; the test is in the retail code
                                         if (r) {
                                             return r;
                                         } else {
@@ -472,7 +495,7 @@ HitEntry* kpaChkHitobjRide(void) {
 }
 
 /**
- * No return statement: the original falls off the end (callers ignore the result).
+ * No return statement: this reconstruction falls off the end; the original C return type is unproven.
  * Declared void, the kpaWork pointer lands in r3 instead of r4, so the long return type stays.
  */
 long kpaClearHitobjRide(void) {
@@ -489,10 +512,23 @@ long kpaClearHitobjRide(void) {
     mario->kpaWork->rideHit[9] = NULL;
 }
 
+/** Records floor probe i's x offset. */
+// Original name and size (0x48) from the JP demo map (UNUSED there: every call is inlined).
+void kpaSetHitofsRide(s32 i, f32 ofs) {
+    marioGetPtr()->kpaWork->rideProbeX[i] = ofs;
+}
+
+/** Floor probe i's recorded x offset (1000.0f when clear). */
+// Original name and size (0x3c) from the JP demo map (UNUSED there: nothing calls it); the getter of
+// kpaSetHitofsRide's field.
+f32 kpaGetHitofsRide(s32 i) {
+    return marioGetPtr()->kpaWork->rideProbeX[i];
+}
+
 /** The object Bowser's body spheres touched this frame (kpaHitCheck), or NULL when the player is not Bowser. */
 HitEntry* kpaGetHitobj(void) {
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId != 2) {
+    if (mario->characterId != CHARACTER_BOWSER) {
         return NULL;
     }
     return mario->kpaWork->objHit;
@@ -501,7 +537,7 @@ HitEntry* kpaGetHitobj(void) {
 /** The object his fire breath touched this frame (kpaFireMain), or NULL when the player is not Bowser. */
 HitEntry* kpaGetHitFlame(void) {
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId != 2) {
+    if (mario->characterId != CHARACTER_BOWSER) {
         return NULL;
     }
     return mario->kpaWork->flameHit;
@@ -512,7 +548,7 @@ typedef struct HeadSphere {
     s32 y;
     s32 radius;
     s32 mode;
-} HeadSphere; // mode: 0 always, 1 only while jumping, 2 only while not jumping, 3 only when neither jumping nor falling
+} HeadSphere; // mode: 0 always, 1 only while jumping, 2 only while not jumping, 3 only while neither jumping nor falling
 typedef struct HeadSphereSet1 {
     s32 count;
     HeadSphere spheres[1];
@@ -525,6 +561,7 @@ typedef struct HeadSphereSet4 {
     s32 count;
     HeadSphere spheres[4];
 } HeadSphereSet4;
+
 /**
  * Bowser's collision spheres for each power-up level (small, normal, big, giant): count, then forward offset,
  * height, radius and when each is active; kpaHitCheck tests them against map objects through head_sphere_data.
@@ -560,7 +597,12 @@ static HeadSphereSet4 head_sphere_data_lv3 = {
     {-43, 142, 74, 1},
     },
 };
-static s32* head_sphere_data[] = {(s32*)&head_sphere_data_lv0, (s32*)&head_sphere_data_lv1, (s32*)&head_sphere_data_lv2, (s32*)&head_sphere_data_lv3};
+static s32* head_sphere_data[] = {
+    (s32*)&head_sphere_data_lv0,
+    (s32*)&head_sphere_data_lv1,
+    (s32*)&head_sphere_data_lv2,
+    (s32*)&head_sphere_data_lv3,
+};
 
 /**
  * Tests Bowser's body against map objects with the per-level head spheres (head_sphere_data);
@@ -576,15 +618,15 @@ HitEntry* kpaHitCheck(void) {
     s32 n;
     MarioWork* mario;
     HitEntry* best;
-    f32 rad, x, y, z, r, sn;
+    f32 x, y, z, r, sn;
 
     best = NULL;
     mario = marioGetPtr();
-    if (mario->characterId != 2) {
+    if (mario->characterId != CHARACTER_BOWSER) {
         return NULL;
     }
     mario->kpaWork->objHit = NULL;
-    kpa_headClear();
+    kpaClearHitobjHead();
     if (kpaFireAttackCheck() == 1) {
         return NULL;
     }
@@ -618,11 +660,9 @@ HitEntry* kpaHitCheck(void) {
         }
         hit = hitCheckSphereFilter(NULL, x, y, z, r);
         if ((mario->flags & MARIO_FLAG_IS_JUMPING) && (hitGetAttr(hit) & HIT_ATTR_MOBJ) && mobjHitObjPtrToPtr(hit)->position.y > y) {
-            KHEAD(j) = hit;
+            kpaSetHitobjHead(j, hit);
         }
         if (hit) {
-            if (1) {
-            }
             best = hit;
         }
     }
@@ -648,13 +688,20 @@ HitEntry* kpaFlameHitCheck(f32 x, f32 y, f32 z, f32 r) {
     return hitCheckSphereFilter(kpaFlameHitFilter, x, y, z, r);
 }
 
-// FAKE: stand-in for a function the linker stripped from the original object; its 0.5f is the first
-// literal in the target .sdata2 pool (codegen runs bottom-up, so it must sit last in the file). The map file
-// of the Japanese July 2004 demo (MarioSt.MAP) shows the head of koopa_hit.o as kpaSearchWallFront (kept there, 0x320 bytes) and the stripped
-// _reflect2/_reflect; the demo kpaSearchWallFront's literals are 45, 0.75, 0.25, 0.5, so the US original
-// (whose only literal left is 0.5) was a different version and cannot be taken from the demo.
+/**
+ * Slides a move (vx, vz) along a wall with normal (nx, nz): the move minus its part into the wall, at half speed.
+ * Original name and size (0x28) from the JP demo map (UNUSED there: kpaSearchWallFront's calls are inlined).
+ * JP and later never call it; its stripped copy is what puts 0.5f first in this object's .sdata2 pool (code is
+ * generated bottom-up, so it sits last in the file there).
+ */
+void _reflect(f32 vx, f32 nx, f32 vz, f32 nz, f32* mx, f32* mz) {
+    f32 dot = vx * nx + vz * nz;
+    *mx = 0.5f * (vx - dot * nx);
+    *mz = 0.5f * (vz - dot * nz);
+}
+
 #if VERSION <= VERSION_DEMO_JP
-/** demo only: Koopa's front-wall search (two rays at 3/4 and 1/4 of the body height), called from searchFrontWall */
+/** early demos only: Koopa's front-wall search (two rays at 3/4 and 1/4 of the body height), called from searchFrontWall */
 HitEntry* kpaSearchWallFront(Vec* pos, f32* h, f32 dx, f32 dz) {
     Vec p;
     Vec dir;
@@ -674,7 +721,7 @@ HitEntry* kpaSearchWallFront(Vec* pos, f32* h, f32 dx, f32 dz) {
 
     mario = marioGetPtr();
     sincosf(&s, &c, dz);
-    if (marioChkSts(0x10) && (__fabsf(mario->groundRot.x) >= 45.0f || __fabsf(mario->groundRot.z) >= 45.0f)) {
+    if (marioChkSts(MARIO_STS_ROLL) && (__fabsf(mario->groundRot.x) >= 45.0f || __fabsf(mario->groundRot.z) >= 45.0f)) {
         pos->x += dx * s;
         pos->z += dx * c;
         return NULL;
@@ -692,7 +739,7 @@ HitEntry* kpaSearchWallFront(Vec* pos, f32* h, f32 dx, f32 dz) {
         if (chkBalloon(hit)) {
             mario->hitobjFrontWall = hit;
         }
-        kpaWallSlide(s * dx, nrm.x, c * dx, nrm.z, &mx, &mz);
+        _reflect(s * dx, nrm.x, c * dx, nrm.z, &mx, &mz);
     }
     dist = range;
     p.y = pos->y + h2;
@@ -705,12 +752,12 @@ HitEntry* kpaSearchWallFront(Vec* pos, f32* h, f32 dx, f32 dz) {
             if (dist < bestDist) {
                 hit = hit2;
                 bestDist = dist;
-                kpaWallSlide(s * dx, nrm.x, c * dx, nrm.z, &mx, &mz);
+                _reflect(s * dx, nrm.x, c * dx, nrm.z, &mx, &mz);
             }
         } else {
             hit = hit2;
             bestDist = dist;
-            kpaWallSlide(s * dx, nrm.x, c * dx, nrm.z, &mx, &mz);
+            _reflect(s * dx, nrm.x, c * dx, nrm.z, &mx, &mz);
         }
     }
     if (hit) {
@@ -722,11 +769,5 @@ HitEntry* kpaSearchWallFront(Vec* pos, f32* h, f32 dx, f32 dz) {
     pos->x += dx * s;
     pos->z += dx * c;
     return NULL;
-}
-#else
-// FAKE: stand-in for a function the linker stripped from the original object (its 0.5f is the first .sdata2
-// literal); see docs/FAKES.md.
-static f32 kpaHalf(f32 v) {
-    return 0.5f * v;
 }
 #endif

@@ -2,8 +2,7 @@
 
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "mario/mario.h"
+#include "libc_decls.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_map.h"
@@ -11,14 +10,20 @@
 #include "evt/evt_msg.h"
 #include "evt/evt_party.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "moo.h"
-#include "math.h"
+#include "system.h"
+#include "pmario_sound.h"
+
+#include "mario/mario.h"
 #include "party.h"
-#include "libc_decls.h"
 
 static USER_FUNC(mario_kirimomi);
 static USER_FUNC(z);
+
+static EvtWord party_damage_pose[52];
+static EvtWord mario_fly[203];
+EvtWord moo_03_init_evt[35];
 
 /** Event script: puts the active partner (by party id) into its hurt pose during the flight through space. */
 static EVT_BEGIN(party_damage_pose)
@@ -53,7 +58,7 @@ static EVT_BEGIN(mario_fly)
     CALL(evt_party_stop, 0)
     WAIT_FRAMES(1)
     CALL(evt_snd_sfxon, STRING("SFX_STG7_MARIO_FLY1"), LW(10))
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_set_pose, STRING("M_F_1"))
     CALL_CHILD(party_damage_pose)
     WAIT_FRAMES(1)
@@ -64,7 +69,7 @@ static EVT_BEGIN(mario_fly)
     CALL(evt_mario_set_pos, -300, -300, 0)
     CALL(evt_party_set_pos, 0, -300, -300, 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, -304, 304, 3000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, -304, 304, 3000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_FLOAT_VALUE(LW(2), LW(0))
@@ -78,7 +83,7 @@ static EVT_BEGIN(mario_fly)
     END_INLINE_EVENT
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, -304, 304, 3000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, -304, 304, 3000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         SET_FLOAT_VALUE(LW(2), LW(0))
@@ -124,11 +129,11 @@ EVT_END()
  * and the flight scene (mario_fly) with Mario and the partner tumbling.
  */
 EVT_BEGIN(moo_03_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG7_MON1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG7_MOO3"))
-    CALL(evt_map_playanim, STRING("hosi_01"), 1, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG7_MON1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG7_MOO3"))
+    CALL(evt_map_playanim, STRING("hosi_01"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(z)
-    CALL(evt_cam3d_evt_set, 0, 0, LW(0), 0, 0, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 0, LW(0), 0, 0, 0, 0, EASING_SINE_IN_OUT)
     SPAWN_EVENT(mario_fly)
     WAIT_FRAMES(10)
     BEGIN_INLINE_EVENT
@@ -136,17 +141,6 @@ EVT_BEGIN(moo_03_init_evt)
     END_INLINE_EVENT
     RETURN
 EVT_END()
-
-/**
- * Script helper: stores in LW(0) the camera distance, as an event float,
- * at which 240 units fit the field of view (tan of 12.5 degrees).
- */
-static USER_FUNC(z) {
-    f32 t = tan(0.21816612780094147);
-    // evt float encoding of the distance that fits 240 units in the fov
-    event->lwData[0] = (s32)(1024.0f * (240.0f / t / 2)) - 230000000;
-    return EVT_RETURN_DONE;
-}
 
 /**
  * Script helper (runs every frame, blocking): spins Mario
@@ -160,7 +154,7 @@ static USER_FUNC(mario_kirimomi) {
     mario->rot.z -= 10.0f;
     mario->rot.z = fmod(mario->rot.z, 360.0);
     if (party != NULL) {
-        if (party->currentMemberId != 4) {
+        if (party->currentMemberId != PARTY_YOSHI) {
             party->rotOfsY = party->height / 2;
         } else {
             party->rotOfsY = (party->height - 10.0f) / 2;
@@ -170,4 +164,16 @@ static USER_FUNC(mario_kirimomi) {
         party->rotation = fmod(party->rotation, 360.0);
     }
     return EVT_RETURN_BLOCK;
+}
+
+/**
+ * Script helper: stores in LW(0) the camera distance, as an event float,
+ * at which 240 units fit the field of view (tan of 12.5 degrees).
+ */
+static USER_FUNC(z) {
+    f32 t = tan(0.21816612780094147);
+
+    // evt float encoding of the distance that fits 240 units in the fov
+    event->lwData[0] = FLOAT(240.0f / t / 2);
+    return EVT_RETURN_DONE;
 }

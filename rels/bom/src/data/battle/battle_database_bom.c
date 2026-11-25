@@ -8,65 +8,66 @@
 #include "battle/battle_stage.h"
 #include "battle/battle_stage_object.h"
 #include "driver/npcdrv.h"
+#include "eff/n64/eff_snowfall_n64.h"
 
 static USER_FUNC(_snow_control);
 
-BattleStageObjectData bom_btlobject_data[11];
-BattleStageData bom_btlstage_data[1];
-BattleUnitSetup btlparty_bom_bom_00_01_off_1[1];
-BattleGroupSetup btlgrp_bom_bom_00_01_off_1;
-BattleUnitSetup btlparty_bom_bom_03_01_off_1[2];
-BattleGroupSetup btlgrp_bom_bom_03_01_off_1;
-BattleUnitSetup btlparty_bom_bom_03_01_off_2[3];
-BattleGroupSetup btlgrp_bom_bom_03_01_off_2;
-BattleUnitSetup btlparty_bom_bom_03_03_off_1[2];
-BattleGroupSetup btlgrp_bom_bom_03_03_off_1;
-BattleUnitSetup btlparty_bom_bom_03_03_off_2[3];
-BattleGroupSetup btlgrp_bom_bom_03_03_off_2;
-BattleUnitSetup btlparty_bom_bom_04_01_off_1[2];
-BattleGroupSetup btlgrp_bom_bom_04_01_off_1;
-BattleUnitSetup btlparty_bom_bom_04_01_off_2[3];
-BattleGroupSetup btlgrp_bom_bom_04_01_off_2;
-BattleUnitSetup btlparty_bom_bom_04_02_off_1[2];
-BattleGroupSetup btlgrp_bom_bom_04_02_off_1;
-BattleUnitSetup btlparty_bom_bom_04_02_off_2[3];
-BattleGroupSetup btlgrp_bom_bom_04_02_off_2;
-BattleUnitSetup btlparty_bom_bom_04_03_off_1[4];
-BattleGroupSetup btlgrp_bom_bom_04_03_off_1;
-NpcBattleSelect btlgrpsel_bom_btlno_bom_test1_off[2];
-NpcBattleSelect btlgrpsel_bom_btlno_bom_03_01_off[3];
-NpcBattleSelect btlgrpsel_bom_btlno_bom_03_02_off[3];
-NpcBattleSelect btlgrpsel_bom_btlno_bom_03_03_off[3];
-NpcBattleSelect btlgrpsel_bom_btlno_bom_04_01_off[3];
-NpcBattleSelect btlgrpsel_bom_btlno_bom_04_02_off[3];
-NpcBattleSelect btlgrpsel_bom_btlno_bom_04_03_off[2];
+static BattleStageObjectData bom_btlobject_data[11];
+static BattleStageData bom_btlstage_data[1];
+static BattleUnitSetup btlparty_bom_bom_00_01_off_1[1];
+static BattleGroupSetup btlgrp_bom_bom_00_01_off_1;
+static BattleUnitSetup btlparty_bom_bom_03_01_off_1[2];
+static BattleGroupSetup btlgrp_bom_bom_03_01_off_1;
+static BattleUnitSetup btlparty_bom_bom_03_01_off_2[3];
+static BattleGroupSetup btlgrp_bom_bom_03_01_off_2;
+static BattleUnitSetup btlparty_bom_bom_03_03_off_1[2];
+static BattleGroupSetup btlgrp_bom_bom_03_03_off_1;
+static BattleUnitSetup btlparty_bom_bom_03_03_off_2[3];
+static BattleGroupSetup btlgrp_bom_bom_03_03_off_2;
+static BattleUnitSetup btlparty_bom_bom_04_01_off_1[2];
+static BattleGroupSetup btlgrp_bom_bom_04_01_off_1;
+static BattleUnitSetup btlparty_bom_bom_04_01_off_2[3];
+static BattleGroupSetup btlgrp_bom_bom_04_01_off_2;
+static BattleUnitSetup btlparty_bom_bom_04_02_off_1[2];
+static BattleGroupSetup btlgrp_bom_bom_04_02_off_1;
+static BattleUnitSetup btlparty_bom_bom_04_02_off_2[3];
+static BattleGroupSetup btlgrp_bom_bom_04_02_off_2;
+static BattleUnitSetup btlparty_bom_bom_04_03_off_1[4];
+static BattleGroupSetup btlgrp_bom_bom_04_03_off_1;
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_test1_off[2];
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_03_01_off[3];
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_03_02_off[3];
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_03_03_off[3];
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_04_01_off[3];
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_04_02_off[3];
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_04_03_off[2];
 NpcSetupBattleInfo btlsetup_bom_tbl[8];
 NpcTerritoryInfo btl_bom_setup_no_tbl[8];
-extern EvtWord bgset_bom_snow_event[];
+static EvtWord bgset_bom_snow_event[4];
 
 /**
  * Props of the Fahr Outpost battle stage: each entry names a model of the backdrop and where it stands, the
  * last entries being the background layers.
  */
-BattleStageObjectData bom_btlobject_data[] = {
-    {"yuki_front", 2, 1, {0.0f, 0.0f, 76.0f}, 0, 60, {0}},
-    {"yuki_back", 2, 1, {0.0f, 0.0f, -40.0f}, 10, 50, {0}},
-    {"kusa_01", 2, 1, {-167.0f, 0.0f, -21.0f}, 20, 40, {0}},
-    {"kusa_02", 2, 1, {162.0f, 0.0f, -11.0f}, 30, 30, {0}},
-    {"kabe_01", 2, 1, {194.0f, 0.0f, 66.0f}, 0, 60, {0}},
-    {"kabe_02", 2, 1, {111.0f, 0.0f, -25.0f}, 10, 50, {0}},
-    {"kabe_03", 2, 0, {-71.0f, 0.0f, -60.0f}, 0, 60, {0}},
-    {"ki_01", 2, 0, {185.0f, 0.0f, -55.0f}, 10, 50, {0}},
-    {"ki_02", 2, 0, {76.0f, 0.0f, -50.0f}, 20, 40, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
+static BattleStageObjectData bom_btlobject_data[] = {
+    {"yuki_front", 2, STAGE_LAYER_A2, {0.0f, 0.0f, 76.0f}, 0, 60, {0}},
+    {"yuki_back", 2, STAGE_LAYER_A2, {0.0f, 0.0f, -40.0f}, 10, 50, {0}},
+    {"kusa_01", 2, STAGE_LAYER_A2, {-167.0f, 0.0f, -21.0f}, 20, 40, {0}},
+    {"kusa_02", 2, STAGE_LAYER_A2, {162.0f, 0.0f, -11.0f}, 30, 30, {0}},
+    {"kabe_01", 2, STAGE_LAYER_A2, {194.0f, 0.0f, 66.0f}, 0, 60, {0}},
+    {"kabe_02", 2, STAGE_LAYER_A2, {111.0f, 0.0f, -25.0f}, 10, 50, {0}},
+    {"kabe_03", 2, STAGE_LAYER_A1, {-71.0f, 0.0f, -60.0f}, 0, 60, {0}},
+    {"ki_01", 2, STAGE_LAYER_A1, {185.0f, 0.0f, -55.0f}, 10, 50, {0}},
+    {"ki_02", 2, STAGE_LAYER_A1, {76.0f, 0.0f, -50.0f}, 20, 40, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
 };
 
 /**
  * Battle stage of Fahr Outpost: the stage model directories, the props above, the backdrop weapons and the
  * background event that runs during the fight.
  */
-BattleStageData bom_btlstage_data[] = {
+static BattleStageData bom_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_07_0", // specificStageDataDir
@@ -83,13 +84,10 @@ BattleStageData bom_btlstage_data[] = {
     },
 };
 
-/**
- * Enemy party of battle bom_00_01 in Fahr Outpost: Goomba (start positions and item drop tables included).
- */
-BattleUnitSetup btlparty_bom_bom_00_01_off_1[] = {
+static BattleUnitSetup btlparty_bom_bom_00_01_off_1[] = {
     {
         &unit_kuriboo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -99,11 +97,7 @@ BattleUnitSetup btlparty_bom_bom_00_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_00_01 in Fahr Outpost: the party above with its item-drop weights and the heart
- * and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_00_01_off_1 = {
+static BattleGroupSetup btlgrp_bom_bom_00_01_off_1 = {
     1, // numEnemies
     btlparty_bom_bom_00_01_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -113,14 +107,10 @@ BattleGroupSetup btlgrp_bom_bom_00_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_03_01, variant 1, in Fahr Outpost: 2 x Ice Puff (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_bom_bom_03_01_off_1[] = {
+static BattleUnitSetup btlparty_bom_bom_03_01_off_1[] = {
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -130,7 +120,7 @@ BattleUnitSetup btlparty_bom_bom_03_01_off_1[] = {
     },
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -140,11 +130,7 @@ BattleUnitSetup btlparty_bom_bom_03_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_03_01, variant 1 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_03_01_off_1 = {
+static BattleGroupSetup btlgrp_bom_bom_03_01_off_1 = {
     2, // numEnemies
     btlparty_bom_bom_03_01_off_1, // enemyData
     25, // heldItemWeight
@@ -155,14 +141,10 @@ BattleGroupSetup btlgrp_bom_bom_03_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_03_01, variant 2, in Fahr Outpost: 3 x Ice Puff (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_bom_bom_03_01_off_2[] = {
+static BattleUnitSetup btlparty_bom_bom_03_01_off_2[] = {
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -172,7 +154,7 @@ BattleUnitSetup btlparty_bom_bom_03_01_off_2[] = {
     },
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -182,7 +164,7 @@ BattleUnitSetup btlparty_bom_bom_03_01_off_2[] = {
     },
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -192,11 +174,7 @@ BattleUnitSetup btlparty_bom_bom_03_01_off_2[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_03_01, variant 2 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_03_01_off_2 = {
+static BattleGroupSetup btlgrp_bom_bom_03_01_off_2 = {
     3, // numEnemies
     btlparty_bom_bom_03_01_off_2, // enemyData
     25, // heldItemWeight
@@ -207,14 +185,10 @@ BattleGroupSetup btlgrp_bom_bom_03_01_off_2 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_03_03, variant 1, in Fahr Outpost: 2 x Frost Piranha (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_bom_bom_03_03_off_1[] = {
+static BattleUnitSetup btlparty_bom_bom_03_03_off_1[] = {
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -224,7 +198,7 @@ BattleUnitSetup btlparty_bom_bom_03_03_off_1[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -234,11 +208,7 @@ BattleUnitSetup btlparty_bom_bom_03_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_03_03, variant 1 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_03_03_off_1 = {
+static BattleGroupSetup btlgrp_bom_bom_03_03_off_1 = {
     2, // numEnemies
     btlparty_bom_bom_03_03_off_1, // enemyData
     25, // heldItemWeight
@@ -249,14 +219,10 @@ BattleGroupSetup btlgrp_bom_bom_03_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_03_03, variant 2, in Fahr Outpost: 3 x Frost Piranha (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_bom_bom_03_03_off_2[] = {
+static BattleUnitSetup btlparty_bom_bom_03_03_off_2[] = {
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -266,7 +232,7 @@ BattleUnitSetup btlparty_bom_bom_03_03_off_2[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -276,7 +242,7 @@ BattleUnitSetup btlparty_bom_bom_03_03_off_2[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -286,11 +252,7 @@ BattleUnitSetup btlparty_bom_bom_03_03_off_2[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_03_03, variant 2 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_03_03_off_2 = {
+static BattleGroupSetup btlgrp_bom_bom_03_03_off_2 = {
     3, // numEnemies
     btlparty_bom_bom_03_03_off_2, // enemyData
     25, // heldItemWeight
@@ -301,14 +263,10 @@ BattleGroupSetup btlgrp_bom_bom_03_03_off_2 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_04_01, variant 1, in Fahr Outpost: Frost Piranha and Ice Puff (start positions
- * and item drop tables included).
- */
-BattleUnitSetup btlparty_bom_bom_04_01_off_1[] = {
+static BattleUnitSetup btlparty_bom_bom_04_01_off_1[] = {
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -318,7 +276,7 @@ BattleUnitSetup btlparty_bom_bom_04_01_off_1[] = {
     },
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -328,11 +286,7 @@ BattleUnitSetup btlparty_bom_bom_04_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_04_01, variant 1 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_04_01_off_1 = {
+static BattleGroupSetup btlgrp_bom_bom_04_01_off_1 = {
     2, // numEnemies
     btlparty_bom_bom_04_01_off_1, // enemyData
     25, // heldItemWeight
@@ -343,14 +297,10 @@ BattleGroupSetup btlgrp_bom_bom_04_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_04_01, variant 2, in Fahr Outpost: 2 x Frost Piranha and Ice Puff (start
- * positions and item drop tables included).
- */
-BattleUnitSetup btlparty_bom_bom_04_01_off_2[] = {
+static BattleUnitSetup btlparty_bom_bom_04_01_off_2[] = {
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -360,7 +310,7 @@ BattleUnitSetup btlparty_bom_bom_04_01_off_2[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -370,7 +320,7 @@ BattleUnitSetup btlparty_bom_bom_04_01_off_2[] = {
     },
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -380,11 +330,7 @@ BattleUnitSetup btlparty_bom_bom_04_01_off_2[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_04_01, variant 2 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_04_01_off_2 = {
+static BattleGroupSetup btlgrp_bom_bom_04_01_off_2 = {
     3, // numEnemies
     btlparty_bom_bom_04_01_off_2, // enemyData
     25, // heldItemWeight
@@ -395,14 +341,10 @@ BattleGroupSetup btlgrp_bom_bom_04_01_off_2 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_04_02, variant 1, in Fahr Outpost: Ice Puff and Frost Piranha (start positions
- * and item drop tables included).
- */
-BattleUnitSetup btlparty_bom_bom_04_02_off_1[] = {
+static BattleUnitSetup btlparty_bom_bom_04_02_off_1[] = {
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -412,7 +354,7 @@ BattleUnitSetup btlparty_bom_bom_04_02_off_1[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -422,11 +364,7 @@ BattleUnitSetup btlparty_bom_bom_04_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_04_02, variant 1 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_04_02_off_1 = {
+static BattleGroupSetup btlgrp_bom_bom_04_02_off_1 = {
     2, // numEnemies
     btlparty_bom_bom_04_02_off_1, // enemyData
     25, // heldItemWeight
@@ -437,14 +375,10 @@ BattleGroupSetup btlgrp_bom_bom_04_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_04_02, variant 2, in Fahr Outpost: 2 x Ice Puff and Frost Piranha (start
- * positions and item drop tables included).
- */
-BattleUnitSetup btlparty_bom_bom_04_02_off_2[] = {
+static BattleUnitSetup btlparty_bom_bom_04_02_off_2[] = {
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -454,7 +388,7 @@ BattleUnitSetup btlparty_bom_bom_04_02_off_2[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -464,7 +398,7 @@ BattleUnitSetup btlparty_bom_bom_04_02_off_2[] = {
     },
     {
         &unit_bllizard, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -474,11 +408,7 @@ BattleUnitSetup btlparty_bom_bom_04_02_off_2[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_04_02, variant 2 in Fahr Outpost: the party above with its item-drop weights and
- * the heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_04_02_off_2 = {
+static BattleGroupSetup btlgrp_bom_bom_04_02_off_2 = {
     3, // numEnemies
     btlparty_bom_bom_04_02_off_2, // enemyData
     25, // heldItemWeight
@@ -489,14 +419,10 @@ BattleGroupSetup btlgrp_bom_bom_04_02_off_2 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle bom_04_03 in Fahr Outpost: 4 x Frost Piranha (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_bom_bom_04_03_off_1[] = {
+static BattleUnitSetup btlparty_bom_bom_04_03_off_1[] = {
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -506,7 +432,7 @@ BattleUnitSetup btlparty_bom_bom_04_03_off_1[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -516,7 +442,7 @@ BattleUnitSetup btlparty_bom_bom_04_03_off_1[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -526,7 +452,7 @@ BattleUnitSetup btlparty_bom_bom_04_03_off_1[] = {
     },
     {
         &unit_ice_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -536,11 +462,7 @@ BattleUnitSetup btlparty_bom_bom_04_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle bom_04_03 in Fahr Outpost: the party above with its item-drop weights and the heart
- * and flower drop tables.
- */
-BattleGroupSetup btlgrp_bom_bom_04_03_off_1 = {
+static BattleGroupSetup btlgrp_bom_bom_04_03_off_1 = {
     4, // numEnemies
     btlparty_bom_bom_04_03_off_1, // enemyData
     25, // heldItemWeight
@@ -551,64 +473,42 @@ BattleGroupSetup btlgrp_bom_bom_04_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Developer test battle 1 in Fahr Outpost: always fights bom_00_01_off_1. */
-NpcBattleSelect btlgrpsel_bom_btlno_bom_test1_off[] = {
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_test1_off[] = {
     {50, &btlgrp_bom_bom_00_01_off_1, bom_btlstage_data},
     {0},
 };
 
-/**
- * Battle 03_01 in Fahr Outpost picks one of these enemy groups at random: bom_03_01_off_1 (weight 20) and
- * bom_03_01_off_2 (weight 10).
- */
-NpcBattleSelect btlgrpsel_bom_btlno_bom_03_01_off[] = {
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_03_01_off[] = {
     {20, &btlgrp_bom_bom_03_01_off_1, bom_btlstage_data},
     {10, &btlgrp_bom_bom_03_01_off_2, bom_btlstage_data},
     {0},
 };
 
-/**
- * Battle 03_02 in Fahr Outpost picks one of these enemy groups at random: bom_03_01_off_1 (weight 10) and
- * bom_03_01_off_2 (weight 20).
- */
-NpcBattleSelect btlgrpsel_bom_btlno_bom_03_02_off[] = {
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_03_02_off[] = {
     {10, &btlgrp_bom_bom_03_01_off_1, bom_btlstage_data},
     {20, &btlgrp_bom_bom_03_01_off_2, bom_btlstage_data},
     {0},
 };
 
-/**
- * Battle 03_03 in Fahr Outpost picks one of these enemy groups at random: bom_03_03_off_1 (weight 10) and
- * bom_03_03_off_2 (weight 10).
- */
-NpcBattleSelect btlgrpsel_bom_btlno_bom_03_03_off[] = {
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_03_03_off[] = {
     {10, &btlgrp_bom_bom_03_03_off_1, bom_btlstage_data},
     {10, &btlgrp_bom_bom_03_03_off_2, bom_btlstage_data},
     {0},
 };
 
-/**
- * Battle 04_01 in Fahr Outpost picks one of these enemy groups at random: bom_04_01_off_1 (weight 10) and
- * bom_04_01_off_2 (weight 10).
- */
-NpcBattleSelect btlgrpsel_bom_btlno_bom_04_01_off[] = {
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_04_01_off[] = {
     {10, &btlgrp_bom_bom_04_01_off_1, bom_btlstage_data},
     {10, &btlgrp_bom_bom_04_01_off_2, bom_btlstage_data},
     {0},
 };
 
-/**
- * Battle 04_02 in Fahr Outpost picks one of these enemy groups at random: bom_04_02_off_1 (weight 10) and
- * bom_04_02_off_2 (weight 10).
- */
-NpcBattleSelect btlgrpsel_bom_btlno_bom_04_02_off[] = {
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_04_02_off[] = {
     {10, &btlgrp_bom_bom_04_02_off_1, bom_btlstage_data},
     {10, &btlgrp_bom_bom_04_02_off_2, bom_btlstage_data},
     {0},
 };
 
-/** Battle 04_03 in Fahr Outpost always fights one group, bom_04_03_off_1. */
-NpcBattleSelect btlgrpsel_bom_btlno_bom_04_03_off[] = {
+static NpcBattleSelect btlgrpsel_bom_btlno_bom_04_03_off[] = {
     {10, &btlgrp_bom_bom_04_03_off_1, bom_btlstage_data},
     {0},
 };
@@ -624,7 +524,7 @@ NpcSetupBattleInfo btlsetup_bom_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_bom_btlno_bom_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -634,7 +534,7 @@ NpcSetupBattleInfo btlsetup_bom_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_bom_btlno_bom_03_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -644,7 +544,7 @@ NpcSetupBattleInfo btlsetup_bom_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_bom_btlno_bom_03_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -654,7 +554,7 @@ NpcSetupBattleInfo btlsetup_bom_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_bom_btlno_bom_03_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -664,7 +564,7 @@ NpcSetupBattleInfo btlsetup_bom_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_bom_btlno_bom_04_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -674,7 +574,7 @@ NpcSetupBattleInfo btlsetup_bom_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_bom_btlno_bom_04_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -684,17 +584,13 @@ NpcSetupBattleInfo btlsetup_bom_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_bom_btlno_bom_04_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
     {0},
 };
 
-/**
- * Battle ids of Fahr Outpost (BTLNO_BOM_*) and their index into btlsetup_bom_tbl; handed to the battle system
- * by relSetBtlAddr.
- */
 NpcTerritoryInfo btl_bom_setup_no_tbl[] = {
     {"BTLNO_BOM_TEST1", 0},
     {"BTLNO_BOM_03_01", 1},
@@ -707,16 +603,14 @@ NpcTerritoryInfo btl_bom_setup_no_tbl[] = {
 };
 
 /** Background event of the Fahr Outpost battle stage: starts the snowfall effect for the whole battle. */
-EVT_BEGIN(bgset_bom_snow_event)
+static EVT_BEGIN(bgset_bom_snow_event)
     CALL(_snow_control)
     RETURN
 EVT_END()
 
-struct EffEntry* effSnowfallN64Entry(s32 type, s32 count);
-
 /**
- * Starts the 64-particle snowfall effect once, then keeps the event blocked
- * so the effect stays alive for the battle.
+ * Script helper (no arguments): starts the snowfall effect (effSnowfallN64Entry) on its first call, then keeps
+ * blocking.
  */
 static USER_FUNC(_snow_control) {
     if (isFirstCall) {

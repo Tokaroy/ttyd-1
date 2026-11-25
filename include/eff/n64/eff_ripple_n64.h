@@ -1,4 +1,6 @@
 // eff_ripple_n64.c: ripple entry (effRippleN64Entry), tilt setter (effRippleN64SetRxRz), work data.
+
+#include "driver/camdrv.h"
 #pragma once
 
 #include "driver/effdrv.h"
@@ -6,18 +8,18 @@
 #include <dolphin/mtx.h>
 
 typedef struct EffRippleN64Work {
-    s32 type;     // 0x0
-    Vec position; // 0x4
-    f32 scale;    // 0x10
-    f32 scaleY;   // 0x14
-    s32 alpha;    // 0x18
-    s32 lifetime; // 0x1C
-    s32 frame;    // 0x20
-    s32 offset;   // 0x24
-    f32 surfaceY; // 0x28, y + yOffset at entry; never read
-    f32 rx;       // 0x2C
-    f32 rz;       // 0x30
-    s32 cameraId; // 0x34, dispEntry camera
+    s32 type;          // 0x0
+    Vec position;      // 0x4
+    f32 scale;         // 0x10
+    f32 scaleY;        // 0x14
+    s32 alpha;         // 0x18
+    s32 lifetime;      // 0x1C
+    s32 frame;         // 0x20
+    s32 offset;        // 0x24
+    f32 reserved_28;   // 0x28, set to y + yOffset at entry, never read
+    f32 rx;            // 0x2C
+    f32 rz;            // 0x30
+    CameraId cameraId; // 0x34, dispEntry camera
 } EffRippleN64Work;
 
 EffectEntry* effRippleN64Entry(s32 type, f32 x, f32 y, f32 z, f32 yOffset);

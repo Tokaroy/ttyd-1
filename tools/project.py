@@ -179,13 +179,13 @@ class ProjectConfig:
         self.warn_missing_config: bool = False  # Warn on missing unit configuration
         self.warn_missing_source: bool = False  # Warn on missing source file
         self.rel_strip_partial: bool = True  # Generate PLFs with -strip_partial
-        self.rel_empty_file: Optional[str] = (
-            None  # Object name for generating empty RELs
-        )
         # Module name -> symbol list file: before `dtk rel make`, the module's PLF goes through
         # tools/drop_relocations.py, which drops the relocations against the listed symbols (references the
         # original linker left unresolved, as 0 with no relocation).
         self.rel_dropped_relocations: Dict[str, Path] = {}
+        self.rel_empty_file: Optional[str] = (
+            None  # Object name for generating empty RELs
+        )
         self.shift_jis = (
             True  # Convert source files from UTF-8 to Shift JIS automatically
         )

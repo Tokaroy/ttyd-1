@@ -1,31 +1,44 @@
-// aji_08 (敵のアジト, X-Naut Fortress): the corridor with the moving ceiling (evt_slit, tenjo) and an X-Naut
-// PhD (gundan_zako_magician).
+// aji_08 (敵のアジト, X-Naut Fortress): the corridor with the moving ceiling (evt_slit, tenjo).
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_item.h"
+#include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "manager/evtmgr_cmd.h"
 #include "driver/camdrv.h"
 #include "mario/mario.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
 #include "aji.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
 
 static USER_FUNC(camAtY);
 static USER_FUNC(slit_chk);
 
-extern EvtWord evt_slit0[];
-extern EvtWord evt_slit1[];
-extern EvtWord evt_slit2[];
+static EvtWord s_door_open[22];
+static EvtWord s_door_close[22];
+static EvtWord evt_slit0[15];
+static EvtWord evt_slit1[15];
+static EvtWord evt_slit2[15];
 static BeroEntry bero_entry_data[5];
-extern EvtWord heya_tenura_onoff[];
+static EvtWord heya_tenura_onoff[68];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord aji_08_init_evt[];
+#else
+EvtWord aji_08_init_evt[148];
+#endif
 
 /**
  * Door open animation step: moves the two door leaves S_door1_2
@@ -57,7 +70,7 @@ EVT_END()
  * Exit event of the ceiling slit s_bero_2: locks the controls
  * and changes the map to aji_06 (the potion laboratory), entering as "tenjo" (from the ceiling).
  */
-EVT_BEGIN(evt_slit0)
+static EVT_BEGIN(evt_slit0)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_bero_mapchange, STRING("aji_06"), STRING("tenjo"))
@@ -69,7 +82,7 @@ EVT_END()
  * Exit event of the ceiling slit with exitEvent evt_slit1:
  * the map changes to aji_07 (the teleporter room), entering as "tenjo".
  */
-EVT_BEGIN(evt_slit1)
+static EVT_BEGIN(evt_slit1)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_bero_mapchange, STRING("aji_07"), STRING("tenjo"))
@@ -78,7 +91,7 @@ EVT_BEGIN(evt_slit1)
 EVT_END()
 
 /** Exit event of the ceiling slit with exitEvent evt_slit2: the map changes to aji_09, entering as "tenjo". */
-EVT_BEGIN(evt_slit2)
+static EVT_BEGIN(evt_slit2)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_bero_mapchange, STRING("aji_09"), STRING("tenjo"))
@@ -118,7 +131,7 @@ static BeroEntry bero_entry_data[] = {
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
         NULL, 0, // enterEvent..caseType
-        (s32*)evt_slit0, // exitEvent
+        evt_slit0, // exitEvent
         "aji_06", // nextMapName
         "tenjo", // nextBeroName
         1, // enterAnimeType
@@ -134,7 +147,7 @@ static BeroEntry bero_entry_data[] = {
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
         NULL, 0, // enterEvent..caseType
-        (s32*)evt_slit1, // exitEvent
+        evt_slit1, // exitEvent
         "aji_07", // nextMapName
         "tenjo", // nextBeroName
         1, // enterAnimeType
@@ -150,7 +163,7 @@ static BeroEntry bero_entry_data[] = {
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
         NULL, 0, // enterEvent..caseType
-        (s32*)evt_slit2, // exitEvent
+        evt_slit2, // exitEvent
         "aji_09", // nextMapName
         "tenjo", // nextBeroName
         1, // enterAnimeType
@@ -161,26 +174,26 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Swaps the room model with the roof model by the camera height:
- * while the camera looks from y = 180 or higher the roof S_tenura is shown and the room S_heya hidden,
+ * Swaps the room model with the roof model by the camera target height:
+ * while the camera target is at y = 180 or higher the roof S_tenura is shown and the room S_heya hidden,
  * otherwise the other way round. Runs forever.
  */
-EVT_BEGIN(heya_tenura_onoff)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_heya"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_tenura"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(heya_tenura_onoff)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_heya"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_tenura"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(0), 0)
     LOOP(0)
         CALL(camAtY, LW(1))
         IF_INT_GREATER_OR_EQUAL(LW(1), 180)
             IF_INT_EQUAL(LW(0), 0)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_heya"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_tenura"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_heya"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_tenura"), MAP_OBJ_FLAG_HIDDEN)
                 SET_VALUE(LW(0), 1)
             END_IF
         ELSE
             IF_INT_EQUAL(LW(0), 1)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_heya"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_tenura"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_heya"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_tenura"), MAP_OBJ_FLAG_HIDDEN)
                 SET_VALUE(LW(0), 0)
             END_IF
         END_IF
@@ -190,14 +203,14 @@ EVT_BEGIN(heya_tenura_onoff)
 EVT_END()
 
 /**
- * Init script of aji_08, the corridor above the fortress rooms:
- * plays BGM_STG7_DUN2, sets up the exits and the roof- swap check, places a Star Piece (GSWF_AJI08_STAR_PIECE),
- * and runs the ceiling plate S_ita rocking back and forth forever with SFX_STG7_AMB_CEILING_MOVE1;
- * the X-Naut magician grunt is removed once Lord Crump is beaten.
+ * Map init of aji_08 (relSetEvtAddr in aji.c): BGM_STG7_DUN2 and ENV_STG7_AJI2 (JP and later set reverb mode 1), the
+ * entrances, heya_tenura_onoff, evt_emergency and slit_chk; loops the bari, awa1 and awa2 animations, places a Star
+ * Piece (GSWF_STARPIECE_99) and swings the S_ita ceiling back and forth with SFX_STG7_AMB_CEILING_MOVE1. From
+ * STG7_20_LORD_CRUMP_DEFEATED the wizard underling NPC is deleted.
  */
 EVT_BEGIN(aji_08_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG7_DUN2"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG7_AJI2"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG7_DUN2"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG7_AJI2"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 1)
 #endif
@@ -209,15 +222,15 @@ EVT_BEGIN(aji_08_init_evt)
     BEGIN_INLINE_EVENT
         CALL(slit_chk)
     END_INLINE_EVENT
-    CALL(evt_map_playanim, STRING("bari"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa1"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa2"), 1, 0)
-    CALL(evt_item_entry, STRING("item00"), ITEM_STAR_PIECE, -975, 170, 75, ITEM_ENTRY_FIXED, GSWF(GSWF_AJI08_STAR_PIECE), 0)
+    CALL(evt_map_playanim, STRING("bari"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa1"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa2"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_item_entry, STRING("item00"), ITEM_STAR_PIECE, -975, 170, 75, ITEM_TYPE_STILL, GSWF_STARPIECE_99, 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
             CALL(evt_mapobj_get_position, STRING("S_ita"), LW(0), LW(1), LW(2))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_AMB_CEILING_MOVE1"), LW(0), LW(1), LW(2), 0)
-            CALL(evt_sub_intpl_msec_init, 11, -100, 100, 1000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -100, 100, 1000)
             LABEL(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -228,7 +241,7 @@ EVT_BEGIN(aji_08_init_evt)
             END_IF
             CALL(evt_mapobj_get_position, STRING("S_ita"), LW(0), LW(1), LW(2))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_AMB_CEILING_MOVE1"), LW(0), LW(1), LW(2), 0)
-            CALL(evt_sub_intpl_msec_init, 11, 100, -100, 1000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 100, -100, 1000)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -239,22 +252,23 @@ EVT_BEGIN(aji_08_init_evt)
             END_IF
         END_LOOP
     END_INLINE_EVENT
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG7_20_LORD_CRUMP_DEFEATED)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG7_20_LORD_CRUMP_DEFEATED)
         CALL(evt_npc_check_delete, STRING("軍団ザコ魔法使い"))
     END_IF
     RETURN
 EVT_END()
 
-/** Script function: returns the 3D camera's look-at height (cameraAt.y) in args[0]. */
+/** Script helper: returns the 3D camera's target height in args[0] as an integer (fraction dropped). */
 static USER_FUNC(camAtY) {
     EvtWord* args = event->args;
 
     evtSetValue(event, args[0], camGetPtr(CAMERA_3D)->cameraAt.y);
     return EVT_RETURN_DONE;
 }
+
 /**
- * Script function: waits until paper-mode Mario is at a slit position (x below -200 or above 300, height 160 to
- * 169), then switches off the 3D camera control and stops the event whose ID is in LW(0),
+ * Script function: waits until paper-mode Mario is at a slit position (x below -200 or above 300, height strictly between
+ * 160 and 169), then switches off the 3D camera control and suspends the event whose ID is in LW(0),
  * the roof-swap script heya_tenura_onoff. Blocks until then.
  */
 static USER_FUNC(slit_chk) {
@@ -264,6 +278,8 @@ static USER_FUNC(slit_chk) {
         if ((mario->position.x < -200.0f || mario->position.x > 300.0f) && mario->position.y < 169.0f &&
             mario->position.y > 160.0f) {
             camCtrlOff(CAMERA_3D);
+
+            // Suspend the room/ceiling visibility event whose ID was inherited in LW0.
             evtStopID(event->lwData[0]);
             return EVT_RETURN_DONE;
         }

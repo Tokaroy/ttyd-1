@@ -59,9 +59,6 @@ TARGET_LIBS := G2D              \
                amcnotstub       \
                amcstubs         \
                ar               \
-               ax               \
-               axart            \
-               axfx             \
                base             \
                card             \
                db               \
@@ -75,19 +72,15 @@ TARGET_LIBS := G2D              \
                gx               \
                hio              \
                mcc              \
-               mix              \
                mtx              \
                odemustubs       \
                odenotstub       \
                os               \
                pad              \
                perf             \
-               seq              \
                si               \
                sp               \
                support          \
-               syn              \
-               texPalette       \
                vi
 
 VERIFY_LIBS := $(filter-out amcstubs dsp odemustubs,$(TARGET_LIBS))
@@ -101,7 +94,7 @@ PYTHON ?= python3
 # Every file has a debug version. Append D to the list.
 TARGET_LIBS_DEBUG := $(addsuffix D,$(TARGET_LIBS))
 
-# Every source directory is built.
+# TODO, decompile
 SRC_DIRS := $(shell $(FIND) src -type d)
 
 ###################### Other Tools ######################
@@ -172,7 +165,7 @@ CHARFLAGS          := -char unsigned
 RELEASE_OPTLEVEL   := -O4,p
 SYM_ON             := -sym on
 
-# Unknown: why these CARD files are built with -char signed while the rest of the SDK uses -char unsigned.
+# why. Did some SDK libs (like CARD) prefer char signed over unsigned? TODO: Figure out consistency behind this.
 build/debug/src/card/CARDRename.o: CHARFLAGS := -char signed
 build/release/src/card/CARDRename.o: CHARFLAGS := -char signed
 build/debug/src/card/CARDOpen.o: CHARFLAGS := -char signed
@@ -217,7 +210,7 @@ extract: $(DTK)
 	$(info Extracting files...)
 	@$(DTK) ar extract $(TARGET_LIBS) --out baserom/release/src
 	@$(DTK) ar extract $(TARGET_LIBS_DEBUG) --out baserom/debug/src
-    # Thank you GPT, very cool. Temporary hack to remove D off of inner src folders to let objdiff work.
+    # Drop the trailing 'D' (debug) from the extracted inner folder names so objdiff finds them.
 	@for dir in $$($(FIND) baserom/debug/src -type d -name 'src'); do \
 		$(FIND) "$$dir" -mindepth 1 -maxdepth 1 -type d | while read subdir; do \
 			mv "$$subdir" "$${subdir%?}"; \

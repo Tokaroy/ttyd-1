@@ -1,8 +1,10 @@
 // moo_05 (月, the Moon): a crater field between moo_01 and moo_02.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
+#include "moo.h"
 #include "evt/evt_case.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_img.h"
@@ -11,13 +13,21 @@
 #include "evt/evt_offscreen.h"
 #include "evt/evt_paper.h"
 #include "evt/evt_snd.h"
-#include "moo.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "party/party_motion.h"
 #include "driver/mapdrv.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[3];
+
+#if VERSION < VERSION_US
+static EvtWord rock_main[79];
+static EvtWord rock_evt0[21];
+#else
+static EvtWord rock_evt0[15];
+#endif
+
+EvtWord moo_05_init_evt[59];
 
 /** Exits of moo_05: west road w_bero to moo_01 (e_bero); east road e_bero to moo_02 (w_bero). */
 static BeroEntry bero_entry_data[] = {
@@ -56,9 +66,10 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
+
 /**
- * Rock-blasting script (JP only): the rock crumbles into an offscreen animation,
+ * Rock-blasting script (JP and demos): the rock crumbles into an offscreen animation,
  * then the model and collision of the rock in LW(10)/LW(11) are removed.
  */
 static EVT_BEGIN(rock_main)
@@ -69,7 +80,7 @@ static EVT_BEGIN(rock_main)
     END_INLINE_EVENT
     CALL(evt_offscreen_entry, STRING("offscreen"))
     CALL(evt_mapobj_set_offscreen, 0, LW(10), STRING("offscreen"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, LW(10), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, LW(10), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_img_entry, STRING("img"))
     CALL(evt_img_set_paper, STRING("img"), STRING("OFF_d_bom_ver2"))
     CALL(evt_img_alloc_capture, STRING("img"), 0, STRING("offscreen"), 0, 0, 0, 0, 0)
@@ -85,18 +96,22 @@ static EVT_BEGIN(rock_main)
 EVT_END()
 #endif
 
-/** Event script: Bobbery blows up the rock (S_iwa_07) of moo_05; sets GSWF_MOO05_ROCK_BOMBED. */
+/**
+ * Bobbery's (CASE_BOBBERY) event on rock S_iwa_07 of moo_05: removes the rock with the paper explosion
+ * (rock_main) and sets GSWF_MOO_05_ROCK_07_BLOWN. From the US release on the flag is set first; earlier versions
+ * lock Mario's controls and set it after the explosion.
+ */
 static EVT_BEGIN(rock_evt0)
 #if VERSION >= VERSION_US
-    SET_VALUE(GSWF(GSWF_MOO05_ROCK_BOMBED), 1)
+    SET_VALUE(GSWF_MOO_05_ROCK_07_BLOWN, 1)
 #else
     CALL(evt_mario_key_onoff, 0)
 #endif
     SET_VALUE(LW(10), STRING("S_iwa_07"))
     SET_VALUE(LW(11), STRING("A_iwa_07"))
     CALL_CHILD(rock_main)
-#if VERSION <= VERSION_JP
-    SET_VALUE(GSWF(GSWF_MOO05_ROCK_BOMBED), 1)
+#if VERSION < VERSION_US
+    SET_VALUE(GSWF_MOO_05_ROCK_07_BLOWN, 1)
     CALL(evt_mario_key_onoff, 1)
 #endif
     CALL(evt_exit_case_evt)
@@ -111,16 +126,16 @@ EVT_BEGIN(moo_05_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG7_MON1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG7_MOO1"))
-    CALL(evt_map_playanim, STRING("hosi_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("hosi_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("hosi_03"), 1, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG7_MON1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG7_MOO1"))
+    CALL(evt_map_playanim, STRING("hosi_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("hosi_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("hosi_03"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_paper_entry, STRING("OFF_d_bom_ver2"))
-    IF_INT_EQUAL(GSWF(GSWF_MOO05_ROCK_BOMBED), 0)
-        CALL(evt_run_case_evt, CASE_COND_BOBBERY, 1, STRING("A_iwa_07"), 0, PTR(rock_evt0), 0)
+    IF_INT_EQUAL(GSWF_MOO_05_ROCK_07_BLOWN, 0)
+        CALL(evt_run_case_evt, CASE_BOBBERY, 1, STRING("A_iwa_07"), 0, PTR(rock_evt0), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_iwa_07"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_iwa_07"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_iwa_07"), 1, 0)
     END_IF
     RETURN

@@ -1,30 +1,34 @@
 // kpa_03 (クッパ編, Bowser's interludes): the second side-scrolling stage, by the sea; continues in kpa_04.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "kpa.h"
 #include "evt/evt_npc.h"
+#include "kpa_stage_data.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_seq.h"
-#include "kpa_stage_data.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "driver/seqdrv.h"
 
 static EvtWord kpa_act_stg2_mobj[209];
-EvtWord kpa_act_stg2_item[85];
+static EvtWord kpa_act_stg2_item[85];
+static EvtWord kpa_fall[41];
+static EvtWord kairyu_evt[38];
+
 #if VERSION == VERSION_EU
 static EvtWord jumpstand_evt[62];
 #else
 static EvtWord jumpstand_evt[60];
 #endif
+
 static NpcSetupInfo npcEnt[1];
+EvtWord kpa_03_init_evt[44];
 
 /**
- * Blocks, hidden blocks, pipes and obstacle blocks of side-scrolling stage 2 by the sea, listed from left to
- * right.
+ * Blocks, pipes and obstacle blocks of side-scrolling stage 2 by the sea.
  */
 static EvtWord kpa_act_stg2_mobj[] = {
     KPA_OBJ_SANGO(-1275.0f, 0.0f), KPA_OBJ_BRICK_2(-1100.0f, 200.0f), KPA_OBJ_SANGO(-1100.0f, 250.0f),
@@ -53,8 +57,8 @@ static EvtWord kpa_act_stg2_mobj[] = {
     KPA_OBJ_BRICK_2(1475.0f, 350.0f), KPA_OBJ_END,
 };
 
-/** Coins Bowser can collect in side-scrolling stage 2, as x and z positions. */
-EvtWord kpa_act_stg2_item[] = {
+/** Coins Bowser can collect in side-scrolling stage 2, as x and y positions. */
+static EvtWord kpa_act_stg2_item[] = {
     KPA_ITEM(-1050.0f, 212.5f), KPA_ITEM(-1000.0f, 212.5f), KPA_ITEM(-875.0f, 12.5f),
     KPA_ITEM(-875.0f, 62.5f), KPA_ITEM(-825.0f, 12.5f), KPA_ITEM(-825.0f, 62.5f), KPA_ITEM(-775.0f, 12.5f),
     KPA_ITEM(-775.0f, 62.5f), KPA_ITEM(125.0f, 0.0f), KPA_ITEM(175.0f, 0.0f), KPA_ITEM(225.0f, 0.0f),
@@ -96,10 +100,10 @@ EVT_END()
  * Gives Bowser a small constant push (hosei) while he is between x = -175 and -100 below y = 400:
  * the sea current at this part of stage 2. Runs until the stage ends.
  */
-EVT_BEGIN(kairyu_evt)
-    CALL(evt_seq_wait, 2)
+static EVT_BEGIN(kairyu_evt)
+    CALL(evt_seq_wait, SEQ_GAME)
     LOOP(0)
-        IF_INT_NOT_EQUAL(LSWF(3), 0)
+        IF_INT_NOT_EQUAL(LSWF_KPA_STAGE_ENDED, 0)
             BREAK_LOOP
         END_IF
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -120,8 +124,8 @@ EVT_END()
  * kills the stage clock (kpa_time, its event id in GW(15)),
  * saves Bowser's current power level (evt_koopa_get_level), loads kpa_04 after 600 ms,
  * turns the camera off once he is above y = 400
- * and launches him up with evt_mario_jump_jumpstand 700 units above the platform (a lower launch speed in the US
- * demo and earlier). The EU release also cancels the attack mode first.
+ * and launches him up with evt_mario_jump_jumpstand 700 units above the platform, using a shorter duration argument
+ * and a different jump mode in the early demos. The EU release also cancels the attack mode first.
  */
 static EVT_BEGIN(jumpstand_evt)
     DELETE_EVENT(GW(15))
@@ -130,7 +134,7 @@ static EVT_BEGIN(jumpstand_evt)
 #endif
     BEGIN_INLINE_EVENT
         WAIT_MS(600)
-        CALL(evt_koopa_get_level, GSW(GSW_KPA_BOWSER_POWER))
+        CALL(evt_koopa_get_level, GSW_KPA_BOWSER_LEVEL)
         CALL(evt_bero_mapchange, STRING("kpa_04"), STRING("kpa_next_map"))
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
@@ -160,9 +164,9 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /**
- * Map init for kpa_03, side-scrolling stage 2 (by the sea):
- * builds the blocks and coins from kpa_act_stg2_*, plays the sea animation, and starts the pit watcher, HUD,
- * intro, current and clock. It continues in kpa_04.
+ * Map init for kpa_03, side-scrolling stage 2: starts Bowser at x = -1400, builds the stage's blocks and
+ * coins from kpa_act_stg2_mobj/item, plays the sea animation anm_umi and starts the pit watcher, the HUD,
+ * the intro, the sea current (kairyu_evt) and the clock. The red jump stand at the end leads to kpa_04.
  */
 EVT_BEGIN(kpa_03_init_evt)
     CALL(evt_npc_setup, PTR(npcEnt))
@@ -172,10 +176,10 @@ EVT_BEGIN(kpa_03_init_evt)
     CALL_CHILD(kpa_read_mobj)
     SET_VALUE(LW(0), PTR(kpa_act_stg2_item))
     CALL_CHILD(kpa_read_item)
-    CALL(evt_map_playanim, STRING("anm_umi"), 1, 0)
+    CALL(evt_map_playanim, STRING("anm_umi"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(kpa_fall)
-    CALL(kpa_status_init, 2, GSW(GSW_KPA_LIVES), GSW(GSW_KPA_TIME_LEFT))
-    SET_VALUE(LSW(1), 1)
+    CALL(kpa_status_init, 2, GSW_KPA_TRY_COUNT, GSW_KPA_TIME_LEFT)
+    SET_VALUE(LSW_KPA_FIELD_BGM, 1)
     SPAWN_EVENT(kpa_stage_start)
     SPAWN_EVENT(kairyu_evt)
     SPAWN_EVENT_GET_ID(PTR(kpa_time), GW(15))

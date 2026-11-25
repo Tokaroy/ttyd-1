@@ -1,19 +1,13 @@
 // las_09 (ラストダンジョン, Palace of Shadow): the Shadow Sirens (Beldam, Marilyn) and Doopliss (Rampell) cutscene and
 // battle, and the two Chain Chomp statues (bomb_wanwan) that are bombed open.
 
+#include "version.h"
 #include "eff/n64/eff_guruguru_n64.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "driver/effdrv.h"
-#include "manager/evtmgr_cmd.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_damage.h"
-#include "evt/evt_npc.h"
-#include "driver/hitdrv.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_case.h"
 #include "evt/evt_eff.h"
+#include "evt/evt_case.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_img.h"
 #include "evt/evt_map.h"
@@ -24,19 +18,60 @@
 #include "evt/evt_paper.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "las.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "driver/npcdrv.h"
 #include "driver/mapdrv.h"
-#include "driver/camdrv.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "mario/mario.h"
+
+#include "driver/effdrv.h"
+#include "manager/evtmgr_cmd.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_damage.h"
+#include "evt/evt_npc.h"
+#include "driver/hitdrv.h"
+#include "driver/seqdrv.h"
 
 static USER_FUNC(eff_guruguru);
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
+static EvtWord n_door_close[22];
+static EvtWord n_door_open[22];
 static BeroEntry bero_entry_data[8];
 static HitDamageReturn dmgRetPoint[58];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord first_evt[208];
+#else
+static EvtWord first_evt[210];
+#endif
+
+static EvtWord bomb_wanwan[149];
+static EvtWord bomb_wanwan1_evt[27];
+static EvtWord bomb_wanwan2_evt[27];
+static EvtWord switch_1_evt[279];
+static EvtWord switch_2_evt[280];
+static EvtWord goikkou_talk[31];
+static EvtWord majyorin_init[12];
+static EvtWord maririn_init[12];
+static EvtWord ranpel_init[12];
 static NpcSetupInfo npcEnt[4];
+static EvtWord majyorin_evt_npc_entry[26];
+static EvtWord majyorin_evt_main[652];
+static EvtWord majyorin_evt[55];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_09_init_evt[];
+#else
+EvtWord las_09_init_evt[257];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -120,8 +155,8 @@ EVT_END()
 
 /**
  * Exits of las_09: west door w_bero to las_08 (e_bero_1); east door e_bero to las_19 (w_bero); north door
- * n_bero to las_10 (s_bero); dokan_1 (scripted pipe); dokan_2 (scripted pipe); dokan_5 (scripted pipe);
- * dokan_4 (scripted pipe).
+ * n_bero to las_10 (s_bero); pipes inside this room: dokan_1 to dokan_5, dokan_2 to dokan_4, dokan_5 to
+ * dokan_1, dokan_4 to dokan_2.
  */
 static BeroEntry bero_entry_data[] = {
     {
@@ -246,8 +281,8 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Where Mario is put back after falling through any of the 58 floor panels (mod_00 and up) that fall away
- * when the Shadow Sirens battle ends; all send him to a point far below the floor.
+ * Where Mario is put back after falling into one of the 57 listed hazard hit objects (mod_00 and up);
+ * y = -1000 uses each hit object's own position.
  */
 static HitDamageReturn dmgRetPoint[] = {
     {"mod_00", {0.0f, -1000.0f, 0.0f}},
@@ -314,7 +349,7 @@ static HitDamageReturn dmgRetPoint[] = {
  * Event script: the cutscene on the first entry to the Palace garden.
  * Mario and the partner enter from the west, the camera pans to the door,
  * the door swings open and shut behind them, the partner comments (stg8_las_11),
- * the story progress is set to STORY_STG8_03_THE_PALACE_GARDEN and the room is entered normally.
+ * the story progress is set to STG8_03_THE_PALACE_GARDEN and the room is entered normally.
  */
 static EVT_BEGIN(first_evt)
     CALL(evt_mario_key_onoff, 0)
@@ -326,16 +361,16 @@ static EVT_BEGIN(first_evt)
     CALL(evt_party_set_pos, 0, -1070, 0, 0)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_party_set_dir, 0, 90, 0)
-    CALL(evt_cam3d_evt_set, 0, 466, 1414, 0, 362, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 466, 1414, 0, 362, 0, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(200)
-        CALL(evt_cam3d_evt_set, 0, 87, 1414, 0, 110, 0, 3000, 0)
+        CALL(evt_cam3d_evt_set, 0, 87, 1414, 0, 110, 0, 3000, EASING_LINEAR)
         WAIT_MS(3000)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     LOOP(0)
         IF_INT_NOT_EQUAL(GF(0), 0)
             BREAK_LOOP
@@ -343,11 +378,11 @@ static EVT_BEGIN(first_evt)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 157, 87, 1126, -800, 110, 85, 2000, 11)
+    CALL(evt_cam3d_evt_set, 157, 87, 1126, -800, 110, 85, 2000, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(10))
         IF_INT_EQUAL(LW(10), 0)
@@ -364,7 +399,7 @@ static EVT_BEGIN(first_evt)
     CALL(evt_mario_mov_pos2, -875, 0, FLOAT(150.0f))
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(10))
         IF_INT_EQUAL(LW(10), 0)
@@ -376,16 +411,16 @@ static EVT_BEGIN(first_evt)
         END_IF
     END_LOOP
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, -900, 80, 259, -900, 32, -12, 0, 11)
+    CALL(evt_cam3d_evt_set, -900, 80, 259, -900, 32, -12, 0, EASING_SINE_IN_OUT)
     CALL(evt_party_stop, 0)
     WAIT_FRAMES(1)
     CALL(evt_msg_print_party, STRING("stg8_las_11"))
     CALL(evt_party_run, 0)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_03_THE_PALACE_GARDEN)
+    SET_VALUE(GSW_STORY_PROGRESS, STG8_03_THE_PALACE_GARDEN)
     CALL_CHILD(bero_case_entry)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_key_onoff, 1)
     RETURN
@@ -398,7 +433,7 @@ EVT_END()
  * plays the paper "OFF_d_bom_ver2" break animation,
  * removes the statue's hit area and plays a short success jingle.
  */
-EVT_BEGIN(bomb_wanwan)
+static EVT_BEGIN(bomb_wanwan)
     SET_VALUE(LW(14), LW(0))
     SET_VALUE(LW(15), LW(1))
     BEGIN_INLINE_EVENT
@@ -422,13 +457,13 @@ EVT_BEGIN(bomb_wanwan)
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_img_alloc_capture, STRING("img"), 0, STRING("ofs"), 1, LW(0), LW(1), LW(2), LW(3))
         WAIT_FRAMES(1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(14), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(14), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_img_clear_virtual_point, STRING("img"))
         CALL(evt_img_onoff, STRING("img"), 1)
         CALL(evt_img_set_paper_anim, STRING("img"), STRING("A_1"))
         CALL(evt_img_wait_animend, STRING("img"))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(14), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(14), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     CALL(evt_img_onoff, STRING("img"), 0)
     CALL(evt_img_release, STRING("img"))
@@ -436,25 +471,25 @@ EVT_BEGIN(bomb_wanwan)
     CALL(evt_paper_delete, STRING("OFF_d_bom_ver2"))
     CALL(evt_offscreen_delete, STRING("ofs"))
     CALL(evt_hitobj_onoff, LW(15), 0, 0)
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
     WAIT_MS(2000)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     RETURN
 EVT_END()
 
 /**
  * Event script: Bobbery explodes the first Chain Chomp statue (map object wan3, hit object A_wan1).
- * Hides the letterbox, locks Mario's controls, runs bomb_wanwan and sets GSWF_LAS09_CHOMP_STATUE_1_BOMBED.
+ * Disables automatic letterboxing, locks Mario's controls, runs bomb_wanwan and sets GSWF_LAS_09_CHAIN_CHOMP_1_BLOWN_UP.
  */
-EVT_BEGIN(bomb_wanwan1_evt)
+static EVT_BEGIN(bomb_wanwan1_evt)
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_mario_key_onoff, 0)
     SET_VALUE(LW(0), STRING("wan3"))
     SET_VALUE(LW(1), STRING("A_wan1"))
     CALL_CHILD(bomb_wanwan)
-    SET_VALUE(GSWF(GSWF_LAS09_CHOMP_STATUE_1_BOMBED), 1)
+    SET_VALUE(GSWF_LAS_09_CHAIN_CHOMP_1_BLOWN_UP, 1)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_letter_box_disable, 0)
     CALL(evt_exit_case_evt)
@@ -463,15 +498,15 @@ EVT_END()
 
 /**
  * Event script: Bobbery explodes the second Chain Chomp statue (wan1, hit object A_wan2).
- * Same as bomb_wanwan1_evt but sets GSWF_LAS09_CHOMP_STATUE_2_BOMBED.
+ * Same as bomb_wanwan1_evt but sets GSWF_LAS_09_CHAIN_CHOMP_2_BLOWN_UP.
  */
-EVT_BEGIN(bomb_wanwan2_evt)
+static EVT_BEGIN(bomb_wanwan2_evt)
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_mario_key_onoff, 0)
     SET_VALUE(LW(0), STRING("wan1"))
     SET_VALUE(LW(1), STRING("A_wan2"))
     CALL_CHILD(bomb_wanwan)
-    SET_VALUE(GSWF(GSWF_LAS09_CHOMP_STATUE_2_BOMBED), 1)
+    SET_VALUE(GSWF_LAS_09_CHAIN_CHOMP_2_BLOWN_UP, 1)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_letter_box_disable, 0)
     CALL(evt_exit_case_evt)
@@ -484,22 +519,24 @@ EVT_END()
  * after another, opening the way and the "Ship_Change" harbour exit;
  * plays a success jingle if the other switch is already pressed.
  */
-EVT_BEGIN(switch_1_evt)
+static EVT_BEGIN(switch_1_evt)
     // Controls off; the camera swings to the platforms the first switch controls.
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_cam3d_evt_set, 0, 400, 1368, 0, -40, 700, 1000, 11)
+    CALL(evt_cam3d_evt_set, 0, 400, 1368, 0, -40, 700, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     WAIT_MS(500)
+
     // An earthquake rumbles through the room.
     CALL(evt_snd_sfxon, STRING("SFX_STG8_QUAKE2"), LW(10))
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0048828125f), 1500)
     CALL(evt_snd_sfxoff, LW(10))
     BEGIN_INLINE_EVENT
-        // The third platform segment fades in and flips into place.
+
+        // The third platform segment becomes translucent and flips into place.
         CALL(evt_mapobj_get_position, STRING("S_daizadai1_3"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_PORT_APPEAR1"), LW(0), LW(1), LW(2), 0)
         BEGIN_SIBLING_EVENT
-            CALL(evt_sub_intpl_msec_init, 1, 255, 50, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 255, 50, 500)
             LOOP(0)
                 CALL(evt_sub_intpl_msec_get_value)
                 CALL(evt_mapobj_color, 1, STRING("S_daizadai1_3"), 255, 255, 255, LW(0))
@@ -509,7 +546,7 @@ EVT_BEGIN(switch_1_evt)
                 END_IF
             END_LOOP
         END_SIBLING_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, 180, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_rotate, 1, STRING("S_daizadai1_3"), 0, 0, LW(0))
@@ -521,11 +558,12 @@ EVT_BEGIN(switch_1_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
+
         // Then the second segment.
         CALL(evt_mapobj_get_position, STRING("S_daizadai1_2"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_PORT_APPEAR1"), LW(0), LW(1), LW(2), 0)
         BEGIN_SIBLING_EVENT
-            CALL(evt_sub_intpl_msec_init, 1, 255, 50, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 255, 50, 500)
             LOOP(0)
                 CALL(evt_sub_intpl_msec_get_value)
                 CALL(evt_mapobj_color, 1, STRING("S_daizadai1_2"), 255, 255, 255, LW(0))
@@ -535,7 +573,7 @@ EVT_BEGIN(switch_1_evt)
                 END_IF
             END_LOOP
         END_SIBLING_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, -180, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_rotate, 1, STRING("S_daizadai1_2"), 0, 0, LW(0))
@@ -546,11 +584,12 @@ EVT_BEGIN(switch_1_evt)
         END_LOOP
     END_INLINE_EVENT
     WAIT_MS(600)
+
     // Then the first segment, which completes the bridge.
     CALL(evt_mapobj_get_position, STRING("S_daizadai1_1"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_PORT_APPEAR2"), LW(0), LW(1), LW(2), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, 255, 50, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 255, 50, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_color, 1, STRING("S_daizadai1_1"), 255, 255, 255, LW(0))
@@ -560,7 +599,7 @@ EVT_BEGIN(switch_1_evt)
             END_IF
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, 0, -180, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_rotate, 1, STRING("S_daizadai1_1"), LW(0), 0, 0)
@@ -570,18 +609,20 @@ EVT_BEGIN(switch_1_evt)
         END_IF
     END_LOOP
     CALL(evt_hitobj_onoff, STRING("A_daizadai1"), 0, 0)
+
     // If the other switch was already pressed, a short success jingle plays over the music.
-    IF_INT_EQUAL(GSWF(GSWF_LAS09_SWITCH_2_PRESSED), 1)
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+    IF_INT_EQUAL(GSWF_LAS_09_SWITCH_2_PRESSED, 1)
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(2000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_IF
+
     // The harbour exit appears and the camera returns to Mario.
     CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change"), STRING("Ship_Change2"))
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_off, 1000, 11)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_mario_key_onoff, 1)
     RETURN
@@ -590,24 +631,26 @@ EVT_END()
 /**
  * Event script: runs when the second blue switch is pressed.
  * Same as switch_1_evt for the platforms S_daizadai2_1..3 and the harbour exit Ship_Change1,
- * which is made walkable.
+ * whose ship-panel attribute (HIT_ATTR_SHIP_PANEL2) is turned on; no hit object is turned off.
  */
-EVT_BEGIN(switch_2_evt)
+static EVT_BEGIN(switch_2_evt)
     // Controls off; the camera swings to the platforms the second switch controls.
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_cam3d_evt_set, 0, 450, 45, 0, -75, -558, 1000, 11)
+    CALL(evt_cam3d_evt_set, 0, 450, 45, 0, -75, -558, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     WAIT_MS(500)
+
     // An earthquake rumbles through the room.
     CALL(evt_snd_sfxon, STRING("SFX_STG8_QUAKE2"), LW(10))
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0048828125f), 1500)
     CALL(evt_snd_sfxoff, LW(10))
     BEGIN_INLINE_EVENT
-        // The third platform segment fades in and flips into place.
+
+        // The third platform segment becomes translucent and flips into place.
         CALL(evt_mapobj_get_position, STRING("S_daizadai2_3"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_PORT_APPEAR1"), LW(0), LW(1), LW(2), 0)
         BEGIN_SIBLING_EVENT
-            CALL(evt_sub_intpl_msec_init, 1, 255, 50, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 255, 50, 500)
             LOOP(0)
                 CALL(evt_sub_intpl_msec_get_value)
                 CALL(evt_mapobj_color, 1, STRING("S_daizadai2_3"), 255, 255, 255, LW(0))
@@ -617,7 +660,7 @@ EVT_BEGIN(switch_2_evt)
                 END_IF
             END_LOOP
         END_SIBLING_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, 180, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_rotate, 1, STRING("S_daizadai2_3"), 0, 0, LW(0))
@@ -629,11 +672,12 @@ EVT_BEGIN(switch_2_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
+
         // Then the second segment.
         CALL(evt_mapobj_get_position, STRING("S_daizadai2_2"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_PORT_APPEAR1"), LW(0), LW(1), LW(2), 0)
         BEGIN_SIBLING_EVENT
-            CALL(evt_sub_intpl_msec_init, 1, 255, 50, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 255, 50, 500)
             LOOP(0)
                 CALL(evt_sub_intpl_msec_get_value)
                 CALL(evt_mapobj_color, 1, STRING("S_daizadai2_2"), 255, 255, 255, LW(0))
@@ -643,7 +687,7 @@ EVT_BEGIN(switch_2_evt)
                 END_IF
             END_LOOP
         END_SIBLING_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, -180, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_rotate, 1, STRING("S_daizadai2_2"), 0, 0, LW(0))
@@ -654,11 +698,12 @@ EVT_BEGIN(switch_2_evt)
         END_LOOP
     END_INLINE_EVENT
     WAIT_MS(600)
+
     // Then the first segment, which completes the bridge.
     CALL(evt_mapobj_get_position, STRING("S_daizadai2_1"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_PORT_APPEAR2"), LW(0), LW(1), LW(2), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, 255, 50, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 255, 50, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_color, 1, STRING("S_daizadai2_1"), 255, 255, 255, LW(0))
@@ -668,7 +713,7 @@ EVT_BEGIN(switch_2_evt)
             END_IF
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_rotate, 1, STRING("S_daizadai2_1"), LW(0), 0, 0)
@@ -677,19 +722,21 @@ EVT_BEGIN(switch_2_evt)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // If the other switch was already pressed, a short success jingle plays over the music.
-    IF_INT_EQUAL(GSWF(GSWF_LAS09_SWITCH_1_PRESSED), 1)
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+    IF_INT_EQUAL(GSWF_LAS_09_SWITCH_1_PRESSED, 1)
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(2000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_IF
+
     // The harbour exit appears and the camera returns to Mario.
     CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change1"), STRING("Ship_Change1"))
-    CALL(evt_hitobj_attr_onoff, 0, 1, STRING("Ship_Change1"), 32768)
+    CALL(evt_hitobj_attr_onoff, 0, 1, STRING("Ship_Change1"), HIT_ATTR_SHIP_PANEL2)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_off, 1000, 11)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_mario_key_onoff, 1)
     RETURN
@@ -699,7 +746,7 @@ EVT_END()
  * Talk event of the dazed Shadow Sirens after the battle:
  * Beldam, Marilyn and Doopliss each say a line, then the partner comments.
  */
-EVT_BEGIN(goikkou_talk)
+static EVT_BEGIN(goikkou_talk)
     CALL(evt_party_stop, 0)
     CALL(evt_msg_print, 0, STRING("stg8_las_27"), 0, STRING("マジョリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_28"), 0, STRING("マリリン"))
@@ -711,37 +758,37 @@ EVT_BEGIN(goikkou_talk)
 EVT_END()
 
 /**
- * Init event of Beldam (Majolyne): clears her battle-info flag and sets status bit 2,
+ * Init event of Beldam (Majolyne): clears her stop-for-event flag and sets status bit 2,
  * which makes her turn to face the way she moves (the evt_npc move commands check it).
  */
-EVT_BEGIN(majyorin_init)
-    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_HAS_BATTLE_INFO)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+static EVT_BEGIN(majyorin_init)
+    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_STOP_FOR_EVENT)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
 /**
- * Init of the Marilyn NPC: clears its battle info flag and sets status bit 2 (evt_npc_status_onoff),
+ * Init of the Marilyn NPC: clears its stop-for-event flag and sets status bit 2 (evt_npc_status_onoff),
  * which makes it turn to face the way it moves (the evt_npc move commands check it).
  */
 static EVT_BEGIN(maririn_init)
-    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_HAS_BATTLE_INFO)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_STOP_FOR_EVENT)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
-/** Init event of Doopliss (Rampell): same as Beldam's (no battle info, turns to face the way he moves). */
-EVT_BEGIN(ranpel_init)
-    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_HAS_BATTLE_INFO)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+/** Init event of Doopliss (Rampell): same as Beldam's (clears the stop-for-event flag, turns to face the way he moves). */
+static EVT_BEGIN(ranpel_init)
+    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_STOP_FOR_EVENT)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
 /** NPCs of the Shadow Sirens scene: Beldam (マジョリン), Marilyn (マリリン) and Doopliss (ランペル). */
 static NpcSetupInfo npcEnt[] = {
     {
-        "マジョリン", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "マジョリン", // name (Beldam)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         majyorin_init, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -750,8 +797,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "マリリン", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "マリリン", // name (Marilyn)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         maririn_init, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -760,8 +807,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ランペル", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ランペル", // name (Doopliss)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         ranpel_init, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -776,30 +823,45 @@ static NpcSetupInfo npcEnt[] = {
  * Event script: creates the NPC "にせ" with the Professor Frankly (Kurihakase) model, hidden below the floor.
  * In the cutscene it plays the fake professor who turns out to be Doopliss.
  */
-EVT_BEGIN(majyorin_evt_npc_entry)
-    CALL(evt_npc_entry, STRING("にせ"), STRING("c_kuri_h"))
+static EVT_BEGIN(majyorin_evt_npc_entry)
+    CALL(evt_npc_entry, STRING("にせ"), STRING("c_kuri_h")) // Doopliss disguised as Professor Frankly
     CALL(evt_npc_set_tribe, STRING("にせ"), STRING("クリハカセ"))
-    CALL(evt_npc_flag_onoff, 1, STRING("にせ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_status_onoff, 1, STRING("にせ"), 2)
+    CALL(evt_npc_flag_onoff, 1, STRING("にせ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_status_onoff, 1, STRING("にせ"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_set_position, STRING("にせ"), 0, -1000, 0)
     RETURN
 EVT_END()
 
 /**
- * Event script: the cutscene before the Shadow Sirens battle.
- * Beldam talks to Mario, Beldam and Marilyn appear,
- * the fake Frankly transforms into Doopliss in a puff of smoke, they gloat and surround Mario,
- * and the fight starts with battle info 8 (Beldam, Marilyn and Doopliss).
- * Afterwards the three are shown dizzy with spinning stars, make a final remark,
- * and the story moves to STORY_STG8_07_BELDAM_CONFRONTATION.
+ * Script helper (args[0] = effect name, args[1..3] = position, args[4] = last effect parameter): starts a named swirl
+ * effect (effGuruguruN64Entry 0, 3) at the position with scale 0.8.
  */
-EVT_BEGIN(majyorin_evt_main)
-    // Controls off; Mario's partner stops and turns to face the doors.
+static USER_FUNC(eff_guruguru) {
+    EvtWord* args = event->args;
+    const char* name = (const char*)evtGetValue(event, args[0]);
+    f32 x = evtGetFloat(event, args[1]);
+    f32 y = evtGetFloat(event, args[2]);
+    f32 z = evtGetFloat(event, args[3]);
+    f32 w = evtGetFloat(event, args[4]);
+    EffectEntry* eff = effGuruguruN64Entry(0, 3, x, y, z, w);
+
+    ((EffGuruguruN64Work*)eff->userdata)->scale = 0.8f;
+    effSetName(eff, name);
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Beldam's ambush at STG8_06: Beldam and Marilyn rise out of the shadows (evt_npc_majo_disp_on), a stand-in NPC walks
+ * in and turns into Doopliss, they talk with Mario's partner (stg8_las_12 to 23, BGM_EVT_WITCH1) and the battle starts
+ * (battle info 8); afterwards all three sit dazed (eff_guruguru, stg8_las_24 to 26) with goikkou_talk as their talk
+ * script, and STG8_07_BELDAM_CONFRONTATION is set.
+ */
+static EVT_BEGIN(majyorin_evt_main)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_mario_wait_landon)
     CALL(evt_npc_stop_for_event)
-    CALL(evt_npc_change_fbat_mode, 7)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_EVENT)
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
         LOOP(0)
@@ -814,12 +876,11 @@ EVT_BEGIN(majyorin_evt_main)
         CALL(evt_party_set_dir, 0, 90, 200)
         SET_VALUE(GF(0), 0)
     END_INLINE_EVENT
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_WITCH1"))
-    CALL(evt_msg_toge, 1, 0, 0, 0)
-    // Beldam speaks to Mario and his partner answers; Beldam stirs up her sister.
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_WITCH1"))
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg8_las_12"), 0, STRING("マジョリン"))
     CALL(evt_mario_set_dir, 90, 300, 0)
-    CALL(evt_cam3d_evt_set, 765, 102, 340, 765, 43, 9, 500, 11)
+    CALL(evt_cam3d_evt_set, 765, 102, 340, 765, 43, 9, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_majo_disp_on, STRING("マジョリン"), 750, 0, 20, 0)
@@ -838,11 +899,11 @@ EVT_BEGIN(majyorin_evt_main)
     CALL(evt_mario_adjust_dir)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg8_las_13"), 0, STRING("マジョリン"))
-    CALL(evt_cam3d_evt_set, 660, 82, 338, 660, 30, 43, 0, 11)
+    CALL(evt_cam3d_evt_set, 660, 82, 338, 660, 30, 43, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
     CALL(evt_msg_print_party, STRING("stg8_las_14"))
-    CALL(evt_cam3d_evt_set, 765, 102, 340, 765, 43, 9, 0, 11)
+    CALL(evt_cam3d_evt_set, 765, 102, 340, 765, 43, 9, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg8_las_15"), 0, STRING("マジョリン"))
@@ -850,7 +911,6 @@ EVT_BEGIN(majyorin_evt_main)
     CALL(evt_npc_get_dir, STRING("にせ"), LW(3))
     SET_VALUE(LW(4), LW(2))
     ADD(LW(4), 15)
-    // In a puff of smoke the fake Frankly is revealed as Doopliss.
     CALL(evt_eff, 0, STRING("kemuri_test"), 7, LW(0), LW(1), LW(4), FLOAT(1.3994141f), 0, 0, 0, 0, 0, 0, 0)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_RANPEL_TRANSFORM1"), LW(0), LW(1), LW(4), 0)
     WAIT_MS(300)
@@ -862,7 +922,6 @@ EVT_BEGIN(majyorin_evt_main)
         CALL(evt_msg_print, 0, STRING("stg8_las_15_01"), 0, STRING("ランペル"))
     END_INLINE_EVENT
     WAIT_MS(600)
-    // Beldam, Marilyn and Doopliss gloat in turn and surround Mario.
     CALL(evt_msg_print, 0, STRING("stg8_las_15_02"), 0, STRING("マジョリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_16"), 0, STRING("マリリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_17"), 0, STRING("ランペル"))
@@ -871,19 +930,18 @@ EVT_BEGIN(majyorin_evt_main)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg8_las_18"), 0, STRING("マジョリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_19"), 0, STRING("ランペル"))
-    CALL(evt_cam3d_evt_set, 660, 82, 338, 660, 30, 43, 0, 11)
+    CALL(evt_cam3d_evt_set, 660, 82, 338, 660, 30, 43, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
-    // The partner answers back as the camera circles the three villains.
     CALL(evt_msg_print_party, STRING("stg8_las_20"))
     CALL(evt_npc_set_ry, STRING("マジョリン"), 270)
-    CALL(evt_cam3d_evt_set, 779, 104, 340, 779, 45, 9, 0, 11)
+    CALL(evt_cam3d_evt_set, 779, 104, 340, 779, 45, 9, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("stg8_las_21"), 0, STRING("マジョリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_22"), 0, STRING("マリリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_23"), 0, STRING("ランペル"))
-    CALL(evt_cam3d_evt_set, 700, 193, 760, 700, 57, -12, 1000, 1)
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_cam3d_evt_set, 700, 193, 760, 700, 57, -12, 1000, EASING_QUADRATIC_IN)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_set_pose, STRING("M_I_Y"))
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
@@ -902,9 +960,8 @@ EVT_BEGIN(majyorin_evt_main)
     ADD(LW(0), 80)
     SUBTRACT(LW(2), 10)
     CALL(evt_npc_move_position, STRING("ランペル"), LW(0), LW(2), 0, FLOAT(90.0f), 0)
-    CALL(evt_mario_dispflag_onoff, 0, 2)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_party_run, 0)
-    // The battle against Beldam, Marilyn and Doopliss starts and the script waits for it to end.
     CALL(evt_npc_set_battle_info, STRING("マジョリン"), 8)
     CALL(evt_npc_battle_start, STRING("マジョリン"))
     CALL(evt_npc_wait_battle_end)
@@ -912,13 +969,12 @@ EVT_BEGIN(majyorin_evt_main)
     SUBTRACT(LW(0), 20)
     SUBTRACT(LW(2), 10)
     CALL(evt_party_set_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_npc_flag_onoff, 0, STRING("マジョリン"), NPC_FLAG_MOVE_ANIM)
-    CALL(evt_npc_flag_onoff, 0, STRING("マリリン"), NPC_FLAG_MOVE_ANIM)
-    CALL(evt_npc_flag_onoff, 0, STRING("ランペル"), NPC_FLAG_MOVE_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("マジョリン"), NPC_FLAG_NO_TURN_TO_MARIO)
-    CALL(evt_npc_flag_onoff, 1, STRING("マリリン"), NPC_FLAG_NO_TURN_TO_MARIO)
-    CALL(evt_npc_flag_onoff, 1, STRING("ランペル"), NPC_FLAG_NO_TURN_TO_MARIO)
-    // Defeated, the three sit dizzy with stars spinning over their heads.
+    CALL(evt_npc_flag_onoff, 0, STRING("マジョリン"), NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("マリリン"), NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("ランペル"), NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("マジョリン"), NPC_FLAG_NO_TALK_TURN)
+    CALL(evt_npc_flag_onoff, 1, STRING("マリリン"), NPC_FLAG_NO_TALK_TURN)
+    CALL(evt_npc_flag_onoff, 1, STRING("ランペル"), NPC_FLAG_NO_TALK_TURN)
     CALL(evt_npc_set_force_regl_anim, STRING("マジョリン"), STRING("MJR_D_4"))
     CALL(evt_npc_set_force_regl_anim, STRING("マリリン"), STRING("MRR_D_4"))
     CALL(evt_npc_set_force_regl_anim, STRING("ランペル"), STRING("D_2"))
@@ -943,7 +999,6 @@ EVT_BEGIN(majyorin_evt_main)
     CALL(evt_npc_get_position, STRING("マジョリン"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_WITCH_PIYO1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(500)
-    // They make a final remark.
     CALL(evt_msg_print, 0, STRING("stg8_las_24"), 0, STRING("マジョリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_25"), 0, STRING("マリリン"))
     CALL(evt_msg_print, 0, STRING("stg8_las_26"), 0, STRING("ランペル"))
@@ -951,22 +1006,21 @@ EVT_BEGIN(majyorin_evt_main)
     CALL(evt_npc_change_interrupt, STRING("マジョリン"), 6, PTR(goikkou_talk))
     CALL(evt_npc_change_interrupt, STRING("マリリン"), 6, PTR(goikkou_talk))
     CALL(evt_npc_change_interrupt, STRING("ランペル"), 6, PTR(goikkou_talk))
-    // The story advances and Mario regains control.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_07_BELDAM_CONFRONTATION)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    SET_VALUE(GSW_STORY_PROGRESS, STG8_07_BELDAM_CONFRONTATION)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     CALL(evt_npc_start_for_event)
     RETURN
 EVT_END()
 
 /**
- * Event script: waits for Mario to reach the trigger area near X 620 (on the walkway, not on the platform
- * mod_38) and then starts majyorin_evt_main.
+ * Waits until Mario is within 100 of (x 620, z 90) on both axes and either on the floor (y 0 to -5, not riding
+ * mod_38) or at x 640 or more, then spawns majyorin_evt_main.
  */
-EVT_BEGIN(majyorin_evt)
-    CALL(evt_seq_wait, 2)
+static EVT_BEGIN(majyorin_evt)
+    CALL(evt_seq_wait, SEQ_GAME)
     SET_VALUE(LF(0), 0)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -991,63 +1045,62 @@ EVT_BEGIN(majyorin_evt)
 EVT_END()
 
 /**
- * Map init script for las_09: music and ambience, the doors, return points for the falling floor tiles,
- * the water animation, the Shadow Sirens, a recovery block and a save block,
- * the two Chain Chomp statues Bobbery can bomb, the two blue switches with their platforms,
- * and the Shadow Sirens cutscene when the story is at STORY_STG8_06_MOVING_PLANETS.
- * At STORY_STG8_02_FOLLOW_THE_LIT_TORCHES it plays the arrival cutscene.
+ * Map init of las_09 (relSetEvtAddr in las.c): no music, ENV_STG8_LAS3 (JP+ reverb mode 2), entrances (STG8_02 spawns
+ * first_evt instead), damage return point, evt_gazigazi_entry, water, NPCs, save and recovery blocks, two Chain Chomp
+ * objects with Bobbery cases, two blue switches with their platforms and panels; at STG8_06_MOVING_PLANETS the Beldam
+ * scene (majyorin_evt_main or majyorin_evt); from STG8_04_GLOOMTAIL sets GSWF_LAS_09_VISITED_AFTER_GLOOMTAIL.
  */
 EVT_BEGIN(las_09_init_evt)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS3"))
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS3"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_02_FOLLOW_THE_LIT_TORCHES)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG8_02_FOLLOW_THE_LIT_TORCHES)
         CALL_CHILD(evt_bero_info_run)
     END_IF
     CALL(evt_hit_damage_return_set, PTR(dmgRetPoint))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_map_playanim, STRING("mizu"), 1, 0)
+    CALL(evt_map_playanim, STRING("mizu"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_npc_setup, PTR(npcEnt))
     CALL(evt_mobj_recovery_blk, STRING("r_blk"), 10, 190, 50, 25, 0, 0)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -190, 50, 25, 0, 0)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_02_FOLLOW_THE_LIT_TORCHES)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG8_02_FOLLOW_THE_LIT_TORCHES)
         SPAWN_EVENT(first_evt)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_LAS09_CHOMP_STATUE_1_BOMBED), 0)
-        CALL(evt_run_case_evt, CASE_COND_BOBBERY, 1, STRING("A_wan1"), 0, PTR(bomb_wanwan1_evt), 0)
+    IF_INT_EQUAL(GSWF_LAS_09_CHAIN_CHOMP_1_BLOWN_UP, 0)
+        CALL(evt_run_case_evt, CASE_BOBBERY, 1, STRING("A_wan1"), 0, PTR(bomb_wanwan1_evt), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("wan3"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("wan3"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_wan1"), 0, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_LAS09_CHOMP_STATUE_2_BOMBED), 0)
-        CALL(evt_run_case_evt, CASE_COND_BOBBERY, 1, STRING("A_wan2"), 0, PTR(bomb_wanwan2_evt), 0)
+    IF_INT_EQUAL(GSWF_LAS_09_CHAIN_CHOMP_2_BLOWN_UP, 0)
+        CALL(evt_run_case_evt, CASE_BOBBERY, 1, STRING("A_wan2"), 0, PTR(bomb_wanwan2_evt), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("wan1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("wan1"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_wan2"), 0, 0)
     END_IF
-    CALL(evt_mobj_switch_blue, 2, STRING("switch1"), -540, 10, -1300, PTR(switch_1_evt), GSWF(GSWF_LAS09_SWITCH_1_PRESSED))
-    CALL(evt_mobj_switch_blue, 2, STRING("switch2"), 540, 10, -1300, PTR(switch_2_evt), GSWF(GSWF_LAS09_SWITCH_2_PRESSED))
-    IF_INT_EQUAL(GSWF(GSWF_LAS09_SWITCH_1_PRESSED), 1)
+    CALL(evt_mobj_switch_blue, 2, STRING("switch1"), -540, 10, -1300, PTR(switch_1_evt), GSWF_LAS_09_SWITCH_1_PRESSED)
+    CALL(evt_mobj_switch_blue, 2, STRING("switch2"), 540, 10, -1300, PTR(switch_2_evt), GSWF_LAS_09_SWITCH_2_PRESSED)
+    IF_INT_EQUAL(GSWF_LAS_09_SWITCH_1_PRESSED, 1)
         CALL(evt_mapobj_rotate, 0, STRING("S_daizadai1_1"), 180, 0, 0)
         CALL(evt_mapobj_rotate, 0, STRING("S_daizadai1_2"), 0, 0, -180)
         CALL(evt_mapobj_rotate, 0, STRING("S_daizadai1_3"), 0, 0, 180)
         CALL(evt_hitobj_onoff, STRING("A_daizadai1"), 0, 0)
         CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change"), STRING("Ship_Change2"))
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_LAS09_SWITCH_2_PRESSED), 1)
+    IF_INT_EQUAL(GSWF_LAS_09_SWITCH_2_PRESSED, 1)
         CALL(evt_mapobj_rotate, 0, STRING("S_daizadai2_1"), 180, 0, 0)
         CALL(evt_mapobj_rotate, 0, STRING("S_daizadai2_2"), 0, 0, -180)
         CALL(evt_mapobj_rotate, 0, STRING("S_daizadai2_3"), 0, 0, 180)
         CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change1"), STRING("Ship_Change1"))
     ELSE
-        CALL(evt_hitobj_attr_onoff, 0, 0, STRING("Ship_Change1"), 32768)
+        CALL(evt_hitobj_attr_onoff, 0, 0, STRING("Ship_Change1"), HIT_ATTR_SHIP_PANEL2)
     END_IF
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_den"), MAPOBJ_FLAG_BBOX_CULL)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_den"), MAP_OBJ_FLAG_CLIP)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
         CALL_CHILD(majyorin_evt_npc_entry)
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("majyorin_evt"))
@@ -1056,36 +1109,16 @@ EVT_BEGIN(las_09_init_evt)
             CALL(evt_mario_set_dir, 90, 0, 0)
             CALL(evt_party_set_dir, 0, 90, 0)
             BEGIN_INLINE_EVENT
-                CALL(evt_seq_wait, 2)
-                CALL(evt_bero_exec_wait, 65536)
+                CALL(evt_seq_wait, SEQ_GAME)
+                CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
                 SPAWN_EVENT(majyorin_evt_main)
             END_INLINE_EVENT
         ELSE
             SPAWN_EVENT(majyorin_evt)
         END_IF
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_04_GLOOMTAIL)
-        SET_VALUE(GSWF(GSWF_LAS26_GLOOMTAIL_BODY_CLEARED), 1)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG8_04_GLOOMTAIL)
+        SET_VALUE(GSWF_LAS_09_VISITED_AFTER_GLOOMTAIL, 1)
     END_IF
     RETURN
 EVT_END()
-
-EffectEntry* effGuruguruN64Entry(s32 type, s32 num, f32 x, f32 y, f32 z, f32 radius);
-
-/**
- * Script helper: starts a spinning star ring effect ("guruguru") around args[1..3] with radius args[4]
- * and gives it the name args[0], so it can be deleted later. Used to show the Shadow Sirens dizzy.
- */
-static USER_FUNC(eff_guruguru) {
-    EvtWord* args = event->args;
-    const char* name = (const char*)evtGetValue(event, args[0]);
-    f32 x = evtGetFloat(event, args[1]);
-    f32 y = evtGetFloat(event, args[2]);
-    f32 z = evtGetFloat(event, args[3]);
-    f32 w = evtGetFloat(event, args[4]);
-    EffectEntry* eff = effGuruguruN64Entry(0, 3, x, y, z, w);
-
-    ((EffGuruguruN64Work*)eff->userdata)->scale = 0.8f;
-    effSetName(eff, name);
-    return EVT_RETURN_DONE;
-}

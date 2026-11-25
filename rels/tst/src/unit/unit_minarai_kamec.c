@@ -97,7 +97,7 @@ static BattleUnitDefense defence = {{0, 0, 0, 0, 0}};
  * Damage-type modifiers of the apprentice Magikoopa placeholder (`minarai_kamec`): none, no special weakness
  * or immunity.
  */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 /**
  * Status vulnerability of the apprentice Magikoopa placeholder (`minarai_kamec`) (100% is the normal chance):
@@ -110,10 +110,10 @@ static StatusVulnerability regist = {100, 100, 100, 100, 100, 100, 100, 100, 100
  * action) and the animation each one plays; the idle animation is `KUR_S_1`.
  */
 static PoseTableEntry pose_table[] = {
-    {BTL_POSE_NORMAL, "KUR_S_1"},
+    {POSE_TYPE_NORMAL, "KUR_S_1"},
     {31, "KUR_S_1"},
-    {BTL_POSE_DAMAGE, "KUR_D_1"},
-    {BTL_POSE_STAY_DEFAULT, "KUR_S_1"},
+    {POSE_TYPE_DAMAGE, "KUR_D_1"},
+    {POSE_TYPE_ACTION, "KUR_S_1"},
 };
 
 /** Data table of the apprentice Magikoopa placeholder (`minarai_kamec`): no events. */
@@ -126,7 +126,7 @@ static BattleDataEntry data_table[] = {
  * with its hit box, defence tables and pose table.
  */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_minarai_kamec", "c_kuribo", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER, 0, pose_table},
+    {1, "btl_un_minarai_kamec", "c_kuribo", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart, 0, pose_table},
 };
 
 /**
@@ -134,11 +134,11 @@ static BattleUnitKindPart parts[] = {
  * attack and damage handlers (confusion uses the default one) and starts the wait event.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -147,7 +147,7 @@ EVT_END()
  * and runs the shared default damage reaction (btldefaultevt_Damage).
  */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
@@ -156,17 +156,17 @@ static EVT_BEGIN(damage_event)
 EVT_END()
 
 /**
- * Attack of the placeholder unit: uses an enemy item if it has one (and then ends its turn),
+ * Attack of the placeholder unit: uses an enemy item if the item-use check selects one (and then ends its turn),
  * otherwise does nothing and just restarts the wait event.
  */
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -175,6 +175,6 @@ EVT_END()
  * so it matches the current state, then returns; the battle system runs it whenever the unit is idle.
  */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()

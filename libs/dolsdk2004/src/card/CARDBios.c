@@ -3,14 +3,11 @@
 #include "__card.h"
 
 #if DEBUG
-/** Library version string kept in the binary (debug build). */
 const char* __CARDVersion = "<< Dolphin SDK - CARD\tdebug build: Apr  5 2004 03:56:53 (0x2301) >>";
 #else
-/** Library version string kept in the binary (release build). */
 const char* __CARDVersion = "<< Dolphin SDK - CARD\trelease build: Apr  5 2004 04:15:35 (0x2301) >>";
 #endif
 
-/** EXI clock used for memory card transfers (16 MHz). */
 u32 __CARDFreq = EXI_FREQ_16M;
 
 CARDControl __CARDBlock[2];
@@ -27,29 +24,16 @@ static s32 Retry(s32 chan);
 static void UnlockedCallback(s32 chan, s32 result);
 static BOOL OnReset(BOOL f);
 
-/** Registers OnReset (priority 127) with the OS so cards are unmounted before a reset. */
 static OSResetFunctionInfo ResetFunctionInfo = {OnReset, 127};
 
-/** No-op completion callback used when an API call has no callback of its own. */
 void __CARDDefaultApiCallback(s32 chan, s32 result) {}
 
-/**
- * Completion callback for the blocking API variants:
- * wakes the thread sleeping on the channel's thread queue (see __CARDSync).
- */
 void __CARDSyncCallback(s32 chan, s32 result) {
     CARDControl* card;
     card = &__CARDBlock[chan];
     OSWakeupThread(&card->threadQueue);
 }
 
-/**
- * EXI external-interrupt handler, called when the card is pulled out:
- * marks the channel detached, drops the EXI callback, cancels the timeout alarm,
- * fails the pending EXI callback with CARD_RESULT_NOCARD,
- * records NOCARD as the channel result unless an operation is busy,
- * and calls the detach callback given to CARDMount if the mount had finished.
- */
 void __CARDExtHandler(s32 chan, OSContext* context) {
     CARDControl* card;
     CARDCallback callback;
@@ -81,13 +65,6 @@ void __CARDExtHandler(s32 chan, OSContext* context) {
     }
 }
 
-/**
- * EXI interrupt handler for a finished card command:
- * cancels the timeout alarm, locks the channel, reads and clears the card status register,
- * and treats status bits 0x18 as an I/O error.
- * On an error it re-issues the command through Retry while the retry count lasts;
- * otherwise it unlocks the channel and hands the result to the pending exiCallback.
- */
 void __CARDExiHandler(s32 chan, OSContext* context) {
     CARDControl* card;
     CARDCallback callback;
@@ -112,7 +89,7 @@ void __CARDExiHandler(s32 chan, OSContext* context) {
         goto error;
     }
 
-    if ((result = (status & 0x18) ? CARD_RESULT_IOERROR : CARD_RESULT_READY) == CARD_RESULT_IOERROR &&
+    if ((result = (status & CARD_STATUS_ERROR) ? CARD_RESULT_IOERROR : CARD_RESULT_READY) == CARD_RESULT_IOERROR &&
         --card->retry > 0)
     {
         result = Retry(chan);
@@ -134,11 +111,6 @@ fatal:
     }
 }
 
-/**
- * EXI DMA-complete handler: deselects the card,
- * releases the EXI channel and calls the transmit callback with READY
- * or NOCARD depending on whether the card is still present.
- */
 void __CARDTxHandler(s32 chan, OSContext* context) {
     CARDControl* card;
     CARDCallback callback;
@@ -156,10 +128,6 @@ void __CARDTxHandler(s32 chan, OSContext* context) {
     }
 }
 
-/**
- * Called when the EXI channel becomes free after it was busy:
- * passes CARD_RESULT_UNLOCKED, or NOCARD if the card was pulled, to the pending unlock callback.
- */
 void __CARDUnlockedHandler(s32 chan, OSContext* context) {
     CARDControl* card;
     CARDCallback callback;
@@ -174,7 +142,6 @@ void __CARDUnlockedHandler(s32 chan, OSContext* context) {
     }
 }
 
-/** Sends the card command 0x81 that enables (0x0100) or disables (0x0000) the card's interrupt line. */
 s32 __CARDEnableInterrupt(s32 chan, BOOL enable) {
     BOOL err;
     u32 cmd;
@@ -193,7 +160,6 @@ s32 __CARDEnableInterrupt(s32 chan, BOOL enable) {
     return err ? CARD_RESULT_NOCARD : CARD_RESULT_READY;
 }
 
-/** Reads the card's one-byte status register (command 0x83). */
 s32 __CARDReadStatus(s32 chan, u8* status) {
     BOOL err;
     u32 cmd;
@@ -214,7 +180,6 @@ s32 __CARDReadStatus(s32 chan, u8* status) {
     return err ? CARD_RESULT_NOCARD : CARD_RESULT_READY;
 }
 
-/** Reads the card's 16-bit vendor ID (command 0x85). */
 int __CARDReadVendorID(s32 chan, u16* id) {
     BOOL err;
     u32 cmd;
@@ -234,7 +199,6 @@ int __CARDReadVendorID(s32 chan, u16* id) {
     return err ? CARD_RESULT_NOCARD : CARD_RESULT_READY;
 }
 
-/** Clears the card's status register (command 0x89). */
 s32 __CARDClearStatus(s32 chan) {
     BOOL err;
     u32 cmd;
@@ -254,7 +218,6 @@ s32 __CARDClearStatus(s32 chan) {
     return err ? CARD_RESULT_NOCARD : CARD_RESULT_READY;
 }
 
-/** Sends the card command 0x88 (sleep). */
 s32 __CARDSleep(s32 chan) {
     int err;
     u32 cmd;
@@ -276,7 +239,6 @@ s32 __CARDSleep(s32 chan) {
     return CARD_RESULT_READY;
 }
 
-/** Sends the card command 0x87 (wake up). */
 s32 __CARDWakeup(s32 chan) {
     int err;
     u32 cmd;
@@ -297,11 +259,6 @@ s32 __CARDWakeup(s32 chan) {
     return CARD_RESULT_READY;
 }
 
-/**
- * Alarm handler for a card command that did not finish in time:
- * finds the channel by its alarm, drops the EXI callback
- * and reports CARD_RESULT_IOERROR to the pending exiCallback.
- */
 static void TimeoutHandler(OSAlarm* alarm, OSContext* context) {
     s32 chan;
     CARDControl* card;
@@ -327,12 +284,6 @@ static void TimeoutHandler(OSAlarm* alarm, OSContext* context) {
     }
 }
 
-/**
- * Arms the channel's timeout alarm for the command in card->cmd[0]:
- * 100 ms for page program (0xF2), none for 0xF3,
- * and 2 seconds per 64 blocks for 0xF4 on large-page cards
- * or 2 seconds per 8 KiB of sector size for sector erase (0xF1).
- */
 static void SetupTimeoutAlarm(CARDControl* card) {
     OSCancelAlarm(&card->alarm);
     switch (card->cmd[0]) {
@@ -343,7 +294,7 @@ static void SetupTimeoutAlarm(CARDControl* card) {
     case 0xF3:
         break;
     case 0xF4:
-        if (card->pageSize > 0x80) {
+        if (card->pageSize > CARD_PAGE_SIZE) {
             OSSetAlarm(&card->alarm, OSSecondsToTicks((OSTime)2) * (card->cBlock / 0x40),
                        TimeoutHandler);
             break;
@@ -355,13 +306,6 @@ static void SetupTimeoutAlarm(CARDControl* card) {
     }
 }
 
-/**
- * Re-sends the current command after an I/O error:
- * selects the card, restarts the timeout alarm,
- * writes the command bytes (plus the latency bytes for a 0x52 read)
- * and restarts the DMA (512 bytes for a read, one page otherwise).
- * Commands with no data phase just deselect and unlock. Returns a CARD_RESULT code.
- */
 static s32 Retry(s32 chan) {
     CARDControl* card;
 
@@ -395,7 +339,7 @@ static s32 Retry(s32 chan) {
         return CARD_RESULT_READY;
     }
 
-    if (!EXIDma(chan, card->buffer, (s32)((card->cmd[0] == 0x52) ? 512 : card->pageSize), card->mode,
+    if (!EXIDma(chan, card->buffer, (s32)((card->cmd[0] == 0x52) ? CARD_SEG_SIZE : card->pageSize), card->mode,
                 __CARDTxHandler))
     {
         EXIDeselect(chan);
@@ -406,12 +350,6 @@ static s32 Retry(s32 chan) {
     return CARD_RESULT_READY;
 }
 
-/**
- * Callback used by __CARDStart when the EXI channel was busy:
- * once it is free it retries the command through Retry;
- * if that fails or the card vanished, it reports the error to the transmit callback (for read command 0x52)
- * or the EXI callback (for 0xF2, 0xF4 and 0xF1).
- */
 static void UnlockedCallback(s32 chan, s32 result) {
     CARDCallback callback;
     CARDControl* card;
@@ -451,11 +389,6 @@ static void UnlockedCallback(s32 chan, s32 result) {
     }
 }
 
-/**
- * Begins a card command: records the transmit and EXI callbacks,
- * tries to lock the EXI channel (returning CARD_RESULT_BUSY and waiting on UnlockedCallback if another user
- * holds it), selects the card and arms the timeout alarm.
- */
 static s32 __CARDStart(s32 chan, CARDCallback txCallback, CARDCallback exiCallback) {
     BOOL enabled;
     CARDControl* card;
@@ -504,11 +437,6 @@ static s32 __CARDStart(s32 chan, CARDCallback txCallback, CARDCallback exiCallba
 #define AD3(x) ((u8)(((x) >> 7) & 0x03))
 #define BA(x) ((u8)((x)&0x7f))
 
-/**
- * Reads one 512-byte segment from card address card->addr into card->buffer:
- * sends the read command 0x52 with the address bytes,
- * the latency bytes and starts an EXI DMA that ends in __CARDTxHandler.
- */
 s32 __CARDReadSegment(s32 chan, CARDCallback callback) {
     CARDControl* card;
     s32 result;
@@ -525,7 +453,7 @@ s32 __CARDReadSegment(s32 chan, CARDCallback callback) {
     card->cmd[3] = AD3(card->addr);
     card->cmd[4] = BA(card->addr);
     card->cmdlen = 5;
-    card->mode = 0;
+    card->mode = EXI_READ;
     card->retry = 0;
 
     result = __CARDStart(chan, callback, 0);
@@ -534,8 +462,8 @@ s32 __CARDReadSegment(s32 chan, CARDCallback callback) {
     } else if (result >= 0) {
         if (!EXIImmEx(chan, card->cmd, card->cmdlen, EXI_WRITE) ||
             !EXIImmEx(chan, (u8* )card->workArea + sizeof(CARDID), card->latency,
-            EXI_WRITE) || // DMA could be used here instead
-            !EXIDma(chan, card->buffer, 512, card->mode, __CARDTxHandler))
+            EXI_WRITE) || // latency bytes by immediate transfer, then the DMA read
+            !EXIDma(chan, card->buffer, CARD_SEG_SIZE, card->mode, __CARDTxHandler))
         {
             card->txCallback = NULL;
             EXIDeselect(chan);
@@ -549,10 +477,6 @@ s32 __CARDReadSegment(s32 chan, CARDCallback callback) {
     return result;
 }
 
-/**
- * Programs one page (card->pageSize bytes) at card->addr from card->buffer with command 0xF2 (address bit 0x80
- * set on large-page cards) and an EXI DMA that ends in __CARDTxHandler.
- */
 s32 __CARDWritePage(s32 chan, CARDCallback callback) {
     CARDControl* card;
     s32 result;
@@ -564,7 +488,7 @@ s32 __CARDWritePage(s32 chan, CARDCallback callback) {
     ASSERTLINE(906, card->addr < (u32) card->size * 1024 * 1024 / 8);
     card->cmd[0] = 0xF2;
 
-    if (card->pageSize > 0x80) {
+    if (card->pageSize > CARD_PAGE_SIZE) {
         card->cmd[1] = AD1(card->addr) | 0x80;
     } else {
         card->cmd[1] = AD1(card->addr);
@@ -574,7 +498,7 @@ s32 __CARDWritePage(s32 chan, CARDCallback callback) {
     card->cmd[3] = AD3(card->addr);
     card->cmd[4] = BA(card->addr);
     card->cmdlen = 5;
-    card->mode = 1;
+    card->mode = EXI_WRITE;
     card->retry = 3;
 
     result = __CARDStart(chan, 0, callback);
@@ -596,7 +520,6 @@ s32 __CARDWritePage(s32 chan, CARDCallback callback) {
     return result;
 }
 
-/** Sends the whole-card erase command (0xF4) and releases the channel; completion arrives through the EXI interrupt. */
 s32 __CARDErase(s32 chan, CARDCallback callback) {
     CARDControl* card;
     s32 result;
@@ -628,11 +551,6 @@ s32 __CARDErase(s32 chan, CARDCallback callback) {
     return result;
 }
 
-/**
- * Sends the sector erase command (0xF1) for the sector at 'addr' and releases the channel;
- * completion arrives through the EXI interrupt.
- * On large-page (512-byte) cards it does nothing and calls the callback with 0 immediately.
- */
 s32 __CARDEraseSector(s32 chan, u32 addr, CARDCallback callback) {
     CARDControl* card;
     s32 result;
@@ -643,7 +561,7 @@ s32 __CARDEraseSector(s32 chan, u32 addr, CARDCallback callback) {
     ASSERTLINE(1012, addr % card->sectorSize == 0);
     ASSERTLINE(1013, addr < (u32) card->size * 1024 * 1024 / 8);
 
-    if (card->pageSize > 0x80) {
+    if (card->pageSize > CARD_PAGE_SIZE) {
         if (callback) {
             callback(chan, 0);
         }
@@ -675,11 +593,6 @@ s32 __CARDEraseSector(s32 chan, u32 addr, CARDCallback callback) {
     return result;
 }
 
-/**
- * One-time CARD library setup: remembers the font encoding from the OS, registers the version string,
- * initializes the DSP and OS alarms, gives each channel a result of NOCARD, a thread queue and an alarm,
- * points both channels at the boot disk header's disk ID (address 0) and registers OnReset.
- */
 void CARDInit(void) {
     int chan;
 
@@ -706,12 +619,10 @@ void CARDInit(void) {
     OSRegisterResetFunction(&ResetFunctionInfo);
 }
 
-/** Returns the font encoding (ANSI or Shift-JIS) the library uses, as set from the OS in CARDInit. */
 u16 __CARDGetFontEncode(void) {
     return __CARDEncode;
 }
 
-/** Sets the font encoding to ANSI or Shift-JIS (other values are ignored) and returns the previous one. */
 u16 __CARDSetFontEncode(u16 encode) {
     u16 prev = __CARDEncode;
 
@@ -725,25 +636,16 @@ u16 __CARDSetFontEncode(u16 encode) {
     return prev;
 }
 
-/**
- * Sets the disk ID (game code and maker code) that both channels use to own files;
- * NULL selects the empty ID __CARDDiskNone, which can access every file.
- */
 void __CARDSetDiskID(const DVDDiskID* id) {
     __CARDBlock[0].diskID = id ? id : &__CARDDiskNone;
     __CARDBlock[1].diskID = id ? id : &__CARDDiskNone;
 }
 
-/** Returns the disk ID that a channel currently uses to own and find files. */
 const DVDDiskID* CARDGetDiskID(s32 chan) {
     ASSERTLINE(1168, 0 <= chan && chan < 2);
     return __CARDBlock[chan].diskID;
 }
 
-/**
- * Sets the disk ID of a channel (NULL means the boot disk ID at address 0);
- * returns CARD_RESULT_BUSY if an operation is running.
- */
 s32 CARDSetDiskID(s32 chan, const DVDDiskID* diskID) {
     BOOL enabled;
     CARDControl* card;
@@ -754,6 +656,7 @@ s32 CARDSetDiskID(s32 chan, const DVDDiskID* diskID) {
     enabled = OSDisableInterrupts();
 
     if (card->result == CARD_RESULT_BUSY) {
+        // BUG: returns with interrupts still disabled (no OSRestoreInterrupts on this path)
         return CARD_RESULT_BUSY;   
     }
 
@@ -762,11 +665,6 @@ s32 CARDSetDiskID(s32 chan, const DVDDiskID* diskID) {
     return 0;
 }
 
-/**
- * Claims a channel for an API call: FATAL_ERROR for a bad channel, NOCARD if nothing is attached,
- * BUSY if another operation is running; otherwise marks the channel busy,
- * clears its API callback and returns the control block.
- */
 s32 __CARDGetControlBlock(s32 chan, CARDControl** pcard) {
     BOOL enabled;
     s32 result;
@@ -795,10 +693,6 @@ s32 __CARDGetControlBlock(s32 chan, CARDControl** pcard) {
     return result;
 }
 
-/**
- * Releases a channel after an API call: stores 'result' as the channel's result code (only while attached, or if
- * it was still busy) and returns it.
- */
 s32 __CARDPutControlBlock(CARDControl* card, s32 result) {
     BOOL enabled;
 
@@ -815,7 +709,6 @@ s32 __CARDPutControlBlock(CARDControl* card, s32 result) {
     return result;
 }
 
-/** Returns the result code of the last operation on a channel (CARD_RESULT_BUSY while one is running). */
 s32 CARDGetResultCode(s32 chan) {
     CARDControl* card;
     
@@ -828,10 +721,6 @@ s32 CARDGetResultCode(s32 chan) {
     return card->result;
 }
 
-/**
- * Reports the free space of the mounted card: bytes not used (free blocks times sector size)
- * and the number of unused directory entries. Either pointer may be NULL.
- */
 s32 CARDFreeBlocks(s32 chan, s32* byteNotUsed, s32* filesNotUsed) {
     CARDControl* card;
     s32 result;
@@ -868,7 +757,6 @@ s32 CARDFreeBlocks(s32 chan, s32* byteNotUsed, s32* filesNotUsed) {
     return __CARDPutControlBlock(card, CARD_RESULT_READY);
 }
 
-/** Reports the font encoding recorded in the card's header block. */
 s32 CARDGetEncoding(s32 chan, u16* encode) {
     CARDControl* card;
     CARDID* id;
@@ -884,7 +772,6 @@ s32 CARDGetEncoding(s32 chan, u16* encode) {
     return __CARDPutControlBlock(card, CARD_RESULT_READY);
 }
 
-/** Reports the card's capacity in megabits. */
 s32 CARDGetMemSize(s32 chan, u16* size) {
     CARDControl* card;
     s32 result;
@@ -898,7 +785,6 @@ s32 CARDGetMemSize(s32 chan, u16* size) {
     return __CARDPutControlBlock(card, CARD_RESULT_READY);
 }
 
-/** Returns the card's flash sector size in bytes. */
 s32 CARDGetSectorSize(s32 chan, u32* size) {
     CARDControl* card;
     s32 result;
@@ -912,10 +798,6 @@ s32 CARDGetSectorSize(s32 chan, u32* size) {
     return __CARDPutControlBlock(card, CARD_RESULT_READY);
 }
 
-/**
- * Blocks the current thread (sleeping on the channel's queue) until the channel's pending operation finishes,
- * then returns its result code.
- */
 s32 __CARDSync(s32 chan) {
     CARDControl* block;
     s32 result;
@@ -931,10 +813,6 @@ s32 __CARDSync(s32 chan) {
     return result;
 }
 
-/**
- * OS reset hook: before a reset, unmounts both channels and vetoes the reset (returns FALSE)
- * while an unmount is still busy.
- */
 static BOOL OnReset(BOOL final) {
     if (!final) {
         if (CARDUnmount(0) == CARD_RESULT_BUSY || CARDUnmount(1) == CARD_RESULT_BUSY) {
@@ -945,10 +823,6 @@ static BOOL OnReset(BOOL final) {
     return TRUE;
 }
 
-/**
- * Sets the flag that lets DoMount use 512-byte pages on cards whose vendor ID starts with 0xEC;
- * returns the previous flag.
- */
 BOOL CARDSetFastMode(BOOL enable) {
     u16 prev = __CARDFastMode;
     __CARDFastMode = enable ? TRUE : FALSE;
@@ -956,12 +830,10 @@ BOOL CARDSetFastMode(BOOL enable) {
     return prev ? TRUE : FALSE;
 }
 
-/** Returns the fast-mode flag set by CARDSetFastMode. */
 BOOL CARDGetFastMode(void) {
     return __CARDFastMode ? TRUE : FALSE;
 }
 
-/** Reports through 'mode' whether the mounted card is being used with 512-byte pages (1) or 128-byte pages (0). */
 s32 CARDGetCurrentMode(s32 chan, u32* mode) {
     CARDControl* card;
     s32 result;

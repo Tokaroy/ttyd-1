@@ -1,4 +1,6 @@
 // Top-level battle entry: runs the battle main loop, checks for the end of the sequence and handles reset.
+
+#include "version.h"
 #include "battle/battle.h"
 #include "battle/battle_ac_help.h"
 #include "battle/battle_break_slot.h"
@@ -18,8 +20,12 @@
 #include "unit/unit_system.h"
 #include "driver/animdrv.h"
 #include "statuswindow.h"
-#include "version.h"
-#include "battle/battle_party.h"
+#include "battle/battle_stage.h"
+#include "battle/battle_sub.h"
+
+// Separate capacities: unit-slot indexes versus the after-reaction queue.
+enum { BATTLE_UNIT_SLOT_COUNT = 64,
+       BATTLE_AFTER_REACTION_COUNT = 64 };
 
 BattleWork* _battleWorkPointer;
 
@@ -36,8 +42,13 @@ static void _EquipItem(BattleUnit* unit, EquipFlags flags, ItemType type);
 static void BattlePartyInfoWorkInit(BattleWork* wp);
 static void BattleCheckUnitBroken(BattleWork* wp);
 
+// battleInit and battleEnd: original names and sizes (0x4 each: a bare return) from the JP demo map (UNUSED there:
+// nothing calls them); the empty partners of battleMain, which the map lists between them.
+void battleInit(void) {
+}
+
 /**
- * Per-frame battle entry called by the battle game sequence;
+ * Per-frame battle entry, called every frame from the main loop (marioStMain);
  * flags BATTLE_SEQ_END once BattleMain reports the battle is over.
  */
 void battleMain(void) {
@@ -48,12 +59,16 @@ void battleMain(void) {
     }
 }
 
+// Original name and size from the JP demo map (see battleInit).
+void battleEnd(void) {
+}
+
 /**
  * Returns TRUE once the battle has finished (BATTLE_SEQ_END, the top flag bit),
  * so the sequence can return to the field.
  */
-BOOL battleSeqEndCheck() {
-    return _battleWorkPointer->flags >> 31;
+BOOL battleSeqEndCheck(void) {
+    return (_battleWorkPointer->flags & BATTLE_SEQ_END) != 0;
 }
 
 /**
@@ -64,11 +79,10 @@ BOOL battleSeqEndCheck() {
  */
 void BattleInit(FieldBattleInfo* info) {
     BattleWork* wp;
-
-#if VERSION != VERSION_JP
-    wp = _battleWorkPointer = (BattleWork*)BattleAlloc(sizeof(BattleWork));
-#else
+#if VERSION == VERSION_JP
     wp = _battleWorkPointer = (BattleWork*)_mapAlloc(sizeof(BattleWork));
+#else
+    wp = _battleWorkPointer = (BattleWork*)BattleAlloc(sizeof(BattleWork));
 #endif
     memset(_battleWorkPointer, 0, sizeof(BattleWork));
     wp->curtainSfxId = -1;
@@ -81,8 +95,8 @@ void BattleInit(FieldBattleInfo* info) {
     BattleAfterReactionQueueInit();
     BattleStatusChangeMsgWorkInit();
     btlDispInit();
-    BattleSetSeq(wp, SEQ_UNKNOWN, 0);
-    BattleSetSeq(wp, SEQ_INIT, 0x1000000);
+    BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_INIT);
+    BattleSetSeq(wp, SEQ_INIT, SEQ_INIT_START);
     wp->seqEndWork = NULL;
     wp->commandMenu.flags = 0;
     wp->commandMenu.cursor[0].absPos = 0;
@@ -136,14 +150,14 @@ static BOOL BattleMain(void) {
     BattleBreakSlot_Main();
     btlDispMain();
 
-    if (BattleGetSeq(wp, SEQ_UNKNOWN) == 4) {
+    if (BattleGetSeq(wp, SEQ_UNKNOWN) == BATTLE_STAGE_DONE) {
         return FALSE;
     }
 
-    if ((gp->flags & GLOBAL_FLAG_KIOSK) && (gp->flags & GLOBAL_FLAG_KIOSK_TIMEOUT) && BattleGetSeq(wp, SEQ_UNKNOWN) == 2) {
-        wp->flags |= (BATTLE_FLAG_INTERRUPTED | BATTLE_FLAG_RESET_ABORT);
-        BattleSetSeq(wp, SEQ_UNKNOWN, 3);
-        BattleSetSeq(wp, SEQ_END, 0x7000000);
+    if ((gp->flags & GW_FLAG_E3) && (gp->flags & GW_FLAG_E3_TIMEOUT) && BattleGetSeq(wp, SEQ_UNKNOWN) == BATTLE_STAGE_TURN) {
+        wp->flags |= (BATTLE_FLAG_INTERRUPT_STOP | BATTLE_FLAG_DEMO_TIMEOUT);
+        BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_END);
+        BattleSetSeq(wp, SEQ_END, SEQ_END_START);
         return TRUE;
     }
 
@@ -160,7 +174,7 @@ void BattleEnd(void) {
     int i;
     void* subMenu;
 
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_UNIT_SLOT_COUNT; i++) {
         unit = BattleGetUnitPtr(wp, i);
         if (unit) {
             BtlUnit_Delete(unit);
@@ -175,20 +189,23 @@ void BattleEnd(void) {
     if (subMenu) {
         BattleFree(subMenu);
     }
-#if VERSION != VERSION_JP
-    BattleFree(wp);
-#else
+#if VERSION == VERSION_JP
     _mapFree(wp);
+#else
+    BattleFree(wp);
 #endif
     _battleWorkPointer = NULL;
 }
 
+extern BattleUnitSetup entryunit_party[7];
+
 /**
  * Spawns the battle's units: the system unit, Mario and his current partner with their stats from the pouch
- * and the equipped badges, then each enemy of the selected group with its held item (an item it stole in the
+ * and the equipped badges, then each enemy of the selected group with (in the releases) its held item (an item it stole in the
  * field takes priority) and its drop table.
  */
 BOOL Btl_UnitSetup(BattleWork* wp) {
+#if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
     BattleUnit* party;
     BattleUnit* mario;
     int i;
@@ -198,6 +215,17 @@ BOOL Btl_UnitSetup(BattleWork* wp) {
     PouchData* pouch;
     BattleUnit* system;
     BattleUnitType partyId;
+#else
+    int i;
+    BattleUnitSetup* enemyData;
+    NpcBattleInfo* setup;
+    BattleGroupSetup* groupSetup;
+    PouchData* pouch;
+    BattleUnit* system;
+    BattleUnit* mario;
+    BattleUnitType partyId;
+    BattleUnit* party;
+#endif
     BattleUnit* enemy;
     ItemType heldItem;
     int j;
@@ -206,9 +234,9 @@ BOOL Btl_UnitSetup(BattleWork* wp) {
     setup = wp->fbatInfo->setup;
     groupSetup = setup->groupSetup;
     pouch = pouchGetPtr();
-    wp->alliances[0].allianceId = 2;
-    wp->alliances[1].allianceId = 1;
-    wp->alliances[2].allianceId = 0;
+    wp->alliances[0].clearFlags = ALLIANCE_CLEAR_LEADER_OUT;
+    wp->alliances[1].clearFlags = ALLIANCE_CLEAR_ALL_OUT;
+    wp->alliances[2].clearFlags = ALLIANCE_CLEAR_NONE;
     wp->alliances[0].attackDirection = 1;
     wp->alliances[1].attackDirection = -1;
     wp->alliances[2].attackDirection = 1;
@@ -224,7 +252,7 @@ BOOL Btl_UnitSetup(BattleWork* wp) {
 
     partyId = wp->fbatInfo->party;
     if (partyId) {
-        party = BtlUnit_Entry(&entryunit_party[partyId - UNIT_GOOMBELLA]);
+        party = BtlUnit_Entry(&entryunit_party[partyId - TYPE_PARTNER_MIN]);
         BtlUnit_GetHomePos(party, &x, &y, &z);
         BtlUnit_SetHomePos(party, -140.0, y, 5.0);
         BtlUnit_SetPos(party, -140.0, y, 5.0);
@@ -234,25 +262,24 @@ BOOL Btl_UnitSetup(BattleWork* wp) {
 
     enemyData = groupSetup->enemyData;
 #if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
-    // Every demo (the early ones and the 2004-09 ones): the enemies carry no held or stolen items.
+    // every demo: the enemies carry no held or stolen items
     heldItem = ITEM_NULL;
 #endif
     for (i = 0; i < groupSetup->numEnemies; enemyData++, i++) {
         enemy = BtlUnit_Entry(enemyData);
         enemy->groupSetupId = i;
-#if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
-        enemy->heldItem = heldItem;
-#else
+#if VERSION == VERSION_JP || VERSION == VERSION_US || VERSION == VERSION_EU
         enemy->heldItem = ITEM_NULL;
-        // The releases give each enemy its held item, or the item it stole in the field.
         heldItem = setup->stolenItems[enemy->groupSetupId];
         if (heldItem) {
             enemy->heldItem = heldItem;
-            enemy->flags |= UNIT_FLAG_HOLDING_STOLEN_ITEM;
+            enemy->flags |= BATTLE_UNIT_FLAG_STOLEN_ITEM;
         } else {
             enemy->heldItem = setup->heldItems[i];
             BtlUnit_EquipItem(enemy, EQUIP_RESET, setup->heldItems[i]);
         }
+#else
+        enemy->heldItem = heldItem;
 #endif
         enemy->dropTable = setup->itemDropLists[i];
         enemy->currentHp = enemy->maxHp;
@@ -261,40 +288,40 @@ BOOL Btl_UnitSetup(BattleWork* wp) {
 
     wp->activeUnitId = -1;
     wp->badgeEquippedFlags = 0;
-    for (j = 0; j < 200; j++) {
+    for (j = 0; j < MAX_BADGES; j++) {
         switch (pouch->equippedBadges[j]) {
             case ITEM_QUICK_CHANGE:
-                wp->badgeEquippedFlags |= BADGE_FLAG_QUICK_CHANGE;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_QUICK_CHANGE;
                 break;
             case ITEM_PEEKABOO:
-                wp->badgeEquippedFlags |= BADGE_FLAG_PEEKABOO;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_PEEKABOO;
                 break;
             case ITEM_TIMING_TUTOR:
-                wp->badgeEquippedFlags |= BADGE_FLAG_TIMING_TUTOR;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_TIMING_TUTOR;
                 break;
             case ITEM_HEART_FINDER:
-                wp->badgeEquippedFlags |= BADGE_FLAG_HEART_FINDER;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_HEART_FINDER;
                 break;
             case ITEM_FLOWER_FINDER:
-                wp->badgeEquippedFlags |= BADGE_FLAG_FLOWER_FINDER;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_FLOWER_FINDER;
                 break;
             case ITEM_MONEY_MONEY:
-                wp->badgeEquippedFlags |= BADGE_FLAG_MONEY_MONEY;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_MONEY_MONEY;
                 break;
             case ITEM_ATTACK_FX_R:
-                wp->badgeEquippedFlags |= BADGE_FLAG_ATTACK_FX_R;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_ATTACK_FX_R;
                 break;
             case ITEM_ATTACK_FX_B:
-                wp->badgeEquippedFlags |= BADGE_FLAG_ATTACK_FX_B;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_ATTACK_FX_B;
                 break;
             case ITEM_ATTACK_FX_G:
-                wp->badgeEquippedFlags |= BADGE_FLAG_ATTACK_FX_G;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_ATTACK_FX_G;
                 break;
             case ITEM_ATTACK_FX_Y:
-                wp->badgeEquippedFlags |= BADGE_FLAG_ATTACK_FX_Y;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_ATTACK_FX_Y;
                 break;
             case ITEM_ATTACK_FX_P:
-                wp->badgeEquippedFlags |= BADGE_FLAG_ATTACK_FX_P;
+                wp->badgeEquippedFlags |= BATTLE_BADGE_ATTACK_FX_P;
                 break;
             default:
                 break;
@@ -378,8 +405,8 @@ void BattleIncSeq(BattleWork* wp, BattleSequence seq) {
 }
 
 /**
- * Allocates battle memory: from the battle area of the map heap in US and PAL,
- * from HEAP_BATTLE in JP and the demos.
+ * Allocates battle memory: from the battle area of the map heap in US and later,
+ * from HEAP_BATTLE in JP and the early demos.
  */
 void* BattleAlloc(u32 size) {
 #if VERSION >= VERSION_US
@@ -391,12 +418,13 @@ void* BattleAlloc(u32 size) {
 
 /** Frees memory from BattleAlloc; NULL is ignored. */
 void BattleFree(void* ptr) {
-    if (ptr)
+    if (ptr) {
 #if VERSION >= VERSION_US
         (_mapFree)(R_battlemapalloc_base_ptr, ptr);
 #else
         __memFree(HEAP_BATTLE, ptr);
 #endif
+    }
 }
 
 /** Returns the unit in battle slot index, or NULL for negative or out-of-range slots. */
@@ -407,7 +435,7 @@ BattleUnit* BattleGetUnitPtr(BattleWork* wp, s32 index) {
     if (index < -1) {
         return NULL;
     }
-    if (index < BATTLE_UNIT_MAX) {
+    if (index < BATTLE_UNIT_SLOT_COUNT) {
         return wp->units[index];
     }
 
@@ -416,7 +444,7 @@ BattleUnit* BattleGetUnitPtr(BattleWork* wp, s32 index) {
 
 /** Stores unit in battle slot index (ignored past BATTLE_UNIT_MAX). */
 void BattleSetUnitPtr(BattleWork* wp, s32 index, BattleUnit* unit) {
-    if (index < BATTLE_UNIT_MAX) {
+    if (index < BATTLE_UNIT_SLOT_COUNT) {
         wp->units[index] = unit;
     }
 }
@@ -431,7 +459,7 @@ BattleUnitPart* BattleGetUnitPartsPtr(s32 index, s32 partNum) {
 BattleUnit* BattleGetSystemPtr(BattleWork* wp) {
     s32 i;
     BattleUnit* unit;
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_UNIT_SLOT_COUNT; i++) {
         unit = BattleGetUnitPtr(wp, i);
         if (unit != NULL && unit->currentKind == UNIT_SYSTEM) {
             return unit;
@@ -444,9 +472,9 @@ BattleUnit* BattleGetSystemPtr(BattleWork* wp) {
 BattleUnit* BattleGetMarioPtr(BattleWork* wp) {
     s32 i;
     BattleUnit* unit;
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_UNIT_SLOT_COUNT; i++) {
         unit = BattleGetUnitPtr(wp, i);
-        if (unit != NULL && unit->currentKind == UNIT_MARIO && unit->alliance == 0) {
+        if (unit != NULL && unit->currentKind == UNIT_MARIO && unit->alliance == ALLIANCE_PLAYER) {
             return unit;
         }
     }
@@ -457,10 +485,10 @@ BattleUnit* BattleGetMarioPtr(BattleWork* wp) {
 BattleUnit* BattleGetPartyPtr(BattleWork* wp) {
     s32 i;
     BattleUnit* unit;
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_UNIT_SLOT_COUNT; i++) {
         unit = BattleGetUnitPtr(wp, i);
-        if (unit != NULL && !(unit->flags & UNIT_FLAG_NOT_ACTIVE_PARTNER) && unit->currentKind >= TYPE_PARTNER_MIN &&
-            unit->currentKind < TYPE_PARTNER_MAX && unit->alliance == 0) {
+        if (unit != NULL && !(unit->flags & BATTLE_UNIT_FLAG_SWAPPED_OUT) && unit->currentKind >= TYPE_PARTNER_MIN &&
+            unit->currentKind < TYPE_PARTNER_MAX && unit->alliance == ALLIANCE_PLAYER) {
             return unit;
         }
     }
@@ -477,10 +505,10 @@ BattleUnit* BattleGetPartnerPtr(BattleWork* wp, BattleUnit* unit) {
 
 /**
  * Starts loading a partner's animation data in the background (partyId is the unit kind 0xE0-0xE6)
- * so a partner switch is quick; returns TRUE once it has loaded (animEffectAsync's result).
+ * so a partner switch is quick.
  */
 BOOL BattlePartyAnimeLoad(s32 partyId) {
-    BattleUnitSetup* setup = &entryunit_party[partyId - UNIT_GOOMBELLA];
+    BattleUnitSetup* setup = &entryunit_party[partyId - TYPE_PARTNER_MIN];
 
     return animEffectAsync(setup->unitKindParams->parts->modelName, 1);
 }
@@ -493,39 +521,42 @@ BOOL BattlePartyAnimeLoad(s32 partyId) {
 BattleUnit* BattleChangeParty(BattleWork* wp) {
     s32 kind = wp->commandMenu.partyKind;
     BattleUnit* party = BattleGetPartyPtr(wp);
-    s32 oldId = *(s32*)party;
+    s32 oldId = party->unitId;
     BattleUnit* unit;
     s32 i;
     f32 dummy, x, y, z;
 
-    if (kind < UNIT_GOOMBELLA || kind >= UNIT_MAX) {
+    if (kind < TYPE_PARTNER_MIN || kind >= TYPE_PARTNER_MAX) {
         return NULL;
     }
-    unit = BtlUnit_Spawn(&entryunit_party[kind - UNIT_GOOMBELLA], 1);
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
+    unit = BtlUnit_Spawn(&entryunit_party[kind - TYPE_PARTNER_MIN], BTL_SPAWN_QUEUE_BACK);
+    for (i = 0; i < BATTLE_UNIT_SLOT_COUNT; i++) {
         s32 id = wp->movePriorityQueue[i];
         if (id != -1) {
             if (id == oldId) {
-                wp->movePriorityQueue[i] = *(s32*)unit;
-            } else if (id == *(s32*)unit) {
+                wp->movePriorityQueue[i] = unit->unitId;
+            } else if (id == unit->unitId) {
                 wp->movePriorityQueue[i] = oldId;
             }
         }
     }
     BtlUnit_GetHomePos(unit, &x, &y, &z);
     BtlUnit_GetHomePos(party, &x, &dummy, &z);
-    BtlUnit_EquipItem(unit, EQUIP_RESET | EQUIP_PARTNER, 0);
+    BtlUnit_EquipItem(unit, EQUIP_RESET | EQUIP_PARTNER, ITEM_NULL);
     y += BattleGetFloorHeight(_battleWorkPointer, x, y, z);
     BtlUnit_SetHomePos(unit, x, y, z);
     if (wp->activeUnitId == oldId) {
-        wp->activeUnitId = *(s32*)unit;
+        wp->activeUnitId = unit->unitId;
     }
+    // BUG: this also copies a Double or Triple Dip in progress from a partner KO'd in the middle of it; the new
+    // partner then continues that Dip with the list of the last command chosen (see CMD_STATE_INIT in
+    // BattleCommandInput).
     unit->moveState = party->moveState;
     unit->movesRemaining = party->movesRemaining;
     unit->maxMovesThisTurn = party->maxMovesThisTurn;
     unit->activeTurns = party->activeTurns;
     BtlUnit_SetParamToPouch(party);
-    party->flags |= UNIT_FLAG_NOT_ACTIVE_PARTNER;
+    party->flags |= BATTLE_UNIT_FLAG_SWAPPED_OUT;
     unit->moveColorLv = party->moveColorLv;
     unit->moveColorLvDisp = party->moveColorLvDisp;
     return unit;
@@ -540,51 +571,51 @@ s32 BattleTransPartyId(BattleUnitType kind) {
         case UNIT_GOOMBELLA_CHAPTER4:
         case UNIT_DOOPLISS_CHAPTER8_GOOMBELLA:
         case UNIT_GOOMBELLA:
-            return PARTNER_GOOMBELLA;
+            return PARTY_GOOMBELLA;
         case UNIT_KOOPS_CHAPTER4:
         case UNIT_DOOPLISS_CHAPTER8_KOOPS:
         case UNIT_KOOPS:
-            return PARTNER_KOOPS;
+            return PARTY_KOOPS;
         case UNIT_YOSHI_CHAPTER4:
         case UNIT_DOOPLISS_CHAPTER8_YOSHI:
         case UNIT_YOSHI:
-            return PARTNER_YOSHI;
+            return PARTY_YOSHI;
         case UNIT_FLURRIE_CHAPTER4:
         case UNIT_DOOPLISS_CHAPTER8_FLURRIE:
         case UNIT_FLURRIE:
-            return PARTNER_FLURRIE;
+            return PARTY_FLURRIE;
         case UNIT_DOOPLISS_CHAPTER8_VIVIAN:
         case UNIT_VIVIAN:
-            return PARTNER_VIVIAN;
+            return PARTY_VIVIAN;
         case UNIT_DOOPLISS_CHAPTER8_BOBBERY:
         case UNIT_BOBBERY:
-            return PARTNER_BOBBERY;
+            return PARTY_BOBBERY;
         case UNIT_DOOPLISS_CHAPTER8_MS_MOWZ:
         case UNIT_MS_MOWZ:
-            return PARTNER_MSMOWZ;
+            return PARTY_MS_MOWZ;
         case UNIT_NULL:
-            return PARTNER_NONE;
+            return PARTY_NONE;
         default:
-            return PARTNER_NONE;
+            return PARTY_NONE;
     }
 }
 
 /** Converts a pouch party id back to the partner's battle unit kind (0xE0-0xE6). */
 BattleUnitType BattleTransPartyIdToUnitKind(s32 partyId) {
     switch (partyId) {
-        case PARTNER_GOOMBELLA:
+        case PARTY_GOOMBELLA:
             return UNIT_GOOMBELLA;
-        case PARTNER_KOOPS:
+        case PARTY_KOOPS:
             return UNIT_KOOPS;
-        case PARTNER_YOSHI:
+        case PARTY_YOSHI:
             return UNIT_YOSHI;
-        case PARTNER_FLURRIE:
+        case PARTY_FLURRIE:
             return UNIT_FLURRIE;
-        case PARTNER_VIVIAN:
+        case PARTY_VIVIAN:
             return UNIT_VIVIAN;
-        case PARTNER_BOBBERY:
+        case PARTY_BOBBERY:
             return UNIT_BOBBERY;
-        case PARTNER_MSMOWZ:
+        case PARTY_MS_MOWZ:
             return UNIT_MS_MOWZ;
         default:
             return UNIT_NULL;
@@ -596,7 +627,7 @@ BattleUnitType BattleTransPartyIdToUnitKind(s32 partyId) {
  * then adds every badge in the pouch's equipped list for Mario
  * or the partner (or the single item type for an enemy) via _EquipItem, and re-derives max HP and FP.
  */
-void BtlUnit_EquipItem(BattleUnit* unit, s32 flags, ItemType type) {
+void BtlUnit_EquipItem(BattleUnit* unit, EquipFlags flags, ItemType type) {
     PouchData* pouch = pouchGetPtr();
     int i;
 
@@ -609,7 +640,7 @@ void BtlUnit_EquipItem(BattleUnit* unit, s32 flags, ItemType type) {
 
         if (unit->currentKind != UNIT_SYSTEM) {
             if (flags & (EQUIP_MARIO | EQUIP_PARTNER)) {
-                for (i = 0; i < 200; i++) {
+                for (i = 0; i < MAX_BADGES; i++) {
                     _EquipItem(unit, flags & ~EQUIP_RESET, pouch->equippedBadges[i]);
                 }
             } else {
@@ -849,7 +880,7 @@ static void _EquipItem(BattleUnit* unit, EquipFlags flags, ItemType type) {
 
 /**
  * Resets the saved per-partner state (size, status flags and turns,
- * and in US/PAL the disabled-command bits) kept while partners are swapped out.
+ * and in US and later the disabled-command bits) kept while partners are swapped out.
  */
 static void BattlePartyInfoWorkInit(BattleWork* wp) {
     BattleWorkPartyInfo* partyInfo;
@@ -898,13 +929,13 @@ f32 BattleGetFloorHeight(BattleWork* wp, f32 x, f32 y, f32 z) {
     return stage->audienceSizeY;
 }
 
-/** Deletes units flagged UNIT_FLAG_DELETE_PENDING at the start of a frame. */
+/** Deletes every unit flagged BATTLE_UNIT_FLAG_BROKEN (BtlUnit_Delete); BattleMain calls it first each frame. */
 static void BattleCheckUnitBroken(BattleWork* wp) {
     s32 i;
 
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_UNIT_SLOT_COUNT; i++) {
         BattleUnit* unit = BattleGetUnitPtr(wp, i);
-        if (unit && unit->flags & UNIT_FLAG_DELETE_PENDING) {
+        if (unit && unit->flags & BATTLE_UNIT_FLAG_BROKEN) {
             BtlUnit_Delete(unit);
         }
     }
@@ -914,48 +945,48 @@ static void BattleCheckUnitBroken(BattleWork* wp) {
 void BattleAfterReactionQueueInit(void) {
     BattleAfterReaction* base = _battleWorkPointer->afterReactions;
     s32 i;
-    for (i = 0; i < 64; i++) {
-        base[i].unitId = -1;
+    for (i = 0; i < BATTLE_AFTER_REACTION_COUNT; i++) {
+        base[i].unitId = UNIT_ID_NONE;
         base[i].tag = 0;
     }
 }
 
 /**
- * Queues an after-reaction for unit a: a script from its unit data entry b to run once the current action
+ * Queues an after-reaction for unit unitId: a script from its unit data entry tag to run once the current action
  * finishes. A unit already queued is not added again.
  */
-void BattleAfterReactionEntry(s32 a, s32 b) {
+void BattleAfterReactionEntry(s32 unitId, s32 tag) {
     BattleAfterReaction* base = _battleWorkPointer->afterReactions;
     s32 i;
-    for (i = 0; i < 64; i++) {
-        if (base[i].unitId != -1 && a == base[i].unitId) {
+    for (i = 0; i < BATTLE_AFTER_REACTION_COUNT; i++) {
+        if (base[i].unitId != UNIT_ID_NONE && unitId == base[i].unitId) {
             return;
         }
     }
-    for (i = 0; i < 64; i++) {
-        if (base[i].unitId == -1) {
+    for (i = 0; i < BATTLE_AFTER_REACTION_COUNT; i++) {
+        if (base[i].unitId == UNIT_ID_NONE) {
             break;
         }
     }
-    if (i < 64) {
-        base[i].unitId = a;
-        base[i].tag = b;
+    if (i < BATTLE_AFTER_REACTION_COUNT) {
+        base[i].unitId = unitId;
+        base[i].tag = tag;
     }
 }
 
-/** Removes every queued after-reaction of unit a with tag b, closing the gaps. */
-void BattleAfterReactionRelease(s32 a, s32 b) {
+/** Removes every queued after-reaction of unit unitId with tag tag, closing the gaps. */
+void BattleAfterReactionRelease(s32 unitId, s32 tag) {
     s32 i;
     s32 j;
     BattleAfterReaction* base = _battleWorkPointer->afterReactions;
-    for (i = 0; i < 64; i++) {
-        if (base[i].unitId != -1 && a == base[i].unitId && b == base[i].tag) {
-            for (j = i; j < 63; j++) {
+    for (i = 0; i < BATTLE_AFTER_REACTION_COUNT; i++) {
+        if (base[i].unitId != UNIT_ID_NONE && unitId == base[i].unitId && tag == base[i].tag) {
+            for (j = i; j < BATTLE_AFTER_REACTION_COUNT - 1; j++) {
                 base[j].unitId = base[j + 1].unitId;
                 base[j].tag = base[j + 1].tag;
             }
-            base[63].unitId = -1;
-            base[63].tag = 0;
+            base[BATTLE_AFTER_REACTION_COUNT - 1].unitId = UNIT_ID_NONE;
+            base[BATTLE_AFTER_REACTION_COUNT - 1].tag = 0;
             i--;
         }
     }
@@ -971,7 +1002,7 @@ BOOL BattleAfterReactionMain(void) {
     BattleWork* wp = _battleWorkPointer;
     BattleAfterReaction* base = wp->afterReactions;
     s32 i;
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_AFTER_REACTION_COUNT; i++) {
         id = base[i].unitId;
         if (id != -1) {
             s32 tag = base[i].tag;
@@ -989,7 +1020,7 @@ BOOL BattleAfterReactionMain(void) {
             evt = evtEntry(BtlUnit_GetData(unit, tag), 10, 0);
             if (evt != NULL) {
                 unit->attackEventId = evt->eventId;
-                evt->unitId = *(s32*)unit;
+                evt->unitId = unit->unitId;
             }
             return TRUE;
         }
@@ -1006,14 +1037,13 @@ BOOL battleDisableHResetCheck(void) {
     if (wp == NULL) {
         return FALSE;
     }
-    return (wp->flags >> 29) & 1;
+    return (wp->flags & BATTLE_FLAG_DISABLE_HRESET) != 0;
 }
 
 /**
- * Merlee ("majinai", charm) check each turn while she has charms left:
- * counts down a random 6-10 turn delay, then picks the charm type (1 attack, 2 defence, 3 the Star Point bonus
- * after the battle (battle_seq_end.c), 4 the coin bonus after a won battle (npcdrv.c); only 1-3 for battles flagged
- * NPC_BATTLE_MERLEE_NO_CURSE_4) and returns it, 0 meanwhile.
+ * Returns Merlee's pending spell (MAJINAI_*), or 0; called at the start of each turn from turn 2. While uses remain,
+ * counts down turnsUntilMerleeActivation (a negative count restarts it at 5 to 9); at 0 it picks a spell at random
+ * (30% Power, 30% Defence, 20% Exp, 20% Coins; 45/45/10 without coins for NPC_BATTLE_MERLEE_SAFE_CURSE_UNUSED battles).
  */
 u8 BattleMajinaiCheck(void) {
     PouchData* pouch = pouchGetPtr();
@@ -1023,42 +1053,42 @@ u8 BattleMajinaiCheck(void) {
         return 0;
     }
     if (pouch->turnsUntilMerleeActivation < 0) {
-        pouch->merleeNextCurseType = 0;
+        pouch->merleeNextCurseType = MAJINAI_NONE;
         pouch->turnsUntilMerleeActivation = irand(5) + 6;
-        (pouch->turnsUntilMerleeActivation)--;
+        pouch->turnsUntilMerleeActivation--;
         return 0;
     }
-    if (pouch->merleeNextCurseType != 0) {
+    if (pouch->merleeNextCurseType != MAJINAI_NONE) {
         return pouch->merleeNextCurseType;
     }
-    (pouch->turnsUntilMerleeActivation)--;
+    pouch->turnsUntilMerleeActivation--;
     if (pouch->turnsUntilMerleeActivation > 0) {
         return 0;
     }
     pouch->turnsUntilMerleeActivation = 0;
-    if ((u32)wp->fbatInfo->setup->battleFlags & NPC_BATTLE_MERLEE_NO_CURSE_4) {
+    if (wp->fbatInfo->setup->battleFlags & NPC_BATTLE_MERLEE_SAFE_CURSE_UNUSED) {
         r = irand(100);
-        if (r < 45)
-            pouch->merleeNextCurseType = 1;
-        else if (r < 90)
-            pouch->merleeNextCurseType = 2;
-        else
-            pouch->merleeNextCurseType = 3;
+        if (r < 45) {
+            pouch->merleeNextCurseType = MAJINAI_POWER_UP;
+        } else if (r < 90) {
+            pouch->merleeNextCurseType = MAJINAI_DEFENCE_UP;
+        } else {
+            pouch->merleeNextCurseType = MAJINAI_EXP_UP;
+        }
     } else {
         r = irand(100);
-        if (r < 30)
-            pouch->merleeNextCurseType = 1;
-        else if (r < 60)
-            pouch->merleeNextCurseType = 2;
-        else if (r < 80)
-            pouch->merleeNextCurseType = 3;
-        else
-            pouch->merleeNextCurseType = 4;
+        if (r < 30) {
+            pouch->merleeNextCurseType = MAJINAI_POWER_UP;
+        } else if (r < 60) {
+            pouch->merleeNextCurseType = MAJINAI_DEFENCE_UP;
+        } else if (r < 80) {
+            pouch->merleeNextCurseType = MAJINAI_EXP_UP;
+        } else {
+            pouch->merleeNextCurseType = MAJINAI_COIN_UP;
+        }
     }
     return pouch->merleeNextCurseType;
 }
-
-#include "battle/battle_stage.h"
 
 /** Uses up one of Merlee's charms and resets the countdown for the next. */
 void BattleMajinaiDone(void) {
@@ -1066,10 +1096,10 @@ void BattleMajinaiDone(void) {
     pouch->merleeCurseUsesRemaining--;
     if (pouch->merleeCurseUsesRemaining != 0) {
         pouch->turnsUntilMerleeActivation = -1;
-        pouch->merleeNextCurseType = 0;
+        pouch->merleeNextCurseType = MAJINAI_NONE;
     } else {
         pouch->turnsUntilMerleeActivation = -1;
-        pouch->merleeNextCurseType = 0;
+        pouch->merleeNextCurseType = MAJINAI_NONE;
     }
 }
 
@@ -1155,7 +1185,7 @@ void BattleConsumeReserveItem(void) {
     s32 i;
     wp = _battleWorkPointer;
     for (i = 0; i < 4; i++) {
-        if ((s32)wp->reserveItems[i] != 0) {
+        if (wp->reserveItems[i] != 0) {
             pouchRemoveItem(wp->reserveItems[i]);
         }
         wp->reserveItems[i] = 0;

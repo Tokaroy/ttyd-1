@@ -1,12 +1,18 @@
 // Battle damage: computes damage, defense, status effects, counterattacks and the resulting hit events.
+
+#include "version.h"
 #include "eff/eff_nice.h"
 #include "eff/n64/eff_vapor_n64.h"
-#include "version.h"
+#include "mario/mario_pouch.h"
+#include "battle/battle_status_effect.h"
+#include "battle/battle_ac.h"
+#include "battle/battle_ac_help.h"
+#include "eff/eff_bomb.h"
+#include "eff/n64/eff_ice_n64.h"
+#include "eff/eff_damage_star.h"
+#include "eff/eff_recovery.h"
 #include "battle/battle_audience.h"
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
-// FAKE: inlining off for the whole file (FAKES.md); without it 3 functions change length, e.g. BattleCheckDamage 640 -> 866 instructions
-#pragma dont_inline on
+#include "battle/battle_actrecord.h"
 #include "battle/battle_damage.h"
 #include "battle/battle.h"
 #include "battle/battle_unit.h"
@@ -15,44 +21,32 @@
 #include "eff/eff_hit.h"
 #include "eff/eff_miss_star.h"
 #include "eff/n64/eff_kemuri12_n64.h"
+#include "battle/battle_sub.h"
 #include <string.h>
 #include "battle/battle_mario.h"
-#include "battle/battle_ac_help.h"
-#include "battle/battle_disp.h"
-#include "eff/eff_bomb.h"
-#include "eff/eff_damage_star.h"
-#include "eff/eff_recovery.h"
-#include "eff/n64/eff_ice_n64.h"
 #include "system.h"
 #include "pmario_sound.h"
+#include "eff/n64/eff_stamp_n64.h"
+#include "battle/battle_disp.h"
 #include "eff/eff_fukidashi.h"
-#include "battle/battle_status_effect.h"
 #include "eff/eff_updown.h"
-#include "battle/battle_actrecord.h"
+#include "battle/unit_work.h"
 
-static void _getSickStatusParam(BattleUnit* unit, BattleWeapon* weapon, u32 type, s8* outTime, s8* outStrength);
-static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* part, u32 special, s32 type, s32 rate, s32 levelDiff, s8 time, s8 strength);
-static u32 BattleCheckPikkyoro(BattleWeapon* weapon, u32* flags);
-static s32 BattleCalculateDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* part, BattleWeapon* weapon, u32* result, u32 flags);
-static s32 BattleCalculateFpDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* part, BattleWeapon* weapon, u32* resultFlags, u32 flags);
 static s32 _checkDamageCode_EmergencyRevival(BattleUnit* unit, u32* flags);
-static void __declare(s32 unitIdx, s32 partIdx, s32* outUnit, s32* outPart);
-
-void BtlActRec_AddCount(u8* count);
 
 /**
  * Applies a finished hit to target: clamps damage to +-99, credits the attacker's totals,
- * spawns the damage-star popups (HP, and FP for Mario's side), plays the Attack FX,
+ * spawns the damage-star popups (HP and FP), plays the Attack FX,
  * guard or element damage sound, lowers HP and FP (negative damage heals),
- * may wake a sleeping target (half the time, when flag is set) and tells the audience about big hits,
+ * may wake a sleeping target (half the time, when canWake is set) and tells the audience about big hits,
  * KOs and partner downs. unitId -5 means no attacker (counter damage, hazards).
  */
-void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s32 damage, s32 fpDamage, u32 result, u32 pattern, s32 flag) {
+void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s32 damage, s32 fpDamage, u32 result, u32 pattern, s32 canWake) {
     BattleWork* wp = _battleWorkPointer;
     BattleUnit* attacker;
     Vec pos;
 
-    if (unitId != -5) {
+    if (unitId != UNIT_ID_SYSTEM) {
         attacker = BattleGetUnitPtr(wp, unitId);
     } else {
         attacker = NULL;
@@ -71,28 +65,28 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
         part = target->currentTarget = BtlUnit_GetPartsPtr(target, BtlUnit_GetBodyPartsId(target));
     }
     target->damagePattern = pattern;
-    if (target->attributeFlags & UNIT_ATTR_NO_KNOCKBACK_POSE) {
-        if ((u32)target->damagePattern == 0x15 || (u32)target->damagePattern == 0x16 ||
-            (u32)target->damagePattern == 0x17 || (u32)target->damagePattern == 0x18) {
-            target->damagePattern = 0;
+    if (target->attributeFlags & kUnitNoSpin) {
+        if (target->damagePattern == ATTACKPATTERN_CHUCHURINA_BINTA_L || target->damagePattern == ATTACKPATTERN_CHUCHURINA_BINTA_R ||
+            target->damagePattern == ATTACKPATTERN_CHUCHURINA_BINTA_L_LAST || target->damagePattern == ATTACKPATTERN_CHUCHURINA_BINTA_R_LAST) {
+            target->damagePattern = ATTACKPATTERN_NULL;
         }
     }
     BtlUnit_GetHitPos(target, part, &pos.x, &pos.y, &pos.z);
 
-    if (!(result & DAMAGE_FLAG_HEAL)) {
+    if (!(result & DAMAGE_RESULT_ABSORBED)) {
         if (damage != 0 || fpDamage != 0) {
             f32 x, y, z;
             BtlUnit_GetHitPos(target, part, &x, &y, &z);
             switch ((u8)result) {
-                case DAMAGE_HIT_FIRE:
-                case DAMAGE_HIT_EXPLOSION:
+                case DAMAGE_CODE_FIRE:
+                case DAMAGE_CODE_EXPLOSION:
                     effKemuri12N64Entry(0, 0x1e, x, y, z, 1.0f);
                     effHitEntry(1, 3, x, y, z, 1.0f);
                     break;
-                case DAMAGE_HIT_ELECTRIC:
+                case DAMAGE_CODE_ELECTRIC:
                     effHitEntry(2, 3, x, y, z, 1.0f);
                     break;
-                case DAMAGE_HIT_ICE:
+                case DAMAGE_CODE_ICE:
                     effIceN64Entry(0, x, y, z);
                     effHitEntry(3, 3, x, y, z, 1.0f);
                     break;
@@ -100,8 +94,8 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
                     effHitEntry(0, 3, x, y, z, 1.0f);
                     break;
             }
-            if (BtlUnit_GetBelong(target) == 0) {
-                if (damage != 0 && !(target->attributeFlags & UNIT_ATTR_NO_DAMAGE_NUMBER)) {
+            if (BtlUnit_GetBelong(target) == ALLIANCE_PLAYER) {
+                if (damage != 0 && !(target->attributeFlags & kNoDamageNumber)) {
                     effDamageStarEntry(0, damage, x - 8.0f, 5.0f + y, z, 10.0f, 30.0f);
                 }
                 if (fpDamage != 0) {
@@ -112,7 +106,7 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
                     }
                 }
             } else {
-                if (damage != 0 && !(target->attributeFlags & UNIT_ATTR_NO_DAMAGE_NUMBER)) {
+                if (damage != 0 && !(target->attributeFlags & kNoDamageNumber)) {
                     effDamageStarEntry(0, damage, x, 10.0f + y, z, 10.0f, -30.0f);
                 }
                 if (fpDamage != 0) {
@@ -123,19 +117,22 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
                     }
                 }
             }
-            if (unitId != -5 && attacker && attacker->badgesEquipped.MegaRush &&
+            if (unitId != UNIT_ID_SYSTEM && attacker && attacker->badgesEquipped.MegaRush &&
                 attacker->currentHp <= attacker->kindParams->perilHP) {
                 f32 x2, y2, z2;
                 BtlUnit_GetHitPos(target, part, &x2, &y2, &z2);
-                effFukidashiEntry(0, 0, 0, x2, y2, z2, 10.0f, 0.0f, 0x3c);
+                effFukidashiEntry(0, 0, NULL, x2, y2, z2, 10.0f, 0.0f, 0x3c);
             }
         } else {
             f32 x, y, z;
             BtlUnit_GetHitPos(target, part, &x, &y, &z);
-            if (pattern != 2 && pattern != 3 && pattern != 0x15 && pattern != 0x16 && pattern != 0x14 &&
-                pattern != 0x13 && pattern != 0x1b && pattern != 7 && (u8)result != DAMAGE_HIT_STATUS_ONLY) {
-                s32 dir = BtlUnit_GetBelong(target) == 0 ? -1 : 1;
-                if (result & DAMAGE_FLAG_AC_SUCCESS) {
+            if (pattern != ATTACKPATTERN_DAMAGE_MOTION && pattern != ATTACKPATTERN_DAMAGE_MOTION_BLOW &&
+                pattern != ATTACKPATTERN_CHUCHURINA_BINTA_L && pattern != ATTACKPATTERN_CHUCHURINA_BINTA_R &&
+                pattern != ATTACKPATTERN_CHUCHURINA_ITEMSTEAL && pattern != ATTACKPATTERN_ULTRA_HAMMER_FINISH &&
+                pattern != ATTACKPATTERN_NO_DAMAGE_FINISH && pattern != ATTACKPATTERN_SWALLOW_SAMBO_BODY &&
+                (u8)result != DAMAGE_CODE_STATUS_ONLY) {
+                s32 dir = BtlUnit_GetBelong(target) == ALLIANCE_PLAYER ? -1 : 1;
+                if (result & DAMAGE_RESULT_AC_SUCCESS) {
                     effMissStarEntry(1, 1, x, y, z, dir);
                 } else {
                     effMissStarEntry(0, 1, x, y, z, dir);
@@ -148,15 +145,14 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
         effRecoveryEntry(0, __fabs(damage), x, y, z);
     }
 
-    if (!(result & DAMAGE_FLAG_HEAL) && damage > 0) {
-#if VERSION <= VERSION_DEMO_JP
+    if (!(result & DAMAGE_RESULT_ABSORBED) && damage > 0) {
+        s32 n = 0;
         s32 i = target->badgesEquipped.PityFlower;
+#if VERSION <= VERSION_DEMO_JP
         for (; i > 0; i--) {
             irand(100);
         }
 #else
-        s32 n = 0;
-        s32 i = target->badgesEquipped.PityFlower;
         for (; i > 0; i--) {
             if (irand(100) < 30) {
                 n++;
@@ -172,41 +168,44 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
 #endif
     }
 
-    if (pattern != 0x13 && pattern != 0x1b) {
-        if (result & DAMAGE_FLAG_ATTACK_FX_R) {
+    if (pattern != ATTACKPATTERN_ULTRA_HAMMER_FINISH && pattern != ATTACKPATTERN_NO_DAMAGE_FINISH) {
+        if (result & DAMAGE_RESULT_ATTACK_FX_R) {
             psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_R1", &pos);
-#if VERSION <= VERSION_DEMO_JP
-        } else if (result & DAMAGE_FLAG_ATTACK_FX_Y) {
-            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_B1", &pos);
-        } else if (result & DAMAGE_FLAG_ATTACK_FX_B) {
-            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_G1", &pos);
-        } else if (result & DAMAGE_FLAG_ATTACK_FX_G) {
+        } else if (result & DAMAGE_RESULT_ATTACK_FX_Y) {
+#if VERSION >= VERSION_JP
             psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_Y1", &pos);
-#else
-        } else if (result & DAMAGE_FLAG_ATTACK_FX_Y) {
-            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_Y1", &pos);
-        } else if (result & DAMAGE_FLAG_ATTACK_FX_B) {
-            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_B1", &pos);
-        } else if (result & DAMAGE_FLAG_ATTACK_FX_G) {
-            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_G1", &pos);
+        } else if (result & DAMAGE_RESULT_ATTACK_FX_B) {
 #endif
-        } else if (result & DAMAGE_FLAG_ATTACK_FX_P) {
+            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_B1", &pos);
+#if VERSION <= VERSION_DEMO_JP
+        } else if (result & DAMAGE_RESULT_ATTACK_FX_B) {
+#else
+        } else if (result & DAMAGE_RESULT_ATTACK_FX_G) {
+#endif
+            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_G1", &pos);
+        }
+#if VERSION <= VERSION_DEMO_JP
+        else if (result & DAMAGE_RESULT_ATTACK_FX_G) {
+            psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_Y1", &pos);
+        }
+#endif
+        else if (result & DAMAGE_RESULT_ATTACK_FX_P) {
             psndSFXOn_3D("SFX_MARIO_HAMMER_PIKKYO_P1", &pos);
-        } else if (BtlUnit_GetBelong(target) == 0 && (result & DAMAGE_FLAG_GUARDED)) {
+        } else if (BtlUnit_GetBelong(target) == ALLIANCE_PLAYER && (result & DAMAGE_RESULT_GUARD)) {
             psndSFXOn_3D("SFX_MARIO_GUARD1", &pos);
         } else {
             if (damage > 0) {
                 switch ((u8)result) {
-                    case DAMAGE_HIT_FIRE:
+                    case DAMAGE_CODE_FIRE:
                         psndSFXOn_3D(target->kindParams->fireDamageSfxName, &pos);
                         psndSFXOn_3D(target->kindParams->damageSfxName, &pos);
                         break;
-                    case DAMAGE_HIT_ICE:
+                    case DAMAGE_CODE_ICE:
                         psndSFXOn_3D(target->kindParams->iceDamageSfxName, &pos);
                         psndSFXOn_3D(target->kindParams->damageSfxName, &pos);
                         break;
-                    case DAMAGE_HIT_ELECTRIC:
-                        psndSFXOn_3D(target->kindParams->explosionDamageSfxName, &pos);
+                    case DAMAGE_CODE_ELECTRIC:
+                        psndSFXOn_3D(target->kindParams->electricDamageSfxName, &pos);
                         psndSFXOn_3D(target->kindParams->damageSfxName, &pos);
                         break;
                     default:
@@ -214,7 +213,7 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
                         break;
                 }
             }
-            if (fpDamage > 0 && BtlUnit_GetBelong(target) == 0) {
+            if (fpDamage > 0 && BtlUnit_GetBelong(target) == ALLIANCE_PLAYER) {
                 psndSFXOn_3D("SFX_MARIO_DAMAGE_FP1", &pos);
             }
         }
@@ -225,7 +224,7 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
     target->fpDamageTaken = fpDamage;
     target->fpLost = fpDamage;
     target->totalFpDamageTaken += target->fpDamageTaken;
-    if (!(target->attributeFlags & UNIT_ATTR_HP_LOCKED) && !(part->attributes & PART_ATTR_NO_HP_LOSS)) {
+    if (!(target->attributeFlags & kUnitHpFixed) && !(part->attributes & kNoHpLoss)) {
         target->hpGauge.prevHp = target->currentHp;
         target->currentHp -= target->hpDamageTaken;
         if (target->currentHp > target->maxHp) {
@@ -239,10 +238,10 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
             target->hpGauge.drainTimer = target->hpGauge.drainLength;
             target->hpGauge.visibleTimer = target->hpGauge.visibleLength;
         }
-        if (result & DAMAGE_FLAG_LAST_HIT) {
-            target->hpGauge.flags |= HP_GAUGE_FADE_OUT;
+        if (result & DAMAGE_RESULT_FINAL_HIT) {
+            target->hpGauge.flags |= HP_GAUGE_FLAG_TIMED;
         } else {
-            target->hpGauge.flags &= ~HP_GAUGE_FADE_OUT;
+            target->hpGauge.flags &= ~HP_GAUGE_FLAG_TIMED;
         }
     }
     if (target->fpDamageTaken) {
@@ -263,53 +262,53 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
     if (damage > 0) {
         if (target->currentKind == UNIT_MARIO) {
             BtlActRec_AddCount(&wp->actRecord.marioHitsTaken);
-            BtlActRec_AddPoint(&wp->actRecord.marioDamageTaken, (u8)damage);
+            BtlActRec_AddPoint(&wp->actRecord.marioDamageTaken, damage);
         } else if (target->currentKind >= TYPE_PARTNER_MIN && target->currentKind < TYPE_PARTNER_MAX) {
             BtlActRec_AddCount(&wp->actRecord.partnerHitsTaken);
-            BtlActRec_AddPoint(&wp->actRecord.partnerDamageTaken, (u8)damage);
+            BtlActRec_AddPoint(&wp->actRecord.partnerDamageTaken, damage);
         }
     }
-    if (flag && (damage > 0 || fpDamage > 0) && BtlUnit_CheckStatus(target, STATUS_SLEEP) && irand(100) < 50) {
+    if (canWake && (damage > 0 || fpDamage > 0) && BtlUnit_CheckStatus(target, STATUS_SLEEP) && irand(100) < 50) {
         f32 x, y, z;
         target->sleepTurns = 1;
         target->sleepStrength = 100;
         BtlUnit_CheckRecoveryStatus(target, STATUS_SLEEP);
         BtlUnit_GetPos(target, &x, &y, &z);
         y += BtlUnit_GetHeight(target) / 2;
-        effFukidashiEntry(0, 0, 0, x, y, z, 10.0f, 0.0f, 0x3c);
+        effFukidashiEntry(0, 0, NULL, x, y, z, 10.0f, 0.0f, 0x3c);
     }
     if (target->currentKind == UNIT_MARIO) {
         BattleAudience_Case_MarioBigDamage(target->hpDamageTaken);
     }
     if (target->currentHp <= 0) {
         target->currentHp = 0;
-        if (result & DAMAGE_FLAG_LAST_HIT) {
-            result |= DAMAGE_FLAG_KO;
-            if (target->attributeFlags & UNIT_ATTR_REVIVES_AFTER_KO) {
+        if (result & DAMAGE_RESULT_FINAL_HIT) {
+            result |= DAMAGE_RESULT_ZERO_HP;
+            if (target->attributeFlags & kUndead) {
                 switch ((u8)result) {
-                    case DAMAGE_HIT_FIRE:
-                    case DAMAGE_HIT_EXPLOSION:
-                    case DAMAGE_HIT_COUNTER_FIERY:
-                    case DAMAGE_HIT_COUNTER_EXPLOSIVE:
-                    case DAMAGE_HIT_COUNTER_VOLATILE_EXPLOSIVE:
-                    case DAMAGE_HIT_COUNTER_HOLD_FAST:
-                        result |= DAMAGE_FLAG_DEFEATED;
+                    case DAMAGE_CODE_FIRE:
+                    case DAMAGE_CODE_EXPLOSION:
+                    case DAMAGE_CODE_COUNTER_FIERY:
+                    case DAMAGE_CODE_COUNTER_EXPLOSIVE:
+                    case DAMAGE_CODE_COUNTER_VOLATILE_EXPLOSIVE:
+                    case DAMAGE_CODE_COUNTER_HOLD_FAST:
+                        result |= DAMAGE_RESULT_DEATH;
                         break;
                 }
             } else {
-                result |= DAMAGE_FLAG_DEFEATED;
+                result |= DAMAGE_RESULT_DEATH;
                 _checkDamageCode_EmergencyRevival(target, &result);
             }
-            if ((u32)target->damagePattern == 0x19) {
+            if (target->damagePattern == ATTACKPATTERN_BLOW) {
                 s32 b = 1;
-                if ((result & DAMAGE_FLAG_DEFEATED) && !(result & DAMAGE_FLAG_LIFE_SHROOM) && (result & DAMAGE_FLAG_LAST_HIT) && target->vulnStatus->galeForceRate) {
+                if ((result & DAMAGE_RESULT_DEATH) && !(result & DAMAGE_RESULT_REVIVAL) && (result & DAMAGE_RESULT_FINAL_HIT) && target->vulnStatus->galeForceRate) {
                     b = 0;
                 }
                 if (b) {
-                    target->damagePattern = 0;
+                    target->damagePattern = ATTACKPATTERN_NULL;
                 }
             }
-            if (result & DAMAGE_FLAG_DEFEATED) {
+            if (result & DAMAGE_RESULT_DEATH) {
                 if (target->currentKind >= TYPE_PARTNER_MIN && target->currentKind < TYPE_PARTNER_MAX) {
                     BattleAudience_Case_PartyDown();
                 }
@@ -319,17 +318,17 @@ void BattleDamageDirect(s32 unitId, BattleUnit* target, BattleUnitPart* part, s3
                 }
             }
         }
-    } else if ((u32)target->damagePattern == 0x19) {
-        target->damagePattern = 0;
+    } else if (target->damagePattern == ATTACKPATTERN_BLOW) {
+        target->damagePattern = ATTACKPATTERN_NULL;
     }
-    target->tokenFlags |= TOKEN_FLAG_WAS_HIT;
+    target->tokenFlags |= kDamagedThisTurn;
     BattleRunHitEvent(target, result);
 }
 
 /**
- * Picks the Attack FX sound for a hammer/jump hit:
- * with several Attack FX badges equipped one is chosen at random,
- * and its DAMAGE_FLAG_ATTACK_FX_* bit is returned added to *flags. "Pikkyoro" is the squeaky toy-hammer sound.
+ * Picks the Attack FX sound of a weapon with SPECIAL_ATTACK_FX: with several Attack FX badges equipped one of them
+ * is chosen at random, and its DAMAGE_RESULT_ATTACK_FX_* bit is added to *flags (when flags is not NULL) and
+ * returned with the other bits of *flags.
  */
 static u32 BattleCheckPikkyoro(BattleWeapon* weapon, u32* flags) {
     BattleWork* wp = _battleWorkPointer;
@@ -344,28 +343,28 @@ static u32 BattleCheckPikkyoro(BattleWeapon* weapon, u32* flags) {
         result = *flags;
     }
     if (weapon->special & SPECIAL_ATTACK_FX) {
-        f = (u32)wp->badgeEquippedFlags;
-        if (f & BADGE_FLAG_ATTACK_FX_R) {
+        f = wp->badgeEquippedFlags;
+        if (f & BATTLE_BADGE_ATTACK_FX_R) {
             table[0] = 1;
             idx = 0;
             count++;
         }
-        if (f & BADGE_FLAG_ATTACK_FX_Y) {
+        if (f & BATTLE_BADGE_ATTACK_FX_Y) {
             table[1] = 1;
             idx = 1;
             count++;
         }
-        if (f & BADGE_FLAG_ATTACK_FX_B) {
+        if (f & BATTLE_BADGE_ATTACK_FX_B) {
             table[2] = 1;
             idx = 2;
             count++;
         }
-        if (f & BADGE_FLAG_ATTACK_FX_G) {
+        if (f & BATTLE_BADGE_ATTACK_FX_G) {
             table[3] = 1;
             idx = 3;
             count++;
         }
-        if (f & BADGE_FLAG_ATTACK_FX_P) {
+        if (f & BATTLE_BADGE_ATTACK_FX_P) {
             table[4] = 1;
             idx = 4;
             count++;
@@ -383,19 +382,19 @@ static u32 BattleCheckPikkyoro(BattleWeapon* weapon, u32* flags) {
         }
         switch (idx) {
             case 0:
-                result |= DAMAGE_FLAG_ATTACK_FX_R;
+                result |= DAMAGE_RESULT_ATTACK_FX_R;
                 break;
             case 1:
-                result |= DAMAGE_FLAG_ATTACK_FX_Y;
+                result |= DAMAGE_RESULT_ATTACK_FX_Y;
                 break;
             case 2:
-                result |= DAMAGE_FLAG_ATTACK_FX_B;
+                result |= DAMAGE_RESULT_ATTACK_FX_B;
                 break;
             case 3:
-                result |= DAMAGE_FLAG_ATTACK_FX_G;
+                result |= DAMAGE_RESULT_ATTACK_FX_G;
                 break;
             case 4:
-                result |= DAMAGE_FLAG_ATTACK_FX_P;
+                result |= DAMAGE_RESULT_ATTACK_FX_P;
                 break;
         }
     }
@@ -406,13 +405,16 @@ static u32 BattleCheckPikkyoro(BattleWeapon* weapon, u32* flags) {
 }
 
 /**
- * Computes the HP damage weapon deals to target's part:
- * base power from the weapon's damage function plus attacker boosts (Power Plus, P-Up D-Down, All or Nothing,
- * Mega/Power Rush, Ice Power, Charge, Huge, Attack Up, minus Tiny, Attack Down, HP/FP Drain),
- * minus the part's defence for the element plus Defend Plus, Damage Dodge, Defense Up/Down and defending,
- * then guard reduction, Double Pain and Last Stand.
- * Elements the part absorbs set DAMAGE_FLAG_HEAL and return the heal amount;
- * zero when All or Nothing missed its command.
+ * Computes the HP damage weapon deals to target's part. The base comes from the weapon's damage function; the
+ * attacker adds MAJINAI_POWER_UP (+3), Power Plus, P-Up D-Down, All or Nothing, Mega Rush and Power Rush (in the
+ * early demos only one of the two), Ice Power on parts weak to it, Charge, Huge and Attack Up, and loses P-Down
+ * D-Up, HP Drain, FP Drain, Tiny and Attack Down. The part's defence for the element is raised by Defend Plus,
+ * Damage Dodge (when guarding), the Defend command, Defense Up/Down, MAJINAI_DEFENCE_UP for Mario (+3) and the
+ * unit-work defence, and cleared by SPECIAL_PIERCE_DEFENSE. Then come the target's P-Up D-Down, the per-hit and
+ * per-target diminishing, the guard reduction, Ice Power against fire (in the early demos a defence bonus
+ * instead), P-Down D-Up, Double Pain, Last Stand and the defence attribute.
+ * An element the part absorbs sets DAMAGE_RESULT_ABSORBED and returns the heal amount as a negative number;
+ * the damage is zero when All or Nothing missed its command.
  */
 static s32 BattleCalculateDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* part, BattleWeapon* weapon, u32* result, u32 flags) {
     u32 defaultResult;
@@ -422,43 +424,45 @@ static s32 BattleCalculateDamage(BattleUnit* attacker, BattleUnit* target, Battl
     s32 defenseAttr;
     u8 element;
     s32 n;
-    u32 isJump;
+    u32 badgePower;
     s8 turns;
     s8 strength;
-    WeaponPowerFn fn;
+    BattleWeaponDamageFn fn;
 
-    if (target->tokenFlags & TOKEN_FLAG_GUARDING) {
-        flags |= DAMAGE_FLAG_GUARDING;
+    if (target->tokenFlags & kBodyguarding) {
+        flags |= DAMAGE_RESULT_GUARD_RETURN;
     }
     element = weapon->element;
-    if (attacker && (weapon->special & SPECIAL_FIERY_IF_BURNED) && BtlUnit_CheckStatus(attacker, STATUS_BURN)) {
+    if (attacker && (weapon->special & SPECIAL_IGNITABLE) && BtlUnit_CheckStatus(attacker, STATUS_BURN)) {
         element = ELEMENT_FIRE;
     }
-    defaultResult = flags | DAMAGE_HIT_NONE;
+    defaultResult = flags | DAMAGE_CODE_NO_DAMAGE;
     *result = defaultResult;
     fn = weapon->hpDamageFn;
     if (fn == NULL) {
         return 0;
     }
-    if (part->attributes & PART_ATTR_IMMUNE_TO_DAMAGE_OR_STATUS) {
+    if (part->attributes & kImmuneToDamageAndStatus) {
         return 0;
     }
-    if (attacker && (weapon->special & SPECIAL_BADGE_BUFFABLE) && attacker->badgesEquipped.AllOrNothing &&
-        !((u32)wp->actionCommands.result & 2) && !(flags & DAMAGE_FLAG_AC_SUCCESS)) {
+    if (attacker && (weapon->special & SPECIAL_BADGE_POWER) && attacker->badgesEquipped.AllOrNothing &&
+        !(wp->actionCommands.result & AC_RESULT_SUCCESS) && !(flags & DAMAGE_RESULT_AC_SUCCESS)) {
         return 0;
     }
     damage = weapon->hpDamageWork[0];
+
+    // This tests fn again here (fn == NULL returned above)
     if (fn) {
         damage = fn(attacker, weapon, target, part);
     }
-    if (wp->majinaiState == 1 && (weapon->special & SPECIAL_STATUS_BUFFABLE)) {
+    if (wp->majinaiState == MAJINAI_POWER_UP && (weapon->special & SPECIAL_STATUS_POWER)) {
         damage += 3;
     }
-    if (weapon->special & SPECIAL_BADGE_BUFFABLE) {
+    if (weapon->special & SPECIAL_BADGE_POWER) {
         damage += attacker->badgesEquipped.PowerPlus;
         damage += attacker->badgesEquipped.PUpDDown;
         if (attacker->badgesEquipped.AllOrNothing) {
-            if (((u32)wp->actionCommands.result & 2) || (flags & DAMAGE_FLAG_AC_SUCCESS)) {
+            if ((wp->actionCommands.result & AC_RESULT_SUCCESS) || (flags & DAMAGE_RESULT_AC_SUCCESS)) {
                 damage += attacker->badgesEquipped.AllOrNothing;
             } else {
                 damage = 0;
@@ -474,48 +478,48 @@ static s32 BattleCalculateDamage(BattleUnit* attacker, BattleUnit* target, Battl
             if (attacker->currentHp <= attacker->kindParams->dangerHP && attacker->badgesEquipped.PowerRush) {
             damage += attacker->badgesEquipped.PowerRush * 2;
         }
-        if (attacker->badgesEquipped.IcePower && (part->attributes & PART_ATTR_WEAK_TO_ICE_POWER)) {
+        if (attacker->badgesEquipped.IcePower && (part->attributes & kWeakToIcePower)) {
             damage += attacker->badgesEquipped.IcePower;
         }
     }
-    if (weapon->special & SPECIAL_CHARGE_BUFFABLE) {
+    if (weapon->special & SPECIAL_CHARGEABLE) {
         if (BtlUnit_CheckStatus(attacker, STATUS_CHARGE)) {
             BtlUnit_GetStatus(attacker, STATUS_CHARGE, &turns, &strength);
             if ((damage += strength) < 0) {
                 damage = 0;
             }
         }
-        attacker->tokenFlags |= TOKEN_FLAG_CHARGE_EXPENDED;
+        attacker->tokenFlags |= kChargeExpended;
     }
-    if ((weapon->special & SPECIAL_STATUS_BUFFABLE) && BtlUnit_CheckStatus(attacker, STATUS_HUGE)) {
+    if ((weapon->special & SPECIAL_STATUS_POWER) && BtlUnit_CheckStatus(attacker, STATUS_HUGE)) {
         BtlUnit_GetStatus(attacker, STATUS_HUGE, &turns, &strength);
         if ((damage += strength) < 0) {
             damage = 0;
         }
     }
-    if ((weapon->special & SPECIAL_STATUS_BUFFABLE) && BtlUnit_CheckStatus(attacker, STATUS_ATTACK_UP)) {
+    if ((weapon->special & SPECIAL_STATUS_POWER) && BtlUnit_CheckStatus(attacker, STATUS_ATTACK_UP)) {
         BtlUnit_GetStatus(attacker, STATUS_ATTACK_UP, &turns, &strength);
         if ((damage += strength) < 0) {
             damage = 0;
         }
     }
-    isJump = (weapon->special & SPECIAL_BADGE_BUFFABLE) != 0;
-    if (isJump) {
+    badgePower = (weapon->special & SPECIAL_BADGE_POWER) != 0;
+    if (badgePower) {
         damage -= attacker->badgesEquipped.PDownDUp;
     }
-    if (isJump && attacker->badgesEquipped.HpDrain) {
+    if (badgePower && attacker->badgesEquipped.HpDrain) {
         damage -= attacker->badgesEquipped.HpDrain;
     }
-    if (isJump && attacker->badgesEquipped.FpDrain) {
+    if (badgePower && attacker->badgesEquipped.FpDrain) {
         damage -= attacker->badgesEquipped.FpDrain;
     }
-    if ((weapon->special & SPECIAL_STATUS_BUFFABLE) && BtlUnit_CheckStatus(attacker, STATUS_TINY)) {
+    if ((weapon->special & SPECIAL_STATUS_POWER) && BtlUnit_CheckStatus(attacker, STATUS_TINY)) {
         BtlUnit_GetStatus(attacker, STATUS_TINY, &turns, &strength);
         if ((damage += strength) < 0) {
             damage = 0;
         }
     }
-    if ((weapon->special & SPECIAL_STATUS_BUFFABLE) && BtlUnit_CheckStatus(attacker, STATUS_ATTACK_DOWN)) {
+    if ((weapon->special & SPECIAL_STATUS_POWER) && BtlUnit_CheckStatus(attacker, STATUS_ATTACK_DOWN)) {
         BtlUnit_GetStatus(attacker, STATUS_ATTACK_DOWN, &turns, &strength);
         if ((damage += strength) < 0) {
             damage = 0;
@@ -529,27 +533,27 @@ skip:
     defenseAttr = part->defenseAttr->defenseAttrs[element];
     switch (element) {
         case ELEMENT_FIRE:
-            *result = flags | DAMAGE_HIT_FIRE;
+            *result = flags | DAMAGE_CODE_FIRE;
             break;
         case ELEMENT_ICE:
-            *result = flags | DAMAGE_HIT_ICE;
+            *result = flags | DAMAGE_CODE_ICE;
             break;
         case ELEMENT_ELECTRIC:
-            *result = flags | DAMAGE_HIT_ELECTRIC;
+            *result = flags | DAMAGE_CODE_ELECTRIC;
             break;
         case ELEMENT_EXPLOSION:
-            *result = flags | DAMAGE_HIT_EXPLOSION;
+            *result = flags | DAMAGE_CODE_EXPLOSION;
             break;
         case ELEMENT_NORMAL:
         default:
-            *result = flags | DAMAGE_HIT_NORMAL;
+            *result = flags | DAMAGE_CODE_NORMAL;
             break;
     }
-    if (defenseAttr != 3) {
+    if (defenseAttr != DEFENSE_ATTR_ABSORB) {
         if (target->badgesEquipped.DefendPlus) {
             defense += target->badgesEquipped.DefendPlus;
         }
-        if (target->badgesEquipped.DamageDodge && (flags & DAMAGE_FLAG_GUARDED)) {
+        if (target->badgesEquipped.DamageDodge && (flags & DAMAGE_RESULT_GUARD)) {
             defense += target->badgesEquipped.DamageDodge;
         }
 #if VERSION <= VERSION_DEMO_JP
@@ -557,7 +561,7 @@ skip:
             defense += target->badgesEquipped.IcePower;
         }
 #endif
-        if (BtlUnit_CheckStatusFlag(target, STATUS_FLAG_DEFENDING)) {
+        if (BtlUnit_CheckStatusFlag(target, UNIT_STATUS_FLAG_DEFEND)) {
             defense++;
         }
         if (BtlUnit_CheckStatus(target, STATUS_DEFENSE_UP)) {
@@ -570,32 +574,34 @@ skip:
                 defense = 0;
             }
         }
-        if (wp->majinaiState == 2 && target->currentKind == UNIT_MARIO) {
+        if (wp->majinaiState == MAJINAI_DEFENCE_UP && target->currentKind == UNIT_MARIO) {
             defense += 3;
         }
-        if (part->attributes & PART_ATTR_WEAK_TO_ATTACK_FX_R) {
-            if ((defense += target->work[1]) < 0) {
+
+        // JP and the early demos test bit 0x20 here, US and later kPartUnitWorkDefense (0x80); Hooktail's parts carry the bit each version tests
+        if (part->attributes & VERSION_PICK(0x20, kPartUnitWorkDefense)) {
+            if ((defense += target->work[UNIT_WORK_PART_DEFENSE]) < 0) {
                 defense = 0;
             }
         }
-        if ((weapon->special & SPECIAL_PIERCES_DEFENSE) && defense > 0) {
+        if ((weapon->special & SPECIAL_PIERCE_DEFENSE) && defense > 0) {
             defense = 0;
         }
     }
-    damage = (defenseAttr == 3) ? damage : damage - defense;
+    damage = (defenseAttr == DEFENSE_ATTR_ABSORB) ? damage : damage - defense;
     if ((damage += target->badgesEquipped.PUpDDown) > 0) {
-        if (weapon->special & SPECIAL_DIMINISHING_BY_HIT) {
+        if (weapon->special & SPECIAL_DIMINISH_BY_HIT) {
             if ((damage -= target->hpDamageCount) <= 0) {
                 damage = 1;
             }
         }
-        if (weapon->special & SPECIAL_DIMINISHING_BY_TARGET) {
-            if ((damage -= attacker->superguardedCount) <= 0) {
+        if (weapon->special & SPECIAL_DIMINISH_BY_TARGET) {
+            if ((damage -= attacker->attackHitCount) <= 0) {
                 damage = 1;
             }
         }
     }
-    if (flags & DAMAGE_FLAG_GUARDED) {
+    if (flags & DAMAGE_RESULT_GUARD) {
         damage--;
     }
 #if VERSION >= VERSION_JP
@@ -616,33 +622,34 @@ skip:
         damage = (damage + n - 1) / n;
     }
     switch (defenseAttr) {
-        case 1:
+        case DEFENSE_ATTR_WEAK:
             damage++;
             break;
-        case 2:
+        case DEFENSE_ATTR_IMMUNE:
             damage = 0;
             break;
-        case 4:
-            if (!(flags & DAMAGE_FLAG_PIERCE_IMMUNE)) {
+        case DEFENSE_ATTR_IMMUNE_EXCEPT_GULP:
+            if (!(flags & DAMAGE_RESULT_GULP)) {
                 damage = 0;
             }
             break;
-        case 3:
+        case DEFENSE_ATTR_ABSORB:
             break;
     }
     if (damage < 0) {
         damage = 0;
     }
-    if (defenseAttr == 3) {
-        *result |= DAMAGE_FLAG_HEAL;
+    if (defenseAttr == DEFENSE_ATTR_ABSORB) {
+        *result |= DAMAGE_RESULT_ABSORBED;
+        // FAKE: negation as an unsigned multiply; -damage changes the object
         return (u32)damage * -1;
     }
     if (damage <= 0) {
         *result = defaultResult;
         return 0;
     }
-    if (flags & DAMAGE_FLAG_LAST_HIT) {
-        if ((weapon->special & SPECIAL_FORCE_RESULT_10000) || !(target->attributeFlags & UNIT_ATTR_NO_LAST_HIT_RESULT)) {
+    if (flags & DAMAGE_RESULT_FINAL_HIT) {
+        if ((weapon->special & SPECIAL_FORCE_RESULT_10000) || !(target->attributeFlags & kUnitNoFinalHitResult_UNUSED)) {
             *result |= 0x10000;
         }
     }
@@ -657,34 +664,36 @@ static s32 BattleCalculateFpDamage(BattleUnit* attacker, BattleUnit* target, Bat
     BattleWork* wp = _battleWorkPointer;
     s32 damage = 0;
     s32 reduce = 0;
-    WeaponPowerFn fn;
+    BattleWeaponDamageFn fn;
 
-    if (*resultFlags & DAMAGE_FLAG_HEAL) {
+    if (*resultFlags & DAMAGE_RESULT_ABSORBED) {
         return 0;
     }
     fn = weapon->fpDamageFn;
     if (fn == NULL) {
         return 0;
     }
-    if (part->attributes & PART_ATTR_IMMUNE_TO_DAMAGE_OR_STATUS) {
+    if (part->attributes & kImmuneToDamageAndStatus) {
         return 0;
     }
-    if (attacker && (weapon->special & SPECIAL_BADGE_BUFFABLE) && attacker->badgesEquipped.AllOrNothing &&
-        !((u32)wp->actionCommands.result & 2)) {
+    if (attacker && (weapon->special & SPECIAL_BADGE_POWER) && attacker->badgesEquipped.AllOrNothing &&
+        !(wp->actionCommands.result & AC_RESULT_SUCCESS)) {
         return 0;
     }
+
+    // This tests fn again here (fn == NULL returned above)
     if (fn) {
         damage = fn(attacker, weapon, target, part);
     }
-    if (flags & DAMAGE_FLAG_GUARDED) {
+    if (flags & DAMAGE_RESULT_GUARD) {
         reduce = 1;
     }
     damage -= reduce;
     if (damage < 0) {
         damage = 0;
     }
-    if (damage > 0 && (*resultFlags & DAMAGE_HIT_MASK) == DAMAGE_HIT_NONE) {
-        *resultFlags = (*resultFlags & ~DAMAGE_HIT_MASK) | DAMAGE_HIT_NORMAL;
+    if (damage > 0 && (*resultFlags & DAMAGE_HIT_MASK) == DAMAGE_CODE_NO_DAMAGE) {
+        *resultFlags = (*resultFlags & ~DAMAGE_HIT_MASK) | DAMAGE_CODE_NORMAL;
     }
     return damage;
 }
@@ -694,88 +703,87 @@ static s32 BattleCalculateFpDamage(BattleUnit* attacker, BattleUnit* target, Bat
  * 5 confuse, 6 electric, 7 dodgy, 8 burn, 9 freeze, ... in the order of BattleSetStatusDamageFromWeapon).
  */
 static s32 _getSickStatusRate(BattleWeapon* weapon, s32 type) {
-    BattleWeapon* w = weapon;
     switch (type) {
-        case 1:
-            return w->sleepChance;
-        case 2:
-            return w->stopChance;
-        case 3:
-            return w->dizzyChance;
-        case 4:
-            return w->poisonChance;
-        case 5:
-            return w->confuseChance;
-        case 6:
-            return w->electricChance;
-        case 7:
-            return w->dodgyChance;
-        case 8:
-            return w->burnChance;
-        case 9:
-            return w->freezeChance;
-        case 10:
-            if (w->sizeChangeStrength > 0) {
-                return w->sizeChangeChance;
+        case STATUS_SLEEP:
+            return weapon->sleepChance;
+        case STATUS_STOP:
+            return weapon->stopChance;
+        case STATUS_DIZZY:
+            return weapon->dizzyChance;
+        case STATUS_POISON:
+            return weapon->poisonChance;
+        case STATUS_CONFUSE:
+            return weapon->confuseChance;
+        case STATUS_ELECTRIC:
+            return weapon->electricChance;
+        case STATUS_DODGY:
+            return weapon->dodgyChance;
+        case STATUS_BURN:
+            return weapon->burnChance;
+        case STATUS_FREEZE:
+            return weapon->freezeChance;
+        case STATUS_HUGE:
+            if (weapon->sizeChangeStrength > 0) {
+                return weapon->sizeChangeChance;
             }
             return 0;
-        case 11:
-            if (w->sizeChangeStrength <= 0) {
-                return w->sizeChangeChance;
+        case STATUS_TINY:
+            if (weapon->sizeChangeStrength <= 0) {
+                return weapon->sizeChangeChance;
             }
             return 0;
-        case 12:
-            if (w->atkChangeStrength > 0) {
-                return w->atkChangeChance;
+        case STATUS_ATTACK_UP:
+            if (weapon->atkChangeStrength > 0) {
+                return weapon->atkChangeChance;
             }
             return 0;
-        case 13:
-            if (w->atkChangeStrength <= 0) {
-                return w->atkChangeChance;
+        case STATUS_ATTACK_DOWN:
+            if (weapon->atkChangeStrength <= 0) {
+                return weapon->atkChangeChance;
             }
             return 0;
-        case 14:
-            if (w->defChangeStrength > 0) {
-                return w->defChangeChance;
+        case STATUS_DEFENSE_UP:
+            if (weapon->defChangeStrength > 0) {
+                return weapon->defChangeChance;
             }
             return 0;
-        case 15:
-            if (w->defChangeStrength <= 0) {
-                return w->defChangeChance;
+        case STATUS_DEFENSE_DOWN:
+            if (weapon->defChangeStrength <= 0) {
+                return weapon->defChangeChance;
             }
             return 0;
-        case 0:
-            return w->allergicChance;
-        case 19:
-            return w->fastChance;
-        case 20:
-            return w->slowChance;
-        case 25:
-            return w->frightChance;
-        case 26:
-            return w->galeForceChance;
-        case 27:
-            return (u8)w->ohkoChance;
-        case 18:
-            return w->invisibleChance;
-        case 23:
-            return w->hpRegenTime > 0 ? 100 : 0;
-        case 24:
-            return w->fpRegenTime > 0 ? 100 : 0;
+        case STATUS_ALLERGIC:
+            return weapon->allergicChance;
+        case STATUS_FAST:
+            return weapon->fastChance;
+        case STATUS_SLOW:
+            return weapon->slowChance;
+        case STATUS_FRIGHT:
+            return weapon->frightChance;
+        case STATUS_GALE_FORCE:
+            return weapon->galeForceChance;
+        case STATUS_DEAD:
+            return (u8)weapon->ohkoChance;
+        case STATUS_INVISIBLE:
+            return weapon->invisibleChance;
+        case STATUS_HP_REGEN:
+            return weapon->hpRegenTime > 0 ? 100 : 0;
+        case STATUS_FP_REGEN:
+            return weapon->fpRegenTime > 0 ? 100 : 0;
 #if VERSION <= VERSION_DEMO_JP
-        case 16:
-            return w->chargeStrength > 0 ? 100 : 0;
-        case 21:
-            return w->paybackTime > 0 ? 100 : 0;
+        case STATUS_CHARGE:
+            return weapon->chargeStrength > 0 ? 100 : 0;
+        case STATUS_PAYBACK:
+            return weapon->paybackTime > 0 ? 100 : 0;
 #else
-        case 16:
-            return w->chargeStrength != 0 ? 100 : 0;
-        case 21:
-            return w->paybackTime != 0 ? 100 : 0;
+        case STATUS_CHARGE:
+            return weapon->chargeStrength != 0 ? 100 : 0;
+        case STATUS_PAYBACK:
+            return weapon->paybackTime != 0 ? 100 : 0;
 #endif
-        case 22:
-            return w->holdFastTime > 0 ? 100 : 0;
-        case 17:
+        case STATUS_HOLD_FAST:
+            return weapon->holdFastTime > 0 ? 100 : 0;
+        case STATUS_FLIPPED:
             return 0;
     }
     return 0;
@@ -787,127 +795,126 @@ static s32 _getSickStatusRate(BattleWeapon* weapon, s32 type) {
  * Ice Smash), extra unused Defend badges add strength, and extra Charge badges raise the charge.
  */
 static void _getSickStatusParam(BattleUnit* unit, BattleWeapon* weapon, u32 type, s8* outTime, s8* outStrength) {
-    BattleWeapon* w = weapon;
     s32 time;
     s32 strength;
     s32 badge;
     s32 n;
 
     switch (type) {
-        case 1:
-            time = strength = w->sleepTime;
+        case STATUS_SLEEP:
+            time = strength = weapon->sleepTime;
             break;
-        case 2:
-            time = strength = w->stopTime;
+        case STATUS_STOP:
+            time = strength = weapon->stopTime;
             break;
-        case 3:
-            time = strength = w->dizzyTime;
+        case STATUS_DIZZY:
+            time = strength = weapon->dizzyTime;
             break;
-        case 4:
-            time = w->poisonTime;
-            strength = w->poisonStrength;
+        case STATUS_POISON:
+            time = weapon->poisonTime;
+            strength = weapon->poisonStrength;
             break;
-        case 5:
-            time = strength = w->confuseTime;
+        case STATUS_CONFUSE:
+            time = strength = weapon->confuseTime;
             break;
-        case 6:
-            time = strength = w->electricTime;
+        case STATUS_ELECTRIC:
+            time = strength = weapon->electricTime;
             break;
-        case 7:
-            time = strength = w->dodgyTime;
+        case STATUS_DODGY:
+            time = strength = weapon->dodgyTime;
             break;
-        case 8:
-            time = strength = w->burnTime;
+        case STATUS_BURN:
+            time = strength = weapon->burnTime;
             break;
-        case 9:
-            time = strength = w->freezeTime;
+        case STATUS_FREEZE:
+            time = strength = weapon->freezeTime;
             break;
-        case 10:
-            if (w->sizeChangeStrength > 0) {
-                time = w->sizeChangeTime;
-                strength = w->sizeChangeStrength;
+        case STATUS_HUGE:
+            if (weapon->sizeChangeStrength > 0) {
+                time = weapon->sizeChangeTime;
+                strength = weapon->sizeChangeStrength;
             } else {
                 strength = 0;
                 time = 0;
             }
             break;
-        case 11:
-            if (w->sizeChangeStrength < 0) {
-                time = w->sizeChangeTime;
-                strength = w->sizeChangeStrength;
+        case STATUS_TINY:
+            if (weapon->sizeChangeStrength < 0) {
+                time = weapon->sizeChangeTime;
+                strength = weapon->sizeChangeStrength;
             } else {
                 strength = 0;
                 time = 0;
             }
             break;
-        case 12:
-            if (w->atkChangeStrength > 0) {
-                time = w->atkChangeTime;
-                strength = w->atkChangeStrength;
+        case STATUS_ATTACK_UP:
+            if (weapon->atkChangeStrength > 0) {
+                time = weapon->atkChangeTime;
+                strength = weapon->atkChangeStrength;
             } else {
                 strength = 0;
                 time = 0;
             }
             break;
-        case 13:
-            if (w->atkChangeStrength < 0) {
-                time = w->atkChangeTime;
-                strength = w->atkChangeStrength;
+        case STATUS_ATTACK_DOWN:
+            if (weapon->atkChangeStrength < 0) {
+                time = weapon->atkChangeTime;
+                strength = weapon->atkChangeStrength;
             } else {
                 strength = 0;
                 time = 0;
             }
             break;
-        case 14:
-            if (w->defChangeStrength > 0) {
-                time = w->defChangeTime;
-                strength = w->defChangeStrength;
+        case STATUS_DEFENSE_UP:
+            if (weapon->defChangeStrength > 0) {
+                time = weapon->defChangeTime;
+                strength = weapon->defChangeStrength;
             } else {
                 strength = 0;
                 time = 0;
             }
             break;
-        case 15:
-            if (w->defChangeStrength < 0) {
-                time = w->defChangeTime;
-                strength = w->defChangeStrength;
+        case STATUS_DEFENSE_DOWN:
+            if (weapon->defChangeStrength < 0) {
+                time = weapon->defChangeTime;
+                strength = weapon->defChangeStrength;
             } else {
                 strength = 0;
                 time = 0;
             }
             break;
-        case 0:
-            time = strength = w->allergicTime;
+        case STATUS_ALLERGIC:
+            time = strength = weapon->allergicTime;
             break;
-        case 19:
-            time = strength = w->fastTime;
+        case STATUS_FAST:
+            time = strength = weapon->fastTime;
             break;
-        case 20:
-            time = strength = w->slowTime;
+        case STATUS_SLOW:
+            time = strength = weapon->slowTime;
             break;
-        case 27:
-            time = strength = w->ohkoChance;
+        case STATUS_DEAD:
+            time = strength = weapon->ohkoChance;
             break;
-        case 18:
-            time = strength = w->invisibleTime;
+        case STATUS_INVISIBLE:
+            time = strength = weapon->invisibleTime;
             break;
-        case 23:
-            time = w->hpRegenTime;
-            strength = w->hpRegenStrength;
+        case STATUS_HP_REGEN:
+            time = weapon->hpRegenTime;
+            strength = weapon->hpRegenStrength;
             break;
-        case 24:
-            time = w->fpRegenTime;
-            strength = w->fpRegenStrength;
+        case STATUS_FP_REGEN:
+            time = weapon->fpRegenTime;
+            strength = weapon->fpRegenStrength;
             break;
-        case 16:
-            time = w->chargeStrength;
-            strength = w->chargeStrength;
+        case STATUS_CHARGE:
+            time = weapon->chargeStrength;
+            strength = weapon->chargeStrength;
             break;
-        case 21:
-            time = strength = w->paybackTime;
+        case STATUS_PAYBACK:
+            time = strength = weapon->paybackTime;
             break;
-        case 22:
-            time = strength = w->holdFastTime;
+        case STATUS_HOLD_FAST:
+            time = strength = weapon->holdFastTime;
             break;
         default:
             strength = 0;
@@ -917,45 +924,45 @@ static void _getSickStatusParam(BattleUnit* unit, BattleWeapon* weapon, u32 type
 
     badge = weapon->itemId;
     n = 0;
-    if (badge >= 0xF0 && badge < 0x153) {
+    if (badge >= BADGE_MIN && badge < BADGE_MAX) {
         n = pouchEquipCheckBadge(badge);
     }
     if (n > 0) {
         switch (badge) {
-            case 0xF4:
-                if (type == 11) {
+            case ITEM_SHRINK_STOMP:
+                if (type == STATUS_TINY) {
                     time += (n - 1) * 2;
                 }
                 break;
-            case 0xF5:
-                if (type == 1) {
+            case ITEM_SLEEPY_STOMP:
+                if (type == STATUS_SLEEP) {
                     time += (n - 1) * 2;
                 }
                 break;
-            case 0xF6:
-                if (type == 15) {
+            case ITEM_SOFT_STOMP:
+                if (type == STATUS_DEFENSE_DOWN) {
                     time += (n - 1) * 2;
                 }
                 break;
-            case 0xFB:
-                if (type == 5) {
+            case ITEM_HEAD_RATTLE:
+                if (type == STATUS_CONFUSE) {
                     time += (n - 1) * 2;
                 }
                 break;
-            case 0xFD:
-                if (type == 9) {
+            case ITEM_ICE_SMASH:
+                if (type == STATUS_FREEZE) {
                     time += (n - 1) * 2;
                 }
                 break;
-            case 0x14F:
-            case 0x150:
-                if (type == 14 && unit->badgesEquipped.DefendUnused >= 2) {
+            case ITEM_UNUSED_DEFEND_BADGE:
+            case ITEM_UNUSED_DEFEND_BADGE_P:
+                if (type == STATUS_DEFENSE_UP && unit->badgesEquipped.DefendUnused >= 2) {
                     strength += unit->badgesEquipped.DefendUnused - 1;
                 }
                 break;
         }
     }
-    if (type == 16) {
+    if (type == STATUS_CHARGE) {
         if (weapon == &badgeWeapon_Charge || weapon == &badgeWeapon_ChargeP) {
             if (unit->currentKind == UNIT_MARIO) {
                 n = pouchEquipCheckBadge(ITEM_CHARGE);
@@ -989,56 +996,55 @@ static void _getSickStatusParam(BattleUnit* unit, BattleWeapon* weapon, u32 type
 static u8 _getRegistStatus(BattleUnit* unit, s32 type) {
     BattleVulnerableStatus* v = unit->vulnStatus;
     switch (type) {
-        case 1:
+        case STATUS_SLEEP:
             return v->sleepRate;
-        case 2:
+        case STATUS_STOP:
             return v->stopRate;
-        case 3:
+        case STATUS_DIZZY:
             return v->dizzyRate;
-        case 4:
+        case STATUS_POISON:
             return v->poisonRate;
-        case 5:
+        case STATUS_CONFUSE:
             return v->confuseRate;
-        case 6:
+        case STATUS_ELECTRIC:
             return v->electricRate;
-        case 8:
+        case STATUS_BURN:
             return v->burnRate;
-        case 9:
+        case STATUS_FREEZE:
             return v->freezeRate;
-        case 10:
+        case STATUS_HUGE:
             return v->hugeRate;
-        case 11:
+        case STATUS_TINY:
             return v->tinyRate;
-        case 12:
+        case STATUS_ATTACK_UP:
             return v->attackUpRate;
-        case 13:
+        case STATUS_ATTACK_DOWN:
             return v->attackDownRate;
-        case 14:
+        case STATUS_DEFENSE_UP:
             return v->defenseUpRate;
-        case 15:
+        case STATUS_DEFENSE_DOWN:
             return v->defenseDownRate;
-        case 0:
+        case STATUS_ALLERGIC:
             return v->allergicRate;
-        case 27:
+        case STATUS_DEAD:
             return v->instaKillRate;
-        case 19:
+        case STATUS_FAST:
             return v->fastRate;
-        case 20:
+        case STATUS_SLOW:
             return v->slowRate;
-        case 25:
+        case STATUS_FRIGHT:
             return v->frightRate;
-        case 26:
+        case STATUS_GALE_FORCE:
             return v->galeForceRate;
-        case 7:
+        case STATUS_DODGY:
             return v->dodgyRate;
-        case 18:
+        case STATUS_INVISIBLE:
             return v->invisibleRate;
     }
     return 100;
 }
 
-#include "eff/n64/eff_stamp_n64.h"
-
+// Statement macro: sets the six colour fields of the effect's EffStampN64Work; written out, each use would repeat six casts.
 #define STAMP_COL(e, r0, g0, b0, r1, g1, b1)      \
     ((EffStampN64Work*)(e)->userdata)->r = (r0);  \
     ((EffStampN64Work*)(e)->userdata)->g = (g0);  \
@@ -1052,7 +1058,7 @@ static u8 _getRegistStatus(BattleUnit* unit, s32 type) {
  * difference), for time turns at strength; on success sets the status, plays its effect and announcement,
  * and records it in *result.
  * Also handles the stat buffs (charge, attack/defence up/down, size, fast/slow, HP/FP regen) and their stacking.
- * Returns whether it took.
+ * Returns 1 after the immunity and chance checks pass, independently of the status setter's return value.
  */
 static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* part, u32 special, s32 type, s32 rate, s32 levelDiff, s8 time, s8 strength) {
     s32 ok;
@@ -1066,57 +1072,53 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
     s8 curTurns;
     s8 curStrength;
 
-#if VERSION <= VERSION_DEMO_JP
-    BtlUnit_GetStatus(unit, STATUS_CHARGE, NULL, &prevStrength);
-#else
     ok = 0;
     BtlUnit_GetStatus(unit, STATUS_CHARGE, NULL, &prevStrength);
     switch (type) {
-        case 0x16:
-        case 0x17:
-        case 0x18:
+        case STATUS_HOLD_FAST:
+        case STATUS_HP_REGEN:
+        case STATUS_FP_REGEN:
             break;
-        case 0x13:
-        case 0x14:
+        case STATUS_FAST:
+        case STATUS_SLOW:
             if (time <= 0) {
                 ok = 1;
             }
             break;
-        case 0:
-        case 0x15:
+        case STATUS_ALLERGIC:
+        case STATUS_PAYBACK:
             if (time <= 0) {
                 ok = 1;
             }
             break;
-        case 0xa:
-        case 0xb:
-        case 0xc:
-        case 0xd:
-        case 0xe:
-        case 0xf:
+        case STATUS_HUGE:
+        case STATUS_TINY:
+        case STATUS_ATTACK_UP:
+        case STATUS_ATTACK_DOWN:
+        case STATUS_DEFENSE_UP:
+        case STATUS_DEFENSE_DOWN:
             if (strength == 0) {
                 ok = 1;
             }
             break;
-        case 1:
-        case 2:
-        case 3:
-        case 4:
-        case 5:
-        case 6:
-        case 7:
-        case 8:
-        case 9:
+        case STATUS_SLEEP:
+        case STATUS_STOP:
+        case STATUS_DIZZY:
+        case STATUS_POISON:
+        case STATUS_CONFUSE:
+        case STATUS_ELECTRIC:
+        case STATUS_DODGY:
+        case STATUS_BURN:
+        case STATUS_FREEZE:
             if (time == 0) {
                 ok = 1;
             }
             break;
     }
-#endif
-    if (part->attributes & PART_ATTR_IMMUNE_TO_DAMAGE_OR_STATUS) {
+    if (part->attributes & kImmuneToDamageAndStatus) {
         return 0;
     }
-    if (part->attributes & PART_ATTR_IMMUNE_TO_STATUS) {
+    if (part->attributes & kImmuneToStatus) {
         return 0;
     }
 #if VERSION >= VERSION_JP
@@ -1124,23 +1126,23 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
         return 0;
     }
 #endif
-    if (part->attributes & PART_ATTR_IMMUNE_TO_MOST_STATUS) {
+    if (part->attributes & kImmuneToNegativeStatus) {
         switch (type) {
-            case 0:
-            case 1:
-            case 2:
-            case 3:
-            case 4:
-            case 5:
-            case 8:
-            case 9:
-            case 0xb:
-            case 0xd:
-            case 0xf:
-            case 0x14:
-            case 0x19:
-            case 0x1a:
-            case 0x1b:
+            case STATUS_ALLERGIC:
+            case STATUS_SLEEP:
+            case STATUS_STOP:
+            case STATUS_DIZZY:
+            case STATUS_POISON:
+            case STATUS_CONFUSE:
+            case STATUS_BURN:
+            case STATUS_FREEZE:
+            case STATUS_TINY:
+            case STATUS_ATTACK_DOWN:
+            case STATUS_DEFENSE_DOWN:
+            case STATUS_SLOW:
+            case STATUS_FRIGHT:
+            case STATUS_GALE_FORCE:
+            case STATUS_DEAD:
 #if VERSION <= VERSION_DEMO_JP
                 return 0;
 #else
@@ -1153,20 +1155,20 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
     }
     if (unit->badgesEquipped.FeelingFine) {
         switch (type) {
-            case 1:
-            case 2:
-            case 3:
-            case 4:
-            case 5:
-            case 6:
-            case 0xb:
-            case 0xd:
-            case 0xf:
-            case 0x1b:
+            case STATUS_SLEEP:
+            case STATUS_STOP:
+            case STATUS_DIZZY:
+            case STATUS_POISON:
+            case STATUS_CONFUSE:
+            case STATUS_ELECTRIC:
+            case STATUS_TINY:
+            case STATUS_ATTACK_DOWN:
+            case STATUS_DEFENSE_DOWN:
+            case STATUS_DEAD:
                 return 0;
         }
     }
-    if ((u32)type == 8 && unit->badgesEquipped.IcePower) {
+    if ((u32)type == STATUS_BURN && unit->badgesEquipped.IcePower) {
         return 0;
     }
     chance = rate;
@@ -1174,9 +1176,9 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
         return 0;
     }
     regist = _getRegistStatus(unit, type);
-    if (!(special & SPECIAL_IGNORE_STATUS_VULNERABILITY) || regist == 0) {
+    if (!(special & SPECIAL_IGNORE_VULNERABILITY) || regist == 0) {
         chance = chance * regist / 100;
-        if (!(special & SPECIAL_IGNORE_STATUS_VULNERABILITY) && regist > 0) {
+        if (!(special & SPECIAL_IGNORE_VULNERABILITY) && regist > 0) {
             chance += levelDiff;
         }
     }
@@ -1193,195 +1195,184 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
         if ((u32)type == STATUS_SLEEP) {
             *result |= STATUS_RESULT_SLEEP;
         }
-        if ((u32)type == STATUS_INSTANT_KILL) {
-            *result |= STATUS_RESULT_INSTANT_KILL;
+        if ((u32)type == STATUS_DEAD) {
+            *result |= STATUS_RESULT_DEAD;
         }
         ok = BtlUnit_SetStatus(unit, type, time, strength);
     }
     switch (type) {
-        case 6:
-        case 7:
-        case 0xa:
-        case 0xc:
-        case 0xe:
-        case 0x10:
-        case 0x12:
-        case 0x13:
-        case 0x15:
-        case 0x16:
-        case 0x17:
-        case 0x18:
-            *result |= STATUS_RESULT_OTHER;
+        case STATUS_ELECTRIC:
+        case STATUS_DODGY:
+        case STATUS_HUGE:
+        case STATUS_ATTACK_UP:
+        case STATUS_DEFENSE_UP:
+        case STATUS_CHARGE:
+        case STATUS_INVISIBLE:
+        case STATUS_FAST:
+        case STATUS_PAYBACK:
+        case STATUS_HOLD_FAST:
+        case STATUS_HP_REGEN:
+        case STATUS_FP_REGEN:
+            *result |= STATUS_RESULT_UNTIMED;
             break;
         default:
             if (time > 0) {
-                *result |= STATUS_RESULT_AILMENT;
+                *result |= STATUS_RESULT_TIMED;
             } else {
-                *result |= STATUS_RESULT_OTHER;
+                *result |= STATUS_RESULT_UNTIMED;
             }
             break;
     }
 
     if (ok) {
         BtlUnit_GetPos(unit, &x, &y, &z);
-        if (unit->attributeFlags & UNIT_ATTR_CEILING) {
+        if (unit->attributeFlags & kCeiling) {
             y -= BtlUnit_GetHeight(unit) / 2;
         } else {
             y += BtlUnit_GetHeight(unit) / 2;
         }
-#if VERSION <= VERSION_DEMO_JP
-        switch (type) {
-            case 1:
-                effStampN64Entry(0, x, y, 10.0f + z);
-                break;
-            case 5:
-                effStampN64Entry(1, x, y, 10.0f + z);
-                break;
-            case 0xe:
-            case 0xf:
-                eff = effStampN64Entry(2, x, y, 10.0f + z);
-                STAMP_COL(eff, 0, 0, 200, 0, 0, 10);
-                break;
-            case 0xa:
-            case 0xb:
-            case 0xc:
-            case 0xd:
-            case 0x10:
-                eff = effStampN64Entry(2, x, y, 10.0f + z);
-                STAMP_COL(eff, 200, 0, 0, 10, 0, 0);
-                break;
-            default:
-                eff = effStampN64Entry(2, x, y, 10.0f + z);
-                STAMP_COL(eff, 200, 200, 200, 10, 10, 10);
-                break;
-        }
-#else
+#if VERSION >= VERSION_JP
         switch (unit->currentKind) {
-            case 0x17:
-            case 0x84:
-            case 0xab:
+            case UNIT_HOOKTAIL:
+            case UNIT_GLOOMTAIL:
+            case UNIT_BONETAIL:
                 x -= 300.0f;
                 z += 30.0f;
                 break;
 #if VERSION >= VERSION_US
-            case 0x95:
-            case 0x96:
+            case UNIT_SHADOW_QUEEN_INVINCIBLE:
+            case UNIT_SHADOW_QUEEN_DEMON:
                 z += 40.0f;
                 break;
 #endif
         }
+#endif
         switch (type) {
-            case 1:
+            case STATUS_SLEEP:
                 effStampN64Entry(0, x, y, 10.0f + z);
                 break;
-            case 5:
+            case STATUS_CONFUSE:
                 effStampN64Entry(1, x, y, 10.0f + z);
                 break;
-            case 2:
+#if VERSION <= VERSION_DEMO_JP
+            case STATUS_DEFENSE_UP:
+            case STATUS_DEFENSE_DOWN:
+                eff = effStampN64Entry(2, x, y, 10.0f + z);
+                STAMP_COL(eff, 0, 0, 200, 0, 0, 10);
+                break;
+            case STATUS_HUGE:
+            case STATUS_TINY:
+            case STATUS_ATTACK_UP:
+            case STATUS_ATTACK_DOWN:
+            case STATUS_CHARGE:
+                eff = effStampN64Entry(2, x, y, 10.0f + z);
+                STAMP_COL(eff, 200, 0, 0, 10, 0, 0);
+#else
+            case STATUS_STOP:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 110, 110, 10, 10, 10);
                 break;
-            case 3:
+            case STATUS_DIZZY:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 0, 110, 220, 10, 10, 10);
                 break;
-            case 4:
+            case STATUS_POISON:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 0, 220, 0, 10, 10, 10);
                 break;
-            case 6:
+            case STATUS_ELECTRIC:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 0, 10, 10, 10);
                 break;
-            case 0x10:
+            case STATUS_CHARGE:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 220, 220, 0);
                 break;
-            case 0x15:
-            case 0x16:
+            case STATUS_PAYBACK:
+            case STATUS_HOLD_FAST:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 0, 0, 0, 220);
                 break;
-            case 0xa:
+            case STATUS_HUGE:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 220, 0, 0);
                 break;
-            case 0xb:
+            case STATUS_TINY:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 0, 0, 10, 10, 10);
                 break;
-            case 0xc:
+            case STATUS_ATTACK_UP:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 220, 0, 0);
                 break;
-            case 0xd:
+            case STATUS_ATTACK_DOWN:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 0, 0, 10, 10, 10);
                 break;
-            case 0xe:
+            case STATUS_DEFENSE_UP:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 0, 0, 220);
                 break;
-            case 0xf:
+            case STATUS_DEFENSE_DOWN:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 0, 0, 220, 10, 10, 10);
                 break;
-            case 0x13:
+            case STATUS_FAST:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 220, 110, 0);
                 break;
-            case 0x14:
+            case STATUS_SLOW:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 110, 0, 10, 10, 10);
                 break;
-            case 8:
+            case STATUS_BURN:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 0, 220, 0, 0);
                 break;
-            case 9:
+            case STATUS_FREEZE:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 0, 110, 220);
                 break;
-            case 0:
+            case STATUS_ALLERGIC:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 160, 220, 0, 10, 10, 10);
                 break;
-            case 0x12:
+            case STATUS_INVISIBLE:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 110, 110, 110);
                 break;
-            case 0x17:
+            case STATUS_HP_REGEN:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 220, 110, 110);
                 break;
-            case 0x18:
+            case STATUS_FP_REGEN:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 160, 220, 0);
                 break;
-            case 7:
+            case STATUS_DODGY:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 0, 220, 0);
                 break;
-            case 0x1b:
+            case STATUS_DEAD:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 220, 220, 220, 10, 10, 10);
+#endif
                 break;
             default:
                 eff = effStampN64Entry(2, x, y, 10.0f + z);
                 STAMP_COL(eff, 200, 200, 200, 10, 10, 10);
                 break;
         }
-#endif
         switch (type) {
-            case 0xe:
-            case 0xf:
+            case STATUS_DEFENSE_UP:
+            case STATUS_DEFENSE_DOWN:
                 effUpdownEntry(1, x, y, 20.0f + z, strength, 0x3c);
                 break;
-            case 0xa:
-            case 0xb:
-            case 0xc:
-            case 0xd:
-            case 0x10:
+            case STATUS_HUGE:
+            case STATUS_TINY:
+            case STATUS_ATTACK_UP:
+            case STATUS_ATTACK_DOWN:
+            case STATUS_CHARGE:
                 effUpdownEntry(0, x, y, 15.0f + z, strength, 0x3c);
                 break;
         }
@@ -1389,12 +1380,12 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
         BtlUnit_GetPos(unit, &x, &y, &z);
         y += BtlUnit_GetHeight(unit) / 2;
         switch (type) {
-            case 8:
+            case STATUS_BURN:
                 if (unit->iceEff) {
                     effSoftDelete(unit->iceEff);
                 }
                 break;
-            case 9:
+            case STATUS_FREEZE:
                 eff = effVaporN64Entry(0, 0x3c, x, y, z, 1.0f);
                 ((EffVaporN64Work*)eff->userdata)->r1 = 0xff;
                 ((EffVaporN64Work*)eff->userdata)->g1 = 0xff;
@@ -1410,7 +1401,7 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
     if (ok) {
         BtlUnit_GetStatus(unit, type, &curTurns, &curStrength);
         switch (type) {
-            case 0x10:
+            case STATUS_CHARGE:
                 if (curStrength > 0) {
                     if (prevStrength != curStrength) {
                         BattleStatusChangeInfoSetAnnouce(unit, type, curStrength, 1);
@@ -1423,35 +1414,35 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
                     }
                 }
                 break;
-            case 4:
+            case STATUS_POISON:
                 if (curStrength > 0) {
                     BattleStatusChangeInfoSetAnnouce(unit, type, curStrength, 1);
                     BattleStatusChangeMsgSetAnnouce(unit, type, 1);
                     announce = 1;
                 }
                 break;
-            case 0:
-            case 1:
-            case 2:
-            case 3:
-            case 5:
-            case 6:
-            case 7:
-            case 8:
-            case 9:
-            case 0xa:
-            case 0xb:
-            case 0xc:
-            case 0xd:
-            case 0xe:
-            case 0xf:
-            case 0x12:
-            case 0x13:
-            case 0x14:
-            case 0x15:
-            case 0x16:
-            case 0x17:
-            case 0x18:
+            case STATUS_ALLERGIC:
+            case STATUS_SLEEP:
+            case STATUS_STOP:
+            case STATUS_DIZZY:
+            case STATUS_CONFUSE:
+            case STATUS_ELECTRIC:
+            case STATUS_DODGY:
+            case STATUS_BURN:
+            case STATUS_FREEZE:
+            case STATUS_HUGE:
+            case STATUS_TINY:
+            case STATUS_ATTACK_UP:
+            case STATUS_ATTACK_DOWN:
+            case STATUS_DEFENSE_UP:
+            case STATUS_DEFENSE_DOWN:
+            case STATUS_INVISIBLE:
+            case STATUS_FAST:
+            case STATUS_SLOW:
+            case STATUS_PAYBACK:
+            case STATUS_HOLD_FAST:
+            case STATUS_HP_REGEN:
+            case STATUS_FP_REGEN:
                 if (curTurns > 0) {
                     BattleStatusChangeInfoSetAnnouce(unit, type, curTurns, 1);
                     BattleStatusChangeMsgSetAnnouce(unit, type, 1);
@@ -1463,76 +1454,76 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
     BtlUnit_GetHitPos(unit, part, &hitPos.x, &hitPos.y, &hitPos.z);
     if (announce) {
         switch (type) {
-            case 1:
+            case STATUS_SLEEP:
                 psndSFXOn_3D("SFX_CONDITION_SLEEP1", &hitPos);
                 break;
-            case 2:
+            case STATUS_STOP:
                 psndSFXOn_3D("SFX_CONDITION_STOP1", &hitPos);
                 break;
-            case 3:
+            case STATUS_DIZZY:
                 psndSFXOn_3D("SFX_CONDITION_GURUGURU1", &hitPos);
                 break;
-            case 5:
+            case STATUS_CONFUSE:
                 psndSFXOn_3D("SFX_CONDITION_CONFUSE1", &hitPos);
                 break;
-            case 4:
+            case STATUS_POISON:
                 psndSFXOn_3D("SFX_CONDITION_POISON1", &hitPos);
                 break;
-            case 7:
+            case STATUS_DODGY:
                 psndSFXOn_3D("SFX_CONDITION_YOKEYOKE1", &hitPos);
                 break;
-            case 6:
+            case STATUS_ELECTRIC:
                 psndSFXOn_3D("SFX_CONDITION_BIRIBIRI1", &hitPos);
                 break;
-            case 0xa:
+            case STATUS_HUGE:
                 psndSFXOn_3D("SFX_CONDITION_DEKADEKA1", &hitPos);
                 break;
-            case 0xb:
+            case STATUS_TINY:
                 psndSFXOn_3D("SFX_CONDITION_MINIMINI1", &hitPos);
                 break;
-            case 0xe:
+            case STATUS_DEFENSE_UP:
                 psndSFXOn_3D("SFX_CONDITION_KATIKATI1", &hitPos);
                 break;
-            case 0xf:
+            case STATUS_DEFENSE_DOWN:
                 psndSFXOn_3D("SFX_BTL_FUNYA1", &hitPos);
                 break;
-            case 0x14:
+            case STATUS_SLOW:
                 psndSFXOn_3D("SFX_CONDITION_SLOW1", &hitPos);
                 break;
-            case 8:
+            case STATUS_BURN:
                 psndSFXOn_3D("SFX_CONDITION_FIRE1", &hitPos);
                 break;
-            case 9:
+            case STATUS_FREEZE:
                 psndSFXOn_3D("SFX_CONDITION_ICE1", &hitPos);
                 break;
-            case 0x13:
+            case STATUS_FAST:
                 psndSFXOn_3D("SFX_CONDITION_FAST1", &hitPos);
                 break;
-            case 0x17:
+            case STATUS_HP_REGEN:
                 psndSFXOn_3D("SFX_CONDITION_REST_HP_SLOW1", &hitPos);
                 break;
-            case 0x18:
+            case STATUS_FP_REGEN:
                 psndSFXOn_3D("SFX_CONDITION_REST_FP_SLOW1", &hitPos);
                 break;
-            case 0:
+            case STATUS_ALLERGIC:
                 psndSFXOn_3D("SFX_CONDITION_ALLERGY1", &hitPos);
                 break;
-            case 0xc:
+            case STATUS_ATTACK_UP:
                 psndSFXOn_3D("SFX_CONDITION_TUYOTUYO1", &hitPos);
                 break;
-            case 0xd:
+            case STATUS_ATTACK_DOWN:
                 psndSFXOn_3D("SFX_CONDITION_YOWAYOWA1", &hitPos);
                 break;
-            case 0x10:
+            case STATUS_CHARGE:
                 psndSFXOn_3D("SFX_CONDITION_CHARGE1", &hitPos);
                 break;
-            case 0x12:
+            case STATUS_INVISIBLE:
                 psndSFXOn_3D("SFX_CONDITION_TOUMEI1", &hitPos);
                 break;
-            case 0x15:
+            case STATUS_PAYBACK:
                 psndSFXOn_3D("SFX_CONDITION_COUNTER1", &hitPos);
                 break;
-            case 0x16:
+            case STATUS_HOLD_FAST:
                 psndSFXOn_3D("SFX_BTL_THUNDERS_COUNTER1", &hitPos);
                 break;
         }
@@ -1541,8 +1532,9 @@ static s32 BattleSetStatusDamage(u32* result, BattleUnit* unit, BattleUnitPart* 
 }
 
 /**
- * Rolls every status the weapon can inflict (unless DAMAGE_FLAG_NO_STATUS) against target
- * and returns the result flags of those that took.
+ * Tries every status the weapon can inflict on target (unless flags has DAMAGE_RESULT_NO_STATUS) and returns the
+ * result flags of those that took. Huge, Defense Up and Attack Up are skipped when they have neither turns nor
+ * strength.
  */
 s32 BattleSetStatusDamageFromWeapon(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* part, BattleWeapon* weapon, u32 flags) {
     s32 rate;
@@ -1552,28 +1544,28 @@ s32 BattleSetStatusDamageFromWeapon(BattleUnit* attacker, BattleUnit* target, Ba
     s8 time;
     s8 strength;
 
-    if (!(flags & DAMAGE_FLAG_NO_STATUS)) {
-        for (i = 0; i < 28; i++) {
+    if (!(flags & DAMAGE_RESULT_NO_STATUS)) {
+        for (i = 0; i < STATUS_INVALID; i++) {
             _getSickStatusParam(attacker, weapon, i, &time, &strength);
             rate = (s8)_getSickStatusRate(weapon, i);
             levelDiff = 0;
             switch (i) {
-                case 10:
+                case STATUS_HUGE:
                     if (!time && !strength) {
                         continue;
                     }
                     break;
-                case 14:
+                case STATUS_DEFENSE_UP:
                     if (!time && !strength) {
                         continue;
                     }
                     break;
-                case 12:
+                case STATUS_ATTACK_UP:
                     if (!time && !strength) {
                         continue;
                     }
                     break;
-                case 26:
+                case STATUS_GALE_FORCE:
                     if (rate > 0) {
                         levelDiff = attacker->level - target->level;
                     }
@@ -1582,7 +1574,7 @@ s32 BattleSetStatusDamageFromWeapon(BattleUnit* attacker, BattleUnit* target, Ba
 #if VERSION <= VERSION_DEMO_JP
             BattleSetStatusDamage(&result, target, part, weapon->special, i, (s8)rate, levelDiff, time, strength);
 #else
-            if (BattleSetStatusDamage(&result, target, part, weapon->special, i, (s8)rate, levelDiff, time, strength) && i == 18) {
+            if (BattleSetStatusDamage(&result, target, part, weapon->special, i, (s8)rate, levelDiff, time, strength) && i == STATUS_INVISIBLE) {
                 btlDispPoseAnime(part);
             }
 #endif
@@ -1604,28 +1596,28 @@ s32 BattlePreCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPar
     if (!target || !part) {
         return 1;
     }
-    if (weapon->special & SPECIAL_CHARGE_BUFFABLE) {
-        attacker->tokenFlags |= TOKEN_FLAG_CHARGE_EXPENDED;
+    if (weapon->special & SPECIAL_CHARGEABLE) {
+        attacker->tokenFlags |= kChargeExpended;
     }
-    if ((part->attributes & PART_ATTR_EVASIVE) && !(weapon->special & SPECIAL_HITS_EVASIVE_PARTS)) {
+    if ((part->attributes & kClone) && !(weapon->special & SPECIAL_CONTACTS_CLONES)) {
         return 2;
     }
-    if (weapon->special & SPECIAL_ALWAYS_HITS) {
+    if (weapon->special & SPECIAL_CANNOT_MISS) {
         return 1;
     }
-    if (BtlUnit_CheckStatus(target, STATUS_INVISIBLE) || (target->attributeFlags & UNIT_ATTR_INTANGIBLE)) {
+    if (BtlUnit_CheckStatus(target, STATUS_INVISIBLE) || (target->attributeFlags & kPermanentlyInvisible)) {
         return 4;
     }
-    if (target->attributeFlags & UNIT_ATTR_VEILED) {
+    if (target->attributeFlags & kVeiled) {
         return 4;
     }
-    if ((part->counterAttributes & COUNTER_ATTR_PREEMPTIVE_FRONT_SPIKY) && !(weapon->counterResistFlags & COUNTER_RESIST_PREEMPTIVE_SPIKY) && !attacker->badgesEquipped.SpikeShield) {
+    if ((part->counterAttributes & kCounterPreemptiveFrontSpiky) && !(weapon->counterResistFlags & COUNTER_RESIST_PREEMPTIVE_SPIKY) && !attacker->badgesEquipped.SpikeShield) {
         return 5;
     }
-    if (part->attributes & PART_ATTR_INTANGIBLE) {
+    if (part->attributes & VERSION_PICK(0x10, kIntangiblePart)) {
         return 4;
     }
-    if (flags & DAMAGE_FLAG_ALWAYS_HIT) {
+    if (flags & DAMAGE_RESULT_NO_EVADE) {
         return 1;
     }
     if (target->badgesEquipped.PrettyLucky) {
@@ -1652,7 +1644,7 @@ s32 BattlePreCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPar
     if (BtlUnit_CheckStatus(target, STATUS_DODGY) && !BtlUnit_CheckStatus(target, STATUS_SLEEP) && !BtlUnit_CheckStatus(target, STATUS_STOP) && irand(100) >= 50) {
         return 6;
     }
-    n = (u8)weapon->baseAccuracy;
+    n = weapon->baseAccuracy;
     if (BtlUnit_CheckStatus(attacker, STATUS_DIZZY)) {
         n = n * 50 / 100;
     }
@@ -1666,27 +1658,27 @@ s32 BattlePreCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPar
 }
 
 /**
- * Adds DAMAGE_FLAG_LIFE_SHROOM to a KO code and returns 1 when the falling unit will be revived:
- * Mario or a partner with a Life Shroom in the pouch, or an enemy holding one.
+ * Adds DAMAGE_RESULT_REVIVAL to *flags and returns 1 when the unit will be revived: Mario or a partner while the
+ * pouch holds a Life Shroom, or an enemy holding one.
  */
 static s32 _checkDamageCode_EmergencyRevival(BattleUnit* unit, u32* flags) {
     s32 kind = unit->currentKind;
     if (kind == UNIT_MARIO) {
-        if ((s32)pouchCheckItem(ITEM_LIFE_SHROOM) > 0) {
-            *flags |= DAMAGE_FLAG_LIFE_SHROOM;
+        if (pouchCheckItem(ITEM_LIFE_SHROOM) > 0) {
+            *flags |= DAMAGE_RESULT_REVIVAL;
             return 1;
         }
         return 0;
     }
-    if (kind >= UNIT_GOOMBELLA && kind < UNIT_MAX) {
-        if ((s32)pouchCheckItem(ITEM_LIFE_SHROOM) > 0) {
-            *flags |= DAMAGE_FLAG_LIFE_SHROOM;
+    if (kind >= TYPE_PARTNER_MIN && kind < TYPE_PARTNER_MAX) {
+        if (pouchCheckItem(ITEM_LIFE_SHROOM) > 0) {
+            *flags |= DAMAGE_RESULT_REVIVAL;
             return 1;
         }
         return 0;
     }
     if (unit->heldItem == ITEM_LIFE_SHROOM) {
-        *flags |= DAMAGE_FLAG_LIFE_SHROOM;
+        *flags |= DAMAGE_RESULT_REVIVAL;
         return 1;
     }
     return 0;
@@ -1700,10 +1692,10 @@ static s32 _checkDamageCode_EmergencyRevival(BattleUnit* unit, u32* flags) {
  * Returns 18 when the hit landed, 19 when it had no effect, 21 when Superguarded without a counter,
  * -1 when the attacker was countered.
  */
-s32 BattleCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* part, BattleWeapon* weapon, s32 flags) {
+s32 BattleCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* part, BattleWeapon* weapon, u32 flags) {
     BattleWork* wp = _battleWorkPointer;
     u32 pattern;
-    s32 ret = -1;
+    s32 ret = CHECK_DAMAGE_COUNTERED;
     u32 status = 0;
     s32 damage;
     s32 fpDamage;
@@ -1711,176 +1703,181 @@ s32 BattleCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* 
     CounterWork cw;
     Vec hit;
     Vec hit2;
+
     CounterWork* cwp;
     Vec pos;
     u32 result;
-    s32 code;
-    s32 code2;
-    u32 r1;
-    u32 r2;
-    u32 r3;
-    u32 r4;
+    u32 code;
+    u32 code2;
+    u32 poisonResult;
+    u32 freezeResult;
+    u32 burnResult;
+    u32 electricResult;
     s32 pierce;
 
     pierce = 0;
     cwp = &cw;
     BattleInitCounterPreCheckWork(cwp);
     if (!target) {
-        return 18;
+        return CHECK_DAMAGE_HIT;
     }
     if (part) {
         target->currentTarget = part;
     }
     damage = 0;
-    if (!(weapon->special & SPECIAL_UNGUARDABLE) && BtlUnit_GetACPossibility(target) && BattleActionCommandGetDefenceResult() == 5) {
+    if (!(weapon->special & SPECIAL_UNGUARDABLE) && BtlUnit_GetACPossibility(target) && BattleActionCommandGetDefenceResult() == GUARD_RESULT_SUPERGUARD) {
         BtlUnit_GetHitPos(target, part, &hit.x, &hit.y, &hit.z);
-        eff = effNiceEntry(2, hit.x - 60.0f, 45.0f + hit.y, hit.z - 10.0f);
+        eff = effNiceEntry(NICE_EFFECT_GREAT, hit.x - 60.0f, 45.0f + hit.y, hit.z - 10.0f);
         ((NiceEffectWork*)eff->userdata)->overallScale = 0.75f;
-        flags |= DAMAGE_FLAG_SUPERGUARDED;
+        flags |= DAMAGE_RESULT_SUPERGUARD;
         psndSFXOn("SFX_SYSTEM_GREAT1");
         BattleAudience_Case_GuardGood();
-        attacker->superguardedCount++;
-        target->superguardCountTaken = attacker->superguardedCount;
+        attacker->attackHitCount++;
+        target->attackerHitCountTaken = attacker->attackHitCount;
         switch (weapon->superguardsAllowed) {
             case 2:
-                result = flags | DAMAGE_HIT_SUPERGUARDED;
+                result = flags | DAMAGE_CODE_SUPERGUARDED;
                 BattleDamageDirect(attacker->unitId, target, part, 0, 0, result, weapon->damagePattern, 0);
-                return 21;
+                return CHECK_DAMAGE_SUPERGUARDED;
             case 3:
-                flags |= DAMAGE_FLAG_LAST_HIT;
-                result = flags | DAMAGE_HIT_SUPERGUARDED;
+                flags |= DAMAGE_RESULT_FINAL_HIT;
+                result = flags | DAMAGE_CODE_SUPERGUARDED;
                 BattleDamageDirect(attacker->unitId, target, part, 0, 0, result, weapon->damagePattern, 0);
-                return 21;
+                return CHECK_DAMAGE_SUPERGUARDED;
             case 4:
-                flags |= DAMAGE_FLAG_LAST_HIT;
-                result = flags | DAMAGE_HIT_SUPERGUARDED;
+                flags |= DAMAGE_RESULT_FINAL_HIT;
+                result = flags | DAMAGE_CODE_SUPERGUARDED;
                 BattleDamageDirect(attacker->unitId, target, part, 0, 0, result, weapon->damagePattern, 0);
                 if (attacker->hitEventCode) {
-                    BattleRunHitEventDirect(attacker, (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_SUPERGUARD_COUNTER), attacker->hitEventCode);
+                    BattleRunHitEventDirect(attacker, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_SUPERGUARD_COUNTER, attacker->hitEventCode);
                 } else {
-                    BattleDamageDirect(-5, attacker, NULL, 1, 0, (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_SUPERGUARD_COUNTER), 0, 1);
+                    BattleDamageDirect(UNIT_ID_SYSTEM, attacker, NULL, 1, 0, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_SUPERGUARD_COUNTER, 0, 1);
                 }
-                return -1;
+                return CHECK_DAMAGE_COUNTERED;
             case 1:
             default:
-                flags |= DAMAGE_FLAG_LAST_HIT;
-                result = flags | DAMAGE_HIT_SUPERGUARDED;
+                flags |= DAMAGE_RESULT_FINAL_HIT;
+                result = flags | DAMAGE_CODE_SUPERGUARDED;
                 BattleDamageDirect(attacker->unitId, target, part, 0, 0, result, weapon->damagePattern, 0);
-                BattleDamageDirect(-5, attacker, NULL, 1, 0, (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_SUPERGUARD_COUNTER), 0, 1);
-                return -1;
+                BattleDamageDirect(UNIT_ID_SYSTEM, attacker, NULL, 1, 0, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_SUPERGUARD_COUNTER, 0, 1);
+                return CHECK_DAMAGE_COUNTERED;
         }
     }
-    BattleCheckCounter(cwp, attacker, target, part, weapon, (u32*)&flags);
-    while (cw.noHazard) {
-        if (flags & DAMAGE_FLAG_LAST_HIT) {
-            if (part->counterAttributes & COUNTER_ATTR_VOLATILE_EXPLOSIVE) {
-                BattleRunHitEvent(target, (DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_KO | DAMAGE_FLAG_DEFEATED | DAMAGE_HIT_EXPLOSION));
-                ret = 18;
+    BattleCheckCounter(cwp, attacker, target, part, weapon, &flags);
+    while (cw.attackHits) {
+        if (flags & DAMAGE_RESULT_FINAL_HIT) {
+            if (part->counterAttributes & kCounterVolatileExplosive) {
+                BattleRunHitEvent(target, DAMAGE_RESULT_DEATH | DAMAGE_RESULT_ZERO_HP | DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_EXPLOSION);
+                ret = CHECK_DAMAGE_HIT;
                 break;
             }
-            if ((part->counterAttributes & COUNTER_ATTR_EXPLOSIVE) &&
+            if ((part->counterAttributes & kCounterExplosive) &&
                 (weapon->element == ELEMENT_EXPLOSION || weapon->element == ELEMENT_ELECTRIC || weapon->element == ELEMENT_FIRE ||
-                 ((weapon->special & SPECIAL_FIERY_IF_BURNED) && BtlUnit_CheckStatus(attacker, STATUS_BURN)))) {
-                BattleRunHitEvent(target, (DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_KO | DAMAGE_FLAG_DEFEATED | DAMAGE_HIT_EXPLOSION));
-                ret = 18;
+                 ((weapon->special & SPECIAL_IGNITABLE) && BtlUnit_CheckStatus(attacker, STATUS_BURN)))) {
+                BattleRunHitEvent(target, DAMAGE_RESULT_DEATH | DAMAGE_RESULT_ZERO_HP | DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_EXPLOSION);
+                ret = CHECK_DAMAGE_HIT;
                 break;
             }
         }
         if (!(weapon->special & SPECIAL_UNGUARDABLE) && BtlUnit_GetACPossibility(target)) {
             if (BattleActionCommandGetDefenceResult() > 3) {
                 BtlUnit_GetHitPos(target, part, &hit2.x, &hit2.y, &hit2.z);
-                eff = effNiceEntry(0, hit2.x - 60.0f, 45.0f + hit2.y, hit2.z - 10.0f);
+                eff = effNiceEntry(NICE_EFFECT_NICE, hit2.x - 60.0f, 45.0f + hit2.y, hit2.z - 10.0f);
                 ((NiceEffectWork*)eff->userdata)->overallScale = 0.75f;
-                flags |= DAMAGE_FLAG_GUARDED;
+                flags |= DAMAGE_RESULT_GUARD;
                 psndSFXOn("SFX_SYSTEM_NICE1");
                 BattleAudience_Case_GuardGood();
             } else {
                 BattleAudience_Case_GuardBad();
             }
         }
-        if ((weapon->special & SPECIAL_FLIPS_SHELLED) && (part->attributes & PART_ATTR_SHELLED)) {
+        if ((weapon->special & SPECIAL_FLIP_SHELLED) && (part->attributes & kIsShelled)) {
             pierce = 1;
-            flags |= DAMAGE_FLAG_FLIPPED;
+            flags |= DAMAGE_RESULT_FLIPPED;
         }
-        if ((weapon->special & SPECIAL_FLIPS_BOMB_FLIPPABLE) && (part->attributes & PART_ATTR_BOMB_FLIPPABLE)) {
+        if ((weapon->special & SPECIAL_FLIP_BOMB_FLIPPABLE) && (part->attributes & kIsBombFlippable)) {
             pierce = 1;
-            flags |= DAMAGE_FLAG_FLIPPED;
+            flags |= DAMAGE_RESULT_FLIPPED;
         }
-        if ((weapon->special & SPECIAL_GROUNDS_WINGED) && (part->attributes & PART_ATTR_WINGED)) {
+        if ((weapon->special & SPECIAL_GROUND_WINGED) && (part->attributes & kIsWinged)) {
             pierce = 1;
-            if (flags & DAMAGE_FLAG_LAST_HIT) {
-                flags |= DAMAGE_FLAG_GROUNDED;
+            if (flags & DAMAGE_RESULT_FINAL_HIT) {
+                flags |= DAMAGE_RESULT_GROUNDED;
             }
         }
-        BattleCheckPikkyoro(weapon, (u32*)&flags);
+        BattleCheckPikkyoro(weapon, &flags);
         damage = BattleCalculateDamage(attacker, target, part, weapon, &result, flags);
         fpDamage = BattleCalculateFpDamage(attacker, target, part, weapon, &result, flags);
         target->hpDamageCount++;
-        if (!(flags & DAMAGE_FLAG_GUARDED)) {
-            if (flags & DAMAGE_FLAG_STATUS_ANY_HIT) {
+        if (!(flags & DAMAGE_RESULT_GUARD)) {
+            if (flags & DAMAGE_RESULT_STATUS_EVERY_HIT) {
                 status = BattleSetStatusDamageFromWeapon(attacker, target, part, weapon, flags);
-            } else if (flags & DAMAGE_FLAG_LAST_HIT) {
+            } else if (flags & DAMAGE_RESULT_FINAL_HIT) {
                 status = BattleSetStatusDamageFromWeapon(attacker, target, part, weapon, flags);
             }
         }
-        if ((result & DAMAGE_HIT_MASK) == DAMAGE_HIT_NONE && pierce) {
-            result = flags | DAMAGE_HIT_NORMAL;
+        if ((result & DAMAGE_HIT_MASK) == DAMAGE_CODE_NO_DAMAGE && pierce) {
+            result = flags | DAMAGE_CODE_NORMAL;
         }
-        if ((result & DAMAGE_HIT_MASK) == DAMAGE_HIT_NONE && (weapon->damagePattern == 0x13 || weapon->damagePattern == 0x1B)) {
-            result = flags | DAMAGE_HIT_NORMAL;
+        if ((result & DAMAGE_HIT_MASK) == DAMAGE_CODE_NO_DAMAGE && (weapon->damagePattern == ATTACKPATTERN_ULTRA_HAMMER_FINISH || weapon->damagePattern == ATTACKPATTERN_NO_DAMAGE_FINISH)) {
+            result = flags | DAMAGE_CODE_NORMAL;
         }
-        if ((result & DAMAGE_HIT_MASK) == DAMAGE_HIT_NONE && status) {
-            if (status & STATUS_RESULT_AILMENT) {
-                result = flags | DAMAGE_HIT_NORMAL;
+        if ((result & DAMAGE_HIT_MASK) == DAMAGE_CODE_NO_DAMAGE && status) {
+            if (status & STATUS_RESULT_TIMED) {
+                result = flags | DAMAGE_CODE_NORMAL;
             } else {
-                result = flags | DAMAGE_HIT_STATUS_ONLY;
+                result = flags | DAMAGE_CODE_STATUS_ONLY;
             }
         }
         if (status & STATUS_RESULT_FRIGHT) {
-            result = flags | DAMAGE_HIT_FRIGHT;
+            result = flags | DAMAGE_CODE_FRIGHT;
         }
         if (status & STATUS_RESULT_GALE_FORCE) {
-            result = flags | DAMAGE_HIT_GALE_FORCE;
+            result = flags | DAMAGE_CODE_GALE_FORCE;
         }
-        if (((u32)flags & DAMAGE_FLAG_LAST_HIT) && (status & STATUS_RESULT_INSTANT_KILL)) {
-            code = (DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_KO | DAMAGE_FLAG_DEFEATED | DAMAGE_HIT_NORMAL);
-            target->damagePattern = 0;
-            _checkDamageCode_EmergencyRevival(target, (u32*)&code);
+        if ((flags & DAMAGE_RESULT_FINAL_HIT) && (status & STATUS_RESULT_DEAD)) {
+            code = DAMAGE_RESULT_DEATH | DAMAGE_RESULT_ZERO_HP | DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_NORMAL;
+            target->damagePattern = ATTACKPATTERN_NULL;
+            _checkDamageCode_EmergencyRevival(target, &code);
             BattleRunHitEvent(target, code);
-            ret = 18;
+            ret = CHECK_DAMAGE_HIT;
             break;
         }
-        if (((u32)flags & DAMAGE_FLAG_LAST_HIT) && (weapon->special & SPECIAL_SHATTERS_FREEZE) && BtlUnit_CheckStatus(target, STATUS_FREEZE) && irand(100) < 0) {
-            code2 = (DAMAGE_FLAG_SHATTER | DAMAGE_FLAG_LAST_HIT | DAMAGE_FLAG_KO | DAMAGE_FLAG_DEFEATED | DAMAGE_HIT_NORMAL);
-            _checkDamageCode_EmergencyRevival(target, (u32*)&code2);
+        if ((flags & DAMAGE_RESULT_FINAL_HIT) && (weapon->special & SPECIAL_FREEZE_CRUSH) && BtlUnit_CheckStatus(target, STATUS_FREEZE) && irand(100) < 0) {
+            // BUG: irand(100) < 0 never holds, so this hit never happens, though many attacks carry SPECIAL_FREEZE_CRUSH.
+            // With a real chance, the last hit of such an attack would break the target's freeze and defeat it outright
+            // at any HP (DEATH | ZERO_HP); btldefaultevt_Damage plays the ice burst. Life Shroom revival still applies.
+            code2 = DAMAGE_RESULT_FREEZE_CRUSH | DAMAGE_RESULT_DEATH | DAMAGE_RESULT_ZERO_HP | DAMAGE_RESULT_FINAL_HIT |
+                    DAMAGE_CODE_NORMAL;
+            _checkDamageCode_EmergencyRevival(target, &code2);
             BattleRunHitEvent(target, code2);
-            ret = 18;
+            ret = CHECK_DAMAGE_HIT;
             break;
         }
         if (!status && !damage && !fpDamage && !pierce) {
-            ret = 19;
-            if (target->currentKind >= UNIT_GOOMBA && target->currentKind < UNIT_UNUSED_TREE && weapon->damagePattern != 0x1B) {
+            ret = CHECK_DAMAGE_NO_EFFECT;
+            if (target->currentKind >= UNIT_GOOMBA && target->currentKind < UNIT_UNUSED_TREE && weapon->damagePattern != ATTACKPATTERN_NO_DAMAGE_FINISH) {
                 BattleAudience_Case_EnemyNoDamage();
             }
         } else {
-            ret = 18;
+            ret = CHECK_DAMAGE_HIT;
             if (target->currentKind >= UNIT_GOOMBA && target->currentKind < UNIT_UNUSED_TREE && (damage > 0 || status)) {
                 BattleAudience_Case_EnemyDamage(damage);
             }
         }
         pattern = weapon->damagePattern;
-        if (pattern == 0x14 && cw.msg) {
-            pattern = 0;
+        if (pattern == ATTACKPATTERN_CHUCHURINA_ITEMSTEAL && cw.result) {
+            pattern = ATTACKPATTERN_NULL;
         }
-        if (pattern == 0xE || pattern == 0x10) {
-            if (target->attributeFlags & UNIT_ATTR_NO_HAMMER_KNOCKBACK) {
-                pattern = 0;
+        if (pattern == ATTACKPATTERN_KAITEN_HAMMER || pattern == ATTACKPATTERN_ULTRA_HAMMER) {
+            if (target->attributeFlags & kUnitNoHammerKnockback) {
+                pattern = ATTACKPATTERN_NULL;
             }
             if (irand(100) >= target->kindParams->hammerKnockbackChance) {
-                pattern = 0;
+                pattern = ATTACKPATTERN_NULL;
             }
-            if (!(flags & DAMAGE_FLAG_AC_SUCCESS)) {
-                pattern = 0;
+            if (!(flags & DAMAGE_RESULT_AC_SUCCESS)) {
+                pattern = ATTACKPATTERN_NULL;
             }
         }
         if (status & STATUS_RESULT_SLEEP) {
@@ -1890,9 +1887,9 @@ s32 BattleCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* 
         }
         break;
     }
-    attacker->superguardedCount++;
-    target->superguardCountTaken = attacker->superguardedCount;
-    if (cw.msg) {
+    attacker->attackHitCount++;
+    target->attackerHitCountTaken = attacker->attackHitCount;
+    if (cw.result) {
         if (cw.payback) {
             cw.count += damage * 50 / 100;
         }
@@ -1902,26 +1899,26 @@ s32 BattleCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* 
         if (cw.returnPostage) {
             cw.count += damage * 50 / 100;
         }
-        if (cw.inflictPoison) {
-            r1 = 0;
-            BattleSetStatusDamage(&r1, attacker, part, 0, 4, 100, 0, 3, 1);
+        if (cw.poisonStatus) {
+            poisonResult = 0;
+            BattleSetStatusDamage(&poisonResult, attacker, part, 0, STATUS_POISON, 100, 0, 3, 1);
         }
-        if (cw.inflictFreeze) {
-            r2 = 0;
-            BattleSetStatusDamage(&r2, attacker, part, 0, 9, 100, 0, 3, 1);
+        if (cw.freezeStatus) {
+            freezeResult = 0;
+            BattleSetStatusDamage(&freezeResult, attacker, part, 0, STATUS_FREEZE, 100, 0, 3, 1);
         }
-        if (cw.inflictBurn) {
-            r3 = 0;
-            BattleSetStatusDamage(&r3, attacker, part, 0, 8, 100, 0, 3, 1);
+        if (cw.burnStatus) {
+            burnResult = 0;
+            BattleSetStatusDamage(&burnResult, attacker, part, 0, STATUS_BURN, 100, 0, 3, 1);
         }
-        if (cw.inflictElectric) {
-            r4 = 0;
-            BattleSetStatusDamage(&r4, attacker, part, 0, 6, 100, 0, 3, 1);
+        if (cw.electricStatus) {
+            electricResult = 0;
+            BattleSetStatusDamage(&electricResult, attacker, part, 0, STATUS_ELECTRIC, 100, 0, 3, 1);
         }
         if (!cw.count) {
             cw.count = 1;
         }
-        if (!attacker->alliance) {
+        if (attacker->alliance == ALLIANCE_PLAYER) {
             BattleAudience_Case_Countered();
         }
         if (cw.holdFast) {
@@ -1931,22 +1928,22 @@ s32 BattleCheckDamage(BattleUnit* attacker, BattleUnit* target, BattleUnitPart* 
             BattleFogForceStop();
         }
         BattleActionCommandStop(wp);
-        BattleAcHelpSetDispType(0);
-        BattleDamageDirect(-5, attacker, NULL, cw.count, 0, cw.msg, 0, 1);
+        BattleAcHelpSetDispType(AC_HELP_DISP_OFF);
+        BattleDamageDirect(UNIT_ID_SYSTEM, attacker, NULL, cw.count, 0, cw.result, 0, 1);
         if (cw.hitEvent) {
-            target->damagePattern = 0;
+            target->damagePattern = ATTACKPATTERN_NULL;
             BattleRunHitEvent(target, cw.hitEvent);
         }
-        return -1;
+        return CHECK_DAMAGE_COUNTERED;
     }
     return ret;
 }
 
 /**
- * Redirects an attack on *unitIdx to its bodyguard: the first unit whose protectId names the target, that was not
- * hit or declared a guard this action, whose status lets it guard (BtlUnit_CanGuardStatus) and that has a
- * PART_ATTR_GUARD_COVER part steps in; both run their guard hit events (0x1029 on the target, 0x1038 on the guard)
- * and *unitIdx/*partIdx become the guard's.
+ * Redirects an attack on *unitIdx to a unit guarding it: one whose protectId is the target, without kDamagedThisTurn
+ * or kProtectedByBodyguard, able to guard, and with a kGuardTargetPart part. Both units play their guard hit events,
+ * the target gets kProtectedByBodyguard and the guard kBodyguarding, BATTLE_FLAG_GUARD_MOVE is set, and
+ * *unitIdx/*partIdx become the guard and that part.
  */
 void BattleAttackDeclare(s32* unitIdx, s32* partIdx) {
     s32 i;
@@ -1956,9 +1953,8 @@ void BattleAttackDeclare(s32* unitIdx, s32* partIdx) {
     s32 j;
     s32 n;
 
-    i = 0;
     wp = _battleWorkPointer;
-    for (; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         if (i == *unitIdx) {
             continue;
         }
@@ -1969,10 +1965,10 @@ void BattleAttackDeclare(s32* unitIdx, s32* partIdx) {
         if (unit->protectId != *unitIdx) {
             continue;
         }
-        if (unit->tokenFlags & TOKEN_FLAG_WAS_HIT) {
+        if (unit->tokenFlags & kDamagedThisTurn) {
             continue;
         }
-        if (unit->tokenFlags & TOKEN_FLAG_GUARD_DECLARED) {
+        if (unit->tokenFlags & kProtectedByBodyguard) {
             continue;
         }
         if (!BtlUnit_CanGuardStatus(unit)) {
@@ -1981,7 +1977,7 @@ void BattleAttackDeclare(s32* unitIdx, s32* partIdx) {
         n = (u8)unit->kindParams->numParts;
         part = unit->parts;
         for (j = 0; j < n; j++) {
-            if (part->attributes & PART_ATTR_GUARD_COVER) {
+            if (part->attributes & kGuardTargetPart) {
                 break;
             }
             part = part->nextPart;
@@ -1991,13 +1987,13 @@ void BattleAttackDeclare(s32* unitIdx, s32* partIdx) {
         }
     }
     if (i < BATTLE_UNIT_MAX) {
-        BattleGetUnitPtr(wp, *unitIdx)->damagePattern = 0;
-        BattleRunHitEvent(BattleGetUnitPtr(wp, *unitIdx), 0x1029);
-        BattleGetUnitPtr(wp, *unitIdx)->tokenFlags |= TOKEN_FLAG_GUARD_DECLARED;
+        BattleGetUnitPtr(wp, *unitIdx)->damagePattern = ATTACKPATTERN_NULL;
+        BattleRunHitEvent(BattleGetUnitPtr(wp, *unitIdx), DAMAGE_RESULT_GUARD_RETURN | DAMAGE_CODE_PROTECTED);
+        BattleGetUnitPtr(wp, *unitIdx)->tokenFlags |= kProtectedByBodyguard;
         wp->flags |= BATTLE_FLAG_GUARD_MOVE;
-        unit->damagePattern = 0;
-        BattleRunHitEvent(unit, 0x1038);
-        unit->tokenFlags |= TOKEN_FLAG_GUARDING;
+        unit->damagePattern = ATTACKPATTERN_NULL;
+        BattleRunHitEvent(unit, DAMAGE_RESULT_GUARD_RETURN | DAMAGE_CODE_BODYGUARD_MOVE);
+        unit->tokenFlags |= kBodyguarding;
         *unitIdx = i;
         *partIdx = part->kindPartParams->partNum;
     }
@@ -2015,11 +2011,10 @@ static void __declare(s32 unitIdx, s32 partIdx, s32* outUnit, s32* outPart) {
     s32 j;
     s32 n;
 
-    i = 0;
     wp = _battleWorkPointer;
     *outUnit = -1;
     *outPart = 0;
-    for (; i < BATTLE_UNIT_MAX; i++) {
+    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         if (i == unitIdx) {
             continue;
         }
@@ -2030,10 +2025,10 @@ static void __declare(s32 unitIdx, s32 partIdx, s32* outUnit, s32* outPart) {
         if (unit->protectId != unitIdx) {
             continue;
         }
-        if (unit->tokenFlags & TOKEN_FLAG_WAS_HIT) {
+        if (unit->tokenFlags & kDamagedThisTurn) {
             continue;
         }
-        if (unit->tokenFlags & TOKEN_FLAG_GUARD_DECLARED) {
+        if (unit->tokenFlags & kProtectedByBodyguard) {
             continue;
         }
         if (!BtlUnit_CanGuardStatus(unit)) {
@@ -2042,7 +2037,7 @@ static void __declare(s32 unitIdx, s32 partIdx, s32* outUnit, s32* outPart) {
         n = (u8)unit->kindParams->numParts;
         part = unit->parts;
         for (j = 0; j < n; j++) {
-            if (part->attributes & PART_ATTR_GUARD_COVER) {
+            if (part->attributes & kGuardTargetPart) {
                 break;
             }
             part = part->nextPart;
@@ -2052,13 +2047,13 @@ static void __declare(s32 unitIdx, s32 partIdx, s32* outUnit, s32* outPart) {
         }
     }
     if (i < BATTLE_UNIT_MAX) {
-        BattleGetUnitPtr(wp, unitIdx)->damagePattern = 0;
-        BattleRunHitEvent(BattleGetUnitPtr(wp, unitIdx), 0x1029);
-        BattleGetUnitPtr(wp, unitIdx)->tokenFlags |= TOKEN_FLAG_GUARD_DECLARED;
+        BattleGetUnitPtr(wp, unitIdx)->damagePattern = ATTACKPATTERN_NULL;
+        BattleRunHitEvent(BattleGetUnitPtr(wp, unitIdx), DAMAGE_RESULT_GUARD_RETURN | DAMAGE_CODE_PROTECTED);
+        BattleGetUnitPtr(wp, unitIdx)->tokenFlags |= kProtectedByBodyguard;
         wp->flags |= BATTLE_FLAG_GUARD_MOVE;
-        unit->damagePattern = 0;
-        BattleRunHitEvent(unit, 0x1038);
-        unit->tokenFlags |= TOKEN_FLAG_GUARDING;
+        unit->damagePattern = ATTACKPATTERN_NULL;
+        BattleRunHitEvent(unit, DAMAGE_RESULT_GUARD_RETURN | DAMAGE_CODE_BODYGUARD_MOVE);
+        unit->tokenFlags |= kBodyguarding;
         *outUnit = i;
         *outPart = part->kindPartParams->partNum;
     }
@@ -2100,10 +2095,10 @@ void BattleAttackDeclareAll(BattleWork* wp) {
     wt->currentTarget = 0;
 }
 
-/** Clears a counter-check record before a hit (noHazard = 1: nothing hurts the attacker). */
+/** Clears a CounterWork and sets its hit count to 1. */
 void BattleInitCounterPreCheckWork(CounterWork* work) {
     memset(work, 0, sizeof(CounterWork));
-    work->noHazard = 1;
+    work->attackHits = 1;
 }
 
 /**
@@ -2117,136 +2112,134 @@ s32 BattleCheckCounter(CounterWork* work, BattleUnit* attacker, BattleUnit* targ
         return 0;
     }
     work->count = 0;
-    if ((part->counterAttributes & COUNTER_ATTR_TOP_SPIKY) && !attacker->badgesEquipped.SpikeShield && !(weapon->counterResistFlags & COUNTER_RESIST_TOP_SPIKY)) {
-        work->type = DAMAGE_HIT_COUNTER_TOP_SPIKY;
-        work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_TOP_SPIKY);
+    if ((part->counterAttributes & kCounterTopSpiky) && !attacker->badgesEquipped.SpikeShield && !(weapon->counterResistFlags & COUNTER_RESIST_TOP_SPIKY)) {
+        work->type = DAMAGE_CODE_COUNTER_TOP_SPIKY;
+        work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_TOP_SPIKY;
         work->count++;
-        work->hitEvent = 0x1F;
-        *flags |= DAMAGE_FLAG_LAST_HIT;
-        work->noHazard = 0;
-    } else if ((part->counterAttributes & COUNTER_ATTR_PREEMPTIVE_FRONT_SPIKY) && !attacker->badgesEquipped.SpikeShield && !(weapon->counterResistFlags & COUNTER_RESIST_PREEMPTIVE_SPIKY)) {
-        work->type = DAMAGE_HIT_COUNTER_PREEMPTIVE_SPIKY;
-        work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_PREEMPTIVE_SPIKY);
+        work->hitEvent = DAMAGE_CODE_AVOID_TOP_SPIKY;
+        *flags |= DAMAGE_RESULT_FINAL_HIT;
+        work->attackHits = 0;
+    } else if ((part->counterAttributes & kCounterPreemptiveFrontSpiky) && !attacker->badgesEquipped.SpikeShield && !(weapon->counterResistFlags & COUNTER_RESIST_PREEMPTIVE_SPIKY)) {
+        work->type = DAMAGE_CODE_COUNTER_PREEMPTIVE_SPIKY;
+        work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_PREEMPTIVE_SPIKY;
         work->count++;
-        work->hitEvent = 0x20;
-        *flags |= DAMAGE_FLAG_LAST_HIT;
-        work->noHazard = 0;
-    } else if ((part->counterAttributes & COUNTER_ATTR_FRONT_SPIKY) && !attacker->badgesEquipped.SpikeShield && !(weapon->counterResistFlags & COUNTER_RESIST_FRONT_SPIKY)) {
-        work->type = DAMAGE_HIT_COUNTER_FRONT_SPIKY;
-        work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_FRONT_SPIKY);
+        work->hitEvent = DAMAGE_CODE_AVOID_PREEMPTIVE_SPIKY;
+        *flags |= DAMAGE_RESULT_FINAL_HIT;
+        work->attackHits = 0;
+    } else if ((part->counterAttributes & kCounterFrontSpiky) && !attacker->badgesEquipped.SpikeShield && !(weapon->counterResistFlags & COUNTER_RESIST_FRONT_SPIKY)) {
+        work->type = DAMAGE_CODE_COUNTER_FRONT_SPIKY;
+        work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_FRONT_SPIKY;
         work->count++;
-        work->hitEvent = 0x21;
-        *flags |= DAMAGE_FLAG_LAST_HIT;
-        work->noHazard = 0;
-    } else if (((part->counterAttributes & COUNTER_ATTR_FIERY) || (part->counterAttributes & COUNTER_ATTR_FIERY_STATUS)) && !attacker->badgesEquipped.IcePower && !(weapon->counterResistFlags & COUNTER_RESIST_FIERY)) {
-        work->type = DAMAGE_HIT_COUNTER_FIERY;
-        work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_FIERY);
+        work->hitEvent = DAMAGE_CODE_AVOID_FRONT_SPIKY;
+        *flags |= DAMAGE_RESULT_FINAL_HIT;
+        work->attackHits = 0;
+    } else if (((part->counterAttributes & kCounterFiery) || (part->counterAttributes & kCounterFieryStatus)) && !attacker->badgesEquipped.IcePower && !(weapon->counterResistFlags & COUNTER_RESIST_FIERY)) {
+        work->type = DAMAGE_CODE_COUNTER_FIERY;
+        work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_FIERY;
         work->count++;
-        work->hitEvent = 0x22;
-        *flags |= DAMAGE_FLAG_LAST_HIT;
-        work->noHazard = 0;
-        if (part->counterAttributes & COUNTER_ATTR_FIERY_STATUS) {
-            work->inflictBurn = 1;
+        work->hitEvent = DAMAGE_CODE_AVOID_FIERY;
+        *flags |= DAMAGE_RESULT_FINAL_HIT;
+        work->attackHits = 0;
+        if (part->counterAttributes & kCounterFieryStatus) {
+            work->burnStatus = 1;
         }
-    } else if (((part->counterAttributes & COUNTER_ATTR_ICY) || (part->counterAttributes & COUNTER_ATTR_ICY_STATUS)) && !(weapon->counterResistFlags & COUNTER_RESIST_ICY)) {
-        work->type = DAMAGE_HIT_COUNTER_ICY;
-        work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_ICY);
+    } else if (((part->counterAttributes & kCounterIcy) || (part->counterAttributes & kCounterIcyStatus)) && !(weapon->counterResistFlags & COUNTER_RESIST_ICY)) {
+        work->type = DAMAGE_CODE_COUNTER_ICY;
+        work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_ICY;
         work->count++;
-        work->hitEvent = 0x23;
-        *flags |= DAMAGE_FLAG_LAST_HIT;
-        work->noHazard = 0;
-        if (part->counterAttributes & COUNTER_ATTR_ICY_STATUS) {
-            work->inflictFreeze = 1;
+        work->hitEvent = DAMAGE_CODE_AVOID_ICY;
+        *flags |= DAMAGE_RESULT_FINAL_HIT;
+        work->attackHits = 0;
+        if (part->counterAttributes & kCounterIcyStatus) {
+            work->freezeStatus = 1;
         }
-    } else if (((part->counterAttributes & COUNTER_ATTR_ELECTRIC) || (part->counterAttributes & COUNTER_ATTR_ELECTRIC_STATUS)) && !(weapon->counterResistFlags & COUNTER_RESIST_ELECTRIC) && !BtlUnit_CheckStatus(attacker, STATUS_ELECTRIC)) {
-        work->type = DAMAGE_HIT_COUNTER_ELECTRIC;
-        work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_ELECTRIC);
+    } else if (((part->counterAttributes & kCounterElectric) || (part->counterAttributes & kCounterElectricStatus)) && !(weapon->counterResistFlags & COUNTER_RESIST_ELECTRIC) && !BtlUnit_CheckStatus(attacker, STATUS_ELECTRIC)) {
+        work->type = DAMAGE_CODE_COUNTER_ELECTRIC;
+        work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_ELECTRIC;
         work->count++;
-        work->hitEvent = 0x24;
-        *flags |= DAMAGE_FLAG_LAST_HIT;
-        work->noHazard = 0;
-        if (part->counterAttributes & COUNTER_ATTR_ELECTRIC_STATUS) {
-            work->inflictElectric = 1;
+        work->hitEvent = DAMAGE_CODE_AVOID_ELECTRIC;
+        *flags |= DAMAGE_RESULT_FINAL_HIT;
+        work->attackHits = 0;
+        if (part->counterAttributes & kCounterElectricStatus) {
+            work->electricStatus = 1;
         }
     } else {
-        if ((part->counterAttributes & COUNTER_ATTR_EXPLOSIVE) && !(weapon->counterResistFlags & COUNTER_RESIST_EXPLOSIVE)) {
+        if ((part->counterAttributes & kCounterExplosive) && !(weapon->counterResistFlags & COUNTER_RESIST_EXPLOSIVE)) {
             if (weapon->element == ELEMENT_EXPLOSION || weapon->element == ELEMENT_ELECTRIC || weapon->element == ELEMENT_FIRE ||
-                ((weapon->special & SPECIAL_FIERY_IF_BURNED) && BtlUnit_CheckStatus(attacker, STATUS_BURN))) {
-                work->type = DAMAGE_HIT_COUNTER_EXPLOSIVE;
-                work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_EXPLOSIVE);
+                ((weapon->special & SPECIAL_IGNITABLE) && BtlUnit_CheckStatus(attacker, STATUS_BURN))) {
+                work->type = DAMAGE_CODE_COUNTER_EXPLOSIVE;
+                work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_EXPLOSIVE;
                 work->count++;
-                *flags |= DAMAGE_FLAG_LAST_HIT;
+                *flags |= DAMAGE_RESULT_FINAL_HIT;
             }
         }
-        if ((part->counterAttributes & COUNTER_ATTR_VOLATILE_EXPLOSIVE) && !(weapon->counterResistFlags & COUNTER_RESIST_VOLATILE_EXPLOSIVE)) {
-            work->type = DAMAGE_HIT_COUNTER_VOLATILE_EXPLOSIVE;
-            work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_VOLATILE_EXPLOSIVE);
+        if ((part->counterAttributes & kCounterVolatileExplosive) && !(weapon->counterResistFlags & COUNTER_RESIST_VOLATILE_EXPLOSIVE)) {
+            work->type = DAMAGE_CODE_COUNTER_VOLATILE_EXPLOSIVE;
+            work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_VOLATILE_EXPLOSIVE;
             work->count++;
-            *flags |= DAMAGE_FLAG_LAST_HIT;
+            *flags |= DAMAGE_RESULT_FINAL_HIT;
         }
-        if ((BtlUnit_CheckStatus(target, STATUS_ELECTRIC) || (part->counterAttributes & COUNTER_ATTR_ELECTRIC) || (part->counterAttributes & COUNTER_ATTR_ELECTRIC_STATUS)) &&
+        if ((BtlUnit_CheckStatus(target, STATUS_ELECTRIC) || (part->counterAttributes & kCounterElectric) || (part->counterAttributes & kCounterElectricStatus)) &&
             !(weapon->counterResistFlags & COUNTER_RESIST_ELECTRIC) && !BtlUnit_CheckStatus(attacker, STATUS_ELECTRIC)) {
-            work->type = DAMAGE_HIT_COUNTER_ELECTRIFIED;
-            work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_ELECTRIFIED);
+            work->type = DAMAGE_CODE_COUNTER_ELECTRIFIED;
+            work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_ELECTRIFIED;
             work->count++;
-            *flags |= DAMAGE_FLAG_LAST_HIT;
-            if (part->counterAttributes & COUNTER_ATTR_ELECTRIC_STATUS) {
-                work->inflictElectric = 1;
+            *flags |= DAMAGE_RESULT_FINAL_HIT;
+            if (part->counterAttributes & kCounterElectricStatus) {
+                work->electricStatus = 1;
             }
         }
         if (BtlUnit_CheckStatus(target, STATUS_PAYBACK) && !(weapon->counterResistFlags & COUNTER_RESIST_PAYBACK)) {
-            work->type = DAMAGE_HIT_COUNTER_PAYBACK;
-            work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_PAYBACK);
-            *flags |= DAMAGE_FLAG_LAST_HIT;
+            work->type = DAMAGE_CODE_COUNTER_PAYBACK;
+            work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_PAYBACK;
+            *flags |= DAMAGE_RESULT_FINAL_HIT;
             work->payback = 1;
         }
-        if (((part->counterAttributes & COUNTER_ATTR_POISON) || (part->counterAttributes & COUNTER_ATTR_POISON_STATUS)) && !(weapon->counterResistFlags & COUNTER_RESIST_POISON)) {
-            work->type = DAMAGE_HIT_COUNTER_POISON;
-            work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_POISON);
-            *flags |= DAMAGE_FLAG_LAST_HIT;
+        if (((part->counterAttributes & kCounterPoison) || (part->counterAttributes & kCounterPoisonStatus)) && !(weapon->counterResistFlags & COUNTER_RESIST_POISON)) {
+            work->type = DAMAGE_CODE_COUNTER_POISON;
+            work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_POISON;
+            *flags |= DAMAGE_RESULT_FINAL_HIT;
             work->payback = 1;
-            if (part->counterAttributes & COUNTER_ATTR_POISON_STATUS) {
-                work->inflictPoison = 1;
+            if (part->counterAttributes & kCounterPoisonStatus) {
+                work->poisonStatus = 1;
             }
         }
         if (BtlUnit_CheckStatus(target, STATUS_HOLD_FAST) && !(weapon->counterResistFlags & COUNTER_RESIST_HOLD_FAST)) {
-            work->type = DAMAGE_HIT_COUNTER_HOLD_FAST;
-            work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_HOLD_FAST);
-            *flags |= DAMAGE_FLAG_LAST_HIT;
+            work->type = DAMAGE_CODE_COUNTER_HOLD_FAST;
+            work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_HOLD_FAST;
+            *flags |= DAMAGE_RESULT_FINAL_HIT;
             work->holdFast = 1;
         }
         if (target->badgesEquipped.ReturnPostage && !(weapon->counterResistFlags & COUNTER_RESIST_PAYBACK)) {
-            work->type = DAMAGE_HIT_COUNTER_PAYBACK;
-            work->msg = (DAMAGE_FLAG_LAST_HIT | DAMAGE_HIT_COUNTER_PAYBACK);
-            *flags |= DAMAGE_FLAG_LAST_HIT;
+            work->type = DAMAGE_CODE_COUNTER_PAYBACK;
+            work->result = DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_COUNTER_PAYBACK;
+            *flags |= DAMAGE_RESULT_FINAL_HIT;
             work->returnPostage = 1;
         }
     }
     switch (work->type) {
-        case DAMAGE_HIT_COUNTER_TOP_SPIKY:
-            return 8;
-        case DAMAGE_HIT_COUNTER_PREEMPTIVE_SPIKY:
-            return 7;
-        case DAMAGE_HIT_COUNTER_FRONT_SPIKY:
-            return 9;
-        case DAMAGE_HIT_COUNTER_FIERY:
-            return 10;
-        case DAMAGE_HIT_COUNTER_ICY:
-            return 11;
-        case DAMAGE_HIT_COUNTER_EXPLOSIVE:
-            return 12;
-        case DAMAGE_HIT_COUNTER_VOLATILE_EXPLOSIVE:
-            return 13;
-        case DAMAGE_HIT_COUNTER_ELECTRIFIED:
-            if (1) {
-                return 14;
-            }
-        case DAMAGE_HIT_COUNTER_POISON:
-            return 15;
-        case DAMAGE_HIT_COUNTER_PAYBACK:
-            return 16;
-        case DAMAGE_HIT_COUNTER_HOLD_FAST:
-            return 17;
+        case DAMAGE_CODE_COUNTER_TOP_SPIKY:
+            return CHECK_COUNTER_TOP_SPIKY;
+        case DAMAGE_CODE_COUNTER_PREEMPTIVE_SPIKY:
+            return CHECK_COUNTER_PREEMPTIVE_SPIKY;
+        case DAMAGE_CODE_COUNTER_FRONT_SPIKY:
+            return CHECK_COUNTER_FRONT_SPIKY;
+        case DAMAGE_CODE_COUNTER_FIERY:
+            return CHECK_COUNTER_FIERY;
+        case DAMAGE_CODE_COUNTER_ICY:
+            return CHECK_COUNTER_ICY;
+        case DAMAGE_CODE_COUNTER_EXPLOSIVE:
+            return CHECK_COUNTER_EXPLOSIVE;
+        case DAMAGE_CODE_COUNTER_VOLATILE_EXPLOSIVE:
+            return CHECK_COUNTER_VOLATILE_EXPLOSIVE;
+        case DAMAGE_CODE_COUNTER_ELECTRIFIED:
+            return CHECK_COUNTER_ELECTRIFIED;
+        case DAMAGE_CODE_COUNTER_POISON:
+            return CHECK_COUNTER_POISON;
+        case DAMAGE_CODE_COUNTER_PAYBACK:
+            return CHECK_COUNTER_PAYBACK;
+        case DAMAGE_CODE_COUNTER_HOLD_FAST:
+            return CHECK_COUNTER_HOLD_FAST;
     }
     return 0;
 }

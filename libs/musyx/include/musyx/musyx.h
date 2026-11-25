@@ -4,7 +4,6 @@
 #include "musyx/platform.h"
 #include "musyx/version.h"
 
-#include <math.h>
 #include <stddef.h>
 
 #ifdef __cplusplus
@@ -160,7 +159,14 @@ typedef struct SND_HOOKS {
   void (*free)(void* addr);
 } SND_HOOKS;
 
+typedef struct SND_HOOKS_EX {
+  void* (*malloc)(size_t);
+  void* (*mallocPhysical)(size_t);
+  void (*free)(void*);
+} SND_HOOKS_EX;
+
 void sndSetHooks(SND_HOOKS* hooks);
+void sndSetHooksEx(SND_HOOKS_EX* hooks);
 
 // Misc flags to influence the way the sound system works internally
 // (support may vary from platform to platform)
@@ -170,6 +176,7 @@ void sndSetHooks(SND_HOOKS* hooks);
 #define SND_FLAGS_EMITTERGROUPSUSEMAXVOICES                                                        \
   0x00000002 // define this to enable usage of max. voices from FX table for emitter group start
              // management
+#define SND_FLAGS_COMPRESSOR 0x00000008 // hwInit calls hwEnableCompressor (MusyX 2.0.1 and later)
 
 // Platform dependend flags : PC
 
@@ -412,7 +419,8 @@ void sndVirtualSampleSetCallback(u32 (*callback)(u8 reason, const SND_VIRTUALSAM
 void sndVirtualSampleARAMUpdate(SND_INSTID instID, void* base, u32 off1, u32 len1, u32 off2,
                                 u32 len2);
 
-void sndVirtualSampleEndPlayback(SND_INSTID instID, bool sampleEndedNormally);
+void sndVirtualSampleEndPlayback(SND_INSTID instID, bool sampleEndedNormally, u32 numLastGoodSamples);
+s32 sndVirtualSampleGetARAMAddress(u16 instID, s32* aramAddr);
 
 #define SND_AUX_BLOCKSIZE 160 // Size of block passed to the AUX FX hanler (in samples)
 
@@ -684,10 +692,9 @@ typedef struct SND_DOOR {
 typedef struct SND_LISTENER {
   struct SND_LISTENER* next;
   struct SND_LISTENER* prev;
-#ifndef SND3D_LISTENER_NO_ROOM
-  SND_ROOM* room;
-#endif
 
+  // MusyX 2.0.1 and later have no room pointer here (the room code is gone) and oneMeter at the end; the
+  // size stays 0x90 (sound.h's SoundWork.listener).
   u32 flags;
   SND_FVECTOR pos;
   f32 volPosOff;   // (reserved for future use)
@@ -700,6 +707,7 @@ typedef struct SND_LISTENER {
   f32 surroundDisBack;
   f32 soundSpeed;
   f32 vol;
+  f32 oneMeter; // set by sndAddListenerEx (1.0 without extra parameters)
 } SND_LISTENER;
 
 #define SND_LISTENER_DEFAULT 0x00000000 // No special features are activated
@@ -709,10 +717,9 @@ typedef struct SND_LISTENER {
 typedef struct SND_EMITTER {
   struct SND_EMITTER* next;
   struct SND_EMITTER* prev;
-#ifndef SND3D_EMITTER_NO_ROOM
-  SND_ROOM* room;
-#endif
 
+  // MusyX 2.0.1 and later: no room pointer here, userData at the end (0x50 bytes: sound.h's SoundEffect, the
+  // JP demo map's static tmp_em in snd3d.c).
   SND_PARAMETER_INFO* paraInfo;
 
   u32 flags;
@@ -733,7 +740,7 @@ typedef struct SND_EMITTER {
 
   u16 VolLevelCnt; // Used during continous emitter allocation process
   f32 fade;        // Used to fade-in of continous emitters
-
+  u32 userData;
 } SND_EMITTER;
 
 #define SND_EMITTER_DEFAULTKEY 0xFF
@@ -793,15 +800,20 @@ SND_VOICEID sndAddEmitterParaEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FV
 //
 // Listener related functions
 //
+typedef struct SND_LISTENER_EXPARAMETER {
+  f32 oneMeter;
+} SND_LISTENER_EXPARAMETER;
+
 bool sndAddListener(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
                     SND_FVECTOR* up, f32 front_sur, f32 back_sur, f32 soundSpeed, u32 flags, u8 vol,
-                    SND_ROOM* room);
+                    const SND_LISTENER_EXPARAMETER* exPara);
 bool sndAddListenerEx(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
                       SND_FVECTOR* up, f32 front_sur, f32 back_sur, f32 soundSpeed,
-                      f32 volPosOffset, u32 flags, u8 vol, SND_ROOM* room);
+                      f32 volPosOffset, u32 flags, u8 vol, const SND_LISTENER_EXPARAMETER* exPara);
 bool sndUpdateListener(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
                        SND_FVECTOR* up, u8 vol, SND_ROOM* room);
 bool sndRemoveListener(SND_LISTENER* li);
+
 //
 // Functions to add emitters directly to a studio
 //
@@ -836,6 +848,7 @@ typedef struct SND_3DINFO {
   u8 pan;
   u8 span;
   u16 doppler;
+  u16 lpfFactor;
 } SND_3DINFO;
 
 void sndGet3DParameters(SND_3DINFO* info, SND_FVECTOR* pos, SND_FVECTOR* dir, f32 maxDis, f32 comp,

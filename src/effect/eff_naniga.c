@@ -1,4 +1,6 @@
-// Item-reveal effect (naniga: "what is it") with "what" sounds and a smoke burst for the item shown.
+// Item-reveal effect (naniga: "what is it"): a smoke burst, then a reel of item icons that spins and stops on the
+// item, with "what" sounds and sparkles when the item is shown.
+
 #include "data/item_data.h"
 #include "driver/animdrv.h"
 #include "driver/camdrv.h"
@@ -18,6 +20,9 @@
 #include "evt/evt_cmd.h"
 #include "eff/eff_itemget.h"
 #include "libc_decls.h"
+#include "eff/eff_kemutest.h"
+#include "eff/eff_naniga.h"
+#include "driver/mapdrv.h"
 
 typedef struct EffNanigaWork {
     s32 type;      // 0x0
@@ -39,9 +44,9 @@ typedef struct EffNanigaWork {
 } EffNanigaWork;
 
 static void effNanigaMain(EffectEntry* effect);
-static void effNanigaDisp(CameraId cameraId, EffectEntry* effect);
-static void effNanigaDisp2(CameraId cameraId, EffectEntry* effect);
-static void effNanigaDisp3(CameraId cameraId, EffectEntry* effect);
+static void effNanigaDisp(CameraId cameraId, void* param);
+static void effNanigaDisp2(CameraId cameraId, void* param);
+static void effNanigaDisp3(CameraId cameraId, void* param);
 
 /**
  * Plays SFX_ITEM_WHAT3, 4 and 5 at the effect's position (LW 0-2), 833 ms apart;
@@ -74,7 +79,7 @@ EffectEntry* effNanigaEntry(s32 type, f32 x, f32 y, f32 z, s32* list, s32 item) 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffNanigaWork));
     effect->userdata = work;
     effect->callback = effNanigaMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = 20.0f + y;
@@ -122,8 +127,8 @@ EffectEntry* effNanigaEntry(s32 type, f32 x, f32 y, f32 z, s32* list, s32 item) 
 }
 
 /**
- * Per frame: runs the state machine ("what" sounds, EFF_naniga animation, smoke burst)
- * and deletes the effect at the end.
+ * Per frame: runs the state machine (smoke burst, reel spin and stop with "what" sounds, EFF_naniga animation,
+ * item sparkles, fade) and deletes the effect at the end.
  */
 static void effNanigaMain(EffectEntry* effect) {
     EffNanigaWork* work = effect->userdata;
@@ -140,8 +145,8 @@ static void effNanigaMain(EffectEntry* effect) {
     v.z = work->position.z;
     pos = v;
     inBattle = gp->inBattle ? TRUE : FALSE;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (work->pose != -1) {
             animPoseRelease(work->pose);
         }
@@ -152,12 +157,14 @@ static void effNanigaMain(EffectEntry* effect) {
         case 0:
             work->state++;
             work->timer = 30;
+
+            // fall through
         case 1:
             if (work->timer == 30) {
                 for (i = 0; i < 4; i++) {
                     effKemuTestDrawCam(effKemuTestEntry(2, work->screen.x, work->screen.y, work->screen.z,
                                                         0.5f + (f32)irand(200) / 100.0f),
-                                       8);
+                                       CAMERA_2D);
                 }
                 psndSFXOn_3D("SFX_ITEM_WHAT1", &pos);
             }
@@ -175,7 +182,7 @@ static void effNanigaMain(EffectEntry* effect) {
             }
             break;
         case 3:
-            work->offset = intplGetValue(5, work->minOffset, work->maxOffset, work->timer, 300);
+            work->offset = intplGetValue(EASING_CUBIC_OUT, work->minOffset, work->maxOffset, work->timer, 300);
             work->timer++;
             if (work->timer > 300) {
                 psndSFXOff(work->sfxId);
@@ -227,9 +234,9 @@ static void effNanigaMain(EffectEntry* effect) {
                 animPoseSetAnim(work->pose, "A_1", TRUE);
                 work->state++;
                 evt = evtEntryType(sound_evt, 0, 0, 0);
-                evt->lwData[0] = (s32)(1024.0f * pos.x) - 230000000;
-                evt->lwData[1] = (s32)(1024.0f * pos.y) - 230000000;
-                evt->lwData[2] = (s32)(1024.0f * pos.z) - 230000000;
+                evt->lwData[0] = FLOAT(pos.x);
+                evt->lwData[1] = FLOAT(pos.y);
+                evt->lwData[2] = FLOAT(pos.z);
             }
             break;
         case 11:
@@ -272,18 +279,34 @@ static void effNanigaMain(EffectEntry* effect) {
         case 4:
         case 5:
         case 10:
-            dispEntry(CAMERA_2D, dispCalcZ(&pos), 1, (DispCallback)effNanigaDisp, effect);
+            dispEntry(CAMERA_2D, dispCalcZ(&pos), DISP_MODE_ALPHA_TEST, effNanigaDisp, effect);
             break;
         default:
             if (state == 11 && animPoseGetLoopTimes(work->pose) < 0.8f) {
                 break;
             }
-            dispEntry(CAMERA_3D, dispCalcZ(&pos), 1, (DispCallback)effNanigaDisp3, effect);
+            dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_ALPHA_TEST, effNanigaDisp3, effect);
             break;
     }
     if (work->pose != -1) {
-        dispEntry(CAMERA_3D, dispCalcZ(&pos), 2, (DispCallback)effNanigaDisp2, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_XLU, effNanigaDisp2, effect);
     }
+}
+
+/** Draws one textured 40-unit quad centred on the origin of the current matrix. */
+// Original name and size (0xc4) from the JP demo map (UNUSED there: every call is inlined).
+static void quads(void) {
+    f32 w = 40.0f;
+
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(-w / 2.0f, w / 2.0f, 0.0f);
+    GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(w / 2.0f, w / 2.0f, 0.0f);
+    GXTexCoord2f32(1.0f, 0.0f);
+    GXPosition3f32(w / 2.0f, -w / 2.0f, 0.0f);
+    GXTexCoord2f32(1.0f, 1.0f);
+    GXPosition3f32(-w / 2.0f, -w / 2.0f, 0.0f);
+    GXTexCoord2f32(0.0f, 1.0f);
 }
 
 /**
@@ -291,17 +314,16 @@ static void effNanigaMain(EffectEntry* effect) {
  * clipped by a scissor to a 40x40 window (scaled 1.5x) around the effect's screen position.
  * Used while the reel spins and settles (states 2-5 and 10).
  */
-static void effNanigaDisp(CameraId cameraId, EffectEntry* effect) {
+static void effNanigaDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffNanigaWork* work = effect->userdata;
     CameraEntry* camera = camGetPtr(cameraId);
     Mtx mT, mR, mS, mC;
     GXTexObj texObj;
     u32 left, top, width, height;
-    f32 w, lo, hi;
     f32 oldScale;
     s32 i;
 
-    w = 40.0f;
     oldScale = work->scale;
     work->scale *= 1.5f;
     PSMTXTrans(mT, work->screen.x, work->screen.y, work->screen.z);
@@ -317,7 +339,7 @@ static void effNanigaDisp(CameraId cameraId, EffectEntry* effect) {
     effGetTexObj(0x57, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
@@ -331,20 +353,9 @@ static void effNanigaDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(camera->view, mC, mT);
     GXLoadPosMtxImm(mT, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-    lo = -w / 2.0f;
-    hi = 20.0f;
-    GXPosition3f32(lo, hi, 0.0f);
-    GXTexCoord2f32(0.0f, 0.0f);
-    GXPosition3f32(hi, hi, 0.0f);
-    GXTexCoord2f32(1.0f, 0.0f);
-    GXPosition3f32(hi, lo, 0.0f);
-    GXTexCoord2f32(1.0f, 1.0f);
-    GXPosition3f32(lo, lo, 0.0f);
-    GXTexCoord2f32(0.0f, 1.0f);
+    quads();
     for (i = 0; i < work->count + 5; i++) {
-        // FAKE: s32-id cast: the JP prototype takes an s16, which narrows the u16 icon_id (FAKES.md)
-        ((void (*)(GXTexObj*, s32))iconGetTexObj)(&texObj, itemDataTable[work->list[i % work->count]].icon_id);
+        iconGetTexObj(&texObj, itemDataTable[work->list[i % work->count]].icon_id);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
         PSMTXTrans(mT, 0.0f, -40.0f * (f32)i + work->offset, 0.0f);
         PSMTXScale(mS, 0.9f, 0.9f, 0.9f);
@@ -353,15 +364,7 @@ static void effNanigaDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXConcat(camera->view, mT, mT);
         GXLoadPosMtxImm(mT, GX_PNMTX0);
         GXSetCurrentMtx(GX_PNMTX0);
-        GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-        GXPosition3f32(lo, hi, 0.0f);
-        GXTexCoord2f32(0.0f, 0.0f);
-        GXPosition3f32(hi, hi, 0.0f);
-        GXTexCoord2f32(1.0f, 0.0f);
-        GXPosition3f32(hi, lo, 0.0f);
-        GXTexCoord2f32(1.0f, 1.0f);
-        GXPosition3f32(lo, lo, 0.0f);
-        GXTexCoord2f32(0.0f, 1.0f);
+        quads();
     }
     GXSetScissor(left, top, width, height);
     work->scale = oldScale;
@@ -371,7 +374,8 @@ static void effNanigaDisp(CameraId cameraId, EffectEntry* effect) {
  * Draws the EFF_naniga animation pose (groups 1-3) 20 units below the effect, facing the camera,
  * tinted white at the work's alpha. Registered every frame while the pose is loaded.
  */
-static void effNanigaDisp2(CameraId cameraId, EffectEntry* effect) {
+static void effNanigaDisp2(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffNanigaWork* work = effect->userdata;
     Mtx mT, mR, mS, mC;
 
@@ -381,7 +385,7 @@ static void effNanigaDisp2(CameraId cameraId, EffectEntry* effect) {
     PSMTXScale(mS, work->scale, work->scale, work->scale);
     PSMTXConcat(mT, mR, mT);
     PSMTXConcat(mT, mS, mC);
-    animPoseSetMaterialFlagOn(work->pose, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(work->pose, MAP_OBJ_FLAG_COLOR);
     animPoseSetMaterialEvtColor(work->pose, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
     animPoseMain(work->pose);
     animPoseDrawMtx(work->pose, mC, 1, 0.0f, 10.0f);
@@ -390,11 +394,12 @@ static void effNanigaDisp2(CameraId cameraId, EffectEntry* effect) {
 }
 
 /**
- * Draws the result as a single camera-facing icon 16 units below the effect:
- * the chosen item's icon (ICON_184 below state 4, which this pass is not registered for).
- * Registered in the states after the reel (state 11 waits until the pose has played 0.8 of its loop).
+ * Draws the result as one icon 16 units below the effect, turned to the camera yaw: the chosen item's icon
+ * (ICON_ITEM_MYSTERY below state 4, a state this pass is never registered in). Registered in state 11 and later
+ * (state 11 waits until the pose has played 0.8 of its loop).
  */
-static void effNanigaDisp3(CameraId cameraId, EffectEntry* effect) {
+static void effNanigaDisp3(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffNanigaWork* work = effect->userdata;
     ItemData* item;
     Mtx mT, mR, mS, mC;
@@ -407,7 +412,7 @@ static void effNanigaDisp3(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mT, mR, mT);
     PSMTXConcat(mT, mS, mC);
     if (work->state < 4) {
-        iconDispGxCol(mC, 0, ICON_184, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+        iconDispGxCol(mC, 0, ICON_ITEM_MYSTERY, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     } else {
         iconDispGxCol(mC, 0, item->icon_id, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     }

@@ -88,7 +88,7 @@ BattleUnitKind unit_marco = {
 static BattleUnitDefense defence = {{0, 0, 0, 0, 0}};
 
 /** Damage-type modifiers of the `marco` placeholder unit: none, no special weakness or immunity. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 /**
  * Status vulnerability of the `marco` placeholder unit (100% is the normal chance): immune to Sleep, Stop,
@@ -102,13 +102,13 @@ static StatusVulnerability regist = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
  * each one plays; the idle animation is `EM_S_1`.
  */
 static PoseTableEntry pose_table[] = {
-    {BTL_POSE_NORMAL, "EM_S_1"},
+    {POSE_TYPE_NORMAL, "EM_S_1"},
     {31, "KNP_S_1"},
-    {BTL_POSE_DAMAGE, "EM_D_1"},
-    {BTL_POSE_RUN, "EM_R_1"},
-    {BTL_POSE_WALK, "EM_W_1"},
-    {BTL_POSE_TALK, "EM_T_1"},
-    {BTL_POSE_STAY_DEFAULT, "EM_S_1"},
+    {POSE_TYPE_DAMAGE, "EM_D_1"},
+    {POSE_TYPE_RUN, "EM_R_1"},
+    {POSE_TYPE_WALK, "EM_W_1"},
+    {POSE_TYPE_TALK, "EM_T_1"},
+    {POSE_TYPE_ACTION, "EM_S_1"},
 };
 
 /** Data table of the `marco` placeholder unit: no events. */
@@ -121,13 +121,13 @@ static BattleDataEntry data_table[] = {
  * tables and pose table.
  */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_teresa", "c_mario", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER, 0, pose_table},
+    {1, "btl_un_teresa", "c_mario", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart, 0, pose_table},
 };
 
 /** Battle init script of the placeholder unit: installs only the wait handler and starts the wait event. */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
     OPCODE_END_SCRIPT,
     RETURN
@@ -142,6 +142,6 @@ EVT_END()
  * so it matches the current state, then returns; the battle system runs it whenever the unit is idle.
  */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()

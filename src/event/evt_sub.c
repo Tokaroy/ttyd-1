@@ -1,11 +1,14 @@
 // Miscellaneous script commands and scripts: tree and bush shaking, mail, star stones, splines,
 // countdowns, play time, area and language queries.
+
 #include "version.h"
-#include "mario/mario_cam.h"
 #include "eff/eff_stageclear.h"
+#include "driver/fadedrv.h"
+#include "evt/evt_window.h"
 #include "eff/eff_itemget.h"
 #include "icon_ids.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_save_flags.h"
 #include "countdown.h"
 #include "driver/animdrv.h"
 #include "driver/camdrv.h"
@@ -25,10 +28,12 @@
 #include "evt/evt_mario.h"
 #include "evt/evt_memcard.h"
 #include "evt/evt_sub.h"
+#include <dolphin/pad.h>
+#include "statuswindow.h"
 #include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
+#include "mario/mario_motion.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_fade.h"
 #include "evt/evt_item.h"
@@ -36,17 +41,15 @@
 #include "evt/evt_msg.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
-#include "evt/evt_window.h"
-#include "mario/mario_motion.h"
-#include "statuswindow.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_pouch.h"
+#include "mario/mario_cam.h"
+#include "poly_trig.h"
 #include "driver/mapdrv.h"
-#include "evt/evt_story.h"
-#include <dolphin/pad.h>
 #include "driver/casedrv.h"
-// FAKE: evt_sub.c calls spline_getvalue through this prototype (the types it was compiled with) instead of the one in driver/mapdrv.h; same registers, behaviour-identical.
-typedef void (*Spline_getvalueLocalFn)(f32*, f32, s32, Vec*, f32*, Vec*);
 
 #include "system.h"
 #include "driver/msgdrv.h"
@@ -55,15 +58,15 @@ typedef void (*Spline_getvalueLocalFn)(f32*, f32, s32, Vec*, f32*, Vec*);
 #include <stdio.h>
 #include <dolphin/os.h>
 
-#define KEYFN(name, fn)                         \
-    USER_FUNC(name) {                           \
-        EvtWord* args = event->args;            \
-        s32 chan = evtGetValue(event, args[0]); \
-        evtSetValue(event, args[1], fn(chan));  \
-        return EVT_RETURN_DONE;                 \
-    }
+static USER_FUNC(mail_evt_gor_04_keyoff_check);
+static USER_FUNC(irai_mail_check);
+static USER_FUNC(get_stop);
+static USER_FUNC(set_stop);
+static USER_FUNC(stageclear_wait);
+static USER_FUNC(stone_bg_open);
+static USER_FUNC(stone_ry);
 
-s32 stop;
+static s32 stop;
 
 typedef struct SplineWork {
     s32 n;        // 0x0
@@ -78,48 +81,13 @@ typedef struct SplineWork {
     s32 manual;   // 0x28
 } SplineWork;
 
-#if VERSION >= VERSION_JP
-// coin_fmt is only used by a function the linker stripped; force_active keeps the string in .rodata
-#pragma force_active on
-/** Format of three floats for a coin-position helper the linker stripped; nothing reads it. */
-// FAKE: force_active keeps a stripped function's string in .rodata; nothing reads it
-static const char coin_fmt[] = "%f%f%f";
-#pragma force_active reset
-#endif
-
 /** Black text colour of the "You got N coins!" line in the coin reward window (coingetDisp). */
 static const GXColor coin_black = {0x00, 0x00, 0x00, 0xFF};
 
 static USER_FUNC(bgm_start_wait);
-#if VERSION >= VERSION_US
-// Forward declaration of evt_sub_scale_by_fps (defined near the end of the file), which the star stone cutscene calls.
-USER_FUNC(evt_sub_scale_by_fps);
-#endif
-static USER_FUNC(get_stop);
-static USER_FUNC(irai_mail_check);
-static USER_FUNC(mail_evt_gor_04_keyoff_check);
-static USER_FUNC(set_stop);
-static USER_FUNC(stageclear_wait);
 static USER_FUNC(stone_bg);
-static USER_FUNC(stone_bg_open);
-static USER_FUNC(stone_ry);
 static void coingetDisp(WinMgrEntry* entry);
 
-#if VERSION <= VERSION_DEMO_JP
-extern EvtWord evt_sub_starstone[1030];
-#else
-extern EvtWord evt_sub_starstone[VERSION_PICK(1043, 1084)];
-#endif
-extern EvtWord evt_sub_mail_vibration[26];
-#if VERSION <= VERSION_JP
-s32 evt_sub_mail_event_end[1];
-#endif
-
-/**
- * the demo keeps this file's data in definition order:
- * stopwatch, the tree data and scripts, the grass data and scripts,
- * then the coin window (retail puts the small objects in .sdata)
- */
 #if VERSION <= VERSION_DEMO_JP
 EVT_BEGIN(evt_sub_stopwatch)
     LOOP(0)
@@ -133,39 +101,157 @@ EVT_END()
  * Sway of a hammered tree, one row per frame for 25 frames: the trunk's tilt in degrees and the leaves' two
  * offsets, swinging out and settling back to rest. tree_evt reads it.
  */
-s32 tree_data[] = {
-    FLOAT(0.0f), FLOAT(0.0f), FLOAT(0.0f), FLOAT(-0.535f), FLOAT(1.447f), FLOAT(1.624f), FLOAT(-1.171f), FLOAT(3.175f),
-    FLOAT(3.567f), FLOAT(-1.605f), FLOAT(4.339f), FLOAT(4.872f), FLOAT(-1.534f), FLOAT(4.091f), FLOAT(4.581f), FLOAT(-0.686f),
-    FLOAT(1.747f), FLOAT(1.893f), FLOAT(0.716f), FLOAT(-2.068f), FLOAT(-2.483f), FLOAT(2.229f), FLOAT(-6.232f), FLOAT(-7.24f),
-    FLOAT(3.412f), FLOAT(-9.6245f), FLOAT(-11.073f), FLOAT(3.823f), FLOAT(-11.1245f), FLOAT(-12.675f), FLOAT(3.102f), FLOAT(-9.989f),
-    FLOAT(-11.147f), FLOAT(1.544f), FLOAT(-6.963f), FLOAT(-7.358f), FLOAT(-0.31f), FLOAT(-3.166f), FLOAT(-2.659f), FLOAT(-1.923f),
-    FLOAT(0.289f), FLOAT(1.598f), FLOAT(-2.754f), FLOAT(2.28f), FLOAT(4.061f), FLOAT(-2.552f), FLOAT(2.416f), FLOAT(4.261f),
-    FLOAT(-1.677f), FLOAT(1.44f), FLOAT(3.099f), FLOAT(-0.505f), FLOAT(-0.055f), FLOAT(1.279f), FLOAT(0.584f), FLOAT(-1.478f),
-    FLOAT(-0.493f), FLOAT(1.215f), FLOAT(-2.236f), FLOAT(-1.51f), FLOAT(1.304f), FLOAT(-2.22f), FLOAT(-1.662f), FLOAT(1.102f),
-    FLOAT(-1.828f), FLOAT(-1.4165f), FLOAT(0.735f), FLOAT(-1.218f), FLOAT(-0.944f), FLOAT(0.326f), FLOAT(-0.555f), FLOAT(-0.416f),
+static s32 tree_data[] = {
+    FLOAT(0.0f), FLOAT(0.0f), FLOAT(0.0f),
+    FLOAT(-0.5341796875f), FLOAT(1.4462890625f), FLOAT(1.623046875f),
+    FLOAT(-1.1708984375f), FLOAT(3.1748046875f), FLOAT(3.56640625f),
+    FLOAT(-1.6044921875f), FLOAT(4.3388671875f), FLOAT(4.87109375f),
+    FLOAT(-1.533203125f), FLOAT(4.0908203125f), FLOAT(4.580078125f),
+    FLOAT(-0.685546875f), FLOAT(1.74609375f), FLOAT(1.892578125f),
+    FLOAT(0.7158203125f), FLOAT(-2.0673828125f), FLOAT(-2.482421875f),
+    FLOAT(2.228515625f), FLOAT(-6.2314453125f), FLOAT(-7.2392578125f),
+    FLOAT(3.4111328125f), FLOAT(-9.6240234375f), FLOAT(-11.072265625f),
+    FLOAT(3.822265625f), FLOAT(-11.1240234375f), FLOAT(-12.6748046875f),
+    FLOAT(3.1015625f), FLOAT(-9.98828125f), FLOAT(-11.146484375f),
+    FLOAT(1.5439453125f), FLOAT(-6.962890625f), FLOAT(-7.357421875f),
+    FLOAT(-0.3095703125f), FLOAT(-3.1650390625f), FLOAT(-2.658203125f),
+    FLOAT(-1.9228515625f), FLOAT(0.2880859375f), FLOAT(1.59765625f),
+    FLOAT(-2.75390625f), FLOAT(2.279296875f), FLOAT(4.060546875f),
+    FLOAT(-2.5517578125f), FLOAT(2.4150390625f), FLOAT(4.2607421875f),
+    FLOAT(-1.6767578125f), FLOAT(1.439453125f), FLOAT(3.0986328125f),
+    FLOAT(-0.5048828125f), FLOAT(-0.0546875f), FLOAT(1.2783203125f),
+    FLOAT(0.583984375f), FLOAT(-1.4775390625f), FLOAT(-0.4921875f),
+    FLOAT(1.21484375f), FLOAT(-2.2353515625f), FLOAT(-1.509765625f),
+    FLOAT(1.3037109375f), FLOAT(-2.2197265625f), FLOAT(-1.6611328125f),
+    FLOAT(1.1015625f), FLOAT(-1.8271484375f), FLOAT(-1.416015625f),
+    FLOAT(0.734375f), FLOAT(-1.2177734375f), FLOAT(-0.943359375f),
+    FLOAT(0.3251953125f), FLOAT(-0.5546875f), FLOAT(-0.4150390625f),
     FLOAT(0.0f), FLOAT(0.0f), FLOAT(0.0f),
 };
 
-#if VERSION >= VERSION_JP
 /**
  * Stopwatch script that just waits a frame forever: scripts spawn it with SPAWN_EVENT_GET_ID
- * and read how long it has run with evt_sub_get_stopwatch (Peach's timed tasks in aji_06, aji_16 and aji_17).
+ * and read how long it has run with evt_sub_get_stopwatch (e.g. Peach's timed tasks in aji_06, aji_16 and aji_17).
  */
+#if VERSION >= VERSION_JP
 EVT_BEGIN(evt_sub_stopwatch)
     LOOP(0)
         WAIT_FRAMES(1)
     END_LOOP
     RETURN
 EVT_END()
+#endif
+
+#if VERSION <= VERSION_DEMO_JP
+static EVT_BEGIN(tree_evt)
+    SET_VALUE(LF(0), 0)
+    IF_INT_NOT_EQUAL(LW(3), 0)
+        SET_VALUE(LF(0), 1)
+    END_IF
+    IF_INT_NOT_EQUAL(LW(4), 0)
+        SET_VALUE(LF(0), 1)
+    END_IF
+    IF_INT_EQUAL(LF(0), 1)
+        CALL(evt_mapobj_get_position, LW(2), LW(13), LW(14), LW(15))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1"), LW(13), LW(14), LW(15), 0)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1_LEAVES1"), LW(13), LW(14), LW(15), 0)
+        CALL(evt_mapobj_get_position, LW(2), LW(13), LW(14), LW(15))
+        CALL(evt_mapobj_get_position, LW(3), LW(10), LW(11), LW(12))
+        SET_VALUE(LW(14), LW(11))
+        CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
+        SET_VALUE(LW(15), LW(12))
+        SUBTRACT(LW(14), 25)
+        SWITCH(LW(0))
+            CASE_EQUAL(0)
+            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 0, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
+            CASE_EQUAL(1)
+            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 3, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
+            CASE_EQUAL(2)
+            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 4, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
+            CASE_EQUAL(3)
+            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 4, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
+            CASE_EQUAL(4)
+            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 3, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
+            CASE_EQUAL(5)
+            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 2, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
+            CASE_EQUAL(6)
+            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 2, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
+        END_SWITCH
+    END_IF
+    IF_INT_NOT_EQUAL(LW(5), 0)
+        SPAWN_EVENT(LW(5))
+    END_IF
+    SET_INT_READ_ADDR(PTR(tree_data))
+    LOOP(25)
+        READ_INT3(LW(10), LW(11), LW(12))
+        IF_INT_NOT_EQUAL(LW(2), 0)
+            CALL(evt_mapobj_rotate, 1, LW(2), FLOAT(0.0f), FLOAT(0.0f), LW(10))
+        END_IF
+        IF_INT_NOT_EQUAL(LW(3), 0)
+            CALL(evt_mapobj_trans, 1, LW(3), LW(11), FLOAT(0.0f), FLOAT(0.0f))
+        END_IF
+        IF_INT_NOT_EQUAL(LW(4), 0)
+            CALL(evt_mapobj_trans, 1, LW(4), LW(12), FLOAT(0.0f), FLOAT(0.0f))
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+EVT_BEGIN(evt_sub_tree_access_entry)
+    SET_INT_READ_ADDR(LW(0))
+    LOOP(0)
+        READ_INT3(LW(0), LW(1), LW(2))
+        READ_INT3(LW(3), LW(4), LW(5))
+        IF_INT_EQUAL(LW(0), 7)
+            BREAK_LOOP
+        END_IF
+        CALL(evt_run_case_evt, CASE_HAMMER, 1, LW(1), 0, PTR(tree_evt), 0)
+    END_LOOP
+    RETURN
+EVT_END()
+#endif
 
 /**
  * Sideways sway of a checked bush, one offset per frame for 12 frames, out and back to rest;
  * kusa_evt reads it.
  */
 static s32 kusa_data[] = {
-    FLOAT(0.0f), FLOAT(-1.874f), FLOAT(-2.999f), FLOAT(-2.22f), FLOAT(-0.776f), FLOAT(0.0f), FLOAT(-0.776f), FLOAT(-2.22f),
-    FLOAT(-2.999f), FLOAT(-2.443f), FLOAT(-1.22f), FLOAT(0.0f),
+    FLOAT(0.0f), FLOAT(-1.873046875f), FLOAT(-2.998046875f), FLOAT(-2.2197265625f), FLOAT(-0.775390625f), FLOAT(0.0f), FLOAT(-0.775390625f), FLOAT(-2.2197265625f),
+    FLOAT(-2.998046875f), FLOAT(-2.4423828125f), FLOAT(-1.2197265625f), FLOAT(0.0f),
 };
+
+#if VERSION <= VERSION_DEMO_JP
+static EVT_BEGIN(kusa_evt)
+    CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_GRASS_SHAKE1"), LW(10), LW(11), LW(12), 0)
+    IF_INT_NOT_EQUAL(LW(3), 0)
+        SPAWN_EVENT(LW(3))
+    END_IF
+    SET_INT_READ_ADDR(PTR(kusa_data))
+    LOOP(12)
+        READ_INT(LW(10))
+        IF_INT_NOT_EQUAL(LW(2), 0)
+            CALL(evt_mapobj_trans, 1, LW(2), LW(10), FLOAT(0.0f), FLOAT(0.0f))
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+EVT_BEGIN(evt_sub_kusa_access_entry)
+    SET_INT_READ_ADDR(LW(0))
+    LOOP(0)
+        READ_INT3(LW(0), LW(1), LW(2))
+        READ_INT(LW(3))
+        IF_INT_EQUAL(LW(0), 4)
+            BREAK_LOOP
+        END_IF
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(1), 0, PTR(kusa_evt), 0)
+    END_LOOP
+    RETURN
+EVT_END()
+#endif
 
 /**
  * The pale yellow "You got N coins!" window that evt_sub_get_coin opens for coin rewards;
@@ -174,129 +260,15 @@ static s32 kusa_data[] = {
 WinMgrDesc coinget_window_desc[] = {
     {0, 0, 8, -175, 120, 350, 42, {0xE1, 0xD7, 0x9B, 0xFF}, NULL, coingetDisp},
 };
-#endif
 
-#if VERSION >= VERSION_US
 /**
  * Shakes a tree hit with the hammer: plays the tree and leaves sounds,
  * drops falling-leaf effects (LW(0) picks the leaf variant), spawns the optional drop script in LW(5),
  * then sways map objects LW(2) (trunk, rotated)
  * and LW(3)/LW(4) (leaves, shifted) through tree_data for 25 frames. Run per tree by evt_sub_tree_access_entry.
  */
-EVT_BEGIN(tree_evt)
-    SET_TYPE(0)
-    SET_VALUE(LF(0), 0)
-    IF_INT_NOT_EQUAL(LW(3), 0)
-        SET_VALUE(LF(0), 1)
-    END_IF
-    IF_INT_NOT_EQUAL(LW(4), 0)
-        SET_VALUE(LF(0), 1)
-    END_IF
-    IF_INT_EQUAL(LF(0), 1)
-        CALL(evt_mapobj_get_position, LW(2), LW(13), LW(14), LW(15))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1"), LW(13), LW(14), LW(15), 0)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1_LEAVES1"), LW(13), LW(14), LW(15), 0)
-        CALL(evt_mapobj_get_position, LW(2), LW(13), LW(14), LW(15))
-        CALL(evt_mapobj_get_position, LW(3), LW(10), LW(11), LW(12))
-        SET_VALUE(LW(14), LW(11))
-        CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
-        SET_VALUE(LW(15), LW(12))
-        SUBTRACT(LW(14), 25)
-        SWITCH(LW(0))
-            CASE_EQUAL(0)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 0, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(1)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 3, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(2)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 4, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(3)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 4, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(4)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 3, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(5)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 2, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(6)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 2, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-        END_SWITCH
-    END_IF
-    IF_INT_NOT_EQUAL(LW(5), 0)
-        SPAWN_EVENT(LW(5))
-    END_IF
-    SET_INT_READ_ADDR(PTR(tree_data))
-    LOOP(25)
-        READ_INT3(LW(10), LW(11), LW(12))
-        IF_INT_NOT_EQUAL(LW(2), 0)
-            CALL(evt_mapobj_rotate, 1, LW(2), FLOAT(0.0f), FLOAT(0.0f), LW(10))
-        END_IF
-        IF_INT_NOT_EQUAL(LW(3), 0)
-            CALL(evt_mapobj_trans, 1, LW(3), LW(11), FLOAT(0.0f), FLOAT(0.0f))
-        END_IF
-        IF_INT_NOT_EQUAL(LW(4), 0)
-            CALL(evt_mapobj_trans, 1, LW(4), LW(12), FLOAT(0.0f), FLOAT(0.0f))
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-#elif VERSION <= VERSION_DEMO_JP
-/** Demo version of tree_evt: same tree shake, without the SET_TYPE(0) at the start. */
-EVT_BEGIN(tree_evt)
-    SET_VALUE(LF(0), 0)
-    IF_INT_NOT_EQUAL(LW(3), 0)
-        SET_VALUE(LF(0), 1)
-    END_IF
-    IF_INT_NOT_EQUAL(LW(4), 0)
-        SET_VALUE(LF(0), 1)
-    END_IF
-    IF_INT_EQUAL(LF(0), 1)
-        CALL(evt_mapobj_get_position, LW(2), LW(13), LW(14), LW(15))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1"), LW(13), LW(14), LW(15), 0)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1_LEAVES1"), LW(13), LW(14), LW(15), 0)
-        CALL(evt_mapobj_get_position, LW(2), LW(13), LW(14), LW(15))
-        CALL(evt_mapobj_get_position, LW(3), LW(10), LW(11), LW(12))
-        SET_VALUE(LW(14), LW(11))
-        CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
-        SET_VALUE(LW(15), LW(12))
-        SUBTRACT(LW(14), 25)
-        SWITCH(LW(0))
-            CASE_EQUAL(0)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 0, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(1)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 3, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(2)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 4, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(3)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 4, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(4)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 3, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(5)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 2, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-            CASE_EQUAL(6)
-            CALL(evt_eff64, 0, STRING("fall_leaf_n64"), 2, LW(13), LW(14), LW(15), 60, 0, 0, 0, 0, 0, 0, 0)
-        END_SWITCH
-    END_IF
-    IF_INT_NOT_EQUAL(LW(5), 0)
-        SPAWN_EVENT(LW(5))
-    END_IF
-    SET_INT_READ_ADDR(PTR(tree_data))
-    LOOP(25)
-        READ_INT3(LW(10), LW(11), LW(12))
-        IF_INT_NOT_EQUAL(LW(2), 0)
-            CALL(evt_mapobj_rotate, 1, LW(2), FLOAT(0.0f), FLOAT(0.0f), LW(10))
-        END_IF
-        IF_INT_NOT_EQUAL(LW(3), 0)
-            CALL(evt_mapobj_trans, 1, LW(3), LW(11), FLOAT(0.0f), FLOAT(0.0f))
-        END_IF
-        IF_INT_NOT_EQUAL(LW(4), 0)
-            CALL(evt_mapobj_trans, 1, LW(4), LW(12), FLOAT(0.0f), FLOAT(0.0f))
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-#else
-/** JP version of tree_evt: identical to the US and PAL script. */
-EVT_BEGIN(tree_evt)
+#if VERSION >= VERSION_JP
+static EVT_BEGIN(tree_evt)
     SET_TYPE(0)
     SET_VALUE(LF(0), 0)
     IF_INT_NOT_EQUAL(LW(3), 0)
@@ -358,6 +330,7 @@ EVT_END()
  * leaves, leaves, drop script; a first word of 7 ends it)
  * and registers a hammer case on each hit object that runs tree_evt.
  */
+#if VERSION >= VERSION_JP
 EVT_BEGIN(evt_sub_tree_access_entry)
     SET_INT_READ_ADDR(LW(0))
     LOOP(0)
@@ -366,63 +339,19 @@ EVT_BEGIN(evt_sub_tree_access_entry)
         IF_INT_EQUAL(LW(0), 7)
             BREAK_LOOP
         END_IF
-        CALL(evt_run_case_evt, CASE_COND_HAMMER, 1, LW(1), 0, PTR(tree_evt), 0)
+        CALL(evt_run_case_evt, CASE_HAMMER, 1, LW(1), 0, PTR(tree_evt), 0)
     END_LOOP
     RETURN
 EVT_END()
-
-#if VERSION <= VERSION_DEMO_JP
-/** Demo position of kusa_data: the bush sway offsets read by kusa_evt. */
-static s32 kusa_data[] = {
-    FLOAT(0.0f), FLOAT(-1.874f), FLOAT(-2.999f), FLOAT(-2.22f), FLOAT(-0.776f), FLOAT(0.0f), FLOAT(-0.776f), FLOAT(-2.22f),
-    FLOAT(-2.999f), FLOAT(-2.443f), FLOAT(-1.22f), FLOAT(0.0f),
-};
 #endif
 
-#if VERSION >= VERSION_US
 /**
  * Shakes a bush Mario checks: plays the grass sound at Mario, spawns the optional drop script in LW(3),
  * and sways map object LW(2) sideways through kusa_data for 12 frames.
  * Run per bush by evt_sub_kusa_access_entry.
  */
-EVT_BEGIN(kusa_evt)
-    SET_TYPE(0)
-    CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_GRASS_SHAKE1"), LW(10), LW(11), LW(12), 0)
-    IF_INT_NOT_EQUAL(LW(3), 0)
-        SPAWN_EVENT(LW(3))
-    END_IF
-    SET_INT_READ_ADDR(PTR(kusa_data))
-    LOOP(12)
-        READ_INT(LW(10))
-        IF_INT_NOT_EQUAL(LW(2), 0)
-            CALL(evt_mapobj_trans, 1, LW(2), LW(10), FLOAT(0.0f), FLOAT(0.0f))
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-#elif VERSION <= VERSION_DEMO_JP
-/** Demo version of kusa_evt: same bush shake, without the SET_TYPE(0) at the start. */
-EVT_BEGIN(kusa_evt)
-    CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_GRASS_SHAKE1"), LW(10), LW(11), LW(12), 0)
-    IF_INT_NOT_EQUAL(LW(3), 0)
-        SPAWN_EVENT(LW(3))
-    END_IF
-    SET_INT_READ_ADDR(PTR(kusa_data))
-    LOOP(12)
-        READ_INT(LW(10))
-        IF_INT_NOT_EQUAL(LW(2), 0)
-            CALL(evt_mapobj_trans, 1, LW(2), LW(10), FLOAT(0.0f), FLOAT(0.0f))
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-#else
-/** JP version of kusa_evt: identical to the US and PAL script. */
-EVT_BEGIN(kusa_evt)
+#if VERSION >= VERSION_JP
+static EVT_BEGIN(kusa_evt)
     SET_TYPE(0)
     CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_GRASS_SHAKE1"), LW(10), LW(11), LW(12), 0)
@@ -446,6 +375,7 @@ EVT_END()
  * drop script; a first word of 4 ends it) and registers an A-button case in front of each one that runs
  * kusa_evt.
  */
+#if VERSION >= VERSION_JP
 EVT_BEGIN(evt_sub_kusa_access_entry)
     SET_INT_READ_ADDR(LW(0))
     LOOP(0)
@@ -454,19 +384,12 @@ EVT_BEGIN(evt_sub_kusa_access_entry)
         IF_INT_EQUAL(LW(0), 4)
             BREAK_LOOP
         END_IF
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(1), 0, PTR(kusa_evt), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(1), 0, PTR(kusa_evt), 0)
     END_LOOP
     RETURN
 EVT_END()
-
-#if VERSION <= VERSION_DEMO_JP
-/** Demo position of coinget_window_desc: the "You got N coins!" window of evt_sub_get_coin. */
-WinMgrDesc coinget_window_desc[] = {
-    {0, 0, 8, -175, 120, 350, 42, {0xE1, 0xD7, 0x9B, 0xFF}, NULL, coingetDisp},
-};
 #endif
 
-#if VERSION >= VERSION_US
 /**
  * The Crystal Star pickup cutscene.
  * LW(0) is the star (1 Diamond ... 7 Crystal, -1 the chapter 4 scene where the star is shown with Doopliss as
@@ -474,7 +397,7 @@ WinMgrDesc coinget_window_desc[] = {
  * Adds the star to the pouch, spins it up around Mario with the fanfare, prints the chapter's lines,
  * runs the stage-clear curtain and save prompt, then changes map:
  * Peach's interlude at aji_10 after chapters 1-3, usu_00, muj_12 and so on after the others.
- * US and PAL time the spin in milliseconds and scale its steps by the frame rate.
+ * US and later time the spin in milliseconds and scale its steps by the frame rate.
  */
 EVT_BEGIN(evt_sub_starstone)
     // Mario stops and the star goes into his pouch; the Doopliss scene (-1) adds nothing.
@@ -504,6 +427,7 @@ EVT_BEGIN(evt_sub_starstone)
         CALL(evt_pouch_add_item, ITEM_CRYSTAL_STAR, LW(2))
         CASE_EQUAL(-1)
     END_SWITCH
+
     // Remember which star this is for the rest of the scene.
     IF_INT_EQUAL(LW(0), 1)
         SET_VALUE(LF(1), 1)
@@ -529,7 +453,8 @@ EVT_BEGIN(evt_sub_starstone)
     IF_INT_EQUAL(LW(0), -1)
         SET_VALUE(LF(8), 1)
     END_IF
-    // The fanfare lasts at least 9.7 seconds; the screen flashes white with a chime.
+
+    // The scene lasts at least 9.7 seconds from here; the screen flashes white with a chime.
     CALL(set_stop, 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(9700)
@@ -538,6 +463,7 @@ EVT_BEGIN(evt_sub_starstone)
     CALL(evt_snd_sfxon, STRING("SFX_EVT_STARSTONE_WHITEOUT1"), 0)
     CALL(evt_fade_entry, FADE_OUT_BLACK, 300, 255, 255, 255)
     CALL(evt_fade_end_wait)
+
     // In the flash the star appears beside Mario (or Doopliss posing as him), he strikes a pose and the
     // Crystal Star fanfare starts.
     IF_INT_EQUAL(LF(8), 1)
@@ -556,24 +482,36 @@ EVT_BEGIN(evt_sub_starstone)
     IF_INT_EQUAL(LF(8), 0)
         CALL(evt_mario_set_pose, STRING("M_N_3"))
     END_IF
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_GET_STARSTONE1"))
+#if VERSION < VERSION_US
+    CALL(evt_fade_entry, FADE_IN_BLACK, 300, 255, 255, 255)
+#endif
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_GET_STARSTONE1"))
     CALL(bgm_start_wait)
+
     // Fade back in; the camera closes in while the star spirals up around him, spinning,
     // until it hovers overhead.
+#if VERSION >= VERSION_US
     CALL(evt_fade_entry, FADE_IN_BLACK, 300, 255, 255, 255)
+#endif
     IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_cam3d_evt_set_npc_rel, STRING("にせマリオ"), 0, 50, 397, 0, 70, 25, 2000, 11)
+        CALL(evt_cam3d_evt_set_npc_rel, STRING("にせマリオ"), 0, 50, 397, 0, 70, 25, 2000, EASING_SINE_IN_OUT)
     ELSE
-        CALL(evt_cam3d_evt_set_rel, 0, 50, 397, 0, 70, 25, 2000, 11)
+        CALL(evt_cam3d_evt_set_rel, 0, 50, 397, 0, 70, 25, 2000, EASING_SINE_IN_OUT)
     END_IF
     CALL(evt_snd_sfxon_3d, STRING("SFX_SE2_EVT_STARSTONE_GET1"), LW(5), LW(3), LW(6), 0)
     SET_VALUE(LW(7), LW(1))
     SET_FLOAT_VALUE(LW(8), FLOAT(35.0f))
     SET_FLOAT_VALUE(LW(9), LW(3))
-    CALL(evt_sub_intpl_msec_init, 4, 0, 3600, 2833)
+#if VERSION >= VERSION_US
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, 0, 3600, 2833)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
+#else
+    CALL(evt_sub_intpl_init, EASING_QUADRATIC_OUT, 0, 3600, 170)
+    LOOP(171)
+        CALL(evt_sub_intpl_get_value)
+#endif
         IF_INT_EQUAL(LF(8), 1)
             CALL(evt_npc_get_position, STRING("にせマリオ"), LW(2), LW(3), LW(4))
         ELSE
@@ -586,6 +524,7 @@ EVT_BEGIN(evt_sub_starstone)
         ADD_FLOAT(LW(6), LW(4))
         CALL(evt_item_set_position, LW(7), LW(5), LW(9), LW(6))
         CALL(stone_ry, LW(7), LW(0))
+#if VERSION >= VERSION_US
         SET_FLOAT_VALUE(LW(2), FLOAT(0.20507813f))
         SET_FLOAT_VALUE(LW(3), FLOAT(0.28222656f))
         CALL(evt_sub_scale_by_fps, LW(2), LW(3))
@@ -603,697 +542,13 @@ EVT_BEGIN(evt_sub_starstone)
     END_IF
     ADD(LW(3), 48)
     CALL(evt_item_set_position, LW(7), LW(2), LW(3), LW(4))
-    // Mario cheers and holds the star high in a burst of light, and the chapter's "You got a Crystal Star!"
-    // message shows.
-    IF_INT_NOT_EQUAL(LF(8), 1)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAPPY1"), LW(0), LW(1), LW(2), 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_npc_set_anim, STRING("にせマリオ"), STRING("EM_I_1"))
-    ELSE
-        CALL(evt_mario_set_pose, STRING("M_P_2"))
-    END_IF
-    CALL(evt_item_get_position, LW(7), LW(0), LW(1), LW(2))
-    ADD(LW(1), 16)
-    CALL(evt_eff64, STRING("sub_hikari"), STRING("radiation_n64"), 12, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
-    ADD(LW(2), -10)
-    CALL(evt_eff, STRING("sub_bg"), STRING("itemget"), 0, LW(0), LW(1), LW(2), 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(stone_bg, LW(7))
-    IF_INT_EQUAL(LF(1), 1)
-        CALL(evt_msg_print, 0, STRING("stg1_gon_33_18"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_msg_print, 0, STRING("stg2_mri_e25_03"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        CALL(evt_msg_print, 0, STRING("stg3_tou_475"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_39"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        CALL(evt_msg_print, 0, STRING("stg5_dou_29_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        CALL(evt_msg_print, 0, STRING("stg6_pik_20"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        CALL(evt_msg_print, 0, STRING("stg7_aji_42_02"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_10_02"), 0, 0)
-    END_IF
-    // Wait out the fanfare, then the stage-clear jingle plays and the light fades.
-    LOOP(0)
-        CALL(get_stop, LW(0))
-        IF_INT_EQUAL(LW(0), 1)
-            BREAK_LOOP
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STAGE_CLEAR1"))
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
-    CALL(evt_eff_softdelete, STRING("sub_hikari"))
-    CALL(stone_bg_open, LW(7))
-    // The curtain comes down (the map's own star object is hidden behind it),
-    // STAGE CLEAR appears and Mario cheers.
-    BEGIN_INLINE_EVENT
-        IF_INT_EQUAL(LF(1), 1)
-            SET_VALUE(LW(0), STRING("gon_11_S"))
-        END_IF
-        IF_INT_EQUAL(LF(2), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(3), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(4), 1)
-            SET_VALUE(LW(0), STRING("S_jin04"))
-        END_IF
-        IF_INT_EQUAL(LF(5), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(6), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(7), 1)
-            SET_VALUE(LW(0), STRING("S_aji_14"))
-        END_IF
-        IF_INT_EQUAL(LF(8), 1)
-            SET_VALUE(LW(0), STRING("S_jin04"))
-        END_IF
-        WAIT_FRAMES(10)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_HIDE)
-    END_INLINE_EVENT
-    CALL(evt_fade_entry, FADE_CURTAIN_ENTER_3D, 0, 0, 0, 0)
-    CALL(evt_fade_end_wait)
-    WAIT_MS(1000)
-    CALL(evt_eff, STRING("sub_clear"), STRING("stageclear"), 10, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(stageclear_wait)
-    IF_INT_NOT_EQUAL(LF(8), 1)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAPPY2"), LW(0), LW(1), LW(2), 0)
-    END_IF
-    WAIT_MS(2000)
-    // The curtain closes and the chapter's diary page sums up what happened.
-    CALL(evt_fade_entry, FADE_CURTAIN_CENTER_A2_3D, 0, 0, 0, 0)
-    CALL(evt_fade_end_wait)
-    CALL(evt_item_delete, LW(7))
-    WAIT_MS(1000)
-    IF_INT_EQUAL(LF(1), 1)
-        CALL(evt_msg_print, 0, STRING("stg1_gon_34"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_msg_print, 0, STRING("stg2_mri_e25_04"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        CALL(evt_msg_print, 0, STRING("stg3_tou_475_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_39_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        CALL(evt_msg_print, 0, STRING("stg5_dou_29_02"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        CALL(evt_msg_print, 0, STRING("stg6_pik_20_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        CALL(evt_msg_print, 0, STRING("stg7_aji_42_03"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_10_03"), 0, 0)
-    END_IF
-    // Offer to save; the save kind tells which chapter was just finished.
-    WAIT_MS(1000)
-    IF_INT_EQUAL(LF(1), 1)
-        SET_VALUE(LW(0), 1)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        SET_VALUE(LW(0), 4)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        SET_VALUE(LW(0), 7)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        SET_VALUE(LW(0), 10)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        SET_VALUE(LW(0), 13)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        SET_VALUE(LW(0), 16)
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        SET_VALUE(LW(0), 19)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        SET_VALUE(LW(0), 22)
-    END_IF
-    SET_VALUE(LF(10), 0)
-    CALL_CHILD(evt_memcard_save_wrapper)
-    // Move on: Peach's interlude (aji_10) after chapters 1-3, then usu_00, muj_12, pik_03 and pik_01 after
-    // chapters 4-7. The Doopliss scene instead fades back in where it is.
-    CALL(evt_mario_init_camid)
-    CALL(evt_party_init_camid, 0)
-    CALL(evt_party_init_camid, 1)
-    IF_INT_EQUAL(LF(1), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("aji_10"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("aji_10"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("aji_10"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
-        CALL(evt_bero_mapchange, STRING("usu_00"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
-        CALL(evt_bero_mapchange, STRING("muj_12"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        CALL(evt_fade_set_mapchange_type, 0, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
-        CALL(evt_bero_mapchange, STRING("pik_03"), STRING("next"))
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("pik_01"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_eff_delete, STRING("sub_bg"))
-        CALL(evt_eff_delete, STRING("sub_clear"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_jin04"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_fade_reset, 1)
-        CALL(evt_npc_set_camid, STRING("にせマリオ"), 4)
-        CALL(evt_mario_set_pose, STRING("M_D_2"))
-        CALL(evt_fade_entry, FADE_IN_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-    END_IF
-    CALL(evt_mario_key_onoff, 1)
-    RETURN
-EVT_END()
-#elif VERSION <= VERSION_DEMO_JP
-/**
- * Demo version of evt_sub_starstone: same cutscene,
- * with a frame-counted spin (evt_sub_intpl_init over 170 frames) and the plain evt_memcard_save prompt;
- * it also leaves the ambient sound and, in the Doopliss case, the music running.
- */
-EVT_BEGIN(evt_sub_starstone)
-    // Mario stops and the star goes into his pouch; the Doopliss scene (-1) adds nothing.
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_party_stop, 0)
-    SWITCH(LW(0))
-        CASE_EQUAL(1)
-        CALL(evt_pouch_get_starstone, 1)
-        CALL(evt_pouch_add_item, ITEM_DIAMOND_STAR, LW(2))
-        CASE_EQUAL(2)
-        CALL(evt_pouch_get_starstone, 2)
-        CALL(evt_pouch_add_item, ITEM_EMERALD_STAR, LW(2))
-        CASE_EQUAL(3)
-        CALL(evt_pouch_get_starstone, 3)
-        CALL(evt_pouch_add_item, ITEM_GOLD_STAR, LW(2))
-        CASE_EQUAL(4)
-        CALL(evt_pouch_get_starstone, 4)
-        CALL(evt_pouch_add_item, ITEM_RUBY_STAR, LW(2))
-        CASE_EQUAL(5)
-        CALL(evt_pouch_get_starstone, 5)
-        CALL(evt_pouch_add_item, ITEM_SAPPHIRE_STAR, LW(2))
-        CASE_EQUAL(6)
-        CALL(evt_pouch_get_starstone, 6)
-        CALL(evt_pouch_add_item, ITEM_GARNET_STAR, LW(2))
-        CASE_EQUAL(7)
-        CALL(evt_pouch_get_starstone, 7)
-        CALL(evt_pouch_add_item, ITEM_CRYSTAL_STAR, LW(2))
-        CASE_EQUAL(-1)
-    END_SWITCH
-    // Remember which star this is for the rest of the scene.
-    IF_INT_EQUAL(LW(0), 1)
-        SET_VALUE(LF(1), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 2)
-        SET_VALUE(LF(2), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 3)
-        SET_VALUE(LF(3), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 4)
-        SET_VALUE(LF(4), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 5)
-        SET_VALUE(LF(5), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 6)
-        SET_VALUE(LF(6), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 7)
-        SET_VALUE(LF(7), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), -1)
-        SET_VALUE(LF(8), 1)
-    END_IF
-    // The fanfare lasts at least 9.7 seconds; the screen flashes white with a chime.
-    CALL(set_stop, 0)
-    BEGIN_INLINE_EVENT
-        WAIT_MS(9700)
-        CALL(set_stop, 1)
-    END_INLINE_EVENT
-    CALL(evt_snd_sfxon, STRING("SFX_EVT_STARSTONE_WHITEOUT1"), 0)
-    CALL(evt_fade_entry, FADE_OUT_BLACK, 300, 255, 255, 255)
-    CALL(evt_fade_end_wait)
-    // In the flash the star appears beside Mario (or Doopliss posing as him), he strikes a pose and the
-    // Crystal Star fanfare starts.
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_npc_get_position, STRING("にせマリオ"), LW(2), LW(3), LW(4))
-    ELSE
-        CALL(evt_mario_get_pos, 0, LW(2), LW(3), LW(4))
-    END_IF
-    CALL(evt_sub_get_sincos, 0, LW(5), LW(6))
-    MULTIPLY_FLOAT(LW(5), FLOAT(40.0f))
-    MULTIPLY_FLOAT(LW(6), FLOAT(40.0f))
-    ADD_FLOAT(LW(5), LW(2))
-    ADD_FLOAT(LW(6), LW(4))
-    CALL(evt_item_set_position, LW(1), LW(5), LW(3), LW(6))
-    CALL(evt_mario_adjust_dir)
-    WAIT_MS(500)
-    IF_INT_EQUAL(LF(8), 0)
-        CALL(evt_mario_set_pose, STRING("M_N_3"))
-    END_IF
-    // Fade back in; the camera closes in while the star spirals up around him, spinning,
-    // until it hovers overhead.
-    CALL(evt_fade_entry, FADE_IN_BLACK, 300, 255, 255, 255)
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_GET_STARSTONE1"))
-    CALL(bgm_start_wait)
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_cam3d_evt_set_npc_rel, STRING("にせマリオ"), 0, 50, 397, 0, 70, 25, 2000, 11)
-    ELSE
-        CALL(evt_cam3d_evt_set_rel, 0, 50, 397, 0, 70, 25, 2000, 11)
-    END_IF
-    CALL(evt_snd_sfxon_3d, STRING("SFX_SE2_EVT_STARSTONE_GET1"), LW(5), LW(3), LW(6), 0)
-    SET_VALUE(LW(7), LW(1))
-    SET_FLOAT_VALUE(LW(8), FLOAT(35.0f))
-    SET_FLOAT_VALUE(LW(9), LW(3))
-    CALL(evt_sub_intpl_init, 4, 0, 3600, 170)
-    LOOP(171)
-        CALL(evt_sub_intpl_get_value)
-        IF_INT_EQUAL(LF(8), 1)
-            CALL(evt_npc_get_position, STRING("にせマリオ"), LW(2), LW(3), LW(4))
-        ELSE
-            CALL(evt_mario_get_pos, 0, LW(2), LW(3), LW(4))
-        END_IF
-        CALL(evt_sub_get_sincos, LW(0), LW(5), LW(6))
-        MULTIPLY_FLOAT(LW(5), LW(8))
-        MULTIPLY_FLOAT(LW(6), LW(8))
-        ADD_FLOAT(LW(5), LW(2))
-        ADD_FLOAT(LW(6), LW(4))
-        CALL(evt_item_set_position, LW(7), LW(5), LW(9), LW(6))
-        CALL(stone_ry, LW(7), LW(0))
-        SUBTRACT_FLOAT(LW(8), FLOAT(0.205078125f))
-        ADD_FLOAT(LW(9), FLOAT(0.2822265625f))
-        WAIT_FRAMES(1)
-    END_LOOP
-    // Mario cheers and holds the star high in a burst of light, and the chapter's "You got a Crystal Star!"
-    // message shows.
-    IF_INT_NOT_EQUAL(LF(8), 1)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAPPY1"), LW(0), LW(1), LW(2), 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_npc_set_anim, STRING("にせマリオ"), STRING("EM_I_1"))
-    ELSE
-        CALL(evt_mario_set_pose, STRING("M_P_2"))
-    END_IF
-    CALL(evt_item_get_position, LW(7), LW(0), LW(1), LW(2))
-    ADD(LW(1), 16)
-    CALL(evt_eff64, STRING("sub_hikari"), STRING("radiation_n64"), 12, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
-    ADD(LW(2), -10)
-    CALL(evt_eff, STRING("sub_bg"), STRING("itemget"), 0, LW(0), LW(1), LW(2), 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(stone_bg, LW(7))
-    IF_INT_EQUAL(LF(1), 1)
-        CALL(evt_msg_print, 0, STRING("stg1_gon_33_18"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_msg_print, 0, STRING("stg2_mri_e25_03"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        CALL(evt_msg_print, 0, STRING("stg3_tou_475"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_39"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        CALL(evt_msg_print, 0, STRING("stg5_dou_29_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        CALL(evt_msg_print, 0, STRING("stg6_pik_20"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        CALL(evt_msg_print, 0, STRING("stg7_aji_42_02"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_10_02"), 0, 0)
-    END_IF
-    // Wait out the fanfare, then the stage-clear jingle plays and the light fades.
-    LOOP(0)
-        CALL(get_stop, LW(0))
-        IF_INT_EQUAL(LW(0), 1)
-            BREAK_LOOP
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STAGE_CLEAR1"))
-    CALL(evt_eff_softdelete, STRING("sub_hikari"))
-    CALL(stone_bg_open, LW(7))
-    // The curtain comes down (the map's own star object is hidden behind it),
-    // STAGE CLEAR appears and Mario cheers.
-    BEGIN_INLINE_EVENT
-        IF_INT_EQUAL(LF(1), 1)
-            SET_VALUE(LW(0), STRING("gon_11_S"))
-        END_IF
-        IF_INT_EQUAL(LF(2), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(3), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(4), 1)
-            SET_VALUE(LW(0), STRING("S_jin04"))
-        END_IF
-        IF_INT_EQUAL(LF(5), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(6), 1)
-            SET_VALUE(LW(0), STRING("S"))
-        END_IF
-        IF_INT_EQUAL(LF(7), 1)
-            SET_VALUE(LW(0), STRING("S_aji_14"))
-        END_IF
-        IF_INT_EQUAL(LF(8), 1)
-            SET_VALUE(LW(0), STRING("S_jin04"))
-        END_IF
-        WAIT_FRAMES(10)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_HIDE)
-    END_INLINE_EVENT
-    CALL(evt_fade_entry, FADE_CURTAIN_ENTER_3D, 0, 0, 0, 0)
-    CALL(evt_fade_end_wait)
-    WAIT_MS(1000)
-    CALL(evt_eff, STRING("sub_clear"), STRING("stageclear"), 10, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(stageclear_wait)
-    IF_INT_NOT_EQUAL(LF(8), 1)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAPPY2"), LW(0), LW(1), LW(2), 0)
-    END_IF
-    WAIT_MS(2000)
-    // The curtain closes and the chapter's diary page sums up what happened.
-    CALL(evt_fade_entry, FADE_CURTAIN_CENTER_A2_3D, 0, 0, 0, 0)
-    CALL(evt_fade_end_wait)
-    CALL(evt_item_delete, LW(7))
-    WAIT_MS(1000)
-    IF_INT_EQUAL(LF(1), 1)
-        CALL(evt_msg_print, 0, STRING("stg1_gon_34"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_msg_print, 0, STRING("stg2_mri_e25_04"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        CALL(evt_msg_print, 0, STRING("stg3_tou_475_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_39_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        CALL(evt_msg_print, 0, STRING("stg5_dou_29_02"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        CALL(evt_msg_print, 0, STRING("stg6_pik_20_01"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        CALL(evt_msg_print, 0, STRING("stg7_aji_42_03"), 0, 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_msg_print, 0, STRING("stg4_jin_10_03"), 0, 0)
-    END_IF
-    // Offer to save; the save kind tells which chapter was just finished.
-    WAIT_MS(1000)
-    IF_INT_EQUAL(LF(1), 1)
-        SET_VALUE(LW(0), 1)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        SET_VALUE(LW(0), 4)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        SET_VALUE(LW(0), 7)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        SET_VALUE(LW(0), 10)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        SET_VALUE(LW(0), 13)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        SET_VALUE(LW(0), 16)
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        SET_VALUE(LW(0), 19)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        SET_VALUE(LW(0), 22)
-    END_IF
-    SET_VALUE(LF(10), 0)
-    CALL_CHILD(evt_memcard_save)
-    // Move on: Peach's interlude (aji_10) after chapters 1-3, then usu_00, muj_12, pik_03 and pik_01 after
-    // chapters 4-7. The Doopliss scene instead fades back in where it is.
-    CALL(evt_mario_init_camid)
-    CALL(evt_party_init_camid, 0)
-    CALL(evt_party_init_camid, 1)
-    IF_INT_EQUAL(LF(1), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("aji_10"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("aji_10"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(3), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("aji_10"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(4), 1)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
-        CALL(evt_bero_mapchange, STRING("usu_00"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(5), 1)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
-        CALL(evt_bero_mapchange, STRING("muj_12"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(6), 1)
-        CALL(evt_fade_set_mapchange_type, 0, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
-        CALL(evt_bero_mapchange, STRING("pik_03"), STRING("next"))
-    END_IF
-    IF_INT_EQUAL(LF(7), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_sfx_all_stop)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_MARIO_A1, 0, FADE_STORY_MARIO_A3, 0)
-        CALL(evt_bero_mapchange, STRING("pik_01"), 0)
-    END_IF
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-        WAIT_MS(2000)
-        CALL(evt_eff_delete, STRING("sub_bg"))
-        CALL(evt_eff_delete, STRING("sub_clear"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_jin04"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_fade_reset, 1)
-        CALL(evt_npc_set_camid, STRING("にせマリオ"), 4)
-        CALL(evt_mario_set_pose, STRING("M_D_2"))
-        CALL(evt_fade_entry, FADE_IN_WHITE, 1000, 0, 0, 0)
-        CALL(evt_fade_end_wait)
-    END_IF
-    CALL(evt_mario_key_onoff, 1)
-    RETURN
-EVT_END()
 #else
-/**
- * JP version of evt_sub_starstone: the US cutscene with a frame-counted spin (170 frames)
- * and the plain evt_memcard_save prompt.
- */
-EVT_BEGIN(evt_sub_starstone)
-    // Mario stops and the star goes into his pouch; the Doopliss scene (-1) adds nothing.
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_party_stop, 0)
-    SWITCH(LW(0))
-        CASE_EQUAL(1)
-        CALL(evt_pouch_get_starstone, 1)
-        CALL(evt_pouch_add_item, ITEM_DIAMOND_STAR, LW(2))
-        CASE_EQUAL(2)
-        CALL(evt_pouch_get_starstone, 2)
-        CALL(evt_pouch_add_item, ITEM_EMERALD_STAR, LW(2))
-        CASE_EQUAL(3)
-        CALL(evt_pouch_get_starstone, 3)
-        CALL(evt_pouch_add_item, ITEM_GOLD_STAR, LW(2))
-        CASE_EQUAL(4)
-        CALL(evt_pouch_get_starstone, 4)
-        CALL(evt_pouch_add_item, ITEM_RUBY_STAR, LW(2))
-        CASE_EQUAL(5)
-        CALL(evt_pouch_get_starstone, 5)
-        CALL(evt_pouch_add_item, ITEM_SAPPHIRE_STAR, LW(2))
-        CASE_EQUAL(6)
-        CALL(evt_pouch_get_starstone, 6)
-        CALL(evt_pouch_add_item, ITEM_GARNET_STAR, LW(2))
-        CASE_EQUAL(7)
-        CALL(evt_pouch_get_starstone, 7)
-        CALL(evt_pouch_add_item, ITEM_CRYSTAL_STAR, LW(2))
-        CASE_EQUAL(-1)
-    END_SWITCH
-    // Remember which star this is for the rest of the scene.
-    IF_INT_EQUAL(LW(0), 1)
-        SET_VALUE(LF(1), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 2)
-        SET_VALUE(LF(2), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 3)
-        SET_VALUE(LF(3), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 4)
-        SET_VALUE(LF(4), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 5)
-        SET_VALUE(LF(5), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 6)
-        SET_VALUE(LF(6), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), 7)
-        SET_VALUE(LF(7), 1)
-    END_IF
-    IF_INT_EQUAL(LW(0), -1)
-        SET_VALUE(LF(8), 1)
-    END_IF
-    // The fanfare lasts at least 9.7 seconds; the screen flashes white with a chime.
-    CALL(set_stop, 0)
-    BEGIN_INLINE_EVENT
-        WAIT_MS(9700)
-        CALL(set_stop, 1)
-    END_INLINE_EVENT
-    CALL(evt_snd_sfxon, STRING("SFX_EVT_STARSTONE_WHITEOUT1"), 0)
-    CALL(evt_fade_entry, FADE_OUT_BLACK, 300, 255, 255, 255)
-    CALL(evt_fade_end_wait)
-    // In the flash the star appears beside Mario (or Doopliss posing as him), he strikes a pose and the
-    // Crystal Star fanfare starts.
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_npc_get_position, STRING("にせマリオ"), LW(2), LW(3), LW(4))
-    ELSE
-        CALL(evt_mario_get_pos, 0, LW(2), LW(3), LW(4))
-    END_IF
-    CALL(evt_sub_get_sincos, 0, LW(5), LW(6))
-    MULTIPLY_FLOAT(LW(5), FLOAT(40.0f))
-    MULTIPLY_FLOAT(LW(6), FLOAT(40.0f))
-    ADD_FLOAT(LW(5), LW(2))
-    ADD_FLOAT(LW(6), LW(4))
-    CALL(evt_item_set_position, LW(1), LW(5), LW(3), LW(6))
-    CALL(evt_mario_adjust_dir)
-    WAIT_MS(500)
-    IF_INT_EQUAL(LF(8), 0)
-        CALL(evt_mario_set_pose, STRING("M_N_3"))
-    END_IF
-    // Fade back in; the camera closes in while the star spirals up around him, spinning,
-    // until it hovers overhead.
-    CALL(evt_fade_entry, FADE_IN_BLACK, 300, 255, 255, 255)
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_GET_STARSTONE1"))
-    CALL(bgm_start_wait)
-    IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_cam3d_evt_set_npc_rel, STRING("にせマリオ"), 0, 50, 397, 0, 70, 25, 2000, 11)
-    ELSE
-        CALL(evt_cam3d_evt_set_rel, 0, 50, 397, 0, 70, 25, 2000, 11)
-    END_IF
-    CALL(evt_snd_sfxon_3d, STRING("SFX_SE2_EVT_STARSTONE_GET1"), LW(5), LW(3), LW(6), 0)
-    SET_VALUE(LW(7), LW(1))
-    SET_FLOAT_VALUE(LW(8), FLOAT(35.0f))
-    SET_FLOAT_VALUE(LW(9), LW(3))
-    CALL(evt_sub_intpl_init, 4, 0, 3600, 170)
-    LOOP(171)
-        CALL(evt_sub_intpl_get_value)
-        IF_INT_EQUAL(LF(8), 1)
-            CALL(evt_npc_get_position, STRING("にせマリオ"), LW(2), LW(3), LW(4))
-        ELSE
-            CALL(evt_mario_get_pos, 0, LW(2), LW(3), LW(4))
-        END_IF
-        CALL(evt_sub_get_sincos, LW(0), LW(5), LW(6))
-        MULTIPLY_FLOAT(LW(5), LW(8))
-        MULTIPLY_FLOAT(LW(6), LW(8))
-        ADD_FLOAT(LW(5), LW(2))
-        ADD_FLOAT(LW(6), LW(4))
-        CALL(evt_item_set_position, LW(7), LW(5), LW(9), LW(6))
-        CALL(stone_ry, LW(7), LW(0))
         SUBTRACT_FLOAT(LW(8), FLOAT(0.20507813f))
         ADD_FLOAT(LW(9), FLOAT(0.28222656f))
         WAIT_FRAMES(1)
     END_LOOP
+#endif
+
     // Mario cheers and holds the star high in a burst of light, and the chapter's "You got a Crystal Star!"
     // message shows.
     IF_INT_NOT_EQUAL(LF(8), 1)
@@ -1335,6 +590,7 @@ EVT_BEGIN(evt_sub_starstone)
     IF_INT_EQUAL(LF(8), 1)
         CALL(evt_msg_print, 0, STRING("stg4_jin_10_02"), 0, 0)
     END_IF
+
     // Wait out the fanfare, then the stage-clear jingle plays and the light fades.
     LOOP(0)
         CALL(get_stop, LW(0))
@@ -1343,12 +599,15 @@ EVT_BEGIN(evt_sub_starstone)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STAGE_CLEAR1"))
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STAGE_CLEAR1"))
+#if VERSION >= VERSION_JP
+    CALL(evt_snd_envoff, PSND_FADEOUT)
+#endif
     CALL(evt_eff_softdelete, STRING("sub_hikari"))
     CALL(stone_bg_open, LW(7))
+
     // The curtain comes down (the map's own star object is hidden behind it),
     // STAGE CLEAR appears and Mario cheers.
     BEGIN_INLINE_EVENT
@@ -1377,7 +636,7 @@ EVT_BEGIN(evt_sub_starstone)
             SET_VALUE(LW(0), STRING("S_jin04"))
         END_IF
         WAIT_FRAMES(10)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_FLAG_HIDDEN)
     END_INLINE_EVENT
     CALL(evt_fade_entry, FADE_CURTAIN_ENTER_3D, 0, 0, 0, 0)
     CALL(evt_fade_end_wait)
@@ -1389,6 +648,7 @@ EVT_BEGIN(evt_sub_starstone)
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAPPY2"), LW(0), LW(1), LW(2), 0)
     END_IF
     WAIT_MS(2000)
+
     // The curtain closes and the chapter's diary page sums up what happened.
     CALL(evt_fade_entry, FADE_CURTAIN_CENTER_A2_3D, 0, 0, 0, 0)
     CALL(evt_fade_end_wait)
@@ -1418,6 +678,7 @@ EVT_BEGIN(evt_sub_starstone)
     IF_INT_EQUAL(LF(8), 1)
         CALL(evt_msg_print, 0, STRING("stg4_jin_10_03"), 0, 0)
     END_IF
+
     // Offer to save; the save kind tells which chapter was just finished.
     WAIT_MS(1000)
     IF_INT_EQUAL(LF(1), 1)
@@ -1445,15 +706,20 @@ EVT_BEGIN(evt_sub_starstone)
         SET_VALUE(LW(0), 22)
     END_IF
     SET_VALUE(LF(10), 0)
+#if VERSION >= VERSION_US
+    CALL_CHILD(evt_memcard_save_wrapper)
+#else
     CALL_CHILD(evt_memcard_save)
+#endif
+
     // Move on: Peach's interlude (aji_10) after chapters 1-3, then usu_00, muj_12, pik_03 and pik_01 after
     // chapters 4-7. The Doopliss scene instead fades back in where it is.
     CALL(evt_mario_init_camid)
     CALL(evt_party_init_camid, 0)
     CALL(evt_party_init_camid, 1)
     IF_INT_EQUAL(LF(1), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+        CALL(evt_snd_envoff_f, PSND_FADEOUT, 2000)
         CALL(evt_snd_sfx_all_stop)
         CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
         CALL(evt_fade_end_wait)
@@ -1462,8 +728,8 @@ EVT_BEGIN(evt_sub_starstone)
         CALL(evt_bero_mapchange, STRING("aji_10"), 0)
     END_IF
     IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+        CALL(evt_snd_envoff_f, PSND_FADEOUT, 2000)
         CALL(evt_snd_sfx_all_stop)
         CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
         CALL(evt_fade_end_wait)
@@ -1472,8 +738,8 @@ EVT_BEGIN(evt_sub_starstone)
         CALL(evt_bero_mapchange, STRING("aji_10"), 0)
     END_IF
     IF_INT_EQUAL(LF(3), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+        CALL(evt_snd_envoff_f, PSND_FADEOUT, 2000)
         CALL(evt_snd_sfx_all_stop)
         CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
         CALL(evt_fade_end_wait)
@@ -1494,8 +760,8 @@ EVT_BEGIN(evt_sub_starstone)
         CALL(evt_bero_mapchange, STRING("pik_03"), STRING("next"))
     END_IF
     IF_INT_EQUAL(LF(7), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+        CALL(evt_snd_envoff_f, PSND_FADEOUT, 2000)
         CALL(evt_snd_sfx_all_stop)
         CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
         CALL(evt_fade_end_wait)
@@ -1504,15 +770,17 @@ EVT_BEGIN(evt_sub_starstone)
         CALL(evt_bero_mapchange, STRING("pik_01"), 0)
     END_IF
     IF_INT_EQUAL(LF(8), 1)
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-        CALL(evt_snd_envoff_f, PSND_FADE_OUT, 2000)
+#if VERSION >= VERSION_JP
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+        CALL(evt_snd_envoff_f, PSND_FADEOUT, 2000)
         CALL(evt_snd_sfx_all_stop)
+#endif
         CALL(evt_fade_entry, FADE_OUT_WHITE, 1000, 0, 0, 0)
         CALL(evt_fade_end_wait)
         WAIT_MS(2000)
         CALL(evt_eff_delete, STRING("sub_bg"))
         CALL(evt_eff_delete, STRING("sub_clear"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_jin04"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_jin04"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_fade_reset, 1)
         CALL(evt_npc_set_camid, STRING("にせマリオ"), 4)
         CALL(evt_mario_set_pose, STRING("M_D_2"))
@@ -1522,7 +790,6 @@ EVT_BEGIN(evt_sub_starstone)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
-#endif
 
 /**
  * Rumbles controller 0 in ten bursts of ten 50 ms pulses with two seconds between,
@@ -1543,20 +810,20 @@ EVT_BEGIN(evt_sub_mail_vibration)
 EVT_END()
 
 /**
- * The incoming-mail scene: freezes Mario (off Yoshi), shows the surprise balloon,
- * plays the mail jingle with the rumble, prints the "mail arrived" message and, the first times,
- * the hint about reading mail (GSWF_MAIL_TUTORIAL_SEEN).
- * Called by every mail_evt_* script after it has put the mail in the pouch.
+ * The incoming-mail scene: freezes Mario (off Yoshi), shows the surprise balloon, plays the mail jingle with the
+ * rumble and the message window (evt_win_one_message), then the hint about reading mail (mail_first_hit) the first
+ * time and again while GSWF_MAIL_TUTORIAL_REPEAT_OFF is clear.
+ * Run by the mail_evt_* scripts after they have put the mail in the pouch.
  */
-EVT_BEGIN(mail_evt)
+static EVT_BEGIN(mail_evt)
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_party_yoshi_ride, 0, 0)
     CALL(evt_mario_wait_rideon)
     CALL(evt_mario_balloon_bikkuri)
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION3"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION3"))
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     CALL(evt_win_one_message, 0)
@@ -1564,13 +831,13 @@ EVT_BEGIN(mail_evt)
     WAIT_FRAMES(1)
     CALL(evt_sub_rumble_onoff, 1, 0)
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_TUTORIAL_SEEN), 0)
-        SET_VALUE(GSWF(GSWF_MAIL_TUTORIAL_SEEN), 1)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+    IF_INT_EQUAL(GSWF_MAIL_TUTORIAL_SEEN, 0)
+        SET_VALUE(GSWF_MAIL_TUTORIAL_SEEN, 1)
         CALL(evt_msg_print, 0, STRING("mail_first_hit"), 0, 0)
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_MAIL_OPENED_ONCE), 0)
+        IF_INT_EQUAL(GSWF_MAIL_TUTORIAL_REPEAT_OFF, 0)
             CALL(evt_msg_print, 0, STRING("mail_first_hit"), 0, 0)
         END_IF
     END_IF
@@ -1580,11 +847,11 @@ EVT_BEGIN(mail_evt)
 EVT_END()
 
 /**
- * Petalburg (nok_01): once Kroop's talk is done (STORY_STG1_02),
+ * Petalburg (nok_01): once Kroop's talk is done (STG1_02),
  * sends Frankly's mail (16, plus 26) when Mario walks past x = 190.
  */
-EVT_BEGIN(mail_evt_nok_01)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_FRANKLY_SENT), 1)
+static EVT_BEGIN(mail_evt_nok_01)
+    IF_INT_EQUAL(GSWF_MAIL_FRANKLY_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1594,14 +861,14 @@ EVT_BEGIN(mail_evt_nok_01)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), 190, -2000, 190, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_02_TALKING_WITH_KROOP)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG1_02_TALKING_WITH_KROOP)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_FRANKLY_SENT), 1)
+    SET_VALUE(GSWF_MAIL_FRANKLY_SENT, 1)
     CALL(evt_pouch_receive_mail, 16)
     CALL(evt_pouch_receive_mail, 26)
     CALL_CHILD(mail_evt)
@@ -1609,11 +876,11 @@ EVT_BEGIN(mail_evt_nok_01)
 EVT_END()
 
 /**
- * Rogueport (gor_03): after the Glitzville ticket (STORY_STG2_47) sends Koopley's mail (17)
+ * Rogueport (gor_03): after the Glitzville ticket (STG2_47) sends Koopley's mail (17)
  * when Mario crosses x = -100; also delivers any Trouble Center follow-up mail that is due (irai_mail_check).
  * Loops for as long as the map runs.
  */
-EVT_BEGIN(mail_evt_gor_03)
+static EVT_BEGIN(mail_evt_gor_03)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     LOOP(0)
         SET_VALUE(LW(10), LW(0))
@@ -1623,9 +890,9 @@ EVT_BEGIN(mail_evt_gor_03)
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -100, -2000, -100, 2000, LW(5))
         IF_INT_EQUAL(LW(5), 1)
             SET_VALUE(LF(0), 0)
-            IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_47_AFTER_GETTING_THE_TICKET)
-                IF_INT_EQUAL(GSWF(GSWF_MAIL_KOOPLEY_SENT), 0)
-                    SET_VALUE(GSWF(GSWF_MAIL_KOOPLEY_SENT), 1)
+            IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_47_AFTER_GETTING_THE_TICKET)
+                IF_INT_EQUAL(GSWF_MAIL_KOOPLEY_SENT, 0)
+                    SET_VALUE(GSWF_MAIL_KOOPLEY_SENT, 1)
                     CALL(evt_pouch_receive_mail, 17)
                     SET_VALUE(LF(0), 1)
                 END_IF
@@ -1646,11 +913,11 @@ EVT_BEGIN(mail_evt_gor_03)
 EVT_END()
 
 /**
- * Rogueport (gor_02): at STORY_STG3_51 sends Koopie Koo's mail (18)
- * when Mario enters the strip near x -280..-230; also delivers due Trouble Center follow-up mail.
+ * Rogueport (gor_02): at STG3_51 sends Koopie Koo's mail (18)
+ * when Mario crosses the line from (-280, -50) to (-230, 220); also delivers due Trouble Center follow-up mail.
  * Loops for as long as the map runs.
  */
-EVT_BEGIN(mail_evt_gor_02)
+static EVT_BEGIN(mail_evt_gor_02)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     LOOP(0)
         SET_VALUE(LW(10), LW(0))
@@ -1660,9 +927,9 @@ EVT_BEGIN(mail_evt_gor_02)
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -280, -50, -230, 220, LW(5))
         IF_INT_EQUAL(LW(5), 1)
             SET_VALUE(LF(0), 0)
-            IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_51_FRANKLYS_HOUSE)
-                IF_INT_EQUAL(GSWF(GSWF_MAIL_KOOPIE_KOO_SENT), 0)
-                    SET_VALUE(GSWF(GSWF_MAIL_KOOPIE_KOO_SENT), 1)
+            IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_51_FRANKLYS_HOUSE_STG_3)
+                IF_INT_EQUAL(GSWF_MAIL_KOOPIE_KOO_SENT, 0)
+                    SET_VALUE(GSWF_MAIL_KOOPIE_KOO_SENT, 1)
                     CALL(evt_pouch_receive_mail, 18)
                     SET_VALUE(LF(0), 1)
                 END_IF
@@ -1682,9 +949,9 @@ EVT_BEGIN(mail_evt_gor_02)
     RETURN
 EVT_END()
 
-/** Rogueport (gor_01): at STORY_STG4_37 sends Petuni's mail (19) when Mario crosses x = 350. */
-EVT_BEGIN(mail_evt_gor_01)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_PETUNI_SENT), 1)
+/** Rogueport (gor_01): at STG4_37 sends Petuni's mail (19) when Mario crosses x = 350. */
+static EVT_BEGIN(mail_evt_gor_01)
+    IF_INT_EQUAL(GSWF_MAIL_PETUNI_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1694,25 +961,25 @@ EVT_BEGIN(mail_evt_gor_01)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), 350, -2000, 350, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_37_TO_THE_PORT)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG4_37_TO_THE_PORT)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_PETUNI_SENT), 1)
+    SET_VALUE(GSWF_MAIL_PETUNI_SENT, 1)
     CALL(evt_pouch_receive_mail, 19)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Rogueport (gor_04): at STORY_STG5_66 sends the Boo mail (20) when Mario crosses x = 30,
+ * Rogueport (gor_04): at STG5_66 sends the Boo mail (20) when Mario crosses x = 30,
  * but only while Mario has control (mail_evt_gor_04_keyoff_check);
  * also delivers due Trouble Center follow-up mail. Loops for as long as the map runs.
  */
-EVT_BEGIN(mail_evt_gor_04)
+static EVT_BEGIN(mail_evt_gor_04)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     LOOP(0)
         SET_VALUE(LW(10), LW(0))
@@ -1726,9 +993,9 @@ EVT_BEGIN(mail_evt_gor_04)
         END_IF
         IF_INT_EQUAL(LW(5), 1)
             SET_VALUE(LF(0), 0)
-            IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_66_BELDAM_FINDS_OUT)
-                IF_INT_EQUAL(GSWF(GSWF_MAIL_BOO_SENT), 0)
-                    SET_VALUE(GSWF(GSWF_MAIL_BOO_SENT), 1)
+            IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_66_BELDAM_FINDS_OUT)
+                IF_INT_EQUAL(GSWF_MAIL_BOO_SENT, 0)
+                    SET_VALUE(GSWF_MAIL_BOO_SENT, 1)
                     CALL(evt_pouch_receive_mail, 20)
                     SET_VALUE(LF(0), 1)
                 END_IF
@@ -1749,12 +1016,12 @@ EVT_BEGIN(mail_evt_gor_04)
 EVT_END()
 
 /**
- * Excess Express (rsh_02_a in US and PAL, rsh_03_a in JP and the demos):
- * from day 3 (STORY_STG6_45) sends Pa-Patch's mail (21)
- * when Mario crosses the line at x = -100 (JP and demos: 400).
+ * Excess Express (rsh_02_a in US and later, rsh_03_a in JP and the early demos):
+ * from day 3 (STG6_45) sends Pa-Patch's mail (21)
+ * when Mario crosses the line at x = -100 (JP and the early demos: 400).
  */
-EVT_BEGIN(mail_evt_rsh_03_a)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_PA_PATCH_SENT), 1)
+static EVT_BEGIN(mail_evt_rsh_03_a)
+    IF_INT_EQUAL(GSWF_MAIL_PA_PATCH_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1768,25 +1035,25 @@ EVT_BEGIN(mail_evt_rsh_03_a)
 #else
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), 400, -2000, 400, 2000, LW(5))
 #endif
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_45_DAY_3_STARTS)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_45_DAY_3_STARTS)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_PA_PATCH_SENT), 1)
+    SET_VALUE(GSWF_MAIL_PA_PATCH_SENT, 1)
     CALL(evt_pouch_receive_mail, 21)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Riverside Station (hom_00): once the drawbridge is down (STORY_STG6_42) sends King K's mail (22)
+ * Riverside Station (hom_00): once the drawbridge is down (STG6_42) sends King K's mail (22)
  * when Mario crosses x = -600.
  */
-EVT_BEGIN(mail_evt_hom_00)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_KING_K_SENT), 1)
+static EVT_BEGIN(mail_evt_hom_00)
+    IF_INT_EQUAL(GSWF_MAIL_KING_K_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1796,25 +1063,25 @@ EVT_BEGIN(mail_evt_hom_00)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -600, -2000, -600, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_42_DRAWBRIDGE_DOWN)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG6_42_DRAWBRIDGE_DOWN)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_KING_K_SENT), 1)
+    SET_VALUE(GSWF_MAIL_KING_K_SENT, 1)
     CALL(evt_pouch_receive_mail, 22)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Rogueport (gor_02): at STORY_STG6_71 sends Zip Toad's mail (23) when Mario enters the map's area.
- * PAL also waits until Mario is out of motion 25.
+ * Rogueport (gor_02): at STG6_71 sends Zip Toad's mail (23) when Mario crosses the line from
+ * (-1000, -4226) to (1000, 7374). The PAL demo and PAL also wait until Mario is out of motion 25.
  */
-EVT_BEGIN(mail_evt_gor_02_2)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_ZIP_TOAD_SENT), 1)
+static EVT_BEGIN(mail_evt_gor_02_2)
+    IF_INT_EQUAL(GSWF_MAIL_ZIP_TOAD_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1824,7 +1091,7 @@ EVT_BEGIN(mail_evt_gor_02_2)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -1000, -4226, 1000, 7374, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_71_FRANKLYS_HOUSE)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG6_71_FRANKLYS_HOUSE_STG_6)
             IF_INT_EQUAL(LW(5), 1)
 #if VERSION >= VERSION_DEMO_EU
                 CALL(evt_mario_get_motion, LW(5))
@@ -1838,18 +1105,18 @@ EVT_BEGIN(mail_evt_gor_02_2)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_ZIP_TOAD_SENT), 1)
+    SET_VALUE(GSWF_MAIL_ZIP_TOAD_SENT, 1)
     CALL(evt_pouch_receive_mail, 23)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Fahr Outpost (bom_01): at STORY_STG7_02 after the cannon is approved sends Rawk Hawk's mail (24)
+ * Fahr Outpost (bom_01): at STG7_02 after the cannon is approved sends Rawk Hawk's mail (24)
  * when Mario crosses x = -230.
  */
-EVT_BEGIN(mail_evt_bom_01)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_RAWK_HAWK_SENT), 1)
+static EVT_BEGIN(mail_evt_bom_01)
+    IF_INT_EQUAL(GSWF_MAIL_RAWK_HAWK_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1859,8 +1126,8 @@ EVT_BEGIN(mail_evt_bom_01)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -230, -2000, -230, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG7_02_MAYOR_BOB)
-            IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_APPROVAL), 1)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG7_02_MAYOR_BOB)
+            IF_INT_EQUAL(GSWF_PIK_GOLDBOB_PERMISSION_GIVEN, 1)
                 IF_INT_EQUAL(LW(5), 1)
                     BREAK_LOOP
                 END_IF
@@ -1868,18 +1135,18 @@ EVT_BEGIN(mail_evt_bom_01)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_RAWK_HAWK_SENT), 1)
+    SET_VALUE(GSWF_MAIL_RAWK_HAWK_SENT, 1)
     CALL(evt_pouch_receive_mail, 24)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Rogueport Underground (tik_00): at STORY_STG7_50_A sends the mails from the ghost T. (25 and 33)
- * when Mario crosses x = 470 or x = -500.
+ * Rogueport Sewers (tik_00): at STG7_50_A sends mails 25 and 33 (GSWF_MAIL_GHOST_T_SENT) when Mario crosses x = 470 or
+ * x = -500.
  */
-EVT_BEGIN(mail_evt_tik_00)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_GHOST_T_SENT), 1)
+static EVT_BEGIN(mail_evt_tik_00)
+    IF_INT_EQUAL(GSWF_MAIL_GHOST_T_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1890,7 +1157,7 @@ EVT_BEGIN(mail_evt_tik_00)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), 470, -2000, 470, 2000, LW(5))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -500, -2000, -500, 2000, LW(6))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG7_50_A_WAITING_PROF_FRANKLY)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG7_50_A_WAITING_PROF_FRANKLY)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
@@ -1900,7 +1167,7 @@ EVT_BEGIN(mail_evt_tik_00)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_GHOST_T_SENT), 1)
+    SET_VALUE(GSWF_MAIL_GHOST_T_SENT, 1)
     CALL(evt_pouch_receive_mail, 25)
     CALL(evt_pouch_receive_mail, 33)
     CALL_CHILD(mail_evt)
@@ -1908,11 +1175,11 @@ EVT_BEGIN(mail_evt_tik_00)
 EVT_END()
 
 /**
- * Boggly Woods (win_01): after Flurrie joins (STORY_STG2_09) sends mail 27,
- * issue 1 of the RDM series (GSWF_MAIL_RDM_ISSUE1_SENT), when Mario crosses x = 390.
+ * Boggly Woods (win_01): after Flurrie joins (STG2_09) sends mail 27,
+ * issue 1 of the RDM series (GSWF_MAIL_RDM_ISSUE_1_SENT), when Mario crosses x = 390.
  */
-EVT_BEGIN(mail_evt_win_01)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_RDM_ISSUE1_SENT), 1)
+static EVT_BEGIN(mail_evt_win_01)
+    IF_INT_EQUAL(GSWF_MAIL_RDM_ISSUE_1_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1922,26 +1189,25 @@ EVT_BEGIN(mail_evt_win_01)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), 390, -2000, 390, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_09_FLURRIE_JOINS)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_09_FLURRIE_JOINS)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_RDM_ISSUE1_SENT), 1)
+    SET_VALUE(GSWF_MAIL_RDM_ISSUE_1_SENT, 1)
     CALL(evt_pouch_receive_mail, 27)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Glitzville (tou_01): at STORY_STG3_12 sends mail 28 (RDM issue 2) when Mario crosses x = -50
- * and starts the double-points sale (GSWF_MRI07_DOUBLE_POINTS_SALE),
- * stamping its start time with evt_sub_save_playtime.
+ * Glitzville (tou_01): at STG3_12 sends mail 28 (RDM issue 2) when Mario crosses x = -50 and starts the mri_07
+ * double-points sale (GSWF_SHOP_MRI_07_DOUBLE_POINTS_SALE, start time in GSW_SHOP_MRI_07_SALE_START_TIME).
  */
-EVT_BEGIN(mail_evt_tou_01)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_RDM_ISSUE2_SENT), 1)
+static EVT_BEGIN(mail_evt_tou_01)
+    IF_INT_EQUAL(GSWF_MAIL_RDM_ISSUE_2_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1951,27 +1217,27 @@ EVT_BEGIN(mail_evt_tou_01)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -50, -2000, -50, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_12_MINI_YOSHI_EGG)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_12_THE_MINI_YOSHI_EGG)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_RDM_ISSUE2_SENT), 1)
+    SET_VALUE(GSWF_MAIL_RDM_ISSUE_2_SENT, 1)
     CALL(evt_pouch_receive_mail, 28)
-    SET_VALUE(GSWF(GSWF_MRI07_DOUBLE_POINTS_SALE), 1)
-    CALL(evt_sub_save_playtime, GSW(GSW_MRI07_DOUBLE_POINTS_TIME))
+    SET_VALUE(GSWF_SHOP_MRI_07_DOUBLE_POINTS_SALE, 1)
+    CALL(evt_sub_save_playtime, GSW_SHOP_MRI_07_SALE_START_TIME)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Twilight Town (usu_01): at STORY_STG4_04_01 sends mail 29 (RDM issue 3)
- * when Mario crosses x = 110 (the demos: 300).
+ * Twilight Town (usu_01): at STG4_04_01 sends mail 29 (RDM issue 3)
+ * when Mario crosses x = 110 (the early demos: 300).
  */
-EVT_BEGIN(mail_evt_usu_01)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_RDM_ISSUE3_SENT), 1)
+static EVT_BEGIN(mail_evt_usu_01)
+    IF_INT_EQUAL(GSWF_MAIL_RDM_ISSUE_3_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1985,25 +1251,25 @@ EVT_BEGIN(mail_evt_usu_01)
 #else
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), 110, -2000, 110, 2000, LW(5))
 #endif
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_04_01_PAPER_MAGE_TUBE_MOD)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG4_04_01_PAPER_MAGE_TUBE_MOD)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_RDM_ISSUE3_SENT), 1)
+    SET_VALUE(GSWF_MAIL_RDM_ISSUE_3_SENT, 1)
     CALL(evt_pouch_receive_mail, 29)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Rogueport (gor_01): at STORY_STG5_59_01_A sends mail 30 (RDM issue 4) when Mario crosses z = 200
- * and starts the usu_01 double-points sale; also delivers due Trouble Center follow-up mail.
- * Loops for as long as the map runs.
+ * Rogueport (gor_01): loops for as long as the map runs; each time Mario crosses z = 200 it sends mail 30 (RDM issue 4)
+ * once at STG5_59_01 and starts the usu_01 double-points sale, and delivers due Trouble Center follow-up mail
+ * (irai_mail_check), running mail_evt when anything arrived.
  */
-EVT_BEGIN(mail_evt_gor_01_2)
+static EVT_BEGIN(mail_evt_gor_01_2)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     LOOP(0)
         SET_VALUE(LW(10), LW(0))
@@ -2013,12 +1279,12 @@ EVT_BEGIN(mail_evt_gor_01_2)
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -2000, 200, 2000, 200, LW(5))
         IF_INT_EQUAL(LW(5), 1)
             SET_VALUE(LF(0), 0)
-            IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_59_01_A_MAIL_FROM_PEACH)
-                IF_INT_EQUAL(GSWF(GSWF_MAIL_RDM_ISSUE4_SENT), 0)
-                    SET_VALUE(GSWF(GSWF_MAIL_RDM_ISSUE4_SENT), 1)
+            IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_59_01_A_MAIL_FROM_PEACH)
+                IF_INT_EQUAL(GSWF_MAIL_RDM_ISSUE_4_SENT, 0)
+                    SET_VALUE(GSWF_MAIL_RDM_ISSUE_4_SENT, 1)
                     CALL(evt_pouch_receive_mail, 30)
-                    SET_VALUE(GSWF(GSWF_USU01_DOUBLE_POINTS_SALE), 1)
-                    CALL(evt_sub_save_playtime, GSW(GSW_USU01_DOUBLE_POINTS_TIME))
+                    SET_VALUE(GSWF_SHOP_USU_01_DOUBLE_POINTS_SALE, 1)
+                    CALL(evt_sub_save_playtime, GSW_SHOP_USU_01_SALE_START_TIME)
                     SET_VALUE(LF(0), 1)
                 END_IF
             END_IF
@@ -2037,9 +1303,9 @@ EVT_BEGIN(mail_evt_gor_01_2)
     RETURN
 EVT_END()
 
-/** Excess Express (rsh_03_a): on day 2 (STORY_STG6_21) sends mail 31 (RDM issue 5) when Mario crosses x = 400. */
-EVT_BEGIN(mail_evt_rsh_03_a_2)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_RDM_ISSUE5_SENT), 1)
+/** Excess Express (rsh_03_a): on day 2 (STG6_21) sends mail 31 (RDM issue 5) when Mario crosses x = 400. */
+static EVT_BEGIN(mail_evt_rsh_03_a_2)
+    IF_INT_EQUAL(GSWF_MAIL_RDM_ISSUE_5_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -2049,25 +1315,25 @@ EVT_BEGIN(mail_evt_rsh_03_a_2)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), 400, -2000, 400, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_21_DAY_2)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG6_21_DAY_2)
             IF_INT_EQUAL(LW(5), 1)
                 BREAK_LOOP
             END_IF
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_RDM_ISSUE5_SENT), 1)
+    SET_VALUE(GSWF_MAIL_RDM_ISSUE_5_SENT, 1)
     CALL(evt_pouch_receive_mail, 31)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
 /**
- * Poshley Heights (pik_00): at STORY_STG7_02 after the cannon is approved sends mail 32 (RDM issue 6)
+ * Poshley Heights (pik_00): at STG7_02 after the cannon is approved sends mail 32 (RDM issue 6)
  * when Mario crosses x = -60 and starts the rsh_03 double-points sale.
  */
-EVT_BEGIN(mail_evt_pik_00)
-    IF_INT_EQUAL(GSWF(GSWF_MAIL_RDM_ISSUE6_SENT), 1)
+static EVT_BEGIN(mail_evt_pik_00)
+    IF_INT_EQUAL(GSWF_MAIL_RDM_ISSUE_6_SENT, 1)
         RETURN
     END_IF
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -2077,8 +1343,8 @@ EVT_BEGIN(mail_evt_pik_00)
         SET_VALUE(LW(12), LW(2))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_check_intersect, LW(0), LW(2), LW(10), LW(12), -60, -2000, -60, 2000, LW(5))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG7_02_MAYOR_BOB)
-            IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_APPROVAL), 1)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG7_02_MAYOR_BOB)
+            IF_INT_EQUAL(GSWF_PIK_GOLDBOB_PERMISSION_GIVEN, 1)
                 IF_INT_EQUAL(LW(5), 1)
                     BREAK_LOOP
                 END_IF
@@ -2086,19 +1352,23 @@ EVT_BEGIN(mail_evt_pik_00)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    SET_VALUE(GSWF(GSWF_MAIL_RDM_ISSUE6_SENT), 1)
+    SET_VALUE(GSWF_MAIL_RDM_ISSUE_6_SENT, 1)
     CALL(evt_pouch_receive_mail, 32)
-    SET_VALUE(GSWF(GSWF_RSH03_DOUBLE_POINTS_SALE), 1)
-    CALL(evt_sub_save_playtime, GSW(GSW_RSH03_DOUBLE_POINTS_TIME))
+    SET_VALUE(GSWF_SHOP_RSH_03_DOUBLE_POINTS_SALE, 1)
+    CALL(evt_sub_save_playtime, GSW_SHOP_RSH_03_SALE_START_TIME)
     CALL_CHILD(mail_evt)
     RETURN
 EVT_END()
 
-// Written out instead of EVT_BEGIN/EVT_END: JP and the demos end it without the end opcode (evt_sub_mail_event_end
-// below follows it in .data)
-EvtWord evt_sub_mail_event[] = {
+/**
+ * Mail trigger of the map scripts: unless the E3 system flag (GW_FLAG_E3) is set or Mario is not in mode 0, runs the
+ * mail_evt_<map> script of the current map (nok_01, gor_01 to gor_04, rsh_02_a / rsh_03_a, hom_00, bom_01, tik_00,
+ * win_01, tou_01, usu_01, pik_00); gor_01 and gor_02 also spawn their looping second script. US and later check the
+ * Pa-Patch mail in rsh_02_a; JP and the early demos in rsh_03_a after the RDM issue 5 check.
+ */
+EVT_BEGIN(evt_sub_mail_event)
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_SET(LW(0), GLOBAL_FLAG_KIOSK)
+    IF_BITS_SET(LW(0), GW_FLAG_E3)
         RETURN
     END_IF
     CALL(evt_mario_get_mode, LW(0))
@@ -2124,19 +1394,26 @@ EvtWord evt_sub_mail_event[] = {
         CALL_CHILD(mail_evt_gor_01)
         RETURN
     END_IF
+#if VERSION >= VERSION_US
     IF_STR_EQUAL(LW(0), STRING("gor_04"))
         CALL_CHILD(mail_evt_gor_04)
         RETURN
     END_IF
-#if VERSION >= VERSION_US
     IF_STR_EQUAL(LW(0), STRING("rsh_02_a"))
         CALL_CHILD(mail_evt_rsh_03_a)
         RETURN
     END_IF
+#else
+    IF_STR_EQUAL(LW(0), STRING("gor_04"))
+        CALL_CHILD(mail_evt_gor_04)
+        RETURN
+    END_IF
 #endif
     IF_STR_EQUAL(LW(0), STRING("rsh_03_a"))
+#if VERSION >= VERSION_US
         CALL_CHILD(mail_evt_rsh_03_a_2)
-#if VERSION <= VERSION_JP
+#else
+        CALL_CHILD(mail_evt_rsh_03_a_2)
         CALL_CHILD(mail_evt_rsh_03_a)
 #endif
         RETURN
@@ -2170,19 +1447,7 @@ EvtWord evt_sub_mail_event[] = {
         RETURN
     END_IF
     RETURN
-#if VERSION >= VERSION_US
-    OPCODE_END_SCRIPT
-#endif
-};
-
-// Nothing left in the code reads evt_sub_mail_event_end; force_active keeps it in the link
-#pragma force_active on
-#if VERSION <= VERSION_JP
-__declspec(section ".data") s32 evt_sub_mail_event_end[] = {
-    1,
-};
-#endif
-#pragma force_active reset
+EVT_END()
 
 /**
  * Starts a frame-counted interpolation in the calling script:
@@ -2273,7 +1538,7 @@ USER_FUNC(evt_sub_intpl_get_float) {
 
 /**
  * Starts a time-based interpolation: easing mode, start, end and duration in milliseconds,
- * timed from the script's own clock. Retail uses this so animations run at the same speed at 50 Hz.
+ * timed from the script's own clock, so animations run at the same speed at 50 Hz.
  */
 USER_FUNC(evt_sub_intpl_msec_init) {
     EvtWord* args = event->args;
@@ -2294,7 +1559,7 @@ USER_FUNC(evt_sub_intpl_msec_init) {
  * LW(1) is 1 until the duration has passed, then the end value and 0.
  */
 USER_FUNC(evt_sub_intpl_msec_get_value) {
-    s32 ms = (u64)(s32)((s32)event->lifetime - (s32)event->savedTime) / (OS_TIMER_CLOCK / 1000);
+    s32 ms = OSTicksToMilliseconds((u64)OSDiffTick(event->lifetime, event->savedTime));
     if (ms < event->lwData[15]) {
         event->lwData[0] = intplGetValue(event->lwData[11], event->lwData[12], event->lwData[13], ms, event->lwData[15]);
         event->lwData[1] = 1;
@@ -2308,7 +1573,7 @@ USER_FUNC(evt_sub_intpl_msec_get_value) {
 /** Like evt_sub_intpl_msec_get_value, but writes the value as a float to args[0] and the running flag to args[1]. */
 USER_FUNC(evt_sub_intpl_msec_get_value_para) {
     EvtWord* args = event->args;
-    s32 ms = (u64)(s32)((s32)event->lifetime - (s32)event->savedTime) / (OS_TIMER_CLOCK / 1000);
+    s32 ms = OSTicksToMilliseconds((u64)OSDiffTick(event->lifetime, event->savedTime));
     if (ms < event->lwData[15]) {
         evtSetFloat(event, args[0], intplGetValue(event->lwData[11], event->lwData[12], event->lwData[13], ms, event->lwData[15]));
         evtSetValue(event, args[1], 1);
@@ -2335,9 +1600,9 @@ USER_FUNC(evt_sub_spline_init) {
     SplineWork* w = _mapAlloc(sizeof(SplineWork));
     event->lwData[15] = (EvtWord)w;
     w->n = n;
-    w->ts = _mapAlloc(n * 4);
+    w->ts = _mapAlloc(n * sizeof(f32));
     w->pts = pts;
-    w->tbl = _mapAlloc(n * 12);
+    w->tbl = _mapAlloc(n * sizeof(Vec));
     spline_maketable(n, w->pts, w->ts, w->tbl);
     w->manual = manual;
     w->mode = mode;
@@ -2356,18 +1621,18 @@ USER_FUNC(evt_sub_spline_get_value) {
     EvtWord* args = event->args;
     SplineWork* w = (SplineWork*)event->lwData[15];
     f32 el;
-    f32 v[3];
+    Vec v;
     f32 t;
     if (!w->manual) {
         t = intplGetValue(w->mode, 0.0f, 1.0f, w->cur, w->steps);
     } else {
-        el = (u64)(event->lifetime - w->start) / (OS_TIMER_CLOCK / 1000);
+        el = OSTicksToMilliseconds((u64)(event->lifetime - w->start));
         t = intplGetValue(w->mode, 0.0f, 1.0f, (s32)el, w->msec);
     }
-    ((Spline_getvalueLocalFn)spline_getvalue)(v, t, w->n, w->pts, w->ts, w->tbl);
-    evtSetValue(event, args[0], FLOAT(v[0]));
-    evtSetValue(event, args[1], FLOAT(v[1]));
-    evtSetValue(event, args[2], FLOAT(v[2]));
+    spline_getvalue(&v, t, w->n, w->pts, w->ts, w->tbl);
+    evtSetValue(event, args[0], FLOAT(v.x));
+    evtSetValue(event, args[1], FLOAT(v.y));
+    evtSetValue(event, args[2], FLOAT(v.z));
     w->cur++;
     if (!w->manual) {
         if (w->cur <= w->steps) {
@@ -2393,14 +1658,15 @@ USER_FUNC(evt_sub_spline_get_value) {
 USER_FUNC(evt_sub_spline_get_value_manual) {
     EvtWord* args = event->args;
     SplineWork* w = (SplineWork*)event->lwData[15];
-    f32 t = evtGetValue(event, args[0]);
-    f32 v[3];
-    t = t; // FAKE: self-assignment gives t a second definition, which keeps the target's float register order
-    t = t / (w->manual ? (f32)w->msec : (f32)w->steps);
-    ((Spline_getvalueLocalFn)spline_getvalue)(v, t, w->n, w->pts, w->ts, w->tbl);
-    evtSetValue(event, args[1], FLOAT(v[0]));
-    evtSetValue(event, args[2], FLOAT(v[1]));
-    evtSetValue(event, args[3], FLOAT(v[2]));
+    f32 pos = evtGetValue(event, args[0]);
+    f32 t;
+    Vec v;
+
+    t = pos / (w->manual ? (f32)w->msec : (f32)w->steps);
+    spline_getvalue(&v, t, w->n, w->pts, w->ts, w->tbl);
+    evtSetValue(event, args[1], FLOAT(v.x));
+    evtSetValue(event, args[2], FLOAT(v.y));
+    evtSetValue(event, args[3], FLOAT(v.z));
     return EVT_RETURN_DONE;
 }
 
@@ -2458,11 +1724,30 @@ USER_FUNC(evt_sub_random) {
 USER_FUNC(evt_sub_get_stopwatch) {
     EvtWord* args = event->args;
     s64* sw = (s64*)evtGetPtrID(evtGetValue(event, args[0]));
-    s32 ms = *sw / (OS_TIMER_CLOCK / 1000);
+    s32 ms = OSTicksToMilliseconds(*sw);
     if (ms > 600000) {
         ms = 600000;
     }
     evtSetValue(event, args[1], ms);
+    return EVT_RETURN_DONE;
+}
+
+/** Converts args[0] milliseconds to frames (sysMsec2Frame) and returns them in args[1]. */
+// evt_sub_msec2frame and evt_sub_msec2frame_f: original names and sizes (0x54, 0x50) from the JP demo map (UNUSED
+// there: no script uses them); the integer and the float conversion their names give.
+USER_FUNC(evt_sub_msec2frame) {
+    EvtWord* args = event->args;
+    s32 msec = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], sysMsec2Frame(msec));
+    return EVT_RETURN_DONE;
+}
+
+/** Converts the float args[0] milliseconds to frames (sysMsec2FrameFloat) and returns them in the float args[1]. */
+// Original name and size from the JP demo map (see evt_sub_msec2frame).
+USER_FUNC(evt_sub_msec2frame_f) {
+    EvtWord* args = event->args;
+    f32 msec = evtGetFloat(event, args[0]);
+    evtSetFloat(event, args[1], sysMsec2FrameFloat(msec));
     return EVT_RETURN_DONE;
 }
 
@@ -2473,34 +1758,34 @@ USER_FUNC(evt_sub_get_stopwatch) {
 USER_FUNC(evt_sub_area_check) {
     EvtWord* args = event->args;
     s32 mode = evtGetValue(event, args[0]);
-    f32 a1 = evtGetValue(event, args[1]);
-    f32 a2 = evtGetValue(event, args[2]);
-    f32 a3 = evtGetValue(event, args[3]);
-    f32 a4 = evtGetValue(event, args[4]);
-    f32 a5 = evtGetValue(event, args[5]);
+    f32 cx = evtGetValue(event, args[1]);
+    f32 cy = evtGetValue(event, args[2]);
+    f32 range = evtGetValue(event, args[3]);
+    f32 px = evtGetValue(event, args[4]);
+    f32 py = evtGetValue(event, args[5]);
     s32 result;
+    f32 dist;
     switch (mode) {
-        case 0: {
-            f32 dist = distABf(a1, a2, a4, a5);
-            if (a3 < dist) {
+        case 0:
+            dist = distABf(cx, cy, px, py);
+            if (range < dist) {
                 result = 0;
             } else {
                 result = 1;
             }
             break;
-        }
         case 1:
             result = 1;
-            if (a1 - a3 > a4) {
+            if (cx - range > px) {
                 result = 0;
             }
-            if (a1 + a3 < a4) {
+            if (cx + range < px) {
                 result = 0;
             }
-            if (a2 - a3 > a5) {
+            if (cy - range > py) {
                 result = 0;
             }
-            if (a2 + a3 < a5) {
+            if (cy + range < py) {
                 result = 0;
             }
             break;
@@ -2534,7 +1819,7 @@ USER_FUNC(evt_sub_get_dir) {
     return EVT_RETURN_DONE;
 }
 
-/** Returns the global system flags (gp->flags, e.g. GLOBAL_FLAG_KIOSK) in args[0]. */
+/** Returns the system flag word (gp->flags) in args[0]. */
 USER_FUNC(evt_sub_get_system_flag) {
     evtSetValue(event, event->args[0], gp->flags);
     return EVT_RETURN_DONE;
@@ -2553,11 +1838,105 @@ USER_FUNC(evt_sub_system_flag_onoff) {
     return EVT_RETURN_DONE;
 }
 
-KEYFN(evt_key_get_dir, keyGetDir)
+/** Returns the main and C stick directions held on controller args[0] (keyGetDir, DEMO_*STICK_*) in args[1]. */
+USER_FUNC(evt_key_get_dir) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetDir(chan));
+    return EVT_RETURN_DONE;
+}
 
-KEYFN(evt_key_get_button, keyGetButton)
+/** Returns the buttons held on controller args[0] (keyGetButton) in args[1]. */
+USER_FUNC(evt_key_get_button) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetButton(chan));
+    return EVT_RETURN_DONE;
+}
 
-KEYFN(evt_key_get_buttontrg, keyGetButtonTrg)
+/** Returns the directions pressed or auto-repeating on controller args[0] (keyGetDirRep) in args[1]. */
+// evt_key_get_dirrep, _buttonrep, _dirtrg, _stickx, _sticky, _substickx, _substicky, _triggerl and _triggerr:
+// original names and sizes (0x54 each) from the JP demo map (UNUSED there: no script uses them). They sit in the
+// order of system.c's keyGet* functions, of which evt_key_get_dir, _button and _buttontrg call the first, second
+// and sixth: each returns its keyGet* value for controller args[0] in args[1].
+USER_FUNC(evt_key_get_dirrep) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetDirRep(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the buttons pressed or auto-repeating on controller args[0] (keyGetButtonRep) in args[1]. */
+USER_FUNC(evt_key_get_buttonrep) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetButtonRep(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the directions newly pressed this frame on controller args[0] (keyGetDirTrg) in args[1]. */
+USER_FUNC(evt_key_get_dirtrg) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetDirTrg(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the buttons newly pressed this frame on controller args[0] (keyGetButtonTrg) in args[1]. */
+USER_FUNC(evt_key_get_buttontrg) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetButtonTrg(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the main stick's x position on controller args[0] (keyGetStickX) in args[1]. */
+USER_FUNC(evt_key_get_stickx) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetStickX(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the main stick's y position on controller args[0] (keyGetStickY) in args[1]. */
+USER_FUNC(evt_key_get_sticky) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetStickY(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the C stick's x position on controller args[0] (keyGetSubStickX) in args[1]. */
+USER_FUNC(evt_key_get_substickx) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetSubStickX(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the C stick's y position on controller args[0] (keyGetSubStickY) in args[1]. */
+USER_FUNC(evt_key_get_substicky) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetSubStickY(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the analog L trigger on controller args[0] (keyGetTriggerL) in args[1]. */
+USER_FUNC(evt_key_get_triggerl) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetTriggerL(chan));
+    return EVT_RETURN_DONE;
+}
+
+/** Returns the analog R trigger on controller args[0] (keyGetTriggerR) in args[1]. */
+USER_FUNC(evt_key_get_triggerr) {
+    EvtWord* args = event->args;
+    s32 chan = evtGetValue(event, args[0]);
+    evtSetValue(event, args[1], keyGetTriggerR(chan));
+    return EVT_RETURN_DONE;
+}
 
 /** Returns the current map name (e.g. "gor_01") in args[0]. */
 USER_FUNC(evt_sub_get_mapname) {
@@ -2595,8 +1974,11 @@ USER_FUNC(evt_sub_status_gauge_check_update) {
 }
 
 #if VERSION >= VERSION_US
-/** Makes the status bar refresh its numbers at once. Not in JP or the demos. */
-USER_FUNC(N_evt_sub_status_gauge_force_update) {
+/**
+ * Makes the status bar refresh its numbers at once. Not in JP or the early demos.
+ * Descriptive name (not in the symbol maps).
+ */
+USER_FUNC(evt_sub_status_gauge_force_update) {
     statusWinForceUpdate();
     return EVT_RETURN_DONE;
 }
@@ -2607,17 +1989,17 @@ USER_FUNC(N_evt_sub_status_gauge_force_update) {
  * so a later evt_sub_load_progresstime can measure how long ago it was. Used to time the double-points sales.
  */
 USER_FUNC(evt_sub_save_playtime) {
-    s32 base = event->args[0];
+    s32 base = event->args[0]; // a GSW(n) script value: base + EVTDAT_GSW_BASE is n
     u8 buf[8];
     *(s64*)buf = gp->playTime;
-    swByteSet(base + 0xA21FE80, buf[0]);
-    swByteSet(base + 0xA21FE81, buf[1]);
-    swByteSet(base + 0xA21FE82, buf[2]);
-    swByteSet(base + 0xA21FE83, buf[3]);
-    swByteSet(base + 0xA21FE84, buf[4]);
-    swByteSet(base + 0xA21FE85, buf[5]);
-    swByteSet(base + 0xA21FE86, buf[6]);
-    swByteSet(base + 0xA21FE87, buf[7]);
+    swByteSet(base + EVTDAT_GSW_BASE + 0, buf[0]);
+    swByteSet(base + EVTDAT_GSW_BASE + 1, buf[1]);
+    swByteSet(base + EVTDAT_GSW_BASE + 2, buf[2]);
+    swByteSet(base + EVTDAT_GSW_BASE + 3, buf[3]);
+    swByteSet(base + EVTDAT_GSW_BASE + 4, buf[4]);
+    swByteSet(base + EVTDAT_GSW_BASE + 5, buf[5]);
+    swByteSet(base + EVTDAT_GSW_BASE + 6, buf[6]);
+    swByteSet(base + EVTDAT_GSW_BASE + 7, buf[7]);
     return EVT_RETURN_DONE;
 }
 
@@ -2630,15 +2012,15 @@ USER_FUNC(evt_sub_load_progresstime) {
     s32 base = args[0];
     u8 buf[8];
     s64 ms;
-    buf[0] = swByteGet(base + 0xA21FE80);
-    buf[1] = swByteGet(base + 0xA21FE81);
-    buf[2] = swByteGet(base + 0xA21FE82);
-    buf[3] = swByteGet(base + 0xA21FE83);
-    buf[4] = swByteGet(base + 0xA21FE84);
-    buf[5] = swByteGet(base + 0xA21FE85);
-    buf[6] = swByteGet(base + 0xA21FE86);
-    buf[7] = swByteGet(base + 0xA21FE87);
-    ms = (gp->playTime - *(s64*)buf) / (OS_TIMER_CLOCK / 1000);
+    buf[0] = swByteGet(base + EVTDAT_GSW_BASE + 0);
+    buf[1] = swByteGet(base + EVTDAT_GSW_BASE + 1);
+    buf[2] = swByteGet(base + EVTDAT_GSW_BASE + 2);
+    buf[3] = swByteGet(base + EVTDAT_GSW_BASE + 3);
+    buf[4] = swByteGet(base + EVTDAT_GSW_BASE + 4);
+    buf[5] = swByteGet(base + EVTDAT_GSW_BASE + 5);
+    buf[6] = swByteGet(base + EVTDAT_GSW_BASE + 6);
+    buf[7] = swByteGet(base + EVTDAT_GSW_BASE + 7);
+    ms = OSTicksToMilliseconds(gp->playTime - *(s64*)buf);
     if (ms > 86400000) {
         ms = 86400000;
     }
@@ -2646,7 +2028,7 @@ USER_FUNC(evt_sub_load_progresstime) {
     return EVT_RETURN_DONE;
 }
 
-/** Returns the text language setting (gp->language) in args[0]; message code uses 0 as the default language. */
+/** Returns the text language setting (gp->language) in args[0]; 0 is Japanese (LANGUAGE_JP). */
 USER_FUNC(evt_sub_get_language) {
     evtSetValue(event, event->args[0], gp->language);
     return EVT_RETURN_DONE;
@@ -2659,6 +2041,8 @@ USER_FUNC(evt_sub_animgroup_async) {
     if (r == 0) {
         return EVT_RETURN_BLOCK;
     }
+
+    // Redundant test (r is nonzero here); the compare is in the retail code
     if (r != 0) {
         return EVT_RETURN_DONE;
     }
@@ -2666,13 +2050,13 @@ USER_FUNC(evt_sub_animgroup_async) {
 }
 
 #if VERSION >= VERSION_DEMO_EU
-/** Returns the display frame rate (50 or 60) in args[0]. PAL and the EU demo only. */
+/** Returns the display frame rate (50 or 60) in args[0]. Only in the PAL demo and PAL. */
 USER_FUNC(evt_sub_get_framerate) {
     evtSetValue(event, event->args[0], gp->framerate);
     return EVT_RETURN_DONE;
 }
-
 #endif
+
 /** Starts the on-screen countdown timer: args[0] is the time limit, args[1] the restart time. */
 USER_FUNC(evt_sub_countdown_start) {
     EvtWord* args = event->args;
@@ -2717,7 +2101,7 @@ USER_FUNC(evt_sub_countdown_set_restart_time) {
 /**
  * Draws the "You got N coins!" message inside the coin window of evt_sub_get_coin;
  * work[0] is the coin count, work[1] turns the text on.
- * US and PAL widen the window to fit the message and formats it per language.
+ * US and later widen the window to fit the message and format it per language.
  */
 static void coingetDisp(WinMgrEntry* entry) {
     s32* work = entry->param;
@@ -2727,7 +2111,7 @@ static void coingetDisp(WinMgrEntry* entry) {
         u16 lines;
         s32 w;
 
-        if ((u32)gp->language == 0) {
+        if (gp->language == LANGUAGE_JP) {
             sprintf(buf, msgSearch("msg_window_coin_get"), work[0]);
         } else {
             strcpy(buf, msgSearch("msg_window_coin_get"));
@@ -2748,77 +2132,8 @@ static void coingetDisp(WinMgrEntry* entry) {
     }
 }
 
-/** Polynomial sine for evt_sub_get_coin's coin placement, valid on 0..2 pi. */
-static inline f32 coin_sin(f32 x) {
-    f32 a = 0.00761f;
-    f32 b = 0.16605f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-    if (x <= 3.1415927f) {
-        if (x <= 1.5707964f) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        } else {
-            y = 1.5707964f - (x - 1.5707964f);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * y;
-        }
-    } else if (x < 4.712389f) {
-        y = x - 3.1415927f;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    } else {
-        y = 1.5707964f - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    }
-    return a;
-}
-/** Polynomial cosine for evt_sub_get_coin's coin placement, valid on 0..2 pi. */
-static inline f32 coin_cos(f32 x) {
-    f32 a = 0.03705f;
-    f32 b = 0.4967f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-    if (x <= 3.1415927f) {
-        if (x <= 1.5707964f) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-        } else {
-            y = 1.5707964f - (x - 1.5707964f);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = -a;
-        }
-    } else if (x < 4.712389f) {
-        y = x - 3.1415927f;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = -a;
-    } else {
-        y = 1.5707964f - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-    }
-    return a;
-}
-// FAKE: turns off copy propagation so the temporaries and registers match the target; removing it changes the code
+// FAKE: #pragma opt_propagation off and opt_lifetimes off for evt_sub_get_coin (as for every user of the polySinf/polyCosf
+// inlines): no copy propagation or lifetime splitting, which gives the target temporaries and registers
 #pragma opt_propagation off
 #pragma opt_lifetimes off
 /**
@@ -2841,8 +2156,8 @@ USER_FUNC(evt_sub_get_coin) {
     EffectEntry* eff;
     s32* work;
     rad = 6.2831855f * rad / 360.0f;
-    s = 10.0f * coin_sin(rad);
-    c = 10.0f * coin_cos(rad);
+    s = 10.0f * polySinf(rad);
+    c = 10.0f * polyCosf(rad);
     a.x += s;
     a.z -= c;
     a.y += 62.0f;
@@ -2862,15 +2177,14 @@ USER_FUNC(evt_sub_get_coin) {
     switch (state) {
         case 0:
 #if VERSION <= VERSION_DEMO_JP
-            // the demo draws the coin icon in 2D at Mario's screen position
-            iconEntry2D("iraiCoin", ICON_18B);
+            iconEntry2D("iraiCoin", ICON_ITEM_COIN);
             getScreenPoint(&b, &scr);
             iconSetPos("iraiCoin", scr.x, scr.y, scr.z);
             iconFlagOn("iraiCoin", ICON_FLAG_HIDDEN);
 #else
-            iconEntry("iraiCoin", ICON_18B);
+            iconEntry("iraiCoin", ICON_ITEM_COIN);
             iconSetPos("iraiCoin", b.x, b.y, b.z);
-            iconFlagOn("iraiCoin", ICON_FLAG_EFFECT_A | ICON_FLAG_HIDDEN);
+            iconFlagOn("iraiCoin", ICON_FLAG_HIDDEN | ICON_FLAG_CAM_EFFECT_A);
             ((ItemGetWork*)eff->userdata)->camera = CAMERA_3D_EFFECTA;
 #endif
             marioChgGetItemMotion();
@@ -2879,14 +2193,14 @@ USER_FUNC(evt_sub_get_coin) {
             winMgrSetParam(event->userdata3, work);
             work[0] = coin;
             work[1] = 0;
-            psndBGMOff(PSND_FADE_DIP_TO(40));
-            psndBGMOn(PSND_FADE_OUT | PSND_CH(1), "BGM_FF_GET_ITEM1");
+            psndBGMOff(PSND_SILENT | PSND_SILENT_LEVEL(3));
+            psndBGMOn(PSND_FADEOUT | PSND_SLOT(1), "BGM_FF_GET_ITEM1");
             event->userdata[2] = 200;
             event->savedTime = gp->renderTime;
             event->userdata[0] = 1;
             return EVT_RETURN_BLOCK;
         case 1:
-            if ((s32)(((u32)gp->renderTime - (u32)event->savedTime) / (OS_TIMER_CLOCK / 1000)) > event->userdata[2]) {
+            if ((s32)OSTicksToMilliseconds((u32)gp->renderTime - (u32)event->savedTime) > event->userdata[2]) {
                 iconFlagOff("iraiCoin", ICON_FLAG_HIDDEN);
                 work[1] = 1;
                 event->userdata[2] = 500;
@@ -2895,7 +2209,7 @@ USER_FUNC(evt_sub_get_coin) {
             }
             return EVT_RETURN_BLOCK;
         case 2:
-            if ((s32)(((u32)gp->renderTime - (u32)event->savedTime) / (OS_TIMER_CLOCK / 1000)) > event->userdata[2]) {
+            if ((s32)OSTicksToMilliseconds((u32)gp->renderTime - (u32)event->savedTime) > event->userdata[2]) {
                 event->userdata[0] = 10;
             }
             return EVT_RETURN_BLOCK;
@@ -2909,11 +2223,13 @@ USER_FUNC(evt_sub_get_coin) {
             effSoftDelete(eff);
             iconDelete("iraiCoin");
             marioChgStayMotion();
-            psndBGMOn(PSND_FADE_RESUME | PSND_FADE_UNDIP, NULL);
-            psndBGMOff(PSND_FADE_OUT | PSND_CH(1));
+            psndBGMOn(PSND_CONTINUE | PSND_UNSILENT, NULL);
+            psndBGMOff(PSND_FADEOUT | PSND_SLOT(1));
             winMgrCloseAutoDelete(event->userdata3);
             work[1] = 0;
             event->userdata[0] = 101;
+
+            // BUG: returns DONE instead of BLOCK, so case 101 never runs and the 8-byte work block is never _mapFree'd.
             return EVT_RETURN_DONE;
         case 101:
             if (!winMgrAction(event->userdata3)) {
@@ -2924,6 +2240,7 @@ USER_FUNC(evt_sub_get_coin) {
     }
     return EVT_RETURN_DONE;
 }
+
 #pragma opt_propagation reset
 #pragma opt_lifetimes reset
 
@@ -2933,31 +2250,33 @@ static USER_FUNC(stone_ry) {
     char* name = (char*)evtGetValue(event, args[0]);
     s32 ang = evtGetValue(event, args[1]);
     EffectEntry* item = itemNameToPtr(name)->effect;
-    ((EffStarStoneWork*)item->userdata)->flags &= ~STARSTONE_FLAG_SHINE_SFX;
-    ((EffStarStoneWork*)item->userdata)->rotY = ang % 360;
+    ((EffStarStoneWork*)item->userdata)->flags &= ~STAR_STONE_FLAG_SHINE_SFX;
+    ((EffStarStoneWork*)item->userdata)->rot.y = ang % 360;
     return EVT_RETURN_DONE;
 }
 
 /**
- * Puts the star stone, its glow and Mario (or the Doopliss Mario NPC before STORY_STG4_15) on camera 5,
+ * Puts the star stone, its glow and Mario (or the Doopliss Mario NPC before STG4_15) on camera 5,
  * so they draw in front of the stage-clear background in evt_sub_starstone.
  */
 static USER_FUNC(stone_bg) {
     char* name;
     CameraEntry* cam;
     EffectEntry* eff;
-    u8* item;
+    ItemEntry* item;
     name = (char*)evtGetValue(event, event->args[0]);
     cam = camGetPtr(CAMERA_2D);
-    cam->letterBoxCamId = 5;
+    cam->letterBoxCamId = CAMERA_3D_EFFECTA;
     eff = effNameToPtr("sub_bg");
     ((ItemGetWork*)eff->userdata)->camera = CAMERA_3D_EFFECTA;
-    item = (u8*)itemNameToPtr(name);
-    ((EffStarStoneWork*)((ItemEntry*)item)->effect->userdata)->cam = 5;
-    if (npcNameToPtr_NoAssert("\x82\xC9\x82\xB9\x83\x7D\x83\x8A\x83\x49") != NULL && evtGetValue(event, GSW(GSW_STORY_PROGRESS)) < STORY_STG4_15_DOOPLISS_BATTLE_2) {
-        npcNameToPtr_NoAssert("\x82\xC9\x82\xB9\x83\x7D\x83\x8A\x83\x49")->cameraId = 5;
+    item = itemNameToPtr(name);
+    ((EffStarStoneWork*)item->effect->userdata)->cam = CAMERA_3D_EFFECTA;
+
+    // The name is Shift-JIS "にせマリオ", the NPC evt_sub_starstone uses when LW(0) is -1
+    if (npcNameToPtr_NoAssert("にせマリオ") != NULL && evtGetValue(event, GSW_STORY_PROGRESS) < STG4_15_DOOPLISS_BATTLE_2) {
+        npcNameToPtr_NoAssert("にせマリオ")->cameraId = CAMERA_3D_EFFECTA;
     } else {
-        marioSetCamId(5);
+        marioSetCamId(CAMERA_3D_EFFECTA);
     }
     return EVT_RETURN_DONE;
 }
@@ -2974,7 +2293,7 @@ static USER_FUNC(stageclear_wait) {
     return effStageClearEndChk(effNameToPtr("sub_clear")) ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
 }
 
-/** Sets the module-level stop flag to args[0]; evt_sub_starstone raises it 9.7 seconds into the fanfare. */
+/** Sets the module-level stop flag to args[0]; evt_sub_starstone raises it 9.7 seconds after the white flash starts. */
 static USER_FUNC(set_stop) {
     stop = evtGetValue(event, event->args[0]);
     return EVT_RETURN_DONE;
@@ -2994,7 +2313,7 @@ static USER_FUNC(bgm_start_wait) {
 #if VERSION >= VERSION_US
 /**
  * Scales the two float variables args[0] and args[1] by 60 / frame rate,
- * so per-frame steps cover the same distance at 50 Hz. Not in JP or the demos.
+ * so per-frame steps cover the same distance at 50 Hz. Not in JP or the early demos.
  */
 USER_FUNC(evt_sub_scale_by_fps) {
     EvtWord* args = event->args;
@@ -3017,46 +2336,44 @@ USER_FUNC(evt_sub_scale_by_fps) {
  */
 USER_FUNC(evt_sub_check_intersect) {
     EvtWord* args = event->args;
-    f32 a, b, c, d, e, f, g, h;
+
+    // Segment P1-P2 (args 0-3) against segment Q1-Q2 (args 4-7); args[8] = 1 when they intersect
+    f32 p1x, p1y, p2x, p2y, q1x, q1y, q2x, q2y;
     f32 t1, t2;
-    a = evtGetFloat(event, args[0]);
-    b = evtGetFloat(event, args[1]);
-    c = evtGetFloat(event, args[2]);
-    d = evtGetFloat(event, args[3]);
-    e = evtGetFloat(event, args[4]);
-    f = evtGetFloat(event, args[5]);
-    g = evtGetFloat(event, args[6]);
-    h = evtGetFloat(event, args[7]);
-    if (a >= c) {
-        if ((a < e && a < g) || (c > e && c > g)) {
+    p1x = evtGetFloat(event, args[0]);
+    p1y = evtGetFloat(event, args[1]);
+    p2x = evtGetFloat(event, args[2]);
+    p2y = evtGetFloat(event, args[3]);
+    q1x = evtGetFloat(event, args[4]);
+    q1y = evtGetFloat(event, args[5]);
+    q2x = evtGetFloat(event, args[6]);
+    q2y = evtGetFloat(event, args[7]);
+    if (p1x >= p2x) {
+        if ((p1x < q1x && p1x < q2x) || (p2x > q1x && p2x > q2x)) {
             evtSetValue(event, args[8], 0);
             return EVT_RETURN_DONE;
         }
-    } else {
-        if ((c < e && c < g) || (a > e && a > g)) {
-            evtSetValue(event, args[8], 0);
-            return EVT_RETURN_DONE;
-        }
+    } else if ((p2x < q1x && p2x < q2x) || (p1x > q1x && p1x > q2x)) {
+        evtSetValue(event, args[8], 0);
+        return EVT_RETURN_DONE;
     }
-    if (b >= d) {
-        if ((b < f && b < h) || (d > f && d > h)) {
+    if (p1y >= p2y) {
+        if ((p1y < q1y && p1y < q2y) || (p2y > q1y && p2y > q2y)) {
             evtSetValue(event, args[8], 0);
             return EVT_RETURN_DONE;
         }
-    } else {
-        if ((d < f && d < h) || (b > f && b > h)) {
-            evtSetValue(event, args[8], 0);
-            return EVT_RETURN_DONE;
-        }
+    } else if ((p2y < q1y && p2y < q2y) || (p1y > q1y && p1y > q2y)) {
+        evtSetValue(event, args[8], 0);
+        return EVT_RETURN_DONE;
     }
-    t1 = (a - c) * (f - b) + (b - d) * (a - e);
-    t2 = (a - c) * (h - b) + (b - d) * (a - g);
+    t1 = (p1x - p2x) * (q1y - p1y) + (p1y - p2y) * (p1x - q1x);
+    t2 = (p1x - p2x) * (q2y - p1y) + (p1y - p2y) * (p1x - q2x);
     if (t1 * t2 > 0.0f) {
         evtSetValue(event, args[8], 0);
         return EVT_RETURN_DONE;
     }
-    t1 = (e - g) * (b - f) + (f - h) * (e - a);
-    t2 = (e - g) * (d - f) + (f - h) * (e - c);
+    t1 = (q1x - q2x) * (p1y - q1y) + (q1y - q2y) * (q1x - p1x);
+    t2 = (q1x - q2x) * (p2y - q1y) + (q1y - q2y) * (q1x - p2x);
     if (t1 * t2 > 0.0f) {
         evtSetValue(event, args[8], 0);
         return EVT_RETURN_DONE;
@@ -3065,6 +2382,9 @@ USER_FUNC(evt_sub_check_intersect) {
     return EVT_RETURN_DONE;
 }
 
+// Statement macro on irai_mail_check's locals (i, u, ret, arg): for an active, unfinished request more than 7200 s old it sets ret and, if arg, marks it done and sends the mail.
+// A macro, not an inline function: a static inline with its own i and union (ret through a pointer) gives each of
+// the six copies its own 8-byte union slot (frame 48 -> 80 bytes) and swaps the loop registers (GD15, 2026-11-18).
 #define IRAI_CHECK(flag, done, base, mail)                 \
     if (swGet(flag) && !swGet(done)) {                     \
         for (i = 0; i < 8; i++) {                          \
@@ -3078,13 +2398,12 @@ USER_FUNC(evt_sub_check_intersect) {
             }                                              \
         }                                                  \
     }
+
 /**
- * Trouble Center follow-up mail ("irai" is request): the thank-you letters irai_af_mail_00 to 05
- * (Koopook, Pine T. Jr., Jolene, Bub-ulber, Eve, Gob; mails 37-42).
- * For the six troubles that send one (#7, #12, #13, #15, #20, #26: GSWF_TROUBLE_*_SOLVED) and are solved but
- * whose mail has not gone out (GSWF 23-28),
- * checks whether two hours have passed since the time stamp saved for them; args[1] returns 1 if one is due.
- * With args[0] nonzero it also marks it sent and puts the mail in the pouch.
+ * Trouble Center follow-up mail ("irai" is request): for each of the six requests that send a thank-you letter,
+ * when the request is done, its mail flag (GSWF 0x17 to 0x1C) is clear and more than 7200 seconds (two hours) of
+ * play time have passed since the time saved for it, returns 1 in args[1]; with args[0] nonzero it also sets the
+ * mail flag and puts the mail (0x25 to 0x2A) in the pouch.
  */
 static USER_FUNC(irai_mail_check) {
     EvtWord* args = event->args;
@@ -3095,12 +2414,12 @@ static USER_FUNC(irai_mail_check) {
         u8 b[8];
         OSTime t;
     } u;
-    IRAI_CHECK(0x1505, 0x17, 0x58d, 0x25)
-    IRAI_CHECK(0x150a, 0x18, 0x595, 0x26)
-    IRAI_CHECK(0x150b, 0x19, 0x59d, 0x27)
-    IRAI_CHECK(0x150d, 0x1a, 0x5a5, 0x28)
-    IRAI_CHECK(0x1512, 0x1b, 0x5ad, 0x29)
-    IRAI_CHECK(0x1518, 0x1c, 0x5b5, 0x2a)
+    IRAI_CHECK(SWF_TROUBLE_DONE(TROUBLE_TRY_TO_FIND_ME), 0x17, GSW_ID(GSW_GON_TRY_TO_FIND_ME_DONE_TIME), 0x25)
+    IRAI_CHECK(SWF_TROUBLE_DONE(TROUBLE_HELP_MY_DADDY), 0x18, GSW_ID(GSW_TIK_HELP_MY_DADDY_DONE_TIME), 0x26)
+    IRAI_CHECK(SWF_TROUBLE_DONE(TROUBLE_HELP_WANTED), 0x19, GSW_ID(GSW_TOU_HELP_WANTED_DONE_TIME), 0x27)
+    IRAI_CHECK(SWF_TROUBLE_DONE(TROUBLE_THE_FOOD_I_WANT), 0x1a, GSW_ID(GSW_NOK_FOOD_I_WANT_DONE_TIME), 0x28)
+    IRAI_CHECK(SWF_TROUBLE_DONE(TROUBLE_TELL_THAT_PERSON), 0x1b, GSW_ID(GSW_USU_TROUBLE_20_DONE_TIME), 0x29)
+    IRAI_CHECK(SWF_TROUBLE_DONE(TROUBLE_I_CANT_SPEAK), 0x1c, GSW_ID(GSW_BOM_I_CANT_SPEAK_DONE_TIME), 0x2a)
     evtSetValue(event, args[1], ret);
     return EVT_RETURN_DONE;
 }

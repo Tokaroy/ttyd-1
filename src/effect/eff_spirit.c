@@ -1,5 +1,6 @@
 // Spirit: a glowing orb rises, then arcs from its start point to a target point over `time` frames,
 // shrinking while its color cycles yellow, cyan and magenta.
+
 #include "eff/eff_spirit.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
@@ -7,12 +8,10 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "version.h"
-#include "libc_decls.h"
-
+#include "eff/eff_magic1_n64.h"
+#include "driver/effdrv.h"
 static void effSpiritDisp(CameraId cameraId, EffectEntry* effect);
 static void effSpiritMain(EffectEntry* effect);
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
 
 typedef struct EffSpiritWork {
     s32 type;       // 0x0
@@ -49,7 +48,7 @@ EffectEntry* effSpiritEntry(s32 type, s32 time, f32 x1, f32 y1, f32 z1, f32 x2, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffSpiritWork));
     effect->userdata = work;
     effect->callback = effSpiritMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x1;
     work->position.y = y1;
@@ -87,12 +86,13 @@ EffectEntry* effSpiritEntry(s32 type, s32 time, f32 x1, f32 y1, f32 z1, f32 x2, 
 static void effSpiritMain(EffectEntry* effect) {
     EffSpiritWork* work = effect->userdata;
     Vec position;
+    f32 ang;
 
     position = (Vec){work->position.x, work->position.y, work->position.z};
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -121,15 +121,13 @@ static void effSpiritMain(EffectEntry* effect) {
         case 1:
             if (work->step < work->steps) {
                 work->step++;
-                work->position.x = intplGetValue(11, work->startPos.x, work->endPos.x, work->step, work->steps);
-                work->position.y = intplGetValue(11, work->startPos.y, work->endPos.y, work->step, work->steps);
-                work->position.z = intplGetValue(11, work->startPos.z, work->endPos.z, work->step, work->steps);
-                {
-                    f32 ang = 3.1415927f * ((f32)work->step / (f32)work->steps);
-                    ang = sin(ang);
-                    work->position.y += 50.0f * ang;
-                }
-                work->scale = intplGetValue(11, 1.0f, 0.0f, work->step, work->steps);
+                work->position.x = intplGetValue(EASING_SINE_IN_OUT, work->startPos.x, work->endPos.x, work->step, work->steps);
+                work->position.y = intplGetValue(EASING_SINE_IN_OUT, work->startPos.y, work->endPos.y, work->step, work->steps);
+                work->position.z = intplGetValue(EASING_SINE_IN_OUT, work->startPos.z, work->endPos.z, work->step, work->steps);
+                ang = 3.1415927f * ((f32)work->step / (f32)work->steps);
+                ang = sin(ang);
+                work->position.y += 50.0f * ang;
+                work->scale = intplGetValue(EASING_SINE_IN_OUT, 1.0f, 0.0f, work->step, work->steps);
             } else {
                 effDelete(effect);
                 return;
@@ -138,9 +136,9 @@ static void effSpiritMain(EffectEntry* effect) {
     }
     switch (work->colorState) {
         case 0:
-            work->r = intplGetValue(11, 255.0f, 37.0f, work->colorStep, 32);
-            work->g = intplGetValue(11, 242.0f, 254.0f, work->colorStep, 32);
-            work->b = intplGetValue(11, 0.0f, 246.0f, work->colorStep, 32);
+            work->r = intplGetValue(EASING_SINE_IN_OUT, 255.0f, 37.0f, work->colorStep, 32);
+            work->g = intplGetValue(EASING_SINE_IN_OUT, 242.0f, 254.0f, work->colorStep, 32);
+            work->b = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 246.0f, work->colorStep, 32);
             work->colorStep++;
             if (work->colorStep >= 32) {
                 work->colorState = 1;
@@ -148,9 +146,9 @@ static void effSpiritMain(EffectEntry* effect) {
             }
             break;
         case 1:
-            work->r = intplGetValue(11, 37.0f, 226.0f, work->colorStep, 32);
-            work->g = intplGetValue(11, 254.0f, 65.0f, work->colorStep, 32);
-            work->b = intplGetValue(11, 246.0f, 255.0f, work->colorStep, 32);
+            work->r = intplGetValue(EASING_SINE_IN_OUT, 37.0f, 226.0f, work->colorStep, 32);
+            work->g = intplGetValue(EASING_SINE_IN_OUT, 254.0f, 65.0f, work->colorStep, 32);
+            work->b = intplGetValue(EASING_SINE_IN_OUT, 246.0f, 255.0f, work->colorStep, 32);
             work->colorStep++;
             if (work->colorStep >= 32) {
                 work->colorState = 2;
@@ -158,9 +156,9 @@ static void effSpiritMain(EffectEntry* effect) {
             }
             break;
         case 2:
-            work->r = intplGetValue(11, 226.0f, 255.0f, work->colorStep, 32);
-            work->g = intplGetValue(11, 65.0f, 242.0f, work->colorStep, 32);
-            work->b = intplGetValue(11, 255.0f, 0.0f, work->colorStep, 32);
+            work->r = intplGetValue(EASING_SINE_IN_OUT, 226.0f, 255.0f, work->colorStep, 32);
+            work->g = intplGetValue(EASING_SINE_IN_OUT, 65.0f, 242.0f, work->colorStep, 32);
+            work->b = intplGetValue(EASING_SINE_IN_OUT, 255.0f, 0.0f, work->colorStep, 32);
             work->colorStep++;
             if (work->colorStep >= 32) {
                 work->colorState = 0;
@@ -168,10 +166,10 @@ static void effSpiritMain(EffectEntry* effect) {
             }
             break;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effSpiritDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effSpiritDisp, effect);
 }
 
-/** Draws the orb as one additive, camera-facing quad tinted with the current colour. */
+/** Draws the orb as one camera-facing quad tinted with the current colour. */
 static void effSpiritDisp(CameraId cameraId, EffectEntry* effect) {
     EffSpiritWork* work = effect->userdata;
     CameraEntry* camera;

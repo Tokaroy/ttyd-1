@@ -1,5 +1,6 @@
 // tst.rel battle setups: the BTLNO_TEST_* enemy groups and the test stages (bti_01..bti_04), plus the
 // background-set wave offset user function that moves stage object "B".
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
@@ -17,30 +18,30 @@ static USER_FUNC(_wave_offset);
 extern EvtWord bgset_tst_wave_event[];
 
 /**
- * Stage objects of the test battle stages, in four runs: entries 0-7 (trees ki_1 to ki_3, fence saku_1,
+ * Stage objects of the test battle stages, in three runs: entries 0-7 (trees ki_1 to ki_3, fence saku_1,
  * background sets B and C, and the if_wire and if_body objects), 8-12 (a smaller scene of two trees, the
  * fence, B and C), and 13-18 (the tree scene again without the wire objects).
  */
 BattleStageObjectData tst_btlobject_data[] = {
-    {"ki_1", 0, 0, {136.0f, 0.0f, -63.0f}, 50, 40, {0}},
-    {"ki_2", 0, 0, {86.0f, 0.0f, -30.0f}, 0, 90, {0}},
-    {"ki_3", 0, 0, {40.0f, 0.0f, -50.0f}, 30, 60, {0}},
-    {"saku_1", 0, 1, {-19.0f, 0.0f, -49.0f}, 0, 90, {0}},
-    {"B", 2, 2, {0}, 0, 90, {0}},
-    {"C", 2, 3, {0}, 0, 90, {0}},
-    {"if_wire", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
-    {"if_body", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
-    {"ki_1", 0, 0, {136.0f, 0.0f, -63.0f}, 50, 30, {0}},
-    {"ki_2", 0, 0, {40.0f, 0.0f, -50.0f}, 0, 90, {0}},
-    {"saku_1", 0, 1, {-50.0f, 0.0f, -50.0f}, 0, 90, {0}},
-    {"B", 2, 2, {0}, 0, 90, {0}},
-    {"C", 2, 3, {0}, 0, 90, {0}},
-    {"ki_1", 0, 0, {136.0f, 0.0f, -63.0f}, 50, 40, {0}},
-    {"ki_2", 0, 0, {86.0f, 0.0f, -30.0f}, 0, 90, {0}},
-    {"ki_3", 0, 0, {40.0f, 0.0f, -50.0f}, 30, 60, {0}},
-    {"saku_1", 0, 1, {-19.0f, 0.0f, -49.0f}, 0, 90, {0}},
-    {"B", 2, 2, {0}, 0, 90, {0}},
-    {"C", 2, 3, {0}, 0, 90, {0}},
+    {"ki_1", 0, STAGE_LAYER_A1, {136.0f, 0.0f, -63.0f}, 50, 40, {0}},
+    {"ki_2", 0, STAGE_LAYER_A1, {86.0f, 0.0f, -30.0f}, 0, 90, {0}},
+    {"ki_3", 0, STAGE_LAYER_A1, {40.0f, 0.0f, -50.0f}, 30, 60, {0}},
+    {"saku_1", 0, STAGE_LAYER_A2, {-19.0f, 0.0f, -49.0f}, 0, 90, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 90, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 90, {0}},
+    {"if_wire", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+    {"if_body", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+    {"ki_1", 0, STAGE_LAYER_A1, {136.0f, 0.0f, -63.0f}, 50, 30, {0}},
+    {"ki_2", 0, STAGE_LAYER_A1, {40.0f, 0.0f, -50.0f}, 0, 90, {0}},
+    {"saku_1", 0, STAGE_LAYER_A2, {-50.0f, 0.0f, -50.0f}, 0, 90, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 90, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 90, {0}},
+    {"ki_1", 0, STAGE_LAYER_A1, {136.0f, 0.0f, -63.0f}, 50, 40, {0}},
+    {"ki_2", 0, STAGE_LAYER_A1, {86.0f, 0.0f, -30.0f}, 0, 90, {0}},
+    {"ki_3", 0, STAGE_LAYER_A1, {40.0f, 0.0f, -50.0f}, 30, 60, {0}},
+    {"saku_1", 0, STAGE_LAYER_A2, {-19.0f, 0.0f, -49.0f}, 0, 90, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 90, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 90, {0}},
 };
 
 /**
@@ -1933,7 +1934,7 @@ BattleUnitSetup btlparty_test_barriern[] = {
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
 #if VERSION <= VERSION_DEMO_JP
-        {90.0f, 60.0f, 0.0f}, // position
+        {90.0f, 60.0f, 0.0f},
 #else
         {50.0f, 40.0f, -10.0f}, // position
 #endif
@@ -1947,7 +1948,7 @@ BattleUnitSetup btlparty_test_barriern[] = {
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
 #if VERSION <= VERSION_DEMO_JP
-        {170.0f, 60.0f, 0.0f}, // position
+        {170.0f, 60.0f, 0.0f},
 #else
         {130.0f, 40.0f, 10.0f}, // position
 #endif
@@ -2490,7 +2491,7 @@ NpcBattleSelect btlgrpsel_test_kishi[] = {
 
 /**
  * Encounter table of tst.rel, indexed by BTLNO_TEST_*: 38 debug fights, one per enemy family (Goombas,
- * Koopas, Buzzies, Bob-ombs, Magikoopas and so on) plus a few developer test rooms. Each entry has one
+ * Koopas, Buzzies, Bob-ombs, Magikoopas and so on) plus BTLNO_TEST_TAMURA, TAMURA2, NAKAYAMA and KISHI. Each entry has one
  * group choice, the shared battle music BGM_ZAKO_BATTLE1 and a fixed random placement range. Registered
  * with relSetBtlAddr in tst.c.
  */
@@ -2925,8 +2926,9 @@ NpcTerritoryInfo btl_tst_setup_no_tbl[] = {
 };
 
 /**
- * Moves a stage object along two sine waves: x = ampX * sin(stepX / periodX), y = ampY * (1 + sin(...)).
- * Args: object name, x step var, x period, x amplitude, y step var, y period, y amplitude.
+ * Moves a stage object along two sine waves: x = ampX * sin(360 degrees * stepX / periodX), y = ampY * (1 + sin(...)).
+ * Args: object name, x step var, x period, x amplitude, y step var, y period, y amplitude. Each call advances both
+ * steps by one, so the periods count calls.
  */
 static USER_FUNC(_wave_offset) {
     EvtWord* args = event->args;
@@ -2945,8 +2947,8 @@ static USER_FUNC(_wave_offset) {
     if (!pObject) {
         __assert2("battle_bgset_test.c", 102, "pObject",
                   /*"制御しようとする背景セットBの%sは存在しない"*/
-                  "\x90\xA7\x8C\xE4\x82\xB5\x82\xE6\x82\xA4\x82\xC6\x82\xB7\x82\xE9\x94\x77\x8C\x69\x83\x5A\x83\x62"
-                  "\x83\x67\x42\x82\xCC\x25\x73\x82\xCD\x91\xB6\x8D\xDD\x82\xB5\x82\xC8\x82\xA2",
+                  "制御しようとする背景セッ"
+                  "トBの%sは存在しない",
                   name);
     }
 #endif
@@ -2967,7 +2969,7 @@ static USER_FUNC(_wave_offset) {
 
 /**
  * Endless loop for the test battle stage: each frame calls _wave_offset on stage object B to make it sway on a
- * wave (800-unit x period, 300-unit y period).
+ * wave (800-frame x period, 300-frame y period).
  */
 EVT_BEGIN(bgset_tst_wave_event)
     SET_VALUE(LW(0), 0)

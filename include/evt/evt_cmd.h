@@ -1,4 +1,5 @@
 // The script-writing macros: EVT_BEGIN/EVT_END, the opcode macros and the operand helpers (PTR, FLOAT, LW...).
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -13,9 +14,11 @@
 
 #define PTR(value) (EvtWord)(value)
 #define STRING(value) PTR(value)
-#define FLOAT(value) ((s32)((value) * 1024.0f) - EVTDAT_FLOAT_BASE)
+#define FLOAT(value) ((s32)(1024.0f * (value)) - EVTDAT_FLOAT_BASE)
 
 #define EVT_CMD(param_count, opcode) (((param_count) << 16) | (opcode))
+
+#define EVT_DEF(name) EvtWord(name)[]
 
 #define EVT_BEGIN(name) EvtWord(name)[] = {
 
@@ -24,30 +27,16 @@
     }                 \
     ;
 
-// EVT_END plus one trailing zero pad word
-#define EVT_END_PAD()  \
-    OPCODE_END_SCRIPT, \
-        0              \
-    }                  \
-    ;
-
-// EVT_END plus four trailing zero pad words
-#define EVT_END_PAD4() \
-    OPCODE_END_SCRIPT, \
-        0, 0, 0, 0     \
-    }                  \
-    ;
-
 // Used to define native C functions that scripts can call
 #define USER_FUNC(function) s32(function)(EventEntry * event, BOOL isFirstCall)
 
 // Termination
 // #define END EVT_CMD(0, OPCODE_END_SCRIPT),
 #define END
-#define RETURN EVT_CMD(0, OPCODE_END_EVENT),
+#define RETURN EVT_CMD(0, OPCODE_END_EVT),
 
 // Labels / Jumps
-#define LABEL(LABEL_ID) EVT_CMD(1, OPCODE_LABEL), LABEL_ID,
+#define LABEL(LABEL_ID) EVT_CMD(1, OPCODE_LBL), LABEL_ID,
 #define GOTO(LABEL_ID) EVT_CMD(1, OPCODE_GOTO), LABEL_ID,
 
 // Loops
@@ -65,7 +54,7 @@
 #define DEBUG_BP EVT_CMD(0, OPCODE_DEBUG_BP),
 
 // Waiting
-#define WAIT_FRAMES(FRAMES) EVT_CMD(1, OPCODE_WAIT_FRAME), FRAMES,
+#define WAIT_FRAMES(FRAMES) EVT_CMD(1, OPCODE_WAIT_FRM), FRAMES,
 #define WAIT_MS(MILLISECONDS) EVT_CMD(1, OPCODE_WAIT_MSEC), MILLISECONDS,
 // Blocks the current script as long as (expr) is true.
 #define WAIT_WHILE(expr) EVT_CMD(1, OPCODE_HALT), expr,
@@ -73,24 +62,24 @@
 // Conditionals
 #define IF_STR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_STR_EQUAL), var1, var2,
 #define IF_STR_NOT_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_STR_NOT_EQUAL), var1, var2,
-#define IF_STR_LESS(var1, var2) EVT_CMD(2, OPCODE_IF_STR_LESS), var1, var2,
-#define IF_STR_GREATER(var1, var2) EVT_CMD(2, OPCODE_IF_STR_GREATER), var1, var2,
-#define IF_STR_LESS_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_STR_LESS_EQUAL), var1, var2,
-#define IF_STR_GREATER_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_STR_GREATER_EQUAL), var1, var2,
+#define IF_STR_LESS(var1, var2) EVT_CMD(2, OPCODE_IF_STR_SMALL), var1, var2,
+#define IF_STR_GREATER(var1, var2) EVT_CMD(2, OPCODE_IF_STR_LARGE), var1, var2,
+#define IF_STR_LESS_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_STR_SMALL_EQUAL), var1, var2,
+#define IF_STR_GREATER_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_STR_LARGE_EQUAL), var1, var2,
 
 #define IF_FLOAT_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IFF_EQUAL), var1, var2,
 #define IF_FLOAT_NOT_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IFF_NOT_EQUAL), var1, var2,
-#define IF_FLOAT_LESS(var1, var2) EVT_CMD(2, OPCODE_IFF_LESS), var1, var2,
-#define IF_FLOAT_GREATER(var1, var2) EVT_CMD(2, OPCODE_IFF_GREATER), var1, var2,
-#define IF_FLOAT_LESS_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IFF_LESS_EQUAL), var1, var2,
-#define IF_FLOAT_GREATER_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IFF_GREATER_EQUAL), var1, var2,
+#define IF_FLOAT_LESS(var1, var2) EVT_CMD(2, OPCODE_IFF_SMALL), var1, var2,
+#define IF_FLOAT_GREATER(var1, var2) EVT_CMD(2, OPCODE_IFF_LARGE), var1, var2,
+#define IF_FLOAT_LESS_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IFF_SMALL_EQUAL), var1, var2,
+#define IF_FLOAT_GREATER_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IFF_LARGE_EQUAL), var1, var2,
 
 #define IF_INT_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_EQUAL), var1, var2,
 #define IF_INT_NOT_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_NOT_EQUAL), var1, var2,
-#define IF_INT_LESS(var1, var2) EVT_CMD(2, OPCODE_IF_LESS), var1, var2,
-#define IF_INT_GREATER(var1, var2) EVT_CMD(2, OPCODE_IF_GREATER), var1, var2,
-#define IF_INT_LESS_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_LESS_EQUAL), var1, var2,
-#define IF_INT_GREATER_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_GREATER_EQUAL), var1, var2,
+#define IF_INT_LESS(var1, var2) EVT_CMD(2, OPCODE_IF_SMALL), var1, var2,
+#define IF_INT_GREATER(var1, var2) EVT_CMD(2, OPCODE_IF_LARGE), var1, var2,
+#define IF_INT_LESS_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_SMALL_EQUAL), var1, var2,
+#define IF_INT_GREATER_OR_EQUAL(var1, var2) EVT_CMD(2, OPCODE_IF_LARGE_EQUAL), var1, var2,
 
 #define IF_BITS_SET(var1, var2) EVT_CMD(2, OPCODE_IF_FLAG), var1, var2,
 #define IF_BITS_CLEAR(var1, var2) EVT_CMD(2, OPCODE_IF_NOT_FLAG), var1, var2,
@@ -103,10 +92,10 @@
 #define SWITCH_RAW(expr) EVT_CMD(1, OPCODE_SWITCHI), expr,
 #define CASE_EQUAL(expr) EVT_CMD(1, OPCODE_CASE_EQUAL), expr,
 #define CASE_NOT_EQUAL(expr) EVT_CMD(1, OPCODE_CASE_NOT_EQUAL), expr,
-#define CASE_LESS(expr) EVT_CMD(1, OPCODE_CASE_LESS), expr,
-#define CASE_GREATER(expr) EVT_CMD(1, OPCODE_CASE_GREATER), expr,
-#define CASE_LESS_OR_EQUAL(expr) EVT_CMD(1, OPCODE_CASE_LESS_EQUAL), expr,
-#define CASE_GREATER_OR_EQUAL(expr) EVT_CMD(1, OPCODE_CASE_GREATER_EQUAL), expr,
+#define CASE_LESS(expr) EVT_CMD(1, OPCODE_CASE_SMALL), expr,
+#define CASE_GREATER(expr) EVT_CMD(1, OPCODE_CASE_LARGE), expr,
+#define CASE_LESS_OR_EQUAL(expr) EVT_CMD(1, OPCODE_CASE_SMALL_EQUAL), expr,
+#define CASE_GREATER_OR_EQUAL(expr) EVT_CMD(1, OPCODE_CASE_LARGE_EQUAL), expr,
 #define CASE_DEFAULT EVT_CMD(0, OPCODE_CASE_ETC),
 #define CASE_OR_EQUAL(val) EVT_CMD(1, OPCODE_CASE_OR), val,
 #define CASE_AND_EQUAL(val) EVT_CMD(1, OPCODE_CASE_AND), val,
@@ -149,9 +138,9 @@
 #define READ_FLOAT_INDEXED(dest, offset) EVT_CMD(2, OPCODE_READF_N), dest, offset,
 
 // User Work / User Flag Base
-#define SET_UW_BASE(expr) EVT_CMD(1, OPCODE_SET_USER_WORK), expr,
-#define SET_UF_BASE(expr) EVT_CMD(1, OPCODE_SET_USER_FLAG), expr,
-#define ALLOCATE_UW(count, destVar) EVT_CMD(2, OPCODE_ALLOC_USER_WORK), count, destVar,
+#define SET_UW_BASE(expr) EVT_CMD(1, OPCODE_SET_USER_WRK), expr,
+#define SET_UF_BASE(expr) EVT_CMD(1, OPCODE_SET_USER_FLG), expr,
+#define ALLOCATE_UW(count, destVar) EVT_CMD(2, OPCODE_ALLOC_USER_WRK), count, destVar,
 
 // Bitwise Operations
 #define AND(target, val) EVT_CMD(2, OPCODE_AND), target, val,
@@ -179,12 +168,12 @@
 #define CALL(...) EVT_CMD(NUMARGS((EvtWord)__VA_ARGS__), OPCODE_USER_FUNC), (EvtWord)__VA_ARGS__,
 
 // Spawning / Controlling Events
-#define SPAWN_EVENT(script) EVT_CMD(1, OPCODE_RUN_EVENT), PTR(script),
-#define SPAWN_EVENT_GET_ID(script, idOut) EVT_CMD(2, OPCODE_RUN_EVENT_ID), script, idOut,
+#define SPAWN_EVENT(script) EVT_CMD(1, OPCODE_RUN_EVT), PTR(script),
+#define SPAWN_EVENT_GET_ID(script, idOut) EVT_CMD(2, OPCODE_RUN_EVT_ID), script, idOut,
 // Blocks until the child finished
-#define CALL_CHILD(script) EVT_CMD(1, OPCODE_RUN_CHILD_EVENT), PTR(script),
-#define DELETE_EVENT(tid) EVT_CMD(1, OPCODE_DELETE_EVENT), tid,
-#define RESTART_EVENT(script) EVT_CMD(1, OPCODE_RESTART_EVENT), script,
+#define CALL_CHILD(script) EVT_CMD(1, OPCODE_RUN_CHILD_EVT), PTR(script),
+#define DELETE_EVENT(tid) EVT_CMD(1, OPCODE_DELETE_EVT), tid,
+#define RESTART_EVENT(script) EVT_CMD(1, OPCODE_RESTART_EVT), script,
 
 #define SET_PRIORITY(priority) EVT_CMD(1, OPCODE_SET_PRI), priority,
 #define SET_SPEED(timeScale) EVT_CMD(1, OPCODE_SET_SPD), timeScale,
@@ -196,15 +185,15 @@
 #define RESUME_TYPES_OTHER(types) EVT_CMD(1, OPCODE_START_OTHER), types,
 #define SUSPEND_EVENT(tid) EVT_CMD(1, OPCODE_STOP_ID), tid,
 #define RESUME_EVENT(tid) EVT_CMD(1, OPCODE_START_ID), tid,
-#define IS_EVENT_RUNNING(tid, resultOut) EVT_CMD(2, OPCODE_CHECK_EVENT), tid, resultOut,
+#define IS_EVENT_RUNNING(tid, resultOut) EVT_CMD(2, OPCODE_CHK_EVT), tid, resultOut,
 
 // Inline-block Events
-#define BEGIN_INLINE_EVENT EVT_CMD(0, OPCODE_INLINE_EVENT),
-#define BEGIN_INLINE_EVENT_GET_ID(idOut) EVT_CMD(1, OPCODE_INLINE_EVENT_ID), idOut,
+#define BEGIN_INLINE_EVENT EVT_CMD(0, OPCODE_INLINE_EVT),
+#define BEGIN_INLINE_EVENT_GET_ID(idOut) EVT_CMD(1, OPCODE_INLINE_EVT_ID), idOut,
 #define END_INLINE_EVENT EVT_CMD(0, OPCODE_END_INLINE),
 // Siblings are tied to the current script's lifetime
-#define BEGIN_SIBLING_EVENT EVT_CMD(0, OPCODE_BROTHER_EVENT),
-#define BEGIN_SIBLING_EVENT_GET_ID(idOut) EVT_CMD(1, OPCODE_BROTHER_EVENT_ID), idOut,
+#define BEGIN_SIBLING_EVENT EVT_CMD(0, OPCODE_BROTHER_EVT),
+#define BEGIN_SIBLING_EVENT_GET_ID(idOut) EVT_CMD(1, OPCODE_BROTHER_EVT_ID), idOut,
 #define END_SIBLING_EVENT EVT_CMD(0, OPCODE_END_BROTHER),
 
 // Data types
@@ -220,12 +209,9 @@
 #define EVTDAT_UF_MAX (-200 * 1000000)
 #define EVTDAT_FLOAT_MAX (-220 * 1000000)
 #define EVTDAT_POINTER_MAX (-250 * 1000000)
-#define EVTDAT_ADDR_MAX (-270 * 1000000)
-
-// The "no value" word (-250000000): passed for an argument that should be left
-// unchanged or a pointer that is absent; script functions test their arguments
-// against it. Super Paper Mario's engine uses the same value under this name.
+// "no variable": an argument slot the command neither reads nor writes
 #define EVT_NULLPTR EVTDAT_POINTER_MAX
+#define EVTDAT_ADDR_MAX (-270 * 1000000)
 
 #define EVTDAT_LW_BASE (30 * 1000000)
 #define EVTDAT_GW_BASE (50 * 1000000)
@@ -249,6 +235,59 @@
 #define GSW(id) ((id) - EVTDAT_GSW_BASE)
 #define UW(id) ((id) - EVTDAT_UW_BASE)
 #define UF(id) ((id) - EVTDAT_UF_BASE)
+
+// The other way round for C code: swSet(GSWF_ID(GSWF_x)), swByteGet(GSW_ID(GSW_x)) take the flag or byte number.
+#define GSWF_ID(value) ((value) + EVTDAT_GSWF_BASE)
+#define GSW_ID(value) ((value) + EVTDAT_GSW_BASE)
+
+/* Saved variables with a known meaning */
+#include "evt/evt_story.h"
+#include "evt/evt_collect_flags.h"
+#include "evt/evt_save_flags.h"
+
+/* Trouble Center (gor_irai.c). Trouble ids are the game's own: each reward script prints irai_NN messages and sets
+ * GSWF_TROUBLE_DONE(NN). Names are the US trouble titles. */
+typedef enum TroubleId {
+    TROUBLE_NONE = 0,
+    TROUBLE_NEED_A_KEY = 1,              /* Garf, gor_02 */
+    TROUBLE_SAFE_DELIVERY = 2,           /* McGoomba, gor_01 */
+    TROUBLE_PRICE_ADJUSTMENT = 3,        /* Arfur, gor_02 */
+    TROUBLE_FIND_THIS_GUY = 4,           /* Goomther, gor_01 */
+    TROUBLE_HIT_ME_PLEASE = 5,           /* Mousimilian, gor_01 */
+    TROUBLE_IM_HUNGRY = 6,               /* Bomberto, gor_00 */
+    TROUBLE_TRY_TO_FIND_ME = 7,          /* Koopook, gon_08 */
+    TROUBLE_LISTEN_TO_ME = 8,            /* Mayor Kroop, nok_01 */
+    TROUBLE_ORDER_ME_AN_ITEM = 9,        /* Plenn T., gor_01 */
+    TROUBLE_EMERGENCY_SHROOM = 10,       /* Puni Elder, mri_01 */
+    TROUBLE_PLAY_WITH_ME = 11,           /* Lahla, gor_03 */
+    TROUBLE_HELP_MY_DADDY = 12,          /* Pine T. Jr., tik_06 */
+    TROUBLE_HELP_WANTED = 13,            /* Jolene, tou_05 */
+    TROUBLE_HEARTFUL_CAKE_RECIPE = 14,   /* Merlee, tik_12 */
+    TROUBLE_THE_FOOD_I_WANT = 15,        /* Bub-ulber, nok_00 */
+    TROUBLE_ELUSIVE_BADGE = 16,          /* Ms. Mowz, gor_01 */
+    TROUBLE_NEWSLETTER = 17,             /* Mayor Dour, usu_00 */
+    TROUBLE_SEEKING_LEGENDARY_BOOK = 18, /* Zess T., gor_01 (done = Mario has the Cookbook) */
+    TROUBLE_IMPORTANT_THING = 19,        /* Frankie, gor_03 */
+    TROUBLE_TELL_THAT_PERSON = 20,       /* Eve, usu_01 */
+    TROUBLE_LOOKING_FOR_A_GAL = 21,      /* Goom Goom, dou_04 */
+    TROUBLE_GET_THESE_INGREDIENTS = 22,  /* Chef Shimi, rsh_03 */
+    TROUBLE_I_MUST_HAVE_THAT_BOOK = 23,  /* Toodles, pik_00 */
+    TROUBLE_SECURITY_CODE = 24,          /* Businessman, tou_01 */
+    TROUBLE_DELIVERY_PLEASE = 25,        /* Goldbob, pik_00 */
+    TROUBLE_I_CANT_SPEAK = 26,           /* Gob, bom_02 */
+    TROUBLE_I_WANNA_MEET_LUIGI = 27,     /* Toadia, pik_01 */
+    TROUBLE_ROUST_THESE_CADS = 28,       /* Doe T., win_00 */
+    TROUBLE_HELP_ME_MAKE_UP = 29,        /* Bub, pik_01 */
+    TROUBLE_ERASE_THAT_GRAFFITI = 30,    /* Swob, bom_02 */
+} TroubleId;
+#define GSW_TROUBLE_ACCEPTED GSW(1420)          /* TroubleId of the accepted trouble, TROUBLE_NONE if none */
+#define GSWF_TROUBLE_BOARD_EXPLAINED GSWF(5374) /* the board's first explanation (irai_00..03) was given */
+#define GSWF_TROUBLE_DONE(id) GSWF(5374 + (id)) /* trouble id solved */
+#define GSWF_TROUBLE_WORK(n) GSWF(5405 + (n))   /* n = 0..16: progress flags of the accepted trouble */
+#define GSW_TROUBLE_WORK(n) GSW(1469 + (n))     /* n = 0..5: progress values of the accepted trouble */
+/* the same as save-work indices for swGet / swByteGet in C */
+#define SW_TROUBLE_ACCEPTED 1420
+#define SWF_TROUBLE_DONE(id) ((id) + 5374)
 
 #define EVT_RETURN_BLOCK 0
 #define EVT_RETURN_YIELD 1

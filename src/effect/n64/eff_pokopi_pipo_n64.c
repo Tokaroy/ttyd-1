@@ -1,5 +1,6 @@
-// Paper Mario 64 effect: a green blob lobbed from a start point to an end point along an arc,
-// squashing and stretching as it moves; lasts `duration` frames plus a fade-out.
+// Paper Mario 64 effect: a blob lobbed from a start point to an end point along an arc,
+// squashing and stretching when it lands; lasts `duration` frames plus 60 (alpha stays 255).
+
 #include "eff/n64/eff_pokopi_pipo_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -15,7 +16,7 @@ typedef struct EffPokopiPipoN64Work {
     Vec position; // 0x4
     Vec start;    // 0x10
     Vec end;      // 0x1C
-    s32 timeLeft; // 0x28 lifetime
+    s32 lifetime; // 0x28
     s32 frame;    // 0x2C
     s32 r;        // 0x30
     s32 g;        // 0x34
@@ -47,7 +48,7 @@ static u8 w_scale_data[7] = {110, 150, 130, 110, 100, 95, 100};
 static u8 h_scale_data[7] = {80, 60, 80, 100, 120, 110, 100};
 
 static void effPokopiPipoMain(EffectEntry* effect);
-static void effPokopiPipoDisp(CameraId cameraId, EffectEntry* effect);
+static void effPokopiPipoDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a lobbed blob that flies from (x, y, z) to (x2, y2, z2) in duration frames on a gravity arc,
@@ -63,13 +64,13 @@ EffectEntry* effPokopiPipoN64Entry(s32 type, s32 duration, f32 x, f32 y, f32 z, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffPokopiPipoN64Work));
     effect->userdata = work;
     effect->callback = effPokopiPipoMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (duration <= 0) {
-        work->timeLeft = 1000;
+        work->lifetime = 1000;
     } else {
-        work->timeLeft = duration + 60;
+        work->lifetime = duration + 60;
     }
     work->duration = duration;
     work->alpha = 255;
@@ -103,8 +104,9 @@ EffectEntry* effPokopiPipoN64Entry(s32 type, s32 duration, f32 x, f32 y, f32 z, 
 }
 
 /**
- * Moves the blob under gravity (-0.2 per frame), bounces it off a floor at height 14.3,
- * and at the end of the flight plays a squash-and-stretch table; deletes 60 frames after the flight.
+ * Moves the blob under gravity (-0.2 per frame), stops its fall at a floor at height 14.3 (vertical speed zeroed),
+ * and at the end of the flight reverses its vertical speed and plays a squash-and-stretch table before moving on;
+ * deletes 60 frames after the flight.
  */
 static void effPokopiPipoMain(EffectEntry* effect) {
     EffPokopiPipoN64Work* work = effect->userdata;
@@ -117,15 +119,15 @@ static void effPokopiPipoMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
-        work->timeLeft = 16;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
+        work->lifetime = 16;
     }
-    if (work->timeLeft < 1000) {
-        work->timeLeft--;
+    if (work->lifetime < 1000) {
+        work->lifetime--;
     }
     work->frame++;
-    if (work->timeLeft < 0) {
+    if (work->lifetime < 0) {
         effDelete(effect);
         return;
     }
@@ -152,11 +154,15 @@ static void effPokopiPipoMain(EffectEntry* effect) {
         work->position.y = 14.285715f;
         work->angleVel = -20.0f;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effPokopiPipoDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effPokopiPipoDisp, effect);
 }
 
-/** Draws the blob as a camera-facing, spinning quad (texture 0x95 for type 0, otherwise 0x96). */
-static void effPokopiPipoDisp(CameraId cameraId, EffectEntry* effect) {
+/**
+ * Draws the blob as a camera-facing, spinning quad (texture 0x95 for type 0, otherwise 0x96); the TEV stage
+ * replaces with the texture, so the colour set in TEVREG0 has no effect.
+ */
+static void effPokopiPipoDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffPokopiPipoN64Work* work;
     s32 alpha;

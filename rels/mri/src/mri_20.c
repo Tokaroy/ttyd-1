@@ -1,23 +1,29 @@
 // mri_20 (巨木の中, The Great Tree): a pipe room with planters, guarded by an X-Naut and a Yux.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_snd.h"
-#include "mri_puni.h"
 #include "mri.h"
 #include "data_tables.h"
-#include "evt/evt_story.h"
+#include "evt/evt_map.h"
+#include "evt/evt_npc.h"
+#include "mri_puni.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
-BeroEntry bero_black_shadow[1];
+static BeroEntry bero_black_shadow[1];
 static BeroEntry bero_entry_data[5];
+static EvtWord evt_ueki_08[20];
 static KusaAccess ueki_access_data[7];
+EvtWord mri_20_init_evt[123];
 
 /** Exit of mri_20: pipe dokan1 to mri_04. */
-BeroEntry bero_black_shadow[] = {
+static BeroEntry bero_black_shadow[] = {
     {
         "dokan1", // hitName
         2, // type
@@ -38,8 +44,8 @@ BeroEntry bero_black_shadow[] = {
 };
 
 /**
- * Exits of mri_20: pipe dokan1 to mri_03 (dokan); pipe dokan2 to mri_02 (dokan3); dokan3 (scripted pipe);
- * dokan4 (scripted pipe).
+ * Exits of mri_20: pipe dokan1 to mri_03 (dokan); pipe dokan2 to mri_02 (dokan3); pipe dokan3 to dokan4
+ * in this room; pipe dokan4 to dokan3 in this room.
  */
 static BeroEntry bero_entry_data[] = {
     {
@@ -112,13 +118,13 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Planter hit script 8: the first time it is hit it launches a Power Punch badge out of the planter;
+ * Planter search script 8: the first time it is searched it launches a Power Punch item out of the planter;
  * remembered with a flag.
  */
 static EVT_BEGIN(evt_ueki_08)
     CALL(evt_item_delete_check, STRING("item_ueki_08"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ueki_08"), ITEM_POWER_PUNCH, 250, -320, 130, ITEM_ENTRY_LAUNCH, GSWF(GSWF_MRI20_PLANTER_POWER_PUNCH_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_ueki_08"), ITEM_POWER_PUNCH, 250, -320, 130, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_MRI_20_POWER_PUNCH_PLANT, 0)
     END_IF
     RETURN
 EVT_END()
@@ -140,8 +146,8 @@ static KusaAccess ueki_access_data[] = {
 /**
  * Map init script of mri_20, a pipe room with planters that an X-Naut grunt and a Yux guard:
  * sets up the Puni, the planters and the water animations,
- * removes the guards once the story is past STORY_STG2_25_01_PEACH_CRUMP_AND_X_NAUTS,
- * and redirects the pipe for the Ms. Mowz black-shadow scene at STORY_STG2_12_RIVAL_ARRIVAL.
+ * removes the guards once the story is past STG2_25_01_PEACH_CRUMP_X_NAUTS,
+ * and redirects the pipe for the Ms. Mowz black-shadow scene at STG2_12_RIVAL_ARRIVAL.
  */
 EVT_BEGIN(mri_20_init_evt)
     CALL(evt_puni_mem_init)
@@ -157,25 +163,25 @@ EVT_BEGIN(mri_20_init_evt)
     CALL_CHILD(evt_bero_info_run)
     SPAWN_EVENT(puni_disp_info)
     SPAWN_EVENT(mri_countdown)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_23_TIME_BOMB_ACTIVATED, STORY_STG2_23_01_X_NAUT_BATTLE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI9"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_23_TIME_BOMB_ACTIVATED, STG2_23_01_X_NAUT_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI9"))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI4"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI4"))
     END_SWITCH
-    IF_INT_GREATER(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_01_PEACH_CRUMP_AND_X_NAUTS)
+    IF_INT_GREATER(GSW_STORY_PROGRESS, STG2_25_01_PEACH_CRUMP_X_NAUTS)
         CALL(evt_npc_check_delete, STRING("軍団ザコ２"))
         CALL(evt_npc_check_delete, STRING("バリアーン"))
     END_IF
     SET_VALUE(LW(0), PTR(ueki_access_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    CALL(evt_map_playanim, STRING("mizu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("mizu_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_02"), 1, 0)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_12_RIVAL_ARRIVAL)
+    CALL(evt_map_playanim, STRING("mizu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_12_RIVAL_ARRIVAL)
         SET_VALUE(LW(0), STRING("dokan1"))
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_bero_overwrite, STRING("dokan1"), PTR(bero_black_shadow))

@@ -2,7 +2,6 @@
 #include <dolphin/mtx.h>
 #include "fake_tgmath.h"
 
-/** Converts a 3x4 matrix into the ROMtx (4x3, transposed) layout the paired-singles array routines read. */
 asm void PSMTXReorder(const register Mtx src, register ROMtx dest) {
     psq_l f0, 0(src), 0, 0
     psq_l f2, 16(src), 0, 0
@@ -24,7 +23,6 @@ asm void PSMTXReorder(const register Mtx src, register ROMtx dest) {
     psq_st f10, 40(dest), 0, 0
 }
 
-/** Transforms count points by a ROMtx (reordered matrix), two at a time, in paired-singles assembly. */
 asm void PSMTXROMultVecArray(const register ROMtx m, const register Vec* srcBase, register Vec* dstBase, register u32 count) {
     nofralloc
     stwu r1, -64(r1)
@@ -101,10 +99,6 @@ exit:
     blr
 }
 
-/**
- * Two-matrix skinning: for each of count points it builds m0 + w * (m1 - m0) from the point's weight w in wtBase
- * and transforms the point from srcBase by that blended ROMtx into dstBase. Assembly.
- */
 asm void PSMTXROSkin2VecArray(const register ROMtx m0, const register ROMtx m1, const register f32* wtBase, const register Vec* srcBase, register Vec* dstBase, register u32 count) {
     nofralloc
     stwu r1, -160(r1)
@@ -216,7 +210,6 @@ loop:
     blr
 }
 
-/** Transforms count 16-bit integer points by a matrix into floating-point vectors, in paired-singles assembly. */
 asm void PSMTXROMultS16VecArray(const register Mtx m, const register S16Vec* srcBase, register Vec* dstBase, register u32 count) {
     nofralloc
     stwu r1, -64(r1)
@@ -295,10 +288,6 @@ exit:
     blr
 }
 
-/**
- * Transforms count 16-bit integer points by a reordered matrix into floating-point vectors,
- * in paired-singles assembly.
- */
 asm void PSMTXMultS16VecArray(const register ROMtx* m, const register S16Vec* srcBase, register Vec* dstBase, register u32 count) {
     psq_l f0, 0(m), 0, 0
     lis r7, 7

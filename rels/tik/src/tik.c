@@ -1,15 +1,25 @@
 // Rogueport Sewers (tik, chika: underground): the REL prolog/epilog, the map list, and the shared wandering event for
 // the sewer residents (tik_villager_urouro).
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_sub.h"
 
 #include "data/mapdata.h"
 #include "manager/evtmgr_cmd.h"
 #include "dolphin/mtx.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_sub.h"
 #include "tik.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
+
+EvtWord tik_villager_urouro[101];
 
 /**
  * REL prolog for the Rogueport Sewers module.
@@ -66,7 +76,8 @@ void _unresolved(void) {
  * args[2], args[3] and args[4] are the home X, home Z and the allowed radius.
  * If the target lies farther than the radius from home, the target is reset to the home point.
  */
-static USER_FUNC(evt_tik_villager_urouro_check_func) {
+// An out-of-range destination is reset to the center, not clamped to the edge of the circle.
+USER_FUNC(evt_tik_villager_urouro_check_func) {
     EvtWord* args = event->args;
     s32 xVar = args[0];
     s32 zVar = args[1];
@@ -91,11 +102,11 @@ static USER_FUNC(evt_tik_villager_urouro_check_func) {
 /**
  * Wandering loop for the sewer residents (urouro = loitering about).
  * The NPC flips to face the opposite way every few seconds, then picks a random heading of 120 to 240 degrees,
- * walks 50 units that way (clamped to 70 units from where it started) at speed 30,
+ * walks 50 units that way (reset to where it started if that lands more than 70 units from there) at speed 30,
  * and rests a second before repeating.
  */
 EVT_BEGIN(tik_villager_urouro)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_get_position, STRING("me"), LW(6), LW(7), LW(8))
     CALL(evt_sub_random, 1000, LW(0))
     ADD(LW(0), 100)
@@ -117,7 +128,7 @@ EVT_BEGIN(tik_villager_urouro)
         CALL(evt_sub_get_dir, LW(10), LW(12), LW(0), LW(2), LW(3))
         CALL(evt_npc_set_ry, STRING("me"), LW(3))
         WAIT_MS(500)
-        CALL(evt_npc_move_position, STRING("me"), LW(0), LW(2), 0, FLOAT(30.0f), 4)
+        CALL(evt_npc_move_position, STRING("me"), LW(0), LW(2), 0, FLOAT(30.0f), NPC_MOVE_POSITION_FLAG_WALL_STOP)
         WAIT_MS(1000)
     END_LOOP
 EVT_END()

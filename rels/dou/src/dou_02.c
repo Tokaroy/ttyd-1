@@ -1,24 +1,49 @@
 // dou_02 (洞窟, Pirate's Grotto): water room between dou_01 and dou_12 with a spear trap and bobbing platforms.
 // Gate Handle and Star Piece items.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_damage.h"
 #include "dou.h"
 #include "driver/hitdrv.h"
-#include "evt/evt_case.h"
 #include "evt/evt_hit.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
+#include "evt/evt_case.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "evt/evt_item.h"
+#include "evt/evt_mobj.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 static BeroEntry bero_entry_data[4];
+
+#if VERSION >= VERSION_DEMO_EU
+static EvtWord yari_trap_sub[129];
+#else
+static EvtWord yari_trap_sub[119];
+#endif
+
+static EvtWord yari_trap[11];
+static EvtWord dou_puka_event_init0[8];
+static EvtWord dou_puka_event_0[24];
+static EvtWord dou_puka_event_rev_0[10];
+static EvtWord dou_puka_event_main0[21];
+static EvtWord dou_puka_event_sub0[45];
+static EvtWord dou_puka_event_init1[8];
+static EvtWord dou_puka_event_1[24];
+static EvtWord dou_puka_event_rev_1[10];
+static EvtWord dou_puka_event_main1[21];
+static EvtWord dou_puka_event_sub1[45];
 static HitDamageReturn hitDmgRetPoints[8];
+static EvtWord evt_ride_ship[15];
+EvtWord dou_02_init_evt[139];
 
 /** Exits (beros) of this room: w_bero_1 to dou_01, e_bero_1 to dou_12 and e_bero_2 to dou_12. */
 static BeroEntry bero_entry_data[] = {
@@ -85,10 +110,10 @@ static EVT_BEGIN(yari_trap_sub)
     END_IF
     SET_VALUE(GW(15), 1)
     LOOP(0)
-        CALL(evt_hitobj_attr_onoff, 1, 1, STRING("bb"), 2048)
+        CALL(evt_hitobj_attr_onoff, 1, 1, STRING("bb"), HIT_ATTR_SPIKES)
         CALL(evt_mapobj_get_position, STRING("s02_yari"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_MOBJ_FLOOR_TRAP1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 1, 0, 50, 150)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 0, 50, 150)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_trans, 1, STRING("s02_yari"), 0, LW(0), 0)
@@ -101,7 +126,7 @@ static EVT_BEGIN(yari_trap_sub)
         WAIT_MS(1000)
         CALL(evt_mapobj_get_position, STRING("s02_yari"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_MOBJ_FLOOR_TRAP2"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 4, 50, 0, 300)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, 50, 0, 300)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_trans, 1, STRING("s02_yari"), 0, LW(0), 0)
@@ -111,7 +136,7 @@ static EVT_BEGIN(yari_trap_sub)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_hitobj_attr_onoff, 1, 0, STRING("bb"), 2048)
+        CALL(evt_hitobj_attr_onoff, 1, 0, STRING("bb"), HIT_ATTR_SPIKES)
 #if VERSION >= VERSION_DEMO_EU
         CALL(evt_sub_get_framerate, LW(0))
         IF_INT_EQUAL(LW(0), 50)
@@ -142,9 +167,10 @@ static EVT_BEGIN(yari_trap)
 EVT_END()
 
 /**
- * Clears the state and offset registers of floating platform 0 (state 0 = idle, 1 = being ridden,
- * 2 = stepped off; offset = its current height).
+ * Clears the state and offset registers of floating platform 0 (state 0 = idle, 1 = dipping,
+ * 2 = dip finished; offset = its current height).
  */
+// Each boat uses a state word (0 idle, 1 sinking, 2 awaiting step-off) and a height word.
 static EVT_BEGIN(dou_puka_event_init0)
     SET_VALUE(GW(0), 0)
     SET_VALUE(GW(1), 0)
@@ -155,7 +181,7 @@ EVT_END()
  * Stand-on case script for floating platform 0:
  * if idle it marks the platform as ridden, runs the extra callback in LW(3)
  * when there is one (e.g. the boat or barrel creak sound), then the shared dip animation dou_puka_event,
- * and marks it as stepped off.
+ * and marks the dip as finished (state 2).
  */
 static EVT_BEGIN(dou_puka_event_0)
     IF_INT_NOT_EQUAL(GW(0), 0)
@@ -173,7 +199,7 @@ EVT_END()
 
 /**
  * Step-off case script for floating platform 0:
- * once the dip has finished (state 2) it sets the platform back to idle so it can bob again.
+ * once the dip has finished (state 2) it sets the platform back to idle so it can dip again.
  */
 static EVT_BEGIN(dou_puka_event_rev_0)
     IF_INT_NOT_EQUAL(GW(0), 2)
@@ -200,7 +226,7 @@ EVT_END()
 
 /**
  * Idle bobbing of floating platform 0: after a random 0.2 to 0.6 second delay it runs the shared bobbing loop
- * dou_normal_puka, pauses it while the platform is being ridden and restarts it once Mario steps off.
+ * dou_normal_puka, stops it during a dip and restarts it when the dip has finished.
  */
 static EVT_BEGIN(dou_puka_event_sub0)
     CALL(evt_sub_random, 400, LW(0))
@@ -228,8 +254,8 @@ static EVT_BEGIN(dou_puka_event_sub0)
 EVT_END()
 
 /**
- * Clears the state and offset registers of floating platform 1 (state 0 = idle, 1 = being ridden,
- * 2 = stepped off; offset = its current height).
+ * Clears the state and offset registers of floating platform 1 (state 0 = idle, 1 = dipping,
+ * 2 = dip finished; offset = its current height).
  */
 static EVT_BEGIN(dou_puka_event_init1)
     SET_VALUE(GW(2), 0)
@@ -241,7 +267,7 @@ EVT_END()
  * Stand-on case script for floating platform 1:
  * if idle it marks the platform as ridden, runs the extra callback in LW(3)
  * when there is one (e.g. the boat or barrel creak sound), then the shared dip animation dou_puka_event,
- * and marks it as stepped off.
+ * and marks the dip as finished (state 2).
  */
 static EVT_BEGIN(dou_puka_event_1)
     IF_INT_NOT_EQUAL(GW(2), 0)
@@ -259,7 +285,7 @@ EVT_END()
 
 /**
  * Step-off case script for floating platform 1:
- * once the dip has finished (state 2) it sets the platform back to idle so it can bob again.
+ * once the dip has finished (state 2) it sets the platform back to idle so it can dip again.
  */
 static EVT_BEGIN(dou_puka_event_rev_1)
     IF_INT_NOT_EQUAL(GW(2), 2)
@@ -286,7 +312,7 @@ EVT_END()
 
 /**
  * Idle bobbing of floating platform 1: after a random 0.2 to 0.6 second delay it runs the shared bobbing loop
- * dou_normal_puka, pauses it while the platform is being ridden and restarts it once Mario steps off.
+ * dou_normal_puka, stops it during a dip and restarts it when the dip has finished.
  */
 static EVT_BEGIN(dou_puka_event_sub1)
     CALL(evt_sub_random, 400, LW(0))
@@ -344,14 +370,14 @@ EVT_END()
  * and the ship-change platform for the boat move.
  */
 EVT_BEGIN(dou_02_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_DOU1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_DOU3"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_DOU1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_DOU3"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_map_playanim, STRING("nami"), 1, 0)
-    CALL(evt_map_playanim, STRING("moku"), 1, 0)
+    CALL(evt_map_playanim, STRING("nami"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("moku"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(yari_trap)
     SET_VALUE(LW(0), STRING("s02_fune_01"))
     SET_VALUE(LW(1), STRING("a02_fune_01"))
@@ -360,8 +386,8 @@ EVT_BEGIN(dou_02_init_evt)
     CALL_CHILD(dou_puka_event_init0)
     SPAWN_EVENT(dou_puka_event_main0)
     SPAWN_EVENT(dou_puka_event_sub0)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a02_fune_ata1"), 0, PTR(dou_puka_event_0), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_STAND_ON, 1, STRING("a02_fune_ata1"), 0, PTR(dou_puka_event_rev_0), 0)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a02_fune_ata1"), 0, PTR(dou_puka_event_0), 0)
+    CALL(evt_run_case_evt, CASE_NOT_STAND_ON, 1, STRING("a02_fune_ata1"), 0, PTR(dou_puka_event_rev_0), 0)
     SET_VALUE(LW(0), STRING("s02_fune02"))
     SET_VALUE(LW(1), STRING("a02_fune_02"))
     SET_VALUE(LW(2), STRING("a02_fune_ata2"))
@@ -369,11 +395,11 @@ EVT_BEGIN(dou_02_init_evt)
     CALL_CHILD(dou_puka_event_init1)
     SPAWN_EVENT(dou_puka_event_main1)
     SPAWN_EVENT(dou_puka_event_sub1)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a02_fune_ata2"), 0, PTR(dou_puka_event_1), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_STAND_ON, 1, STRING("a02_fune_ata2"), 0, PTR(dou_puka_event_rev_1), 0)
-    CALL(evt_item_entry, STRING("handle"), ITEM_GATE_HANDLE, 147, 42, 101, ITEM_ENTRY_STAY, GSWF(GSWF_DOU02_GATE_HANDLE_TAKEN), 0)
-    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, -25, 25, 100, ITEM_ENTRY_FIXED, GSWF(GSWF_DOU02_STAR_PIECE), 0)
-    CALL(evt_mobj_powerupblk, STRING("pblk1"), -300, 145, -130, 0, GSWF(GSWF_DOU02_SHINE_SPRITE), 0)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a02_fune_ata2"), 0, PTR(dou_puka_event_1), 0)
+    CALL(evt_run_case_evt, CASE_NOT_STAND_ON, 1, STRING("a02_fune_ata2"), 0, PTR(dou_puka_event_rev_1), 0)
+    CALL(evt_item_entry, STRING("handle"), ITEM_GATE_HANDLE, 147, 42, 101, ITEM_TYPE_GROUND, GSWF_DOU_02_GATE_HANDLE, 0)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, -25, 25, 100, ITEM_TYPE_STILL, GSWF_STARPIECE_77, 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk1"), -300, 145, -130, 0, GSWF_SHINE_29, 0)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
     CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change"), STRING("Ship_Change"))

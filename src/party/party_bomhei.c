@@ -1,6 +1,6 @@
 // Bobbery (bomhei): partner init, follow and the bomb ability.
+
 #include "version.h"
-#include "mot/mot_damage.h"
 #include "driver/casedrv.h"
 #include "dolphin/types.h"
 #include "mario/mario.h"
@@ -23,88 +23,111 @@
 #include "eff/eff_sandars.h"
 #include "driver/npcdrv.h"
 #include "evt/evt_cmd.h"
-#include "party/party_bomhei.h"
-#include "evt/evt_cam.h"
 #include <dolphin/pad.h>
+#include "sfx_name_word.h"
+#include "evt/evt_cam.h"
 
-#if VERSION >= VERSION_JP
+#include "party/party_bomhei.h"
+
 /** Height bob of Bobbery over Mario's head per frame of Mario's carry walk (M_W_7), in quarter units. */
-s32 m_w_7_sync[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 8, 7, 5, 3, 1, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 9, 8, 6, 4, 3, 2, 1, 0, 0, 0, 0, 0};
+#if VERSION >= VERSION_JP
+static s32 m_w_7_sync[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 8, 7, 5, 3, 1, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 9, 8, 6, 4, 3, 2, 1, 0, 0, 0, 0, 0};
 #endif
 
-/** Camera shake of 600 ms (camera 4), run when Bobbery's blast hits a bomb rock (isBombRock). */
-EVT_BEGIN(longQuake_evt)
-    CALL(evt_cam_shake, 4, PTR(0xF24A7A8F), PTR(0xF24A7A8F), 600)
+/** Camera shake of 600 ms (camera 4), run when Bobbery's blast hits a bomb rock (chkBreakable). */
+static EVT_BEGIN(longQuake_evt)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(15.0f / 1024.0f), FLOAT(15.0f / 1024.0f), 600)
     RETURN
 EVT_END()
 
 /** Shorter 200 ms camera shake, run for every other Bobbery blast. */
 static EVT_BEGIN(quake_evt)
-    CALL(evt_cam_shake, 4, PTR(0xF24A7A8F), PTR(0xF24A7A8F), 200)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(15.0f / 1024.0f), FLOAT(15.0f / 1024.0f), 200)
     RETURN
 EVT_END()
 
 #if VERSION <= VERSION_DEMO_JP
-// The demo defines the sync table after the quake scripts.
-s32 m_w_7_sync[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 8, 7, 5, 3, 1, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 9, 8, 6, 4, 3, 2, 1, 0, 0, 0, 0, 0};
+static s32 m_w_7_sync[] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 8, 7, 5, 3, 1, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 10, 10, 9, 8, 6, 4, 3, 2, 1, 0, 0, 0, 0, 0};
 #endif
 
-/**
- * Whether a hit object is something Bobbery's blast breaks:
- * a MOBJ_BombRock map object, or a map collision part with a case (casedrv) waiting for CASE_COND_BOBBERY.
- */
-static inline BOOL isBombRock(HitEntry* hit) {
-    CaseEntry* c;
-    if (hit == NULL) {
-        return FALSE;
-    }
-    if (hitGetAttr(hit) & HIT_ATTR_MOBJ) {
-        if (strcmp(mobjHitObjPtrToPtr(hit)->animName, "MOBJ_BombRock") == 0) {
-            return TRUE;
-        }
-    } else {
-        c = caseCheckHitObj2(hit);
-        if (c != NULL && c->conditionId == CASE_COND_BOBBERY) {
-            return TRUE;
-        }
-    }
-    return FALSE;
+/** Clears Bobbery's use flags: no-make-disp-dir, forced fall, event use and being used. */
+static inline void bomheiCleanFlags(PartyEntry* p) {
+    p->flags2 &= ~PARTY_DISP_FLAG_NO_MAKE_DISP_DIR;
+    p->flags &= ~PARTY_FLAG_FORCE_FALL;
+    p->flags &= ~PARTY_FLAG_IS_EVT_USE;
+    p->flags &= ~PARTY_FLAG_IS_BEING_USED;
 }
 
-/** Stops Bobbery's two looping sounds. */
-static inline void bomheiStopSfx(PartyEntry* party) {
-    if ((u32)party->work.bomhei.sfxId != 0xFFFFFFFFU) {
+/** Frees Bobbery's use work (useStruct), if any. */
+static inline void bomheiFree(PartyEntry* p) {
+    if (p->useStruct != NULL) {
+        __memFree(HEAP_DEFAULT, p->useStruct);
+        p->useStruct = NULL;
+    }
+}
+
+/** Starts sound name in Bobbery's slot 0 (throwSfxId) at his position. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void se0_on(PartyEntry* party, const char* name) {
+    party->work.bomhei.throwSfxId = psndSFXOn_3D(name, &party->playerPtr->position);
+}
+
+/** Starts sound name in Bobbery's slot 1 (sfxId) at his position. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void se1_on(PartyEntry* party, const char* name) {
+    party->work.bomhei.sfxId = psndSFXOn_3D(name, &party->playerPtr->position);
+}
+
+/** Starts sound name in Bobbery's slot 2 (sfxId2) at his position. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void se2_on(PartyEntry* party, const char* name) {
+    party->work.bomhei.sfxId2 = psndSFXOn_3D(name, &party->playerPtr->position);
+}
+
+/** Stops Bobbery's sound in slot 0 (throwSfxId) if it is playing. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void se0_off(PartyEntry* party) {
+    if (party->work.bomhei.throwSfxId != -1) {
+        psndSFXOff(party->work.bomhei.throwSfxId);
+        party->work.bomhei.throwSfxId = -1;
+    }
+}
+
+/** Stops Bobbery's sound in slot 1 (sfxId) if it is playing. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void se1_off(PartyEntry* party) {
+    if (party->work.bomhei.sfxId != -1) {
         psndSFXOff(party->work.bomhei.sfxId);
         party->work.bomhei.sfxId = -1;
     }
-    if ((u32)party->work.bomhei.sfxId2 != 0xFFFFFFFFU) {
+}
+
+/** Stops Bobbery's sound in slot 2 (sfxId2) if it is playing. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void se2_off(PartyEntry* party) {
+    if (party->work.bomhei.sfxId2 != -1) {
         psndSFXOff(party->work.bomhei.sfxId2);
         party->work.bomhei.sfxId2 = -1;
     }
 }
 
-/** Stops the sounds of a bomb use; the demo also has a third one, liftSfxId. */
-static inline void bomheiStopUseSfx(PartyEntry* party) {
-#if VERSION <= VERSION_DEMO_JP
-    if ((u32)party->work.bomhei.liftSfxId != 0xFFFFFFFFU) {
-        psndSFXOff(party->work.bomhei.liftSfxId);
-        party->work.bomhei.liftSfxId = -1;
-    }
-#endif
-    bomheiStopSfx(party);
+/** Marks Bobbery's three sound ids as not playing (-1). */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void init_se_work(PartyEntry* party) {
+    party->work.bomhei.throwSfxId = -1;
+    party->work.bomhei.sfxId = -1;
+    party->work.bomhei.sfxId2 = -1;
 }
 
-#define BOMHEI_CLEAN_FLAGS(p)                 \
-    (p)->flags2 &= ~PARTY_DISP_FLAG_DIR_LOCK; \
-    (p)->flags &= ~PARTY_FLAG_FORCE_FALL;     \
-    (p)->flags &= ~PARTY_FLAG_IS_EVT_USE;     \
-    (p)->flags &= ~PARTY_FLAG_IS_BEING_USED;
-
-#define BOMHEI_FREE(p)                \
-    if ((p)->useStruct != NULL) {     \
-        __memFree(0, (p)->useStruct); \
-        (p)->useStruct = NULL;        \
-    }
+/** Stops the sounds of a bomb use; the early demos keep a third id at 0x17C. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void se_all_off(PartyEntry* p) {
+#if VERSION <= VERSION_DEMO_JP
+    se0_off(p);
+#endif
+    se1_off(p);
+    se2_off(p);
+}
 
 /**
  * Party table bye handler: plays the goodbye sequence when Bobbery leaves the party,
@@ -112,43 +135,47 @@ static inline void bomheiStopUseSfx(PartyEntry* party) {
  * then switches to run mode 14 when the sequence ends.
  */
 void bomhei_bye(PartyEntry* party) {
-    if (party->trigFlags & PARTY_TRIG_FLAG_CHG_RUN_MODE) {
-        party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
+    if (party->trigFlags & PARTY_TRIG_CHG_RUN_MODE) {
+        party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
         partyGoodbyeInit(party);
-        party->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-        bomheiStopUseSfx(party);
+        party->playerPtr->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
+        se_all_off(party);
     }
     if (partyGoodbyeMain(party)) {
-        partyChgRunMode(party, 14);
+        partyChgRunMode(party, PARTY_RUN_DELETE);
     }
 }
 
 /**
- * Party table init handler: Bobbery is member kind 3, 28 units tall and wide,
- * starts in idle state 100 with no bomb sounds playing.
+ * Partner init for Bobbery: member kind, ground mover, 28x28 collision box, state 100, and no sounds playing
+ * (init_se_work).
  */
 void bomhei_init(PartyEntry* party) {
-    party->memberKind = PARTY_MEMBER_BOBBERY;
+    party->memberKind = PARTY_BOBBERY;
     party->moveKind = 0;
     party->height = 28.0f;
     party->width = 28.0f;
     party->work.bomhei.state = 100;
-    party->work.bomhei.liftSfxId = -1;
-    party->work.bomhei.sfxId = -1;
-    party->work.bomhei.sfxId2 = -1;
+    init_se_work(party);
+}
+
+/** TRUE when hit is deep water (HIT_ATTR_WATER_HAZARD, attribute bit 9). */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static BOOL chkWater(HitEntry* hit) {
+    return (hitGetAttr(hit) >> 9) & 1;
 }
 
 /**
- * Bobbery's state for scripts (evt_party.c): 0 when there is no partner or Bobbery is out
- * but not using his ability, 1 on the frame his bomb explodes (use motion 60),
- * 2 otherwise (bomb in progress, or another partner is out).
+ * Bobbery's state for scripts (evt_party.c): 0 when there is no partner, or Bobbery is out
+ * but not using his ability. Otherwise returns 1 for use motion 60 (Bobbery's blast), 2 for other motions;
+ * the motion-60 test itself does not require the selected partner to be Bobbery.
  */
-u8 bomheiGetStatus() {
+s32 bomheiGetStatus(void) {
     u32 partyId = marioGetPartyId();
     PartyEntry* party = partyGetPtr(partyId);
-    u8 status = 2;
+    s32 status = 2;
 
-    if (party == NULL || (party->currentMemberId == PARTY_MEMBER_BOBBERY && (party->flags & PARTY_FLAG_IS_BEING_USED) == 0)) {
+    if (party == NULL || (party->currentMemberId == PARTY_BOBBERY && (party->flags & PARTY_FLAG_IS_BEING_USED) == 0)) {
         status = 0;
         return status;
     } else if (party->useMotionId == 60) {
@@ -157,64 +184,190 @@ u8 bomheiGetStatus() {
     return status;
 }
 
-#if VERSION <= VERSION_DEMO_JP
-/** Party table exit handler (demo): drops Mario's carry flag, stops the bomb sounds and frees the use work. */
+/**
+ * Party table exit handler: drops Mario's carry flag, stops the bomb sounds and frees the use work. The early demos
+ * do this on the given partner; JP and later on the current partner when it is Bobbery in use, through
+ * bomhei_use_cancel.
+ */
 void bomhei_exit(PartyEntry* party) {
+#if VERSION >= VERSION_JP
+    party->playerPtr->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
+    bomhei_use_cancel();
+#else
     party->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-    bomheiStopUseSfx(party);
-    BOMHEI_FREE(party);
+    se_all_off(party);
+    bomheiFree(party);
+#endif
 }
 
 /**
- * Cancels a bomb in progress (demo): back to run mode 2 unless in run mode 9,
+ * Cancels a bomb in progress: back to run mode 2 unless in run mode 9,
  * clears the use flags and frees the use work.
- * Called before plane, ship and bellows rides and on run-mode changes (party_move.c).
- * Unlike the release versions it leaves Mario's carry flag and the sounds alone.
+ * Called before plane, ship and bellows rides (party.c) and when a forced walk starts (partyForceWalk, party_move.c).
+ * The early demos leave Mario's carry flag and sounds alone; JP and later clear the carry flag and stop the two bomb sounds.
  */
-void bomhei_use_cancel() {
+void bomhei_use_cancel(void) {
     PartyEntry* p = partyGetPtr(marioGetPartyId());
-    if (p != NULL && p->currentMemberId == PARTY_MEMBER_BOBBERY && (p->flags & PARTY_FLAG_IS_BEING_USED)) {
-        if (p->runMode != 9) {
-            partyChgRunMode(p, 2);
-            p->moveMode = 0;
+    if (p != NULL && p->currentMemberId == PARTY_BOBBERY && (p->flags & PARTY_FLAG_IS_BEING_USED)) {
+#if VERSION >= VERSION_JP
+        p->playerPtr->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
+#endif
+        if (p->runMode != PARTY_RUN_FORCE_WALK) {
+            partyChgRunMode(p, PARTY_RUN_MOVE);
+            p->moveMode = PARTY_MOVE_MODE_STAY;
         }
-        BOMHEI_CLEAN_FLAGS(p);
-        BOMHEI_FREE(p);
+        bomheiCleanFlags(p);
+#if VERSION >= VERSION_JP
+        se_all_off(p);
+#endif
+        bomheiFree(p);
     }
 }
 
 /**
- * Cancels a bomb only while Mario is carrying Bobbery (demo),
+ * Cancels a bomb only while Mario is carrying Bobbery,
  * putting Mario back in his standing pose and stopping the sounds.
  * Called when Mario takes damage (mot_damage.c).
  */
-void bomhei_use_cancel2() {
+void bomhei_use_cancel2(void) {
     PartyEntry* p = partyGetPtr(marioGetPartyId());
-    if (p != NULL && p->currentMemberId == PARTY_MEMBER_BOBBERY && (p->flags & PARTY_FLAG_IS_BEING_USED) && (p->playerPtr->flags & (MARIO_FLAG_ACTIVE << 13))) {
-        p->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
+    if (p != NULL && p->currentMemberId == PARTY_BOBBERY && (p->flags & PARTY_FLAG_IS_BEING_USED) && (p->playerPtr->flags & MARIO_FLAG_IS_CARRYING_BOBBERY)) {
+        p->playerPtr->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
         marioChgPose("M_S_1");
-        if (p->runMode != 9) {
-            partyChgRunMode(p, 2);
-            p->moveMode = 0;
+        if (p->runMode != PARTY_RUN_FORCE_WALK) {
+            partyChgRunMode(p, PARTY_RUN_MOVE);
+            p->moveMode = PARTY_MOVE_MODE_STAY;
         }
-        BOMHEI_CLEAN_FLAGS(p);
-        bomheiStopUseSfx(p);
-        BOMHEI_FREE(p);
+        bomheiCleanFlags(p);
+        se_all_off(p);
+        bomheiFree(p);
     }
 }
 
 /**
- * Party table post-use handler (demo): drops Mario's carry flag with a standing pose,
- * stops the sounds and frees the use work.
+ * Party table post-use handler: drops Mario's carry flag, stops the sounds and frees the use work.
+ * The early demos restore a standing pose when carried; JP and later choose walk, dash, jump or standing from Mario's state
+ * and repositions Bobbery near Mario during use motions 70-99.
  */
 void bomhei_use_post(PartyEntry* party) {
+#if VERSION >= VERSION_JP
+    MarioWork* player = party->playerPtr;
+    const char* name;
+    if (party->useMotionId >= 70 && party->useMotionId < 100) {
+        partyGetAppearPos(party, &party->position);
+    }
+    if (player->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) {
+        player->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
+        if (player->currMotionId == MARIO_MOTION_WALK) {
+            name = "M_W_1";
+        } else if (player->currMotionId == MARIO_MOTION_DASH) {
+            name = "M_R_1";
+        } else if (player->flags & MARIO_FLAG_IS_JUMPING) {
+            name = "M_J_1B";
+        } else {
+            name = "M_S_1";
+        }
+        marioChgPose(name);
+    }
+    bomheiCleanFlags(party);
+    if (party->runMode != PARTY_RUN_FORCE_WALK) {
+        party->moveMode = PARTY_MOVE_MODE_STAY;
+        party->trigFlags |= PARTY_TRIG_CHG_RUN_MODE;
+    }
+    party->playerPtr->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
+    se_all_off(party);
+    bomheiFree(party);
+#else
     MarioWork* mario = party->playerPtr;
     if (mario->flags & (MARIO_FLAG_ACTIVE << 13)) {
         mario->flags &= ~(MARIO_FLAG_ACTIVE << 13);
         marioChgPose("M_S_1");
     }
-    bomheiStopUseSfx(party);
-    BOMHEI_FREE(party);
+    se_all_off(party);
+    bomheiFree(party);
+#endif
+}
+
+/**
+ * Ends the fuse early on attribute 0xC00 (use motion 60, explode), or floor attribute 0x200
+ * without 0xC00 (use motion 40, the splash). JP and later check front, then head, then floor until one applies;
+ * the early demos inspect only the first hit object present. JP and later return TRUE when one applied (use motion 22
+ * reads it); the early demos return nothing (no caller reads a result there).
+ * 0x200 is the hazard water that sinks Mario (mario_hit.c, MARIO_MOTION_DAMAGE), 0x400 HIT_ATTR_DAMAGE_LIQUID
+ * and 0x800 the spikes (MARIO_MOTION_DAMAGE_TOGE).
+ */
+// Original name and size (0xa4) from the JP demo map (UNUSED there: every call is inlined).
+#if VERSION <= VERSION_DEMO_JP
+static void checkMapAttr(PartyEntry* party) {
+    u32 attr;
+
+    if (party->hitobjFront != NULL) {
+        if (hitGetAttr(party->hitobjFront) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
+            party->useMotionId = 60;
+        }
+    } else if (party->hitobjHead != NULL) {
+        if (hitGetAttr(party->hitobjHead) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
+            party->useMotionId = 60;
+        }
+    } else if (party->hitobjStandOn != NULL) {
+        attr = hitGetAttr(party->hitobjStandOn);
+        if (attr & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
+            party->useMotionId = 60;
+        } else if (attr & HIT_ATTR_WATER_HAZARD) {
+            party->useMotionId = 40;
+        }
+    }
+}
+#else
+static BOOL checkMapAttr(PartyEntry* party) {
+    HitEntry* hit;
+    u32 attr;
+
+    hit = party->hitobjFront;
+    if (hit != NULL && (hitGetAttr(hit) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
+        party->useMotionId = 60;
+        return TRUE;
+    }
+    hit = party->hitobjHead;
+    if (hit != NULL && (hitGetAttr(hit) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
+        party->useMotionId = 60;
+        return TRUE;
+    }
+    hit = party->hitobjStandOn;
+    if (hit != NULL) {
+        attr = hitGetAttr(hit);
+        if (attr & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
+            party->useMotionId = 60;
+            return TRUE;
+        }
+        if (attr & HIT_ATTR_WATER_HAZARD) {
+            party->useMotionId = 40;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+#endif
+
+/**
+ * Holds Bobbery above Mario's head: 36 units up (plus a bob from m_w_7_sync while Mario plays the carry walk
+ * M_W_7), 6 behind along his facing, facing the same way as Mario.
+ */
+// Original name and size (0xf4) from the JP demo map (UNUSED there: every call is inlined).
+void bomhei_hold(PartyEntry* party) {
+    MarioWork* mario = party->playerPtr;
+    f32 height = 36.0f;
+
+    if (strcmp(mario->animName, "M_W_7") == 0) {
+        height += m_w_7_sync[party->work.bomhei.syncFrame] / 4.0f;
+    }
+    party->position.x = mario->position.x;
+    party->position.y = mario->position.y + height;
+    party->position.z = mario->position.z;
+    movePos(&party->position.x, &party->position.z, -6.0f, toMovedirSimple(mario->displayDirectionTarget));
+    party->position.z += 2.0f;
+    party->displayDirectionTarget = mario->displayDirectionTarget;
+    party->displayDirection = mario->displayDirection;
 }
 
 static void bomhei_use_main(PartyEntry* party);
@@ -222,20 +375,38 @@ static void mario_controll(PartyEntry* party);
 static HitEntry* check_front(PartyEntry* party);
 
 /**
- * Party table use handler (demo), run every frame of the bomb ability:
+ * Party table use handler, run every frame of the bomb ability:
  * steps bomhei_use_main, keeps Bobbery on the ground while he walks or blows,
  * faces him at the skull's tongue on Keelhaul Key's muj_05 (A_dokuro_bero),
  * and drives Mario's carry poses unless Mario is in a damage motion (state 0x66).
  */
 void bomhei_use(PartyEntry* party) {
-    MarioWork* mario;
+    MarioWork* mario = party->playerPtr;
+    MapObjectEntry* mobj;
 
+#if VERSION >= VERSION_JP
+    if (party->flags & PARTY_FLAG_IS_BEING_USED) {
+        bomhei_use_main(party);
+        if ((party->useMotionId >= 30 && party->useMotionId <= 32) ||
+            (party->useMotionId >= 50 && party->useMotionId <= 51) || party->useMotionId == 60) {
+            partyChkGnd(party);
+            if (party->flags & PARTY_FLAG_IS_GROUNDED) {
+                partyChgMot(party, PARTY_MOTION_STAY);
+                party->velY = 0.0f;
+            }
+            if (strcmp(gp->currentMapName, "muj_05") == 0 && party->hitobjStandOn != NULL &&
+                strcmp(hitGetName(party->hitobjStandOn), "A_dokuro_bero") == 0) {
+                party->targetDir = angleABf(party->position.x, party->position.z, 638.0f, 12.5f);
+                party->moveDir = party->targetDir;
+            }
+        }
+#else
     bomhei_use_main(party);
     if ((party->useMotionId >= 30 && party->useMotionId <= 32) ||
         (party->useMotionId >= 50 && party->useMotionId <= 51) || party->useMotionId == 60) {
         partyChkGnd(party);
         if (party->flags & PARTY_FLAG_IS_GROUNDED) {
-            partyChgMot(party, 0);
+            partyChgMot(party, PARTY_MOTION_STAY);
             party->velY = 0.0f;
         }
         if (strcmp(gp->currentMapName, "muj_05") == 0 && party->hitobjStandOn != NULL &&
@@ -246,142 +417,17 @@ void bomhei_use(PartyEntry* party) {
     }
     if (party->flags & PARTY_FLAG_IS_BEING_USED) {
         mario = party->playerPtr;
+#endif
         if (party->work.bomhei.state != 0x66) {
             if (mario->currMotionId == MARIO_MOTION_DAMAGE || mario->currMotionId == MARIO_MOTION_DAMAGE_TOGE) {
                 party->work.bomhei.state = 0x66;
+#if VERSION <= VERSION_DEMO_JP
             } else {
                 mario_controll(party);
             }
         }
     }
-}
 #else
-/**
- * Party table exit handler: drops Mario's carry flag and, if Bobbery's bomb is in progress,
- * cancels it like bomhei_use_cancel.
- */
-void bomhei_exit(PartyEntry* party) {
-    PartyEntry* p;
-    party->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-    p = partyGetPtr(marioGetPartyId());
-    if (p != NULL && p->currentMemberId == PARTY_MEMBER_BOBBERY && (p->flags & PARTY_FLAG_IS_BEING_USED)) {
-        p->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-        if (p->runMode != 9) {
-            partyChgRunMode(p, 2);
-            p->moveMode = 0;
-        }
-        BOMHEI_CLEAN_FLAGS(p);
-        bomheiStopSfx(p);
-        BOMHEI_FREE(p);
-    }
-}
-
-/**
- * Cancels a bomb in progress: drops Mario's carry flag, back to run mode 2 unless in run mode 9,
- * clears the use flags, stops the fuse sounds and frees the use work.
- * Called before plane, ship and bellows rides, on run-mode changes (party_move.c) and from bomhei_use.
- */
-void bomhei_use_cancel() {
-    PartyEntry* p = partyGetPtr(marioGetPartyId());
-    if (p != NULL && p->currentMemberId == PARTY_MEMBER_BOBBERY && (p->flags & PARTY_FLAG_IS_BEING_USED)) {
-        p->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-        if (p->runMode != 9) {
-            partyChgRunMode(p, 2);
-            p->moveMode = 0;
-        }
-        BOMHEI_CLEAN_FLAGS(p);
-        bomheiStopSfx(p);
-        BOMHEI_FREE(p);
-    }
-}
-
-/**
- * Cancels a bomb only while Mario is carrying Bobbery, putting Mario back in his standing pose.
- * Called when Mario takes damage (mot_damage.c).
- */
-void bomhei_use_cancel2() {
-    PartyEntry* p = partyGetPtr(marioGetPartyId());
-    if (p != NULL && p->currentMemberId == PARTY_MEMBER_BOBBERY && (p->flags & PARTY_FLAG_IS_BEING_USED) && (p->playerPtr->flags & (MARIO_FLAG_ACTIVE << 13))) {
-        p->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-        marioChgPose("M_S_1");
-        if (p->runMode != 9) {
-            partyChgRunMode(p, 2);
-            p->moveMode = 0;
-        }
-        BOMHEI_CLEAN_FLAGS(p);
-        bomheiStopSfx(p);
-        BOMHEI_FREE(p);
-    }
-}
-
-/**
- * Party table post-use handler: if Bobbery was already flying off
- * after his blast (use motion 70-99) puts him at his appear position,
- * gives Mario a pose matching his motion (walk, run, jump or stand) if he was carrying, clears the use flags,
- * flags a run-mode change and frees the use work.
- */
-void bomhei_use_post(PartyEntry* party) {
-    MarioWork* mario = party->playerPtr;
-    const char* name;
-    if (party->useMotionId >= 70 && party->useMotionId < 100) {
-        partyGetAppearPos(party, &party->position);
-    }
-    if (mario->flags & (MARIO_FLAG_ACTIVE << 13)) {
-        mario->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-        if (mario->currMotionId == MARIO_MOTION_WALK) {
-            name = "M_W_1";
-        } else if (mario->currMotionId == MARIO_MOTION_DASH) {
-            name = "M_R_1";
-        } else if (mario->flags & (MARIO_FLAG_ACTIVE << 16)) {
-            name = "M_J_1B";
-        } else {
-            name = "M_S_1";
-        }
-        marioChgPose(name);
-    }
-    BOMHEI_CLEAN_FLAGS(party);
-    if (party->runMode != 9) {
-        party->moveMode = 0;
-        party->trigFlags |= PARTY_TRIG_FLAG_CHG_RUN_MODE;
-    }
-    party->playerPtr->flags &= ~(MARIO_FLAG_ACTIVE << 13);
-    bomheiStopSfx(party);
-    BOMHEI_FREE(party);
-}
-
-static void bomhei_use_main(PartyEntry* party);
-static void mario_controll(PartyEntry* party);
-static HitEntry* check_front(PartyEntry* party);
-
-/**
- * Party table use handler, run every frame of the bomb ability:
- * steps bomhei_use_main, keeps Bobbery on the ground while he walks or blows,
- * faces him at the skull's tongue on Keelhaul Key's muj_05 (A_dokuro_bero) and drives Mario's carry poses.
- * Cancels the bomb when Mario stands on a red or blue spring while carrying, loses control, is force- moved,
- * or turns sideways through a slit while carrying.
- */
-void bomhei_use(PartyEntry* party) {
-    MarioWork* mario = party->playerPtr;
-    MapObjectEntry* mobj;
-
-    if (party->flags & PARTY_FLAG_IS_BEING_USED) {
-        bomhei_use_main(party);
-        if ((party->useMotionId >= 30 && party->useMotionId <= 32) ||
-            (party->useMotionId >= 50 && party->useMotionId <= 51) || party->useMotionId == 60) {
-            partyChkGnd(party);
-            if (party->flags & PARTY_FLAG_IS_GROUNDED) {
-                partyChgMot(party, 0);
-                party->velY = 0.0f;
-            }
-            if (strcmp(gp->currentMapName, "muj_05") == 0 && party->hitobjStandOn != NULL &&
-                strcmp(hitGetName(party->hitobjStandOn), "A_dokuro_bero") == 0) {
-                party->targetDir = angleABf(party->position.x, party->position.z, 638.0f, 12.5f);
-                party->moveDir = party->targetDir;
-            }
-        }
-        if (party->work.bomhei.state != 0x66) {
-            if (mario->currMotionId == MARIO_MOTION_DAMAGE || mario->currMotionId == MARIO_MOTION_DAMAGE_TOGE) {
-                party->work.bomhei.state = 0x66;
                 return;
             }
             mario_controll(party);
@@ -404,125 +450,25 @@ void bomhei_use(PartyEntry* party) {
             bomhei_use_cancel();
         }
     }
-}
 #endif
+}
 
-// Bits of BomheiWork.flags (cleared when Bobbery is picked up).
-enum BomheiWorkFlag {
-    BOMHEI_FLAG_FUSE_SHORT = 0x2,   // 2.5 s left on the fuse (or splashed): the L_2 / W_2 poses
-    BOMHEI_FLAG_LAND_EXPLODE = 0x4, // Unknown: never set; on landing Bobbery would explode (use motion 50, not 30)
-    BOMHEI_FLAG_SPLASHED = 0x8,     // fell into deep water (marioSetSplash); cleared when he explodes
-};
+// BomheiWork.flags (bit 0x4 is tested once, on landing after the throw, and never set)
+#define BOMHEI_FLAG_FUSE_LIT 0x2 // 2.5 s left: fuse sound, lit poses L_2 / W_2
+#define BOMHEI_FLAG_IN_WATER 0x8 // landed in water (step 40), until the blast
 
 typedef struct BomheiWork {
-    u32 flags; // 0x0, BomheiWorkFlag bits
+    u32 flags; // 0x0, BOMHEI_FLAG_*
     s32 timer; // 0x4
 } BomheiWork;
 
-typedef void (*MarioSetSplashByValueFn)(s32 kind, Vec pos);
-
-/** Negates a float; nothing in this file calls it. */
-static inline f32 bomheiNeg(f32 x) {
-    return -x;
-}
-
-/** Converts a float to s16; nothing in this file calls it. */
-static inline s16 bomheiToS16(f32 x) {
-    return x;
-}
-
-#define BWORK(p) ((BomheiWork*)(p)->useStruct)
-
-#if VERSION <= VERSION_DEMO_JP
-/**
- * The demo checks only the first hit object present.
- * Ends the fuse early when the first of Bobbery's front,
- * head or floor hits present has attribute 0xC00 (use motion 60, explode)
- * or his floor has 0x200 (use motion 40, the splash).
- * 0x200 is the hazard water that sinks Mario (mario_hit.c, MARIO_MOTION_DAMAGE) and 0x800 the spikes
- * (MARIO_MOTION_DAMAGE_TOGE). Guess: 0x400, the other bit of 0xC00, is a further hazard.
- */
-static inline void bomheiChkHitAttr(PartyEntry* party) {
-    u32 attr;
-
-    if (party->hitobjFront != NULL) {
-        if (hitGetAttr(party->hitobjFront) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
-            party->useMotionId = 60;
-        }
-    } else if (party->hitobjHead != NULL) {
-        if (hitGetAttr(party->hitobjHead) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
-            party->useMotionId = 60;
-        }
-    } else if (party->hitobjStandOn != NULL) {
-        attr = hitGetAttr(party->hitobjStandOn);
-        if (attr & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
-            party->useMotionId = 60;
-        } else if (attr & HIT_ATTR_DEEP_WATER) {
-            party->useMotionId = 40;
-        }
-    }
-}
-#else
-/**
- * Ends the fuse early when Bobbery's front, head or floor hit has attribute 0xC00 (use motion 60, explode)
- * or his floor has 0x200 (use motion 40, the splash); returns TRUE if it did.
- * 0x200 is the hazard water that sinks Mario (mario_hit.c, MARIO_MOTION_DAMAGE) and 0x800 the spikes
- * (MARIO_MOTION_DAMAGE_TOGE). Guess: 0x400, the other bit of 0xC00, is a further hazard.
- */
-static inline BOOL bomheiChkHitAttr(PartyEntry* party) {
-    HitEntry* hit;
-    u32 attr;
-
-    hit = party->hitobjFront;
-    if (hit != NULL && (hitGetAttr(hit) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
-        party->useMotionId = 60;
-        return TRUE;
-    }
-    hit = party->hitobjHead;
-    if (hit != NULL && (hitGetAttr(hit) & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
-        party->useMotionId = 60;
-        return TRUE;
-    }
-    hit = party->hitobjStandOn;
-    if (hit != NULL) {
-        attr = hitGetAttr(hit);
-        if (attr & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
-            party->useMotionId = 60;
-            return TRUE;
-        }
-        if (attr & HIT_ATTR_DEEP_WATER) {
-            party->useMotionId = 40;
-            return TRUE;
-        }
-    }
-    return FALSE;
-}
-#endif
-
-/**
- * Holds Bobbery above Mario's head: 36 units up (plus a bob from m_w_7_sync while Mario plays the carry walk
- * M_W_7), 6 behind along his facing, facing the same way as Mario.
- */
-static inline void bomheiSetHoldPos(PartyEntry* party) {
-    MarioWork* mario = party->playerPtr;
-    f32 height = 36.0f;
-
-    if (strcmp(mario->animName, "M_W_7") == 0) {
-        height += m_w_7_sync[party->work.bomhei.syncFrame] / 4.0f;
-    }
-    party->position.x = mario->position.x;
-    party->position.y = mario->position.y + height;
-    party->position.z = mario->position.z;
-    movePos(&party->position.x, &party->position.z, -6.0f, toMovedirSimple(mario->displayDirectionTarget));
-    party->position.z += 2.0f;
-    party->displayDirectionTarget = mario->displayDirectionTarget;
-    party->displayDirection = mario->displayDirection;
-}
+// Bobbery's work (PartyEntry.useStruct). A macro, not an inline function: as a function the object changes.
+#define BOMHEI_WORK(p) ((BomheiWork*)(p)->useStruct)
 
 /**
  * The bomb ability's motion steps (party->useMotionId).
  * 0-2: Bobbery hops onto Mario's head; 10: held there with a 3 s fuse while X is held;
- * 20-22: thrown 38 units ahead on release; 30-32: walks forward slowly (X again cuts the fuse to 0.5 s);
+ * 20-22: thrown 38 units ahead on release; 30-32: walks forward slowly (X again starts the last-moment pose);
  * 40-42: lands in water with a splash; 50-51: A_3 last-moment pose for 40 frames,
  * then check_front picks the hit; 60: the blast (Sanders effect at the partner attack level, camera shake,
  * field enemy hit); 70-71: flies off the top of the screen; 80-82: 0.8 s later drops back near Mario; 100: done.
@@ -532,8 +478,8 @@ static void bomhei_use_main(PartyEntry* party) {
     f32 x, z;
     f32 tmp;
 
-    if (party->trigFlags & PARTY_TRIG_FLAG_CHG_RUN_MODE) {
-        party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
+    if (party->trigFlags & PARTY_TRIG_CHG_RUN_MODE) {
+        party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
 #if VERSION >= VERSION_JP
         party->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
         party->flags &= ~(PARTY_FLAG_DISABLE_FRONT_WALL_CHK | PARTY_FLAG_FORCE_FALL);
@@ -550,8 +496,8 @@ static void bomhei_use_main(PartyEntry* party) {
             party->work.bomhei.state = 100;
             party->work.bomhei.timer = 0;
             party->moveFrames = 4;
-            BWORK(party)->timer = 0;
-            BWORK(party)->flags = 0;
+            BOMHEI_WORK(party)->timer = 0;
+            BOMHEI_WORK(party)->flags = 0;
             partyChgPose(party, "R_1");
         case 1:
             party->moveTarget = mario->position;
@@ -570,6 +516,8 @@ static void bomhei_use_main(PartyEntry* party) {
             party->targetDir = angleABf(party->position.x, party->position.z, x, z);
             party->moveDir = party->targetDir;
             party->velY = 7.5f;
+
+            // the acceleration is negated at run time (the fneg is in the retail code)
             tmp = 0.8333333f;
             party->accelY = -tmp;
             partyChgPose(party, "J_1A");
@@ -582,18 +530,18 @@ static void bomhei_use_main(PartyEntry* party) {
             if (--party->moveFrames > 0) {
                 break;
             }
-            party->flags2 |= PARTY_DISP_FLAG_DIR_LOCK;
+            party->flags2 |= PARTY_DISP_FLAG_NO_MAKE_DISP_DIR;
             partyChgPose(party, "L_1");
-            BWORK(party)->timer = (s16)sysMsec2Frame(3000);
+            BOMHEI_WORK(party)->timer = (s16)sysMsec2Frame(3000);
             party->useMotionId = 10;
             party->work.bomhei.state = 20;
             break;
         case 10:
-            if (BWORK(party)->flags & BOMHEI_FLAG_FUSE_SHORT) {
+            if (BOMHEI_WORK(party)->flags & BOMHEI_FLAG_FUSE_LIT) {
                 partyChgPose(party, "L_2");
             }
-            bomheiSetHoldPos(party);
-            bomheiChkHitAttr(party);
+            bomhei_hold(party);
+            checkMapAttr(party);
 #if VERSION <= VERSION_DEMO_JP
             if ((party->flags & PARTY_FLAG_IS_EVT_USE) || !(mario->buttonHold & PAD_BUTTON_X)) {
 #else
@@ -608,9 +556,9 @@ static void bomhei_use_main(PartyEntry* party) {
     switch (party->useMotionId) {
         case 20:
 #if VERSION <= VERSION_DEMO_JP
-            party->work.bomhei.liftSfxId = psndSFXOn_3D((const char*)0x939, &party->playerPtr->position);
+            se0_on(party, (const char*)PSND_SFX_PARTY_PBM_THROW1);
 #else
-            psndSFXOn_3D((const char*)0x939, &party->playerPtr->position);
+            psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_PBM_THROW1), &party->playerPtr->position);
 #endif
             party->work.bomhei.state = 30;
             party->useMotionId = 21;
@@ -621,22 +569,28 @@ static void bomhei_use_main(PartyEntry* party) {
             party->targetDir = angleABf(party->position.x, party->position.z, x, z);
             party->moveDir = party->targetDir;
             party->velY = 3.5555556f;
+
+            // the acceleration is negated at run time (the fneg is in the retail code)
             tmp = 0.35555556f;
             party->accelY = -tmp;
+
+            // 10.5f is converted to the frame count (10) at run time (the conversion is in the retail code)
             tmp = 10.5f;
             party->moveFrames = (s16)tmp;
-            party->flags2 &= ~PARTY_DISP_FLAG_DIR_LOCK;
+            party->flags2 &= ~PARTY_DISP_FLAG_NO_MAKE_DISP_DIR;
             party->flags |= PARTY_FLAG_IS_JUMPING;
-            bomheiChkHitAttr(party);
+            checkMapAttr(party);
             break;
         case 21:
             partyMoveNoHosei(party);
             if (--party->moveFrames > 0) {
-                bomheiChkHitAttr(party);
+                checkMapAttr(party);
                 break;
             }
             party->velY = 0.0f;
             party->accelY = -0.33333334f;
+
+            // 10.5f is converted to the frame count (10) at run time (the conversion is in the retail code)
             tmp = 10.5f;
             party->moveFrames = (s16)tmp;
             party->flags &= ~PARTY_FLAG_IS_JUMPING;
@@ -645,19 +599,19 @@ static void bomhei_use_main(PartyEntry* party) {
             } else {
                 party->useMotionId = 22;
             }
-            bomheiChkHitAttr(party);
+            checkMapAttr(party);
             break;
         case 22:
             partyMoveNoHosei(party);
 #if VERSION <= VERSION_DEMO_JP
             if (party->hitobjStandOn != NULL) {
-                party->useMotionId = !(BWORK(party)->flags & BOMHEI_FLAG_LAND_EXPLODE) ? 30 : 50;
-            }
-            bomheiChkHitAttr(party);
 #else
-            if (party->hitobjStandOn != NULL && !bomheiChkHitAttr(party)) {
-                party->useMotionId = !(BWORK(party)->flags & BOMHEI_FLAG_LAND_EXPLODE) ? 30 : 50;
+            if (party->hitobjStandOn != NULL && !checkMapAttr(party)) {
+#endif
+                party->useMotionId = !(BOMHEI_WORK(party)->flags & 4) ? 30 : 50;
             }
+#if VERSION <= VERSION_DEMO_JP
+            checkMapAttr(party);
 #endif
             break;
         case 30:
@@ -665,49 +619,50 @@ static void bomhei_use_main(PartyEntry* party) {
             party->useMotionId = 31;
         case 31:
             if (!(party->flags & PARTY_FLAG_IS_EVT_USE) && (gp->buttonNew[0] & PAD_BUTTON_X)) {
-                BWORK(party)->timer = (s16)(sysMsec2Frame(500) + 1);
+                BOMHEI_WORK(party)->timer = (s16)(sysMsec2Frame(500) + 1);
                 party->useMotionId = 50;
             }
             partyChgPose(party, "S_1");
             if (--party->moveFrames > 0) {
-                bomheiChkHitAttr(party);
+                checkMapAttr(party);
                 break;
             }
             party->useMotionId = 32;
         case 32:
             if (!(party->flags & PARTY_FLAG_IS_EVT_USE) && (gp->buttonNew[0] & PAD_BUTTON_X)) {
-                BWORK(party)->timer = (s16)(sysMsec2Frame(500) + 1);
+                BOMHEI_WORK(party)->timer = (s16)(sysMsec2Frame(500) + 1);
             }
-            partyChgPose(party, !(BWORK(party)->flags & BOMHEI_FLAG_FUSE_SHORT) ? "W_1" : "W_2");
+            partyChgPose(party, !(BOMHEI_WORK(party)->flags & BOMHEI_FLAG_FUSE_LIT) ? "W_1" : "W_2");
             party->moveSpeed = 0.6f;
             partyMove(party);
-            if (BWORK(party)->timer <= 0) {
+            if (BOMHEI_WORK(party)->timer <= 0) {
                 party->useMotionId = 50;
             }
-            bomheiChkHitAttr(party);
+            checkMapAttr(party);
             break;
     }
-
 #if VERSION <= VERSION_DEMO_JP
-    if (BWORK(party)->timer > 0) {
-        BWORK(party)->timer--;
-        if (BWORK(party)->timer == (s16)sysMsec2Frame(2500)) {
-            BWORK(party)->flags |= BOMHEI_FLAG_FUSE_SHORT;
-            party->work.bomhei.sfxId = psndSFXOn_3D((const char*)0x93C, &party->playerPtr->position);
+    if (BOMHEI_WORK(party)->timer > 0) {
 #else
-    if (party->useMotionId < 50 && BWORK(party)->timer > 0) {
-        BWORK(party)->timer--;
-        if (BWORK(party)->timer == (s16)sysMsec2Frame(2500)) {
-            BWORK(party)->flags |= BOMHEI_FLAG_FUSE_SHORT;
-            if ((u32)party->work.bomhei.sfxId2 == 0xFFFFFFFFU) {
-                party->work.bomhei.sfxId = psndSFXOn_3D((const char*)0x93C, &party->playerPtr->position);
+    if (party->useMotionId < 50 && BOMHEI_WORK(party)->timer > 0) {
+#endif
+        BOMHEI_WORK(party)->timer--;
+        if (BOMHEI_WORK(party)->timer == (s16)sysMsec2Frame(2500)) {
+            BOMHEI_WORK(party)->flags |= BOMHEI_FLAG_FUSE_LIT;
+#if VERSION <= VERSION_DEMO_JP
+            se1_on(party, (const char*)PSND_SFX_PARTY_PBM_FUSE1);
+#else
+            // the first fuse sound only starts while the second one (FUSE2) is not playing
+            if (party->work.bomhei.sfxId2 == -1) {
+                se1_on(party, SFX_NAME_WORD(PSND_SFX_PARTY_PBM_FUSE1));
             }
 #endif
-        } else if (BWORK(party)->timer == (s16)sysMsec2Frame(500)) {
+        } else if (BOMHEI_WORK(party)->timer == (s16)sysMsec2Frame(500)) {
             party->useMotionId = 50;
             if (mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) {
                 party->work.bomhei.state = 40;
             } else {
+                // Repeated store (useMotionId is already 50); both stores are in the retail code
                 party->useMotionId = 50;
             }
         }
@@ -715,16 +670,14 @@ static void bomhei_use_main(PartyEntry* party) {
 
     switch (party->useMotionId) {
         case 40:
-            if ((u32)party->work.bomhei.sfxId != 0xFFFFFFFFU) {
-                psndSFXOff(party->work.bomhei.sfxId);
-                party->work.bomhei.sfxId = -1;
-            }
-            // FAKE: the Vec goes by value (a pointer to a stack copy, which is what the real `Vec*` receives);
-            // passing &party->position changes the frame of this function and its inlined callers
-            ((MarioSetSplashByValueFn)marioSetSplash)(0, party->position);
-            BWORK(party)->flags |= BOMHEI_FLAG_SPLASHED;
-            BWORK(party)->timer = (s16)(sysMsec2Frame(500) + 30);
-            BWORK(party)->flags |= BOMHEI_FLAG_FUSE_SHORT;
+            se1_off(party);
+
+            // Called with no prototype in scope, passing the Vec by value (the callee's Vec* then points at the caller's
+            // copy, same values); the copy is in the retail code, so the original called it this way.
+            marioSetSplash(0, party->position);
+            BOMHEI_WORK(party)->flags |= BOMHEI_FLAG_IN_WATER;
+            BOMHEI_WORK(party)->timer = (s16)(sysMsec2Frame(500) + 30);
+            BOMHEI_WORK(party)->flags |= BOMHEI_FLAG_FUSE_LIT;
             party->flags |= PARTY_FLAG_FORCE_FALL;
             party->useMotionId = 41;
             party->moveFrames = 6;
@@ -748,15 +701,12 @@ static void bomhei_use_main(PartyEntry* party) {
 
     switch (party->useMotionId) {
         case 50:
-            if ((u32)party->work.bomhei.sfxId != 0xFFFFFFFFU) {
-                psndSFXOff(party->work.bomhei.sfxId);
-                party->work.bomhei.sfxId = -1;
-            }
+            se1_off(party);
 #if VERSION <= VERSION_DEMO_JP
-            party->work.bomhei.sfxId2 = psndSFXOn_3D((const char*)0x93D, &party->playerPtr->position);
+            se2_on(party, (const char*)PSND_SFX_PARTY_PBM_FUSE2);
 #else
-            if ((u32)party->work.bomhei.sfxId2 == 0xFFFFFFFFU) {
-                party->work.bomhei.sfxId2 = psndSFXOn_3D((const char*)0x93D, &party->playerPtr->position);
+            if (party->work.bomhei.sfxId2 == -1) {
+                se2_on(party, SFX_NAME_WORD(PSND_SFX_PARTY_PBM_FUSE2));
             }
 #endif
             partyChgPose(party, "A_3");
@@ -769,23 +719,20 @@ static void bomhei_use_main(PartyEntry* party) {
                 }
                 partyMove(party);
             } else {
-                bomheiSetHoldPos(party);
+                bomhei_hold(party);
             }
             if (--party->moveFrames > 0) {
-                bomheiChkHitAttr(party);
+                checkMapAttr(party);
                 break;
             }
-            if ((u32)party->work.bomhei.sfxId2 != 0xFFFFFFFFU) {
-                psndSFXOff(party->work.bomhei.sfxId2);
-                party->work.bomhei.sfxId2 = -1;
-            }
-            BWORK(party)->flags &= ~BOMHEI_FLAG_FUSE_SHORT;
+            se2_off(party);
+            BOMHEI_WORK(party)->flags &= ~BOMHEI_FLAG_FUSE_LIT;
             party->hitobjAction = check_front(party);
             if (mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) {
                 mario->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
             }
             party->flags &= ~PARTY_FLAG_IS_FALLING;
-            BWORK(party)->flags &= ~BOMHEI_FLAG_SPLASHED;
+            BOMHEI_WORK(party)->flags &= ~BOMHEI_FLAG_IN_WATER;
             party->useMotionId = 60;
             break;
     }
@@ -793,22 +740,25 @@ static void bomhei_use_main(PartyEntry* party) {
     switch (party->useMotionId) {
         case 60: {
             EffectEntry* eff;
-            bomheiStopSfx(party);
+            se1_off(party);
+            se2_off(party);
 #if VERSION >= VERSION_JP
-            psndSFXOn_3D((const char*)0x93B, &party->position);
+            psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_PBM_BOMB1), &party->position);
 #endif
-            BWORK(party)->timer = 0;
+            BOMHEI_WORK(party)->timer = 0;
             party->moveSpeed = 0.0f;
             partyMove(party);
-            if (isBombRock(party->hitobjAction)) {
+            if (chkBreakable(party->hitobjAction)) {
                 evtEntryType(longQuake_evt, 0, 0, 0);
             } else {
                 evtEntryType(quake_evt, 0, 0, 0);
             }
 #if VERSION <= VERSION_DEMO_JP
-            psndSFXOn_3D((const char*)0x93B, &party->position);
+            psndSFXOn_3D((const char*)PSND_SFX_PARTY_PBM_BOMB1, &party->position);
+            eff = effSandarsEntry(pouchGetPartyAttackLv((s32)3), party->position.x,
+#else
+            eff = effSandarsEntry(pouchGetPartyAttackLv(PARTY_BOBBERY), party->position.x,
 #endif
-            eff = effSandarsEntry(pouchGetPartyAttackLv((PartyId)3), party->position.x,
                                   party->position.y + party->height, party->position.z, 0.0f);
             ((EffSandarsWork*)eff->userdata)->camId = party->camId;
             fbatSandersBombTriggerOn();
@@ -865,7 +815,7 @@ static void bomhei_use_main(PartyEntry* party) {
 #if VERSION <= VERSION_DEMO_JP
             hit = _partySearchGround(party, &groundY, &dropDepth, 11.0f, party->velY);
 #else
-            hit = _partySearchGround(party, 11.0f, party->velY);
+            hit = partySearchGround(party, 11.0f, party->velY);
 #endif
             limit = mario->screenY - 25.0f;
             marioGetScreenPos(party->position, &sx, &sy, &sz);
@@ -886,11 +836,11 @@ static void bomhei_use_main(PartyEntry* party) {
                     party->position.y += 200.0f;
                     party->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
                 }
-                if (party->hitobjStandOn != NULL && !((hitGetAttr(party->hitobjStandOn) >> 9) & 1)) {
+                if (party->hitobjStandOn != NULL && !chkWater(party->hitobjStandOn)) {
                     partyChgPose(party, "F_1");
                     party->useMotionId = 82;
                     party->moveFrames = 30;
-                    psndSFXOn_3D((const char*)0x93A, &party->position);
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_PBM_DOWN1), &party->position);
                 }
             }
             break;
@@ -902,12 +852,12 @@ static void bomhei_use_main(PartyEntry* party) {
             partyMove(party);
             break;
         case 100:
-            partyChgRunMode(party, 2);
-            party->moveMode = 0;
-            party->flags2 &= ~PARTY_DISP_FLAG_DIR_LOCK;
+            partyChgRunMode(party, PARTY_RUN_MOVE);
+            party->moveMode = PARTY_MOVE_MODE_STAY;
+            party->flags2 &= ~PARTY_DISP_FLAG_NO_MAKE_DISP_DIR;
             party->flags &= ~PARTY_FLAG_IS_EVT_USE;
             party->flags &= ~PARTY_FLAG_IS_BEING_USED;
-            BOMHEI_FREE(party);
+            bomheiFree(party);
             break;
     }
 }
@@ -916,22 +866,29 @@ static void bomhei_use_main(PartyEntry* party) {
  * Returns 0 while Bobbery's bomb is at a stage where marioCheckMenuDisable must keep the menu shut (being
  * lifted, carried, thrown, the blast, flying off); 1 otherwise or when Bobbery is not in use.
  */
-s32 mario_bomhei_keychk() {
-    MarioWork* mario = marioGetPtr();
-    PartyEntry* p = partyGetPtr(marioGetPartyId());
+s32 mario_bomhei_keychk(void) {
+    PartyEntry* p;
     u8 m;
-    if (p == NULL)
+
+    marioGetPtr();
+    p = partyGetPtr(marioGetPartyId());
+    if (p == NULL) {
         return 1;
-    if (p->currentMemberId != PARTY_MEMBER_BOBBERY)
+    }
+    if (p->currentMemberId != PARTY_BOBBERY) {
         return 1;
-    if ((p->flags & PARTY_FLAG_IS_BEING_USED) == 0)
+    }
+    if ((p->flags & PARTY_FLAG_IS_BEING_USED) == 0) {
         return 1;
+    }
     m = p->work.bomhei.state;
-    if (m == 10 || (m >= 20 && m <= 21) || m == 101 || (m >= 40 && m <= 41) || (m >= 30 && m <= 36))
+    if (m == 10 || (m >= 20 && m <= 21) || m == 101 || (m >= 40 && m <= 41) || (m >= 30 && m <= 36)) {
         return 0;
+    }
     m = p->useMotionId;
-    if ((m >= 50 && m <= 51) || m == 60 || (m >= 70 && m <= 71))
+    if ((m >= 50 && m <= 51) || m == 60 || (m >= 70 && m <= 71)) {
         return 0;
+    }
     return 1;
 }
 
@@ -939,19 +896,25 @@ s32 mario_bomhei_keychk() {
  * Returns 0 while Bobbery is being lifted or thrown, so marioChkKey ignores Mario's buttons;
  * 1 otherwise or when Bobbery is not in use.
  */
-s32 mario_bomhei_keychk2() {
-    MarioWork* mario = marioGetPtr();
-    PartyEntry* p = partyGetPtr(marioGetPartyId());
+s32 mario_bomhei_keychk2(void) {
+    PartyEntry* p;
     u8 m;
-    if (p == NULL)
+
+    marioGetPtr();
+    p = partyGetPtr(marioGetPartyId());
+    if (p == NULL) {
         return 1;
-    if (p->currentMemberId != PARTY_MEMBER_BOBBERY)
+    }
+    if (p->currentMemberId != PARTY_BOBBERY) {
         return 1;
-    if ((p->flags & PARTY_FLAG_IS_BEING_USED) == 0)
+    }
+    if ((p->flags & PARTY_FLAG_IS_BEING_USED) == 0) {
         return 1;
+    }
     m = p->work.bomhei.state;
-    if (m == 10 || m == 101 || (m >= 30 && m <= 36))
+    if (m == 10 || m == 101 || (m >= 30 && m <= 36)) {
         return 0;
+    }
     return 1;
 }
 
@@ -962,26 +925,23 @@ s32 mario_bomhei_keychk2() {
  * 30-36 the throw pose M_C_1 and its 50+10 frame recovery; 100 is idle.
  */
 static void mario_controll(PartyEntry* party) {
-    MarioWork* mario = party->playerPtr;
-    s32 cnt;
+    MarioWork* player = party->playerPtr;
 
     switch (party->work.bomhei.state) {
         case 10:
             marioAdjustMoveDir();
             marioChgPose("M_U_2");
-            mario->flags |= MARIO_FLAG_IS_CARRYING_BOBBERY;
+            player->flags |= MARIO_FLAG_IS_CARRYING_BOBBERY;
             party->work.bomhei.state = 101;
             break;
         case 20:
-            mario->flags |= MARIO_FLAG_IS_CARRYING_BOBBERY;
+            player->flags |= MARIO_FLAG_IS_CARRYING_BOBBERY;
             party->work.bomhei.state = 21;
             break;
         case 21:
-            if (strcmp(mario->animName, "M_W_7") == 0) {
-                animPoseSetLocalTime(mario->paperAnimGroupId[marioAnimeId()], party->work.bomhei.syncFrame);
-                cnt = party->work.bomhei.syncFrame + 1;
-                party->work.bomhei.syncFrame = cnt;
-                if ((u8)cnt >= 40) {
+            if (strcmp(player->animName, "M_W_7") == 0) {
+                animPoseSetLocalTime(player->paperAnimGroupId[marioAnimeId()], party->work.bomhei.syncFrame);
+                if (++party->work.bomhei.syncFrame >= 40) {
                     party->work.bomhei.syncFrame = 0;
                 }
             } else {
@@ -1005,7 +965,7 @@ static void mario_controll(PartyEntry* party) {
             break;
         case 31:
             marioChgPose("M_C_1");
-            mario->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
+            player->flags &= ~MARIO_FLAG_IS_CARRYING_BOBBERY;
             party->work.bomhei.timer = 50;
             party->work.bomhei.state = 32;
             break;
@@ -1016,7 +976,7 @@ static void mario_controll(PartyEntry* party) {
             }
             break;
         case 36:
-            animPoseSetLocalTime(mario->paperAnimGroupId[marioAnimeId()], party->work.bomhei.timer);
+            animPoseSetLocalTime(player->paperAnimGroupId[marioAnimeId()], party->work.bomhei.timer);
             if (--party->work.bomhei.timer < 0) {
                 marioChgMot(MARIO_MOTION_STAY);
                 party->work.bomhei.state = 100;
@@ -1025,13 +985,15 @@ static void mario_controll(PartyEntry* party) {
     }
 }
 
-#if VERSION <= VERSION_DEMO_JP
 /**
- * The demo probes straight down from the moved point and keeps the point itself.
- * Whether there is floor without attribute 0xE00 just below the point dist units from pos along angle;
- * if so moves pos there (the demo keeps the probed height, it does not snap to the floor).
+ * Tests floor without attribute 0xE00 just below the point dist units from pos along angle.
+ * All versions probe 4 units down from 2 above that point. The early demos keep the moved point's original height;
+ * JP and later move pos to the floor hit, rounded to 0.001 units.
  */
-static inline BOOL bomheiChkReturnGround(Vec* pos, f32 dist, f32 angle) {
+// Original name and size (0xf8) from the JP demo map (UNUSED there: every call is inlined). The JP+ roundings are
+// one-line selections, as in mario_hit.c's marioHitCheckVec: that keeps it within the 30-statement auto-inline limit.
+BOOL chkGndAttr(Vec* pos, f32 dist, f32 angle) {
+#if VERSION <= VERSION_DEMO_JP
     f32 x, y, z;
     f32 hx, hy, hz, d, nx, ny, nz;
     HitEntry* hit;
@@ -1042,21 +1004,12 @@ static inline BOOL bomheiChkReturnGround(Vec* pos, f32 dist, f32 angle) {
     z = pos->z;
     movePos(&x, &z, dist, angle);
     d = 4.0f;
-    hit = hitCheckFilter(NULL, &hx, &hy, &hz, &d, &nx, &ny, &nz, x, 2.0f + y, z, 0.0f, -1.0f, 0.0f);
-    if (hit != NULL && !(hitGetAttr(hit) & (HIT_ATTR_DEEP_WATER | HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
+    hit = hitCheckFilter(NULL, x, 2.0f + y, z, 0.0f, -1.0f, 0.0f, &hx, &hy, &hz, &d, &nx, &ny, &nz);
+    if (hit != NULL && !(hitGetAttr(hit) & (HIT_ATTR_WATER_HAZARD | HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
         pos->x = x;
         pos->y = y;
         pos->z = z;
-        return TRUE;
-    }
-    return FALSE;
-}
 #else
-/**
- * Whether there is floor without attribute 0xE00 just below the point dist units from pos along angle;
- * if so moves pos to the floor hit, rounded to 1/1000.
- */
-static inline BOOL bomheiChkReturnGround(Vec* pos, f32 dist, f32 angle) {
     HitCheckQuery query;
     HitEntry* hit;
     f32 x, z;
@@ -1077,36 +1030,24 @@ static inline BOOL bomheiChkReturnGround(Vec* pos, f32 dist, f32 angle) {
         query.targetDir = dir;
     }
     hit = hitCheckVecFilter(&query, NULL);
-    if (hit != NULL && !(hitGetAttr(hit) & (HIT_ATTR_DEEP_WATER | HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
-        if (query.hitPos.x >= 0.0f) {
-            rf = 0.5f;
-        } else {
-            rf = -0.5f;
-        }
+    if (hit != NULL && !(hitGetAttr(hit) & (HIT_ATTR_WATER_HAZARD | HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES))) {
+        rf = (query.hitPos.x >= 0.0f) ? 0.5f : -0.5f;
         pos->x = (s32)((1000.0f * query.hitPos.x) + rf) / 1000.0f;
-        if (query.hitPos.y >= 0.0f) {
-            rf = 0.5f;
-        } else {
-            rf = -0.5f;
-        }
+        rf = (query.hitPos.y >= 0.0f) ? 0.5f : -0.5f;
         pos->y = (s32)((1000.0f * query.hitPos.y) + rf) / 1000.0f;
-        if (query.hitPos.z >= 0.0f) {
-            rf = 0.5f;
-        } else {
-            rf = -0.5f;
-        }
+        rf = (query.hitPos.z >= 0.0f) ? 0.5f : -0.5f;
         pos->z = (s32)((1000.0f * query.hitPos.z) + rf) / 1000.0f;
+#endif
         return TRUE;
     }
     return FALSE;
 }
-#endif
 
 /**
- * Where a partner reappears next to Mario after leaving the screen (Bobbery after his blast in the demo,
+ * Where a partner reappears next to Mario after leaving the screen (Bobbery after his blast in the early demos,
  * Koops and the party_motion fall-ins): 6 units along Mario's yaw,
  * else behind or in front of him at his collision radius,
- * whichever has no wall and floor that passes bomheiChkReturnGround; else behind him at that radius.
+ * whichever has no wall and floor that passes chkGndAttr; else behind him at that radius.
  */
 void partyGetReturnPos(Vec* out) {
     MarioWork* mario = marioGetPtr();
@@ -1122,9 +1063,9 @@ void partyGetReturnPos(Vec* out) {
     dist = mario->wPlayerCollisionBox.x;
     angle = mario->targetYaw;
     sincosf(&s, &c, angle);
-    if (hitCheckFilter(NULL, &hx, &hy, &hz, &dist, &nx, &ny, &nz, x, y, z, s, 0.0f, c) == NULL) {
+    if (hitCheckFilter(NULL, x, y, z, s, 0.0f, c, &hx, &hy, &hz, &dist, &nx, &ny, &nz) == NULL) {
         p = mario->position;
-        if (bomheiChkReturnGround(&p, 6.0f, angle)) {
+        if (chkGndAttr(&p, 6.0f, angle)) {
             out->x = p.x;
             out->y = p.y;
             out->z = p.z;
@@ -1138,9 +1079,9 @@ void partyGetReturnPos(Vec* out) {
     dist = mario->wPlayerCollisionBox.x;
     angle = revise360(toMovedirSimple(mario->displayDirectionTarget) - 180.0f);
     sincosf(&s, &c, angle);
-    if (hitCheckFilter(NULL, &hx, &hy, &hz, &dist, &nx, &ny, &nz, x, y, z, s, 0.0f, c) == NULL) {
+    if (hitCheckFilter(NULL, x, y, z, s, 0.0f, c, &hx, &hy, &hz, &dist, &nx, &ny, &nz) == NULL) {
         p = mario->position;
-        if (bomheiChkReturnGround(&p, mario->wPlayerCollisionBox.x, angle)) {
+        if (chkGndAttr(&p, mario->wPlayerCollisionBox.x, angle)) {
             out->x = p.x;
             out->y = p.y;
             out->z = p.z;
@@ -1150,9 +1091,9 @@ void partyGetReturnPos(Vec* out) {
 
     angle = toMovedirSimple(mario->displayDirectionTarget);
     sincosf(&s, &c, angle);
-    if (hitCheckFilter(NULL, &hx, &hy, &hz, &dist, &nx, &ny, &nz, x, y, z, s, 0.0f, c) == NULL) {
+    if (hitCheckFilter(NULL, x, y, z, s, 0.0f, c, &hx, &hy, &hz, &dist, &nx, &ny, &nz) == NULL) {
         p = mario->position;
-        if (bomheiChkReturnGround(&p, mario->wPlayerCollisionBox.x, angle)) {
+        if (chkGndAttr(&p, mario->wPlayerCollisionBox.x, angle)) {
             out->x = p.x;
             out->y = p.y;
             out->z = p.z;
@@ -1171,11 +1112,11 @@ void partyGetReturnPos(Vec* out) {
 /**
  * Picks the hit object Bobbery's blast acts on (party->hitobjAction, read by the case triggers):
  * a bomb rock within 30 units (50 when the direction is sideways to the camera) in eight directions around his
- * facing, else the floor below if it is a bomb rock or any floor, else his floor hit.
+ * facing, else a bomb rock below, else a bomb rock he stands on;
+ * otherwise the floor below, or his standing floor hit if no floor was found below.
  */
 static HitEntry* check_front(PartyEntry* party) {
     const s32 angles[8] = {0, 45, -45, 90, -90, 135, -135, 180};
-    static const Vec down = {0.0f, -1.0f, 0.0f};
     HitCheckQuery q;
     f32 height;
     HitEntry* hit;
@@ -1202,7 +1143,7 @@ static HitEntry* check_front(PartyEntry* party) {
             } else {
                 lim = 30.0f;
             }
-            if (q.targetDistance <= lim && isBombRock(hit)) {
+            if (q.targetDistance <= lim && chkBreakable(hit)) {
                 return hit;
             }
             found = NULL;
@@ -1210,18 +1151,18 @@ static HitEntry* check_front(PartyEntry* party) {
     }
 
     q.targetPos = party->position;
-    q.targetDir = down;
+    q.targetDir = (Vec){0.0f, -1.0f, 0.0f};
     q.targetDistance = 2.0f + height;
     hit = hitCheckVecFilter(&q, NULL);
     if (hit != NULL) {
-        if (isBombRock(hit)) {
+        if (chkBreakable(hit)) {
             return hit;
         }
         last = hit;
     }
 
     hit = party->hitobjStandOn;
-    if (hit != NULL && isBombRock(hit)) {
+    if (hit != NULL && chkBreakable(hit)) {
         return hit;
     }
     if (found != NULL) {
@@ -1231,4 +1172,24 @@ static HitEntry* check_front(PartyEntry* party) {
         return last;
     }
     return hit;
+}
+
+/** Whether a bomb breaks the hit: the MOBJ_BombRock map object, or a case event with the CASE_BOBBERY condition. */
+// Original name and size (0x90) from the JP demo map (UNUSED there: every call is inlined).
+BOOL chkBreakable(HitEntry* hit) {
+    CaseEntry* c;
+    if (hit == NULL) {
+        return FALSE;
+    }
+    if (hitGetAttr(hit) & HIT_ATTR_MOBJ) {
+        if (strcmp(mobjHitObjPtrToPtr(hit)->animName, "MOBJ_BombRock") == 0) {
+            return TRUE;
+        }
+    } else {
+        c = caseCheckHitObj2(hit);
+        if (c != NULL && c->conditionId == CASE_BOBBERY) {
+            return TRUE;
+        }
+    }
+    return FALSE;
 }

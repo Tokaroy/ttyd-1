@@ -5,7 +5,14 @@
 
 #include "data/mapdata.h"
 #include "yuu.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * REL entry point: runs the static constructors,
@@ -32,6 +39,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Linker stub for unresolved imports; does nothing. */
 void _unresolved(void) {
 }

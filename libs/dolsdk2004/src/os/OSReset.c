@@ -3,8 +3,7 @@
 
 #include "__os.h"
 
-// These macros are copied from OSThread.c. Or ARE they the same
-// macros? They dont seem to be in the SDK headers.
+// Reset-function queue insertion and removal.
 #define ENQUEUE_INFO(info, queue)                            \
     do {                                                     \
         OSResetFunctionInfo* __prev = (queue)->tail; \
@@ -34,6 +33,7 @@
         }                                                   \
     } while(0);
 
+// Inserts by ascending priority; equal priorities keep their registration order (the search passes <=).
 #define ENQUEUE_INFO_PRIO(info, queue)               \
     do {                                             \
         OSResetFunctionInfo* __prev;         \
@@ -61,29 +61,19 @@ static OSResetFunctionQueue ResetFunctionQueue;
 static u32 bootThisDol;
 
 // prototypes
-static int CallResetFunctions(int final);
+
 static void Reset(u32 resetCode);
 
-/**
- * Adds a function to the reset callback list, sorted by its priority,
- * to be called before the console resets or launches another program.
- */
 void OSRegisterResetFunction(OSResetFunctionInfo* info) {
     ASSERTLINE(208, info->func);
 
     ENQUEUE_INFO_PRIO(info, &ResetFunctionQueue);
 }
 
-/** Removes a function from the reset callback list. */
 void OSUnregisterResetFunction(OSResetFunctionInfo* info) {
     DEQUEUE_INFO(info, &ResetFunctionQueue);
 }
 
-/**
- * Calls the reset callbacks in priority order (final tells them the reset is happening now);
- * stops after a priority group in which one refused, and also syncs the SRAM.
- * Returns 1 if every callback agreed, 0 otherwise.
- */
 int __OSCallResetFunctions(BOOL final) {
     OSResetFunctionInfo* info;
     int err;
@@ -107,54 +97,51 @@ int __OSCallResetFunctions(BOOL final) {
     return 1;
 }
 
-/**
- * Assembly: waits a short time after enabling HID0 instruction-cache flash invalidate,
- * then writes the reset code to PI register 9, resetting the console; never returns.
- */
 #ifdef __GEKKO__
+// Branches forward through fetch1..fetch3 and back to set_hid0 first; then sets HID0_ABE, waits
+// 0x1124 timebase ticks, writes 3 and then resetCode to the PI reset register (0xCC003024) and spins.
 static asm void Reset(u32 resetCode) {
     nofralloc
-    b L_000001BC
-L_000001A0:
+    b fetch1
+set_hid0:
     mfspr r8, HID0
-    ori r8, r8, 0x8
+    ori r8, r8, HID0_ABE
     mtspr HID0, r8
     isync
     sync
     nop
-    b L_000001C0
-L_000001BC:
-    b L_000001DC
-L_000001C0:
+    b delay
+fetch1:
+    b fetch2
+delay:
     mftb r5, 268
-L_000001C4:
+delay_loop:
     mftb r6, 268
     subf r7, r5, r6
     cmplwi r7, 0x1124
-    blt L_000001C4
+    blt delay_loop
     nop
-    b L_000001E0
-L_000001DC:
-    b L_000001FC
-L_000001E0:
+    b write_reset
+fetch2:
+    b fetch3
+write_reset:
     lis r8, 0xcc00
     ori r8, r8, 0x3000
     li r4, 0x3
     stw r4, 0x24(r8)
     stw r3, 0x24(r8)
     nop
-    b L_00000200
-L_000001FC:
-    b L_00000208
-L_00000200:
+    b spin
+fetch3:
+    b fetch_done
+spin:
     nop
-    b L_00000200
-L_00000208:
-    b L_000001A0
+    b spin
+fetch_done:
+    b set_hid0
 }
 #endif
 
-/** Cancels every thread that is ready or waiting (states 1 and 4) so nothing runs during a reset or launch. */
 static void KillThreads(void) {
     OSThread* thread;
     OSThread* next;
@@ -162,8 +149,8 @@ static void KillThreads(void) {
     for (thread = __OSActiveThreadQueue.head; thread; thread = next) {
         next = thread->linkActive.next;
         switch (thread->state) {
-        case 1:
-        case 4:
+        case OS_THREAD_STATE_READY:
+        case OS_THREAD_STATE_WAITING:
             OSCancelThread(thread);
             continue;
         default:
@@ -172,10 +159,6 @@ static void KillThreads(void) {
     }
 }
 
-/**
- * Resets the console now: disables interrupts, turns off video,
- * invalidates the instruction cache and calls Reset with the code shifted left 3 bits.
- */
 void __OSDoHotReset(u32 resetCode) {
     OSDisableInterrupts();
     __VIRegs[1] = 0;
@@ -183,11 +166,6 @@ void __OSDoHotReset(u32 resetCode) {
     Reset(resetCode * 8);
 }
 
-/**
- * Quiets the hardware before a reset or launch:
- * stops the DSP, optionally keeps controller recalibration off, repeats the reset callbacks until they agree,
- * syncs the SRAM, makes the final callback pass, disables the locked cache and kills the threads.
- */
 void __OSShutdownDevices(BOOL doRecal) {
     int rc;
     BOOL disableRecalibration;
@@ -214,18 +192,12 @@ void __OSShutdownDevices(BOOL doRecal) {
     KillThreads();
 }
 
-/**
- * Resets or restarts the console.
- * OS_RESET_RESTART reboots a DOL from the disc, OS_RESET_HOTRESET does a hot reset with the reset code,
- * and OS_RESET_SHUTDOWN shuts the devices down and clears the low-memory globals.
- * forceMenu sets the SRAM flag that makes the IPL show its menu.
- */
 void OSResetSystem(BOOL reset, u32 resetCode, BOOL forceMenu) {
     OSSram* sram;
 
     OSDisableScheduler();
 
-    if (reset == TRUE && forceMenu) {
+    if (reset == OS_RESET_HOTRESET && forceMenu) {
         sram = __OSLockSram();
         sram->flags |= 0x40;
         __OSUnlockSram(1);
@@ -234,7 +206,7 @@ void OSResetSystem(BOOL reset, u32 resetCode, BOOL forceMenu) {
     }
 
     if (reset == OS_RESET_SHUTDOWN ||
-        (reset == OS_RESET_RESTART && (bootThisDol || resetCode + 0x3fff0000 == 0)))
+        (reset == OS_RESET_RESTART && (bootThisDol || resetCode == 0xC0010000)))
     {
         __OSShutdownDevices(FALSE);
     } else {
@@ -251,6 +223,7 @@ void OSResetSystem(BOOL reset, u32 resetCode, BOOL forceMenu) {
         __OSReboot(resetCode, bootThisDol);
     }
 
+    // Clear the OS words in low memory.
     memset(OSPhysicalToCached(0x40), 0, 0xcc - 0x40);
     memset(OSPhysicalToCached(0xd4), 0, 0xe8 - 0xd4);
     memset(OSPhysicalToCached(0xf4), 0, 0xf8 - 0xf4);
@@ -259,21 +232,17 @@ void OSResetSystem(BOOL reset, u32 resetCode, BOOL forceMenu) {
     memset(OSPhysicalToCached(0x30e2), 0, 1);
 }
 
-/**
- * Returns the reset code of the previous reset:
- * from the reboot parameters (tagged with 0x80000000) if there are any, otherwise from PI register 9.
- */
-u32 OSGetResetCode() {
+u32 OSGetResetCode(void) {
     u32 resetCode;
-    if (__OSRebootParams.valid)
-        resetCode = 0x80000000 | __OSRebootParams.restartCode;
-    else
-        resetCode = (__PIRegs[9] & 0xFFFFFFF8) / 8;
+    if (__OSRebootParams.valid) {
+        resetCode = OS_RESETCODE_RESTART | __OSRebootParams.restartCode;
+    } else {
+        resetCode = (__PIRegs[PI_RESET_CODE] & 0xFFFFFFF8) / 8;
+    }
 
     return resetCode;
 }
 
-/** Sets the DOL offset the next restart will boot and returns the previous setting. */
 u32 OSSetBootDol(u32 dolOffset) {
     u32 oldDol;
 

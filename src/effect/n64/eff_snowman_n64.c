@@ -1,12 +1,13 @@
-// Paper Mario 64 effect: a snowman that drops in, then hops along a preset path kicking up snow dust and vapor.
-#include "eff/n64/eff_snowman_n64.h"
+// Paper Mario 64 effect: a snowman that drops in, then hops along a preset path kicking up snow dust and vapor
+// (the body itself is not drawn).
+
+#include "version.h"
 #include "eff/eff_n64.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
-#include "eff/n64/eff_snow_dust_n64.h"
 #include "memory.h"
 #include <stdlib.h>
-#include "version.h"
+#include "eff/n64/eff_snow_dust_n64.h"
 #include "eff/n64/eff_vapor_n64.h"
 
 typedef struct EffSnowmanN64Work {
@@ -31,21 +32,21 @@ typedef struct EffSnowmanN64Work {
 } EffSnowmanN64Work;
 
 /**
- * Width of the snowman in percent over a hop: it crouches, stretches as it leaves the ground,
- * then settles. The height is set to the opposite, so it keeps its volume.
+ * Width of the snowman in percent over a hop: it narrows to 70 (taller), widens to 120 (flatter) as it leaves
+ * the ground, then eases back. The height is set to the opposite (200 minus the width).
  */
 static s8 jump_hscale_data[] = {100, 90, 82, 76, 72, 70, 74, 89, 103, 116, 118, 120, 120, 120, 120, 118, 114, 110};
-/** Width in percent over the 27-frame landing squash, written as characters ('d' is 100). */
-static u8 land_hscale_data[] = "dZRLHFJYdlnlf`_`ceddddddddd";
 
-/** Width in percent over the long spinning hop: a long crouch, then the stretch as it takes off. */
+/** Width in percent over the 27-frame landing squash, written as characters ('d' is 100). */
+static u8 land_hscale_data[27] = "dZRLHFJYdlnlf`_`ceddddddddd";
+
+/** Width in percent over the long spinning hop: it narrows to 70 and holds there, then widens as it takes off. */
 static u8 jump2_hscale_data[] = {100, 90, 82, 76, 72, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 70, 74, 89, 103, 116, 118, 120, 120, 120, 120, 118, 114, 110};
 
 /** Turn in degrees over the long spinning hop: two sways back and forth before it leaves the ground. */
 static s8 jump2_ry_data[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 5, 10, 16, 22, 28, 33, 38, 40, 41, 41, 40, 38, 33, 28, 22, 16, 10, 5, 1, 1, 5, 10, 16, 22, 28, 33, 38, 40, 41, 41, 40, 38, 33, 28, 22, 16, 10, 5, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 #if VERSION <= VERSION_DEMO_JP
-// An older jump table the demo still carries; nothing reads it.
 typedef struct SnowmanJumpStep {
     s16 x;
     s16 y;
@@ -53,10 +54,6 @@ typedef struct SnowmanJumpStep {
     u8 wscale;
     u8 hscale;
 } SnowmanJumpStep;
-
-/**
- * The demo's unused hop table: position, rise and width/height in percent per frame of a slide-in and bounce.
- */
 static SnowmanJumpStep adata[] = {
     {-200, 200, 30, 100, 100}, {-180, 180, 30, 100, 100}, {-160, 160, 30, 100, 100}, {-140, 140, 30, 100, 100},
     {-120, 120, 30, 100, 100}, {-100, 100, 30, 100, 100}, {-80, 80, 30, 100, 100}, {-60, 60, 30, 100, 100},
@@ -71,11 +68,11 @@ static SnowmanJumpStep adata[] = {
 #endif
 
 static void effSnowmanMain(EffectEntry* effect);
-static void effSnowmanDisp(CameraId cameraId, EffectEntry* effect);
+static void effSnowmanDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a snowman at (x, y, z); a lifetime of 0 or less lasts until soft-deleted.
- * Spawned by event scripts through evt_eff.
+ * Reached only through evt_eff64 "snowman_n64"; no script callers found.
  */
 EffectEntry* effSnowmanN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -87,7 +84,7 @@ EffectEntry* effSnowmanN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32
     work = __memAlloc(HEAP_EFFECT, sizeof(EffSnowmanN64Work));
     effect->userdata = work;
     effect->callback = effSnowmanMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -121,7 +118,7 @@ EffectEntry* effSnowmanN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32
 /**
  * Fades in over 16 frames (and out over 16 after a delete request; lifetime 1000 means endless) and turns
  * while moving sideways.
- * States: 0 a 27-frame landing squash, 1 a hop (moves from its 8th frame), 3 a spinning hop,
+ * States: 0 a 27-frame landing squash, 1 a hop (moves from its 8th frame), 3 a spinning hop (no phase enters it),
  * 2 airborne under gravity; each landing starts the next phase of a fixed route:
  * squash, three diagonal hops, one long hop along +X, then stop.
  * Every 8 frames it puffs a vapor cloud (effVaporN64Entry) and snow dust (effSnowDustN64Entry type 1).
@@ -130,9 +127,7 @@ static void effSnowmanMain(EffectEntry* effect) {
     EffSnowmanN64Work* work = effect->userdata;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
-    f32 y;
     f32 spd;
-    f32 zero;
     f32 sx;
     s32 frame;
 
@@ -140,9 +135,9 @@ static void effSnowmanMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    zero = 0.0f;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -161,12 +156,12 @@ static void effSnowmanMain(EffectEntry* effect) {
         work->alpha = frame * 16 + 15;
     }
     sx = work->speed.x;
-    if (sx != zero) {
+    if (sx) {
         spd = work->speed.y;
-        if (spd < zero) {
+        if (spd < 0.0f) {
             spd = -spd;
         }
-        if (sx < zero) {
+        if (sx < 0.0f) {
             work->rotY -= spd;
         } else {
             work->rotY += spd;
@@ -214,7 +209,7 @@ static void effSnowmanMain(EffectEntry* effect) {
             work->offset.y += work->speed.y;
             work->offset.z += work->speed.z;
             work->speed.y += work->gravity;
-            if (work->offset.y < zero) {
+            if (work->offset.y < 0.0f) {
                 switch (work->phase) {
                     case 0:
                         work->state = 0;
@@ -239,20 +234,20 @@ static void effSnowmanMain(EffectEntry* effect) {
                         break;
                     case 4:
                         work->speed.x = 10.0f;
-                        work->speed.z = zero;
+                        work->speed.z = 0.0f;
                         work->state = 1;
                         work->speed.y = 14.0f;
                         work->gravity = -1.0f;
                         break;
                     default:
-                        work->speed.x = zero;
-                        work->speed.y = zero;
-                        work->speed.z = zero;
-                        work->offset.y = zero;
+                        work->speed.x = 0.0f;
+                        work->speed.y = 0.0f;
+                        work->speed.z = 0.0f;
+                        work->offset.y = 0.0f;
                         work->state = 2;
                         break;
                 }
-                work->offset.y = zero;
+                work->offset.y = 0.0f;
                 work->counter = 0;
                 work->phase++;
             }
@@ -263,9 +258,9 @@ static void effSnowmanMain(EffectEntry* effect) {
         effSnowDustN64Entry(1, 10, 30, work->position.x + work->offset.x, 10.0f + (work->position.y + work->offset.y),
                             60.0f + (work->position.z + work->offset.z), 60.0f, 100.0f, 2.0f);
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effSnowmanDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effSnowmanDisp, effect);
 }
 
 /** Empty: the snowman body is never drawn, so only the vapor and snow-dust puffs that effSnowmanMain spawns show. */
-static void effSnowmanDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSnowmanDisp(CameraId cameraId, void* param) {
 }

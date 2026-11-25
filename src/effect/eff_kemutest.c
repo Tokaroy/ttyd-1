@@ -1,4 +1,7 @@
-// Burst of smoke (kemu test) around a point with a stage-burst sound; the type picks the smoke pattern.
+// Burst of smoke (kemu test) around a point; the type picks the smoke pattern (type 3 adds a stage-burst sound and
+// confetti).
+
+#include "version.h"
 #include "eff/eff_kemu_test.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -11,378 +14,56 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
+#include "eff/eff_kemutest.h"
 
 typedef struct KemuTestWork {
-    s32 type;       // 0x0
-    Vec pos;        // 0x4
-    Vec vel;        // 0x10
-    s32 camera;     // 0x1C
-    s32 idx0;       // 0x20
-    s32 idx1;       // 0x24
-    s32 frame;      // 0x28
-    s32 pad2C;      // 0x2C
-    s32 life;       // 0x30
-    f32 gravity;    // 0x34
-    f32 gravityAcc; // 0x38
-    f32 gravityMul; // 0x3C
-    u8 pad40[4];    // 0x40
-    s32 delay;      // 0x44
-    f32 scale;      // 0x48
-    u8 r;           // 0x4C
-    u8 g;           // 0x4D
-    u8 b;           // 0x4E
-    u8 pad4F;
-    f32 rx; // 0x50
-    f32 rz; // 0x54
+    s32 type;        // 0x0
+    Vec pos;         // 0x4
+    Vec vel;         // 0x10
+    CameraId camera; // 0x1C
+    s32 idx0;        // 0x20
+    s32 idx1;        // 0x24
+    s32 frame;       // 0x28
+    s32 pad2C;       // 0x2C
+    s32 life;        // 0x30
+    f32 gravity;     // 0x34
+    f32 gravityAcc;  // 0x38
+    f32 gravityMul;  // 0x3C
+    u8 pad40[4];     // 0x40
+    s32 delay;       // 0x44
+    f32 scale;       // 0x48
+    u8 r;            // 0x4C
+    u8 g;            // 0x4D
+    u8 b;            // 0x4E
+    f32 rx;          // 0x50
+    f32 rz;          // 0x54
 } KemuTestWork;
 
 static void effKemuTestMain(EffectEntry* effect);
 static void effKemuTestDisp(CameraId cameraId, void* param);
 
-// functions are emitted in source order, as in the original
-#pragma defer_codegen off
-
-typedef struct {
-    f32 v[3];
-} KemuF3;
-typedef struct {
-    f32 v[4];
-} KemuF4;
-
-/** Sizes of the three grey puffs of the type 19 smoke, stacked and delayed 4 frames apart; used by effKemuTestEntry. */
-static const KemuF3 kemu_c = {{0.5f, 0.3f, 0.8f}};
-/** Starting X offsets of the three type 19 grey puffs. */
-static const KemuF3 kemu_a = {{0.0f, 10.0f, 10.0f}};
-/** Starting heights of the three type 19 grey puffs, rising one above the other. */
-static const KemuF3 kemu_b = {{0.0f, 5.0f, 20.0f}};
-/** Launch angles in degrees of the type 5 puffs, fanned out from the centre at speed 3. */
-static const KemuF4 kemu_d = {{0.0f, 120.0f, 180.0f, 240.0f}};
-/** Launch angles in degrees of the three type 21 puffs, 120 degrees apart. */
-static const KemuF3 kemu_e = {{0.0f, 120.0f, 240.0f}};
-/** X offsets of the three small type 22 puffs. */
-static const KemuF3 kemu_f = {{0.0f, 5.0f, -5.0f}};
-/** Y offsets of the three small type 22 puffs. */
-static const KemuF3 kemu_g = {{5.0f, 0.0f, -2.0f}};
-/** Z offsets of the three small type 22 puffs, staggered front to back. */
-static const KemuF3 kemu_h = {{0.0f, 1.0f, 2.0f}};
-/** Zero vector copied into the sound position for the type 3 stage-burst sound in effKemuTestEntry. */
-static const Vec kemu_pos = {0.0f, 0.0f, 0.0f};
-/** Zero vector effKemuTestMain starts its per-frame scratch position from. */
-static const Vec kemu_tmp = {0.0f, 0.0f, 0.0f};
-
+/**
+ * Launch direction (degrees, plus 90) and half speed of the ten type 4 and 13 puffs; file scope in the early
+ * demos, statics in effKemuTestEntry from JP on.
+ */
 #if VERSION <= VERSION_DEMO_JP
-// In the demo the burst tables are file-scope statics, first in .data.
 static f32 bom_dir[10] = {10.0f, 40.0f, 80.0f, 170.0f, 140.0f, 100.0f, 25.0f, 155.0f, 60.0f, 120.0f};
 static f32 bom_spd[10] = {2.2f, 2.7f, 3.0f, 2.2f, 2.7f, 3.0f, 1.9f, 1.9f, 1.5f, 1.5f};
 #endif
 
-/** Sets the X and Z rotation used by type 11, which is drawn tilted rather than camera-facing. */
-void effKemuTestSetRxRz(EffectEntry* effect, f32 rx, f32 rz) {
-    KemuTestWork* work = effect->userdata;
-    work->rx = rx;
-    work->rz = rz;
+/** sin and cos of an angle in degrees. */
+static inline f32 sind(f32 deg) {
+    return sin(6.2831855f * deg / 360.0f);
 }
-
-/** Chooses which camera draws the effect. */
-void effKemuTestDrawCam(EffectEntry* effect, s32 camera) {
-    KemuTestWork* work = effect->userdata;
-
-    work->camera = camera;
-}
-
-/** Draws the smoke pieces (texture 0x28) with three TEV stages; billboarded unless type 11. */
-static void effKemuTestDisp(CameraId cameraId, void* param) {
-    EffectEntry* effect = param;
-    Mtx trans;
-    Mtx scl;
-    Mtx rot;
-    Mtx view;
-    GXTexObj tex;
-    KemuTestWork* work = effect->userdata;
-    CameraEntry* camera = camGetPtr(cameraId);
-    s32 type = work->type;
-    s32 i;
-    s32 start = 0;
-    s32 alpha = 0xff;
-    f32 ext;
-    f32 neg;
-    f32 half;
-    f32 w;
-
-    PSMTXTrans(trans, work->pos.x, work->pos.y, work->pos.z);
-    if (type != 11) {
-        PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
-    } else {
-        PSMTXRotRad(rot, 'x', 0.017453292f * work->rx);
-        PSMTXRotRad(scl, 'z', 0.017453292f * work->rz);
-        PSMTXConcat(rot, scl, rot);
-    }
-    PSMTXScale(scl, work->scale, work->scale, work->scale);
-    PSMTXConcat(trans, rot, trans);
-    PSMTXConcat(trans, scl, trans);
-    PSMTXConcat(camera->view, trans, view);
-    effGetTexObj(0x28, &tex);
-    GXLoadTexObj(&tex, 0);
-    GXSetNumChans(1);
-    GXSetChanCtrl(4, 0, 0, 0, 0, 0, 2);
-    GXSetNumTexGens(2);
-    GXSetTexCoordGen2(0, 1, 4, 0x1e, 0, 0x7d);
-    GXSetTexCoordGen2(1, 1, 4, 0x21, 0, 0x7d);
-    GXSetNumTevStages(3);
-    GXSetTevOrder(0, 0, 0, 0xff);
-    GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 0xf, 0xf, 0xf, 8);
-    GXSetTevAlphaIn(0, 7, 7, 7, 4);
-    GXSetTevOrder(1, 1, 0, 0xff);
-    GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(1, 0, 8, 2, 0xf);
-    GXSetTevAlphaIn(1, 0, 4, 1, 7);
-    GXSetTevColor(1, (GXColor){0x80, 0x80, 0x80, 0x80});
-    GXSetTevOrder(2, 0xff, 0xff, 4);
-    GXSetTevColorOp(2, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(2, 0xf, 0, 0xa, 0xf);
-    GXSetTevAlphaIn(2, 7, 0, 5, 7);
-    GXSetCullMode(0);
-    GXClearVtxDesc();
-    GXSetVtxDesc(9, 1);
-    GXSetVtxDesc(0xd, 1);
-    GXSetVtxAttrFmt(0, 9, 1, 4, 0);
-    GXSetVtxAttrFmt(0, 0xd, 1, 4, 0);
-    switch (type) {
-        case 1:
-            start = 1;
-            alpha = 0x40;
-            break;
-        case 3:
-            alpha = 0xc8;
-            break;
-        case 10:
-        case 12:
-            start = 1;
-            alpha = 0xc8;
-            break;
-    }
-    w = 32.0f;
-    neg = -w;
-    work++;
-    for (i = 1; i < effect->count; i++, work++) {
-        if (work->delay == 0 && work->idx0 <= 15) {
-            s32 pass;
-            PSMTXTrans(trans, 0.0625f * (f32)work->idx0, 0.0f, 0.0f);
-            PSMTXScale(scl, 0.0625f, 1.0f, 1.0f);
-            PSMTXConcat(trans, scl, trans);
-            GXLoadTexMtxImm(trans, 0x1e, 1);
-            PSMTXTrans(trans, 0.0625f * (f32)work->idx1, 0.0f, 0.0f);
-            PSMTXScale(scl, 0.0625f, 1.0f, 1.0f);
-            PSMTXConcat(trans, scl, trans);
-            GXLoadTexMtxImm(trans, 0x21, 1);
-            ext = 16.0f;
-            for (pass = start; pass < 2; pass++) {
-                if (pass == 0) {
-                    GXSetChanMatColor(4, (GXColor){0, 0, 0, 0x60});
-                    PSMTXTrans(trans, 2.0f + work->pos.x, work->pos.y - 2.0f, work->pos.z);
-                    PSMTXScale(scl, work->scale, work->scale, work->scale);
-                    PSMTXConcat(view, trans, trans);
-                    if (type == 11) {
-                        PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
-                        PSMTXConcat(trans, rot, trans);
-                    }
-                    PSMTXConcat(trans, scl, trans);
-                    GXLoadPosMtxImm(trans, 0);
-                } else {
-                    GXSetChanMatColor(4, (GXColor){work->r, work->g, work->b, alpha});
-                    PSMTXTrans(trans, work->pos.x, work->pos.y, work->pos.z);
-                    PSMTXScale(scl, work->scale, work->scale, work->scale);
-                    PSMTXConcat(view, trans, trans);
-                    if (type == 11) {
-                        PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
-                        PSMTXConcat(trans, rot, trans);
-                    }
-                    PSMTXConcat(trans, scl, trans);
-                    GXLoadPosMtxImm(trans, 0);
-                }
-                half = neg / 2.0f;
-                GXBegin(0x80, 0, 4);
-                GXPosition3f32(half, ext, 0.0f);
-                GXTexCoord2f32(0.0f, 0.0f);
-                GXPosition3f32(ext, ext, 0.0f);
-                GXTexCoord2f32(1.0f, 0.0f);
-                GXPosition3f32(ext, half, 0.0f);
-                GXTexCoord2f32(1.0f, 1.0f);
-                GXPosition3f32(half, half, 0.0f);
-                GXTexCoord2f32(0.0f, 1.0f);
-            }
-        }
-    }
-}
-
-/** Advances each smoke piece (delay, gravity, spread, texture frame) per type and deletes the effect when all end. */
-static void effKemuTestMain(EffectEntry* effect) {
-    KemuTestWork* work = effect->userdata;
-    Vec pos;
-    Vec tmp = kemu_tmp;
-    s32 type;
-    s32 done = 0;
-    s32 i;
-    s32 play = 0;
-    s32 camera;
-
-    tmp.x = work->pos.x;
-    tmp.y = work->pos.y;
-    tmp.z = work->pos.z;
-    pos = tmp;
-    type = work->type;
-    camera = work->camera;
-    work++;
-    for (i = 1; i < effect->count; i++, work++) {
-        if (work->delay) {
-            work->delay--;
-            continue;
-        }
-        work->idx0 = (s32)(16.0f * (f32)work->frame / (f32)work->life);
-        work->idx1 = (s32)(16.0f * (f32)(work->frame + 1) / (f32)work->life);
-        if (work->idx1 > 15) {
-            work->idx1 = 15;
-        }
-        work->frame++;
-        switch (type) {
-            case 1:
-            case 3:
-            case 19:
-                work->pos.y += work->gravity;
-                work->gravity += work->gravityAcc;
-                work->gravityAcc *= work->gravityMul;
-                break;
-            case 10:
-            case 14: {
-                f32 a = 6.2831855f * (90.0f + 180.0f * (f32)(i - 1) / (f32)(effect->count - 2)) / 360.0f;
-                work->pos.x += work->gravity * (f32)sin(a);
-                work->pos.y += -work->gravity * (f32)cos(a);
-                work->gravity += work->gravityAcc;
-                work->gravityAcc *= work->gravityMul;
-                break;
-            }
-            case 4:
-            case 9:
-            case 17:
-            case 20:
-                work->pos.x += work->vel.x;
-                work->pos.y += work->vel.y;
-                work->vel.x *= 0.9f;
-                work->vel.y *= 0.9f;
-                break;
-            case 5:
-            case 21:
-                work->pos.x += work->vel.x;
-                work->pos.y += work->vel.y;
-                work->vel.x *= 0.9f;
-                work->vel.y *= 0.9f;
-                break;
-            case 6:
-                work->pos.x += work->vel.x;
-                work->vel.x *= 0.95f;
-                work->pos.y += work->gravity;
-                work->gravity += work->gravityAcc;
-                work->gravityAcc *= work->gravityMul;
-                break;
-            case 7:
-            case 8:
-            case 16:
-                work->pos.x += work->vel.x;
-                work->pos.y += work->vel.y;
-                work->vel.x *= 0.9f;
-                work->vel.y *= 0.9f;
-                break;
-            case 11:
-                work->pos.x += work->vel.x;
-                work->pos.y += work->vel.y;
-                work->pos.z += work->vel.z;
-                work->vel.x *= 0.9f;
-                work->vel.y *= 0.9f;
-                work->vel.z *= 0.9f;
-                break;
-            case 12: {
-                f32 a = 6.2831855f * (90.0f + 360.0f * (f32)(i - 1) / (f32)(effect->count - 2)) / 360.0f;
-                work->pos.x += work->gravity * (f32)sin(a);
-                work->pos.y += -work->gravity * (f32)cos(a);
-                work->gravity += work->gravityAcc;
-                work->gravityAcc *= work->gravityMul;
-                work->scale += 0.05f;
-                break;
-            }
-            case 13:
-                work->pos.x += work->vel.x;
-                work->pos.y += work->vel.y;
-                work->vel.x *= 0.9f;
-                work->vel.y *= 0.9f;
-                work->pos.y += work->gravity;
-                work->gravity += work->gravityAcc;
-                work->gravityAcc *= work->gravityMul;
-                break;
-        }
-        switch (type) {
-            case 3:
-            case 6:
-            case 11:
-            case 16:
-            case 18: {
-                s32 r, g, b;
-                g = 0xff;
-                r = 0xff;
-                b = 0xff - work->frame * 60;
-                if (b < 0) {
-                    g = (s32)(0.8f * (f32)b) + 0xff;
-                    b = 0;
-                    if (g < 0) {
-                        r = (s32)(0.4f * (f32)g) + 0xff;
-                        g = 0;
-                        if (r < 0) {
-                            r = 0;
-                        }
-                    }
-                }
-                work->r = r;
-                work->g = g;
-                work->b = b;
-                if (type == 3 && i == 1 && work->frame == 0x1e) {
-                    play = 1;
-                }
-                break;
-            }
-            case 7:
-                work->r += (s32)((f32)(0xbd - work->r) / 10.0f);
-                work->g += (s32)((f32)(0x10 - work->g) / 10.0f);
-                work->b += (s32)((f32)(0xaa - work->b) / 10.0f);
-                break;
-            case 12:
-                work->r += (s32)((f32)(0x82 - work->r) / 64.0f);
-                work->g += (s32)((f32)(0x82 - work->g) / 64.0f);
-                work->b += (s32)((f32)(0x82 - work->b) / 64.0f);
-                break;
-        }
-        if (work->frame >= work->life) {
-            done++;
-        }
-    }
-    if (play) {
-        psndSFXOn_3D("SFX_BTL_STAGE_BURST1", &pos);
-        effConfettiEntry(6, 0x3c, pos.x, pos.y, pos.z);
-    }
-    if (done >= effect->count - 1) {
-        effDelete(effect);
-    } else {
-        dispEntry(camera, dispCalcZ(&pos), 2, effKemuTestDisp, effect);
-    }
+static inline f32 cosd(f32 deg) {
+    return cos(6.2831855f * deg / 360.0f);
 }
 
 /**
- * Spawns the smoke burst at (x, y, z): the type (0-19) picks the piece count and motion.
- * Spawned by the hammer motion (mot_hammer.c), partner code and event scripts.
+ * Spawns the smoke burst at (x, y, z): the type (0-22) picks the piece count and motion.
+ * Spawned by the hammer motion (mot_hammer.c), partner code, other effects and event scripts.
  */
 EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
 #if VERSION >= VERSION_JP
@@ -393,7 +74,8 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     KemuTestWork* work;
     s32 i;
     s32 count;
-    s32 n;
+    f32 spd;
+    f32 ang;
 
     effect = effEntry();
     count = 1;
@@ -464,7 +146,7 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     }
     effect->type = "KemuTest";
     effect->count = count;
-    work = __memAlloc(3, effect->count * sizeof(KemuTestWork));
+    work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(KemuTestWork));
     effect->userdata = work;
     effect->callback = effKemuTestMain;
     work->type = type;
@@ -474,10 +156,12 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     work->frame = 0;
     work->delay = 0;
     work->scale = scale;
-    work->camera = 4;
+    work->camera = CAMERA_3D;
     work->rx = 0.0f;
     work->rz = 0.0f;
     work++;
+
+    // count is re-read from effect->count at every loop test: the target's count - 2 below uses that load
     for (i = 1; i < (count = effect->count); i++, work++) {
         switch (type) {
             case 0:
@@ -515,12 +199,12 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                 work->b = 0xff;
                 work->scale = 1.0f;
                 if (type == 19) {
-                    KemuF3 c = kemu_c;
-                    KemuF3 a = kemu_a;
-                    KemuF3 b = kemu_b;
-                    work->pos.x = a.v[i - 1];
-                    work->pos.y = b.v[i - 1];
-                    work->scale = c.v[i - 1];
+                    f32 c[3] = {0.5f, 0.3f, 0.8f};   // sizes of the three grey puffs
+                    f32 a[3] = {0.0f, 10.0f, 10.0f}; // their starting X offsets
+                    f32 b[3] = {0.0f, 5.0f, 20.0f};  // their starting heights, one above the other
+                    work->pos.x = a[i - 1];
+                    work->pos.y = b[i - 1];
+                    work->scale = c[i - 1];
                     work->delay = i * 4;
                     work->r = 0x78;
                     work->g = 0x78;
@@ -529,8 +213,8 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                 }
                 break;
             case 2:
-            case 16: {
-                f32 ang = 6.2831855f * (f32)irand(0x168) / 360.0f;
+            case 16:
+                ang = 6.2831855f * (f32)irand(0x168) / 360.0f;
                 work->pos.x = 20.0f * (f32)sin(ang);
                 work->pos.y = 20.0f * (f32)cos(ang);
                 work->pos.z = 0.0f;
@@ -542,9 +226,8 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                 work->b = 0xff;
                 work->scale = 1.0f;
                 break;
-            }
-            case 3: {
-                f32 ang = 6.2831855f * (f32)irand(0x168) / 360.0f;
+            case 3:
+                ang = 6.2831855f * (f32)irand(0x168) / 360.0f;
                 work->pos.x = 20.0f * (f32)sin(ang);
                 work->pos.y = 20.0f * (f32)cos(ang);
                 work->pos.z = 0.0f;
@@ -559,7 +242,6 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                 work->b = 0xff;
                 work->scale = 1.0f;
                 break;
-            }
             case 4:
             case 5:
             case 9:
@@ -580,15 +262,12 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                 work->b = 0xff;
                 work->delay = 0;
                 if (type == 4 || type == 13) {
-                    f32 ang;
                     f32 spd;
                     f32 d;
                     d = bom_dir[i - 1];
                     spd = 2.0f * bom_spd[i - 1];
-                    ang = d;
-                    ang = 6.2831855f * (90.0f + ang) / 360.0f;
-                    work->vel.x = spd * (f32)sin(ang);
-                    work->vel.y = -spd * (f32)cos(ang);
+                    work->vel.x = spd * sind(90.0f + d);
+                    work->vel.y = -spd * cosd(90.0f + d);
                     work->scale = 1.0f;
                     work->delay = irand(0x1e);
                     if (type == 13) {
@@ -603,24 +282,23 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                         work->life *= 2;
                     }
                 } else if (type == 5) {
-                    KemuF4 d = kemu_d;
+                    f32 d[4] = {0.0f, 120.0f, 180.0f, 240.0f}; // launch angles in degrees (entry 0 is not read)
                     f32 spd = 3.0f;
-                    f32 s = (f32)sin(6.2831855f * d.v[i] / 360.0f);
+                    f32 s = sind(d[i]);
                     work->vel.x = spd * s;
-                    work->vel.y = -spd * (f32)cos(6.2831855f * d.v[i] / 360.0f);
+                    work->vel.y = -spd * cosd(d[i]);
                     work->scale = 0.5f;
                 } else if (type == 21) {
-                    KemuF3 e = kemu_e;
+                    f32 e[3] = {0.0f, 120.0f, 240.0f}; // launch angles in degrees (entry 0 is not read)
                     f32 spd = 3.0f;
-                    f32 s = (f32)sin(6.2831855f * e.v[i] / 360.0f);
+                    f32 s = sind(e[i]);
                     work->vel.x = spd * s;
-                    work->vel.y = -spd * (f32)cos(6.2831855f * e.v[i] / 360.0f);
+                    work->vel.y = -spd * cosd(e[i]);
                     work->scale = 0.5f;
                 } else if (type == 9 || type == 17 || type == 20) {
                     f32 ang = (f32)irand(0x168);
                     f32 a2;
                     f32 spd;
-                    f32 d;
                     if (i < (effect->count - 1) / 2 + 1) {
                         spd = 4.5f;
                     } else {
@@ -672,10 +350,8 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                 work->g = 0xff;
                 work->b = 0xff;
                 work->scale = 0.6f;
-                {
-                    f32 spd = 1.0f;
-                    work->vel.x = spd * (f32)sin(6.2831855f * angleABf(0.0f, 0.0f, work->pos.x, work->pos.y) / 360.0f);
-                }
+                spd = 1.0f;
+                work->vel.x = spd * (f32)sin(6.2831855f * angleABf(0.0f, 0.0f, work->pos.x, work->pos.y) / 360.0f);
                 break;
             case 7: {
                 f32 a, s;
@@ -744,12 +420,12 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
                 work->b = 0xff;
                 break;
             case 22: {
-                KemuF3 f = kemu_f;
-                KemuF3 g = kemu_g;
-                KemuF3 h = kemu_h;
-                work->pos.x = f.v[i - 1];
-                work->pos.y = g.v[i - 1];
-                work->pos.z = h.v[i - 1];
+                f32 f[3] = {0.0f, 5.0f, -5.0f}; // X offsets of the three small puffs
+                f32 g[3] = {5.0f, 0.0f, -2.0f}; // their Y offsets
+                f32 h[3] = {0.0f, 1.0f, 2.0f};  // their Z offsets, staggered front to back
+                work->pos.x = f[i - 1];
+                work->pos.y = g[i - 1];
+                work->pos.z = h[i - 1];
                 work->vel.x = 0.0f;
                 work->vel.y = 0.0f;
                 work->vel.z = 0.0f;
@@ -765,7 +441,7 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
         }
     }
     if (type == 3) {
-        Vec pos = kemu_pos;
+        Vec pos = {0.0f, 0.0f, 0.0f};
         pos.x = x;
         pos.y = y;
         pos.z = z;
@@ -779,4 +455,303 @@ EffectEntry* effKemuTestEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
         effStardust2N64Entry(0, 8, 0x1e, x, y, z, 50.0f * scale, 50.0f * scale);
     }
     return effect;
+}
+
+/** Advances each smoke piece (delay, gravity, spread, texture frame) per type and deletes the effect when all end. */
+static void effKemuTestMain(EffectEntry* effect) {
+    KemuTestWork* work = effect->userdata;
+    Vec pos;
+    Vec tmp = {0.0f, 0.0f, 0.0f};
+    s32 type;
+    s32 done = 0;
+    s32 i;
+    s32 play = 0;
+    CameraId camera;
+    f32 a;
+
+    tmp.x = work->pos.x;
+    tmp.y = work->pos.y;
+    tmp.z = work->pos.z;
+    pos = tmp;
+    type = work->type;
+    camera = work->camera;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        if (work->delay) {
+            work->delay--;
+            continue;
+        }
+        work->idx0 = (s32)(16.0f * (f32)work->frame / (f32)work->life);
+        work->idx1 = (s32)(16.0f * (f32)(work->frame + 1) / (f32)work->life);
+        if (work->idx1 > 15) {
+            work->idx1 = 15;
+        }
+        work->frame++;
+        switch (type) {
+            case 1:
+            case 3:
+            case 19:
+                work->pos.y += work->gravity;
+                work->gravity += work->gravityAcc;
+                work->gravityAcc *= work->gravityMul;
+                break;
+            case 10:
+            case 14:
+                a = 6.2831855f * (90.0f + 180.0f * (f32)(i - 1) / (f32)(effect->count - 2)) / 360.0f;
+                work->pos.x += work->gravity * (f32)sin(a);
+                work->pos.y += -work->gravity * (f32)cos(a);
+                work->gravity += work->gravityAcc;
+                work->gravityAcc *= work->gravityMul;
+                break;
+            case 4:
+            case 9:
+            case 17:
+            case 20:
+                work->pos.x += work->vel.x;
+                work->pos.y += work->vel.y;
+                work->vel.x *= 0.9f;
+                work->vel.y *= 0.9f;
+                break;
+            case 5:
+            case 21:
+                work->pos.x += work->vel.x;
+                work->pos.y += work->vel.y;
+                work->vel.x *= 0.9f;
+                work->vel.y *= 0.9f;
+                break;
+            case 6:
+                work->pos.x += work->vel.x;
+                work->vel.x *= 0.95f;
+                work->pos.y += work->gravity;
+                work->gravity += work->gravityAcc;
+                work->gravityAcc *= work->gravityMul;
+                break;
+            case 7:
+            case 8:
+            case 16:
+                work->pos.x += work->vel.x;
+                work->pos.y += work->vel.y;
+                work->vel.x *= 0.9f;
+                work->vel.y *= 0.9f;
+                break;
+            case 11:
+                work->pos.x += work->vel.x;
+                work->pos.y += work->vel.y;
+                work->pos.z += work->vel.z;
+                work->vel.x *= 0.9f;
+                work->vel.y *= 0.9f;
+                work->vel.z *= 0.9f;
+                break;
+            case 12:
+                a = 6.2831855f * (90.0f + 360.0f * (f32)(i - 1) / (f32)(effect->count - 2)) / 360.0f;
+                work->pos.x += work->gravity * (f32)sin(a);
+                work->pos.y += -work->gravity * (f32)cos(a);
+                work->gravity += work->gravityAcc;
+                work->gravityAcc *= work->gravityMul;
+                work->scale += 0.05f;
+                break;
+            case 13:
+                work->pos.x += work->vel.x;
+                work->pos.y += work->vel.y;
+                work->vel.x *= 0.9f;
+                work->vel.y *= 0.9f;
+                work->pos.y += work->gravity;
+                work->gravity += work->gravityAcc;
+                work->gravityAcc *= work->gravityMul;
+                break;
+        }
+        switch (type) {
+            case 3:
+            case 6:
+            case 11:
+            case 16:
+            case 18: {
+                s32 r, g, b;
+                g = 0xff;
+                r = 0xff;
+                b = 0xff - work->frame * 60;
+                if (b < 0) {
+                    g = (s32)(0.8f * (f32)b) + 0xff;
+                    b = 0;
+                    if (g < 0) {
+                        r = (s32)(0.4f * (f32)g) + 0xff;
+                        g = 0;
+                        if (r < 0) {
+                            r = 0;
+                        }
+                    }
+                }
+                work->r = r;
+                work->g = g;
+                work->b = b;
+                if (type == 3 && i == 1 && work->frame == 0x1e) {
+                    play = 1;
+                }
+                break;
+            }
+            case 7:
+                work->r += (s32)((f32)(0xbd - work->r) / 10.0f);
+                work->g += (s32)((f32)(0x10 - work->g) / 10.0f);
+                work->b += (s32)((f32)(0xaa - work->b) / 10.0f);
+                break;
+            case 12:
+                work->r += (s32)((f32)(0x82 - work->r) / 64.0f);
+                work->g += (s32)((f32)(0x82 - work->g) / 64.0f);
+                work->b += (s32)((f32)(0x82 - work->b) / 64.0f);
+                break;
+        }
+        if (work->frame >= work->life) {
+            done++;
+        }
+    }
+    if (play) {
+        psndSFXOn_3D("SFX_BTL_STAGE_BURST1", &pos);
+        effConfettiEntry(6, 0x3c, pos.x, pos.y, pos.z);
+    }
+    if (done >= effect->count - 1) {
+        effDelete(effect);
+    } else {
+        dispEntry(camera, dispCalcZ(&pos), DISP_MODE_XLU, effKemuTestDisp, effect);
+    }
+}
+
+/** Draws the smoke pieces (texture 0x28) with three TEV stages; billboarded unless type 11. */
+static void effKemuTestDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
+    Mtx trans;
+    Mtx scl;
+    Mtx rot;
+    Mtx view;
+    GXTexObj tex;
+    KemuTestWork* work = effect->userdata;
+    CameraEntry* camera = camGetPtr(cameraId);
+    s32 type = work->type;
+    s32 i;
+    s32 start = 0;
+    s32 alpha = 0xff;
+    f32 ext;
+    f32 neg;
+    f32 half;
+    f32 w;
+
+    PSMTXTrans(trans, work->pos.x, work->pos.y, work->pos.z);
+    if (type != 11) {
+        PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    } else {
+        PSMTXRotRad(rot, 'x', 0.017453292f * work->rx);
+        PSMTXRotRad(scl, 'z', 0.017453292f * work->rz);
+        PSMTXConcat(rot, scl, rot);
+    }
+    PSMTXScale(scl, work->scale, work->scale, work->scale);
+    PSMTXConcat(trans, rot, trans);
+    PSMTXConcat(trans, scl, trans);
+    PSMTXConcat(camera->view, trans, view);
+    effGetTexObj(0x28, &tex);
+    GXLoadTexObj(&tex, GX_TEXMAP0);
+    GXSetNumChans(1);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    GXSetNumTexGens(2);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
+    GXSetNumTevStages(3);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_CPREV, GX_CC_TEXC, GX_CC_C0, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_APREV, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
+    GXSetTevColor(GX_TEVREG0, (GXColor){0x80, 0x80, 0x80, 0x80});
+    GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_CPREV, GX_CC_RASC, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_APREV, GX_CA_RASA, GX_CA_ZERO);
+    GXSetCullMode(GX_CULL_NONE);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    switch (type) {
+        case 1:
+            start = 1;
+            alpha = 0x40;
+            break;
+        case 3:
+            alpha = 0xc8;
+            break;
+        case 10:
+        case 12:
+            start = 1;
+            alpha = 0xc8;
+            break;
+    }
+    w = 32.0f;
+    neg = -w;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        if (work->delay == 0 && work->idx0 <= 15) {
+            s32 pass;
+            PSMTXTrans(trans, 0.0625f * (f32)work->idx0, 0.0f, 0.0f);
+            PSMTXScale(scl, 0.0625f, 1.0f, 1.0f);
+            PSMTXConcat(trans, scl, trans);
+            GXLoadTexMtxImm(trans, GX_TEXMTX0, GX_MTX2x4);
+            PSMTXTrans(trans, 0.0625f * (f32)work->idx1, 0.0f, 0.0f);
+            PSMTXScale(scl, 0.0625f, 1.0f, 1.0f);
+            PSMTXConcat(trans, scl, trans);
+            GXLoadTexMtxImm(trans, GX_TEXMTX1, GX_MTX2x4);
+            ext = 16.0f;
+            for (pass = start; pass < 2; pass++) {
+                if (pass == 0) {
+                    GXSetChanMatColor(GX_COLOR0A0, (GXColor){0, 0, 0, 0x60});
+                    PSMTXTrans(trans, 2.0f + work->pos.x, work->pos.y - 2.0f, work->pos.z);
+                    PSMTXScale(scl, work->scale, work->scale, work->scale);
+                    PSMTXConcat(view, trans, trans);
+                    if (type == 11) {
+                        PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+                        PSMTXConcat(trans, rot, trans);
+                    }
+                    PSMTXConcat(trans, scl, trans);
+                    GXLoadPosMtxImm(trans, GX_PNMTX0);
+                } else {
+                    GXSetChanMatColor(GX_COLOR0A0, (GXColor){work->r, work->g, work->b, alpha});
+                    PSMTXTrans(trans, work->pos.x, work->pos.y, work->pos.z);
+                    PSMTXScale(scl, work->scale, work->scale, work->scale);
+                    PSMTXConcat(view, trans, trans);
+                    if (type == 11) {
+                        PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+                        PSMTXConcat(trans, rot, trans);
+                    }
+                    PSMTXConcat(trans, scl, trans);
+                    GXLoadPosMtxImm(trans, GX_PNMTX0);
+                }
+                half = neg / 2.0f;
+                GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+                GXPosition3f32(half, ext, 0.0f);
+                GXTexCoord2f32(0.0f, 0.0f);
+                GXPosition3f32(ext, ext, 0.0f);
+                GXTexCoord2f32(1.0f, 0.0f);
+                GXPosition3f32(ext, half, 0.0f);
+                GXTexCoord2f32(1.0f, 1.0f);
+                GXPosition3f32(half, half, 0.0f);
+                GXTexCoord2f32(0.0f, 1.0f);
+            }
+        }
+    }
+}
+
+/** Chooses which camera draws the effect. */
+void effKemuTestDrawCam(EffectEntry* effect, CameraId camera) {
+    ((KemuTestWork*)effect->userdata)->camera = camera;
+}
+
+/** Sets the X and Z rotation used by type 11, which is drawn tilted rather than camera-facing. */
+void effKemuTestSetRxRz(EffectEntry* effect, f32 rx, f32 rz) {
+    KemuTestWork* work = effect->userdata;
+    work->rx = rx;
+    work->rz = rz;
 }

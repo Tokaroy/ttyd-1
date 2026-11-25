@@ -1,4 +1,5 @@
 // Glitz Pit arena (tou2, tou_03): the fighters' battle unit kinds, battle setups and fight/ranking user functions.
+
 #pragma once
 
 #include "dolphin/types.h"
@@ -46,14 +47,5 @@ extern BattleUnitKind unit_togenoko_ace;
 extern BattleUnitKind unit_togezo;
 extern BattleUnitKind unit_ura_noko;
 extern BattleUnitKind unit_ura_pata;
-
 USER_FUNC(evt_tou_get_fighter_num);
-extern NpcSetupBattleInfo btlsetup_tou_tbl[];
-USER_FUNC(evt_tou_get_fighter_battle_msg);
-USER_FUNC(evt_tou_get_fighter_info);
-USER_FUNC(evt_tou_get_fighter_name2);
-USER_FUNC(evt_tou_get_ranking);
-USER_FUNC(evt_tou_set_ranking_win_lose);
-USER_FUNC(evt_tou_set_rule_result);
-USER_FUNC(tou_champion_belt);
-USER_FUNC(tou_champion_belt_onoff);
+USER_FUNC(tou2_rankingReset);

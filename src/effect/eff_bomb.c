@@ -1,5 +1,6 @@
 // Bomb blast (Bomb): eight blast rays 45 degrees apart that stretch along two scale tables, plus a confetti burst;
 // lasts 36 frames. Element 0 of the work array is the header and is not drawn.
+
 #include "eff/eff_bomb.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,6 +9,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffBombWork {
@@ -21,10 +23,7 @@ typedef struct EffBombWork {
     s32 offset;   // 0x24
 } EffBombWork;
 
-/**
- * Per-frame keys for the four straight blast rays (up, right, down, left), read by effBombMain: each triple is
- * the texture frame in the ray strip, then X and Y stretch in percent (100% growing to 200%).
- */
+// per frame: texture frame (of 16), x scale and y scale in percent; scale_dt for elements 1-4, scale_dt2 for 5-8
 static u8 scale_dt[] = {
     0,  100, 100, 0,  103, 103, 1,  106, 106, 1,  110, 110, 2,  113, 113, 2,  117, 117,
     3,  120, 120, 3,  124, 124, 4,  127, 127, 4,  131, 131, 5,  134, 134, 5,  137, 137,
@@ -39,26 +38,25 @@ static u8 scale_dt[] = {
  * frame, X and Y stretch in percent), but they stay hidden for four frames and grow only to about 150%.
  */
 static u8 scale_dt2[] = {
-    0,  0,   0,   0,  0,   0,   0,  0,   0,   0,  0,   0,   0,  100, 100, 0,  101, 101, 1, 103, 103,
-    1,  105, 105, 2,  106, 106, 2,  108, 108, 3,  110, 110, 3,  112, 112, 4,  113, 113,
-    4,  115, 115, 5,  117, 117, 5,  118, 118, 6,  120, 120, 6,  122, 122, 7,  124, 124,
-    7,  125, 125, 8,  127, 127, 8,  129, 129, 9,  131, 131, 9,  132, 132, 10, 134, 134,
-    10, 136, 136, 11, 137, 137, 11, 139, 139, 12, 141, 141, 12, 143, 143, 13, 144, 144,
-    13, 146, 146, 14, 148, 148, 14, 150, 150, 15, 148, 148, 15, 150, 150,
+    0,  0,   0,   0,  0,   0,   0,  0,   0,   0,  0,   0,   0,  100, 100, 0,  101, 101,
+    1,  103, 103, 1,  105, 105, 2,  106, 106, 2,  108, 108, 3,  110, 110, 3,  112, 112,
+    4,  113, 113, 4,  115, 115, 5,  117, 117, 5,  118, 118, 6,  120, 120, 6,  122, 122,
+    7,  124, 124, 7,  125, 125, 8,  127, 127, 8,  129, 129, 9,  131, 131, 9,  132, 132,
+    10, 134, 134, 10, 136, 136, 11, 137, 137, 11, 139, 139, 12, 141, 141, 12, 143, 143,
+    13, 144, 144, 13, 146, 146, 14, 148, 148, 14, 150, 150, 15, 148, 148, 15, 150, 150,
 };
 
-static void effBombDisp(CameraId cameraId, EffectEntry* effect);
+static void effBombDisp(CameraId cameraId, void* payload);
 static void effBombMain(EffectEntry* effect);
 
 /**
  * Spawns a bomb blast at (x, y, z): eight rays (four at 90 degree steps, four offset by 45)
  * and a confetti burst.
- * Spawned by battle damage code (battle_damage.c), scripts in gor_03 and event scripts via evt_eff.
+ * Spawned by battle damage code (battle_damage.c), an NPC function in gor_03 and event scripts via evt_eff.
  */
 EffectEntry* effBombEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffBombWork* work;
-    EffBombWork* bomb;
     f32 size;
     f32 s;
     s32 i;
@@ -77,18 +75,18 @@ EffectEntry* effBombEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     work->scale = scale;
     work->frame = 0;
     work->offset = 0;
-    bomb = work + 1;
-    for (i = 1; i < effect->count; i++, bomb++) {
-        bomb->angle = 90.0f * (f32)(i - 1) + (i > 4 ? 45.0f : 0.0f);
-        s = sin(0.017453292f * bomb->angle);
-        bomb->position.x = size * s;
-        s = cos(0.017453292f * bomb->angle);
-        bomb->position.y = size * s;
-        bomb->position.z = 0.0f;
-        bomb->scaleX = 0.0f;
-        bomb->scaleY = 0.0f;
-        bomb->offset = 0;
-        bomb->frame = 0;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        work->angle = 90.0f * (f32)(i - 1) + (i > 4 ? 45.0f : 0.0f);
+        s = sin(0.017453292f * work->angle);
+        work->position.x = size * s;
+        s = cos(0.017453292f * work->angle);
+        work->position.y = size * s;
+        work->position.z = 0.0f;
+        work->scaleX = 0.0f;
+        work->scaleY = 0.0f;
+        work->offset = 0;
+        work->frame = 0;
     }
     effConfettiEntry(4, 40, x, y, z);
     return effect;
@@ -125,11 +123,12 @@ static void effBombMain(EffectEntry* effect) {
             work->scaleY = scale_dt2[frame * 3 + 2] / 100.0f;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBombDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effBombDisp, effect);
 }
 
 /** Draws the eight rays as stretched sprites, rotated by their angle around the blast centre. */
-static void effBombDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBombDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     EffBombWork* work;
     CameraEntry* camera;
     GXTexObj texObj;
@@ -188,6 +187,8 @@ static void effBombDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx, rot, base);
     PSMTXConcat(camera->view, base, base);
     GXSetCurrentMtx(GX_PNMTX0);
+
+    // deg, half and one are variables: the retail code negates and divides them at run time
     deg = 0.017453292f;
     scale = 30.0f * scale;
     half = 0.5f;

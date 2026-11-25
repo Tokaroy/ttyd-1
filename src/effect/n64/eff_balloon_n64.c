@@ -1,14 +1,17 @@
-// Paper Mario 64 effect: balloon that inflates to a target scale while rotating; type picks the shape.
-#include "eff/n64/eff_balloon_n64.h"
+// Paper Mario 64 effect: balloon that inflates to a target scale at a fixed tilt and wobbles; type is stored
+// but not read.
+
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
+// Only the vertex type, not eff_n64.h: this file calls tri1, effSetVtxDescN64 and effGetTexObjN64 without a
+// prototype, as the bytes need (with eff_n64.h's u16 tri1 the calls with i + 2 and i + 3 mask their arguments).
+#include "eff/eff_n64_vtx.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <dolphin/os/OSFastCast.h>
 #include <string.h>
-#include "eff/eff_n64_vtx.h"
 #include "libc_decls.h"
 
 typedef struct EffBalloonN64Point {
@@ -27,13 +30,6 @@ typedef struct EffBalloonN64Work {
     f32 offsetX;                   // 0xC4
     f32 offsetY;                   // 0xC8
 } EffBalloonN64Work;
-
-void effGetTexObjN64(u32 id, GXTexObj* obj);
-void effSetVtxDescN64(effN64Vtx* vtx);
-// Unprototyped on purpose: this file passes tri1 its vertex indices as plain ints, without the
-// u16 conversion that eff_n64.h's prototype would add, so it includes only the vertex type.
-// FAKE: local prototype: tri1 is declared without parameters (eff_n64.h: (u16, u16, u16, u16)); this file was compiled with it and the header prototype changes the code.
-void tri1();
 
 /** Template vertices of the balloon, copied each frame before the 20 outline points are wobbled around it. */
 static effN64Vtx balloon_vtx[] = {
@@ -62,7 +58,7 @@ static effN64Vtx balloon_vtx[] = {
 };
 
 static void effBalloonMain(EffectEntry* effect);
-static void effBalloonDisp(CameraId cameraId, EffectEntry* effect);
+static void effBalloonDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns the balloon at (x, y, z) that grows to `targetScale`,
@@ -79,7 +75,7 @@ EffectEntry* effBalloonN64Entry(s32 type, f32 x, f32 y, f32 z, f32 targetScale, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffBalloonN64Work));
     effect->userdata = work;
     effect->callback = effBalloonMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -111,16 +107,16 @@ static void effBalloonMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 99;
     }
     if (work->lifetime < 100) {
         work->lifetime--;
     }
     work->frame++;
-    if (work->frame > 0x50000 - 0xE60) {
-        work->frame = 0x100;
+    if (work->frame > 324000) {
+        work->frame = 256;
     }
     lifetime = work->lifetime;
     if (lifetime < 0) {
@@ -147,22 +143,38 @@ static void effBalloonMain(EffectEntry* effect) {
     } else {
         work->offsetY = 1.2f * scale;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBalloonDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effBalloonDisp, effect);
+}
+
+/** Copies vertex `src` to `dst` and transforms its position by `mtx` (fast-cast s16 <-> f32 conversions). */
+static void vtx_copy(effN64Vtx* dst, effN64Vtx* src, Mtx mtx) {
+    Vec v;
+
+    memcpy(dst, src, sizeof(effN64Vtx));
+    OSInitFastCast();
+    OSs16tof32(&dst->x, &v.x);
+    OSs16tof32(&dst->y, &v.y);
+    OSs16tof32(&dst->z, &v.z);
+    PSMTXMultVec(mtx, &v, &v);
+    OSInitFastCast();
+    // FAKE: x stored through an s16* view of dst; &dst->x lets the loop fold the address into its own register
+    OSf32tos16(&v.x, (s16*)dst);
+    OSf32tos16(&v.y, &dst->y);
+    OSf32tos16(&v.z, &dst->z);
 }
 
 /**
  * Builds the vertices in a temporary buffer (from the template, via fast-cast conversions),
- * then draws the outline as a fan of triangles around one vertex;
- * the texture is chosen from the lifetime counter (Guess).
+ * then draws the outline as a fan of triangles around one vertex; vertex 0 (placed at the effect position,
+ * without the rising offset) is joined in only before the soft delete.
+ * The texture is chosen from the lifetime counter.
  */
-static void effBalloonDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBalloonDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera = camGetPtr(cameraId);
     EffBalloonN64Work* work = effect->userdata;
-    s32 type;
-    effN64Vtx* vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, 3)->address;
-    Vec v0;
-    Vec v1;
-    Vec v2;
+    s32 lifetime;
+    effN64Vtx* vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, SMART_GROUP_TEMP)->address;
     GXTexObj texObj;
     Mtx mtx;
     Mtx tex;
@@ -171,11 +183,12 @@ static void effBalloonDisp(CameraId cameraId, EffectEntry* effect) {
     Mtx b;
     s32 i;
 
-    type = work->lifetime;
-    if (type == 0) {
+    // the texture follows the remaining lifetime (0, 1, other), not the entry's type
+    lifetime = work->lifetime;
+    if (lifetime == 0) {
         effGetTexObjN64(0x5F, &texObj);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
-    } else if (type == 1) {
+    } else if (lifetime == 1) {
         effGetTexObjN64(0x5E, &texObj);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
     } else {
@@ -191,48 +204,21 @@ static void effBalloonDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, (GXTevColorArg)12);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ONE);
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
-    memcpy(vtx, &balloon_vtx[1], sizeof(effN64Vtx));
-    OSInitFastCast();
-    OSs16tof32(&vtx->x, &v0.x);
-    OSs16tof32(&vtx->y, &v0.y);
-    OSs16tof32(&vtx->z, &v0.z);
-    PSMTXMultVec(mtx, &v0, &v0);
-    OSInitFastCast();
-    OSf32tos16(&v0.x, &vtx->x);
-    OSf32tos16(&v0.y, &vtx->y);
-    OSf32tos16(&v0.z, &vtx->z);
+    vtx_copy(vtx, &balloon_vtx[1], mtx);
     PSMTXRotRad(rot, 'z', 0.017453292f * work->rotation);
     PSMTXConcat(mtx, rot, a);
     PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
     PSMTXTrans(mtx, work->offsetX, work->offsetY, 0.0f);
     PSMTXConcat(rot, mtx, b);
     PSMTXConcat(a, b, b);
-    memcpy(vtx + 1, &balloon_vtx[0], sizeof(effN64Vtx));
-    OSInitFastCast();
-    OSs16tof32(&vtx[1].x, &v1.x);
-    OSs16tof32(&vtx[1].y, &v1.y);
-    OSs16tof32(&vtx[1].z, &v1.z);
-    PSMTXMultVec(b, &v1, &v1);
-    OSInitFastCast();
-    OSf32tos16(&v1.x, &vtx[1].x);
-    OSf32tos16(&v1.y, &vtx[1].y);
-    OSf32tos16(&v1.z, &vtx[1].z);
+    vtx_copy(vtx + 1, &balloon_vtx[0], b);
     for (i = 0; i < 20; i++) {
         PSMTXTrans(mtx, work->points[i].x, work->points[i].y, 0.0f);
         PSMTXConcat(b, mtx, mtx);
-        memcpy(&vtx[i + 2], &balloon_vtx[i + 2], sizeof(effN64Vtx));
-        OSInitFastCast();
-        OSs16tof32(&vtx[i + 2].x, &v2.x);
-        OSs16tof32(&vtx[i + 2].y, &v2.y);
-        OSs16tof32(&vtx[i + 2].z, &v2.z);
-        PSMTXMultVec(mtx, &v2, &v2);
-        OSInitFastCast();
-        OSf32tos16(&v2.x, (s16*)&vtx[i + 2]);
-        OSf32tos16(&v2.y, &vtx[i + 2].y);
-        OSf32tos16(&v2.z, &vtx[i + 2].z);
+        vtx_copy(&vtx[i + 2], &balloon_vtx[i + 2], mtx);
     }
     DCFlushRange(vtx, sizeof(effN64Vtx) * 32);
     GXInvalidateVtxCache();
@@ -240,7 +226,7 @@ static void effBalloonDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_NONE);
     effSetVtxDescN64(vtx);
-    if (type < 100) {
+    if (lifetime < 100) {
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 3);
         tri1(0x15, 2, 1, 0);
         for (i = 0; i < 19; i++) {

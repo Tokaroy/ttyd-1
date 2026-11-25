@@ -1,5 +1,7 @@
-// Paper Mario 64 effect: puffs of snowy dust; used by the freeze and Crystal Star effects.
+// Paper Mario 64 effect: puffs of snowy dust; used by the Crystal Star effect (eff_starstone) and las_29.
+
 #include "eff/n64/eff_snow_dust_n64.h"
+#include "eff/eff_magic1_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -11,7 +13,7 @@
 #include "libc_decls.h"
 
 static void effSnowDustMain(EffectEntry* effect);
-static void effSnowDustDisp(CameraId cameraId, EffectEntry* effect);
+static void effSnowDustDisp(CameraId cameraId, void* param);
 
 /** Size of a pulsing puff (types 2 and 3) or a type 5 sparkle over its 30-step cycle: three quick swells. */
 static u8 scale_data[] = {
@@ -30,7 +32,7 @@ static u8 a_data[] = {
 };
 
 /** 8x8 quad drawn for each type 1 snowflake. */
-effN64Vtx size8x8_tex64x64_vtx[] = {
+static effN64Vtx size8x8_tex64x64_vtx[] = {
     {-4, -4, 0, 0, 0, 0, 0, 0, 255},
     {4, -4, 0, 2048, 0, 0, 0, 0, 255},
     {4, 4, 0, 2048, 2048, 0, 0, 0, 255},
@@ -38,7 +40,7 @@ effN64Vtx size8x8_tex64x64_vtx[] = {
 };
 
 /** 4x4 quad drawn for each type 0 and type 6 snowflake. */
-effN64Vtx size4x4_tex64x64_vtx[] = {
+static effN64Vtx size4x4_tex64x64_vtx[] = {
     {-2, -2, 0, 0, 0, 0, 0, 0, 255},
     {2, -2, 0, 2048, 0, 0, 0, 0, 255},
     {2, 2, 0, 2048, 2048, 0, 0, 0, 255},
@@ -61,7 +63,7 @@ static effN64Vtx size16x16_tex64x64_vtx[] = {
     {-8, 8, 0, 0, 2048, 0, 0, 0, 255},
 };
 
-/** 32x32 glow diamond behind each sparkle: clear corners fading in to a solid centre vertex. */
+/** Glow diamond (64 units across) behind each sparkle: clear corners fading in to a solid centre vertex. */
 static effN64Vtx size32x32_tex32x32_vtx[5] = {
     {-32, 0, 0, 0, 0, 255, 255, 255, 0},
     {0, -32, 0, 1024, 0, 255, 255, 255, 0},
@@ -78,7 +80,6 @@ static effN64Vtx size32x32_tex32x32_vtx[5] = {
 EffectEntry* effSnowDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y, f32 z, f32 w, f32 h, f32 scale) {
     EffectEntry* effect;
     EffSnowDustN64Work* work;
-    EffSnowDustN64Work* wp;
     f32 step;
     s32 i;
 
@@ -88,7 +89,7 @@ EffectEntry* effSnowDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y
     work = __memAlloc(HEAP_EFFECT, (count + 1) * sizeof(EffSnowDustN64Work));
     effect->userdata = work;
     effect->callback = effSnowDustMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -103,7 +104,7 @@ EffectEntry* effSnowDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y
     work->scale = scale;
     work->width = w;
     work->height = h;
-    work->camId = 4;
+    work->camId = CAMERA_3D;
     work->r = 255;
     work->g = 255;
     work->b = 255;
@@ -150,9 +151,9 @@ EffectEntry* effSnowDustN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y
     } else {
         step = 30.0f / (f32)count;
     }
-    wp = work + 1;
-    for (i = 1; i < count + 1; i++, wp++) {
-        wp->seq = (s32)(-(f32)i * step) - 1;
+    work++;
+    for (i = 1; i < count + 1; i++, work++) {
+        work->seq = (s32)(-(f32)i * step) - 1;
     }
     return effect;
 }
@@ -186,8 +187,8 @@ static void effSnowDustMain(EffectEntry* effect) {
     position = tmp;
     camId = work->camId;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -323,16 +324,17 @@ static void effSnowDustMain(EffectEntry* effect) {
                 break;
         }
     }
-    dispEntry(camId, dispCalcZ(&position), 2, (DispCallback)effSnowDustDisp, effect);
+    dispEntry(camId, dispCalcZ(&position), DISP_MODE_XLU, effSnowDustDisp, effect);
 }
 
 /**
  * Draws each live particle camera-facing, scaled by its size and the effect alpha:
- * types 0/6 a 4x4 flake from texture 8 masked by scrolling texture 0x65, type 1 an 8x8 flake from 0x66,
- * types 2/3 a 12x12 frame from the 0x67 strip (type 2 picks the frame per particle),
- * and types 4/5 a 16x16 sparkle from 0x68 plus a 32x32 glow quad.
+ * types 0/6 a 4x4 flake shaped (alpha) by texture 8 and coloured by scrolling texture 0x65, type 1 an 8x8 flake
+ * shaped by 0x66 and coloured by 0x65, types 2/3 a 12x12 frame from the 0x67 strip (type 2 picks the frame per
+ * particle), and types 4/5 a 16x16 sparkle from 0x68 plus the glow diamond.
  */
-static void effSnowDustDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSnowDustDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* cam;
     EffSnowDustN64Work* work;
     s32 i;
@@ -355,51 +357,51 @@ static void effSnowDustDisp(CameraId cameraId, EffectEntry* effect) {
         case 6:
             GXSetNumChans(0);
             GXSetNumTevStages(2);
-            GXSetTevOrder(0, 0, 0, 0xff);
-            GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-            GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(0, 0xf, 0xf, 0xf, 0xf);
-            GXSetTevAlphaIn(0, 7, 4, 1, 7);
-            GXSetTevOrder(1, 1, 1, 0xff);
-            GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-            GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(1, 4, 2, 8, 0xf);
-            GXSetTevAlphaIn(1, 7, 7, 7, 0);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
+            GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_C1, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
             effGetTexObjN64(8, &texObj);
-            GXLoadTexObj(&texObj, 0);
+            GXLoadTexObj(&texObj, GX_TEXMAP0);
             effGetTexObjN64(0x65, &texObj);
-            GXLoadTexObj(&texObj, 1);
+            GXLoadTexObj(&texObj, GX_TEXMAP1);
             GXSetNumTexGens(2);
-            GXSetTexCoordGen2(0, 1, 4, 0x1e, 0, 0x7d);
-            GXSetTexCoordGen2(1, 1, 4, 0x21, 0, 0x7d);
+            GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+            GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
             PSMTXScale(texMtx, 0.015625f, 0.015625f, 0.0f);
             PSMTXScale(texMtx1, 0.015625f, 0.015625f, 0.0f);
             break;
         case 1:
             GXSetNumChans(0);
             GXSetNumTevStages(2);
-            GXSetTevOrder(0, 0, 0, 0xff);
-            GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-            GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(0, 0xf, 0xf, 0xf, 0xf);
-            GXSetTevAlphaIn(0, 7, 4, 1, 7);
-            GXSetTevOrder(1, 1, 1, 0xff);
-            GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-            GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(1, 4, 2, 8, 0xf);
-            GXSetTevAlphaIn(1, 7, 7, 7, 0);
-            GXSetTevOrder(2, 1, 1, 0xff);
-            GXSetTevColorOp(2, 0, 0, 0, 1, 0);
-            GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(2, 0, 0xc, 8, 0xf);
-            GXSetTevAlphaIn(2, 7, 7, 7, 0);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
+            GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_C1, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+            GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_CPREV, GX_CC_ONE, GX_CC_TEXC, GX_CC_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
             effGetTexObjN64(0x66, &texObj);
-            GXLoadTexObj(&texObj, 0);
+            GXLoadTexObj(&texObj, GX_TEXMAP0);
             effGetTexObjN64(0x65, &texObj);
-            GXLoadTexObj(&texObj, 1);
+            GXLoadTexObj(&texObj, GX_TEXMAP1);
             GXSetNumTexGens(2);
-            GXSetTexCoordGen2(0, 1, 4, 0x1e, 0, 0x7d);
-            GXSetTexCoordGen2(1, 1, 4, 0x21, 0, 0x7d);
+            GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+            GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
             PSMTXScale(texMtx, 0.03125f, 0.03125f, 0.0f);
             PSMTXScale(texMtx1, 0.03125f, 0.03125f, 0.0f);
             break;
@@ -407,39 +409,39 @@ static void effSnowDustDisp(CameraId cameraId, EffectEntry* effect) {
         case 3:
             GXSetNumChans(0);
             GXSetNumTevStages(1);
-            GXSetTevOrder(0, 0, 0, 0xff);
-            GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-            GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(0, 4, 2, 8, 0xf);
-            GXSetTevAlphaIn(0, 7, 4, 1, 7);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_C1, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
             effGetTexObjN64(0x67, &texObj);
-            GXLoadTexObj(&texObj, 0);
+            GXLoadTexObj(&texObj, GX_TEXMAP0);
             GXSetNumTexGens(1);
-            GXSetTexCoordGen2(0, 1, 4, 0x1e, 0, 0x7d);
+            GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
             PSMTXScale(texMtx, 0.00390625f, 0.015625f, 0.0f);
             break;
         case 4:
         case 5:
             GXSetNumChans(0);
             GXSetNumTevStages(2);
-            GXSetTevOrder(0, 0, 0, 0xff);
-            GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-            GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(0, 0xf, 8, 5, 2);
-            GXSetTevAlphaIn(0, 7, 4, 1, 7);
-            GXSetTevOrder(1, 0xff, 0xff, 0xff);
-            GXSetTevColorOp(1, 1, 0, 0, 1, 0);
-            GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-            GXSetTevColorIn(1, 0xf, 4, 5, 0);
-            GXSetTevAlphaIn(1, 7, 7, 7, 0);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_A1, GX_CC_C0);
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
+            GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+            GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+            GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C1, GX_CC_A1, GX_CC_CPREV);
+            GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
             effGetTexObjN64(0x68, &texObj);
-            GXLoadTexObj(&texObj, 0);
+            GXLoadTexObj(&texObj, GX_TEXMAP0);
             GXSetNumTexGens(1);
-            GXSetTexCoordGen2(0, 1, 4, 0x1e, 0, 0x7d);
+            GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
             PSMTXScale(texMtx, 0.015625f, 0.015625f, 0.0f);
             break;
     }
-    GXSetCullMode(0);
+    GXSetCullMode(GX_CULL_NONE);
     work++;
     for (i = 1; i < effect->count; i++, work++) {
         if (work->seq < 0) {
@@ -451,71 +453,71 @@ static void effSnowDustDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXScale(scaleMtx, work->scale * scale, work->scale * scale, work->scale * scale);
         PSMTXConcat(mtx, scaleMtx, mtx);
         PSMTXConcat(cam->view, mtx, mtx);
-        GXLoadPosMtxImm(mtx, 0);
-        GXSetCurrentMtx(0);
-        GXSetTevColor(1, (GXColor){work->r, work->g, work->b, (s32)(scale * (f32)work->alpha)});
-        GXSetTevKColor(0, (GXColor){80 - work->seq, 80 - work->seq, 80 - work->seq, 80 - work->seq});
-        GXLoadTexMtxImm(texMtx, 0x1e, 1);
+        GXLoadPosMtxImm(mtx, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
+        GXSetTevColor(GX_TEVREG0, (GXColor){work->r, work->g, work->b, (s32)(scale * (f32)work->alpha)});
+        GXSetTevKColor(GX_KCOLOR0, (GXColor){80 - work->seq, 80 - work->seq, 80 - work->seq, 80 - work->seq});
+        GXLoadTexMtxImm(texMtx, GX_TEXMTX0, GX_MTX2x4);
         PSMTXTrans(mtx, work->u, work->v, 0.0f);
         PSMTXConcat(texMtx1, mtx, mtx);
-        GXLoadTexMtxImm(mtx, 0x21, 1);
+        GXLoadTexMtxImm(mtx, GX_TEXMTX1, GX_MTX2x4);
         if (type == 2) {
             PSMTXTrans(mtx, (f32)((i & 0x1f) << 6), 64.0f, 0.0f);
             PSMTXConcat(texMtx, mtx, mtx);
-            GXLoadTexMtxImm(mtx, 0x1e, 1);
+            GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
         }
         switch (type) {
             case 0:
             case 6:
                 effSetVtxDescN64(size4x4_tex64x64_vtx);
-                GXBegin(0x90, 0, 6);
+                GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
                 break;
             case 1:
                 effSetVtxDescN64(size8x8_tex64x64_vtx);
-                GXBegin(0x90, 0, 6);
+                GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
                 break;
             case 2:
             case 3:
                 effSetVtxDescN64(size12x12_tex64x64_vtx);
-                GXBegin(0x90, 0, 6);
+                GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
                 break;
             case 4:
             case 5:
                 GXSetNumChans(0);
                 GXSetNumTevStages(3);
-                GXSetTevOrder(0, 0, 0, 0xff);
-                GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-                GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-                GXSetTevColorIn(0, 0xf, 8, 5, 2);
-                GXSetTevAlphaIn(0, 7, 4, 1, 7);
-                GXSetTevOrder(1, 0xff, 0xff, 0xff);
-                GXSetTevColorOp(1, 1, 0, 0, 1, 0);
-                GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-                GXSetTevColorIn(1, 0xf, 4, 5, 0);
-                GXSetTevAlphaIn(1, 7, 7, 7, 0);
-                GXSetTevOrder(2, 0xff, 0xff, 0xff);
-                GXSetTevColorOp(2, 1, 0, 0, 1, 0);
-                GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-                GXSetTevColorIn(2, 0xe, 0xf, 0xf, 0);
-                GXSetTevAlphaIn(2, 7, 7, 7, 0);
-                GXSetTevKColorSel(2, 0xc);
+                GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+                GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_A1, GX_CC_C0);
+                GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
+                GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+                GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C1, GX_CC_A1, GX_CC_CPREV);
+                GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+                GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+                GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_KONST, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+                GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+                GXSetTevKColorSel(GX_TEVSTAGE2, GX_TEV_KCSEL_K0);
                 effSetVtxDescN64(size16x16_tex64x64_vtx);
-                GXBegin(0x90, 0, 6);
+                GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
                 GXSetNumChans(1);
-                GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+                GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
                 GXSetNumTevStages(1);
-                GXSetTevOrder(0, 0xff, 0xff, 4);
-                GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-                GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-                GXSetTevColorIn(0, 0xf, 0xf, 0xf, 0xc);
-                GXSetTevAlphaIn(0, 7, 5, 6, 7);
-                GXSetTevKAlphaSel(0, 0x1c);
+                GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+                GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ONE);
+                GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_KONST, GX_CA_ZERO);
+                GXSetTevKAlphaSel(GX_TEVSTAGE0, GX_TEV_KASEL_K0_A);
                 effSetVtxDescN64(size32x32_tex32x32_vtx);
-                GXBegin(0x90, 0, 12);
+                GXBegin(GX_TRIANGLES, GX_VTXFMT0, 12);
                 tri2(0, 1, 4, 0, 1, 2, 4, 0);
                 tri2(0, 4, 3, 0, 4, 2, 3, 0);
                 break;

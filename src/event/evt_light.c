@@ -1,4 +1,5 @@
 // Script commands for character and map lighting.
+
 #include "evt/evt_light.h"
 #include "manager/evtmgr_cmd.h"
 #include "driver/animdrv.h"
@@ -8,6 +9,25 @@
 #include "mario/mario.h"
 #include "mario/mario_party.h"
 #include "party.h"
+
+/** BOOL on, const char* lightName */
+// Original name and size (0x78) from the JP demo map (UNUSED there: no script uses it); the map lists it before
+// evt_light_charalight_all_onoff, whose flag it sets or clears on one named light (arguments in the order of
+// evt_light_npc_lighting_onoff).
+USER_FUNC(evt_light_charalight_onoff) {
+    EvtWord* args = event->args;
+    BOOL on;
+    LightEntry* light;
+
+    on = evtGetValue(event, args[0]);
+    light = lightNameToPtr((const char*)evtGetValue(event, args[1]));
+    if (on) {
+        light->flags |= LIGHT_CHARA;
+    } else {
+        light->flags &= ~LIGHT_CHARA;
+    }
+    return EVT_RETURN_DONE;
+}
 
 /** BOOL on */
 USER_FUNC(evt_light_charalight_all_onoff) {
@@ -33,13 +53,13 @@ USER_FUNC(evt_light_mario_lighting_onoff) {
     on = evtGetValue(event, *event->args);
     mario = marioGetPtr();
     if (on) {
-        animPoseSetMaterialLightFlagOn(mario->paperAnimGroupId[0], ANIM_MATERIAL_LIGHT_CHARA);
-        animPoseSetMaterialLightFlagOn(mario->paperAnimGroupId[1], ANIM_MATERIAL_LIGHT_CHARA);
-        animPoseSetMaterialLightFlagOn(mario->paperAnimGroupId[2], ANIM_MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOn(mario->paperAnimGroupId[0], MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOn(mario->paperAnimGroupId[1], MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOn(mario->paperAnimGroupId[2], MATERIAL_LIGHT_CHARA);
     } else {
-        animPoseSetMaterialLightFlagOff(mario->paperAnimGroupId[0], ANIM_MATERIAL_LIGHT_CHARA);
-        animPoseSetMaterialLightFlagOff(mario->paperAnimGroupId[1], ANIM_MATERIAL_LIGHT_CHARA);
-        animPoseSetMaterialLightFlagOff(mario->paperAnimGroupId[2], ANIM_MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOff(mario->paperAnimGroupId[0], MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOff(mario->paperAnimGroupId[1], MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOff(mario->paperAnimGroupId[2], MATERIAL_LIGHT_CHARA);
     }
     return EVT_RETURN_DONE;
 }
@@ -52,9 +72,9 @@ USER_FUNC(evt_light_party_lighting_onoff) {
     on = evtGetValue(event, *event->args);
     party = partyGetPtr(marioGetPartyId());
     if (on) {
-        animPoseSetMaterialLightFlagOn(party->paperAnimGroup, ANIM_MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOn(party->paperAnimGroup, MATERIAL_LIGHT_CHARA);
     } else {
-        animPoseSetMaterialLightFlagOff(party->paperAnimGroup, ANIM_MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOff(party->paperAnimGroup, MATERIAL_LIGHT_CHARA);
     }
     return EVT_RETURN_DONE;
 }
@@ -68,10 +88,69 @@ USER_FUNC(evt_light_npc_lighting_onoff) {
     on = evtGetValue(event, args[0]);
     npc = npcNameToPtr((const char*)evtGetValue(event, args[1]));
     if (on) {
-        animPoseSetMaterialLightFlagOn(npc->poseId, ANIM_MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOn(npc->poseId, MATERIAL_LIGHT_CHARA);
     } else {
-        animPoseSetMaterialLightFlagOff(npc->poseId, ANIM_MATERIAL_LIGHT_CHARA);
+        animPoseSetMaterialLightFlagOff(npc->poseId, MATERIAL_LIGHT_CHARA);
     }
+    return EVT_RETURN_DONE;
+}
+
+/** const char* lightName, out: x, y, z */
+// evt_light_get_position, evt_light_get_dir, evt_light_get_color and evt_light_get_distattn: original names and
+// sizes (0x80, 0x80, 0x90, 0x80) from the JP demo map (UNUSED there: no script uses them). Each looks the light up as
+// evt_light_get_flag does and returns the LightEntry member its name gives: the position, the direction (lightEntry's
+// rotation), the four colour bytes and the three distance attenuation coefficients. The map's setters and
+// evt_light_get_intensity are not restored (their bodies are not known).
+USER_FUNC(evt_light_get_position) {
+    EvtWord* args = event->args;
+    LightEntry* light = lightNameToPtr((const char*)evtGetValue(event, args[0]));
+    evtSetFloat(event, args[1], light->position.x);
+    evtSetFloat(event, args[2], light->position.y);
+    evtSetFloat(event, args[3], light->position.z);
+    return EVT_RETURN_DONE;
+}
+
+/** const char* lightName, out: x, y, z */
+// Original name and size from the JP demo map (see evt_light_get_position).
+USER_FUNC(evt_light_get_dir) {
+    EvtWord* args = event->args;
+    LightEntry* light = lightNameToPtr((const char*)evtGetValue(event, args[0]));
+    evtSetFloat(event, args[1], light->rotation.x);
+    evtSetFloat(event, args[2], light->rotation.y);
+    evtSetFloat(event, args[3], light->rotation.z);
+    return EVT_RETURN_DONE;
+}
+
+/** const char* lightName, out: r, g, b, a */
+// Original name and size from the JP demo map (see evt_light_get_position).
+USER_FUNC(evt_light_get_color) {
+    EvtWord* args = event->args;
+    LightEntry* light = lightNameToPtr((const char*)evtGetValue(event, args[0]));
+    evtSetValue(event, args[1], light->color.r);
+    evtSetValue(event, args[2], light->color.g);
+    evtSetValue(event, args[3], light->color.b);
+    evtSetValue(event, args[4], light->color.a);
+    return EVT_RETURN_DONE;
+}
+
+/** const char* lightName, out: the three distance attenuation coefficients */
+// Original name and size from the JP demo map (see evt_light_get_position).
+USER_FUNC(evt_light_get_distattn) {
+    EvtWord* args = event->args;
+    LightEntry* light = lightNameToPtr((const char*)evtGetValue(event, args[0]));
+    evtSetFloat(event, args[1], light->attenDistCoef.x);
+    evtSetFloat(event, args[2], light->attenDistCoef.y);
+    evtSetFloat(event, args[3], light->attenDistCoef.z);
+    return EVT_RETURN_DONE;
+}
+
+/** const char* lightName, out: the light's flags */
+// Original name and size (0x54) from the JP demo map (UNUSED there: no script uses it); looks the light up as
+// evt_light_bind_mapobj does and returns its flags word.
+USER_FUNC(evt_light_get_flag) {
+    EvtWord* args = event->args;
+    LightEntry* light = lightNameToPtr((const char*)evtGetValue(event, args[0]));
+    evtSetValue(event, args[1], light->flags);
     return EVT_RETURN_DONE;
 }
 

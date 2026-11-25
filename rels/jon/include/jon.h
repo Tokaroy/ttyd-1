@@ -1,10 +1,12 @@
 // Pit of 100 Trials (jon, "dungeon"): the area's shared declarations (init scripts, battle tables, unit kinds).
+
 #pragma once
 
 #include "dolphin/types.h"
 #include "driver/npcdrv.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_word.h"
+#include "evt/evt_cmd.h"
 
 extern NpcTerritoryInfo btl_jon_setup_no_tbl[];
 extern NpcSetupBattleInfo btlsetup_jon_tbl[];
@@ -57,7 +59,10 @@ extern BattleUnitKind unit_yami_patakuri;
 extern BattleUnitKind unit_yami_togekuri;
 extern BattleUnitKind unit_yamitogedaruma;
 
-extern u8 enemy_100[];
-extern EvtWord iri_12_makkino_okiru[];
-extern EvtWord jon_init_evt[];
-extern NpcSetupInfo npcEnt_wanwan[];
+// Area-local saved values (JON; swReInit clears them on every area change), named from the area's
+// scripts
+// passed to evt_mobj_signboard for board (setup_return); mobj_signboard never sets or reads its flag
+#define LSWF_JON_SIGNBOARD_UNUSED LSWF(0)
+// jon_init_evt copies GSW_PIT_FLOOR into it and reads it straight back into LW(0) to update GSW_JON_DEEPEST_LEVEL;
+// nothing else uses it
+#define LSW_JON_PIT_FLOOR LSW(0)

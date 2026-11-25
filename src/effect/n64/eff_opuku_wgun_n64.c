@@ -1,6 +1,8 @@
 // Paper Mario 64 effect: water gun (wgun) shot from one point toward another.
-#include "eff/n64/eff_opuku_wgun_n64.h"
+
 #include "system.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -10,13 +12,14 @@
 #include <dolphin/os/OSFastCast.h>
 #include <stdlib.h>
 #include "eff/eff_n64.h"
-#include "libc_decls.h"
-#include <dolphin/os.h>
+#include "eff/n64/eff_opuku_wgun_n64.h"
+#include "dolphin/os.h"
 
 /** Returns the sine of an angle given in degrees. */
 static inline f32 dsin(f32 a) {
     return sin(6.2831855f * a / 360.0f);
 }
+
 typedef struct EffOpukuWgunN64Work {
     s32 type;        // 0x0
     Vec position;    // 0x4
@@ -45,12 +48,28 @@ typedef struct EffOpukuWgunN64Work {
     u8 alphas[12];   // 0x1D8
 } EffOpukuWgunN64Work;
 
+/** Transforms vertex `src`'s position by `mtx` into `dst` (fast-cast s16 <-> f32 conversions). */
+// Original name and size (0x110) from the JP demo map (UNUSED there: every call is inlined).
+static void vtx_copy(effN64Vtx* dst, effN64Vtx* src, Mtx mtx) {
+    Vec v;
+
+    OSInitFastCast();
+    OSs16tof32(&src->x, &v.x);
+    OSs16tof32(&src->y, &v.y);
+    OSs16tof32(&src->z, &v.z);
+    PSMTXMultVec(mtx, &v, &v);
+    OSInitFastCast();
+    OSf32tos16(&v.x, &dst->x);
+    OSf32tos16(&v.y, &dst->y);
+    OSf32tos16(&v.z, &dst->z);
+}
+
 static void effOpukuWgunMain(EffectEntry* effect);
-static void effOpukuWgunDisp(CameraId cameraId, EffectEntry* effect);
+static void effOpukuWgunDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a water-gun shot from (x1, y1, z1) to (x2, y2, z2) living `lifetime` frames at `scale`.
- * Spawned only by event scripts through evt_eff.
+ * Spawned only by event scripts through evt_eff64 "opuku_wgun_n64".
  */
 EffectEntry* effOpukuWgunN64Entry(s32 type, s32 lifetime, f32 x1, f32 y1, f32 z1, f32 x2, f32 y2, f32 z2,
                                   f32 scale) {
@@ -65,7 +84,7 @@ EffectEntry* effOpukuWgunN64Entry(s32 type, s32 lifetime, f32 x1, f32 y1, f32 z1
     work = __memAlloc(HEAP_EFFECT, sizeof(EffOpukuWgunN64Work));
     effect->userdata = work;
     effect->callback = effOpukuWgunMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -135,8 +154,8 @@ static void effOpukuWgunMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -171,13 +190,12 @@ static void effOpukuWgunMain(EffectEntry* effect) {
             work->z[i] = work->start.z + t * (work->end.z - work->start.z);
         } else {
             work->x[i] = work->start.x + t * (work->end.x - work->start.x);
-
             work->y[i] = 120.0f * dsin(180.0f * t) + (work->start.y + t * (work->end.y - work->start.y));
             work->z[i] = work->start.z + t * (work->end.z - work->start.z);
             work->alphas[i] = (u8)(255.0f - 255.0f * t);
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effOpukuWgunDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effOpukuWgunDisp, effect);
 }
 
 /**
@@ -185,18 +203,19 @@ static void effOpukuWgunMain(EffectEntry* effect) {
  * fading over the last three at the tail.
  */
 static u8 a_data[12] = {255, 255, 255, 255, 255, 255, 255, 255, 255, 200, 128, 32};
+
 /**
  * Builds a camera-view ribbon through the twelve points (width grows with each point age, texture 0x8D or 0x8E)
  * and draws it as quads.
  */
-static void effOpukuWgunDisp(CameraId cameraId, EffectEntry* effect) {
+static void effOpukuWgunDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffOpukuWgunN64Work* work;
     Mtx scale;
     GXTexObj texObj;
-    Vec v;
     f32 scl;
-    f32 zero = 0.0f;
+    f32 dz;
     f32 rad;
     f32 dx;
     f32 dy;
@@ -206,10 +225,10 @@ static void effOpukuWgunDisp(CameraId cameraId, EffectEntry* effect) {
     s32 type;
     effN64Vtx* vtx;
     effN64Vtx* p;
-    effN64Vtx* q;
     s32 n;
     s32 j;
     s32 a;
+    s32 first = 0; // first segment drawn: always 0 here (the trail of eff_cloud_n64 computes its own)
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
@@ -219,10 +238,10 @@ static void effOpukuWgunDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevColor(GX_TEVREG0, (GXColor){work->colorR, work->colorG, work->colorB, work->alpha});
     GXSetTevColor(GX_TEVREG1, (GXColor){work->color2R, work->color2G, work->color2B, 200});
     GXSetCullMode(GX_CULL_NONE);
-    p = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 48, 3)->address;
+    p = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 48, SMART_GROUP_TEMP)->address;
     vtx = p;
     for (i = 0; i < 12; i++) {
-        if (i == 0 || i == 0) {
+        if (i == 0 || i == first) {
             ang = -angleABf(work->y[i + 1], -work->x[i + 1], work->y[i], -work->x[i]);
         } else if (i != 11 && work->delay[i] == 0) {
             ang = -angleABf(work->y[i + 1], -work->x[i + 1], work->y[i], -work->x[i]);
@@ -244,41 +263,31 @@ static void effOpukuWgunDisp(CameraId cameraId, EffectEntry* effect) {
         rad = 6.2831855f * ang / 360.0f;
         dx = s * (f32)sin(rad);
         dy = s * (f32)cos(rad);
-        p->x = 20.0f * (work->x[i] + dx);
-        p->y = 20.0f * (work->y[i] + dy);
-        p->z = 20.0f * (work->z[i] + zero);
-        p->s = (i * 10) << 5;
-        p->t = 0;
-        p->r = (i & 1) * 255;
-        p->g = ((i >> 1) & 1) * 255;
-        p->b = ((i >> 2) & 1) * 255;
-        p->a = a;
-        p++;
-        p->x = 20.0f * (work->x[i] - dx);
-        p->y = 20.0f * (work->y[i] - dy);
-        p->z = 20.0f * (work->z[i] + zero);
-        p->s = (i * 10) << 5;
-        p->t = 1024;
-        p->r = (i & 1) * 255;
-        p->g = ((i >> 1) & 1) * 255;
-        p->b = ((i >> 2) & 1) * 255;
-        p->a = a;
-        p++;
+        dz = 0.0f;
+        p[0].x = 20.0f * (work->x[i] + dx);
+        p[0].y = 20.0f * (work->y[i] + dy);
+        p[0].z = 20.0f * (work->z[i] + dz);
+        p[0].s = (i * 10) << 5;
+        p[0].t = 0;
+        p[0].r = (i & 1) * 255;
+        p[0].g = ((i >> 1) & 1) * 255;
+        p[0].b = ((i >> 2) & 1) * 255;
+        p[0].a = a;
+        p[1].x = 20.0f * (work->x[i] - dx);
+        p[1].y = 20.0f * (work->y[i] - dy);
+        p[1].z = 20.0f * (work->z[i] + dz);
+        p[1].s = (i * 10) << 5;
+        p[1].t = 1024;
+        p[1].r = (i & 1) * 255;
+        p[1].g = ((i >> 1) & 1) * 255;
+        p[1].b = ((i >> 2) & 1) * 255;
+        p[1].a = a;
+        p += 2;
     }
     PSMTXScale(scale, 0.05f, 0.05f, 0.05f);
-    q = vtx;
     n = i * 2;
     for (j = 0; j < n; j++) {
-        OSInitFastCast();
-        OSs16tof32(&q->x, &v.x);
-        OSs16tof32(&q->y, &v.y);
-        OSs16tof32(&q->z, &v.z);
-        PSMTXMultVec(scale, &v, &v);
-        OSInitFastCast();
-        OSf32tos16(&v.x, &q->x);
-        OSf32tos16(&v.y, &q->y);
-        OSf32tos16(&v.z, &q->z);
-        q++;
+        vtx_copy(&vtx[j], &vtx[j], scale);
     }
     DCFlushRange(vtx, sizeof(effN64Vtx) * 48);
     GXInvalidateVtxCache();
@@ -326,14 +335,13 @@ static void effOpukuWgunDisp(CameraId cameraId, EffectEntry* effect) {
         effGetTexObjN64(0x8E, &texObj);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
     }
-    a = i - 1;
-    j = 0;
-    n = j;
-    for (; j < a; j++) {
-        if (j >= 0) {
-            GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
-            tri2(n, n + 2, n + 1, n, n + 1, n + 2, n + 3, n);
+
+    for (j = 0; j < i - 1; j++) {
+        n = j * 2;
+        if (j < first) {
+            continue;
         }
-        n += 2;
+        GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
+        tri2(n, n + 2, n + 1, n, n + 1, n + 2, n + 3, n);
     }
 }

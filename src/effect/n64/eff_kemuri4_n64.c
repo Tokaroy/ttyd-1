@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 4 (kemuri: smoke) at a point with an angle and a flip option.
+
 #include "eff/n64/eff_kemuri4_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -10,6 +11,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffKemuri4N64Work {
@@ -18,15 +20,14 @@ typedef struct EffKemuri4N64Work {
     s16 timer;       // 0x6
     u8 alpha;        // 0x8
     s8 texFlag;      // 0x9
-    u8 pad_A[2];     // 0xA
     Vec position;    // 0xC
     Vec scale;       // 0x18
     Vec rotation;    // 0x24
     Mtx mtx;         // 0x30
     f32 rotSpeed;    // 0x60
     f32 moveScale;   // 0x64
-    f32 rising;      // 0x68, nonzero until velocity turns negative
-    f32 reserved_6C; // 0x6C, only cleared at entry
+    f32 holdOnStay;  // 0x68, 1.0 at entry, 0 once velocity < 0; while set, type 0 puffs freeze (timer held) while Mario is in MARIO_MOTION_STAY
+    f32 reserved_6C; // 0x6C
     f32 velocity;    // 0x70
     f32 accel;       // 0x74
     f32 accel2;      // 0x78
@@ -80,19 +81,59 @@ effN64Vtx flowers_v[41] = {
     {-11, -5, 0, 0, 0, 100, 160, 60, 255},
 };
 
-static void effKemuri4Main(EffectEntry* effect);
-static void effKemuri4Disp(CameraId cameraId, EffectEntry* effect);
+/** Builds the puff's model matrix from its rotation (x, then y, around a z spin), position and scale. */
+// Original name and size (0xd8) from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_matrix(EffKemuri4N64Work* work) {
+    Mtx scale;
+    Mtx trans;
+    Mtx rotX;
+    Mtx rotY;
+    Mtx rotZ;
+
+    PSMTXRotRad(rotX, 'x', 0.017453292f * work->rotation.x);
+    PSMTXRotRad(rotY, 'y', 0.017453292f * work->rotation.y);
+    PSMTXRotRad(rotZ, 'z', 0.017453292f * work->rotation.z);
+    PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
+    PSMTXScale(scale, work->scale.x, work->scale.y, work->scale.z);
+    PSMTXConcat(rotX, rotZ, rotZ);
+    PSMTXConcat(rotY, rotZ, rotZ);
+    PSMTXConcat(rotZ, scale, scale);
+    PSMTXConcat(trans, scale, work->mtx);
+}
 
 /**
- * Spawns one puff at (x, y, z) that drifts sideways from the angle (mirrored if flip is nonzero).
- * Called via evt_eff "kemuri4"; type 0 holds in place while Mario is idle.
+ * One frame of a puff: rises with growing speed, drifts back against its direction, spins and fades; a rising
+ * type 0 puff waits (its timer held) while Mario stands still (like eff_mugi's kemuri_mugi_dash).
+ */
+// Original name and size (0x100) from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_hana_dash(EffKemuri4N64Work* work) {
+    if (work->type == 0 && work->holdOnStay && marioGetPtr()->currMotionId == MARIO_MOTION_STAY) {
+        work->timer++;
+        return;
+    }
+    work->accel2 += work->accel3;
+    work->accel += work->accel2;
+    work->velocity += work->accel;
+    work->rotation.z += work->velocity * work->rotSpeed;
+    work->position.x -= work->dirX * (work->velocity * work->moveScale);
+    work->position.z -= work->dirZ * (work->velocity * work->moveScale);
+    work->alpha -= 12;
+    if (work->velocity < 0.0f) {
+        work->holdOnStay = 0.0f;
+    }
+}
+
+static void effKemuri4Main(EffectEntry* effect);
+static void effKemuri4Disp(CameraId cameraId, void* param);
+
+/**
  * Spawns one flower-smoke puff ("dash" in the effect table) at (x, y, z) drifting sideways from the angle,
  * mirrored if flip is nonzero. Called via evt_eff64 "kemuri4_n64"; type 0 holds in place while Mario is idle.
  */
 EffectEntry* effKemuri4N64Entry(s32 type, f32 x, f32 y, f32 z, f32 angle, f32 flip) {
     EffectEntry* effect;
     EffKemuri4N64Work* work;
-    f32 zero = 0.0f;
+
     f32 rad;
     s32 i;
 
@@ -114,9 +155,9 @@ EffectEntry* effKemuri4N64Entry(s32 type, f32 x, f32 y, f32 z, f32 angle, f32 fl
         work->scale.y = 1.0f;
         work->scale.z = 1.0f;
         work->alpha = 255;
-        work->rising = 1.0f;
+        work->holdOnStay = 1.0f;
         work->moveScale = 5.4f;
-        work->rotSpeed = (f32)(flip != zero ? -10 : 10);
+        work->rotSpeed = (f32)(flip ? -10 : 10);
         work->velocity = 0.5f;
         work->accel = -0.07f;
         work->accel2 = 0.003f;
@@ -126,23 +167,21 @@ EffectEntry* effKemuri4N64Entry(s32 type, f32 x, f32 y, f32 z, f32 angle, f32 fl
         work->rotation.x = 0.0f;
         work->rotation.z = 0.0f;
         work->texFlag = (rand() % 100 >> 4) & 1;
-        rad = 6.2831855f * reviseAngle(angle + (f32)(flip != zero ? -90 : 90)) / 360.0f;
+        rad = 6.2831855f * reviseAngle(angle + (f32)(flip ? -90 : 90)) / 360.0f;
         work->dirX = (f32)sin(rad);
         work->dirZ = (f32)cos(rad);
     }
     return effect;
 }
 
-/** Moves and spins the puff, fading alpha by 12 per frame; type 0 stalls its timer while Mario motion is 0. */
+/**
+ * Moves and spins the puff and lowers its alpha field by 12 per frame (Disp never reads it);
+ * type 0 stalls its timer while Mario is in MARIO_MOTION_STAY, until the puff's velocity has turned negative.
+ */
 static void effKemuri4Main(EffectEntry* effect) {
     EffKemuri4N64Work* work = effect->userdata;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
-    Mtx rotZ;
-    Mtx rotY;
-    Mtx rotX;
-    Mtx trans;
-    Mtx scale;
     s32 i;
     s32 anyActive = 0;
 
@@ -159,39 +198,19 @@ static void effKemuri4Main(EffectEntry* effect) {
             continue;
         }
         anyActive = 1;
-        if (work->type == 0 && work->rising && marioGetPtr()->currMotionId == 0U) {
-            work->timer++;
-        } else {
-            work->accel2 = work->accel2 + work->accel3;
-            work->accel = work->accel + work->accel2;
-            work->velocity = work->velocity + work->accel;
-            work->rotation.z = work->rotation.z + work->velocity * work->rotSpeed;
-            work->position.x = work->position.x - work->dirX * (work->velocity * work->moveScale);
-            work->position.z = work->position.z - work->dirZ * (work->velocity * work->moveScale);
-            work->alpha -= 12;
-            if (work->velocity < 0.0f) {
-                work->rising = 0.0f;
-            }
-        }
-        PSMTXRotRad(rotX, 'x', 0.017453292f * work->rotation.x);
-        PSMTXRotRad(rotY, 'y', 0.017453292f * work->rotation.y);
-        PSMTXRotRad(rotZ, 'z', 0.017453292f * work->rotation.z);
-        PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
-        PSMTXScale(scale, work->scale.x, work->scale.y, work->scale.z);
-        PSMTXConcat(rotX, rotZ, rotZ);
-        PSMTXConcat(rotY, rotZ, rotZ);
-        PSMTXConcat(rotZ, scale, scale);
-        PSMTXConcat(trans, scale, work->mtx);
+        kemuri_hana_dash(work);
+        kemuri_matrix(work);
     }
     if (anyActive == 0) {
         effDelete(effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 1, (DispCallback)effKemuri4Disp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_ALPHA_TEST, effKemuri4Disp, effect);
     }
 }
 
 /** Draws a textured quad (texture 0x4C or 0x4D, picked randomly at spawn), then an untextured vertex-colored shape. */
-static void effKemuri4Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri4Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera = camGetPtr(cameraId);
     effN64Vtx* vtx1;
     effN64Vtx* vtx2;

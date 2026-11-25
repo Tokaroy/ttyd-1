@@ -1,14 +1,28 @@
 // sys.rel (システム, System): sys_00, an empty map, and sys_01, the chapter title card ("Prologue", "Chapter 1" ...)
 // that plays between chapters: the title's letters fly in over a rainbow light, followed by the chapter subtitle.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "driver/fadedrv.h"
 #include "eff/eff_itemget.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
+#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
+#include "eff/n64/eff_stardust_n64.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_party.h"
+#include "evt/evt_snd.h"
 
 #include "data/mapdata.h"
 #include "pmario_sound.h"
 #include "dolphin/gx.h"
 #include "dolphin/mtx.h"
+#include <dolphin/pad.h>
 #include "sdk/texPalette.h"
 #include "manager/fontmgr.h"
 #include "driver/msgdrv.h"
@@ -19,96 +33,83 @@
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
-#include "eff/n64/eff_stardust_n64.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
 #include "system.h"
-#include "libc_decls.h"
-#include "version.h"
-#include "evt/evt_story.h"
 #include "rel_module.h"
 
-// One letter of the chapter title, flying in and settling.
 typedef struct SysChar {
-    f32 x;     // 0x00
-    f32 y;     // 0x04
-    f32 z;     // 0x08
-    f32 rot;   // 0x0C
-    s32 timer; // 0x10
-    s32 state; // 0x14
-    s32 texid; // 0x18, letter texture in the title's .tpl
+    f32 x;
+    f32 y;
+    f32 z;
+    f32 rot;
+    s32 timer;
+    s32 state;
+    s32 texid;
 } SysChar;
 
+// US: room for 64 letters, plus the chapter subtitle rendered once into a texture
 typedef struct SysWork {
-    s32 state;       // 0x00
-    FileEntry* file; // 0x04
-    f32 rot;         // 0x08
-    s32 frame;       // 0x0C
-    s32 scroll;      // 0x10
-    s32 type;        // 0x14
-    s32 alpha;       // 0x18
-    f32 angle;       // 0x1C
-    s32 count;       // 0x20
+    s32 state;
+    FileEntry* file;
+    f32 rot;
+    s32 frame;
+    s32 scroll;
+    s32 type;
+    s32 alpha;
+    f32 angle;
+    s32 count;
 #if VERSION >= VERSION_US
-    // US and PAL: room for 64 letters, plus the chapter subtitle rendered once into a texture
-    SysChar chars[64];  // 0x24
+    SysChar chars[64];
     smartEntry* msgTex; // 0x724
     u16 msgTexW;        // 0x728
     u16 msgTexH;        // 0x72A
 #else
-    SysChar chars[8]; // 0x24
+    SysChar chars[8];
 #endif
 } SysWork;
-
-SysWork* g_wp;
+static SysWork* g_wp;
 
 static USER_FUNC(bg);
 static USER_FUNC(display);
 static USER_FUNC(init);
+
 #if VERSION >= VERSION_US
 USER_FUNC(sys_01_start_end_wait);
 #endif
+
 static USER_FUNC(start);
-static void display_func(CameraId cameraId, void* param);
-#if VERSION >= VERSION_US
-void sys_01_msg_tex_capture_func(CameraId cameraId, void* param);
-#endif
-static s32 getLightColor(f32 angle);
 static void sys_01_release(void);
 
-extern EvtWord dummy_evt[];
+static EvtWord dummy_evt[2];
+
 #if VERSION >= VERSION_US
 static u32 niji_tbl[6];
 #else
 static u32 niji_tbl[2];
 #endif
+
 static const char* msg_tbl[9];
-s8 prologue_jp_tbl[6];
-s8 stage1_jp_tbl[6];
-s8 stage2_jp_tbl[6];
-s8 stage3_jp_tbl[6];
-s8 stage4_jp_tbl[6];
-s8 stage5_jp_tbl[6];
-s8 stage6_jp_tbl[6];
-s8 stage7_jp_tbl[6];
-s8 stage8_jp_tbl[6];
-s8* texid_jp_tbl[9];
+static s8 prologue_jp_tbl[6];
+static s8 stage1_jp_tbl[6];
+static s8 stage2_jp_tbl[6];
+static s8 stage3_jp_tbl[6];
+static s8 stage4_jp_tbl[6];
+static s8 stage5_jp_tbl[6];
+static s8 stage6_jp_tbl[6];
+static s8 stage7_jp_tbl[6];
+static s8 stage8_jp_tbl[6];
+static s8* texid_jp_tbl[9];
+static s8 prologue_us_tbl[9];
+
 #if VERSION >= VERSION_US
-s8 prologue_us_tbl[9];
-s8 stage1_us_tbl[10];
-s8 stage2_us_tbl[10];
-s8 stage3_us_tbl[10];
-s8 stage4_us_tbl[10];
-s8 stage5_us_tbl[10];
-s8 stage6_us_tbl[10];
-s8 stage7_us_tbl[10];
-s8 stage8_us_tbl[10];
-s8* texid_us_tbl[9];
+static s8 stage1_us_tbl[10];
+static s8 stage2_us_tbl[10];
+static s8 stage3_us_tbl[10];
+static s8 stage4_us_tbl[10];
+static s8 stage5_us_tbl[10];
+static s8 stage6_us_tbl[10];
+static s8 stage7_us_tbl[10];
+static s8 stage8_us_tbl[10];
+static s8* texid_us_tbl[9];
 s8 prologue_lang3_tbl[7];
 s8 stage1_lang3_tbl[10];
 s8 stage2_lang3_tbl[10];
@@ -149,24 +150,29 @@ s8 stage6_lang6_tbl[8];
 s8 stage7_lang6_tbl[8];
 s8 stage8_lang6_tbl[8];
 s8* texid_lang6_tbl[9];
-s8** lang_tbl[6];
-const char* lang_prefix[7];
+static s8** lang_tbl[6];
+static const char* lang_prefix[7];
 #else
-s8 prologue_us_tbl[9];
-s8 stage1_us_tbl[7];
-s8 stage2_us_tbl[7];
-s8 stage3_us_tbl[7];
-s8 stage4_us_tbl[7];
-s8 stage5_us_tbl[7];
-s8 stage6_us_tbl[7];
-s8 stage7_us_tbl[7];
-s8 stage8_us_tbl[7];
-s8* texid_us_tbl[9];
-s8** lang_tbl[2];
-const char* lang_prefix[2];
+static s8 stage1_us_tbl[7];
+static s8 stage2_us_tbl[7];
+static s8 stage3_us_tbl[7];
+static s8 stage4_us_tbl[7];
+static s8 stage5_us_tbl[7];
+static s8 stage6_us_tbl[7];
+static s8 stage7_us_tbl[7];
+static s8 stage8_us_tbl[7];
+static s8* texid_us_tbl[9];
+static s8** lang_tbl[2];
+static const char* lang_prefix[2];
 #endif
-extern EvtWord sys_01_init_evt[];
-extern EvtWord evt_start[];
+
+EvtWord sys_01_init_evt[135];
+
+#if VERSION >= VERSION_US
+static EvtWord evt_start[191];
+#else
+static EvtWord evt_start[189];
+#endif
 
 /**
  * REL entry point of sys.rel: runs the global constructors,
@@ -182,17 +188,17 @@ void _prolog(void) {
     }
     relSetEvtAddr("sys_00", dummy_evt);
     relSetEvtAddr("sys_01", sys_01_init_evt);
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) != STORY_STG0_02_MARIOS_HOUSE && evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) != STORY_STG2_47_AFTER_GETTING_THE_TICKET && evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) != STORY_STG4_END_OFF_TO_THE_KEYS &&
-        evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) != STORY_STG5_66_BELDAM_FINDS_OUT) {
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) != STG0_02_MARIOS_HOUSE && evtGetValue(NULL, GSW_STORY_PROGRESS) != STG2_47_AFTER_GETTING_THE_TICKET && evtGetValue(NULL, GSW_STORY_PROGRESS) != STG4_END_OFF_TO_THE_KEYS &&
+        evtGetValue(NULL, GSW_STORY_PROGRESS) != STG5_66_BELDAM_FINDS_OUT) {
         psndStopAllFadeOut();
     }
-    camGetPtr(CAMERA_2D)->flags |= CAM_FLAG_LETTER_BOX_DISABLE;
-    camGetPtr(CAMERA_2D)->flags &= ~CAM_FLAG_LETTER_BOX;
-    camGetPtr(CAMERA_2D)->flags |= CAM_FLAG_LETTER_BOX_SNAP;
+    camGetPtr(CAMERA_2D)->flags |= CAMERA_FLAG_LETTER_BOX_OFF;
+    camGetPtr(CAMERA_2D)->flags &= ~CAMERA_FLAG_LETTER_BOX;
+    camGetPtr(CAMERA_2D)->flags |= CAMERA_FLAG_LETTER_BOX_INSTANT;
 }
 
 /** Init event of sys_00, an empty map: does nothing. */
-EVT_BEGIN(dummy_evt)
+static EVT_BEGIN(dummy_evt)
     RETURN
 EVT_END()
 
@@ -214,8 +220,8 @@ static const char* msg_tbl[] = {
 };
 
 /**
- * JP and the demo list _epilog and _unresolved as file-local in their symbol maps (US and PAL: global).
- * The binding does not reach the REL, so they follow rel_module.h, which declares the hooks for every module.
+ * Module unload hook: frees sys_01's texture when sys_01 is the current map, clears the 2D camera's
+ * letter-box-off flag and runs the destructors.
  */
 void _epilog(void) {
     voidfunctionptr* dtor;
@@ -223,7 +229,7 @@ void _epilog(void) {
     if (strcmp(gp->currentMapName, "sys_01") == 0) {
         sys_01_release();
     }
-    camGetPtr(CAMERA_2D)->flags &= ~CAM_FLAG_LETTER_BOX_DISABLE;
+    camGetPtr(CAMERA_2D)->flags &= ~CAMERA_FLAG_LETTER_BOX_OFF;
     for (dtor = _dtors; *dtor != NULL; dtor++) {
         (*dtor)();
     }
@@ -265,6 +271,7 @@ static s32 getLightColor(f32 angle) {
 }
 
 /** Loads the color into TEV register 0 (inlined helper of display_func). */
+// FAKE: invented one-use inline helper (no map name); writing it out changes the code (FAKES.md)
 static inline void setTevColor(GXColor init) {
     GXColor color = init;
 
@@ -285,7 +292,6 @@ static inline void setChanMatColor(GXColor init, s32 c) {
 }
 
 #if VERSION >= VERSION_US
-
 /** US: draws the chapter subtitle once, flat, and copies it into a texture that display_func bends */
 void sys_01_msg_tex_capture_func(CameraId cameraId, void* param) {
     SysWork* wp = param;
@@ -375,7 +381,7 @@ void sys_01_msg_tex_capture_func(CameraId cameraId, void* param) {
     h = bottom - top;
     wp->msgTexW = w;
     wp->msgTexH = h;
-    wp->msgTex = smartAlloc(GXGetTexBufferSize(w, h, GX_TF_RGB5A3, GX_FALSE, 0), 1);
+    wp->msgTex = smartAlloc(GXGetTexBufferSize(w, h, GX_TF_RGB5A3, GX_FALSE, 0), SMART_GROUP_MAP);
     GXSetTexCopySrc(left, top, w, h);
     GXSetTexCopyDst(w, h, GX_TF_RGB5A3, GX_FALSE);
     GXCopyTex(wp->msgTex->address, GX_FALSE);
@@ -388,7 +394,7 @@ void sys_01_msg_tex_capture_func(CameraId cameraId, void* param) {
  * Draw callback of the chapter title card (camera 3D effect A):
  * lights the letters with a rotating rainbow light, scrolls the background,
  * and draws each flying title letter and the subtitle in 3D using the effect_sys texture.
- * The US release and later lay the letters out per language; JP and the demo use a fixed layout.
+ * The US release and later lay the letters out per language; JP and the early demos use a fixed layout.
  */
 static void display_func(CameraId cameraId, void* param) {
     SysWork* wp = param;
@@ -432,7 +438,7 @@ static void display_func(CameraId cameraId, void* param) {
 
     scroll = wp->scroll;
     wp->scroll++;
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
     if (scroll > 0x500) {
         scroll -= 0x500;
     }
@@ -570,7 +576,6 @@ static void display_func(CameraId cameraId, void* param) {
             GXColor4u8(0xFF, 0xFF, 0xFF, 0);
         }
         GXTexCoord2f32(u, v);
-    }
 #else
     msg = msgSearch(msg_tbl[wp->type]);
     FontDrawStart();
@@ -597,8 +602,8 @@ static void display_func(CameraId cameraId, void* param) {
             FontDrawStringMtx(mtx, buf);
             break;
         }
-    }
 #endif
+    }
 
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
     GXSetZCompLoc(GX_TRUE);
@@ -665,7 +670,7 @@ static void display_func(CameraId cameraId, void* param) {
         TEXGetGXTexObjFromPalette(*wp->file->data, &tex, (u16)niji_tbl[gp->language]);
         GXLoadTexObj(&tex, GX_TEXMAP1);
         setChanMatColor((GXColor){0x00, 0x00, 0x00, 0xFF}, getLightColor(chr->rot));
-        if ((u32)gp->language != 0) {
+        if (gp->language != LANGUAGE_JP) {
             PSMTXScale(scale, 0.8f, 0.8f, 0.8f);
         } else {
             PSMTXScale(scale, 1.0f, 1.0f, 1.0f);
@@ -695,7 +700,7 @@ static void display_func(CameraId cameraId, void* param) {
         C_MTXLightPerspective(proj, 25.0f, 640.0f, 0.5f, 0.5f, 0.5f, 0.5f);
         C_MTXLookAt(view, &eye, &up, &target);
         PSMTXConcat(proj, view, proj);
-        if ((u32)gp->language != 0) {
+        if (gp->language != LANGUAGE_JP) {
             PSMTXScale(scale, 0.5f, 0.5f, 0.5f);
         } else {
             PSMTXScale(scale, 1.0f, 1.0f, 1.0f);
@@ -725,130 +730,166 @@ static void display_func(CameraId cameraId, void* param) {
 }
 
 /** Title letters of the prologue in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 prologue_jp_tbl[] = {
+static s8 prologue_jp_tbl[] = {
     16, 17, 17, 6, 18, -1,
 };
 
 /** Title letters of chapter 1 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage1_jp_tbl[] = {
+static s8 stage1_jp_tbl[] = {
     4, 5, 6, 7, 8, -1,
 };
 
 /** Title letters of chapter 2 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage2_jp_tbl[] = {
+static s8 stage2_jp_tbl[] = {
     4, 5, 6, 7, 9, -1,
 };
 
 /** Title letters of chapter 3 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage3_jp_tbl[] = {
+static s8 stage3_jp_tbl[] = {
     4, 5, 6, 7, 10, -1,
 };
 
 /** Title letters of chapter 4 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage4_jp_tbl[] = {
+static s8 stage4_jp_tbl[] = {
     4, 5, 6, 7, 11, -1,
 };
 
 /** Title letters of chapter 5 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage5_jp_tbl[] = {
+static s8 stage5_jp_tbl[] = {
     4, 5, 6, 7, 12, -1,
 };
 
 /** Title letters of chapter 6 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage6_jp_tbl[] = {
+static s8 stage6_jp_tbl[] = {
     4, 5, 6, 7, 13, -1,
 };
 
 /** Title letters of chapter 7 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage7_jp_tbl[] = {
+static s8 stage7_jp_tbl[] = {
     4, 5, 6, 7, 14, -1,
 };
 
 /** Title letters of chapter 8 in Japanese: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage8_jp_tbl[] = {
+static s8 stage8_jp_tbl[] = {
     4, 5, 6, 7, 15, -1,
 };
 
 /** Title letter tables of the Japanese version, indexed by chapter (the prologue first). */
-s8* texid_jp_tbl[] = {
+static s8* texid_jp_tbl[] = {
     prologue_jp_tbl, stage1_jp_tbl, stage2_jp_tbl, stage3_jp_tbl, stage4_jp_tbl, stage5_jp_tbl, stage6_jp_tbl, stage7_jp_tbl, stage8_jp_tbl,
 };
 
-#if VERSION >= VERSION_US
 // US: one title texture set per language; -2 marks a word gap
-s8 prologue_us_tbl[] = {
+static s8 prologue_us_tbl[] = {
+#if VERSION >= VERSION_US
     19, 20, 21, 22, 21, 23, 24, 25, -1,
+#else
+    17, 18, 19, 20, 19, 7, 21, 8, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 1 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage1_us_tbl[] = {
+static s8 stage1_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 11, -1,
+#else
+    4, 5, 6, 7, 8, 9, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 2 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage2_us_tbl[] = {
+static s8 stage2_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 12, -1,
+#else
+    4, 5, 6, 7, 8, 10, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 3 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage3_us_tbl[] = {
+static s8 stage3_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 13, -1,
+#else
+    4, 5, 6, 7, 8, 11, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 4 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage4_us_tbl[] = {
+static s8 stage4_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 14, -1,
+#else
+    4, 5, 6, 7, 8, 12, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 5 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage5_us_tbl[] = {
+static s8 stage5_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 15, -1,
+#else
+    4, 5, 6, 7, 8, 13, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 6 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage6_us_tbl[] = {
+static s8 stage6_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 16, -1,
+#else
+    4, 5, 6, 7, 8, 14, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 7 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage7_us_tbl[] = {
+static s8 stage7_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 17, -1,
+#else
+    4, 5, 6, 7, 8, 15, -1,
+#endif
 };
 
 /**
  * Title letters of chapter 8 in English: effect-texture ids in drawing order, -2 leaves a gap between words,
  * -1 ends the list.
  */
-s8 stage8_us_tbl[] = {
+static s8 stage8_us_tbl[] = {
+#if VERSION >= VERSION_US
     4, 5, 6, 7, 8, 9, 10, -2, 18, -1,
+#else
+    4, 5, 6, 7, 8, 16, -1,
+#endif
 };
 
 /** Title letter tables of the English version, indexed by chapter (the prologue first). */
-s8* texid_us_tbl[] = {
+static s8* texid_us_tbl[] = {
     prologue_us_tbl, stage1_us_tbl, stage2_us_tbl, stage3_us_tbl, stage4_us_tbl, stage5_us_tbl, stage6_us_tbl, stage7_us_tbl, stage8_us_tbl,
 };
 
+#if VERSION >= VERSION_US
 /** Title letters of the prologue in German: effect-texture ids in drawing order, -1 ends the list. */
 s8 prologue_lang3_tbl[] = {
     19, 20, 21, 22, 21, 23, -1,
@@ -1144,79 +1185,25 @@ s8 stage8_lang6_tbl[8] = {
 s8* texid_lang6_tbl[] = {
     prologue_lang6_tbl, stage1_lang6_tbl, stage2_lang6_tbl, stage3_lang6_tbl, stage4_lang6_tbl, stage5_lang6_tbl, stage6_lang6_tbl, stage7_lang6_tbl, stage8_lang6_tbl,
 };
-
-/** The title tables of every language, indexed by the game language. */
-s8** lang_tbl[] = {
-    texid_jp_tbl, texid_us_tbl, texid_lang3_tbl, texid_lang4_tbl, texid_lang5_tbl, texid_lang6_tbl,
-};
-
-/** File-name prefix of the title files of each language. */
-const char* lang_prefix[] = {
-    "jp", "us", "ge", "fr", "sp", "it", "du",
-};
-
-#else
-/** Title letters of the prologue in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 prologue_us_tbl[] = {
-    17, 18, 19, 20, 19, 7, 21, 8, -1,
-};
-
-/** Title letters of chapter 1 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage1_us_tbl[] = {
-    4, 5, 6, 7, 8, 9, -1,
-};
-
-/** Title letters of chapter 2 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage2_us_tbl[] = {
-    4, 5, 6, 7, 8, 10, -1,
-};
-
-/** Title letters of chapter 3 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage3_us_tbl[] = {
-    4, 5, 6, 7, 8, 11, -1,
-};
-
-/** Title letters of chapter 4 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage4_us_tbl[] = {
-    4, 5, 6, 7, 8, 12, -1,
-};
-
-/** Title letters of chapter 5 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage5_us_tbl[] = {
-    4, 5, 6, 7, 8, 13, -1,
-};
-
-/** Title letters of chapter 6 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage6_us_tbl[] = {
-    4, 5, 6, 7, 8, 14, -1,
-};
-
-/** Title letters of chapter 7 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage7_us_tbl[] = {
-    4, 5, 6, 7, 8, 15, -1,
-};
-
-/** Title letters of chapter 8 in English: effect-texture ids in drawing order, -1 ends the list. */
-s8 stage8_us_tbl[] = {
-    4, 5, 6, 7, 8, 16, -1,
-};
-
-/** Title letter tables of the English version, indexed by chapter (the prologue first). */
-s8* texid_us_tbl[] = {
-    prologue_us_tbl, stage1_us_tbl, stage2_us_tbl, stage3_us_tbl, stage4_us_tbl, stage5_us_tbl, stage6_us_tbl, stage7_us_tbl, stage8_us_tbl,
-};
-
-/** The title tables of every language, indexed by the game language. */
-s8** lang_tbl[] = {
-    texid_jp_tbl, texid_us_tbl,
-};
-
-/** File-name prefix of the title files of each language. */
-const char* lang_prefix[] = {
-    "jp", "us",
-};
-
 #endif
+
+/** The title tables of every language, indexed by the game language. */
+static s8** lang_tbl[] = {
+#if VERSION >= VERSION_US
+    texid_jp_tbl, texid_us_tbl, texid_lang3_tbl, texid_lang4_tbl, texid_lang5_tbl, texid_lang6_tbl,
+#else
+    texid_jp_tbl, texid_us_tbl,
+#endif
+};
+
+/** File-name prefix of the title files of each language. */
+static const char* lang_prefix[] = {
+#if VERSION >= VERSION_US
+    "jp", "us", "ge", "fr", "sp", "it", "du",
+#else
+    "jp", "us",
+#endif
+};
 
 /**
  * Init event of sys_01, the chapter title card map:
@@ -1229,7 +1216,7 @@ EVT_BEGIN(sys_01_init_evt)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_set_pos, 0, 0, 0)
     CALL(evt_party_set_pos, 0, 0, 0, 0)
-    CALL(evt_cam3d_evt_set, 0, 0, 500, 0, 0, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 0, 500, 0, 0, 0, 0, EASING_SINE_IN_OUT)
     CALL(bg)
     CALL(evt_fade_entry, FADE_CURTAIN_CENTER_Z1_3D, 0, 0, 0, 0)
     CALL(evt_fade_end_wait)
@@ -1278,14 +1265,14 @@ EVT_END()
  * waits for the title letters to settle, then changes map to the first map of that chapter (gor_10 for the
  * prologue, hei_00, win_06, tou_20, usu_00, muj_20, rsh_02_a, bom_00 and las_00 for chapters 1 to 8).
  */
-EVT_BEGIN(evt_start)
+static EVT_BEGIN(evt_start)
     CALL(evt_fade_end_wait)
     WAIT_MS(2000)
     CALL(evt_bero_get_entername, LW(1))
     IF_STR_NOT_EQUAL(LW(1), STRING("stg_3"))
         IF_STR_NOT_EQUAL(LW(1), STRING("stg_5"))
             IF_STR_NOT_EQUAL(LW(1), STRING("stg_6"))
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_FF_STG_START1"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_FF_STG_START1"))
             END_IF
         END_IF
     END_IF
@@ -1300,7 +1287,7 @@ EVT_BEGIN(evt_start)
 #endif
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_BITS_SET(LW(0), 4864)
+        IF_BITS_SET(LW(0), PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_START)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
@@ -1359,12 +1346,20 @@ EVT_BEGIN(evt_start)
 EVT_END()
 
 /**
- * Script helper: loads the language's effect_sys.tpl title texture,
- * sets up one title letter per character of the chapter's title (flying in one at a time, 20 frames apart)
- * and queues display_func every frame. args[0] is the chapter number (0 = prologue to 8).
- * Blocks until the title is loaded.
+ * Script helper (args[0] = title type; never finishes): shows the title's letters. The first call lays the letters of
+ * lang_tbl out in a row; state 0 loads effect_sys.tpl, and in state 2 each letter waits its turn (20 frames apart),
+ * starts with a stardust burst and spins in over 90 frames; once the last one has, the shared angle turns and the
+ * alpha rises each frame. Once loading has finished it queues display_func (US and later also
+ * sys_01_msg_tex_capture_func).
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(display) {
+    SysWork* wp;
+    SysChar* chr;
+    s32 type = evtGetValue(event, event->args[0]);
+    s32 i;
+#else
+USER_FUNC(display) {
     SysWork* wp;
 #if VERSION >= VERSION_US
     s32 type = evtGetValue(event, event->args[0]);
@@ -1374,6 +1369,7 @@ static USER_FUNC(display) {
     SysChar* chr;
     s32 type = evtGetValue(event, event->args[0]);
     s32 i;
+#endif
 #endif
 
     if (isFirstCall) {
@@ -1434,11 +1430,11 @@ static USER_FUNC(display) {
     switch (wp->state) {
         case 0:
 #if VERSION <= VERSION_DEMO_JP
-            if (fileAsyncf(4, NULL, "%s/eff/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]) != NULL) {
-                wp->file = fileAllocf(4, "%s/eff/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]);
+            if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/eff/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]) != NULL) {
+                wp->file = fileAllocf(FILE_TYPE_TPL, "%s/eff/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]);
 #else
-            if (fileAsyncf(4, NULL, "%s/e/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]) != NULL) {
-                wp->file = fileAllocf(4, "%s/e/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]);
+            if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/e/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]) != NULL) {
+                wp->file = fileAllocf(FILE_TYPE_TPL, "%s/e/%s/effect_sys.tpl", getMarioStDvdRoot(), lang_prefix[gp->language]);
 #endif
                 wp->state++;
             }
@@ -1452,11 +1448,11 @@ static USER_FUNC(display) {
                         if (chr->timer < 0) {
                             chr->timer = 0;
                             chr->state++;
-                            effStardustN64SetDrawCam(effStardustN64Entry(4, chr->x, chr->y, chr->z, 40.0f), 5);
+                            effStardustN64SetDrawCam(effStardustN64Entry(4, chr->x, chr->y, chr->z, 40.0f), CAMERA_3D_EFFECTA);
                         }
                         break;
                     case 1:
-                        chr->rot = intplGetValue(5, 90.0f, 1800.0f, chr->timer, 90);
+                        chr->rot = intplGetValue(EASING_CUBIC_OUT, 90.0f, 1800.0f, chr->timer, 90);
                         chr->timer++;
                         if (chr->timer > 90) {
                             chr->state++;
@@ -1488,21 +1484,21 @@ static USER_FUNC(display) {
     }
     if (wp->state != 0) {
 #if VERSION >= VERSION_US
-        dispEntry(CAMERA_3D, 0.0f, 2, sys_01_msg_tex_capture_func, wp);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, sys_01_msg_tex_capture_func, wp);
 #endif
-        dispEntry(CAMERA_3D_EFFECTA, 0.0f, 2, display_func, wp);
+        dispEntry(CAMERA_3D_EFFECTA, 0.0f, DISP_MODE_XLU, display_func, wp);
     }
     return EVT_RETURN_BLOCK;
 }
 
 /**
- * Script helper: sets GLOBAL_FLAG_CURTAIN_OPEN and advances the title work from state 0 to the next,
- * so the letters begin their spin-in; blocks until the title has been loaded.
+ * Script helper (no arguments): opens the curtain (GW_FLAG_CURTAIN_OPEN), blocks until display has loaded its texture
+ * (state 1 or later), then advances display's state.
  */
 static USER_FUNC(start) {
     SysWork* wp = g_wp;
 
-    gp->flags |= GLOBAL_FLAG_CURTAIN_OPEN;
+    gp->flags |= GW_FLAG_CURTAIN_OPEN;
     if (wp->state < 1) {
         return EVT_RETURN_BLOCK;
     }

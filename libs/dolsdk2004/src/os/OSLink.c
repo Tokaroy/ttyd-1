@@ -50,7 +50,7 @@
 #define R_PPC_PLT32 27    //  word32  L + A
 #define R_PPC_PLTREL32 28 //  word32  L + A - P
 #define R_PPC_PLT16_LO 29 //  half16  #lo(L + A)
-#define R_PPL_PLT16_HI 30 //  half16  #hi(L + A)
+#define R_PPC_PLT16_HI 30 //  half16  #hi(L + A)
 #define R_PPC_PLT16_HA 31 //  half16  #ha(L + A)
 
 #define R_PPC_SDAREL16 32   //  half16* S + A - _SDA_BASE_
@@ -112,33 +112,26 @@ const void* __OSStringTable AT_ADDRESS(OS_BASE_CACHED | 0x30D0);
     else                                \
       __prev->link.next = __next;       \
   } while (0)
-// dont_inline as in the original SDK source (dolsdk2001 and upstream have it); not a fake.
-#pragma dont_inline on
-/** Hook called after a relocatable module is linked, so a debugger can load its symbols. Empty here. */
-void OSNotifyLink(OSModuleInfo* module) {}
 
-/** Hook called after a module is unlinked. Empty here. */
-void OSNotifyUnlink(OSModuleInfo* module) {}
+// Empty notification hooks: Link calls OSNotifyLink with each module it links, OSUnlink calls OSNotifyUnlink.
+// The dont_inline pair keeps the calls out of line, as in the tp, mkdd and Animal Crossing decompilations of this SDK.
+#pragma dont_inline on
+__declspec(weak) void OSNotifyLink(OSModuleInfo* module) {}
+
+__declspec(weak) void OSNotifyUnlink(OSModuleInfo* module) {}
 #pragma dont_inline reset
 
-/** Records the string table that module names are looked up in. */
 void OSSetStringTable(void* stringTable) {
     __OSStringTable = stringTable;
 }
 
-/**
- * Applies the relocations that module holds against newModule (the main program when newModule is NULL):
- * patches 32-bit addresses, 24/14-bit branches and 16-bit low/high halves in module's sections,
- * then flushes the data cache and invalidates the instruction cache over every patched code section.
- * Returns FALSE if module has no import entry for newModule.
- */
 static BOOL Relocate(OSModuleHeader* newModule, OSModuleHeader* module) {
     OSModuleID idNew;
     OSImportInfo* imp;
     OSRel* rel;
     OSSectionInfo* si;
     OSSectionInfo* siFlush;
-    u32* p;
+    u32* p; // first set by an R_DOLPHIN_SECTION record; each import list relies on starting with one
     u32 offset;
     u32 x;
 
@@ -233,12 +226,6 @@ Found:
     return TRUE;
 }
 
-/**
- * Links a relocatable module (REL): checks its version and alignment, adds it to the module list,
- * converts its header offsets to addresses, assigns bss, and relocates it against the main program,
- * itself and every other loaded module (and them against it).
- * With fixed set it trims the import table, then zeroes the bss.
- */
 static BOOL Link(OSModuleInfo* newModule, void* bss, BOOL fixed) {
     u32 i;
     OSSectionInfo* si;
@@ -306,7 +293,7 @@ static BOOL Link(OSModuleInfo* newModule, void* bss, BOOL fixed) {
         newModule->nameOffset += (u32)__OSStringTable;
     }
 
-    Relocate(0, moduleHeader);
+    Relocate(NULL, moduleHeader);
 
     for (moduleInfo = __OSModuleInfoList.head; moduleInfo; moduleInfo = moduleInfo->link.next) {
         Relocate(moduleHeader, (OSModuleHeader*)moduleInfo);
@@ -332,20 +319,10 @@ static BOOL Link(OSModuleInfo* newModule, void* bss, BOOL fixed) {
     return TRUE;
 }
 
-/**
- * Links a REL module into the running program, using bss as its bss memory;
- * returns FALSE if the module version or alignment is not supported.
- * This is how the game loads its code overlays.
- */
 BOOL OSLink(OSModuleInfo* newModule, void* bss) {
     return Link(newModule, bss, FALSE);
 }
 
-/**
- * Like OSLink but for version 3 or later modules,
- * additionally cutting the import table down so the relocation data for other modules can be discarded
- * afterwards.
- */
 BOOL OSLinkFixed(OSModuleInfo* newModule, void* bss) {
     ASSERTLINE(400, newModule->version <= OS_MODULE_VERSION && 3 <= newModule->version);
 
@@ -355,11 +332,8 @@ BOOL OSLinkFixed(OSModuleInfo* newModule, void* bss) {
     return Link(newModule, bss, TRUE);
 }
 
-/**
- * Reverses the relocations that module made against newModule:
- * zeroes addresses and points calls at the module's unresolved-function stub,
- * so no other module still refers to code that is being unloaded.
- */
+// Walks the same relocation lists as Relocate but writes 0 for each target, or for R_PPC_REL24 a branch
+// to the module's unresolved stub when it has one.
 static BOOL Undo(OSModuleHeader* newModule, OSModuleHeader* module) {
     OSModuleID idNew;
     OSImportInfo* imp;
@@ -388,8 +362,6 @@ Found:
     siFlush = 0;
     for (rel = (OSRel*)imp->offset; rel->type != R_DOLPHIN_END; rel++) {
         (u8*)p += rel->offset;
-        si = &OSGetSectionInfo(newModule)[rel->section];
-        offset = OS_SECTIONINFO_OFFSET(si->offset);
         x = 0;
         switch (rel->type) {
         case R_PPC_NONE:
@@ -455,10 +427,6 @@ Found:
     return TRUE;
 }
 
-/**
- * Unlinks a module: removes it from the module list,
- * undoes the references other modules hold into it and turns its header addresses back into offsets.
- */
 BOOL OSUnlink(OSModuleInfo* oldModule) {
     OSModuleHeader* moduleHeader;
     OSModuleInfo* moduleInfo;
@@ -520,17 +488,11 @@ BOOL OSUnlink(OSModuleInfo* oldModule) {
     return TRUE;
 }
 
-/** Empties the module list and clears the string table at startup. Called from OSInit. */
 void __OSModuleInit(void) {
-    __OSModuleInfoList.head = __OSModuleInfoList.tail = 0;
-    __OSStringTable = 0;
+    __OSModuleInfoList.head = __OSModuleInfoList.tail = NULL;
+    __OSStringTable = NULL;
 }
 
-/**
- * Finds the loaded module whose section contains ptr;
- * returns its info and, through section and offset, the section index and the offset within it,
- * or NULL if ptr is in none.
- */
 OSModuleInfo* OSSearchModule(void* ptr, u32* section, u32* offset) {
     OSModuleInfo* moduleInfo;
     OSSectionInfo* sectionInfo;
@@ -542,17 +504,17 @@ OSModuleInfo* OSSearchModule(void* ptr, u32* section, u32* offset) {
     }
 
     moduleInfo = __OSModuleInfoList.head;
-    while (moduleInfo != 0) {
+    while (moduleInfo != NULL) {
         sectionInfo = (OSSectionInfo*)moduleInfo->sectionInfoOffset;
         for (i = 0; i < moduleInfo->numSections; i++) {
             if (sectionInfo->size != 0) {
-                baseSection = sectionInfo->offset & 0xFFFFFFFE;
+                baseSection = OS_SECTIONINFO_OFFSET(sectionInfo->offset);
                 if (baseSection <= (u32)ptr && (u32)ptr < baseSection + sectionInfo->size) {
-                    if (section != 0) {
+                    if (section != NULL) {
                         *section = i;
                     }
 
-                    if (offset != 0) {
+                    if (offset != NULL) {
                         *offset = (u32)ptr - baseSection;
                     }
 

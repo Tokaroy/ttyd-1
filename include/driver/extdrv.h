@@ -1,36 +1,41 @@
 // extdrv.c: the ext driver (ExtdrvPose, ExtdrvTex): many copies of one paper animation drawn as flat textured quads.
+
 #pragma once
 
 #include <dolphin/types.h>
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 
-typedef struct ExtdrvTexInfo {
+// one pose of an extEntry/evt_ext_entry table
+typedef struct ExtTexInfo {
     const char* group; // 0x0
     const char* anim;  // 0x4
     f32 frame;         // 0x8
-} ExtdrvTexInfo;
+} ExtTexInfo;
 
-// ExtdrvPose.flags (set by the map that uses the driver, bom_01)
-#define EXT_POSE_FLAG_ACTIVE 0x1      // drawn (extDraw, extPoseDraw) and depth-sorted by texId
-#define EXT_POSE_FLAG_FACE_CAMERA 0x2 // turns toward the camera like a paper pose (targetRy from dir)
-#define EXT_POSE_FLAG_NO_SHADOW 0x4   // no shadow drawn
-#define EXT_POSE_FLAG_SHADOW_Y 0x10   // the shadow is placed at shadowY instead of under the pose
+// ExtdrvPose.flags (extMain, extDraw, extDrawShadow; punidrv's bit 2 differs)
+typedef enum ExtPoseFlags {
+    EXT_POSE_FLAG_VISIBLE = (1 << 0),    // 0x1, drawn and sorted
+    EXT_POSE_FLAG_BILLBOARD = (1 << 1),  // 0x2, extMain turns it toward the camera
+    EXT_POSE_FLAG_NO_SHADOW = (1 << 2),  // 0x4, extDrawShadow skips it (evt_nannpc_ppflag_onoff)
+    EXT_POSE_FLAG_SHADOW_POS = (1 << 4), // 0x10, shadow at the fixed shadowY (evt_nannpc_set_shadow_position)
+} ExtPoseFlags;
+
 typedef struct ExtdrvPose {
-    u32 flags;    // 0x0
-    f32 dir;      // 0x4
-    f32 shadowY;  // 0x8
-    Mtx* mtx;     // 0xC
-    s32 texId;    // 0x10
-    f32 ry;       // 0x14
+    u32 flags;    // 0x0, ExtPoseFlags
+    f32 dir;      // 0x4, facing in degrees; a billboard pose shows the camera its front or its back by it
+    f32 shadowY;  // 0x8, shadow height with EXT_POSE_FLAG_SHADOW_POS
+    Mtx* mtx;     // 0xC, its matrix in ExtdrvWork.mtxs (the translation is its position)
+    s32 texId;    // 0x10, texture and display list drawn
+    f32 ry;       // 0x14, current turn of a billboard pose; moves a tenth of the way to targetRy each frame
     u8 pad_18[4]; // 0x18
-    f32 targetRy; // 0x1C
+    f32 targetRy; // 0x1C, camera turn, or that plus 180 when the pose faces away
 } ExtdrvPose;
 
 typedef struct ExtdrvTex {
-    void* image;        // 0x0
-    GXTexObj obj;       // 0x4
-    GXTexRegion region; // 0x24
+    struct smartEntry* image; // 0x0, smart heap block of the texture image
+    GXTexObj obj;             // 0x4
+    GXTexRegion region;       // 0x24
 } ExtdrvTex;
 
 typedef struct ExtdrvSort {
@@ -61,7 +66,7 @@ typedef struct ExtdrvWork {
 void extInit(void);
 void extMain(void);
 void extReset(void);
-void extEntry(s32 poseNum, ExtdrvTexInfo* texInfo, void (*initFunc)(void), void (*mainFunc)(void), void (*mainFunc2)(void));
+void extEntry(s32 poseNum, ExtTexInfo* texInfo, void (*initFunc)(void), void (*mainFunc)(void), void (*mainFunc2)(void));
 ExtdrvPose* extGetPosePtr(void);
 s32 extGetPoseNum(void);
 void extPoseDraw(s32 index);
@@ -69,6 +74,7 @@ void extDraw(void);
 void extLoadRenderMode(void);
 void extLoadVertex(void);
 void extLoadTexture(void);
+u32 extGetUsedTmemSize(void);
 void extLoadTextureExit(void);
 void extLoadTev(void);
 void extLoadShadowVertex(void);

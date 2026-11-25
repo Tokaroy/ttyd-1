@@ -3,7 +3,6 @@
 
 #include "__card.h"
 
-/** Copies a file's raw 64-byte directory entry for the given index; needs read permission. */
 s32 __CARDGetStatusEx(s32 chan, s32 fileNo, CARDDir* dirent) {
     ASSERTLINE(85, 0 <= chan && chan < 2);
     ASSERTLINE(86, 0 <= fileNo && fileNo < CARD_MAX_FILE);
@@ -32,12 +31,6 @@ s32 __CARDGetStatusEx(s32 chan, s32 fileNo, CARDDir* dirent) {
     }
 }
 
-/**
- * Writes a whole directory entry's editable fields (name, game and maker codes, time, banner and icon info,
- * comment address, permission, copy count) for a file.
- * Pads the name with zeros, clears the codes if the global or company permission bits are set,
- * refuses a name that duplicates another entry (EXIST), then saves the directory. Needs write permission.
- */
 s32 __CARDSetStatusExAsync(s32 chan, s32 fileNo, CARDDir* dirent, CARDCallback callback) {
     CARDControl* card;
     CARDDir* dir;
@@ -91,7 +84,7 @@ s32 __CARDSetStatusExAsync(s32 chan, s32 fileNo, CARDDir* dirent, CARDCallback c
     if ((memcmp(&ent->fileName, &dirent->fileName, 32) != 0) || (memcmp(ent->gameName, dirent->gameName, 4) != 0) || (memcmp(ent->company, dirent->company, 2) != 0)) {
         for(i = 0; i < CARD_MAX_FILE; i++) {
             if (i != fileNo) {
-                CARDDir* ent = &dir[i]; // sure, just redeclare ent again...
+                CARDDir* ent = &dir[i]; // shadows the outer ent (the entry being changed)
                 if (((u8) ent->gameName[0] != 0xFF) 
                     && (memcmp(&ent->gameName, &dirent->gameName, 4) == 0) 
                     && (memcmp(&ent->company, &dirent->company, 2) == 0) 
@@ -121,7 +114,6 @@ s32 __CARDSetStatusExAsync(s32 chan, s32 fileNo, CARDDir* dirent, CARDCallback c
     return result;
 }
 
-/** Blocking __CARDSetStatusExAsync. */
 s32 __CARDSetStatusEx(s32 chan, s32 fileNo, CARDDir* dirent) {
     s32 result = __CARDSetStatusExAsync(chan, fileNo, dirent, &__CARDSyncCallback);
     if (result < 0) {

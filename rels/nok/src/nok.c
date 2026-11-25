@@ -2,14 +2,23 @@
 
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_sub.h"
 
 #include "data/mapdata.h"
 #include "manager/evtmgr_cmd.h"
 #include "dolphin/mtx.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_sub.h"
 #include "nok.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
+
+EvtWord nokonoko_urouro_regl[97];
 
 /**
  * Module entry point: runs the static constructors,

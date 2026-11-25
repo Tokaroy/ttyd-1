@@ -1,4 +1,5 @@
 // fontmgr.c: the font manager: the binary font (BFN) file structures and text drawing.
+
 #pragma once
 
 #include <dolphin/gx.h>
@@ -87,32 +88,38 @@ u16 FontGetMessageWidthLine(const char* msg, u16* lines);
 void FontDrawMessage(s32 x, s32 y, const char* msg);
 u16 FontGetMessageWidth(const char* message);
 void FontDrawStringMtx(Mtx mtx, const char* message);
-void FontDrawStringShake(f32 x, f32 y, const char* msg); // each character moved by a random 0-2 times the font scale
 void FontDrawColor(GXColor color);
+void FontDrawString(f32 x, f32 y, const char* msg);
 
-u16 hankakuSearch(s32 c);
 u16 kanjiSearch(u32 code);
-u16 kanjiGetWidth(u16 code);
+u16 kanjiGetWidth(u32 code);
 
 void FontDrawEdge(void);
 void FontDrawEdgeOff(void);
 void FontDrawMessageMtx(Mtx mtx, const char* msg);
-
-GXColor HSV2RGB(GXColor hsv);
+void FontDrawCode(f32 x, f32 y, u16 code);
 void FontDrawColorIDX(s32 idx);
-void FontDrawRainbowColor(void);
-void FontDrawRainbowColorOff(void);
+void FontDrawColor_(void);
 void FontDrawNoise(void);
 void FontDrawNoiseOff(void);
-void FontDrawColor_(void);
-GXColor FontGetDrawColor(void);
+void FontDrawRainbowColor(void);
+void FontDrawRainbowColorOff(void);
 void FontDrawScale(f32 scale);
-void FontDrawScaleVec(Vec scale);
-void FontDrawCode(f32 x, f32 y, u16 code);
-void FontDrawCodeMtx(Mtx mtx, u16 code);
-void FontDrawString(f32 x, f32 y, const char* msg);
 void FontDrawStringPitch(f32 x, f32 y, f32 pitch, const char* msg);
-void FontDrawStringVecPitch(Vec pos, f32 pitch, const s8* msg);
+void FontDrawStringShake(f32 x, f32 y, const s8* msg);
 void JUTFont_Free(void);
 void JUTFontSetup(u16 font);
-void FontDrawStringCenterMtx(Mtx mtx, const s8* msg);
+void FontDrawCodeMtx(Mtx mtx, u16 code);
+void FontDrawScaleVec(Vec scale);
+GXColor FontGetDrawColor(void);
+GXColor HSV2RGB(GXColor hsv);
+
+typedef struct FontWidthEntry {
+    u8 kerning; // 0x0
+    u8 width;   // 0x1
+} FontWidthEntry;
+
+void JUTFont_Draw(u16 code);
+FontWidthEntry* JUTFont_GetWidthEntry(u16 code);
+u8 JUTFont_GetWidth(u16 code);
+void JUTFont_DrawPos(u16 code, s32 x, s32 y);

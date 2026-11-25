@@ -1,35 +1,51 @@
 // aji_07 (敵のアジト, X-Naut Fortress): the teleporter room (tensou) linking the fortress with the Moon
 // (moo_04) and the sewers (tik_00).
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "manager/evtmgr_cmd.h"
-#include "mario/mario.h"
-#include "party.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
 #include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "aji.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_item.h"
 #include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+
+#include "manager/evtmgr_cmd.h"
+#include "mario/mario.h"
+#include "party.h"
+#include "evt/evt_bero.h"
+#include "aji.h"
+#include "driver/seqdrv.h"
 
 static USER_FUNC(scale_func);
 
+static EvtWord s_door_open[22];
+static EvtWord s_door_close[22];
 static BeroEntry bero_entry_data[2];
-extern EvtWord tensou_ride[];
-extern EvtWord tensou_switch[];
+static EvtWord tensou_ride[245];
+static EvtWord tensou_switch[62];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord evt_tensou2[];
-extern EvtWord tensou_init[];
+#else
+EvtWord evt_tensou2[216];
+#endif
+
+static EvtWord tensou_init[69];
+static EvtWord evt_haguruma[5];
+EvtWord aji_07_init_evt[];
 
 /**
  * Door open animation step: moves the two door leaves S_door1_2
@@ -89,6 +105,7 @@ static USER_FUNC(scale_func) {
     MarioWork* mario = marioGetPtr();
     PartyEntry* party = partyGetPtr(0);
 
+    // Scale Mario and partner slot 0 only; slot 1 is not changed here.
     mario->scale = (Vec){s, s, s};
     if (party != NULL) {
         party->scale = (Vec){s, s, s};
@@ -100,10 +117,10 @@ static USER_FUNC(scale_func) {
  * Case script for stepping on the teleporter pad (A_tensou):
  * Mario and the partner walk into the beam, spin faster and faster for three seconds,
  * shrink (scale_func) and rise out of sight, and the map changes:
- * to the sewers tik_00 (setting GSWF_TIK00_TELEPORTER_ARRIVAL) normally,
- * to moo_04 during STORY_STG7_25_THE_LAST_MAIL.
+ * to the sewers tik_00 (setting GSWF_AJI_TELEPORT_TO_TIK_PENDING) normally,
+ * to moo_04 during STG7_25_THE_LAST_MAIL.
  */
-EVT_BEGIN(tensou_ride)
+static EVT_BEGIN(tensou_ride)
     // Mario and his partner walk onto the teleporter pad.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
@@ -117,6 +134,8 @@ EVT_BEGIN(tensou_ride)
     WAIT_MS(300)
     CALL(evt_hit_get_position, STRING("A_tensou"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_WARP_LIGHT1"), LW(0), LW(1), LW(2), LW(9))
+
+    // The spin child accumulates this shared angular step once per frame.
     SET_VALUE(GW(0), 0)
     CALL(evt_mario_get_dispdir, LW(0))
     CALL(evt_party_get_dispdir, 0, LW(1))
@@ -131,7 +150,7 @@ EVT_BEGIN(tensou_ride)
     END_INLINE_EVENT
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_WARP1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 30, 3000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 30, 3000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(GW(0), LW(0))
@@ -140,14 +159,15 @@ EVT_BEGIN(tensou_ride)
             BREAK_LOOP
         END_IF
     END_LOOP
-    // They spin faster and faster, shrink and rise out of sight.
+
+    // They shrink and rise while the spin continues.
     CALL(evt_mario_cam_off)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_get_pos, 0, LW(2), LW(3), LW(4))
     CALL(evt_party_get_pos, 0, LW(5), LW(6), LW(7))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 12, 100, 0, 800)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_OUT, 100, 0, 800)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -162,7 +182,7 @@ EVT_BEGIN(tensou_ride)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_WARP2"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 12, 0, 70, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_OUT, 0, 70, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(8), LW(0))
@@ -177,16 +197,19 @@ EVT_BEGIN(tensou_ride)
     END_LOOP
     WAIT_MS(2000)
     CALL(evt_snd_sfxoff, LW(9))
+
     // The map changes: to the Rogueport sewers normally, or to the Moon (moo_04) during the story point of the
     // last mail.
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG7_25_THE_LAST_MAIL)
-        SET_VALUE(GSWF(GSWF_TIK00_TELEPORTER_ARRIVAL), 1)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG7_25_THE_LAST_MAIL)
+        SET_VALUE(GSWF_AJI_TELEPORT_TO_TIK_PENDING, 1)
         CALL(evt_bero_mapchange, STRING("tik_00"), 0)
-        CASE_EQUAL(STORY_STG7_25_THE_LAST_MAIL)
+
+        // Only this exact story checkpoint selects the alternate destination.
+        CASE_EQUAL(STG7_25_THE_LAST_MAIL)
         CALL(evt_bero_mapchange, STRING("moo_04"), 0)
         CASE_DEFAULT
-        SET_VALUE(GSWF(GSWF_TIK00_TELEPORTER_ARRIVAL), 1)
+        SET_VALUE(GSWF_AJI_TELEPORT_TO_TIK_PENDING, 1)
         CALL(evt_bero_mapchange, STRING("tik_00"), 0)
     END_SWITCH
     CALL(evt_exit_case_evt)
@@ -198,34 +221,34 @@ EVT_END()
  * presses the switch (SFX_STG7_SWITCH_WARP1), plays the teleporter's start-up animation anm_saisho and the beam,
  * and attaches tensou_ride to the pad A_tensou.
  */
-EVT_BEGIN(tensou_switch)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("sui__1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("sui__2"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(tensou_switch)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("sui__1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("sui__2"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_get_position, STRING("sui__1"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_SWITCH_WARP1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("anm_saisho"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_saisho"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hikari"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hikari"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_map_checkanim, STRING("anm_saisho"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_map_playanim, STRING("anm_wa-p"), 1, 0)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("A_tensou"), 0, PTR(tensou_ride), 0)
+    CALL(evt_map_playanim, STRING("anm_wa-p"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("A_tensou"), 0, PTR(tensou_ride), 0)
     CALL(evt_exit_case_evt)
     RETURN
 EVT_END()
 
 /**
- * Arrival effect when the teleporter is used from the other side (entered from tik_00 with
- * GSWF_TIK00_TELEPORT_TO_AJI set): Mario and the partner appear in the beam,
- * spinning for four seconds while growing to full size, and then control returns.
+ * Teleporter arrival, spawned by tensou_init: the ring "wa_pu" shows, Mario and the partner spin for four
+ * seconds, grow to full size (scale_func, 0.8 seconds) and settle from 70 above (JP and later with
+ * SFX_STG7_WARP1_2); then the ring fades out and control returns.
  */
 EVT_BEGIN(evt_tensou2)
-    CALL(evt_map_playanim, STRING("anm_wa-p"), 1, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("wa_pu"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_map_playanim, STRING("anm_wa-p"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("wa_pu"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hit_get_position, STRING("A_tensou"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_WARP_LIGHT1"), LW(0), LW(1), LW(2), LW(9))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 5, 0, 5760, 4000)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 5760, 4000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             MODULO(LW(0), 360)
@@ -240,7 +263,7 @@ EVT_BEGIN(evt_tensou2)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 12, 0, 100, 800)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_OUT, 0, 100, 800)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -257,7 +280,7 @@ EVT_BEGIN(evt_tensou2)
 #endif
     CALL(evt_mario_get_pos, 0, LW(2), LW(3), LW(4))
     CALL(evt_party_get_pos, 0, LW(5), LW(6), LW(7))
-    CALL(evt_sub_intpl_msec_init, 12, 70, 0, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_OUT, 70, 0, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(8), LW(0))
@@ -272,7 +295,7 @@ EVT_BEGIN(evt_tensou2)
     END_LOOP
     WAIT_MS(3000)
     CALL(evt_snd_sfxoff, LW(9))
-    CALL(evt_sub_intpl_msec_init, 11, 255, 0, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_color, 1, STRING("wa_pu"), 255, 255, 255, LW(0))
@@ -281,7 +304,7 @@ EVT_BEGIN(evt_tensou2)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("wa_pu"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("wa_pu"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_color, 1, STRING("wa_pu"), 255, 255, 255, 255)
     CALL(evt_mario_cont_onoff, 1)
     CALL(evt_party_cont_onoff, 0, 1)
@@ -293,18 +316,19 @@ EVT_BEGIN(evt_tensou2)
 EVT_END()
 
 /**
- * Sets up the teleporter: the switch (A__sui) gets tensou_switch;
- * when GSWF_TIK00_TELEPORT_TO_AJI is set (the player has come in from tik_00) Mario
- * and the partners are placed on the pad and evt_tensou2 plays the arrival.
+ * Sets up the teleporter: the switch A__sui gets tensou_switch; when GSWF_TIK_TELEPORT_TO_AJI_PENDING is
+ * set it clears it, places Mario and the partners on the pad and spawns evt_tensou2.
  */
-EVT_BEGIN(tensou_init)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("sui__1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("sui__2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A__sui"), 0, PTR(tensou_switch), 0)
-    IF_INT_EQUAL(GSWF(GSWF_TIK00_TELEPORT_TO_AJI), 0)
+static EVT_BEGIN(tensou_init)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("sui__1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("sui__2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A__sui"), 0, PTR(tensou_switch), 0)
+    IF_INT_EQUAL(GSWF_TIK_TELEPORT_TO_AJI_PENDING, 0)
         RETURN
     END_IF
-    SET_VALUE(GSWF(GSWF_TIK00_TELEPORT_TO_AJI), 0)
+
+    // Consume the arrival request before launching the restoration sequence.
+    SET_VALUE(GSWF_TIK_TELEPORT_TO_AJI_PENDING, 0)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
     CALL(evt_party_stop, 1)
@@ -318,23 +342,21 @@ EVT_BEGIN(tensou_init)
     RETURN
 EVT_END()
 
-/**
- * Pick-up event for the Cog lying in the teleporter room:
- * records it in GSWF_AJI07_COG_TAKEN so it does not respawn.
- */
+/** Pick-up event of the Cog in aji_07: sets GSWF_AJI_07_COG, so the init does not place it again. */
 static EVT_BEGIN(evt_haguruma)
-    SET_VALUE(GSWF(GSWF_AJI07_COG_TAKEN), 1)
+    SET_VALUE(GSWF_AJI_07_COG, 1)
     RETURN
 EVT_END()
 
 /**
- * Init script of aji_07, the teleporter room: plays BGM_STG7_DUN2, sets up the exits and the teleporter,
- * places the Cog (ITEM_COG, GSWF_AJI07_COG_TAKEN) on a ledge until it is taken, and, when entered as "tenjo",
- * drops Mario and his partners in from the ceiling slit of aji_08.
+ * Init script of aji_07: BGM_STG7_DUN2 (JP and later also evt_snd_set_rev_mode), the exits, the
+ * teleporter (tensou_init) and the map animations; places the Cog (ITEM_COG) until GSWF_AJI_07_COG is set.
+ * Entered as "tenjo", Mario and the partners start 200 units up and land (the September 2004 PAL demo and
+ * PAL also bring the partner down to Mario). Spawns evt_emergency.
  */
 EVT_BEGIN(aji_07_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG7_DUN2"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG7_AJI4"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG7_DUN2"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG7_AJI4"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 1)
 #endif
@@ -342,11 +364,11 @@ EVT_BEGIN(aji_07_init_evt)
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(tensou_init)
-    CALL(evt_map_playanim, STRING("anm_PC"), 1, 0)
-    CALL(evt_map_playanim, STRING("anm_terop"), 1, 0)
-    CALL(evt_map_playanim, STRING("anm_tiktik"), 1, 0)
-    IF_INT_EQUAL(GSWF(GSWF_AJI07_COG_TAKEN), 0)
-        CALL(evt_item_entry, STRING("haguruma"), ITEM_COG, -65, 100, -120, ITEM_ENTRY_FIXED, -1, PTR(evt_haguruma))
+    CALL(evt_map_playanim, STRING("anm_PC"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("anm_terop"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("anm_tiktik"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_EQUAL(GSWF_AJI_07_COG, 0)
+        CALL(evt_item_entry, STRING("haguruma"), ITEM_COG, -65, 100, -120, ITEM_TYPE_STILL, -1, PTR(evt_haguruma))
     END_IF
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("tenjo"))
@@ -359,7 +381,7 @@ EVT_BEGIN(aji_07_init_evt)
         CALL(evt_party_set_pos, 0, 190, 200, -115)
         CALL(evt_party_set_pos, 1, 200, 200, -105)
         BEGIN_INLINE_EVENT
-            CALL(evt_seq_wait, 2)
+            CALL(evt_seq_wait, SEQ_GAME)
             CALL(evt_mario_cont_onoff, 1)
             CALL(evt_party_cont_onoff, 0, 1)
             CALL(evt_party_cont_onoff, 1, 1)

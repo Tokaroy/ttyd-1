@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: coin, four sprites at preset offsets around a point, each starting after its own delay.
+
 #include "eff/n64/eff_coin_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -42,7 +43,7 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
 };
 
 static void effCoinMain(EffectEntry* effect);
-static void effCoinDisp(CameraId cameraId, EffectEntry* effect);
+static void effCoinDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns four coin sprites around (x, y, z) at the preset offsets and delays in _data, each scaled by scale.
@@ -113,14 +114,15 @@ static void effCoinMain(EffectEntry* effect) {
             work->delay = -1;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effCoinDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effCoinDisp, effect);
 }
 
 /**
  * Draws each started coin as a camera-facing sprite from texture 0x84,
  * shifting the texture window to the animation frame (two animation frames per texture step).
  */
-static void effCoinDisp(CameraId cameraId, EffectEntry* effect) {
+static void effCoinDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffCoinN64Work* work;
     s32 i;

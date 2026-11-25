@@ -1,5 +1,6 @@
 // Environment driver: screen effects drawn with the map: glare, blur, depth of field and the
 // environment textures.
+
 #include "driver/envdrv.h"
 #include "driver/arcdrv.h"
 #include "driver/dispdrv.h"
@@ -7,155 +8,88 @@
 #include "mario/mariost.h"
 #include "manager/dvdmgr.h"
 #include "system.h"
-#include "texPalette.h"
 #include <dolphin/dvd.h>
 #include <string.h>
 #include "memory.h"
 #include "sdk/texPalette.h"
 #include "libc_decls.h"
 #include <math.h>
-
+#include "driver/camdrv.h"
+#include "driver/fadedrv.h"
 static void envGlare(EnvironmentGlare* glare);
 
 //.data
 
-/** Glare filter type 0: the screen copy added back 16 times, up to 7 pixels off in a cross: a star glow. */
-EnvironmentGlare envGlare0 = {
-    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, (GXTevKColorSel)1, (GXTevKColorSel)0, 5.25f, 16, {
-                                                                                            { -1.0f, 0.0f },
-                                                                                            { -3.0f, 0.0f },
-                                                                                            { -5.0f, 0.0f },
-                                                                                            { -7.0f, 0.0f },
-                                                                                            { 1.0f, 0.0f },
-                                                                                            { 3.0f, 0.0f },
-                                                                                            { 5.0f, 0.0f },
-                                                                                            { 7.0f, 0.0f },
-                                                                                            { 0.0f, -1.0f },
-                                                                                            { 0.0f, -3.0f },
-                                                                                            { 0.0f, -5.0f },
-                                                                                            { 0.0f, -7.0f },
-                                                                                            { 0.0f, 1.0f },
-                                                                                            { 0.0f, 3.0f },
-                                                                                            { 0.0f, 5.0f },
-                                                                                            { 0.0f, 7.0f },
-                                                                                        }
+/** Glare pattern for filter type 1: the screen copy added back 16 times, up to 7 pixels off in a cross: a star glow. */
+static EnvironmentGlare envGlare0 = {
+    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, GX_TEV_KCSEL_7_8, GX_TEV_KCSEL_1, 5.25f, 16,
+    {
+        {-1.0f, 0.0f}, {-3.0f, 0.0f}, {-5.0f, 0.0f}, {-7.0f, 0.0f},
+        {1.0f, 0.0f}, {3.0f, 0.0f}, {5.0f, 0.0f}, {7.0f, 0.0f},
+        {0.0f, -1.0f}, {0.0f, -3.0f}, {0.0f, -5.0f}, {0.0f, -7.0f},
+        {0.0f, 1.0f}, {0.0f, 3.0f}, {0.0f, 5.0f}, {0.0f, 7.0f},
+    }
 };
 
-/** Glare filter type 1: the screen copy added back 8 times in a small ring around each pixel, a soft glow. */
-EnvironmentGlare envGlare1 = {
-    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, (GXTevKColorSel)1, (GXTevKColorSel)4, 3.5f, 8, {
-                                                                                          { -1.41419994831f, -1.41419994831f },
-                                                                                          { 0.0f, -1.0f },
-                                                                                          { 1.41419994831f, -1.41419994831f },
-                                                                                          { -1.0f, 0.0f },
-                                                                                          { 1.0f, 0.0f },
-                                                                                          { -1.41419994831f, 1.41419994831f },
-                                                                                          { 0.0f, 1.0f },
-                                                                                          { 1.41419994831f, 1.41419994831f },
-                                                                                      }
+/** Glare pattern for filter type 2: the screen copy added back 8 times in a small ring around each pixel, a soft glow. */
+static EnvironmentGlare envGlare1 = {
+    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, GX_TEV_KCSEL_7_8, GX_TEV_KCSEL_1_2, 3.5f, 8,
+    {
+        {-1.41419994831f, -1.41419994831f}, {0.0f, -1.0f}, {1.41419994831f, -1.41419994831f}, {-1.0f, 0.0f},
+        {1.0f, 0.0f}, {-1.41419994831f, 1.41419994831f}, {0.0f, 1.0f}, {1.41419994831f, 1.41419994831f},
+    }
 };
 
-/** Glare filter type 2: the screen copy added back 52 times over a filled diamond: a strong bloom. */
-EnvironmentGlare envGlare2 = {
-    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, (GXTevKColorSel)1, (GXTevKColorSel)6, 3.5f, 52, {
-                                                                                           { 0.0f, -5.0f },
-                                                                                           { -1.0f, -4.0f },
-                                                                                           { 0.0f, -4.0f },
-                                                                                           { 1.0f, -4.0f },
-                                                                                           { -2.0f, -3.0f },
-                                                                                           { -1.0f, -3.0f },
-                                                                                           { 0.0f, -3.0f },
-                                                                                           { 1.0f, -3.0f },
-                                                                                           { 2.0f, -3.0f },
-                                                                                           { -3.0f, -2.0f },
-                                                                                           { -2.0f, -2.0f },
-                                                                                           { -1.0f, -2.0f },
-                                                                                           { 0.0f, -2.0f },
-                                                                                           { 1.0f, -2.0f },
-                                                                                           { 2.0f, -2.0f },
-                                                                                           { 3.0f, -2.0f },
-                                                                                           { -3.0f, -1.0f },
-                                                                                           { -2.0f, -1.0f },
-                                                                                           { -1.0f, -1.0f },
-                                                                                           { 0.0f, -1.0f },
-                                                                                           { 1.0f, -1.0f },
-                                                                                           { 2.0f, -1.0f },
-                                                                                           { 3.0f, -1.0f },
-                                                                                           { -3.0f, 0.0f },
-                                                                                           { -2.0f, 0.0f },
-                                                                                           { -1.0f, 0.0f },
-                                                                                           { 3.0f, 0.0f },
-                                                                                           { 2.0f, 0.0f },
-                                                                                           { 1.0f, 0.0f },
-                                                                                           { -3.0f, 1.0f },
-                                                                                           { -2.0f, 1.0f },
-                                                                                           { -1.0f, 1.0f },
-                                                                                           { 0.0f, 1.0f },
-                                                                                           { 1.0f, 1.0f },
-                                                                                           { 2.0f, 1.0f },
-                                                                                           { 3.0f, 1.0f },
-                                                                                           { -3.0f, 2.0f },
-                                                                                           { -2.0f, 2.0f },
-                                                                                           { -1.0f, 2.0f },
-                                                                                           { 0.0f, 2.0f },
-                                                                                           { 1.0f, 2.0f },
-                                                                                           { 2.0f, 2.0f },
-                                                                                           { 3.0f, 2.0f },
-                                                                                           { -2.0f, 3.0f },
-                                                                                           { -1.0f, 3.0f },
-                                                                                           { 0.0f, 3.0f },
-                                                                                           { 1.0f, 3.0f },
-                                                                                           { 2.0f, 3.0f },
-                                                                                           { -1.0f, 4.0f },
-                                                                                           { 0.0f, 4.0f },
-                                                                                           { 1.0f, 4.0f },
-                                                                                           { 0.0f, 5.0f },
-                                                                                       }
+/** Glare pattern for filter type 3: the screen copy added back 52 times over a filled diamond: a strong bloom. */
+static EnvironmentGlare envGlare2 = {
+    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, GX_TEV_KCSEL_7_8, GX_TEV_KCSEL_1_4, 3.5f, 52,
+    {
+        {0.0f, -5.0f}, {-1.0f, -4.0f}, {0.0f, -4.0f}, {1.0f, -4.0f},
+        {-2.0f, -3.0f}, {-1.0f, -3.0f}, {0.0f, -3.0f}, {1.0f, -3.0f},
+        {2.0f, -3.0f}, {-3.0f, -2.0f}, {-2.0f, -2.0f}, {-1.0f, -2.0f},
+        {0.0f, -2.0f}, {1.0f, -2.0f}, {2.0f, -2.0f}, {3.0f, -2.0f},
+        {-3.0f, -1.0f}, {-2.0f, -1.0f}, {-1.0f, -1.0f}, {0.0f, -1.0f},
+        {1.0f, -1.0f}, {2.0f, -1.0f}, {3.0f, -1.0f}, {-3.0f, 0.0f},
+        {-2.0f, 0.0f}, {-1.0f, 0.0f}, {3.0f, 0.0f}, {2.0f, 0.0f},
+        {1.0f, 0.0f}, {-3.0f, 1.0f}, {-2.0f, 1.0f}, {-1.0f, 1.0f},
+        {0.0f, 1.0f}, {1.0f, 1.0f}, {2.0f, 1.0f}, {3.0f, 1.0f},
+        {-3.0f, 2.0f}, {-2.0f, 2.0f}, {-1.0f, 2.0f}, {0.0f, 2.0f},
+        {1.0f, 2.0f}, {2.0f, 2.0f}, {3.0f, 2.0f}, {-2.0f, 3.0f},
+        {-1.0f, 3.0f}, {0.0f, 3.0f}, {1.0f, 3.0f}, {2.0f, 3.0f},
+        {-1.0f, 4.0f}, {0.0f, 4.0f}, {1.0f, 4.0f}, {0.0f, 5.0f},
+    }
 };
 
-/** Glare filter type 3: the screen copy added back 16 times on a diamond ring 3 to 4 pixels out, a halo. */
-EnvironmentGlare envGlare3 = {
-    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, (GXTevKColorSel)1, (GXTevKColorSel)4, 3.5f, 16, {
-                                                                                           { 0.0f, -4.0f },
-                                                                                           { -1.0f, -3.0f },
-                                                                                           { 1.0f, -3.0f },
-                                                                                           { -2.0f, -2.0f },
-                                                                                           { 2.0f, -2.0f },
-                                                                                           { -3.0f, -1.0f },
-                                                                                           { 3.0f, -1.0f },
-                                                                                           { -3.0f, 0.0f },
-                                                                                           { 3.0f, 0.0f },
-                                                                                           { -3.0f, 1.0f },
-                                                                                           { 3.0f, 1.0f },
-                                                                                           { -2.0f, 2.0f },
-                                                                                           { 2.0f, 2.0f },
-                                                                                           { -1.0f, 3.0f },
-                                                                                           { 1.0f, 3.0f },
-                                                                                           { 0.0f, 4.0f },
-                                                                                       }
+/** Glare pattern for filter type 4: the screen copy added back 16 times on a diamond ring 3 to 4 pixels out, a halo. */
+static EnvironmentGlare envGlare3 = {
+    GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, GX_TEV_KCSEL_7_8, GX_TEV_KCSEL_1_2, 3.5f, 16,
+    {
+        {0.0f, -4.0f}, {-1.0f, -3.0f}, {1.0f, -3.0f}, {-2.0f, -2.0f},
+        {2.0f, -2.0f}, {-3.0f, -1.0f}, {3.0f, -1.0f}, {-3.0f, 0.0f},
+        {3.0f, 0.0f}, {-3.0f, 1.0f}, {3.0f, 1.0f}, {-2.0f, 2.0f},
+        {2.0f, 2.0f}, {-1.0f, 3.0f}, {1.0f, 3.0f}, {0.0f, 4.0f},
+    }
 };
 
 //.bss
 static EnvironmentWork work[2];
 
+/** The work of the current mode: work[1] in battle, work[0] in the field. */
+static inline EnvironmentWork* envGetWork(void) {
+    return gp->inBattle ? &work[1] : &work[0];
+}
+
 //.sbss
-/** The environment textures (env.tpl: reflection maps, water ripples, darkness pattern), loaded at boot. */
-TEXPalette* env_tpl = NULL;
+static TEXPalette* env_tpl = NULL;
+
 /** Set once env.tpl has finished loading and is unpacked; cleared by envInit. */
-s32 tpl_ok = 0;
+static s32 tpl_ok = 0;
 
 // local prototypes
-void _callback(s32 result, DVDFileInfo* fileInfo);
-static void envCapture(CameraId camId, void* param);
-static void envCapture2(CameraId camId, void* param);
-static void envDisp(CameraId camId, void* param);
-static void envDisp2(CameraId camId, void* param);
 static void envDisp_DepthOfField(void);
 static void envDisp_Blur(void);
 static void envDisp_FF(void);
-
-// there is no function so we'll make a macro
-#define envGetWork() (gp->inBattle ? &work[1] : &work[0])
+static void envDisp_Glare(void);
 
 /**
  * DVD read callback for the asynchronous env.tpl load:
@@ -191,14 +125,14 @@ void envReInit(void) {
  * from the startup archive if it holds it, else asynchronously from the disc.
  * Called from the logo sequence at boot.
  */
-void envTexSetup(void) { // 1:1
+void envTexSetup(void) {
     DVDEntry* entry;
     TEXPalette* tpl;
     char path[128];
     u32 size;
 
     env_tpl = NULL;
-    tpl = arcOpen("env.tpl", 0, 0);
+    tpl = arcOpen("env.tpl", NULL, NULL);
     env_tpl = tpl;
     if (!tpl) {
         sprintf(path, "%s/env.tpl", getMarioStDvdRoot());
@@ -209,7 +143,7 @@ void envTexSetup(void) { // 1:1
         DVDMgrReadAsync(entry, env_tpl, size, 0, _callback);
     } else {
         UnpackTexPalette(tpl);
-        tpl_ok = 1;
+        tpl_ok = TRUE;
     }
 }
 
@@ -218,33 +152,35 @@ void envTexSetup(void) { // 1:1
  * when enabled, copies the frame (flag 1) and the depth buffer (flag
  * 2) to half-size textures for the depth of field and radial effects.
  */
-static void envCapture(CameraId camId, void* param) { // 1:1
+static void envCapture(CameraId camId, void* param) {
     EnvironmentWork* wp = envGetWork();
-    u16 var0, var1, var2, var3;
+    u16 width, height, halfWidth, halfHeight;
     u32 size;
 
-    var0 = gp->fbWidth;
-    var1 = gp->efbHeight;
-    var2 = (u16)(((u32)var0 & 0xFFFF) / 2);
-    var3 = (u16)(((u32)var1 & 0xFFFF) / 2);
-    if (wp->flags & ENV_FLAG_CAPTURE_COLOR) {
+    width = gp->fbWidth;
+    height = gp->efbHeight;
+
+    // FAKE: the & 0xFFFF masks (no-ops on the u16 values) shape the halving; (u32)width / 2 changes the object
+    halfWidth = (u16)(((u32)width & 0xFFFF) / 2);
+    halfHeight = (u16)(((u32)height & 0xFFFF) / 2);
+    if (wp->flags & ENV_FLAG_CAPTURE_COLOR_UNUSED) {
         GXSetTexCopySrc(0, 0, gp->fbWidth, gp->efbHeight);
-        GXSetTexCopyDst(var2, var3, GX_TF_RGBA8, GX_TRUE);
-        size = GXGetTexBufferSize(var2, var3, GX_TF_RGBA8, GX_FALSE, 0);
-        wp->capture = smartAlloc(size, 3);
+        GXSetTexCopyDst(halfWidth, halfHeight, GX_TF_RGBA8, GX_TRUE);
+        size = GXGetTexBufferSize(halfWidth, halfHeight, GX_TF_RGBA8, GX_FALSE, 0);
+        wp->capture = smartAlloc(size, SMART_GROUP_TEMP);
         GXCopyTex(wp->capture->address, GX_FALSE);
         GXPixModeSync();
-        GXInitTexObj(&wp->captureObj, wp->capture->address, var2, var3, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GXInitTexObj(&wp->captureObj, wp->capture->address, halfWidth, halfHeight, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
         GXInitTexObjLOD(&wp->captureObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
     }
-    if (wp->flags & ENV_FLAG_CAPTURE_DEPTH) {
-        GXSetTexCopySrc(0, 0, var0, var1);
-        GXSetTexCopyDst(var2, var3, GX_CTF_Z8M, GX_TRUE);
-        size = GXGetTexBufferSize(var2, var3, GX_CTF_Z8M, GX_FALSE, 0);
-        wp->capture2 = smartAlloc(size, 3);
-        GXCopyTex(wp->capture2->address, 0);
+    if (wp->flags & ENV_FLAG_CAPTURE_DEPTH_UNUSED) {
+        GXSetTexCopySrc(0, 0, width, height);
+        GXSetTexCopyDst(halfWidth, halfHeight, GX_CTF_Z8M, GX_TRUE);
+        size = GXGetTexBufferSize(halfWidth, halfHeight, GX_CTF_Z8M, GX_FALSE, 0);
+        wp->capture2 = smartAlloc(size, SMART_GROUP_TEMP);
+        GXCopyTex(wp->capture2->address, GX_FALSE);
         GXPixModeSync();
-        GXInitTexObj(&wp->captureObj2, wp->capture2->address, var2, var3, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GXInitTexObj(&wp->captureObj2, wp->capture2->address, halfWidth, halfHeight, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
         GXInitTexObjLOD(&wp->captureObj2, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
     }
 }
@@ -253,25 +189,26 @@ static void envCapture(CameraId camId, void* param) { // 1:1
  * 3D-camera draw callback after the scene: copies the finished frame to the half-size blur texture
  * while the motion blur (flag 4) is on, and decides when the blur stops capturing new frames.
  */
-static void envCapture2(CameraId camId, void* param) { // 1:1
+static void envCapture2(CameraId camId, void* param) {
     EnvironmentWork* wp = envGetWork();
-    u16 var0, var1;
+    u16 halfWidth, halfHeight;
 
-    var0 = (u16)(((u32)gp->fbWidth & 0xFFFF) / 2);
-    var1 = (u16)(((u32)gp->efbHeight & 0xFFFF) / 2);
+    // FAKE: the & 0xFFFF masks (no-ops on the u16 values) shape the halving; (u32)gp->fbWidth / 2 changes the object
+    halfWidth = (u16)(((u32)gp->fbWidth & 0xFFFF) / 2);
+    halfHeight = (u16)(((u32)gp->efbHeight & 0xFFFF) / 2);
     if (wp->flags & ENV_FLAG_BLUR_CAPTURE) {
         GXSetTexCopySrc(0, 0, gp->fbWidth, gp->efbHeight);
-        GXSetTexCopyDst(var0, var1, GX_TF_RGB565, GX_TRUE);
+        GXSetTexCopyDst(halfWidth, halfHeight, GX_TF_RGB565, GX_TRUE);
         GXCopyTex(wp->envBlur, GX_FALSE);
         GXPixModeSync();
-        GXInitTexObj(&wp->envBlurObj, wp->envBlur, var0, var1, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
+        GXInitTexObj(&wp->envBlurObj, wp->envBlur, halfWidth, halfHeight, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
         GXInitTexObjLOD(&wp->envBlurObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
     }
     if (wp->flags & ENV_FLAG_BLUR) {
-        if ((wp->blurWork & 1) && (wp->flags & ENV_FLAG_BLUR_READY)) {
+        if ((wp->blur.flags & ENV_BLUR_FLAG_FADE_OUT) && (wp->flags & ENV_FLAG_BLUR_CAPTURED)) {
             wp->flags &= ~ENV_FLAG_BLUR_CAPTURE;
         }
-        wp->flags |= ENV_FLAG_BLUR_READY;
+        wp->flags |= ENV_FLAG_BLUR_CAPTURED;
     }
 }
 
@@ -294,56 +231,35 @@ static void envDisp(CameraId camId, void* param) {
 }
 
 /**
- * Last 3D-camera draw callback: draws the glare (bloom) filter the current type picks (envGlare0..3) over its
+ * 3D-camera draw callback (DISP_MODE_CUSTOM_MID, so it runs before envCapture, envDisp and envCapture2 in the
+ * DISP_MODE_CUSTOM_LAST band): draws the glare (bloom) filter the current type picks (envGlare0..3) over its
  * screen rectangle, restoring the viewport and projection afterwards.
  */
-static void envDisp2(CameraId camId, void* param) { // almost 1:1, needs extra addi
+static void envDisp2(CameraId camId, void* param) {
     f32 vp[GX_VIEWPORT_SZ];
     f32 pm[GX_PROJECTION_SZ];
-    EnvironmentWork* wp;
-    EnvironmentGlareFilter* filter;
 
     GXGetViewportv(vp);
     GXGetProjectionv(pm);
-    wp = envGetWork();
-    filter = &wp->filter; // CodeWarrior is very good compiler, yesyes
-    if (wp->flags & ENV_FLAG_GLARE) {
-        switch (filter->type) {
-            case 0:
-                break;
-            case 1:
-                envGlare(&envGlare0);
-                break;
-            case 2:
-                envGlare(&envGlare1);
-                break;
-            case 3:
-                envGlare(&envGlare2);
-                break;
-            case 4:
-                envGlare(&envGlare3);
-                break;
-        }
-    }
+    envDisp_Glare();
     GXSetViewport(vp[0], vp[1], vp[2], vp[3], vp[4], vp[5]);
     GXSetProjectionv(pm);
 }
 
-/** Once per frame: queues the environment capture and draw callbacks on the 3D camera around the scene. */
+/** Once per frame: queues the environment capture and draw callbacks on the 3D camera after the scene. */
 void envMain(void) {
-    dispEntry(CAMERA_3D, 20.0f, 7, envCapture, NULL);
-    dispEntry(CAMERA_3D, 10.0f, 7, envDisp, NULL);
-    dispEntry(CAMERA_3D, 0.0f, 7, envCapture2, NULL);
-    dispEntry(CAMERA_3D, 5000.0f, 8, envDisp2, NULL);
+    dispEntry(CAMERA_3D, 20.0f, DISP_MODE_CUSTOM_LAST, envCapture, NULL);
+    dispEntry(CAMERA_3D, 10.0f, DISP_MODE_CUSTOM_LAST, envDisp, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_CUSTOM_LAST, envCapture2, NULL);
+    dispEntry(CAMERA_3D, 5000.0f, DISP_MODE_CUSTOM_MID, envDisp2, NULL);
 }
 
-#define PI 3.141592653589793f
-#define TWO_PI 6.283185307179586f
 /** Texture matrix slots (GX_TEXMTX0 to 9) by index, for the environment textures and depth of field. */
-static const s32 texmtx_tbl[] = {30, 33, 36, 39, 42, 45, 48, 51, 54, 57};
+static const s32 texmtx_tbl[] = {GX_TEXMTX0, GX_TEXMTX1, GX_TEXMTX2, GX_TEXMTX3, GX_TEXMTX4, GX_TEXMTX5, GX_TEXMTX6, GX_TEXMTX7, GX_TEXMTX8, GX_TEXMTX9};
 
-static inline f32
-env_sin(f32 x) {
+/** Sine of x in radians (polySinf). */
+// Private copies of polySinf/polyCosf.
+static inline f32 env_sin(f32 x) {
     f32 a = 0.00761f;
     f32 b = 0.16605f;
     f32 c = 1.0f;
@@ -381,8 +297,8 @@ env_sin(f32 x) {
     return a;
 }
 
-static inline f32
-env_cos(f32 x) {
+/** Cosine of x in radians (polyCosf). */
+static inline f32 env_cos(f32 x) {
     f32 a = 0.03705f;
     f32 b = 0.4967f;
     f32 c = 1.0f;
@@ -416,7 +332,17 @@ env_cos(f32 x) {
     return a;
 }
 
-#define WGPIPE_F32(x) (*(volatile f32*)0xCC008000 = (x))
+/** Sends one screen-sized quad centred on the origin (half the frame buffer width and EFB height each way). */
+static inline void dofQuad(void) {
+    GXPosition3f32(-(s32)gp->fbWidth / 2.0f, gp->efbHeight / 2.0f, 0.0f);
+    GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(gp->fbWidth / 2.0f, gp->efbHeight / 2.0f, 0.0f);
+    GXTexCoord2f32(1.0f, 0.0f);
+    GXPosition3f32(gp->fbWidth / 2.0f, -(s32)gp->efbHeight / 2.0f, 0.0f);
+    GXTexCoord2f32(1.0f, 1.0f);
+    GXPosition3f32(-(s32)gp->fbWidth / 2.0f, -(s32)gp->efbHeight / 2.0f, 0.0f);
+    GXTexCoord2f32(0.0f, 1.0f);
+}
 
 // FAKE: the first vertex's y goes through an inline return temp, so in envDisp_DepthOfField (opt_propagation off)
 // it is numbered after the x product and x keeps f0 as in the target. Same value; envDisp_Blur is unaffected.
@@ -436,7 +362,9 @@ static inline f32 dofDiv(f32 a, f32 b) {
 /** Opaque white, the TEV colour of the depth-of-field pass (envDisp_DepthOfField). */
 static const GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
 
-// FAKE: turns off copy propagation so the temporaries and registers match the target; removing it changes the code
+// FAKE: #pragma opt_propagation off and opt_lifetimes off for envDisp_DepthOfField (as for every user of the
+// env_sin/env_cos inlines): no copy propagation or lifetime splitting, which gives the target temporaries and registers;
+// -opt noprop,nolifetimes for the whole file changes other functions
 #pragma opt_propagation off
 #pragma opt_lifetimes off
 // FAKE: tbl, tbl2, coord2 and stage2 are one-element local arrays. The front end scalarizes them into @ temps,
@@ -444,6 +372,11 @@ static const GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
 // pointer under opt_propagation off gives addi r0 + mr), and loop 2's zero inits become the target's li/mr copies.
 // i2 is an `int` array: an s32 (long) element is not scalarized (the int-typed loop compares count as a different
 // type), so it would stay in memory. The `(s32)` cast in `(s32)i2[0] == 3` stops CSE with the `3 == i2[0]` below.
+/**
+ * Draws the depth of field while ENV_FLAG_DOF_UNUSED is set (nothing sets it): for each enabled pass with a nonzero
+ * radius, a full-screen quad of the first capture sampled at four offsets around each pixel, kept where the second
+ * capture's red value is above the pass's level.
+ */
 static void envDisp_DepthOfField(void) {
     GXTevColorArg cin;
     s32 first2[1];
@@ -477,18 +410,19 @@ static void envDisp_DepthOfField(void) {
     tbl[0] = texmtx_tbl;
     mg[0] = 0x43300000;
     dof = &wp->dof;
-    if (wp->flags & ENV_FLAG_DOF) {
+    if (wp->flags & ENV_FLAG_DOF_UNUSED) {
         /* FAKE: cam is a one-element array so it becomes an @ temp numbered between mg and tbl2 */
         cam[0] = camGetPtr(CAMERA_2D);
+
         // FAKE: dead guard (gz is 0) gives cam a second def, so it stays a named web instead of the call-result temp
         gz = 0;
         if (gz)
             cam[0] = (CameraEntry*)wp;
         GXSetProjection(camGetPtr(CAMERA_2D)->projection, cam[0]->projType);
-        GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, 0);
-        GXSetCurrentMtx(0);
-        GXLoadTexObj(smartTexObj(&wp->captureObj, (void**)wp->capture), GX_TEXMAP0);
-        GXLoadTexObj(smartTexObj(&wp->captureObj2, (void**)wp->capture2), GX_TEXMAP1);
+        GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
+        GXLoadTexObj(smartTexObj(&wp->captureObj, &wp->capture->address), GX_TEXMAP0);
+        GXLoadTexObj(smartTexObj(&wp->captureObj2, &wp->capture2->address), GX_TEXMAP1);
         GXSetNumChans(0);
         GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
         GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_OR);
@@ -500,6 +434,7 @@ static void envDisp_DepthOfField(void) {
         GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
         GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
         GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+
         /* FAKE: a one-trip loop. The back end unlinks it, which enables its array-to-register pass, so first2
            (kept in memory by the front end, see below) is promoted late and numbered as a codegen temp. */
         for (k = 0; k < 1; k++) {
@@ -551,6 +486,7 @@ static void envDisp_DepthOfField(void) {
                the read is then deleted and the second pass scalarizes it, so its @ temp is created after the
                CSE temps and numbers below them. */
             hz = *(s16*)i2;
+
             /* FAKE: mg holds the int to float magic 0x43300000. The back end value-numbers the hoisted loop 2 lis
                into mg, so the constant gets mg @ temp number. i2 is initialised last so it does not overlap the
                tbl2 address temp. */
@@ -565,6 +501,7 @@ static void envDisp_DepthOfField(void) {
                 GXSetTevColorOp((GXTevStageID)stage2[0], GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, (GXTevRegID)((s32)i2[0] == 3));
                 GXSetTevAlphaOp((GXTevStageID)stage2[0], GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, (GXTevRegID)(3 == i2[0]));
                 cin = GX_CC_CPREV;
+
                 /* FAKE: first2 is an s32 array stored through an int pointer: the type mismatch keeps it in memory
                    through the front end (see the one-trip loop above) */
                 if (*(int*)first2 = (i2[0] == 0)) {
@@ -574,6 +511,7 @@ static void envDisp_DepthOfField(void) {
                 GXSetTevAlphaIn((GXTevStageID)stage2[0], GX_CA_ZERO, GX_CA_TEXA, GX_CA_KONST, first2[0] ? GX_CA_ZERO : GX_CA_APREV);
                 GXSetTevSwapMode((GXTevStageID)stage2[0], GX_TEV_SWAP0, GX_TEV_SWAP0);
             }
+
             /* FAKE: dead guard (gz2 is 0) that keeps mg alive through the front end */
             gz2 = 0;
             if (gz2)
@@ -610,13 +548,17 @@ static void envDisp_DepthOfField(void) {
 #pragma opt_propagation reset
 #pragma opt_lifetimes reset
 
-typedef struct EnvBlurWork {
-    u16 flags;   // 0x0
-    u8 pad2[6];  // 0x2
-    OSTime time; // 0x8
-    s32 msec;    // 0x10
-    u8 pad14[4]; // 0x14
-} EnvBlurWork;
+/** Stops the depth of field and the frame and depth captures it draws from. */
+// Original name and size (0x44) from the JP demo map (UNUSED there: nothing calls it), between the stripped
+// envSetDoFThresholdZ and envDisp_Blur. The size is the three clears (one clear is 0x2c, two 0x38); envCapture's
+// two flags are the copies envDisp_DepthOfField reads. The order of the clears is not fixed by the size.
+void envDoFOff(void) {
+    EnvironmentWork* wp = envGetWork();
+
+    wp->flags &= ~ENV_FLAG_CAPTURE_COLOR_UNUSED;
+    wp->flags &= ~ENV_FLAG_CAPTURE_DEPTH_UNUSED;
+    wp->flags &= ~ENV_FLAG_DOF_UNUSED;
+}
 
 /**
  * Draws the motion blur: the captured earlier frame over the screen at a constant alpha, or,
@@ -624,18 +566,17 @@ typedef struct EnvBlurWork {
  */
 static void envDisp_Blur(void) {
     EnvironmentWork* wp = envGetWork();
-    EnvBlurWork* blur = (EnvBlurWork*)&wp->blurWork;
+    EnvBlurWork* blur = &wp->blur;
     CameraEntry* cam;
     s32 msec;
     f32 t;
     u8 alpha;
-    GXColor c;
 
-    if ((wp->flags & ENV_FLAG_BLUR) && (wp->flags & ENV_FLAG_BLUR_READY)) {
+    if ((wp->flags & ENV_FLAG_BLUR) && (wp->flags & ENV_FLAG_BLUR_CAPTURED)) {
         cam = camGetPtr(CAMERA_2D);
         GXSetProjection(camGetPtr(CAMERA_2D)->projection, cam->projType);
-        GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXSetNumChans(0);
         GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
         GXSetNumTexGens(1);
@@ -655,7 +596,7 @@ static void envDisp_Blur(void) {
             if (t > 1.0f) {
                 t = 1.0f;
             }
-            if (blur->flags & 1) {
+            if (blur->flags & ENV_BLUR_FLAG_FADE_OUT) {
                 alpha = 255.0f * (1.0f - t);
             } else {
                 alpha = 120.0f * (1.0f - t) + 128.0f;
@@ -675,30 +616,29 @@ static void envDisp_Blur(void) {
         GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
         GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-        DOF_QUAD(gp, 2.0f);
+        dofQuad();
     }
 }
 
 /**
  * Starts the motion blur (from the evt_env helpers):
- * type 1 fades from fully opaque, msec gives the fade time in milliseconds (0 for a constant blur).
+ * a nonzero type fades from fully opaque, msec gives the fade time in milliseconds (0 for a constant blur).
  * Allocates the half-size capture texture in map memory.
  */
 void envBlurOn(s32 type, s32 msec) {
     EnvironmentWork* wp = envGetWork();
-    EnvBlurWork* blur = (EnvBlurWork*)&wp->blurWork;
+    EnvBlurWork* blur = &wp->blur;
 
     wp->flags |= ENV_FLAG_BLUR;
     wp->flags |= ENV_FLAG_BLUR_CAPTURE;
-    wp->flags &= ~ENV_FLAG_BLUR_READY;
+    wp->flags &= ~ENV_FLAG_BLUR_CAPTURED;
     memset(blur, 0, sizeof(EnvBlurWork));
     blur->time = gp->renderTime;
     blur->msec = msec;
     if (type) {
-        blur->flags |= 1;
+        blur->flags |= ENV_BLUR_FLAG_FADE_OUT;
     }
-    wp->envBlur = _mapAlloc(GXGetTexBufferSize(gp->fbWidth / 2,
-                                               gp->efbHeight / 2, GX_TF_RGB565, GX_FALSE, 0));
+    wp->envBlur = _mapAlloc(GXGetTexBufferSize(gp->fbWidth / 2, gp->efbHeight / 2, GX_TF_RGB565, GX_FALSE, 0));
 }
 
 /** Stops the motion blur and frees its capture texture. */
@@ -710,32 +650,32 @@ void envBlurOff(void) {
     _mapFree(wp->envBlur);
 }
 
-/** almost 1:1, needs some regalloc work and type changes */
+/**
+ * Copies the glare filter's screen rectangle to a half-size texture and adds it back over the rectangle once per
+ * offset in glare (up to 8 offsets per pass).
+ */
 static void envGlare(EnvironmentGlare* glare) {
     static f32 frame_cnt = 0.0f;
     EnvironmentWork* envWork = envGetWork();
+    GXTevKColorSel kcolorSel1;
+    GXTevKColorSel kcolorSel0;
     s16 sx;
     EnvironmentGlareFilter* glareFilter;
     u32 texH;
     u32 texW;
-    EnvironmentGlare* glareIter;
-    EnvironmentGlare* glareCur;
+
     s32 width;
     s32 y1v;
 
     s32 x1v;
     s32 glareCount;
-    u32 texMtxId;
     s16 sy;
     s32 doneCount;
-    u32 kc0;
-    u32 kc1;
     s32 batchCount;
     void* texBuf;
     u16 y0;
     u16 x0;
     u16 height;
-    u16 tmp;
 
     u32 size;
     Mtx44 projMtx;
@@ -744,6 +684,7 @@ static void envGlare(EnvironmentGlare* glare) {
     GXTexObj texObj;
 
     int i;
+    int j;
 
     frame_cnt += 1.0f;
     glareFilter = &envWork->filter;
@@ -753,65 +694,63 @@ static void envGlare(EnvironmentGlare* glare) {
     height = (u16)(envWork->filter.y1 - y0);
     texH = height >> 1;
     texW = width >> 1;
-    size = GXGetTexBufferSize((u16)texW, (u16)texH, GX_TF_RGB565, GX_FALSE, 0);
-    texBuf = smartAlloc(size, 3)->address;
+    size = GXGetTexBufferSize(texW, texH, GX_TF_RGB565, GX_FALSE, 0);
+    texBuf = smartAlloc(size, SMART_GROUP_TEMP)->address;
     GXSetTexCopySrc(x0, y0, width, height);
-    GXSetTexCopyDst((u16)texW, (u16)texH, GX_TF_RGB565, GX_TRUE);
+    GXSetTexCopyDst(texW, texH, GX_TF_RGB565, GX_TRUE);
     GXCopyTex(texBuf, GX_FALSE);
     GXPixModeSync();
-    GXInitTexObj(&texObj, texBuf, (u16)texW, (u16)texH, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GXInitTexObj(&texObj, texBuf, texW, texH, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
     GXInitTexObjLOD(&texObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     glareCount = glare->count;
     doneCount = 0;
-    texW = glare->kcolorSel0;
-    texH = glare->kcolorSel1;
+
+    kcolorSel0 = glare->kcolorSel0;
+    kcolorSel1 = glare->kcolorSel1;
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG1);
     GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_KONST, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
-    GXSetTevKColorSel(GX_TEVSTAGE0, texW);
+    GXSetTevKColorSel(GX_TEVSTAGE0, kcolorSel0);
     GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
     GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C1, GX_CC_KONST, GX_CC_ZERO);
-    GXSetTevKColorSel(GX_TEVSTAGE1, texH);
+    GXSetTevKColorSel(GX_TEVSTAGE1, kcolorSel1);
     GXSetTevSwapMode(GX_TEVSTAGE1, GX_TEV_SWAP0, GX_TEV_SWAP0);
 
     for (i = 0; i < 7; i++) {
-        GXSetTevOrder(i * 2 + 2, i + 1, 0, 0xFF);
-        GXSetTevColorOp(i * 2 + 2, 1, 0, 0, 1, 2);
-        GXSetTevColorIn(i * 2 + 2, 0xE, 0xF, 0xF, 8);
-        GXSetTevKColorSel(i * 2 + 2, texW);
-        GXSetTevSwapMode(i * 2 + 2, 0, 0);
-        GXSetTevOrder(i * 2 + 3, 0xFF, 0xFF, 0xFF);
-        GXSetTevColorOp(i * 2 + 3, 0, 0, 0, 1, 0);
-        GXSetTevColorIn(i * 2 + 3, 0xF, 4, 0xE, 0);
-        GXSetTevKColorSel(i * 2 + 3, texH);
-        GXSetTevSwapMode(i * 2 + 3, 0, 0);
+        GXSetTevOrder(i * 2 + 2, i + 1, GX_TEXMAP0, GX_COLOR_NULL);
+        GXSetTevColorOp(i * 2 + 2, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG1);
+        GXSetTevColorIn(i * 2 + 2, GX_CC_KONST, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+        GXSetTevKColorSel(i * 2 + 2, kcolorSel0);
+        GXSetTevSwapMode(i * 2 + 2, GX_TEV_SWAP0, GX_TEV_SWAP0);
+        GXSetTevOrder(i * 2 + 3, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+        GXSetTevColorOp(i * 2 + 3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(i * 2 + 3, GX_CC_ZERO, GX_CC_C1, GX_CC_KONST, GX_CC_CPREV);
+        GXSetTevKColorSel(i * 2 + 3, kcolorSel1);
+        GXSetTevSwapMode(i * 2 + 3, GX_TEV_SWAP0, GX_TEV_SWAP0);
     }
 
-    {
-        int j;
-        for (j = 0; j < 8; j++) {
-            GXSetTexCoordGen(j, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0 + j * 3);
-        }
+    for (j = 0; j < 8; j++) {
+        GXSetTexCoordGen(j, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0 + j * 3);
     }
 
-    if (glareFilter->flags & ENV_GLARE_FLAG_DEPTH) {
+    if (glareFilter->flags & ENV_GLARE_FILTER_Z) {
         GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
     } else {
         GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     }
     GXSetBlendMode(glare->mode, glare->srcFactor, glare->dstFactor, GX_LO_CLEAR);
     GXSetNumChans(0);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_CLAMP, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
     GXSetViewport(0.0f, 0.0f, (f32)gp->fbWidth, (f32)gp->efbHeight, 0.0f, 1.0f);
     GXSetScissor(0, 0, gp->fbWidth, gp->efbHeight);
     MTXOrtho(projMtx, 0.0f, (f32)gp->efbHeight, 0.0f, (f32)gp->fbWidth, 0.0f, -32767.0f);
     GXSetProjection(projMtx, GX_ORTHOGRAPHIC);
     PSMTXIdentity(posMtx);
-    GXLoadPosMtxImm(posMtx, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(posMtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
@@ -823,38 +762,63 @@ static void envGlare(EnvironmentGlare* glare) {
     x1v = x0 + width;
     sx = x0;
     sy = y0;
-    glareIter = glare;
     while (doneCount < glareCount) {
-        glareCur = glareIter;
         batchCount = 0;
-        texMtxId = 0x1E;
         while ((batchCount < 8) && (doneCount < glareCount)) {
-            MTXTrans(texMtx, (glare->coordScale * glareCur->coords[0].x) / (f32)gp->fbWidth, (glare->coordScale * glareCur->coords[0].y) / (f32)gp->efbHeight, 0.0f);
-            GXLoadTexMtxImm(texMtx, texMtxId, 1);
-            texMtxId += 3;
+            MTXTrans(texMtx, (glare->coordScale * glare->coords[doneCount].x) / (f32)gp->fbWidth,
+                     (glare->coordScale * glare->coords[doneCount].y) / (f32)gp->efbHeight, 0.0f);
+            GXLoadTexMtxImm(texMtx, GX_TEXMTX0 + batchCount * 3, GX_MTX2x4);
             batchCount += 1;
-            glareCur = (EnvironmentGlare*)((EnvironmentGlareTexCoord*)glareCur + 1);
-            glareIter = (EnvironmentGlare*)((EnvironmentGlareTexCoord*)glareIter + 1);
             doneCount += 1;
         }
         GXSetNumTevStages((u8)(batchCount * 2));
-        GXSetNumTexGens((u8)batchCount);
+        GXSetNumTexGens(batchCount);
         GXBegin(GX_QUADS, GX_VTXFMT7, 4);
         GXPosition3s16(sx, sy, 0);
         GXTexCoord2u16(0, 0);
-        GXPosition3s16((s16)x1v, sy, 0);
+        GXPosition3s16(x1v, sy, 0);
         GXTexCoord2u16(1, 0);
-        GXPosition3s16((s16)x1v, (s16)y1v, 0);
+        GXPosition3s16(x1v, y1v, 0);
         GXTexCoord2u16(1, 1);
-        GXPosition3s16(sx, (s16)y1v, 0);
+        GXPosition3s16(sx, y1v, 0);
         GXTexCoord2u16(0, 1);
+    }
+}
+
+/** Draws the glare filter the current type picks (envGlare0..3), without envDisp2's viewport save. */
+// Original name and size (0xac) from the JP demo map (UNUSED there: every call is inlined), between envGlare and
+// envGlareFilter. envDisp2 calls it (the unit is compiled with deferred inlining, so the later definition is
+// inlined there); the size fits exactly (without the empty case 0 0xa8).
+static void envDisp_Glare(void) {
+    EnvironmentWork* wp;
+    EnvironmentGlareFilter* filter;
+
+    wp = envGetWork();
+    filter = &wp->filter;
+    if (wp->flags & ENV_FLAG_GLARE_FILTER) {
+        switch (filter->type) {
+            case 0:
+                break;
+            case 1:
+                envGlare(&envGlare0);
+                break;
+            case 2:
+                envGlare(&envGlare1);
+                break;
+            case 3:
+                envGlare(&envGlare2);
+                break;
+            case 4:
+                envGlare(&envGlare3);
+                break;
+        }
     }
 }
 
 /**
  * Sets the glare filter: type 1..4 picks the glare pattern
  * and x0/y0..x1/y1 the screen rectangle it covers (rounded out to even pixels and clamped to the frame);
- * type 0 turns it off. No caller in this tree.
+ * type 0 turns it off. Called from the eki_03 and hom_00 room code.
  */
 void envGlareFilter(s32 type, s16 y0, s16 x0, s16 y1, s16 x1) {
     EnvironmentWork* wp = envGetWork();
@@ -866,7 +830,7 @@ void envGlareFilter(s32 type, s16 y0, s16 x0, s16 y1, s16 x1) {
         f->y1 = 0;
         f->x0 = 0;
         f->y0 = 0;
-        wp->flags &= ~ENV_FLAG_GLARE;
+        wp->flags &= ~ENV_FLAG_GLARE_FILTER;
         return;
     }
     x0 -= x0 & 1;
@@ -891,25 +855,27 @@ void envGlareFilter(s32 type, s16 y0, s16 x0, s16 y1, s16 x1) {
     f->y1 = y1;
     f->x1 = x1;
     f->zscale = 0.0f;
-    f->flags &= ~ENV_GLARE_FLAG_DEPTH;
-    wp->flags |= ENV_FLAG_GLARE;
+    f->flags &= ~ENV_GLARE_FILTER_Z;
+    wp->flags |= ENV_FLAG_GLARE_FILTER;
 }
 
-/** Sets the depth scale of the glare filter and makes it depth-dependent. No caller in this tree. */
+/** Sets the depth scale of the glare filter and makes it depth-dependent. Called from the eki_03 room code. */
 void envGlareFilterZ(f32 zscale) {
     EnvironmentWork* wp = envGetWork();
     EnvironmentGlareFilter* f = &wp->filter;
 
     f->zscale = zscale;
-    f->flags |= ENV_GLARE_FLAG_DEPTH;
+    f->flags |= ENV_GLARE_FILTER_Z;
 }
 
-// FAKE: #pragma opt_propagation off and opt_lifetimes off for envDisp_FF: no copy propagation or lifetime splitting, which gives the target temporaries and registers; without them envDisp_FF is 375 instructions instead of 368
+// FAKE: #pragma opt_propagation off and opt_lifetimes off for envDisp_FF (a user of the env_sin/env_cos inlines): no
+// copy propagation or lifetime splitting, which gives the target temporaries and registers; -opt noprop,nolifetimes for
+// the whole file changes other functions
 #pragma opt_propagation off
 #pragma opt_lifetimes off
 /**
  * Draws a ring of 1000 jittered lines from the screen centre outwards, textured with the captured frame,
- * which gives a radial streak over the picture; enabled by flag 0x10000000.
+ * which gives a radial streak over the picture; enabled by ENV_FLAG_FF_UNUSED.
  */
 static void envDisp_FF(void) {
     EnvironmentWork* wp = envGetWork();
@@ -920,7 +886,7 @@ static void envDisp_FF(void) {
     f32 ofs;
     s32 i;
 
-    if (wp->flags & ENV_FLAG_FF_LINES) {
+    if (wp->flags & ENV_FLAG_FF_UNUSED) {
         GXSetNumChans(0);
         GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
         GXSetNumTexGens(1);
@@ -935,8 +901,8 @@ static void envDisp_FF(void) {
         GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
         GXSetZMode(GX_FALSE, GX_LEQUAL, GX_FALSE);
         GXSetLineWidth(16, GX_TO_ZERO);
-        GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXClearVtxDesc();
         GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
         GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
@@ -959,38 +925,50 @@ static void envDisp_FF(void) {
 
 #pragma opt_propagation reset
 #pragma opt_lifetimes reset
+/** Starts the radial streak of envDisp_FF and the frame capture it is textured with. */
+// envFFOn and envFFOff: original names and sizes (0x38 each) from the JP demo map (UNUSED there: nothing calls
+// them), after envDisp_FF in this order. Each size is two flag changes (one is 0x2c): the effect's flag and the
+// capture flag envDisp_FF's texture comes from (envCapture). The order of the two is not fixed by the size; these
+// follow envBlurOn / envBlurOff.
+void envFFOn(void) {
+    EnvironmentWork* wp = envGetWork();
 
-typedef struct EnvTexMtxWork {
-    MtxPtr view;  // 0x70
-    MtxPtr mtx;   // 0x74
-    MtxPtr model; // 0x78
-    f32 scale;    // 0x7C
-    f32 rotY;     // 0x80
-    f32 rotX;     // 0x84
-} EnvTexMtxWork;
-#define tw ((EnvTexMtxWork*)wp->texMtxWork)
+    wp->flags |= ENV_FLAG_FF_UNUSED;
+    wp->flags |= ENV_FLAG_CAPTURE_COLOR_UNUSED;
+}
+
+/** Stops the radial streak and its frame capture. */
+void envFFOff(void) {
+    EnvironmentWork* wp = envGetWork();
+
+    wp->flags &= ~ENV_FLAG_CAPTURE_COLOR_UNUSED;
+    wp->flags &= ~ENV_FLAG_FF_UNUSED;
+}
+
+static void MTXInvXposeNormal(Mtx src, Mtx dst) {
+    PSMTXInvXpose(src, dst);
+    PSVECNormalize((Vec*)dst[0], (Vec*)dst[0]);
+    PSVECNormalize((Vec*)dst[1], (Vec*)dst[1]);
+    PSVECNormalize((Vec*)dst[2], (Vec*)dst[2]);
+}
 
 /**
  * Builds and loads the texture matrix for environment TEV type type (reflection maps from the surface normals as
  * seen by the camera, scrolled or spun by the env work's angles).
  */
 static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxType mtxType) {
-    static f32 a = 0.0f;
     EnvironmentWork* wp = envGetWork();
     Mtx m0, m2, m1, m3, m4, m5, m6, m7;
     Mtx44 m9;
     Mtx m10, m11, m8;
-    f32 s, dot;
+    f32 dot;
 
     switch (type) {
         case 0:
-            PSMTXRotRad(m0, 'Y', 0.017453292f * tw->rotY);
-            PSMTXRotRad(m1, 'Z', 0.017453292f * -tw->rotX);
+            PSMTXRotRad(m0, 'Y', 0.017453292f * wp->texMtxWork.rotY);
+            PSMTXRotRad(m1, 'Z', 0.017453292f * -wp->texMtxWork.rotX);
             PSMTXConcat(m0, m1, m0);
-            PSMTXInvXpose(m0, m0);
-            PSVECNormalize((Vec*)m0[0], (Vec*)m0[0]);
-            PSVECNormalize((Vec*)m0[1], (Vec*)m0[1]);
-            PSVECNormalize((Vec*)m0[2], (Vec*)m0[2]);
+            MTXInvXposeNormal(m0, m0);
             PSMTXScale(m2, 0.5f, 0.5f, 1.0f);
             PSMTXConcat(m2, m0, m0);
             PSMTXTrans(m2, 0.5f, 0.5f, 0.0f);
@@ -998,13 +976,10 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
             GXLoadTexMtxImm(m0, id, mtxType);
             break;
         case 1:
-            PSMTXRotRad(m0, 'Y', -1.5707964f);
-            PSMTXConcat(m0, tw->model, m0);
-            PSMTXInvXpose(m0, m0);
-            PSVECNormalize((Vec*)m0[0], (Vec*)m0[0]);
-            PSVECNormalize((Vec*)m0[1], (Vec*)m0[1]);
-            PSVECNormalize((Vec*)m0[2], (Vec*)m0[2]);
-            PSMTXScale(m3, 0.5f - 0.25f * tw->scale, 0.5f, 1.0f);
+            PSMTXRotRad(m0, 'Y', (-1.5707964f));
+            PSMTXConcat(m0, wp->texMtxWork.model, m0);
+            MTXInvXposeNormal(m0, m0);
+            PSMTXScale(m3, 0.5f - 0.25f * wp->texMtxWork.scale, 0.5f, 1.0f);
             PSMTXConcat(m3, m0, m0);
             PSMTXTrans(m3, 0.5f, 0.5f, 0.0f);
             PSMTXConcat(m3, m0, m0);
@@ -1016,23 +991,20 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
             Vec half;
             f32 ry2, rx2, s2;
 
-            ry2 = 3.1415927f * tw->rotY / 180.0f;
-            rx2 = 3.1415927f * tw->rotX / 180.0f;
+            ry2 = 3.1415927f * wp->texMtxWork.rotY / 180.0f;
+            rx2 = 3.1415927f * wp->texMtxWork.rotX / 180.0f;
             light.x = -(f32)cos(rx2) * (f32)sin(ry2);
             light.y = -(f32)sin(rx2);
             light.z = -(f32)cos(rx2) * (f32)cos(ry2);
-            PSMTXMultVecSR(tw->view, &light, &light);
+            PSMTXMultVecSR(wp->texMtxWork.view, &light, &light);
             C_VECHalfAngle(&light, &v, &half);
-            PSMTXInvXpose(tw->model, m0);
-            PSVECNormalize((Vec*)m0[0], (Vec*)m0[0]);
-            PSVECNormalize((Vec*)m0[1], (Vec*)m0[1]);
-            PSVECNormalize((Vec*)m0[2], (Vec*)m0[2]);
+            MTXInvXposeNormal(wp->texMtxWork.model, m0);
             PSMTXIdentity(m4);
             m4[0][0] = half.x;
             m4[0][1] = half.y;
             m4[0][2] = half.z;
             PSMTXConcat(m4, m0, m0);
-            s2 = 20.0f * tw->scale;
+            s2 = 20.0f * wp->texMtxWork.scale;
             PSMTXScale(m4, s2, 1.0f, 1.0f);
             PSMTXConcat(m4, m0, m0);
             PSMTXTrans(m4, 1.0f - s2, 0.0f, 0.0f);
@@ -1047,12 +1019,12 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
             Vec v2 = {0.0f, 0.0f, 1.0f};
             f32 ry, rx;
 
-            ry = 3.1415927f * tw->rotY / 180.0f;
-            rx = 3.1415927f * tw->rotX / 180.0f;
+            ry = 3.1415927f * wp->texMtxWork.rotY / 180.0f;
+            rx = 3.1415927f * wp->texMtxWork.rotX / 180.0f;
             light2.x = (f32)cos(rx) * (f32)sin(ry);
             light2.y = (f32)sin(rx);
             light2.z = (f32)cos(rx) * (f32)cos(ry);
-            PSMTXMultVecSR(tw->view, &light2, &light2);
+            PSMTXMultVecSR(wp->texMtxWork.view, &light2, &light2);
             dot = PSVECDotProduct(&light2, &v2);
             if (dot == -1.0f) {
                 PSMTXScale(m0, 0.0f, 0.0f, 0.0f);
@@ -1063,18 +1035,20 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
             h.x = -h.x;
             h.y = -h.y;
             h.z = -h.z;
-            PSMTXInvXpose(tw->model, m5);
-            PSVECNormalize((Vec*)m5[0], (Vec*)m5[0]);
-            PSVECNormalize((Vec*)m5[1], (Vec*)m5[1]);
-            PSVECNormalize((Vec*)m5[2], (Vec*)m5[2]);
+            MTXInvXposeNormal(wp->texMtxWork.model, m5);
             if (dot == 1.0f) {
                 PSMTXIdentity(m6);
             } else {
+                // Unused (JP demo map: v$652, UNUSED, 4 bytes in .sbss between frame_cnt and case 5's a): its
+                // number puts it in this branch; a zero initializer, since it is laid out in source order like a.
+                // f32 as a is a guess.
+                static f32 v = 0.0f;
+
                 PSVECCrossProduct(&h, &v2, &axis);
                 PSMTXRotAxisRad(m6, &axis, (f32)acos(PSVECDotProduct(&v2, &h)));
             }
             PSMTXConcat(m6, m5, m0);
-            PSMTXScale(m6, 2.0f * tw->scale, 2.0f * tw->scale, 1.0f);
+            PSMTXScale(m6, 2.0f * wp->texMtxWork.scale, 2.0f * wp->texMtxWork.scale, 1.0f);
             PSMTXConcat(m6, m0, m0);
             PSMTXTrans(m6, 0.5f, 0.5f, 0.0f);
             PSMTXConcat(m6, m0, m0);
@@ -1082,10 +1056,7 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
             break;
         }
         case 4:
-            PSMTXInvXpose(tw->model, m0);
-            PSVECNormalize((Vec*)m0[0], (Vec*)m0[0]);
-            PSVECNormalize((Vec*)m0[1], (Vec*)m0[1]);
-            PSVECNormalize((Vec*)m0[2], (Vec*)m0[2]);
+            MTXInvXposeNormal(wp->texMtxWork.model, m0);
             GXLoadTexMtxImm(m0, id, GX_MTX2x4);
             PSMTXScale(m7, 0.5f, 0.5f, 0.0f);
             PSMTXTrans(m0, 0.5f, 0.5f, 1.0f);
@@ -1093,6 +1064,7 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
             GXLoadTexMtxImm(m0, id2, mtxType);
             break;
         case 5: {
+            static f32 a = 0.0f;
             Vec camPos;
             Vec target;
             Vec up;
@@ -1100,10 +1072,10 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
             a += 0.0001f;
             camPos = (Vec){10.0f * (f32)sin(a), 100.0f, 10.0f * (f32)cos(a)};
             target = (Vec){10.0f * (f32)sin(a), 0.0f, 10.0f * (f32)cos(a)};
-            up = (Vec){0.0f, 0.0f, -1.0f};
+            up = (Vec){0.0f, 0.0f, (-1.0f)};
             C_MTXLookAt(m8, &camPos, &up, &target);
-            C_MTXLightFrustum((MtxPtr)m9, -32.0f, 32.0f, -32.0f, 32.0f, 300.0f, 0.5f, 0.5f, 0.5f, 0.5f);
-            PSMTXInverse(tw->view, m10);
+            C_MTXLightFrustum((MtxPtr)m9, (-32.0f), 32.0f, (-32.0f), 32.0f, 300.0f, 0.5f, 0.5f, 0.5f, 0.5f);
+            PSMTXInverse(wp->texMtxWork.view, m10);
             PSMTXConcat(m8, m10, m11);
             PSMTXConcat((MtxPtr)m9, m11, m0);
             GXLoadTexMtxImm(m0, id2, mtxType);
@@ -1112,8 +1084,8 @@ static void envTevLoadTexMtxImm(s32 type, GXTexMtx id, GXTexMtx id2, GXTexMtxTyp
     }
 }
 
-static inline void
-envTexObj(TEXPalette* pal, GXTexObj* to, u32 id) {
+/** Fills to with texture id of pal, clamped, mipmapped when the texture has more than one LOD. */
+static inline void envTexObj(TEXPalette* pal, GXTexObj* to, u32 id) {
     GXBool mipMap;
     TEXDescriptor* tdp;
 
@@ -1127,8 +1099,8 @@ envTexObj(TEXPalette* pal, GXTexObj* to, u32 id) {
     GXInitTexObjLOD(to, tdp->textureHeader->minFilter, tdp->textureHeader->magFilter, tdp->textureHeader->minLOD, tdp->textureHeader->maxLOD, tdp->textureHeader->LODBias, GX_DISABLE, tdp->textureHeader->edgeLODEnable, GX_ANISO_1);
 }
 
-static inline void
-envTexObjCI(TEXPalette* pal, GXTexObj* to, GXTlutObj* tlo, GXTlut tluts, u32 id) {
+/** envTexObj for a colour-index texture: also fills tlo with its palette, for TLUT tluts. */
+static inline void envTexObjCI(TEXPalette* pal, GXTexObj* to, GXTlutObj* tlo, GXTlut tluts, u32 id) {
     GXBool mipMap;
     TEXDescriptor* tdp;
 
@@ -1143,8 +1115,8 @@ envTexObjCI(TEXPalette* pal, GXTexObj* to, GXTlutObj* tlo, GXTlut tluts, u32 id)
     GXInitTexObjLOD(to, tdp->textureHeader->minFilter, tdp->textureHeader->magFilter, tdp->textureHeader->minLOD, tdp->textureHeader->maxLOD, tdp->textureHeader->LODBias, GX_DISABLE, tdp->textureHeader->edgeLODEnable, GX_ANISO_1);
 }
 
-static inline void
-envLoadTex(u32 id, s32 map) {
+/** Loads env.tpl texture id into texture map `map`, with its palette in GX_TLUT0 when it has one. */
+static inline void envLoadTex(u32 id, s32 map) {
     GXTexObj obj;
     GXTlutObj tlut;
 
@@ -1158,38 +1130,34 @@ envLoadTex(u32 id, s32 map) {
     }
 }
 
-#define ENV_TEX_TAIL(t, mtxType, gentype, mtxsrc)                                                  \
-    GXSetTexCoordGen2((GXTexCoordID)coord, gentype, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, mtxsrc); \
-    envTevLoadTexMtxImm(t, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, mtxType)
-
 /**
  * Map TEV callback: adds the TEV stages and texture generation for environment effect type (reflection and shine
  * textures from env.tpl, 1..10) to a map object's material, advancing the stage,
  * texture coordinate and map counters in info.
  * Map RELs call it from their own TEV callbacks installed with evt_map_set_tevcallback
- * (the trains in gor_04 and pik_00 with type 7, pik_01 with 4 and 7, hom_10 with 7).
+ * (the trains in gor_04, pik_00, hom_10 and rsh_06 with type 7, pik_01 with 4 and 7, win_04's mirror ball with 10).
  */
 void envAddTev(s32 type, MapTevCallbackInfo* info) {
     s32 stage;
     int map;
     int coord;
-    EnvironmentWork* wp = (gp->inBattle) ? (&work[1]) : (&work[0]);
+    EnvironmentWork* wp = envGetWork();
     s32 indStage;
     Mtx mtx;
     stage = info->tevStage;
-    map = info->texCoord; // MapTevCallbackInfo's texCoord/texMap fields are filled the other way round by mapdrv
-    coord = info->texMap;
+    map = info->texMap;
+    coord = info->texCoord;
     indStage = info->indStage;
     if (type == 0) {
         return;
     }
     PSMTXConcat(camGetCurPtr()->view, info->mtx, mtx);
-    ((EnvTexMtxWork*)wp->texMtxWork)->view = camGetCurPtr()->view;
-    ((EnvTexMtxWork*)wp->texMtxWork)->mtx = info->mtx;
-    ((EnvTexMtxWork*)wp->texMtxWork)->model = mtx;
+    wp->texMtxWork.view = camGetCurPtr()->view;
+    wp->texMtxWork.mtx = info->mtx;
+    wp->texMtxWork.model = mtx;
     GXSetTevOrder((GXTevStageID)stage, coord, (GXTexMapID)map, GX_COLOR_NULL);
-    GXSetTevColorOp((GXTevStageID)stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
-    GXSetTevAlphaOp((GXTevStageID)stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
+    GXSetTevColorOp((GXTevStageID)stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp((GXTevStageID)stage, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevSwapMode((GXTevStageID)stage, GX_TEV_SWAP0, GX_TEV_SWAP0);
     switch (type) {
         case 0:
@@ -1198,11 +1166,11 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 1:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_ZERO, GX_CC_CPREV, GX_CC_TEXC, GX_CC_ZERO);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotY = 10.0f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotX = gp->retraceCount + 45;
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.5f;
+            wp->texMtxWork.rotY = 10.0f;
+            wp->texMtxWork.rotX = gp->retraceCount + 45;
+            wp->texMtxWork.scale = 0.5f;
             envLoadTex(6, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(0, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             coord++;
@@ -1212,11 +1180,11 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 2:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_ZERO, GX_CC_CPREV, GX_CC_TEXC, GX_CC_TEXA);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotY = 10.0f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotX = gp->retraceCount + 45;
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.5f;
+            wp->texMtxWork.rotY = 10.0f;
+            wp->texMtxWork.rotX = gp->retraceCount + 45;
+            wp->texMtxWork.scale = 0.5f;
             envLoadTex(8, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(0, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             coord++;
@@ -1226,9 +1194,9 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 3:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_CPREV, GX_CC_ZERO, GX_CC_TEXC, GX_CC_ZERO);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.5f;
+            wp->texMtxWork.scale = 0.5f;
             envLoadTex(0, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(1, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             map++;
@@ -1238,11 +1206,11 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 4:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_CPREV, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.5f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotY = 45.0f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotX = 45.0f;
+            wp->texMtxWork.scale = 0.5f;
+            wp->texMtxWork.rotY = 45.0f;
+            wp->texMtxWork.rotX = 45.0f;
             envLoadTex(1, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(2, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             map++;
@@ -1252,11 +1220,11 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 5:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_CPREV, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.5f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotY = 45.0f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotX = 45.0f;
+            wp->texMtxWork.scale = 0.5f;
+            wp->texMtxWork.rotY = 45.0f;
+            wp->texMtxWork.rotX = 45.0f;
             envLoadTex(2, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(3, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             map++;
@@ -1266,11 +1234,11 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 6:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_CPREV, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.15f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotY = 0.0f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotX = 90.0f;
+            wp->texMtxWork.scale = 0.15f;
+            wp->texMtxWork.rotY = 0.0f;
+            wp->texMtxWork.rotX = 90.0f;
             envLoadTex(4, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(2, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             map++;
@@ -1280,11 +1248,11 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 7:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_CPREV, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.3f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotY = 0.0f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotX = 90.0f;
+            wp->texMtxWork.scale = 0.3f;
+            wp->texMtxWork.rotY = 0.0f;
+            wp->texMtxWork.rotX = 90.0f;
             envLoadTex(5, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(3, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             map++;
@@ -1294,11 +1262,11 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
         case 8:
             GXSetTevColorIn((GXTevStageID)stage, GX_CC_ZERO, GX_CC_CPREV, GX_CC_TEXC, GX_CC_ZERO);
             GXSetTevAlphaIn((GXTevStageID)stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
-            ((EnvTexMtxWork*)wp->texMtxWork)->scale = 0.5f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotY = 10.0f;
-            ((EnvTexMtxWork*)wp->texMtxWork)->rotX = 45.0f;
+            wp->texMtxWork.scale = 0.5f;
+            wp->texMtxWork.rotY = 10.0f;
+            wp->texMtxWork.rotX = 45.0f;
             envLoadTex(10, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTIDENTITY);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX2x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
             envTevLoadTexMtxImm(0, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX2x4);
             stage++;
             map++;
@@ -1314,7 +1282,7 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
             GXSetTevKColorSel((GXTevStageID)stage, GX_TEV_KCSEL_K1);
             GXSetTevKColor(GX_KCOLOR1, (GXColor){0x7F, 0x7F, 0x7F, 0x00});
             envLoadTex(9, map);
-            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX3x4, GX_TG_NRM, texmtx_tbl[map], (GXBool)0, GX_PTTEXMTX0);
+            GXSetTexCoordGen2((GXTexCoordID)coord, GX_TG_MTX3x4, GX_TG_NRM, texmtx_tbl[map], GX_FALSE, GX_PTTEXMTX0);
             envTevLoadTexMtxImm(4, (GXTexMtx)texmtx_tbl[map], GX_PTTEXMTX0, GX_MTX3x4);
             stage++;
             map++;
@@ -1323,23 +1291,16 @@ void envAddTev(s32 type, MapTevCallbackInfo* info) {
     }
 
     info->tevStage = stage;
-    info->texMap = coord;
+    info->texCoord = coord;
     info->indStage = indStage;
-    info->texCoord = map;
+    info->texMap = map;
 }
 
-#undef ENV_TEX_TAIL
-
-#undef tw
-
-/** The map object being drawn, from a TEV callback's info. */
-static inline MapObject* envWaterObj(MapTevCallbackInfo* info) {
-    return *(MapObject**)info->mapObj;
-}
 /** A map object's parent object. */
 static inline MapObject* envWaterParent(MapObject* o) {
     return o->parent;
 }
+
 /**
  * Map TEV callback for refracting water: copies the screen area behind the water object (from the previous
  * frame's screen rectangle, at half size), builds a wavy indirect texture whose strength grows as the camera
@@ -1347,7 +1308,6 @@ static inline MapObject* envWaterParent(MapObject* o) {
  * Called from map TEV callbacks installed with evt_map_set_tevcallback (dou_00, hei_09).
  */
 void envSetWater(MapTevCallbackInfo* info) {
-    MapObject* obj;
     GXTevStageID stage;
     GXTexMapID map;
     GXTexCoordID coord;
@@ -1372,16 +1332,17 @@ void envSetWater(MapTevCallbackInfo* info) {
     s32 x1;
     s32 y1;
 
-    obj = envWaterObj(info);
     stage = info->tevStage;
-    map = info->texCoord;
-    coord = info->texMap;
+    map = info->texMap;
+    coord = info->texCoord;
     ind = info->indStage;
-    if (obj->flags & MAPOBJ_FLAG_IN_GROUP) {
+    if (info->mapObj->flags & MAP_OBJ_FLAG_GROUP_MEMBER) {
+        MapObject* obj = info->mapObj;
+
         while ((obj = envWaterParent(obj)) != NULL) {
-            if (obj->flags & MAPOBJ_FLAG_GROUP) {
-                if (!(obj->flags & MAPOBJ_FLAG_BBOX)) {
-                    obj->flags |= MAPOBJ_FLAG_BBOX;
+            if (obj->flags & MAP_OBJ_FLAG_GROUP) {
+                if (!(obj->flags & MAP_OBJ_FLAG_SCREEN_RECT)) {
+                    obj->flags |= MAP_OBJ_FLAG_SCREEN_RECT;
                     return;
                 }
                 x0 = obj->screenRect[0];
@@ -1392,14 +1353,14 @@ void envSetWater(MapTevCallbackInfo* info) {
             }
         }
     } else {
-        if (!(obj->flags & MAPOBJ_FLAG_BBOX)) {
-            obj->flags |= MAPOBJ_FLAG_BBOX;
+        if (!(info->mapObj->flags & MAP_OBJ_FLAG_SCREEN_RECT)) {
+            info->mapObj->flags |= MAP_OBJ_FLAG_SCREEN_RECT;
             return;
         }
-        x0 = obj->screenRect[0];
-        y0 = obj->screenRect[1];
-        x1 = obj->screenRect[2];
-        y1 = obj->screenRect[3];
+        x0 = info->mapObj->screenRect[0];
+        y0 = info->mapObj->screenRect[1];
+        x1 = info->mapObj->screenRect[2];
+        y1 = info->mapObj->screenRect[3];
     }
     if (x0 == 0x3FF || y0 == 0x3FF || x1 == 0x3FF || y1 == 0x3FF) {
         return;
@@ -1427,15 +1388,15 @@ void envSetWater(MapTevCallbackInfo* info) {
     w = x1 - x0;
     hw = w / 2;
     hh = h / 2;
-    buf = smartAlloc(GXGetTexBufferSize((u16)hw, (u16)hh, GX_TF_RGB565, GX_FALSE, 0), 3)->address;
-    GXSetTexCopySrc((u16)x0, (u16)y0, (u16)w, (u16)h);
-    GXSetTexCopyDst((u16)hw, (u16)hh, GX_TF_RGB565, GX_TRUE);
+    buf = smartAlloc(GXGetTexBufferSize(hw, hh, GX_TF_RGB565, GX_FALSE, 0), SMART_GROUP_TEMP)->address;
+    GXSetTexCopySrc(x0, y0, w, h);
+    GXSetTexCopyDst(hw, hh, GX_TF_RGB565, GX_TRUE);
     GXCopyTex(buf, GX_FALSE);
     GXPixModeSync();
     GXTexModeSync();
-    GXInitTexObj(&obj1, buf, (u16)hw, (u16)hh, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GXInitTexObj(&obj1, buf, hw, hh, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
     GXInitTexObjLOD(&obj1, GX_NEAR, GX_NEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    PSMTXMultVec(info->mtx, &(*(MapObject**)info->mapObj)->center, &pos);
+    PSMTXMultVec(info->mtx, &info->mapObj->center, &pos);
     scale = 1000.0f / PSVECDistance(&camGetCurPtr()->cameraPos, &pos);
     if (scale < 0.0f) {
         scale = 0.0f;
@@ -1443,7 +1404,7 @@ void envSetWater(MapTevCallbackInfo* info) {
     if (scale > 127.0f) {
         scale = 127.0f;
     }
-    buf2 = smartAlloc(GXGetTexBufferSize(64, 64, GX_TF_IA8, GX_FALSE, 0), 3)->address;
+    buf2 = smartAlloc(GXGetTexBufferSize(64, 64, GX_TF_IA8, GX_FALSE, 0), SMART_GROUP_TEMP)->address;
     for (i = 0; i < 64; i++) {
         for (j = 0; j < 64; j++) {
             f32 s = sin((f32)gp->retraceCount / 10.0f + (18.849552f * j) / 64.0f);
@@ -1492,24 +1453,23 @@ void envSetWater(MapTevCallbackInfo* info) {
     ind++;
     map += 2;
     info->tevStage = stage;
-    info->texMap = coord;
+    info->texCoord = coord;
     info->indStage = ind;
-    info->texCoord = map;
+    info->texMap = map;
 }
 
 /** Stores the view matrix the darkness (yami) pattern of envSetYami is projected with. */
 void envSetYamiView(Mtx view) {
     EnvironmentWork* wp = envGetWork();
 
-    PSMTXCopy(view, (MtxPtr)wp->yamiView);
+    PSMTXCopy(view, wp->yamiView);
 }
 
 /**
- * Map TEV callback for the darkness (yami) effect:
- * projects two env.tpl patterns (9 and 10) scrolling in opposite directions over the surface
- * and multiplies them into the material's colour.
- * Installed with evt_map_set_tevcallback in the chapter 8 world-darkening scenes (sekai_yami) of Rogueport,
- * Petalburg, the Great Tree, Fahr Outpost and others, after the map sets the pattern view with envSetYamiView.
+ * Darkness TEV callback (evt_map_set_tevcallback; called directly by bom_01's crowd and mri_puni): projects env.tpl
+ * textures 9 and 10 from yamiView, scrolling them in opposite directions each retrace, and scales the surface colour
+ * by one minus the product of their alphas. Uses three TEV stages, two texture coordinates and two texture maps, and
+ * advances info's counters past them.
  */
 void envSetYami(MapTevCallbackInfo* info) {
     static f32 u1 = 0.0f;
@@ -1519,16 +1479,16 @@ void envSetYami(MapTevCallbackInfo* info) {
     GXTevStageID stage;
     GXTexMapID map;
     GXTexCoordID coord;
-    s32 indStage;
+    s32 unk18;
     GXTexObj obj;
     Mtx mtx;
     u32 rc;
 
     wp = envGetWork();
     stage = info->tevStage;
-    map = info->texCoord;
-    coord = info->texMap;
-    indStage = info->indStage;
+    map = info->texMap;
+    coord = info->texCoord;
+    unk18 = info->indStage;
 
     if (v_count != (rc = gp->retraceCount)) {
         u1 += 0.004f;
@@ -1543,13 +1503,13 @@ void envSetYami(MapTevCallbackInfo* info) {
     }
     GXSetTevColorOp(stage - 1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
     GXSetTevAlphaOp(stage - 1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG0);
-    C_MTXLightOrtho(mtx, 72.0f, -72.0f, -96.0f, 96.0f, 0.5f, 0.5f, u1, 0.5f);
-    PSMTXConcat(mtx, (MtxPtr)wp->yamiView, mtx);
+    C_MTXLightOrtho(mtx, 72.0f, (-72.0f), (-96.0f), 96.0f, 0.5f, 0.5f, u1, 0.5f);
+    PSMTXConcat(mtx, wp->yamiView, mtx);
     PSMTXConcat(mtx, info->mtx, mtx);
     GXLoadTexMtxImm(mtx, texmtx_tbl[map], GX_MTX3x4);
     GXSetTexCoordGen2(coord, GX_TG_MTX3x4, GX_TG_POS, texmtx_tbl[map], GX_FALSE, GX_PTIDENTITY);
-    C_MTXLightOrtho(mtx, 72.0f, -72.0f, -96.0f, 96.0f, 0.5f, 0.5f, u2, 0.5f);
-    PSMTXConcat(mtx, (MtxPtr)wp->yamiView, mtx);
+    C_MTXLightOrtho(mtx, 72.0f, (-72.0f), (-96.0f), 96.0f, 0.5f, 0.5f, u2, 0.5f);
+    PSMTXConcat(mtx, wp->yamiView, mtx);
     PSMTXConcat(mtx, info->mtx, mtx);
     GXLoadTexMtxImm(mtx, texmtx_tbl[map + 1], GX_MTX3x4);
     GXSetTexCoordGen2(coord + 1, GX_TG_MTX3x4, GX_TG_POS, texmtx_tbl[map + 1], GX_FALSE, GX_PTIDENTITY);
@@ -1583,7 +1543,7 @@ void envSetYami(MapTevCallbackInfo* info) {
     coord += 2;
     map += 2;
     info->tevStage = stage;
-    info->texMap = coord;
-    info->indStage = indStage;
-    info->texCoord = map;
+    info->texCoord = coord;
+    info->indStage = unk18;
+    info->texMap = map;
 }

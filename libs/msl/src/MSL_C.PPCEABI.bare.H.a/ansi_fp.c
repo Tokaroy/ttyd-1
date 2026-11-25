@@ -1,4 +1,5 @@
-#define SIGDIGLEN 36
+#include "ansi_fp.h"
+
 #define DBL_MANT_DIG 53
 #define CHAR_BIT 8
 #define EOF -1
@@ -7,28 +8,8 @@ typedef int BOOL;
 #define TRUE 1
 #define FALSE 0
 
-typedef struct decimal {
-    char sign;
-    char unused;
-    short exp;
-    struct {
-        unsigned char length;
-        unsigned char text[SIGDIGLEN];
-        unsigned char unused;
-    } sig;
-} decimal;
-
-typedef struct decform {
-    char style;
-    char unused;
-    short digits;
-} decform;
-
-extern unsigned char __ctype_map[];
-extern unsigned char __lower_map[];
-/** Local ctype helper: nonzero if c is a decimal digit (bit 0x10 of the ctype map). */
-static inline int isdigit(int c) { return (int)(__ctype_map[(unsigned char)c] & 0x10); }
-/** Local ctype helper: converts an upper-case letter to lower case through the lower-case map, passing EOF through. */
+#include "ctype_map.h"
+static inline int isdigit(int c) { return (int)(__ctype_map[(unsigned char)c] & __digit); }
 static inline int tolower(int c) { return (c == EOF) ? EOF : (int)__lower_map[c]; }
 
 extern float __float_huge[];
@@ -51,10 +32,6 @@ double copysign(double x, double y);
 #define FP_NORMAL 4
 #define FP_SUBNORMAL 5
 
-/**
- * Classifies a double as NaN, infinity, zero, subnormal
- * or normal from its IEEE-754 bit pattern (the C99 fpclassify macro).
- */
 static inline int __fpclassifyd(double x) {
     switch (__HI(x) & 0x7FF00000) {
     case 0x7FF00000:
@@ -76,8 +53,7 @@ static inline int __fpclassifyd(double x) {
 #define isinf(x) (fpclassify(x) == FP_INFINITE)
 #define signbit(x) (__HI(x) & 0x80000000)
 
-/** Counts the trailing zero bits of a 32-bit word (used to normalise mantissas). */
-static inline int __count_trailing_zerol(unsigned long x) {
+static int __count_trailing_zerol(unsigned long x) {
     int result = 0;
     int bits_not_checked = sizeof(unsigned long) * CHAR_BIT;
     int delta = sizeof(unsigned long) * CHAR_BIT / 2;
@@ -101,24 +77,16 @@ static inline int __count_trailing_zerol(unsigned long x) {
     return result;
 }
 
-/**
- * Counts the trailing zero bits in the mantissa of a double,
- * with the implicit leading bit forced on in the high word so the count stops there;
- * reads the two 32-bit halves directly.
- */
-static inline int __count_trailing_zero(double x) {
+static int __count_trailing_zero(double x) {
     unsigned long* l = (unsigned long*)&x;
     if (l[1] != 0)
         return __count_trailing_zerol(l[1]);
+
+    // 0x00100000 is the implicit mantissa bit: the count stops there when the stored mantissa bits are all zero
     return (int)(sizeof(unsigned long) * CHAR_BIT + __count_trailing_zerol(l[0] | 0x00100000));
 }
 
-/**
- * Looks at the digit just past the kept length:
- * returns 1 (round up) if it is above 5 or is a 5 followed by nonzero digits, -1 if below 5,
- * and on an exact tie rounds to even using the last kept digit.
- */
-static inline int __must_round(const decimal* d, int digits) {
+static int __must_round(const decimal* d, int digits) {
     unsigned char const* i = d->sig.text + digits;
 
     if (*i > 5)
@@ -137,11 +105,7 @@ static inline int __must_round(const decimal* d, int digits) {
     return -1;
 }
 
-/**
- * Adds one to the last kept digit of the decimal, carrying leftward through 9s;
- * if every digit was 9 the result becomes 1 and the decimal exponent grows by one.
- */
-static inline void __dorounddecup(decimal* d, int digits) {
+static void __dorounddecup(decimal* d, int digits) {
     unsigned char* b = d->sig.text;
     unsigned char* i = b + digits - 1;
 
@@ -159,25 +123,18 @@ static inline void __dorounddecup(decimal* d, int digits) {
     }
 }
 
-/**
- * Truncates the decimal to the given number of digits (when 0 < digits < its length),
- * rounding up if __must_round says so.
- */
-static inline void __rounddec(decimal* d, int digits) {
-    if (digits > 0 && digits < d->sig.length) {
-        int unkBool = __must_round(d, digits);
+static void __rounddec(decimal* d, int digits) {
+    if (digits <= 0 || digits >= d->sig.length)
+        return;
+    {
+        int roundingResult = __must_round(d, digits);
         d->sig.length = digits;
-        if (unkBool >= 0)
+        if (roundingResult >= 0)
             __dorounddecup(d, digits);
     }
 }
 
-/**
- * Converts an unsigned 64-bit integer to a decimal:
- * one digit per entry of sig.text, most significant first,
- * exponent = digit count - 1 (zero gives a single 0 digit).
- */
-static inline void __ull2dec(decimal* result, unsigned long long val) {
+static void __ull2dec(decimal* result, unsigned long long val) {
     result->sign = 0;
 
     if (val == 0) {
@@ -206,11 +163,7 @@ static inline void __ull2dec(decimal* result, unsigned long long val) {
     result->exp = result->sig.length - 1;
 }
 
-/**
- * Multiplies two decimals digit by digit (schoolbook convolution),
- * keeping at most SIGDIGLEN digits of the product and rounding the dropped tail to even; the exponents add.
- */
-void __timesdec(decimal* result, const decimal* x, const decimal* y) {
+static void __timesdec(decimal* result, const decimal* x, const decimal* y) {
     unsigned long accumulator = 0;
     unsigned char mantissa[SIGDIGLEN * 2];
     int i = x->sig.length + y->sig.length - 1;
@@ -274,11 +227,7 @@ void __timesdec(decimal* result, const decimal* x, const decimal* y) {
     }
 }
 
-/**
- * Fills a decimal from an ASCII digit string and exponent,
- * keeping up to SIGDIGLEN digits and rounding to even if the string has more.
- */
-static inline void __str2dec(decimal* d, const char* s, short exp) {
+static void __str2dec(decimal* d, const char* s, short exp) {
     int i;
 
     d->exp = exp;
@@ -290,6 +239,8 @@ static inline void __str2dec(decimal* d, const char* s, short exp) {
     d->sig.length = (unsigned char)i;
 
     if (*s != 0) {
+        // BUG: *s is a digit character ('0'..'9'), but these two tests compare it with the value 5, so the first
+        // never returns and the second always rounds up; the tie test below compares with '0' correctly.
         if (*s < 5)
             return;
         if (*s > 5)
@@ -308,11 +259,7 @@ static inline void __str2dec(decimal* d, const char* s, short exp) {
     }
 }
 
-/**
- * Computes 2^exp as a decimal: exponents -64, -53, -32, -16 and -8..8 come from string constants,
- * others by squaring 2^(exp/2) with __timesdec (times 2 or 0.5 for an odd exp).
- */
-void __two_exp(decimal* result, long exp) {
+static void __two_exp(decimal* result, long exp) {
     switch (exp) {
     case -64:
         __str2dec(result, "542101086242752217003726400434970855712890625", -20);
@@ -382,6 +329,7 @@ void __two_exp(decimal* result, long exp) {
     {
         decimal x2, temp;
 
+        // half of exp, rounded toward zero: adding the sign bit makes the shift round negative odd values up
         __two_exp(&x2, ((long)((0x80000000UL & exp) >> 31) + exp) >> 1);
         __timesdec(result, &x2, &x2);
 
@@ -396,15 +344,18 @@ void __two_exp(decimal* result, long exp) {
     }
 }
 
-/**
- * Compares two decimals for equality: all-zero values are equal,
- * otherwise the exponents must match and the digits agree up to the shorter length with only zeros beyond it.
- */
-BOOL __equals_dec(const decimal* x, const decimal* y) {
-    if (x->sig.text[0] == 0)
-        return y->sig.text[0] == 0;
-    if (y->sig.text[0] == 0)
-        return x->sig.text[0] == 0;
+static BOOL __equals_dec(const decimal* x, const decimal* y) {
+    if (x->sig.text[0] == 0) {
+        if (y->sig.text[0] == 0)
+            return TRUE;
+        return FALSE;
+    }
+
+    if (y->sig.text[0] == 0) {
+        if (x->sig.text[0] == 0)
+            return TRUE;
+        return FALSE;
+    }
 
     if (x->exp == y->exp) {
         int i;
@@ -436,11 +387,7 @@ BOOL __equals_dec(const decimal* x, const decimal* y) {
     return FALSE;
 }
 
-/**
- * Returns true if decimal x is smaller than y: zero sorts below any nonzero value, then exponents decide,
- * then the digits compare from the most significant end.
- */
-static inline BOOL __less_dec(const decimal* x, const decimal* y) {
+static BOOL __less_dec(const decimal* x, const decimal* y) {
     if (x->sig.text[0] == 0) {
         if (y->sig.text[0] != 0)
             return TRUE;
@@ -477,11 +424,7 @@ static inline BOOL __less_dec(const decimal* x, const decimal* y) {
     return x->exp < y->exp;
 }
 
-/**
- * Computes z = x - y on decimals (x >= y assumed) by digit-wise subtraction with borrows,
- * rounding to even on any digits of y beyond the working precision, then strips leading and trailing zeros.
- */
-void __minus_dec(decimal* z, const decimal* x, const decimal* y) {
+static void __minus_dec(decimal* z, const decimal* x, const decimal* y) {
     int zlen, dexp;
     unsigned char *ib, *i, *ie;
     unsigned char const *jb, *j, *jn;
@@ -581,12 +524,7 @@ done:
     z->sig.length = (unsigned char)(i - ib + 1);
 }
 
-/**
- * Converts a double to an exact decimal: zero gives a single 0 digit,
- * NaN or infinity give a single N or I marker character,
- * otherwise the mantissa integer (from frexp/ldexp/modf) is multiplied by 2^(exponent - mantissa bits).
- */
-void __num2dec_internal(decimal* d, double x) {
+static void __num2dec_internal(decimal* d, double x) {
     char sign = (char)(signbit(x) != 0);
 
     if (x == 0) {
@@ -623,11 +561,6 @@ void __num2dec_internal(decimal* d, double x) {
     }
 }
 
-/**
- * Converts a double to a decimal rounded to f->digits digits (capped at SIGDIGLEN) for printf:
- * NaN/infinity markers pass through, the digits are zero padded,
- * rewritten as ASCII and the exponent is shifted to refer to the last digit.
- */
 void __num2dec(const decform* f, double x, decimal* d) {
     short digits = f->digits;
     int i;
@@ -651,12 +584,6 @@ void __num2dec(const decform* f, double x, decimal* d) {
         d->sig.text[i] += '0';
 }
 
-/**
- * Converts a decimal (ASCII digits, or the I infinity and N NaN markers) back to a double:
- * builds a first guess from the digits with pow and ldexp,
- * then steps to adjacent doubles comparing via __num2dec_internal until the nearest one is found.
- * NaN payload digits are packed from the hex text.
- */
 double __dec2num(const decimal* d) {
     if (d->sig.length <= 0)
         return copysign(0.0, d->sign == 0 ? 1.0 : -1.0);
@@ -670,6 +597,7 @@ double __dec2num(const decimal* d) {
         double result;
         unsigned long long* ll = (unsigned long long*)&result;
 
+        // a NaN: all exponent bits set; the digits after the first are packed into the mantissa as hex nibbles
         *ll = 0x7FF0000000000000ULL;
         if (d->sign)
             *ll |= 0x8000000000000000ULL;
@@ -762,7 +690,7 @@ double __dec2num(const decimal* d) {
 
         if (isinf(first_guess)) {
             decimal max;
-            __str2dec(&max, "179769313486231580793729011405303420", 308);
+            __str2dec(&max, "179769313486231580793729011405303420", 308); // DBL_MAX
             if (__less_dec(&max, &dec))
                 goto done;
             first_guess = DBL_MAX;

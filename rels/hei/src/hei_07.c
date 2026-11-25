@@ -1,21 +1,14 @@
 // hei_07 (平原, Petal Meadows): Shhwonk Fortress quiz room between hei_06 and hei_10 (stone statue, sekizou).
-// Questions with right/wrong answer animations; finishing sets story 31 and opens a pipe to hei_10. Has a save block.
-#include "data_tables.h"
+// Questions with right/wrong answer animations; finishing sets story progress STG1_06_QUIZ and opens a pipe to hei_10. Has a save block.
+
 #include "version.h"
+#include "data_tables.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "driver/msgdrv.h"
-
-#include "driver/mapdrv.h"
-#include "pmario_sound.h"
-#include "string.h"
-#include "mario/mario.h"
-#include "manager/evtmgr_cmd.h"
-#include "system.h"
-#include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_case.h"
 #include "evt/evt_eff.h"
+#include "evt/evt_case.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_img.h"
 #include "evt/evt_map.h"
@@ -26,27 +19,42 @@
 #include "evt/evt_offscreen.h"
 #include "evt/evt_paper.h"
 #include "evt/evt_party.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "hei.h"
-#include "evt/evt_story.h"
 #include "driver/casedrv.h"
+
+#include "driver/mapdrv.h"
+#include "pmario_sound.h"
+#include "string.h"
+#include "mario/mario.h"
+#include "manager/evtmgr_cmd.h"
+#include "system.h"
+#include "evt/evt_bero.h"
+#include "driver/npcdrv.h"
 
 static USER_FUNC(mario_set_dir);
 static void callback(s32 type, void** work);
 
 static BeroEntry bero_entry_data[3];
-extern EvtWord dokan_shake[];
-extern EvtWord dokan_shake2[];
-extern EvtWord sekizou_move[];
-extern EvtWord animation_wait[];
-extern EvtWord seikai_anime[];
-extern EvtWord seikai_anime_stop[];
-extern EvtWord fuseikai_anime[];
-extern EvtWord fuseikai_anime_stop[];
-extern EvtWord offscreen_to_quiz[];
-QuizEntry quiz_data[8];
-extern EvtWord a_sekizou_1[];
+static EvtWord npc_jump[53];
+static EvtWord dokan_shake[8];
+static EvtWord dokan_shake2[20];
+static EvtWord sekizou_move[136];
+static EvtWord animation_wait[46];
+static EvtWord shake_evt[52];
+static EvtWord seikai_anime[46];
+static EvtWord seikai_anime_stop[19];
+static EvtWord fuseikai_anime[21];
+static EvtWord fuseikai_anime_stop[19];
+static EvtWord evt_down_snd[116];
+static EvtWord evt_up_snd_[12];
+static EvtWord evt_up_snd__[76];
+static EvtWord offscreen_to_quiz[101];
+static EvtWord offscreen_to_normal[100];
+static QuizEntry quiz_data[8];
+static EvtWord a_sekizou_1[1018];
+EvtWord hei_07_init_evt[114];
 
 /** Doors of this room: the west exit (w_bero) to hei_06 and the pipe (dokan) to hei_10. */
 static BeroEntry bero_entry_data[] = {
@@ -92,7 +100,7 @@ static BeroEntry bero_entry_data[] = {
  */
 static EVT_BEGIN(npc_jump)
     CALL(evt_npc_get_position, LW(10), LW(5), LW(6), LW(7))
-    CALL(evt_sub_intpl_init, 1, LW(6), 0, 30)
+    CALL(evt_sub_intpl_init, EASING_QUADRATIC_IN, LW(6), 0, 30)
     LOOP(31)
         CALL(evt_sub_intpl_get_value)
         CALL(evt_npc_set_position, LW(10), LW(5), LW(0), LW(7))
@@ -101,7 +109,7 @@ static EVT_BEGIN(npc_jump)
     CALL(evt_npc_get_position, LW(10), LW(5), LW(6), LW(7))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_SINNOSUKE_LANDING2"), LW(5), LW(6), LW(7), 0)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_SINNOSUKE_LANDING3"), LW(5), LW(6), LW(7), 0)
-    CALL(evt_cam_shake, 4, FLOAT(0.0048828125f), FLOAT(0.0f), 200)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0f), 200)
     RETURN
 EVT_END()
 
@@ -109,16 +117,16 @@ EVT_END()
  * Sets off a continuous camera shake (amplitude 0.002, no end);
  * run as an event and deleted when the statue has finished moving.
  */
-EVT_BEGIN(dokan_shake)
-    CALL(evt_cam_shake, 4, FLOAT(0.001953125f), FLOAT(0.0f), 0)
+static EVT_BEGIN(dokan_shake)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.001953125f), FLOAT(0.0f), 0)
     RETURN
 EVT_END()
 
 /** Fades the camera shake out at the end of the statue's movement: three 500 ms shakes at 0.001, 0.001, then 0. */
-EVT_BEGIN(dokan_shake2)
-    CALL(evt_cam_shake, 4, FLOAT(0.0009765625f), FLOAT(0.0f), 500)
-    CALL(evt_cam_shake, 4, FLOAT(0.0009765625f), FLOAT(0.0f), 500)
-    CALL(evt_cam_shake, 4, FLOAT(0.0f), FLOAT(0.0f), 500)
+static EVT_BEGIN(dokan_shake2)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0009765625f), FLOAT(0.0f), 500)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0009765625f), FLOAT(0.0f), 500)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.0f), 500)
     RETURN
 EVT_END()
 
@@ -126,7 +134,7 @@ EVT_END()
  * Cutscene after the quiz is won: the stone statue's base (DAIZA1) slides away with quake and rumble sounds
  * and camera shake, a pipe rises out of the floor, and the "dokan" exit is enabled.
  */
-EVT_BEGIN(sekizou_move)
+static EVT_BEGIN(sekizou_move)
     SPAWN_EVENT_GET_ID(PTR(dokan_shake), LW(10))
     BEGIN_INLINE_EVENT_GET_ID(LW(15))
         CALL(evt_snd_sfxon, STRING("SFX_STG1_QUAKE1"), GW(15))
@@ -143,9 +151,9 @@ EVT_BEGIN(sekizou_move)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(4000)
-        CALL(evt_cam_shake, 4, FLOAT(0.0390625f), FLOAT(0.0f), 100)
-        CALL(evt_cam_shake, 4, FLOAT(0.01953125f), FLOAT(0.0f), 100)
-        CALL(evt_cam_shake, 4, FLOAT(0.009765625f), FLOAT(0.0f), 100)
+        CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0390625f), FLOAT(0.0f), 100)
+        CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.01953125f), FLOAT(0.0f), 100)
+        CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 100)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_mapobj_get_position, STRING("DAIZA1"), LW(0), LW(1), LW(2))
@@ -154,7 +162,7 @@ EVT_BEGIN(sekizou_move)
         CALL(evt_snd_sfxoff, LW(10))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOKAN_APPEAR1"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
-    CALL(evt_map_playanim, STRING("anm_sekizou"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_sekizou"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_sekizou"), LW(0), LW(1))
     WAIT_MS(LW(1))
     CALL(evt_snd_sfxoff, GW(15))
@@ -170,11 +178,11 @@ EVT_BEGIN(sekizou_move)
 EVT_END()
 
 /**
- * Plays the map animation named in LW(0) and, for the two statue-rotation animations, plays the quake sound;
- * used while the statue rotates and nods.
+ * Plays the map animation named in LW(0) and waits for its full length; for the two statue-rotation animations,
+ * a parallel event plays the quake sound near the end.
  */
-EVT_BEGIN(animation_wait)
-    CALL(evt_map_playanim, LW(0), 0, 0)
+static EVT_BEGIN(animation_wait)
+    CALL(evt_map_playanim, LW(0), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, LW(0), LW(1), LW(2))
     BEGIN_INLINE_EVENT
         MULTIPLY_FLOAT(LW(2), FLOAT(0.7998047f))
@@ -196,19 +204,19 @@ EVT_END()
  * ramps the amplitude from 0 to 0.010 over 30 steps, then eases it down to 0.005 over 15 steps.
  */
 static EVT_BEGIN(shake_evt)
-    CALL(evt_sub_intpl_init, 11, 0, 10, 30)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 0, 10, 30)
     LABEL(0)
     CALL(evt_sub_intpl_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
-    CALL(evt_cam_shake, 4, LW(0), FLOAT(0.0f), 100)
+    CALL(evt_cam_shake, CAMERA_3D, LW(0), FLOAT(0.0f), 100)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    CALL(evt_sub_intpl_init, 11, 10, 5, 15)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 10, 5, 15)
     LABEL(1)
     CALL(evt_sub_intpl_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
-    CALL(evt_cam_shake, 4, LW(0), FLOAT(0.0f), 100)
+    CALL(evt_cam_shake, CAMERA_3D, LW(0), FLOAT(0.0f), 100)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(1)
     END_IF
@@ -216,48 +224,48 @@ static EVT_BEGIN(shake_evt)
 EVT_END()
 
 /**
- * Right-answer reaction: confetti above Mario, the right-answer lights come on,
- * the wrong-answer lights go off and the "anm_seikai" animation starts.
+ * Right-answer reaction: confetti above Mario, the lights stay in their idle state (dennshoku shown, dennshoku_2
+ * hidden) and the "anm_seikai" animation starts.
  */
-EVT_BEGIN(seikai_anime)
+static EVT_BEGIN(seikai_anime)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     ADD(LW(1), 150)
     CALL(evt_eff, STRING(""), STRING("confetti"), 3, LW(0), LW(1), LW(2), 160, 0, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("anm_seikai"), 1, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("anm_seikai"), MAP_ANIM_PLAY_LOOP, 0)
     WAIT_MS(1800)
     RETURN
 EVT_END()
 
 /** Stops the right-answer animation and turns the lights back to their idle state. */
-EVT_BEGIN(seikai_anime_stop)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("anm_seikai"), 0, 0)
+static EVT_BEGIN(seikai_anime_stop)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("anm_seikai"), MAP_ANIM_PLAY_ONCE, 0)
     RETURN
 EVT_END()
 
-/** Wrong-answer reaction: the wrong-answer lights come on and the "anm_fuseikai" animation starts. */
-EVT_BEGIN(fuseikai_anime)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("anm_fuseikai"), 1, 0)
+/** Wrong-answer reaction: the lights switch to dennshoku_2 and the "anm_fuseikai" animation starts. */
+static EVT_BEGIN(fuseikai_anime)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("anm_fuseikai"), MAP_ANIM_PLAY_LOOP, 0)
     WAIT_MS(1500)
     RETURN
 EVT_END()
 
 /** Stops the wrong-answer animation and turns the lights back to their idle state. */
-EVT_BEGIN(fuseikai_anime_stop)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("anm_fuseikai"), 0, 0)
+static EVT_BEGIN(fuseikai_anime_stop)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("anm_fuseikai"), MAP_ANIM_PLAY_ONCE, 0)
     RETURN
 EVT_END()
 
 /**
- * Sound-only script for the statue sinking: plays SFX_OFF1_PUZZLE1 at a long list of irregular delays to make a
- * grinding sound.
+ * Sound-only script for the paper transition into the quiz room (offscreen_to_quiz):
+ * plays SFX_OFF1_PUZZLE1 at a long list of irregular delays.
  */
 static EVT_BEGIN(evt_down_snd)
     WAIT_MS(100)
@@ -305,7 +313,7 @@ static EVT_BEGIN(evt_down_snd)
     RETURN
 EVT_END()
 
-/** Sound for one step of the statue rising: SFX_OFF1_PUZZLE_MOVE1, then SFX_OFF1_PUZZLE2 366 ms later. */
+/** One step of the transition back (evt_up_snd__): SFX_OFF1_PUZZLE_MOVE1, then SFX_OFF1_PUZZLE2 366 ms later. */
 static EVT_BEGIN(evt_up_snd_)
     CALL(evt_snd_sfxon, STRING("SFX_OFF1_PUZZLE_MOVE1"), 0)
     WAIT_MS(366)
@@ -314,8 +322,8 @@ static EVT_BEGIN(evt_up_snd_)
 EVT_END()
 
 /**
- * Sound-only script for the statue rising: waits through a list of irregular delays
- * and spawns evt_up_snd_ at the matching beats.
+ * Sound-only script for the paper transition back to the normal room (offscreen_to_normal):
+ * waits through a list of irregular delays and spawns evt_up_snd_ at the matching beats.
  */
 static EVT_BEGIN(evt_up_snd__)
     WAIT_MS(16)
@@ -359,10 +367,11 @@ static EVT_BEGIN(evt_up_snd__)
 EVT_END()
 
 /**
- * Sets up the quiz screen: registers the OFF_d_pazu paper object,
- * captures the offscreen picture of the quiz board and shows it as a paper-animated image.
+ * Goes from the room to the quiz: captures the screen into a paper image (OFF_d_pazu),
+ * swaps the room to its quiz state (hei_07_2), puts Mario and the partner in their quiz places
+ * and plays the image's paper animation A_1 over the new room with the transition sounds.
  */
-EVT_BEGIN(offscreen_to_quiz)
+static EVT_BEGIN(offscreen_to_quiz)
     CALL(evt_paper_entry, STRING("OFF_d_pazu"))
     CALL(evt_img_entry, STRING("capture_img"))
     CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_pazu"))
@@ -370,10 +379,10 @@ EVT_BEGIN(offscreen_to_quiz)
     CALL(evt_img_alloc_capture, STRING("capture_img"), 0, 0, 1, 0, 0, 608, 480)
     CALL(evt_img_clear_virtual_point, STRING("capture_img"))
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hei_07"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hei_07_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hei_07"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hei_07_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dennshoku"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dennshoku_2"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_mario_set_pos, -85, 20, 0)
     CALL(mario_set_dir, 90, 0)
@@ -394,12 +403,12 @@ EVT_END()
  * Finishes the paper transition of the quiz room:
  * after one second the mouth animation anm_kuti_1 plays,
  * the map hei_07 is captured to a paper image that unfolds (animation A_2) with the rising sounds,
- * then the room is swapped to its second state (hei_07_2),
+ * then the room is swapped back to its normal state (hei_07 shown, hei_07_2 hidden),
  * Mario is put back on the ground and control returns to him and his partner.
  */
 static EVT_BEGIN(offscreen_to_normal)
     WAIT_MS(1000)
-    CALL(evt_map_playanim, STRING("anm_kuti_1"), 2, 0)
+    CALL(evt_map_playanim, STRING("anm_kuti_1"), MAP_ANIM_PLAY_AT_END, 0)
     CALL(evt_img_free_capture, STRING("capture_img"), 0)
     CALL(evt_offscreen_entry, STRING("offscreen"))
     CALL(evt_mapobj_set_offscreen, 1, STRING("hei_07"), STRING("offscreen"))
@@ -414,8 +423,8 @@ static EVT_BEGIN(offscreen_to_normal)
     CALL(evt_img_release, STRING("capture_img"))
     CALL(evt_mapobj_clear_offscreen, 1, STRING("hei_07"))
     CALL(evt_offscreen_delete, STRING("offscreen"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hei_07"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hei_07_2"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hei_07"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hei_07_2"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_mario_set_pos, LW(0), 0, LW(2))
     CALL(evt_mario_cont_onoff, 1)
@@ -430,7 +439,7 @@ EVT_END()
  * The eight questions of the quiz statue in Shhwonk Fortress: for each, the statue animation, the question
  * message, the answer choices message and the number of the correct choice.
  */
-QuizEntry quiz_data[] = {
+static QuizEntry quiz_data[] = {
     {"anm_1mon", "stg1_hei_23", "stg1_hei_q_01", 0},
     {"anm_2mon", "stg1_hei_24", "stg1_hei_q_02", 2},
     {"anm_3mon", "stg1_hei_25", "stg1_hei_q_03", 3},
@@ -444,20 +453,22 @@ QuizEntry quiz_data[] = {
 /**
  * Case script for the stone statue (a_sekizou_1):
  * the statue wakes up with a quake and speaks to Mario (stg1_hei_20), offers the quiz as a yes/no choice,
- * and on yes runs the quiz questions with the right/wrong animations until the quiz is won;
- * on no it goes back to sleep. Winning sets the story to "Quiz" and opens the statue's base.
+ * and on yes runs the quiz questions with the right/wrong animations until five right or three wrong answers;
+ * on no it goes back to sleep. Five right, or three wrong and the fight against four Clefts that follows,
+ * move the statue's base and set the story to STG1_06_QUIZ.
  */
-EVT_BEGIN(a_sekizou_1)
+static EVT_BEGIN(a_sekizou_1)
     // Mario freezes and the music stops.
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     WAIT_FRAMES(1)
+
     // On the first visit the statue wakes with a quake that startles Mario; later visits skip straight to
     // the talk.
     IF_INT_EQUAL(GW(0), 0)
         BEGIN_INLINE_EVENT
             WAIT_MS(2000)
-            CALL(evt_eff_fukidashi, 0, STRING("fukidashi"), 0, 1, 0, 0, 0, 0, 0, 0, 0)
+            CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING("fukidashi"), 0, 1, 0, 0, 0, 0, 0, 0, 0)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             CALL(evt_snd_sfxon_3d, STRING("SFX_QUESTION_MARK1"), LW(0), LW(1), LW(2), 0)
         END_INLINE_EVENT
@@ -473,7 +484,7 @@ EVT_BEGIN(a_sekizou_1)
         END_INLINE_EVENT
         SPAWN_EVENT_GET_ID(PTR(shake_evt), LW(10))
         WAIT_MS(2000)
-        CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 3000, 11)
+        CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 3000, EASING_SINE_IN_OUT)
         BEGIN_INLINE_EVENT
             WAIT_MS(1000)
             CALL(mario_set_dir, 45, 100)
@@ -487,7 +498,7 @@ EVT_BEGIN(a_sekizou_1)
         CALL(evt_mario_set_pose, STRING("M_S_1"))
         CALL(evt_snd_sfxoff, GW(10))
     ELSE
-        CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 1000, 11)
+        CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 1000, EASING_SINE_IN_OUT)
         BEGIN_INLINE_EVENT
             WAIT_MS(200)
             CALL(mario_set_dir, 45, 100)
@@ -495,12 +506,13 @@ EVT_BEGIN(a_sekizou_1)
         WAIT_MS(1000)
     END_IF
     WAIT_MS(500)
+
     // The statue greets Mario and asks whether he will take its quiz.
     SET_VALUE(LW(0), STRING("anm_dossun_1"))
     CALL_CHILD(animation_wait)
     WAIT_MS(500)
     SET_VALUE(LW(15), 0)
-    CALL(evt_msg_toge, 2, 95, 65, 0)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, 95, 65, 0)
     IF_INT_EQUAL(GW(0), 0)
         CALL(evt_msg_print, 0, STRING("stg1_hei_20"), PTR(callback), 0)
     ELSE
@@ -508,6 +520,7 @@ EVT_BEGIN(a_sekizou_1)
     END_IF
     SET_VALUE(GW(0), 1)
     CALL(evt_msg_select, 0, STRING("stg1_hei_yn_01"))
+
     // If Mario declines, the statue scolds him and goes back to sleep.
     IF_INT_EQUAL(LW(0), 1)
         SET_VALUE(LW(0), STRING("anm_kaiten1"))
@@ -515,31 +528,32 @@ EVT_BEGIN(a_sekizou_1)
         CALL(evt_msg_print_add, 0, STRING("stg1_hei_21"))
         SET_VALUE(LW(0), STRING("anm_dossun_2"))
         CALL_CHILD(animation_wait)
-        CALL(evt_cam3d_evt_off, 500, 11)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
         CALL(evt_mario_key_onoff, 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20))
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(1))
 #else
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20) | PSND_FADE_DIP_FAST)
+        CALL(evt_snd_bgmoff, PSND_QUICK | PSND_SILENT | PSND_SILENT_LEVEL(1))
 #endif
         RETURN
     END_IF
+
     // If he accepts, the statue gets ready and the quiz music starts.
     SET_VALUE(LW(0), STRING("anm_kaiten1"))
     CALL_CHILD(animation_wait)
     CALL(evt_msg_print_add, 0, STRING("stg1_hei_22"))
-    CALL(evt_map_playanim, STRING("anm_denshoku"), 1, 0)
-    CALL(evt_map_playanim, STRING("anm_mamekyuu"), 1, 0)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_QUIZ1"))
+    CALL(evt_map_playanim, STRING("anm_denshoku"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("anm_mamekyuu"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_QUIZ1"))
     CALL_CHILD(offscreen_to_quiz)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 0, 83, 591, 0, 100, 91, 1500, 11)
+    CALL(evt_cam3d_evt_set, 0, 83, 591, 0, 100, 91, 1500, EASING_SINE_IN_OUT)
     WAIT_MS(1500)
     WAIT_MS(500)
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-    // Quiz loop: each round reads a question from quiz_data and Mario picks an answer; sometimes the statue
-    // asks whether it is his real answer and lets him choose again.
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+
+    // Question index, correct answers, and wrong answers; finish at five correct or three wrong.
     SET_VALUE(LW(11), 0)
     SET_VALUE(LW(12), 0)
     SET_VALUE(LW(13), 0)
@@ -556,15 +570,15 @@ EVT_BEGIN(a_sekizou_1)
             SUBTRACT(LW(0), 1)
             GOTO(10)
         END_IF
-        CALL(evt_map_playanim, LW(5), 1, 0)
+        CALL(evt_map_playanim, LW(5), MAP_ANIM_PLAY_LOOP, 0)
         WAIT_MS(400)
         IF_INT_NOT_EQUAL(LW(11), 0)
             CALL(evt_snd_sfxon, STRING("SFX_QUIZ_START1"), 0)
         END_IF
-        CALL(evt_msg_toge, 2, 95, 65, 0)
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, 95, 65, 0)
         CALL(evt_msg_print, 0, LW(6), PTR(callback), 0)
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_EVT_QUIZ2"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_EVT_QUIZ2"))
         BEGIN_INLINE_EVENT
             IF_INT_EQUAL(LW(11), 0)
                 SET_VALUE(LW(0), STRING("anm_kaiten1"))
@@ -594,12 +608,13 @@ EVT_BEGIN(a_sekizou_1)
                 GOTO(100)
             END_IF
         END_IF
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
         CALL(evt_msg_continue)
-        CALL(evt_msg_toge, 2, 95, 65, 0)
-        // A right answer plays a jingle and the statue howls; the fifth right answer ends the quiz, the
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, 95, 65, 0)
+
+        // A right answer plays a jingle and the right-answer animation; the fifth ends the quiz, the
         // statue moves aside and the story advances.
         IF_INT_EQUAL(LF(1), 1)
             IF_INT_EQUAL(LW(12), 4)
@@ -611,52 +626,52 @@ EVT_BEGIN(a_sekizou_1)
             ADD(LW(12), 1)
             SWITCH(LW(12))
                 CASE_LESS(4)
-                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, 11)
+                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, EASING_SINE_IN_OUT)
                 WAIT_FRAMES(1)
                 SET_VALUE(LW(0), STRING("anm_kaiten1"))
                 CALL_CHILD(animation_wait)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_33"), PTR(callback), 0)
                 CASE_EQUAL(4)
-                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, 11)
+                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, EASING_SINE_IN_OUT)
                 WAIT_FRAMES(1)
                 SET_VALUE(LW(0), STRING("anm_kaiten1"))
                 CALL_CHILD(animation_wait)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_34"), PTR(callback), 0)
                 SET_VALUE(LF(0), 1)
                 CASE_EQUAL(5)
-                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, 11)
+                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, EASING_SINE_IN_OUT)
                 WAIT_FRAMES(1)
                 SET_VALUE(LW(0), STRING("anm_kaiten3"))
                 CALL_CHILD(animation_wait)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_35"), PTR(callback), 0)
                 CALL_CHILD(offscreen_to_normal)
-                CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+                CALL(evt_snd_bgmoff, PSND_FADEOUT)
                 WAIT_MS(1000)
-                CALL(evt_msg_toge, 2, 95, 65, 0)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS, 95, 65, 0)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_35_01"), PTR(callback), 0)
                 CALL_CHILD(sekizou_move)
                 SET_VALUE(LW(0), STRING("anm_kaiten1"))
                 CALL_CHILD(animation_wait)
-                CALL(evt_msg_toge, 2, 150, 65, 0)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS, 150, 65, 0)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_41"), PTR(callback), 0)
                 SET_VALUE(LW(0), STRING("anm_dossun_2"))
                 CALL_CHILD(animation_wait)
-                CALL(evt_cam3d_evt_off, 500, 11)
+                CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
                 CALL(evt_mario_key_onoff, 1)
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
 #if VERSION <= VERSION_DEMO_JP
-                CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20))
+                CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(1))
 #else
-                CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20) | PSND_FADE_DIP_FAST)
+                CALL(evt_snd_bgmoff, PSND_QUICK | PSND_SILENT | PSND_SILENT_LEVEL(1))
 #endif
-                SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_06_QUIZ)
+                SET_VALUE(GSW_STORY_PROGRESS, STG1_06_QUIZ)
                 CALL(evt_exit_case_evt)
                 RETURN
             END_SWITCH
             CALL_CHILD(seikai_anime_stop)
+        ELSE
             // A wrong answer plays a buzzer; the third wrong answer summons four Clefts that attack, and after
             // the fight the statue moves aside as well.
-        ELSE
             IF_INT_EQUAL(LW(13), 2)
                 CALL(evt_snd_sfxon, STRING("SFX_BAD_SOUND2"), 0)
             ELSE
@@ -666,18 +681,18 @@ EVT_BEGIN(a_sekizou_1)
             ADD(LW(13), 1)
             SWITCH(LW(13))
                 CASE_EQUAL(1)
-                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, 11)
+                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, EASING_SINE_IN_OUT)
                 WAIT_MS(300)
                 SET_VALUE(LW(15), 1)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_36"), PTR(callback), 0)
                 CASE_EQUAL(2)
-                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, 11)
+                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, EASING_SINE_IN_OUT)
                 WAIT_MS(300)
                 SET_VALUE(LW(15), 2)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_37"), PTR(callback), 0)
                 SET_VALUE(LF(0), 1)
                 CASE_EQUAL(3)
-                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, 11)
+                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, EASING_SINE_IN_OUT)
                 WAIT_MS(300)
                 SET_VALUE(LW(15), 1)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_38"), PTR(callback), 0)
@@ -687,11 +702,11 @@ EVT_BEGIN(a_sekizou_1)
                     CALL_CHILD(animation_wait)
                 END_INLINE_EVENT
                 CALL_CHILD(offscreen_to_normal)
-                CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+                CALL(evt_snd_bgmoff, PSND_FADEOUT)
                 WAIT_MS(1000)
                 SET_VALUE(LW(14), 0)
                 SET_VALUE(LW(15), 0)
-                CALL(evt_msg_toge, 2, 95, 65, 0)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS, 95, 65, 0)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_38_01"), PTR(callback), 0)
                 CALL(evt_npc_set_position, STRING("シンエモン1"), 70, 250, -53)
                 SET_VALUE(LW(10), STRING("シンエモン1"))
@@ -712,10 +727,10 @@ EVT_BEGIN(a_sekizou_1)
                 WAIT_MS(500)
                 SET_VALUE(LW(14), 0)
                 SET_VALUE(LW(15), 0)
-                CALL(evt_msg_toge, 2, 95, 65, 0)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS, 95, 65, 0)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_39"), PTR(callback), 0)
                 WAIT_MS(100)
-                CALL(evt_cam3d_evt_off, 500, 11)
+                CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
                 CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
                 BEGIN_INLINE_EVENT
                     CALL(evt_npc_move_position, STRING("シンエモン1"), LW(0), LW(2), 1000, 0, 0)
@@ -735,7 +750,7 @@ EVT_BEGIN(a_sekizou_1)
                 WAIT_MS(100)
                 CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
                 CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED1_2"), LW(0), LW(1), LW(2), 0)
-                CALL(evt_mario_dispflag_onoff, 1, 2)
+                CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
                 CALL(evt_mario_set_pose, STRING("M_N_7"))
                 WAIT_MS(500)
                 CALL(evt_npc_set_link, STRING("シンエモン1"), STRING("シンエモン2"))
@@ -745,36 +760,36 @@ EVT_BEGIN(a_sekizou_1)
                 CALL(evt_npc_battle_start, STRING("シンエモン1"))
                 CALL(evt_npc_wait_battle_end)
                 CALL(evt_mario_set_pose, STRING("M_S_1"))
-                CALL(evt_mario_dispflag_onoff, 0, 2)
+                CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
                 CALL(evt_npc_set_position, STRING("シンエモン1"), 0, -1000, 0)
                 CALL(evt_npc_set_position, STRING("シンエモン2"), 0, -1000, 0)
                 CALL(evt_npc_set_position, STRING("シンエモン3"), 0, -1000, 0)
                 CALL(evt_npc_set_position, STRING("シンエモン4"), 0, -1000, 0)
                 WAIT_MS(1000)
-                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, 11)
+                CALL(evt_cam3d_evt_set, -189, 72, 207, 219, 69, -80, 0, EASING_SINE_IN_OUT)
                 WAIT_MS(300)
                 SET_VALUE(LW(14), 0)
                 SET_VALUE(LW(15), 0)
-                CALL(evt_msg_toge, 2, 95, 65, 0)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS, 95, 65, 0)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_40"), PTR(callback), 0)
                 CALL_CHILD(sekizou_move)
                 SET_VALUE(LW(0), STRING("anm_kaiten1"))
                 CALL_CHILD(animation_wait)
-                CALL(evt_msg_toge, 2, 150, 65, 0)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS, 150, 65, 0)
                 CALL(evt_msg_print, 0, STRING("stg1_hei_41"), PTR(callback), 0)
                 SET_VALUE(LW(0), STRING("anm_dossun_2"))
                 CALL_CHILD(animation_wait)
-                CALL(evt_cam3d_evt_off, 800, 11)
+                CALL(evt_cam3d_evt_off, 800, EASING_SINE_IN_OUT)
                 CALL(evt_mario_key_onoff, 1)
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-                CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20) | PSND_FADE_DIP_FAST)
-                SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_06_QUIZ)
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+                CALL(evt_snd_bgmoff, PSND_QUICK | PSND_SILENT | PSND_SILENT_LEVEL(1))
+                SET_VALUE(GSW_STORY_PROGRESS, STG1_06_QUIZ)
                 CALL(evt_exit_case_evt)
                 RETURN
             END_SWITCH
             CALL_CHILD(fuseikai_anime_stop)
         END_IF
-        CALL(evt_cam3d_evt_set, 0, 83, 591, 0, 100, 91, 800, 11)
+        CALL(evt_cam3d_evt_set, 0, 83, 591, 0, 100, 91, 800, EASING_SINE_IN_OUT)
         WAIT_MS(800)
         ADD(LW(11), 1)
     END_LOOP
@@ -782,9 +797,10 @@ EVT_BEGIN(a_sekizou_1)
 EVT_END()
 
 /**
- * Petal Meadows hei_07 map init: registers the exits, sets the dim fortress music and reverb,
- * and either arms the statue's quiz (before story step "Quiz") or opens the pipe exit
- * and leaves the statue moved; adds the save block.
+ * Map init of hei_07 (relSetEvtAddr in hei.c): the entrances with the dokan pipe exit off, BGM_STG1_HEI1 held silent
+ * (at once when entering by the pipe), ENV_STG1_HEI4, reverb mode 1, the anm_hokori animation and the hei_07_2 group
+ * hidden away. Before STG1_06_QUIZ a_sekizou_2 is off and a_sekizou_1_a gets the a_sekizou_1 case script; from then
+ * a_sekizou_2 is on, a_sekizou_1_a / _1_b are off, the pipe exit is on and anm_sekizou is at its end. Save block.
  */
 EVT_BEGIN(hei_07_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
@@ -792,21 +808,21 @@ EVT_BEGIN(hei_07_init_evt)
     CALL_CHILD(evt_bero_info_run)
     SET_VALUE(LW(0), STRING("dokan"))
     CALL_CHILD(bero_case_switch_off)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("dokan"))
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20) | PSND_FADE_DIP_FAST)
+        CALL(evt_snd_bgmoff, PSND_QUICK | PSND_SILENT | PSND_SILENT_LEVEL(1))
     ELSE
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(20))
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(1))
     END_IF
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI4"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI4"))
     CALL(evt_snd_set_rev_mode, 1)
-    CALL(evt_map_playanim, STRING("anm_hokori"), 1, 0)
+    CALL(evt_map_playanim, STRING("anm_hokori"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_mapobj_trans, 1, STRING("hei_07_2"), 0, -1000, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hei_07_2"), MAPOBJ_FLAG_HIDE)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_06_QUIZ)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hei_07_2"), MAP_OBJ_FLAG_HIDDEN)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_06_QUIZ)
         CALL(evt_hitobj_onoff, STRING("a_sekizou_2"), 0, 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_sekizou_1_a"), 0, PTR(a_sekizou_1), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_sekizou_1_a"), 0, PTR(a_sekizou_1), 0)
         SET_VALUE(GW(0), 0)
     ELSE
         CALL(evt_hitobj_onoff, STRING("a_sekizou_2"), 0, 1)
@@ -814,76 +830,12 @@ EVT_BEGIN(hei_07_init_evt)
         CALL(evt_hitobj_onoff, STRING("a_sekizou_1_b"), 0, 0)
         SET_VALUE(LW(0), STRING("dokan"))
         CALL_CHILD(bero_case_switch_on)
-        CALL(evt_map_playanim, STRING("anm_sekizou"), 2, 0)
+        CALL(evt_map_playanim, STRING("anm_sekizou"), MAP_ANIM_PLAY_AT_END, 0)
     END_IF
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -120, 60, -75, 0, 0)
     RETURN
 EVT_END()
-
-void mapPlayAnimationLv(const char* animName, s32 mode, s32 level);
-
-/**
- * Message-window callback for the quiz: while the statue speaks it drives the mouth
- * and smile map animations ("anm_kuti_1", "anm_egao") in step with the text
- * and plays SFX_QUIZ_START1 at the third beat of stg1_hei_23.
- */
-static void callback(s32 type, void** work) {
-    EventEntry* evt = ((MsgWinData*)*work)->event;
-    BOOL valid;
-    f32 frame;
-
-    if (strcmp(*(const char**)*work, "stg1_hei_23") == 0 && type == 3) {
-        evt->lwData[14]++;
-        if (evt->lwData[14] == 3) {
-            psndSFXOn("SFX_QUIZ_START1");
-        }
-    }
-    switch (evt->lwData[15]) {
-        case 0:
-            switch (type) {
-                case 5:
-                    mapCheckAnimation("anm_kuti_1", &valid, &frame);
-                    if (valid) {
-                        mapPlayAnimationLv("anm_kuti_1", 0, 0);
-                    }
-                    break;
-            }
-            break;
-        case 1:
-            switch (type) {
-                case 5:
-                    mapCheckAnimation("anm_egao", &valid, &frame);
-                    if (valid) {
-                        mapPlayAnimationLv("anm_egao", 0, 0);
-                        evt->lwData[14]++;
-                        if (evt->lwData[14] > 1) {
-                            evt->lwData[15] = 0;
-                        }
-                    }
-                    break;
-            }
-            break;
-        case 2:
-            switch (type) {
-                case 5:
-                    mapCheckAnimation("anm_kuti_1", &valid, &frame);
-                    if (valid) {
-                        mapPlayAnimationLv("anm_kuti_1", 0, 0);
-                    }
-                    break;
-                case 3:
-                    evt->lwData[14]++;
-                    if (evt->lwData[14] >= 2) {
-                        mapPlayAnimationLv("anm_egao", 0, 0);
-                        evt->lwData[14] = 0;
-                        evt->lwData[15] = 1;
-                    }
-                    break;
-            }
-            break;
-    }
-}
 
 /**
  * Script helper: turns Mario over args[1] frames toward the direction args[0] (degrees) by the shortest way
@@ -905,11 +857,73 @@ static USER_FUNC(mario_set_dir) {
             event->userdataf[2] -= 360.0f;
         }
     }
-    if ((s32)event->userdata3 > 0) {
+    if (event->userdata3 > 0) {
         mario->multiTimer++;
-        mario->moveDirection = reviseAngle(event->userdataf[1] + event->userdataf[2] * (s32)mario->multiTimer / (s32)event->userdata3);
-        return (s32)mario->multiTimer >= (s32)event->userdata3;
+        mario->moveDirection = reviseAngle(event->userdataf[1] + event->userdataf[2] * mario->multiTimer / event->userdata3);
+        return mario->multiTimer >= event->userdata3;
     }
     mario->moveDirection = reviseAngle(mario->moveDirection + event->userdataf[2]);
     return EVT_RETURN_DONE;
+}
+
+/**
+ * Message callback: for stg1_hei_23 each type 3 adds 1 to LW(14), and SFX_QUIZ_START1 plays when it reaches 3. By
+ * LW(15) it plays anm_kuti_1 (modes 0, 2) or anm_egao (1) on type 5; mode 2 turns 1 and 1 turns 0 as LW(14) counts.
+ */
+// The message callback shares LW14 (mouth/marker count) and LW15 (mouth-animation mode) with the event.
+static void callback(s32 type, void** work) {
+    EventEntry* evt = ((MsgWinData*)*work)->event;
+    BOOL valid;
+    f32 frame;
+
+    if (strcmp(*(const char**)*work, "stg1_hei_23") == 0 && type == 3) {
+        evt->lwData[14]++;
+        if (evt->lwData[14] == 3) {
+            psndSFXOn("SFX_QUIZ_START1");
+        }
+    }
+    switch (evt->lwData[15]) {
+        case 0:
+            switch (type) {
+                case 5:
+                    mapCheckAnimation("anm_kuti_1", &valid, &frame);
+                    if (valid) {
+                        mapPlayAnimationLv("anm_kuti_1", MAP_ANIM_PLAY_ONCE, 0);
+                    }
+                    break;
+            }
+            break;
+        case 1:
+            switch (type) {
+                case 5:
+                    mapCheckAnimation("anm_egao", &valid, &frame);
+                    if (valid) {
+                        mapPlayAnimationLv("anm_egao", MAP_ANIM_PLAY_ONCE, 0);
+                        evt->lwData[14]++;
+                        if (evt->lwData[14] > 1) {
+                            evt->lwData[15] = 0;
+                        }
+                    }
+                    break;
+            }
+            break;
+        case 2:
+            switch (type) {
+                case 5:
+                    mapCheckAnimation("anm_kuti_1", &valid, &frame);
+                    if (valid) {
+                        mapPlayAnimationLv("anm_kuti_1", MAP_ANIM_PLAY_ONCE, 0);
+                    }
+                    break;
+                case 3:
+                    evt->lwData[14]++;
+                    if (evt->lwData[14] >= 2) {
+                        mapPlayAnimationLv("anm_egao", MAP_ANIM_PLAY_ONCE, 0);
+                        evt->lwData[14] = 0;
+                        evt->lwData[15] = 1;
+                    }
+                    break;
+            }
+            break;
+    }
 }

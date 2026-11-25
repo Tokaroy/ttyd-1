@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: freeze, a pale ice-coloured sprite at a point that also spawns snow dust.
-#include "eff/n64/eff_freeze_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,8 +9,8 @@
 #include <dolphin/mtx.h>
 #include <stdlib.h>
 #include "eff/n64/eff_glass_n64.h"
-#include "eff/n64/eff_snow_dust_n64.h"
 #include "eff/n64/eff_vapor_n64.h"
+#include "eff/n64/eff_snow_dust_n64.h"
 
 typedef struct EffFreezeN64Work {
     s32 type;          // 0x0
@@ -46,12 +46,12 @@ static effN64Vtx size32x64_tex32x64_vtx[] = {
 };
 
 static void effFreezeMain(EffectEntry* effect);
-static void effFreezeDisp(CameraId cameraId, EffectEntry* effect);
+static void effFreezeDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns an ice block around (x, y, z) for lifetime frames (0 = until soft-deleted),
  * with a snow-dust effect attached.
- * battle_seq.c spawns it with life 1 above units recovering from freeze; event scripts via evt_eff.
+ * battle_seq.c spawns it with life 1 above units recovering from freeze; event scripts via evt_eff64.
  */
 EffectEntry* effFreezeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -63,7 +63,7 @@ EffectEntry* effFreezeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffFreezeN64Work));
     effect->userdata = work;
     effect->callback = effFreezeMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -89,11 +89,6 @@ EffectEntry* effFreezeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 
     return effect;
 }
 
-/** Picks a random height inside the ice block: scale * rand(0..39) above b->position.y. */
-static inline f32 freezeY(EffFreezeN64Work* a, EffFreezeN64Work* b) {
-    return a->scale * (f32)(rand() % 40) + b->position.y;
-}
-
 /**
  * Blinks the glint frame at random times, puffs a vapour effect every 16 frames
  * and keeps the snow dust on the block.
@@ -111,8 +106,8 @@ static void effFreezeMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -130,7 +125,7 @@ static void effFreezeMain(EffectEntry* effect) {
             ((EffGlassN64Work*)glass->userdata)->texV = 0.1f * (f32)(rand() % 10);
             ((EffGlassN64Work*)glass->userdata)->texVSpeed = 0.01f * (f32)(rand() % 30) + 0.1f;
             ((EffGlassN64Work*)glass->userdata)->rotZ = rand() % 360;
-            ((EffGlassN64Work*)glass->userdata)->rotY = rand() % 20;
+            ((EffGlassN64Work*)glass->userdata)->rotZSpeed = rand() % 20;
             ((EffGlassN64Work*)glass->userdata)->vx = rand() % 10 - 5;
             ((EffGlassN64Work*)glass->userdata)->vy = rand() % 10 - 5;
             ((EffGlassN64Work*)glass->userdata)->vz = 0.0f;
@@ -157,11 +152,12 @@ static void effFreezeMain(EffectEntry* effect) {
     ((EffSnowDustN64Work*)work->dust->userdata)->position.x = work->position.x;
     ((EffSnowDustN64Work*)work->dust->userdata)->position.y = 10.0f + work->position.y;
     ((EffSnowDustN64Work*)work->dust->userdata)->position.z = work->position.z;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effFreezeDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effFreezeDisp, effect);
 }
 
 /** Draws the ice block as a camera-facing 32x64 sprite from texture 138, using texIdx to choose the glint frame. */
-static void effFreezeDisp(CameraId cameraId, EffectEntry* effect) {
+static void effFreezeDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffFreezeN64Work* work;
     s32 alpha;

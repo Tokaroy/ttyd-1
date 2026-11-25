@@ -1,5 +1,8 @@
 // Pause menu: opening and closing the menu, item use from the menu, and the shared text and texture helpers.
+
+#include "version.h"
 #include "win/win_main.h"
+#include "icon_ids.h"
 #include "eff/eff_recovery.h"
 #include "data/item_data.h"
 #include "driver/camdrv.h"
@@ -17,7 +20,9 @@
 #include <string.h>
 #include <stdarg.h>
 #include "evt/evt_yuugijou.h"
-#include "libc_decls.h"
+#include "koopa.h"
+#include "eff/eff_magic1_n64.h"
+#include "party/party_motion.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_env.h"
 #include "evt/evt_fade.h"
@@ -29,44 +34,33 @@
 #include "evt/evt_seq.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "koopa.h"
-#include "party/party_motion.h"
-#include "win/win_log.h"
-#include "version.h"
-#include "evt/evt_story.h"
 #include "win/win_root.h"
-#if VERSION >= VERSION_US
-#endif
+#include "driver/itemdrv.h"
+
 #include "driver/msgdrv.h"
 #include "mario/mario_pouch.h"
 #include "mario/mariost.h"
 #include "win/win_party.h"
+#include "libc_decls.h"
 
-// FAKE: the 0.5f that winTexSet and friends load is a named .sdata2 constant defined after winLectureCheck
-// (winConstHalf below); with a plain 0.5f literal the .sdata2 constants come out in a different
-// order (winTexSet, winIconSet, winMain and others then differ).
-#define HALF_F winConstHalf
+#define HALF_F winMainHalf
 static USER_FUNC(cam_r);
-// Badge tutorial helper: lets the player's input through again (defined below).
 USER_FUNC(lecture_key_mask_off);
 static USER_FUNC(wait);
-// Item-use helper: turns off the partners' forced slit (defined below).
 USER_FUNC(all_party_slit_off);
 static USER_FUNC(party_color);
 static USER_FUNC(famicom_check);
 static USER_FUNC(itemUseFunc2);
+#if VERSION <= VERSION_DEMO_JP
+static USER_FUNC(itemUseFunc);
+#endif
 EvtWord evt_lecture_msg[];
 EvtWord evt_item_use[];
 EvtWord evt_diary_read[];
 
-//.data
-
 //.sbss
-// itemUseFunc's step counter. The demo map has it as a static local (cnt$730), but as one it would be emitted
-// first in .sbss instead of after wp and winTexTpl, so it stays at file scope.
-static s32 cnt;
-TEXPalette* winTexTpl;
-static WindowWork* wp;
+static WindowWork* wp = NULL;
+static TEXPalette* winTexTpl = NULL;
 
 // local prototypes
 #include "driver/fadedrv.h"
@@ -79,11 +73,13 @@ static WindowWork* wp;
 #include "mario/mario_party.h"
 #include "pmario_sound.h"
 #include "statuswindow.h"
-#include "icon_ids.h"
 #include "data/party_data.h"
 #include "manager/evtmgr_cmd.h"
+void FontDrawStringVecPitch(Vec* pos, const char* msg, f32 pitch);
 static void winLectureKeyMask(void);
-// FAKE: the prototype this file was compiled with (u16 icon id; icondrv.h has s16/s32), so callers zero-extend the id
+
+// Private u16 iconId prototype (icondrv.h and the definition take s32): winIconSet's s32 id is truncated at the
+// call (the clrlwi is in the retail code), so the original declared it this way here.
 void iconGetTexObj(GXTexObj* obj, u16 iconId);
 static void winDisp(CameraId camId, void* param);
 static void winDispKoopa(CameraId camId, void* param);
@@ -115,41 +111,33 @@ BOOL winCheck(void) {
         return FALSE;
     }
 
-    if (wp->flags & WIN_FLAG_LECTURE) {
+    if (wp->flags & WINDOW_FLAG_LECTURE) {
         return FALSE;
     }
 
     state = wp->menuState;
-    if (state != 0 && state < 200) {
+    if (state != WIN_MENU_IDLE && state < WIN_MENU_ITEM_USE) {
         return TRUE;
     }
     return FALSE;
 }
 
-/** Allows the pause menu to be opened again (clears WIN_FLAG_OPEN_DISABLED); called from the evt_window script helpers. */
+/** Lets winMain open the pause menu again (clears WINDOW_FLAG_OPEN_DISABLE). */
 void winOpenEnable(void) {
     if (wp) {
-        wp->flags &= ~WIN_FLAG_OPEN_DISABLED;
+        wp->flags &= ~WINDOW_FLAG_OPEN_DISABLE;
     }
 }
 
-/** Blocks the pause menu from opening or running (sets WIN_FLAG_OPEN_DISABLED, which winMain checks first). */
+/** Stops winMain from opening the pause menu (sets WINDOW_FLAG_OPEN_DISABLE). */
 void winOpenDisable(void) {
     if (wp) {
-        wp->flags |= WIN_FLAG_OPEN_DISABLED;
+        wp->flags |= WINDOW_FLAG_OPEN_DISABLE;
     }
 }
 
-#if VERSION >= VERSION_US
-typedef struct {
-    const char* s[6];
-} WinLangTbl;
-#else
-typedef struct {
-    const char* s[2];
-} WinLangTbl;
-#endif
-static const WinLangTbl winLangTbl;
+BOOL winDvdOpenAsync(void);
+void winDvdClose(void);
 
 /**
  * Per-frame pause menu driver.
@@ -166,7 +154,7 @@ void winMain(void) {
 #endif
 
     mario = marioGetPtr();
-    if (!(wp->flags & WIN_FLAG_OPEN_DISABLED) && seqGetSeq() == SEQ_GAME && !seqCheckSeq()) {
+    if (!(wp->flags & WINDOW_FLAG_OPEN_DISABLE) && seqGetSeq() == SEQ_GAME && !seqCheckSeq()) {
         wp->buttonTrg = keyGetButtonTrg(0);
         wp->buttonRep = keyGetButtonRep(0);
         wp->dirTrg = keyGetDirTrg(0);
@@ -201,9 +189,9 @@ void winMain(void) {
         winLectureKeyMask();
 
         switch (wp->menuState) {
-            case 0:
-                if (!(wp->flags & WIN_FLAG_LECTURE)) {
-                    if (marioStGetSystemLevel() != 0U) {
+            case WIN_MENU_IDLE:
+                if (!(wp->flags & WINDOW_FLAG_LECTURE)) {
+                    if (marioStGetSystemLevel() != 0) {
                         break;
                     }
                     if (marioCheckMenuDisable()) {
@@ -215,7 +203,7 @@ void winMain(void) {
                     if (!fadeIsFinish()) {
                         break;
                     }
-                    if (mario->characterId == 2) {
+                    if (mario->characterId == CHARACTER_BOWSER) {
                         if (!(wp->buttonTrg & PAD_BUTTON_START)) {
                             break;
                         }
@@ -231,11 +219,11 @@ void winMain(void) {
                             break;
                         }
 #endif
-                        if ((wp->buttonTrg & PAD_BUTTON_LEFT) && (swByteGet(GSW_STORY_PROGRESS) >= STORY_STG0_07_GOOMBELLA_JOINS || partyChkJoin(1))) {
+                        if ((wp->buttonTrg & PAD_BUTTON_LEFT) && (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) >= STG0_07_GOOMBELLA_JOINS || partyChkJoin(PARTY_GOOMBELLA))) {
                             wp->menuSel = 1;
                         } else if (wp->buttonTrg & PAD_BUTTON_UP) {
                             wp->menuSel = 2;
-                        } else if ((wp->buttonTrg & PAD_BUTTON_RIGHT) && (swByteGet(GSW_STORY_PROGRESS) >= STORY_STG0_17_BADGE_TUTORIAL || pouchGetHaveBadgeCnt())) {
+                        } else if ((wp->buttonTrg & PAD_BUTTON_RIGHT) && (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) >= STG0_17_BADGE_TUTORIAL || pouchGetHaveBadgeCnt())) {
                             wp->menuSel = 3;
                         } else if (wp->buttonTrg & PAD_BUTTON_DOWN) {
                             wp->menuSel = 4;
@@ -247,7 +235,7 @@ void winMain(void) {
                         break;
                     }
 #if VERSION >= VERSION_US
-                    if ((gp->flags & GLOBAL_FLAG_KIOSK) && evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG0_07_GOOMBELLA_JOINS) {
+                    if ((gp->flags & GW_FLAG_E3) && evtGetValue(NULL, GSW_STORY_PROGRESS) < STG0_07_GOOMBELLA_JOINS) {
                         break;
                     }
 #endif
@@ -257,20 +245,20 @@ void winMain(void) {
                     wp->menuSel = 0;
                 }
 #endif
-                camGetPtr(CAMERA_2D)->flags |= CAM_FLAG_LETTER_BOX_DISABLE;
-                if (gp->flags & GLOBAL_FLAG_KIOSK) {
+                camGetPtr(CAMERA_2D)->flags |= CAMERA_FLAG_LETTER_BOX_OFF;
+                if (gp->flags & GW_FLAG_E3) {
                     wp->menuSel = 1;
                 }
-                if (!(wp->flags & WIN_FLAG_LECTURE)) {
+                if (!(wp->flags & WINDOW_FLAG_LECTURE)) {
                     marioStSystemLevel(4);
                 } else {
                     npcStopForEvent();
                 }
-                fbatChangeMode(7);
+                fbatChangeMode(FBAT_MODE_EVENT);
 #if VERSION <= VERSION_DEMO_JP
                 marioCtrlOff2();
 #else
-                if (mario->characterId == 2) {
+                if (mario->characterId == CHARACTER_BOWSER) {
                     if (!kpaGetStageViewType()) {
                         marioCtrlOff();
                     } else {
@@ -282,83 +270,80 @@ void winMain(void) {
 #endif
                 partyCtrlOff();
                 psndSetFlag(PSND_FLAG_MUTE_SFX);
-                if (mario->characterId == 2) {
+                if (mario->characterId == CHARACTER_BOWSER) {
                     kpaPauseSE2();
                 }
                 if (mario->flags & MARIO_FLAG_IS_8_BIT) {
-                    wp->flags |= WIN_FLAG_8BIT_MARIO;
+                    wp->flags |= WINDOW_FLAG_8BIT;
                 } else {
-                    wp->flags &= ~WIN_FLAG_8BIT_MARIO;
+                    wp->flags &= ~WINDOW_FLAG_8BIT;
                 }
                 for (i = 0; i < 4; i++) {
                     padRumbleHardOff(i);
                 }
-#if VERSION >= VERSION_US
-                fileAsyncf(4, 0, WIN_DIR "%s/mail.tpl", getMarioStDvdRoot(), (u32)gp->language == 0 ? "jp" : "us");
+#if VERSION <= VERSION_DEMO_JP
+                fileAsyncf(FILE_TYPE_TPL, NULL, WIN_DIR "jp/mail.tpl", getMarioStDvdRoot());
+                {
+                    const char* name = winGetMapTplName();
+                    fileAsyncf(FILE_TYPE_TPL, NULL, WIN_DIR "jp/%s", getMarioStDvdRoot(), name);
 #else
-                fileAsyncf(4, 0, WIN_DIR "jp/mail.tpl", getMarioStDvdRoot());
+#if VERSION >= VERSION_US
+                fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/mail.tpl", getMarioStDvdRoot(), gp->language == LANGUAGE_JP ? "jp" : "us");
+#else
+                fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/jp/mail.tpl", getMarioStDvdRoot());
 #endif
                 {
 #if VERSION >= VERSION_US
-                    fileAsyncf(4, 0, WIN_DIR "%s/%s", getMarioStDvdRoot(), (u32)gp->language == 0 ? "jp" : "us", winGetMapTplName());
+                    fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/%s", getMarioStDvdRoot(), gp->language == LANGUAGE_JP ? "jp" : "us", winGetMapTplName());
 #else
                     const char* name = winGetMapTplName();
-                    fileAsyncf(4, 0, WIN_DIR "jp/%s", getMarioStDvdRoot(), name);
+                    fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/jp/%s", getMarioStDvdRoot(), name);
+#endif
 #endif
                 }
                 wp->active = 0;
                 if (strncmp(gp->currentMapName, "yuu_", 4) == 0) {
-                    wp->menuState = 400;
+                    wp->menuState = WIN_MENU_YUU;
                 } else {
                     wp->menuState++;
                 }
                 break;
 
-            case 1: {
-                WinLangTbl lang = winLangTbl;
-                BOOL ok;
-
-                if (fileAsyncf(4, 0, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang.s[gp->language]) == NULL) {
-                    ok = FALSE;
-                } else {
-                    wp->res = fileAllocf(4, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang.s[gp->language]);
-                    ok = TRUE;
-                }
-                if (ok) {
+            case WIN_MENU_LOAD:
+                if (winDvdOpenAsync()) {
                     wp->menuState++;
                 }
                 break;
-            }
 
-            case 2:
-                if (!marioGetPtr()->characterId) {
+            case WIN_MENU_ROOT:
+                if (marioGetPtr()->characterId == CHARACTER_MARIO) {
                     switch (winRootMain(wp)) {
                         case -1:
                             wp->menuState++;
                             break;
                         case -2:
-                            wp->menuState = 100;
+                            wp->menuState = WIN_MENU_PARTY_LOAD;
                             break;
                         case -3:
                             if (wp->item.useItem == ITEM_RAGGED_DIARY) {
-                                wp->menuState = 300;
+                                wp->menuState = WIN_MENU_DIARY;
                             } else {
-                                wp->menuState = 200;
+                                wp->menuState = WIN_MENU_ITEM_USE;
                             }
                             break;
                     }
                 } else if (wp->buttonTrg & PAD_BUTTON_START) {
                     kpaPauseSE2();
-                    wp->menuState = 3;
+                    wp->menuState = WIN_MENU_CLOSE;
                 }
                 break;
 
-            case 3:
-                camGetPtr(CAMERA_2D)->flags &= ~CAM_FLAG_LETTER_BOX_DISABLE;
+            case WIN_MENU_CLOSE:
+                camGetPtr(CAMERA_2D)->flags &= ~CAMERA_FLAG_LETTER_BOX_OFF;
 #if VERSION <= VERSION_DEMO_JP
                 marioCtrlOn2();
 #else
-                if (mario->characterId == 2) {
+                if (mario->characterId == CHARACTER_BOWSER) {
                     if (!kpaGetStageViewType()) {
                         marioCtrlOn();
                     } else {
@@ -369,88 +354,83 @@ void winMain(void) {
                 }
 #endif
                 partyCtrlOn();
-                fbatChangeMode(1);
+                fbatChangeMode(FBAT_MODE_FIELD);
                 psndClearFlag(PSND_FLAG_MUTE_SFX);
                 statusWinForceUpdate();
-                if (!(wp->flags & WIN_FLAG_LECTURE)) {
+                if (!(wp->flags & WINDOW_FLAG_LECTURE)) {
                     marioStSystemLevel(0);
                 } else {
                     npcStartForEvent();
                 }
-                if (wp->res) {
-                    fileFree(wp->res);
-                }
-                wp->res = NULL;
+                winDvdClose();
                 wp->flags = 0;
-                wp->menuState = 0;
+                wp->menuState = WIN_MENU_IDLE;
                 break;
 
-            case 100:
+            case WIN_MENU_PARTY_LOAD:
                 if (marioBgmodeChk()) {
                     MarioWork* m = marioGetPtr();
                     m->prevPartyMemberId[0] = wp->party.partyIds[wp->party.cursor];
-                    wp->menuState = 3;
-                } else if (animGroupBaseAsync(partyDataTbl[wp->party.partyIds[wp->party.cursor]].name, 2, 0)) {
+                    wp->menuState = WIN_MENU_CLOSE;
+                } else if (animGroupBaseAsync(partyDataTbl[wp->party.partyIds[wp->party.cursor]].name, 2, NULL)) {
                     wp->menuState++;
                 }
                 break;
 
-            case 101:
+            case WIN_MENU_PARTY_OUT:
                 marioPartyGoodbye();
                 wp->menuState++;
                 break;
 
-            case 102:
+            case WIN_MENU_PARTY_IN:
                 if (!marioGetParty()) {
                     marioPartyHello(wp->party.partyIds[wp->party.cursor]);
-                    wp->menuState = 3;
+                    wp->menuState = WIN_MENU_CLOSE;
                 }
                 break;
 
-            case 200: {
-#if VERSION >= VERSION_DEMO_EU
-                s32 partyId;
-                s32 n;
-
-                partyId = !marioBgmodeChk() ? marioGetParty() : marioGetPtr()->prevPartyMemberId[0];
-                n = 0;
-                for (i = 0; i < 7; i++) {
-                    if (partyId == winPartyDt[i].partyId) {
-                        list[n++] = &winPartyDt[i];
-                    }
-                }
-                // PAL lists only the other partners that have joined (flag 1) and are not away (flag 2)
-                for (i = 0; i < 7; i++) {
-                    if (partyId != winPartyDt[i].partyId && (pouchGetPtr()->partyData[winPartyDt[i].partyId].flags & POUCH_PARTY_FLAG_JOINED) &&
-                        !(pouchGetPtr()->partyData[winPartyDt[i].partyId].flags & POUCH_PARTY_FLAG_AWAY)) {
-                        list[n++] = &winPartyDt[i];
-                    }
-                }
-#else
+            case WIN_MENU_ITEM_USE: {
+#if VERSION < VERSION_DEMO_EU
 #if VERSION >= VERSION_US
-                WindowPartyDt* list[11]; /* FAKE */ // US frame is 96 bytes; only 7 entries used
+                // Only 7 entries are used; 11 gives the US frame size (0x60 against JP's 0x40), the original size is
+                // not known.
+                WindowPartyDt* list[11];
 #else
                 WindowPartyDt* list[7];
 #endif
                 WindowPartyDt* p;
                 WindowPartyDt* base;
+#endif
                 s32 partyId;
                 s32 n;
 
                 partyId = !marioBgmodeChk() ? marioGetParty() : marioGetPtr()->prevPartyMemberId[0];
+#if VERSION >= VERSION_DEMO_EU
+                n = 0;
+                for (i = 0; i < 7; i++) {
+                    if (partyId == winPartyDt[i].partyId) {
+                        list[n++] = &winPartyDt[i];
+#else
                 base = winPartyDt;
                 n = 0;
                 for (i = 0, p = base; i < 7; i++, p++) {
                     if (partyId == p->partyId) {
                         list[n++] = p;
+#endif
                     }
                 }
+#if VERSION >= VERSION_DEMO_EU
+                for (i = 0; i < 7; i++) {
+                    if (partyId != winPartyDt[i].partyId && (pouchGetPtr()->partyData[winPartyDt[i].partyId].flags & POUCH_PARTY_FLAG_JOINED) &&
+                        !(pouchGetPtr()->partyData[winPartyDt[i].partyId].flags & POUCH_PARTY_FLAG_AWAY)) {
+                        list[n++] = &winPartyDt[i];
+#else
                 for (i = 0; i < 7; i++, base++) {
                     if (partyId != base->partyId) {
                         list[n++] = base;
+#endif
                     }
                 }
-#endif
                 wp->currentEvent = evtEntryType(evt_item_use, 0, 0, 0);
                 wp->currentEvent->lwData[10] = wp->item.useItem;
                 wp->currentEvent->lwData[11] = wp->item.useTarget == 0 ? 0 : list[wp->item.useTarget - 1]->partyId;
@@ -460,46 +440,46 @@ void winMain(void) {
                 break;
             }
 
-            case 201:
+            case WIN_MENU_ITEM_USE_WAIT:
                 if (!evtCheckID(wp->currentEvent->eventId)) {
-                    wp->menuState = 3;
+                    wp->menuState = WIN_MENU_CLOSE;
                 }
                 break;
 
-            case 300:
+            case WIN_MENU_DIARY:
                 wp->currentEvent = evtEntryType(evt_diary_read, 0, 0, 0);
                 wp->menuState++;
                 break;
 
-            case 301:
+            case WIN_MENU_DIARY_WAIT:
                 if (!evtCheckID(wp->currentEvent->eventId)) {
-                    wp->menuState = 3;
+                    wp->menuState = WIN_MENU_CLOSE;
                 }
                 break;
 
-            case 400:
+            case WIN_MENU_YUU:
                 evtYuuWindow();
                 wp->menuState++;
                 break;
 
-            case 401:
+            case WIN_MENU_YUU_WAIT:
                 if (evtYuuWindowEndChk()) {
-                    wp->menuState = 3;
+                    wp->menuState = WIN_MENU_CLOSE;
                 }
                 break;
         }
 
-        if (wp->menuState == 2) {
+        if (wp->menuState == WIN_MENU_ROOT) {
             switch (marioGetPtr()->characterId) {
-                case 0:
-                    if (!(wp->flags & WIN_FLAG_LECTURE)) {
-                        dispEntry(CAMERA_2D, 250.0f, 0, winDisp, NULL);
+                case CHARACTER_MARIO:
+                    if (!(wp->flags & WINDOW_FLAG_LECTURE)) {
+                        dispEntry(CAMERA_2D, 250.0f, DISP_MODE_OPAQUE, winDisp, NULL);
                     } else {
-                        dispEntry(CAMERA_2D, 500.0f, 0, winDisp, NULL);
+                        dispEntry(CAMERA_2D, 500.0f, DISP_MODE_OPAQUE, winDisp, NULL);
                     }
                     break;
-                case 2:
-                    dispEntry(CAMERA_2D, 250.0f, 0, winDispKoopa, NULL);
+                case CHARACTER_BOWSER:
+                    dispEntry(CAMERA_2D, 250.0f, DISP_MODE_OPAQUE, winDispKoopa, NULL);
                     break;
             }
         }
@@ -517,23 +497,45 @@ static void winDispKoopa(CameraId camId, void* param) {
     winTexSet(0xB7, (Vec){0.0f, 50.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
 }
 
-#if VERSION >= VERSION_US
 /**
- * Language folders of the menu graphics (win.tpl), indexed by the game language;
- * the menu loads its textures from them.
+ * Starts loading the menu graphics (win.tpl) from the game language's folder; TRUE once loaded into wp->res.
  */
-static const WinLangTbl winLangTbl = {{"jp", "us", "ge", "fr", "sp", "it"}};
-#else
-/** Language folders of the menu graphics (win.tpl), indexed by the game language: Japanese and English. */
-static const WinLangTbl winLangTbl = {{"jp", "us"}};
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+BOOL winDvdOpenAsync(void) {
+    const char* lang[] = {
+        "jp", "us",
+#if VERSION >= VERSION_US
+        "ge", "fr", "sp", "it"
 #endif
+    };
+#if VERSION <= VERSION_DEMO_JP
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]) == NULL) {
+        return FALSE;
+    }
+    wp->res = fileAllocf(FILE_TYPE_TPL, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]);
+#else
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]) == NULL) {
+        return FALSE;
+    }
+    wp->res = fileAllocf(FILE_TYPE_TPL, "%s/w/%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]);
+#endif
+    return TRUE;
+}
+
+/** Frees the menu graphics (win.tpl), if loaded. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void winDvdClose(void) {
+    if (wp->res) {
+        fileFree(wp->res);
+    }
+    wp->res = NULL;
+}
 
 /**
- * Puts the current partner into its item-receiving pose (the *_I_1 animations)
- * when an item is used on them from the menu.
- * The JP and later releases skip it while Koops reports a nonzero nokonokoGetStatus.
+ * Puts the current partner into its item pose (the *_I_1 animations) when an item from the menu is used on them
+ * (evt_item_use). JP and later skip it while evt_party_nokotaro_get_status reports nonzero.
  */
-EVT_BEGIN(kime_pose)
+static EVT_BEGIN(kime_pose)
 #if VERSION >= VERSION_JP
     CALL(evt_party_nokotaro_get_status, 0, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
@@ -542,27 +544,27 @@ EVT_BEGIN(kime_pose)
 #endif
     CALL(evt_mario_get_party, LW(0))
     SWITCH(LW(0))
-        CASE_EQUAL(0)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PARTY_NONE)
+        CASE_EQUAL(PARTY_GOOMBELLA)
         CALL(evt_party_set_pose, 0, STRING("PKR_I_1"))
-        CASE_EQUAL(2)
+        CASE_EQUAL(PARTY_KOOPS)
         CALL(evt_party_set_pose, 0, STRING("PNK_I_1"))
-        CASE_EQUAL(3)
+        CASE_EQUAL(PARTY_BOBBERY)
         CALL(evt_party_set_pose, 0, STRING("I_1"))
-        CASE_EQUAL(4)
+        CASE_EQUAL(PARTY_YOSHI)
         CALL(evt_party_set_pose, 0, STRING("PYS_I_1"))
-        CASE_EQUAL(5)
+        CASE_EQUAL(PARTY_FLURRIE)
         CALL(evt_party_set_pose, 0, STRING("PWD_I_1"))
-        CASE_EQUAL(6)
+        CASE_EQUAL(PARTY_VIVIAN)
         CALL(evt_party_set_pose, 0, STRING("PTR_I_1"))
-        CASE_EQUAL(7)
+        CASE_EQUAL(PARTY_MS_MOWZ)
         CALL(evt_party_set_pose, 0, STRING("PCH_I_1"))
     END_SWITCH
     RETURN
 EVT_END()
 
-/** Puts the current partner into its happy pose (the *_Y_1 animations) as the used item's recovery takes effect. */
-EVT_BEGIN(kime_pose2)
+/** Like kime_pose with the *_Y_1 poses, played as the item takes effect (evt_item_use). */
+static EVT_BEGIN(kime_pose2)
 #if VERSION >= VERSION_JP
     CALL(evt_party_nokotaro_get_status, 0, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
@@ -571,28 +573,28 @@ EVT_BEGIN(kime_pose2)
 #endif
     CALL(evt_mario_get_party, LW(0))
     SWITCH(LW(0))
-        CASE_EQUAL(0)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PARTY_NONE)
+        CASE_EQUAL(PARTY_GOOMBELLA)
         CALL(evt_party_set_pose, 0, STRING("PKR_Y_1"))
-        CASE_EQUAL(2)
+        CASE_EQUAL(PARTY_KOOPS)
         CALL(evt_party_set_pose, 0, STRING("PNK_Y_1"))
-        CASE_EQUAL(3)
+        CASE_EQUAL(PARTY_BOBBERY)
         CALL(evt_party_set_pose, 0, STRING("Y_1"))
-        CASE_EQUAL(4)
+        CASE_EQUAL(PARTY_YOSHI)
         CALL(evt_party_set_pose, 0, STRING("PYS_Y_1"))
-        CASE_EQUAL(5)
+        CASE_EQUAL(PARTY_FLURRIE)
         CALL(evt_party_set_pose, 0, STRING("PWD_Y_1"))
-        CASE_EQUAL(6)
+        CASE_EQUAL(PARTY_VIVIAN)
         CALL(evt_party_set_pose, 0, STRING("PTR_Y_1"))
-        CASE_EQUAL(7)
+        CASE_EQUAL(PARTY_MS_MOWZ)
         CALL(evt_party_set_pose, 0, STRING("PCH_Y_1"))
     END_SWITCH
     RETURN
 EVT_END()
 
 /**
- * Returns the current partner to its normal standing pose
- * after item use (JP on: skipped while Koops reports a nonzero nokonokoGetStatus).
+ * JP and later, run by evt_item_use: sets the partner's pose id 1 (evt_party_set_breed_pose) unless
+ * evt_party_nokotaro_get_status returns nonzero in LW(0).
  */
 #if VERSION >= VERSION_JP
 EVT_BEGIN(win_main_child_evt)
@@ -609,7 +611,7 @@ EVT_END()
  * The 8-bit (Famicom-style) version of the partner item poses, used while Mario is in his 8-bit form;
  * Yoshi's pose depends on his color (party_color).
  */
-EVT_BEGIN(kime_pose_famicom)
+static EVT_BEGIN(kime_pose_famicom)
 #if VERSION >= VERSION_JP
     CALL(evt_party_nokotaro_get_status, 0, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
@@ -618,14 +620,14 @@ EVT_BEGIN(kime_pose_famicom)
 #endif
     CALL(evt_mario_get_party, LW(0))
     SWITCH(LW(0))
-        CASE_EQUAL(0)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PARTY_NONE)
+        CASE_EQUAL(PARTY_GOOMBELLA)
         CALL(evt_party_set_pose, 0, STRING("R_2"))
-        CASE_EQUAL(2)
+        CASE_EQUAL(PARTY_KOOPS)
         CALL(evt_party_set_pose, 0, STRING("R_3"))
-        CASE_EQUAL(3)
+        CASE_EQUAL(PARTY_BOBBERY)
         CALL(evt_party_set_pose, 0, STRING("R_13"))
-        CASE_EQUAL(4)
+        CASE_EQUAL(PARTY_YOSHI)
         CALL(party_color, LW(0))
         SWITCH(LW(0))
             CASE_EQUAL(0)
@@ -643,11 +645,11 @@ EVT_BEGIN(kime_pose_famicom)
             CASE_EQUAL(6)
             CALL(evt_party_set_pose, 0, STRING("R_11"))
         END_SWITCH
-        CASE_EQUAL(5)
+        CASE_EQUAL(PARTY_FLURRIE)
         CALL(evt_party_set_pose, 0, STRING("R_4"))
-        CASE_EQUAL(6)
+        CASE_EQUAL(PARTY_VIVIAN)
         CALL(evt_party_set_pose, 0, STRING("R_12"))
-        CASE_EQUAL(7)
+        CASE_EQUAL(PARTY_MS_MOWZ)
         CALL(evt_party_set_pose, 0, STRING("R_15"))
     END_SWITCH
     RETURN
@@ -662,20 +664,19 @@ EVT_END()
 EVT_BEGIN(evt_item_use)
     SET_TYPE(0)
     CALL(evt_mario_normalize)
-#if VERSION <= VERSION_DEMO_JP
-    WAIT_FRAMES(1)
-    CALL(evt_mario_adjust_dir)
-#else
+#if VERSION >= VERSION_JP
     CALL(all_party_slit_off)
+#endif
     WAIT_FRAMES(1)
     CALL(evt_mario_adjust_dir)
+#if VERSION >= VERSION_JP
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL_CHILD(win_main_child_evt)
 #endif
     IF_INT_EQUAL(LW(11), 0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         ADD(LW(1), 50)
-        CALL(evt_item_entry, STRING("menu_dummy"), LW(10), LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+        CALL(evt_item_entry, STRING("menu_dummy"), LW(10), LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
         ADD(LW(1), 10)
         CALL(evt_eff, 0, STRING("itemget"), 10, LW(0), LW(1), LW(2), 0, 0, 0, 0, 0, 0, 0, 0)
         CALL(evt_snd_sfxon_3d, STRING("SFX_ITEM_MARIO_USE1"), LW(0), LW(1), LW(2), 0)
@@ -697,7 +698,7 @@ EVT_BEGIN(evt_item_use)
     IF_INT_EQUAL(LW(0), LW(11))
         CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
         ADD(LW(1), 50)
-        CALL(evt_item_entry, STRING("menu_dummy"), LW(10), LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+        CALL(evt_item_entry, STRING("menu_dummy"), LW(10), LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
         ADD(LW(1), 10)
         CALL(evt_eff, 0, STRING("itemget"), 10, LW(0), LW(1), LW(2), 0, 0, 0, 0, 0, 0, 0, 0)
         CALL(evt_snd_sfxon_3d, STRING("SFX_ITEM_MARIO_USE1"), LW(0), LW(1), LW(2), 0)
@@ -740,7 +741,6 @@ EVT_END()
  */
 EVT_BEGIN(evt_diary_read)
     SET_TYPE(0)
-    // "Read the diary?" Saying no ends it here.
     CALL(evt_party_cont_onoff, 0, 1)
     WAIT_FRAMES(1)
     CALL(evt_mario_normalize)
@@ -751,7 +751,6 @@ EVT_BEGIN(evt_diary_read)
         CALL(evt_party_cont_onoff, 0, 0)
         RETURN
     END_IF
-    // "You may be cursed by the ghost!" Saying no ends it here.
     CALL(evt_msg_print_add, 0, STRING("stg6_rsh_diary_02"))
     CALL(evt_msg_select, 0, STRING("stg6_rsh_diary_01_yn"))
     IF_INT_NOT_EQUAL(LW(0), 0)
@@ -759,7 +758,6 @@ EVT_BEGIN(evt_diary_read)
         CALL(evt_party_cont_onoff, 0, 0)
         RETURN
     END_IF
-    // "This could be really, REALLY bad." Saying no ends it here.
     CALL(evt_msg_print_add, 0, STRING("stg6_rsh_diary_03"))
     CALL(evt_msg_select, 0, STRING("stg6_rsh_diary_01_yn"))
     IF_INT_NOT_EQUAL(LW(0), 0)
@@ -768,28 +766,26 @@ EVT_BEGIN(evt_diary_read)
         RETURN
     END_IF
     CALL(evt_msg_continue)
-    // The music fades and Mario reads the first lines of the diary.
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
 #if VERSION >= VERSION_JP
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
 #endif
     CALL(evt_mario_adjust_dir)
     CALL(evt_mario_set_pose, STRING("M_L_2"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_diary_04"), 0, 0)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
-    // The ghost is brought in (once) and starts pulsing between faint and solid.
     CALL(evt_npc_check, STRING("ゆうれい"), LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(evt_npc_entry, STRING("ゆうれい"), STRING("c_ghost_k"))
+        CALL(evt_npc_entry, STRING("ゆうれい"), STRING("c_ghost_k")) // Ghost T., who appears when Mario reads his diary
         CALL(evt_npc_set_position, STRING("ゆうれい"), 0, -1000, 0)
         CALL(evt_npc_set_tribe, STRING("ゆうれい"), STRING("ゆうれい"))
         CALL(evt_npc_set_anim, STRING("ゆうれい"), STRING("O_1"))
         CALL(evt_npc_set_autotalkpose, STRING("ゆうれい"), STRING("O_2"), STRING("T_2"))
     END_IF
-    CALL(evt_npc_flag_onoff, 1, STRING("ゆうれい"), NPC_FLAG_NO_SHADOW | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ゆうれい"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_SHADOW)
     BEGIN_INLINE_EVENT
         LOOP(0)
-            CALL(evt_sub_intpl_msec_init, 11, 180, 64, 1000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 64, 1000)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_npc_set_color, STRING("ゆうれい"), 255, 255, 255, LW(0))
@@ -797,7 +793,7 @@ EVT_BEGIN(evt_diary_read)
             IF_INT_EQUAL(LW(1), 1)
                 GOTO(1)
             END_IF
-            CALL(evt_sub_intpl_msec_init, 11, 64, 180, 1000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 64, 180, 1000)
             LABEL(2)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_npc_set_color, STRING("ゆうれい"), 255, 255, 255, LW(0))
@@ -807,8 +803,7 @@ EVT_BEGIN(evt_diary_read)
             END_IF
         END_LOOP
     END_INLINE_EVENT
-    // The ghost music plays and the ghost appears right behind Mario: "YOU LOOKED!"
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG5_GHOST1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG5_GHOST1"))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     ADD(LW(1), 20)
     ADD(LW(2), 20)
@@ -816,14 +811,13 @@ EVT_BEGIN(evt_diary_read)
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_GHOST_APPEAR1"), LW(0), LW(1), LW(2), 0)
 #else
-    CALL(evt_snd_sfxon_3d, 132773, LW(0), LW(1), LW(2), 0)
+    CALL(evt_snd_sfxon_3d, PSND_SFX_STG6_GHOST_APPEAR1 | PSND_SFX_BYPASS_MUTE, LW(0), LW(1), LW(2), 0)
 #endif
     WAIT_MS(200)
     CALL(evt_mario_set_pose, STRING("M_I_O"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_diary_05"), 0, STRING("ゆうれい"))
     WAIT_MS(300)
-    // Silence, then the screen blurs with a shaking sound and the camera rolls.
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     BEGIN_INLINE_EVENT
         CALL(evt_env_blur_on, 0, 0)
     END_INLINE_EVENT
@@ -831,17 +825,28 @@ EVT_BEGIN(evt_diary_read)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_GHOST_SHAKE1"), LW(0), LW(1), LW(2), LW(3))
 #else
-    CALL(evt_snd_sfxon, 132770, LW(3))
+    CALL(evt_snd_sfxon, PSND_SFX_STG6_GHOST_SHAKE1 | PSND_SFX_BYPASS_MUTE, LW(3))
 #endif
     BEGIN_INLINE_EVENT
         CALL(cam_r)
     END_INLINE_EVENT
-    // Four seconds later: Game Over.
     WAIT_MS(4000)
     CALL(evt_fade_set_mapchange_type, 1, -1, 600, -1, -1)
     CALL(evt_seq_set_seq, SEQ_GAME_OVER, 0, 0)
     RETURN
 EVT_END()
+
+// Stripped (JP demo map: UNUSED, 0x14 each, between evt_diary_read and evt_lecture_msg): nothing reads them (their
+// user was probably the stripped winNumSet, 0x228, whose body is not known). Same names and sizes as icondrv's
+// linked digit icon tables, whose contents they take.
+static u16 suuji[] = { // 0-9
+    ICON_NUMBER_0, ICON_NUMBER_1, ICON_NUMBER_2, ICON_NUMBER_3, ICON_NUMBER_4,
+    ICON_NUMBER_5, ICON_NUMBER_6, ICON_NUMBER_7, ICON_NUMBER_8, ICON_NUMBER_9,
+};
+static u16 suuji_s[] = { // 0-9 small
+    ICON_NUMBER_SMALL_0, ICON_NUMBER_SMALL_1, ICON_NUMBER_SMALL_2, ICON_NUMBER_SMALL_3, ICON_NUMBER_SMALL_4,
+    ICON_NUMBER_SMALL_5, ICON_NUMBER_SMALL_6, ICON_NUMBER_SMALL_7, ICON_NUMBER_SMALL_8, ICON_NUMBER_SMALL_9,
+};
 
 /**
  * The badge tutorial's text (lecture_badge_00..07) shown over the pause menu;
@@ -857,6 +862,9 @@ EVT_BEGIN(evt_lecture_msg)
     CALL(wait, 2)
     CALL(evt_msg_continue)
     CALL(evt_msg_print, 0, STRING("lecture_badge_02"), 0, 0)
+#if VERSION <= VERSION_DEMO_JP
+    CALL(wait, 5)
+#else
 #if VERSION >= VERSION_US
     WAIT_MS(500)
     CALL(wait, 3)
@@ -867,6 +875,7 @@ EVT_BEGIN(evt_lecture_msg)
     CALL(wait, 5)
 #if VERSION >= VERSION_US
     WAIT_MS(500)
+#endif
 #endif
     CALL(evt_msg_continue)
     CALL(evt_msg_print, 0, STRING("lecture_badge_03"), 0, 0)
@@ -886,7 +895,7 @@ EVT_BEGIN(evt_lecture_msg)
     CALL(evt_msg_continue)
 #if VERSION >= VERSION_US
     LOOP(0)
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG0_17_BADGE_TUTORIAL)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG0_17_BADGE_TUTORIAL)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
@@ -897,28 +906,23 @@ EVT_BEGIN(evt_lecture_msg)
     CALL(lecture_key_mask_off)
 #endif
     RETURN
-#if VERSION == VERSION_DEMO_US_1 || VERSION >= VERSION_US
-    OPCODE_END_SCRIPT,
-    // the June US demo and the US code line (US, PAL, the September demos): a trailing zero word in the object (the
-    // JP gap_05 data word)
-    0
-};
-#else
 EVT_END()
-#endif
 
 /**
- * evt_item_use step: opens the status window, adds the item's HP/FP/SP to Mario (or HP to partner LW(11) plus
- * FP/SP), then counts frames while spawning the HP and FP recovery number effects over the target.
- * Blocks until done.
+ * Applies the item LW(10) used from the field Items menu, one step per call (static cnt, reset on the first call):
+ * it forces the status window open and adds the item's HP to Mario, or to the partner LW(11) when nonzero, and its FP
+ * and Star Power to Mario's; then it shows the HP number (if any) and some 60 frames later the FP number (if any)
+ * above the one who used it, and ends. JP and later set the partner's HP number's baseY to minus half the partner's
+ * height.
  */
-static USER_FUNC(itemUseFunc) {
+USER_FUNC(itemUseFunc) {
     PartyEntry* party;
     MarioWork* mario;
     ItemData* item;
 #if VERSION >= VERSION_JP
     EffectEntry* eff;
 #endif
+    static s32 cnt;
 
     item = &itemDataTable[event->lwData[10]];
     mario = marioGetPtr();
@@ -964,6 +968,8 @@ static USER_FUNC(itemUseFunc) {
                 break;
             }
             effRecoveryEntry(1, item->fp_restored, mario->position.x, mario->position.y + mario->wPlayerCollisionBox.y, mario->position.z);
+
+            // falls through: unlike the other effect cases, the count jumps straight to 999
         case 130:
             cnt = 999;
             break;
@@ -1013,11 +1019,11 @@ static USER_FUNC(itemUseFunc2) {
     return EVT_RETURN_DONE;
 }
 
-/** Sets args[0] to 1 if Mario is in his 8-bit form (WIN_FLAG_8BIT_MARIO), else 0; picks the partner pose script. */
+/** Sets args[0] to 1 if Mario is in his 8-bit form (WINDOW_FLAG_8BIT), else 0; picks the partner pose script. */
 static USER_FUNC(famicom_check) {
     EvtWord* args = event->args;
 
-    if (wp->flags & WIN_FLAG_8BIT_MARIO) {
+    if (wp->flags & WINDOW_FLAG_8BIT) {
         evtSetValue(event, args[0], 1);
     } else {
         evtSetValue(event, args[0], 0);
@@ -1025,16 +1031,17 @@ static USER_FUNC(famicom_check) {
     return EVT_RETURN_DONE;
 }
 
-/** Sets args[0] to Yoshi's color (pouchGetPartyColor(4)) for the 8-bit item pose. */
+/** Sets args[0] to Yoshi's color (pouchGetPartyColor(PARTY_YOSHI)) for the 8-bit item pose. */
 static USER_FUNC(party_color) {
     EvtWord* args = event->args;
 
-    evtSetValue(event, args[0], pouchGetPartyColor(4));
+    evtSetValue(event, args[0], pouchGetPartyColor(PARTY_YOSHI));
     return EVT_RETURN_DONE;
 }
 
-/** Clears the forced slit state on every partner (allPartyForceSlitOff) before the item-use scene. */
 #if VERSION >= VERSION_JP
+/** Forces every partner out of Paper Mode (allPartyForceSlitOff). */
+// Descriptive name (not in the symbol maps); placeholder unk_80177cf8, JP 0x80177CF8. See docs/NAME_PROVENANCE.md.
 USER_FUNC(all_party_slit_off) {
     allPartyForceSlitOff();
     return EVT_RETURN_DONE;
@@ -1052,7 +1059,7 @@ static USER_FUNC(cam_r) {
 
     cam = camGetPtr(CAMERA_3D);
     cam->rollAngle += 3.0f;
-    s = (f32)sin((f32)(u32)gp->retraceCount / 10.0f);
+    s = (f32)sin((f32)gp->retraceCount / 10.0f);
     PSVECSubtract(&cam->cameraAt, &cam->cameraPos, &v);
     PSVECScale(&v, &v, 0.2f * s);
     cam->viewOffset.x = v.x;
@@ -1063,16 +1070,10 @@ static USER_FUNC(cam_r) {
 
 /** TRUE while the Ragged Diary scene runs or the game is in Game Over; evt_shop and evt_win use it to hold off. */
 BOOL winGhostDiaryChk(void) {
-    if (wp->menuState == 301) {
+    if (wp->menuState == WIN_MENU_DIARY_WAIT) {
         return TRUE;
     }
     return seqGetSeq() == SEQ_GAME_OVER;
-}
-
-// FAKE: stand-in for a function the linker stripped; it only keeps the original's path format string
-// in its place in .rodata.
-const char* winMainStrippedTpl(void) {
-    return WIN_DIR "%s/win.tpl";
 }
 
 /** Prepares the font renderer for the winFontSet* calls that follow. */
@@ -1080,29 +1081,39 @@ void winFontInit(void) {
     FontDrawStart();
 }
 
-/**
- * Draws printf-formatted menu text at pos with scale and color (message control codes honoured).
- * The US and later releases only format when the string contains '%', with a larger buffer.
- */
-#if VERSION >= VERSION_US
+/** Formats the text and draws it; before US it always formats into a 1 KB buffer first. */
 void winFontSet(Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
+#if VERSION >= VERSION_US
     char buf[0x1000];
     const char* msg = fmt;
+#else
+    char buf[0x400];
+#endif
     Mtx trans;
     Mtx scl;
     va_list args;
-
+#if VERSION >= VERSION_US
     if (strstr(fmt, "%")) {
         va_start(args, fmt);
         vsprintf(buf, fmt, args);
         msg = buf;
     }
+#else
+    va_start(args, fmt);
+    vsprintf(buf, fmt, args);
+#endif
     PSMTXTrans(trans, pos.x, pos.y, pos.z);
     PSMTXScale(scl, scale.x, scale.y, scale.z);
     PSMTXConcat(trans, scl, trans);
     FontDrawColor(color);
+#if VERSION >= VERSION_US
     FontDrawMessageMtx(trans, msg);
+#else
+    FontDrawMessageMtx(trans, buf);
+#endif
 }
+
+#if VERSION >= VERSION_US
 
 /** Like winFontSet, but squeezes the text horizontally so it fits in width; used for long localized names. */
 void winFontSetWidth(Vec pos, Vec scale, GXColor color, f32 width, const char* fmt, ...) {
@@ -1122,35 +1133,21 @@ void winFontSetWidth(Vec pos, Vec scale, GXColor color, f32 width, const char* f
     }
     winFontSet(pos, scale, color, msg);
 }
-#else
-/** Pre-US winFontSet: always formats into a 1 KB buffer, then draws it. */
-void winFontSet(Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
-    char buf[0x400];
-    Mtx trans;
-    Mtx scl;
-    va_list args;
 
-    va_start(args, fmt);
-    vsprintf(buf, fmt, args);
-    PSMTXTrans(trans, pos.x, pos.y, pos.z);
-    PSMTXScale(scl, scale.x, scale.y, scale.z);
-    PSMTXConcat(trans, scl, trans);
-    FontDrawColor(color);
-    FontDrawMessageMtx(trans, buf);
-}
 #endif
 
-/**
- * Draws formatted text right-aligned to the width of a three-digit number ("999", full-width in Japanese),
- * for HP/FP/BP style counters. Draws as a plain string, without message control codes.
- */
-#if VERSION >= VERSION_US
+/** Right-aligns the text to a reference width: "９９９" in JP, chosen by language in US and later. */
 void winFontSetR(Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
+#if VERSION >= VERSION_US
     char buf[0x1000];
     const char* msg = fmt;
+#else
+    char buf[0x400];
+#endif
     Mtx trans;
     Mtx scl;
     va_list args;
+#if VERSION >= VERSION_US
     s32 ref;
 
     if (strstr(fmt, "%")) {
@@ -1158,44 +1155,35 @@ void winFontSetR(Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
         vsprintf(buf, fmt, args);
         msg = buf;
     }
-    if ((u32)gp->language != 0) {
+    if (gp->language != LANGUAGE_JP) {
         ref = FontGetMessageWidth("999");
     } else {
         ref = FontGetMessageWidth("９９９");
     }
-    {
-        s32 w = ref - FontGetMessageWidth(msg);
-        PSMTXTrans(trans, pos.x + scale.x * w, pos.y, pos.z);
-    }
-    PSMTXScale(scl, scale.x, scale.y, scale.z);
-    PSMTXConcat(trans, scl, trans);
-    FontDrawColor(color);
-    FontDrawStringMtx(trans, msg);
-}
 #else
-/** Pre-US winFontSetR: always right-aligns to the full-width "９９９". */
-void winFontSetR(Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
-    char buf[0x400];
-    Mtx trans;
-    Mtx scl;
-    va_list args;
-
     va_start(args, fmt);
-    do {
-        vsprintf(buf, fmt, args);
-    } while (0);
+    vsprintf(buf, fmt, args);
+#endif
     {
+#if VERSION >= VERSION_US
+        s32 w = ref - FontGetMessageWidth(msg);
+#else
         s32 w = FontGetMessageWidth("９９９") - FontGetMessageWidth(buf);
+#endif
         PSMTXTrans(trans, pos.x + scale.x * w, pos.y, pos.z);
     }
     PSMTXScale(scl, scale.x, scale.y, scale.z);
     PSMTXConcat(trans, scl, trans);
     FontDrawColor(color);
+#if VERSION >= VERSION_US
+    FontDrawStringMtx(trans, msg);
+#else
     FontDrawStringMtx(trans, buf);
-}
 #endif
+}
 
 #if VERSION >= VERSION_DEMO_EU
+
 /** PAL: right-aligned like winFontSetR, squeezed horizontally to fit width */
 void winFontSetRWidth(Vec pos, Vec scale, GXColor color, f32 width, const char* fmt, ...) {
     char buf[0x1000];
@@ -1213,7 +1201,7 @@ void winFontSetRWidth(Vec pos, Vec scale, GXColor color, f32 width, const char* 
     } else {
         msg = fmt;
     }
-    if ((u32)gp->language != 0) {
+    if (gp->language != LANGUAGE_JP) {
         ref = scale.x * FontGetMessageWidth("999");
     } else {
         ref = scale.x * FontGetMessageWidth("９９９");
@@ -1229,30 +1217,48 @@ void winFontSetRWidth(Vec pos, Vec scale, GXColor color, f32 width, const char* 
     FontDrawColor(color);
     FontDrawStringMtx(trans, msg);
 }
+
 #endif
 
-/** Draws formatted text as a plain string with the font's outline (edge) turned on. */
-#if VERSION >= VERSION_US
+/**
+ * Draws formatted text as a plain string with the font's outline (edge) turned on.
+ * Before US it always formats into a 1 KB buffer; US and later format only strings containing "%", into a 4 KB buffer.
+ */
 void winFontSetEdge(Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
+#if VERSION >= VERSION_US
     char buf[0x1000];
     const char* msg = fmt;
+#else
+    char buf[0x400];
+#endif
     Mtx trans;
     Mtx scl;
     va_list args;
 
+#if VERSION >= VERSION_US
     if (strstr(fmt, "%")) {
         va_start(args, fmt);
         vsprintf(buf, fmt, args);
         msg = buf;
     }
+#else
+    va_start(args, fmt);
+    vsprintf(buf, fmt, args);
+#endif
     PSMTXTrans(trans, pos.x, pos.y, pos.z);
     PSMTXScale(scl, scale.x, scale.y, scale.z);
     PSMTXConcat(trans, scl, trans);
     FontDrawColor(color);
     FontDrawEdge();
+#if VERSION >= VERSION_US
     FontDrawStringMtx(trans, msg);
+#else
+    FontDrawStringMtx(trans, buf);
+#endif
     FontDrawEdgeOff();
 }
+
+#if VERSION >= VERSION_US
 
 /** Outlined text squeezed horizontally to fit in width (winFontSetEdge plus the winFontSetWidth fit). */
 void winFontSetEdgeWidth(Vec pos, Vec scale, GXColor color, f32 width, const char* fmt, ...) {
@@ -1272,24 +1278,7 @@ void winFontSetEdgeWidth(Vec pos, Vec scale, GXColor color, f32 width, const cha
     }
     winFontSetEdge(pos, scale, color, msg);
 }
-#else
-/** Pre-US winFontSetEdge: always formats into a 1 KB buffer. */
-void winFontSetEdge(Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
-    char buf[0x400];
-    Mtx trans;
-    Mtx scl;
-    va_list args;
 
-    va_start(args, fmt);
-    vsprintf(buf, fmt, args);
-    PSMTXTrans(trans, pos.x, pos.y, pos.z);
-    PSMTXScale(scl, scale.x, scale.y, scale.z);
-    PSMTXConcat(trans, scl, trans);
-    FontDrawColor(color);
-    FontDrawEdge();
-    FontDrawStringMtx(trans, buf);
-    FontDrawEdgeOff();
-}
 #endif
 
 /** Looks up message id msg (msgSearch) and draws it; does nothing for NULL. */
@@ -1306,8 +1295,8 @@ void winFontSetLabel(Vec pos, Vec scale, GXColor color, const char* msg) {
     }
 }
 
-/** Draws formatted text with a fixed character pitch (FontDrawStringVecPitch). Only in JP and the demos. */
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
+/** Draws the printf-style text at pos with scale, color and a character pitch of pitch. Only before US. */
 void winFontSetPitch(f32 pitch, Vec pos, Vec scale, GXColor color, const char* fmt, ...) {
     char buf[0x400];
     va_list args;
@@ -1316,9 +1305,7 @@ void winFontSetPitch(f32 pitch, Vec pos, Vec scale, GXColor color, const char* f
     vsprintf(buf, fmt, args);
     FontDrawColor(color);
     FontDrawScaleVec(scale);
-    // FAKE: called through a cast that passes the address of this function's own pos (the same registers as
-    // fontmgr.h's by-value Vec): the plain call first copies pos to a temporary, which the target does not.
-    ((void (*)(Vec*, const char*, f32))FontDrawStringVecPitch)(&pos, buf, pitch);
+    FontDrawStringVecPitch(&pos, buf, pitch);
 }
 #endif
 
@@ -1328,7 +1315,7 @@ void winTexInit(TEXPalette* texture) {
     GXSetCullMode(GX_CULL_NONE);
     GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     GXSetNumChans(0);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -1336,8 +1323,8 @@ void winTexInit(TEXPalette* texture) {
     GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_ZERO);
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
     GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
-    GXSetNumTexGens(1u);
-    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C);
+    GXSetNumTexGens(1);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
@@ -1376,8 +1363,8 @@ void winTexSet(u32 textureId, Vec translate, Vec scale, GXColor color) {
     PSMTXScale(scl, scale.x * GXGetTexObjWidth(&obj), sy, scale.z);
     PSMTXConcat(trans, scl, m);
     PSMTXConcat(camGetPtr(CAMERA_2D)->view, m, m);
-    GXLoadPosMtxImm(m, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(m, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
@@ -1388,9 +1375,13 @@ void winTexSet(u32 textureId, Vec translate, Vec scale, GXColor color) {
     GXPosition3f32(-0.5f, HALF_F, 0.0f);
     GXTexCoord2f32(0.0f, 0.0f);
 }
-
-/** winTexSet that always alpha-blends, whatever the color's alpha. Not in the demos. */
 #if VERSION >= VERSION_JP
+
+/**
+ * Draws texture textureId of the window textures (winTexTpl) on the 2D camera as a quad centred at translate, scale
+ * times its size, tinted color, with nearest filtering and alpha blending. JP and later.
+ */
+// Descriptive name (not in the symbol maps); placeholder unk_80177008, JP 0x80177008. See docs/NAME_PROVENANCE.md.
 void winTexSetNearest(u32 textureId, Vec translate, Vec scale, GXColor color) {
     Mtx trans;
     Mtx scl;
@@ -1411,8 +1402,8 @@ void winTexSetNearest(u32 textureId, Vec translate, Vec scale, GXColor color) {
     PSMTXScale(scl, scale.x * GXGetTexObjWidth(&obj), sy, scale.z);
     PSMTXConcat(trans, scl, m);
     PSMTXConcat(camGetPtr(CAMERA_2D)->view, m, m);
-    GXLoadPosMtxImm(m, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(m, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
@@ -1456,8 +1447,8 @@ void winTexSetRot(u32 textureId, Vec translate, Vec scale, GXColor color, f32 ro
     PSMTXConcat(trans, r, m);
     PSMTXConcat(m, scl, m);
     PSMTXConcat(camGetPtr(CAMERA_2D)->view, m, m);
-    GXLoadPosMtxImm(m, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(m, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
@@ -1477,8 +1468,8 @@ void winTexSetRot(u32 textureId, Vec translate, Vec scale, GXColor color, f32 ro
 void winTexInit_x2(TEXPalette* texture) {
     winTexInit(texture);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C);
-    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     GXSetNumTevStages(2);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -1518,8 +1509,8 @@ void winTexSet_x2(u32 textureId1, u32 textureId2, Vec translate, Vec scale, GXCo
     PSMTXScale(scl, scale.x * GXGetTexObjWidth(&obj), sy, scale.z);
     PSMTXConcat(trans, scl, m);
     PSMTXConcat(camGetPtr(CAMERA_2D)->view, m, m);
-    GXLoadPosMtxImm(m, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(m, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
@@ -1538,7 +1529,7 @@ void winIconInit(void) {
 
 /**
  * Sets up GX so the following winIconSet draws a grayscale icon (R, G and B summed at 1/3 each);
- * used for badges that cost more BP than Mario has left.
+ * used for grayed-out (SELECT_ITEM_GRAY) entries in winmgr's select windows.
  */
 void winIconGrayInit(void) {
     winTexInit(NULL);
@@ -1559,8 +1550,10 @@ void winIconGrayInit(void) {
     GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C1, GX_CC_TEXC, GX_CC_CPREV);
     GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
     GXSetTevSwapMode(GX_TEVSTAGE1, GX_TEV_SWAP0, GX_TEV_SWAP2);
+#if VERSION == VERSION_DEMO_US_1
     if (!GX_TEVSTAGE2 && !GX_TEVSTAGE2 && !GX_TEVSTAGE2) {
     }
+#endif
     GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -1577,7 +1570,7 @@ void winIconGrayInit(void) {
 
 /**
  * Draws item/menu icon iconId centred at translate, scaled and tinted, with linear filtering.
- * One icon id is remapped to its neighbour (ICON_115 to ICON_114).
+ * One icon id is remapped to its neighbour (ICON_WEDDING_RING_SMALL to ICON_WEDDING_RING_LARGE).
  */
 void winIconSet(s32 iconId, Vec translate, Vec scale, GXColor color) {
     Mtx trans;
@@ -1586,8 +1579,8 @@ void winIconSet(s32 iconId, Vec translate, Vec scale, GXColor color) {
     GXTexObj obj;
     f32 sy;
 
-    if (iconId == ICON_115) {
-        iconId = ICON_114;
+    if (iconId == ICON_WEDDING_RING_SMALL) {
+        iconId = ICON_WEDDING_RING_LARGE;
     }
     iconGetTexObj(&obj, iconId);
     GXInitTexObjLOD(&obj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
@@ -1609,8 +1602,8 @@ void winIconSet(s32 iconId, Vec translate, Vec scale, GXColor color) {
     PSMTXScale(scl, scale.x * GXGetTexObjWidth(&obj), sy, scale.z);
     PSMTXConcat(trans, scl, m);
     PSMTXConcat(camGetPtr(CAMERA_2D)->view, m, m);
-    GXLoadPosMtxImm(m, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(m, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
@@ -1625,49 +1618,56 @@ void winIconSet(s32 iconId, Vec translate, Vec scale, GXColor color) {
     GXSetTevSwapMode(GX_TEVSTAGE2, GX_TEV_SWAP0, GX_TEV_SWAP0);
 }
 
+/** Does nothing (an empty body). */
+// Original name and size (0x4: a bare return) from the JP demo map (UNUSED there: nothing calls it); the empty
+// counterpart of winIconInit for the stripped winNumSet, which the map lists after it.
+void winNumInit(void) {
+}
+
 /**
  * evt_lecture_msg step: blocks until the tutorial has reached step args[0].
- * While waiting it lets input through (clears WIN_FLAG_LECTURE_KEY_MASK), and masks it again once the step is reached.
+ * In JP and later it clears WINDOW_FLAG_LECTURE_KEY_MASK on the first call and sets it once the step is reached;
+ * the early demos do not change that flag here.
  */
+// Original name from the JP demo map (wait, local in win_main.o).
 static USER_FUNC(wait) {
     s32 n = evtGetValue(event, event->args[0]);
 
-#if VERSION <= VERSION_DEMO_JP
-    // The demo has no key mask flag.
-    if (wp->lectureStep < n) {
-        return EVT_RETURN_BLOCK;
-    }
-    return EVT_RETURN_DONE;
-#else
+#if VERSION >= VERSION_JP
     if (isFirstCall) {
-        wp->flags &= ~WIN_FLAG_LECTURE_KEY_MASK;
+        wp->flags &= ~WINDOW_FLAG_LECTURE_KEY_MASK;
     }
+#endif
     if (wp->lectureStep < n) {
         return EVT_RETURN_BLOCK;
     }
-    wp->flags |= WIN_FLAG_LECTURE_KEY_MASK;
-    return EVT_RETURN_DONE;
+#if VERSION >= VERSION_JP
+    wp->flags |= WINDOW_FLAG_LECTURE_KEY_MASK;
 #endif
+    return EVT_RETURN_DONE;
 }
 
-/** End of the badge tutorial text: clears WIN_FLAG_LECTURE_KEY_MASK so the player has full control of the menu. */
 #if VERSION >= VERSION_JP
+
+/** Clears WINDOW_FLAG_LECTURE_KEY_MASK in the menu work. */
+// Descriptive name (not in the symbol maps); placeholder unk_80175e98, JP 0x80175E98. See docs/NAME_PROVENANCE.md.
 USER_FUNC(lecture_key_mask_off) {
-    wp->flags &= ~WIN_FLAG_LECTURE_KEY_MASK;
+    wp->flags &= ~WINDOW_FLAG_LECTURE_KEY_MASK;
     return EVT_RETURN_DONE;
 }
+
 #endif
 
 /**
  * Badge tutorial input filter, run by winMain each frame:
  * while the tutorial is on, only the input the current step asks for gets through and doing it advances lectureStep:
  * steps 0-1 take A (read from the pad and swallowed), 2-4 Right, 5-8 A, 9 Start. In JP and later nothing gets
- * through while WIN_FLAG_LECTURE_KEY_MASK is set (outside the script's wait steps).
+ * through while WINDOW_FLAG_LECTURE_KEY_MASK is set (outside the script's wait steps).
  */
 static void winLectureKeyMask(void) {
-    if (wp->flags & WIN_FLAG_LECTURE) {
+    if (wp->flags & WINDOW_FLAG_LECTURE) {
 #if VERSION >= VERSION_JP
-        if (wp->flags & WIN_FLAG_LECTURE_KEY_MASK) {
+        if (wp->flags & WINDOW_FLAG_LECTURE_KEY_MASK) {
             wp->buttonTrg = 0;
             wp->buttonRep = 0;
             wp->dirTrg = 0;
@@ -1727,9 +1727,9 @@ static void winLectureKeyMask(void) {
  * sets the tutorial flag, which opens the menu straight away, and starts evt_lecture_msg.
  */
 void winLectureOn(void) {
-    wp->flags |= WIN_FLAG_LECTURE;
+    wp->flags |= WINDOW_FLAG_LECTURE;
 #if VERSION >= VERSION_JP
-    wp->flags |= WIN_FLAG_LECTURE_KEY_MASK;
+    wp->flags |= WINDOW_FLAG_LECTURE_KEY_MASK;
 #endif
     wp->lectureStep = 0;
     wp->lectureEvent = evtEntry(evt_lecture_msg, 0, 0);
@@ -1737,19 +1737,21 @@ void winLectureOn(void) {
 
 /** TRUE while the badge tutorial's text script is still running; once it ends, clears the tutorial flag. */
 BOOL winLectureCheck(void) {
-
-    if ((wp->flags & WIN_FLAG_LECTURE) && evtCheckID(wp->lectureEvent->eventId)) {
+    if ((wp->flags & WINDOW_FLAG_LECTURE) && evtCheckID(wp->lectureEvent->eventId)) {
         return TRUE;
     }
-    wp->flags &= ~WIN_FLAG_LECTURE;
+    wp->flags &= ~WINDOW_FLAG_LECTURE;
     return FALSE;
 }
 
-// FAKE: see HALF_F at the top; volatile keeps each use a load from this word.
-const volatile f32 winConstHalf __attribute__((aligned(8))) = 0.5f;
+// FAKE: the global 0.5f (a real .sdata2 object) is `volatile` so each HALF_F use loads it; a plain const changes
+// the object in both versions
+const volatile f32 winMainHalf __attribute__((aligned(8))) = 0.5f;
 
-// FAKE: stand-in for a function the linker stripped; it only keeps the original's int-to-float
-// conversion constant in its place in .sdata2.
+// FAKE: stand-in; nothing calls it. It only places the int-to-float conversion constant in this object's
+// constant pool. Removing it changes the object. JP demo map: the constant (@1059) is the stripped winNumSet's
+// (UNUSED 0x228, after wait in codegen order): it follows winNumSet's UNUSED .sdata2 constants @1051, @1052, @1054
+// and its 0.5f (@1053, the global winMainHalf above stands in for it); winNumSet's body is not known.
 void winMainStrippedPool(f32* f, s32 i) {
     *f = (f32)i;
 }

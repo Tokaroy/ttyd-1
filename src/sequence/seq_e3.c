@@ -1,4 +1,5 @@
 // E3 sequence: the trade-show chapter-select menu, still present in the retail builds.
+
 #include "version.h"
 #include "seq/seq_e3.h"
 #include "demo/DEMOPad.h"
@@ -20,14 +21,32 @@
 #include "system.h"
 #include <string.h>
 #include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 #include "mario/mario_motion.h"
 #include "statuswindow.h"
 #include "win/win_main.h"
 #include "manager/fontmgr.h"
 #include "driver/msgdrv.h"
 #include "driver/windowdrv.h"
+#include "sfx_name_word.h"
 #include "mario/mario_party.h"
-#include "evt/evt_story.h"
+
+typedef enum winTexMode {
+#if VERSION >= VERSION_DEMO_EU
+    // PAL's texture file has one texture fewer before the tile
+    TEX_TILE = 4,
+    TEX_CURSOR_A = 5,
+    TEX_CURSOR_B = 6,
+    TEX_BOX_FIRST = 7,
+#else
+    TEX_TILE = 5,
+    TEX_CURSOR_A = 6,
+    TEX_CURSOR_B = 7,
+    TEX_BOX_FIRST = 8,
+#endif
+    TEX_TITLE_BG = 11,
+} winTexMode;
+
 #if VERSION <= VERSION_DEMO_JP
 #include "evt/evt_cmd.h"
 #include "evt/evt_sub.h"
@@ -36,84 +55,65 @@
 #include <dolphin/pad.h>
 #endif
 
+static void pressStartGX(s32 alpha, f32 x, f32 y);
+
 typedef struct seq_e3_entry {
     s32 id; // 0x0
     f32 x;  // 0x4
     f32 y;  // 0x8
 } seq_e3_entry;
 
-// mariost.c's time of the last pad input (not in mariost.h: seq_game.c has a static of the same name)
-extern OSTime none_key;
-
 //.bss
 static seq_e3_work work;
 
 //.sdata
 static seq_e3_work* wp = &work;
-#if VERSION >= VERSION_US
+
 /**
- * The four scenarios of the trade-show menu: the story progress each one starts at and where its box sits
- * on screen, one box in each corner.
+ * The scenarios of the trade-show menu (four in US and later, three before): the story progress each one
+ * starts at and where its box sits on screen.
  */
-seq_e3_entry e3_tbl[4] = {
+#if VERSION >= VERSION_US
+static seq_e3_entry e3_tbl[4] = {
     { 3, -140.0f, 100.0f },
     { 23, 140.0f, 100.0f },
     { 35, -140.0f, -100.0f },
     { 96, 140.0f, -100.0f },
-};
 #else
-/**
- * The three scenarios of the demo's trade-show menu: the story progress each one starts at and where its box
- * sits on screen, two at the top and one at the bottom centre.
- */
-seq_e3_entry e3_tbl[3] = {
+static seq_e3_entry e3_tbl[3] = {
     { 23, -140.0f, 100.0f },
     { 35, 140.0f, 100.0f },
     { 96, 0.0f, -100.0f },
-};
 #endif
-#if VERSION <= VERSION_DEMO_JP
-// The demo's title screen shows four characters: {anim group, walk, stay, action} for each.
-char* anim_tbl[4 * 4] = {
+
+};
+
+/**
+ * Model and three animations for each of the four characters of this sequence. Only the US demo links code that
+ * reads it (the JP demo map lists it UNUSED); in the later versions nothing reads it and the linker strips it.
+ * Its strings of eight bytes and more stay in .rodata; the five six-byte ones go to .sdata2 in the later
+ * compilers and are stripped with the table.
+ * Static: from US on eff_nice.c has a global anim_tbl, so a global here would not link (the JP demo map does not
+ * show this table's scope).
+ */
+static char* anim_tbl[4 * 4] = {
     "b_mario", "M_W_1", "M_S_1", "M_N_8",
     "c_pkr", "PKR_W_1", "PKR_S_1", "PKR_A_2A",
     "c_pnk", "PNK_W_1", "PNK_S_1", "PNK_O_1",
     "c_windy", "PWD_W_1", "PWD_S_1", "PWD_A_7",
 };
-#elif VERSION <= VERSION_JP
-char* anim_tbl[] = { "b_mario", "PKR_W_1", "PKR_S_1", "PKR_A_2A", "PNK_W_1", "PNK_S_1",
-                     "PNK_O_1", "c_windy", "PWD_W_1", "PWD_S_1",  "PWD_A_7" };
-#endif
-
-#if VERSION >= VERSION_US
-// US: anim_tbl is gone (dead-stripped) but its strings stayed at the start of .rodata
-const char e3_anim_str0[] = "b_mario";
-const char e3_anim_str1[] = "PKR_W_1";
-const char e3_anim_str2[] = "PKR_S_1";
-const char e3_anim_str3[] = "PKR_A_2A";
-const char e3_anim_str4[] = "PNK_W_1";
-const char e3_anim_str5[] = "PNK_S_1";
-const char e3_anim_str6[] = "PNK_O_1";
-const char e3_anim_str7[] = "c_windy";
-const char e3_anim_str8[] = "PWD_W_1";
-const char e3_anim_str9[] = "PWD_S_1";
-const char e3_anim_str10[] = "PWD_A_7";
-#endif
 
 // Forward Declarations
 static void e3Disp(CameraId cameraId, void* param);
 static void e3DispOffscreen(CameraId cameraId, void* param);
 #if VERSION == VERSION_DEMO_US_1
 static void e3DispShadow(f32 x, f32 y, f32 z);
-static f32 e3BlinkTime(void);
-#else
-#if VERSION >= VERSION_US
-static
 #endif
-    void pressStartGX(s32 alpha, f32 x, f32 y);
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION != VERSION_DEMO_JP
+static f32 e3BlinkTime(void);
 #endif
 
-#if VERSION <= VERSION_DEMO_JP
 /** Sets every character to the given column of anim_tbl. */
 USER_FUNC(e3PoseSetAnim) {
     s32 col = evtGetValue(event, event->args[0]);
@@ -150,7 +150,7 @@ USER_FUNC(e3PoseSetRotY) {
 
 /**
  * US demo title screen loop: the four characters walk,
- * then every 5-15 s play their action animation and turn to face the other way and back.
+ * then every 5-15 s play their action animation, turn to face the other way, play it again and turn back.
  */
 EVT_BEGIN(e3_pose_evt)
     LOOP(0)
@@ -174,21 +174,28 @@ EVT_BEGIN(e3_pose_evt)
 EVT_END()
 #endif
 
-/**
- * Kiosk play-time alarm: sets GLOBAL_FLAG_KIOSK_TIMEOUT,
- * which sends the field or battle sequence to game over and from there back to this menu.
- */
+/** When the kiosk play-time alarm was started (wp->initTime). */
+// Original name and size (0x10) from the JP demo map (UNUSED there: nothing calls it), before alarm_handler: the
+// getter of the work's one OSTime (the work pointer, two loads and the return).
+OSTime e3GetTime(void) {
+    return wp->initTime;
+}
+
+/** Alarm callback of the kiosk play-time alarm (see seq_e3Init): sets GW_FLAG_E3_TIMEOUT. */
 static void alarm_handler(OSAlarm* alarm, OSContext* context) {
-    gp->flags |= GLOBAL_FLAG_KIOSK_TIMEOUT;
+    gp->flags |= GW_FLAG_E3_TIMEOUT;
 }
 
 /**
- * Enters the kiosk menu: loads its textures (monthry.tpl; the June US demo's e3.tpl plus its four title
- * characters), starts the play-time alarm (5 min in the US release, 10 min otherwise; the June US demo arms it when
- * a scenario starts), sets the kiosk and save-blocks-off flags and plays the file menu BGM.
+ * Enters the kiosk menu: loads its textures (monthry.tpl; the US demo's e3.tpl plus its four title characters),
+ * starts the play-time alarm (5 min in US, 10 min otherwise; the US demo arms it when a scenario starts),
+ * sets the kiosk and save-blocks-off flags and plays the file menu BGM.
  */
 void seq_e3Init(SequenceWork* seq) {
-#if VERSION == VERSION_DEMO_US_1
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+    wp->handle = fileAllocf(FILE_TYPE_TPL, "%s/monthry.tpl", getMarioStDvdRoot());
+#else
     s32 type = gp->inBattle != 0;
     s32 i;
 
@@ -199,19 +206,21 @@ void seq_e3Init(SequenceWork* seq) {
         animPoseGetAnimPosePtr(wp->poseIds[i])->flags |= ANIM_POSE_FLAG_INSTANT_TURN;
     }
     wp->animEvt = evtEntry(e3_pose_evt, 0, 0);
-    wp->handle = fileAllocf(4, "%s/e3.tpl", getMarioStDvdRoot());
+    wp->handle = fileAllocf(FILE_TYPE_TPL, "%s/e3.tpl", getMarioStDvdRoot());
+#endif
 #else
-    wp->handle = fileAllocf(4, "%s/monthry.tpl", getMarioStDvdRoot());
+    wp->handle = fileAllocf(FILE_TYPE_TPL, "%s/monthry.tpl", getMarioStDvdRoot());
 #endif
     wp->curScreen = 0;
     wp->nextScreen = 0;
     wp->scenario = 0;
     wp->poseRotY = 270.0f;
 #if VERSION == VERSION_DEMO_US_1
-    // The June US demo starts the timeout when a scenario is picked.
+    // the June US demo starts the timeout when a scenario is picked
     OSCancelAlarm(&wp->alarm);
     wp->initTime = 0;
 #else
+    // kiosk timeout: 10 minutes, 5 in the US release
     OSCreateAlarm(&wp->alarm);
 #if VERSION == VERSION_US
     OSSetAlarm(&wp->alarm, (OSTime)OS_TIMER_CLOCK * 300, alarm_handler);
@@ -220,14 +229,14 @@ void seq_e3Init(SequenceWork* seq) {
 #endif
     wp->initTime = OSGetTime();
 #endif
-    gp->flags &= ~GLOBAL_FLAG_SKIP_MAP_EVENTS;
-    gp->flags |= GLOBAL_FLAG_SAVE_BLOCKS_OFF;
-    gp->flags |= GLOBAL_FLAG_KIOSK;
-    gp->flags &= ~GLOBAL_FLAG_KIOSK_TIMEOUT;
+    gp->flags &= ~GW_FLAG_NO_ENTRANCE;
+    gp->flags |= GW_FLAG_NO_SAVE_BLOCK;
+    gp->flags |= GW_FLAG_E3;
+    gp->flags &= ~GW_FLAG_E3_TIMEOUT;
     fadeEntry(FADE_IN_BLACK, 200, (GXColor){0x00, 0x00, 0x00, 0xFF});
     fadeReset(1);
     psndStopAllFadeOut();
-    psndBGMOn(PSND_FADE_OUT, "BGM_FILE_MENU1");
+    psndBGMOn(PSND_FADEOUT, "BGM_FILE_MENU1");
     seq->state = 0;
     animGroupBaseAsync("OFF_d_meku", 0, NULL);
 }
@@ -265,6 +274,7 @@ void seq_e3Main(SequenceWork* seq) {
     s32 idx;
     s32 foundIdx;
     EventData* found;
+    MarioWork* mario;
 
     camera = camGetPtr(CAMERA_3D);
     camera->cameraAt = (Vec){0.0f, 0.0f, 0.0f};
@@ -278,7 +288,7 @@ void seq_e3Main(SequenceWork* seq) {
         case 1:
             if (fadeIsFinish() && keyGetButtonTrg(0) & (PAD_BUTTON_START | PAD_BUTTON_A)) {
                 psndSFXOn("SFX_PRESS_START1");
-                fadeEntry(FADE_PAGE_FLIP_Z1_OFFSCREEN, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
+                fadeEntry(MARIO_HEAD_FADE_IN, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
                 fadeSetOffscreenCallback(e3DispOffscreen, wp);
                 wp->nextScreen = 1;
                 seq->state++;
@@ -287,7 +297,7 @@ void seq_e3Main(SequenceWork* seq) {
 
         case 2:
             if (fadeIsFinish()) {
-                fadeEntry(FADE_PAGE_FLIP_A1_OFFSCREEN, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
+                fadeEntry(MARIO_HEAD_FADE_OUT, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
                 wp->curX = wp->dstX = e3_tbl[wp->scenario].x;
                 wp->curY = wp->dstY = e3_tbl[wp->scenario].y;
                 seq->state++;
@@ -301,17 +311,8 @@ void seq_e3Main(SequenceWork* seq) {
             break;
 
         case 4: {
-#if VERSION >= VERSION_US
             prev = wp->scenario;
-            keyGetStickX(0);
-            keyGetStickY(0);
-            if (keyGetDirTrg(0) & (DEMO_STICK_LEFT | DEMO_STICK_RIGHT)) {
-                wp->scenario ^= 1;
-            } else if (keyGetDirTrg(0) & (DEMO_STICK_UP | DEMO_STICK_DOWN)) {
-                wp->scenario ^= 2;
-            }
-#else
-            prev = wp->scenario;
+#if VERSION <= VERSION_DEMO_JP
             stickX = keyGetStickX(0);
             stickY = keyGetStickY(0);
             switch (wp->scenario) {
@@ -340,25 +341,81 @@ void seq_e3Main(SequenceWork* seq) {
                     }
                     break;
             }
-
-#endif
             if (prev != wp->scenario) {
+#if VERSION == VERSION_DEMO_JP
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
+            } else if (keyGetButtonTrg(0) & PAD_BUTTON_B || OSTicksToSeconds(OSGetTime() - none_key) > 120) {
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+#else
                 psndSFXOn((void*)5);
             } else if (keyGetButtonTrg(0) & PAD_BUTTON_B || OSTicksToSeconds(OSGetTime() - none_key) > 120) {
                 psndSFXOn((char*)19);
-                fadeEntry(FADE_PAGE_FLIP_Z1_OFFSCREEN, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
+#endif
+#else
+#if VERSION >= VERSION_US
+            keyGetStickX(0);
+            keyGetStickY(0);
+            if (keyGetDirTrg(0) & (DEMO_STICK_LEFT | DEMO_STICK_RIGHT)) {
+                wp->scenario ^= 1;
+            } else if (keyGetDirTrg(0) & (DEMO_STICK_UP | DEMO_STICK_DOWN)) {
+                wp->scenario ^= 2;
+            }
+#else
+            stickX = keyGetStickX(0);
+            stickY = keyGetStickY(0);
+            switch (wp->scenario) {
+                case 0:
+                    if (keyGetDirTrg(0) & DEMO_STICK_RIGHT) {
+                        wp->scenario = 1;
+                    } else if (keyGetDirTrg(0) & DEMO_STICK_DOWN) {
+                        wp->scenario = 2;
+                    }
+                    break;
+
+                case 1:
+                    if (keyGetDirTrg(0) & DEMO_STICK_LEFT) {
+                        wp->scenario = 0;
+                    } else if (keyGetDirTrg(0) & DEMO_STICK_DOWN) {
+                        wp->scenario = 2;
+                    }
+                    break;
+
+                case 2:
+                    if (stickY > 20) {
+                        wp->scenario = 0;
+                        if (stickX > 0) {
+                            wp->scenario = 1;
+                        }
+                    }
+                    break;
+            }
+#endif
+            if (prev != wp->scenario) {
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
+            } else if (keyGetButtonTrg(0) & PAD_BUTTON_B || OSTicksToSeconds(OSGetTime() - none_key) > 120) {
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+#endif
+                fadeEntry(MARIO_HEAD_FADE_IN, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
                 fadeSetOffscreenCallback(e3DispOffscreen, seq);
                 wp->nextScreen = 0;
                 seq->state++;
             } else if (keyGetButtonTrg(0) & PAD_BUTTON_A) {
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+#else
                 psndSFXOn((char*)18);
+#endif
+#else
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+#endif
                 seq->state = 100;
             }
         } break;
 
         case 5:
             if (fadeIsFinish()) {
-                fadeEntry(FADE_PAGE_FLIP_A1_OFFSCREEN, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
+                fadeEntry(MARIO_HEAD_FADE_OUT, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
                 seq->state = 0;
             }
             break;
@@ -394,7 +451,7 @@ void seq_e3Main(SequenceWork* seq) {
                     break;
                 }
             }
-            swByteSet(GSW_STORY_PROGRESS, prevId);
+            swByteSet(GSW_ID(GSW_STORY_PROGRESS), prevId);
             foundIdx = idx;
 
             for (i = 0; i < stageId; i++) {
@@ -408,10 +465,10 @@ void seq_e3Main(SequenceWork* seq) {
 
             found = eventStgDtPtr(stageId)->data;
             {
-                s32 i;
-                for (i = 0; i <= foundIdx; i++) {
-                    if (found[i].initEvent) {
-                        found[i].initEvent();
+                s32 j;
+                for (j = 0; j <= foundIdx; j++) {
+                    if (found[j].initEvent) {
+                        found[j].initEvent();
                     }
                 }
             }
@@ -428,11 +485,9 @@ void seq_e3Main(SequenceWork* seq) {
 
             marioPartyKill();
 
-            {
-                MarioWork* mario = marioGetPtr();
-                mario->prevPartyMemberId[0] = 0;
-                mario->prevPartyMemberId[1] = 0;
-            }
+            mario = marioGetPtr();
+            mario->prevPartyMemberId[0] = 0;
+            mario->prevPartyMemberId[1] = 0;
 
             if (found[foundIdx].partners[0]) {
                 marioPartyEntry(found[foundIdx].partners[0]);
@@ -447,13 +502,15 @@ void seq_e3Main(SequenceWork* seq) {
             } else if (wp->scenario == 1) {
                 seqSetSeq(SEQ_MAP_CHANGE, "hei_00", "dokan_2");
             } else {
+                seqSetSeq(SEQ_MAP_CHANGE, found[foundIdx].mapName, found[foundIdx].beroName);
+            }
 #else
             if (wp->scenario == 0) {
                 seqSetSeq(SEQ_MAP_CHANGE, "hei_00", "dokan_2");
             } else {
-#endif
                 seqSetSeq(SEQ_MAP_CHANGE, found[foundIdx].mapName, found[foundIdx].beroName);
             }
+#endif
 
             memset(pouchGetPtr()->heldItems, 0, sizeof(s16) * MAX_HELD_ITEMS);
             memset(pouchGetPtr()->storedItems, 0, sizeof(s16) * MAX_STORED_ITEMS);
@@ -464,22 +521,26 @@ void seq_e3Main(SequenceWork* seq) {
             pouchSetMaxFP(20);
             pouchSetFP(20);
 
-            for (i = 0; i < 8; i++) {
+            for (i = 0; i < PARTNER_COUNT; i++) {
                 pouchGetPtr()->partyData[i].currentHP = 20;
                 pouchGetPtr()->partyData[i].HPLevel = 1;
             }
-
 #if VERSION >= VERSION_DEMO_US_2
-            // the 2004-09 demos and PAL: the first scenario starts without items or badges
+            // the September demos and PAL: the first scenario starts without items or badges
             if (wp->scenario != 0) {
-#endif
                 for (i = 0; i < 2; i++) {
                     pouchGetItem(ITEM_THUNDER_RAGE);
                     pouchGetItem(ITEM_SHOOTING_STAR);
                     pouchGetItem(ITEM_FIRE_FLOWER);
                     pouchGetItem(ITEM_POW_BLOCK);
                 }
-#if VERSION >= VERSION_DEMO_US_2
+            }
+#else
+            for (i = 0; i < 2; i++) {
+                pouchGetItem(ITEM_THUNDER_RAGE);
+                pouchGetItem(ITEM_SHOOTING_STAR);
+                pouchGetItem(ITEM_FIRE_FLOWER);
+                pouchGetItem(ITEM_POW_BLOCK);
             }
 #endif
 
@@ -487,56 +548,62 @@ void seq_e3Main(SequenceWork* seq) {
             pouchGetPtr()->maximumBP = 20;
 #if VERSION >= VERSION_DEMO_US_2
             if (wp->scenario != 0) {
-#endif
                 pouchGetItem(ITEM_POWER_BOUNCE);
                 pouchGetItem(ITEM_POWER_SMASH);
                 pouchEquipBadgeID(ITEM_POWER_BOUNCE);
                 pouchEquipBadgeID(ITEM_POWER_SMASH);
-#if VERSION >= VERSION_DEMO_US_2
             }
+#else
+            pouchGetItem(ITEM_POWER_BOUNCE);
+            pouchGetItem(ITEM_POWER_SMASH);
+            pouchEquipBadgeID(ITEM_POWER_BOUNCE);
+            pouchEquipBadgeID(ITEM_POWER_SMASH);
 #endif
             pouchReviseMarioParam();
             pouchRevisePartyParam();
             statusWinForceUpdate();
-#if VERSION == VERSION_DEMO_US_1
-            OSCreateAlarm(&wp->alarm);
-            OSSetAlarm(&wp->alarm, (OSTime)OS_TIMER_CLOCK * 600, alarm_handler);
-            wp->initTime = OSGetTime();
-#endif
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
         } break;
     }
 
-    {
-        wp->dstX = e3_tbl[wp->scenario].x;
-        wp->dstY = e3_tbl[wp->scenario].y;
-        wp->curX += (wp->dstX - wp->curX) / 4;
-        wp->curY += (wp->dstY - wp->curY) / 4;
+    wp->dstX = e3_tbl[wp->scenario].x;
+    wp->dstY = e3_tbl[wp->scenario].y;
+    wp->curX += (wp->dstX - wp->curX) / 4;
+    wp->curY += (wp->dstY - wp->curY) / 4;
+#else
+            OSCreateAlarm(&wp->alarm);
+            OSSetAlarm(&wp->alarm, (OSTime)OS_TIMER_CLOCK * 600, alarm_handler);
+            wp->initTime = OSGetTime();
+        } break;
     }
-    dispEntry(CAMERA_3D, 0.0f, 0, e3Disp, seq);
+
+    wp->dstX = e3_tbl[wp->scenario].x;
+    wp->dstY = e3_tbl[wp->scenario].y;
+    wp->curX += (wp->dstX - wp->curX) / 4;
+    wp->curY += (wp->dstY - wp->curY) / 4;
+#endif
+#else
+        } break;
+    }
+
+    wp->dstX = e3_tbl[wp->scenario].x;
+    wp->dstY = e3_tbl[wp->scenario].y;
+    wp->curX += (wp->dstX - wp->curX) / 4;
+    wp->curY += (wp->dstY - wp->curY) / 4;
+#endif
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_OPAQUE, e3Disp, seq);
 }
 
-// Texture ids in the menu's texture file (US/JP monthry.tpl, the demo's e3.tpl): the background tile,
-// the two frames of the blinking cursor and the first scenario box (one box per scenario follows it).
-// An enum rather than #defines: the cursor's `?:` on enum constants compiles to the original code.
+#if VERSION == VERSION_DEMO_US_1
+// Texture ids in the US demo's e3.tpl.
 typedef enum E3Texture {
-#if VERSION >= VERSION_DEMO_EU
-    // PAL monthry.tpl has one texture fewer before the tile and the scenario boxes
-    E3_TEX_TILE = 4,
-    E3_TEX_CURSOR0 = 5,
-    E3_TEX_CURSOR1 = 6,
-    E3_TEX_BOX = 7,
-#elif VERSION == VERSION_DEMO_US_1
     E3_TEX_BOX = 1,
     E3_TEX_TILE = 4,
     E3_TEX_CURSOR0 = 5,
     E3_TEX_CURSOR1 = 6,
-#else
-    E3_TEX_TILE = 5,
-    E3_TEX_CURSOR0 = 6,
-    E3_TEX_CURSOR1 = 7,
-    E3_TEX_BOX = 8,
-#endif
 } E3Texture;
+#endif
 
 /**
  * Draws the active page through the 2D camera: the title page (the US demo's characters,
@@ -545,36 +612,37 @@ typedef enum E3Texture {
  * On the offscreen page-flip camera it draws the other page.
  */
 static void e3Disp(CameraId cameraId, void* param) {
-    CameraEntry* camera = camGetPtr(CAMERA_2D);
 #if VERSION <= VERSION_DEMO_JP
+    CameraEntry* camera = camGetPtr(CAMERA_2D);
     Mtx poseMtx;
     Mtx poseScale;
+#else
+    CameraEntry* camera = camGetPtr(CAMERA_2D);
 #endif
     Mtx mtx;
     Mtx mtxScale;
     f32 projBackup[GX_PROJECTION_SZ];
     f32 viewportBackup[GX_VIEWPORT_SZ];
     CameraEntry camBackup;
-#if VERSION >= VERSION_US
-    char* keys[4];
-#else
+#if VERSION <= VERSION_DEMO_JP
     char* keys[3];
 #endif
     s32 active;
     s32 alpha;
     s32 i;
-    s32 px, py;
-    s32 row, col;
-    s32 inset, pass, step;
-    f32 t, dx, dy;
+    s32 col, row;
+    s32 pass, step;
+#if VERSION <= VERSION_DEMO_JP
+    f32 t;
     s32 mode;
+#endif
 
     active = wp->curScreen;
     if (cameraId == CAMERA_OFFSCREEN2) {
         active = 1 - wp->curScreen;
     }
 
-    // Backup camera and GX params so we can use them in calculating all this
+    // Draw with the 2D camera: save the current camera and the GX projection/viewport (restored at the end)
     camBackup = *camGetPtr(cameraId);
     *camGetPtr(cameraId) = *camera;
 
@@ -585,7 +653,28 @@ static void e3Disp(CameraId cameraId, void* param) {
                   camera->viewport[4], camera->viewport[5]);
 
     if (active == 0) {
-#if VERSION == VERSION_DEMO_US_1
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+        {
+            f32 pulse = (f32)sin((f64)((f32)gp->retraceCount / 30.0f));
+            alpha = (s32)(pulse * 459.0f);
+        }
+        if (alpha < 0) {
+            alpha = 0;
+        }
+        if (alpha > 255) {
+            alpha = 255;
+        }
+
+        winTexInit(*wp->handle->data);
+        winTexSet(TEX_TITLE_BG, (Vec){0.0f, 0.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+        pressStartGX(alpha, 0.0f, -110.0f);
+    } else {
+        winTexInit(*wp->handle->data);
+        for (col = 0; col < 40; col++) {
+            for (row = 0; row < 32; row++) {
+                winTexSet(TEX_TILE, (Vec){(f32)(col * 16 - 304), (f32)(240 - row * 16), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+#else
         // Title screen: background tiles, the four characters and the title textures
         mode = (s32)((f32)sin(e3BlinkTime()) * 459.0f);
         if (mode < 0) {
@@ -596,39 +685,81 @@ static void e3Disp(CameraId cameraId, void* param) {
         }
 
         winTexInit(*wp->handle->data);
-        for (row = 0, py = -304; row < 6; row++, py += 128) {
-            for (col = 0, px = 0; col < 9; col++, px += 64) {
-                winTexSet(8, (Vec){(f32)py, (f32)(240 - px), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+        for (col = 0; col < 6; col++) {
+            for (row = 0; row < 9; row++) {
+                winTexSet(8, (Vec){(f32)(col * 128 - 304), (f32)(240 - row * 64), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
                           (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
             }
         }
 
-        for (row = 0; row < 4; row++) {
+        for (col = 0; col < 4; col++) {
 
-            t = 180.0f - 120.0f * (f32)row;
+            t = 180.0f - 120.0f * (f32)col;
             e3DispShadow(t, -150.0f, 0.0f);
             MTXTrans(poseMtx, t, -150.0f, 0.0f);
             MTXScale(poseScale, 3.0f, 3.0f, 3.0f);
             MTXConcat(poseMtx, poseScale, poseMtx);
-            animPoseMain(wp->poseIds[row]);
-            animPoseDrawMtx(wp->poseIds[row], poseMtx, 1, wp->poseRotY, 2.0f);
-            animPoseDrawMtx(wp->poseIds[row], poseMtx, 2, wp->poseRotY, 2.0f);
-            animPoseDrawMtx(wp->poseIds[row], poseMtx, 3, wp->poseRotY, 2.0f);
-            animPoseGetAnimPosePtr(wp->poseIds[row])->flags &= ~ANIM_POSE_FLAG_INSTANT_TURN;
+            animPoseMain(wp->poseIds[col]);
+            animPoseDrawMtx(wp->poseIds[col], poseMtx, 1, wp->poseRotY, 2.0f);
+            animPoseDrawMtx(wp->poseIds[col], poseMtx, 2, wp->poseRotY, 2.0f);
+            animPoseDrawMtx(wp->poseIds[col], poseMtx, 3, wp->poseRotY, 2.0f);
+            animPoseGetAnimPosePtr(wp->poseIds[col])->flags &= ~ANIM_POSE_FLAG_INSTANT_TURN;
         }
 
         winTexInit(*wp->handle->data);
         winTexSet(0, (Vec){0.0f, 90.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFE});
         winTexSet(7, (Vec){0.0f, -20.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, mode});
         winTexSet(10, (Vec){0.0f, -170.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+    } else {
+        // Tiled background fill (40 x 32 quads)
+        winTexInit(*wp->handle->data);
+        for (col = 0; col < 40; col++) {
+            for (row = 0; row < 32; row++) {
+                winTexSet(E3_TEX_TILE, (Vec){(f32)(col * 16 - 304), (f32)(240 - row * 16), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+#endif
+                          (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+            }
+        }
+
+        for (i = 0; i < 3; i++) {
+            winTexInit(*wp->handle->data);
+
+            if (i == wp->scenario) {
+#if VERSION == VERSION_DEMO_JP
+                int boxTex = i + TEX_BOX_FIRST;
+
+                // Shadow Box
+                winTexSet(boxTex, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f},
+                          (Vec){0.35f, 0.35f, 0.35f}, (GXColor){0x00, 0x00, 0x00, 0x40});
+
+                // Content Box
+                winTexSet(i + TEX_BOX_FIRST, (Vec){e3_tbl[i].x, e3_tbl[i].y, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
+                          (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+            } else {
+                winTexSet(i + TEX_BOX_FIRST, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
+#else
+                int boxTex = i + E3_TEX_BOX;
+
+                // Shadow Box
+                winTexSet(boxTex, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f},
+                          (Vec){0.35f, 0.35f, 0.35f}, (GXColor){0x00, 0x00, 0x00, 0x40});
+
+                // Content Box
+                winTexSet(i + E3_TEX_BOX, (Vec){e3_tbl[i].x, e3_tbl[i].y, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
+                          (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+            } else {
+                winTexSet(i + E3_TEX_BOX, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
+#endif
 #else
         // 'Press Start' overlay with alpha pulsing
-        alpha = (s32)((f32)sin((f64)((f32)gp->retraceCount / 30.0f)) * 459.0f);
+        {
+            f32 pulse = (f32)sin((f64)((f32)gp->retraceCount / 30.0f));
+            alpha = (s32)(pulse * 459.0f);
+        }
 #if VERSION >= VERSION_DEMO_EU
         {
             // PAL: per-language title texture
             s32 tbl[6] = {11, 11, 12, 13, 14, 15};
-#endif
             if (alpha < 0) {
                 alpha = 0;
             }
@@ -637,38 +768,34 @@ static void e3Disp(CameraId cameraId, void* param) {
             }
 
             winTexInit(*wp->handle->data);
-#if VERSION >= VERSION_DEMO_EU
             winTexSet(tbl[gp->language], (Vec){0.0f, 0.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
-#elif VERSION >= VERSION_US
+            pressStartGX(alpha, 0.0f, -110.0f);
+        }
+#else
+        if (alpha < 0) {
+            alpha = 0;
+        }
+        if (alpha > 255) {
+            alpha = 255;
+        }
+
+        winTexInit(*wp->handle->data);
+#if VERSION >= VERSION_US
         winTexSet(12, (Vec){0.0f, 0.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
 #else
-        winTexSet(11, (Vec){0.0f, 0.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+        winTexSet(TEX_TITLE_BG, (Vec){0.0f, 0.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
 #endif
-            pressStartGX(alpha, 0.0f, -110.0f);
-#if VERSION >= VERSION_DEMO_EU
-        }
-#endif
+        pressStartGX(alpha, 0.0f, -110.0f);
 #endif
     } else {
-        // Tiled background fill (40 x 32 quads)
-#if VERSION == VERSION_DEMO_US_1
-        // Same fill as below; the US demo compiles it with the counters held in these variables.
+        // Tiled background: 40 columns x 32 rows of 16-unit tiles, from x = -304 and down from y = 240
         winTexInit(*wp->handle->data);
-        for (col = 0, py = -304; col < 40; col++, py += 16) {
-            for (px = 0, row = 0; px < 32; px++, row += 16) {
-                winTexSet(E3_TEX_TILE, (Vec){(f32)py, (f32)(240 - row), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+        for (col = 0; col < 40; col++) {
+            for (row = 0; row < 32; row++) {
+                winTexSet(TEX_TILE, (Vec){(f32)(col * 16 - 304), (f32)(240 - row * 16), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
                           (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
             }
         }
-#else
-        winTexInit(*wp->handle->data);
-        for (row = 0, py = -304; row < 40; row++, py += 16) {
-            for (col = 0, px = 0; col < 32; col++, px += 16) {
-                winTexSet(E3_TEX_TILE, (Vec){(f32)py, (f32)(240 - px), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
-                          (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
-            }
-        }
-#endif
 
 #if VERSION >= VERSION_US
         for (i = 0; i < 4; i++) {
@@ -678,27 +805,34 @@ static void e3Disp(CameraId cameraId, void* param) {
             winTexInit(*wp->handle->data);
 
             if (i == wp->scenario) {
+                int boxTex = i + TEX_BOX_FIRST;
+
                 // Shadow Box
-                winTexSet(i + (u32)E3_TEX_BOX, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f},
+                winTexSet(boxTex, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f},
                           (Vec){0.35f, 0.35f, 0.35f}, (GXColor){0x00, 0x00, 0x00, 0x40});
+
                 // Content Box
-                winTexSet(i + E3_TEX_BOX, (Vec){e3_tbl[i].x, e3_tbl[i].y, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
+                winTexSet(i + TEX_BOX_FIRST, (Vec){e3_tbl[i].x, e3_tbl[i].y, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
                           (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
             } else {
-                winTexSet(i + E3_TEX_BOX, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
+                winTexSet(i + TEX_BOX_FIRST, (Vec){10.0f + e3_tbl[i].x, e3_tbl[i].y - 10.0f, 0.0f}, (Vec){0.35f, 0.35f, 0.35f},
+#endif
                           (GXColor){0x80, 0x80, 0x80, 0xFF});
             }
 
             {
-#if VERSION >= VERSION_US
-                char* keys[4] = {"menu_monosiri_gor", "menu_monosiri_hei", "menu_monosiri_gon", "menu_monosiri_win"};
-#else
+#if VERSION <= VERSION_DEMO_JP
                 char* keys[3] = {"menu_monosiri_hei", "menu_monosiri_gon", "menu_monosiri_win"};
+#else
+                char* keys[] = {
+#if VERSION >= VERSION_US
+                    "menu_monosiri_gor",
+#endif
+                    "menu_monosiri_hei", "menu_monosiri_gon", "menu_monosiri_win"};
 #endif
                 step = (i == wp->scenario) ? 0 : 10;
 
-                windowDispGX_Waku_col(0, (GXColor){0x4A, 0x56, 0xB5, 0xFF}, (((f32)step + e3_tbl[i].x) - 100.0f),
-                                      ((e3_tbl[i].y - (f32)step) - 60.0f), 200.0f, 40.0f, 20.0f);
+                windowDispGX_Waku_col((((f32)step + e3_tbl[i].x) - 100.0f), ((e3_tbl[i].y - (f32)step) - 60.0f), 200.0f, 40.0f, 20.0f, 0, (GXColor){0x4A, 0x56, 0xB5, 0xFF});
 
                 // Centered Label
                 FontDrawStart();
@@ -713,25 +847,61 @@ static void e3Disp(CameraId cameraId, void* param) {
 
         // Two passes of four mirrored window corners (shadow and content)
         winTexInit(*wp->handle->data);
-        for (pass = 1, inset = 5; pass >= 0; pass--, inset -= 5) {
+        for (pass = 1; pass >= 0; pass--) {
+
             // Top-Left
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#else
             winTexSet(((gp->retraceCount >> 4) & 1) ? E3_TEX_CURSOR0 : E3_TEX_CURSOR1,
-                      (Vec){(110.0f + wp->curX) + (f32)inset, (90.0f + wp->curY) - (f32)inset, 0.0f},
+#endif
+#else
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#endif
+                      (Vec){(110.0f + wp->curX) + (f32)(pass * 5), (90.0f + wp->curY) - (f32)(pass * 5), 0.0f},
                       (Vec){1.0f, 1.0f, 1.0f},
                       (pass != 0) ? (GXColor){0x00, 0x00, 0x00, 0x40} : (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+
             // Top-Right
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#else
             winTexSet(((gp->retraceCount >> 4) & 1) ? E3_TEX_CURSOR0 : E3_TEX_CURSOR1,
-                      (Vec){(wp->curX - 110.0f) + (f32)inset, (90.0f + wp->curY) - (f32)inset, 0.0f},
+#endif
+#else
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#endif
+                      (Vec){(wp->curX - 110.0f) + (f32)(pass * 5), (90.0f + wp->curY) - (f32)(pass * 5), 0.0f},
                       (Vec){-1.0f, 1.0f, 1.0f},
                       (pass != 0) ? (GXColor){0x00, 0x00, 0x00, 0x40} : (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+
             // Bottom-Left
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#else
             winTexSet(((gp->retraceCount >> 4) & 1) ? E3_TEX_CURSOR0 : E3_TEX_CURSOR1,
-                      (Vec){(110.0f + wp->curX) + (f32)inset, (wp->curY - 90.0f) - (f32)inset, 0.0f},
+#endif
+#else
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#endif
+                      (Vec){(110.0f + wp->curX) + (f32)(pass * 5), (wp->curY - 90.0f) - (f32)(pass * 5), 0.0f},
                       (Vec){1.0f, -1.0f, 1.0f},
                       (pass != 0) ? (GXColor){0x00, 0x00, 0x00, 0x40} : (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+
             // Bottom-Right
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#else
             winTexSet(((gp->retraceCount >> 4) & 1) ? E3_TEX_CURSOR0 : E3_TEX_CURSOR1,
-                      (Vec){(wp->curX - 110.0f) + (f32)inset, (wp->curY - 90.0f) - (f32)inset, 0.0f},
+#endif
+#else
+            winTexSet(((gp->retraceCount >> 4) & 1) ? TEX_CURSOR_A : TEX_CURSOR_B,
+#endif
+                      (Vec){(wp->curX - 110.0f) + (f32)(pass * 5), (wp->curY - 90.0f) - (f32)(pass * 5), 0.0f},
                       (Vec){-1.0f, -1.0f, 1.0f},
                       (pass != 0) ? (GXColor){0x00, 0x00, 0x00, 0x40} : (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
         }
@@ -743,15 +913,6 @@ static void e3Disp(CameraId cameraId, void* param) {
     GXSetViewport(viewportBackup[0], viewportBackup[1], viewportBackup[2], viewportBackup[3], viewportBackup[4],
                   viewportBackup[5]);
 }
-
-#if VERSION != VERSION_DEMO_US_1
-// FAKE: stand-in for a function the linker stripped; it only creates the 30.0f constant in its place in .sdata2
-// (every build except the US demo has it there) and is dead-stripped at link. The one stripped function the
-// Japanese demo's map lists in this unit is `e3GetTime` (0x10 bytes); its code is in no build.
-f32 e3StrippedPool(void) {
-    return 30.0f;
-}
-#endif
 
 /**
  * Page-flip offscreen callback: switches to the next page, draws it,
@@ -825,25 +986,26 @@ static void e3DispShadow(f32 x, f32 y, f32 z) {
     GXTexCoord2f32(1.0f, 0.0f);
 }
 #else
-#if VERSION >= VERSION_US // US: local here, seq_title has the global copy
-static
-#endif
-    void pressStartGX(s32 alpha, f32 x, f32 y) {
+/**
+ * Draws the PRESS START text centred at (x, y) at alpha `alpha`, its colour scrolled through a gradient texture (the
+ * PAL demo and PAL pick the text by language).
+ */
+// seq_title.c has its own copy (global there from US on)
+static void pressStartGX(s32 alpha, f32 x, f32 y) {
     CameraEntry* camera = camGetCurPtr();
     GXTexObj startText, gradient;
-    Mtx v17, v16;
-#if VERSION >= VERSION_DEMO_EU
-    // PAL: per-language "press start" texture
-    s32 tbl[6] = {16, 16, 17, 18, 19, 20};
-#endif
+    Mtx mtx, scale;
 
 #if VERSION >= VERSION_DEMO_EU
+    s32 tbl[6] = {16, 16, 17, 18, 19, 20};
     TEXGetGXTexObjFromPalette(*wp->handle->data, &startText, tbl[gp->language]);
-    GXLoadTexObj(&startText, GX_TEXMAP0);
-    TEXGetGXTexObjFromPalette(*wp->handle->data, &gradient, 3);
 #else
     TEXGetGXTexObjFromPalette(*wp->handle->data, &startText, 3);
+#endif
     GXLoadTexObj(&startText, GX_TEXMAP0);
+#if VERSION >= VERSION_DEMO_EU
+    TEXGetGXTexObjFromPalette(*wp->handle->data, &gradient, 3);
+#else
     TEXGetGXTexObjFromPalette(*wp->handle->data, &gradient, 4);
 #endif
     GXLoadTexObj(&gradient, GX_TEXMAP1);
@@ -861,12 +1023,12 @@ static
     GXSetTevColor(GX_TEVREG0, (GXColor){0x00, 0x00, 0x00, alpha});
     GXSetNumChans(0);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 60);
-    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, 30);
-    MTXScale(v16, 1.0f, 1.0f, 1.0f);
-    MTXTrans(v17, (f32)gp->retraceCount / -200.0f, 0.0f, 0.0f);
-    MTXConcat(v16, v17, v17);
-    GXLoadTexMtxImm(v17, 30, GX_MTX2x4);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
+    MTXScale(scale, 1.0f, 1.0f, 1.0f);
+    MTXTrans(mtx, (f32)gp->retraceCount / -200.0f, 0.0f, 0.0f);
+    MTXConcat(scale, mtx, mtx);
+    GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
@@ -877,12 +1039,12 @@ static
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    MTXTrans(v17, x, y, 0.0f);
-    MTXScale(v16, (f32)GXGetTexObjWidth(&startText), (f32)GXGetTexObjHeight(&startText), 1.0f);
-    MTXConcat(v17, v16, v17);
-    MTXConcat(camera->view, v17, v17);
-    GXLoadPosMtxImm(v17, 0);
-    GXSetCurrentMtx(0);
+    MTXTrans(mtx, x, y, 0.0f);
+    MTXScale(scale, (f32)GXGetTexObjWidth(&startText), (f32)GXGetTexObjHeight(&startText), 1.0f);
+    MTXConcat(mtx, scale, mtx);
+    MTXConcat(camera->view, mtx, mtx);
+    GXLoadPosMtxImm(mtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);

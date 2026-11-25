@@ -1,11 +1,37 @@
 // pik_00 (ピカリーヒルズ, Poshley Heights): the station where the Excess Express ends, with the rich families' villas; chapter
 // 7's cannon permit is given here.
 
-#include "driver/msgdrv.h"
-#include "memory.h"
 #include "version.h"
+#include "driver/msgdrv.h"
+#include "evt/evt_story.h"
+#include "evt/evt_window.h"
+#include "memory.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "statuswindow.h"
+#include "eff/eff_magic1_n64.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_img.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_offscreen.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_telop.h"
+#include "evt/evt_pouch.h"
+#include "mario/mario_hit.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "driver/itemdrv.h"
+#include "driver/envdrv.h"
 
 #include "driver/imgdrv.h"
 #include "driver/animdrv.h"
@@ -26,62 +52,138 @@
 #include "evt/evt_sub.h"
 #include "evt/evt_npc.h"
 #include "mario/mario_pouch.h"
-#include "driver/envdrv.h"
-#include "driver/itemdrv.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_offscreen.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_telop.h"
-#include "evt/evt_window.h"
-#include "mario/mario_hit.h"
-#include "statuswindow.h"
-#include "pik.h"
 #include "data_tables.h"
 #include "cam_road.h"
 #include "cam_shift.h"
+#include "driver/seqdrv.h"
 #include "map/sharin.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "map/sharin.h"
 
 static USER_FUNC(img_flag);
 static USER_FUNC(ramp_r);
 static USER_FUNC(under);
 static USER_FUNC(zoom);
+
 #if VERSION >= VERSION_US
-// Script helper (US and later): force-closes the status window by calling statusWinForceOff; used after the coin gauge
-// has been shown during the Goldbob scene.
 USER_FUNC(pik_00_statuswin_force_off);
 #endif
+
 static void irai_29_15_cb(s32 type, smartEntry* smart);
 static void resha_tev(MapTevCallbackInfo* info);
 
 static HitDamageReturn dmgReturnPt[2];
 static SharinData sharinDt[29];
+static EvtWord evt_sharin_main[87];
+static EvtWord evt_sharin[19];
 static ClankData clankDt[9];
+static EvtWord evt_clank_main[104];
+static EvtWord evt_clank[21];
+static EvtWord evt_bg[81];
+static EvtWord evt_hoshi[88];
+EvtWord hom_10_evt_resha_start[244];
+EvtWord hom_10_evt_resha_start2[259];
+EvtWord hom_10_evt_resha_start3[11];
+EvtWord hom_10_evt_resha_start4[11];
+static EvtWord stop_1[90];
+static EvtWord stop_2[90];
+EvtWord hom_10_evt_resha_stop[36];
+static EvtWord evt_ramp[33];
 static const char* pika_tbl[15];
 static const char* pika_tbl_rsh_06[10];
+static EvtWord hom_10_evt_resha_sub[102];
+EvtWord hom_10_evt_resha_right[35];
+EvtWord hom_10_evt_resha_left[28];
+
+#if VERSION <= VERSION_DEMO_JP
+EvtWord hom_10_init_evt[104];
+#else
+EvtWord hom_10_init_evt[140];
+#endif
+
+static EvtWord resha_noru[8];
 static BeroEntry bero_data[3];
 static const char* name_tbl[6];
-s32 iri_29_item_tbl[2];
+EvtWord evt_pik_yajirushi[71];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord evt_train[252];
+#else
+static EvtWord evt_train[295];
+#endif
+
+static EvtWord init_ekiin[8];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord talk_ekiin[];
+#else
+EvtWord talk_ekiin[146];
+#endif
+
+static EvtWord init_papa[8];
+static EvtWord talk_papa_taihou_kyoka[VERSION_PICK(403, 405)];
+static EvtWord talk_papa[141];
+static EvtWord init_mama[8];
+static s32 iri_29_item_tbl[2];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord talk_mama[316];
+#else
+static EvtWord talk_mama[318];
+#endif
+
+static EvtWord init_konari[13];
+static EvtWord talk_konari[58];
+static EvtWord init_madam[8];
 static s32 item_tbl_madam[2];
-s32 iri_23_item_tbl[2];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord talk_madam_ring_return[52];
+#else
+static EvtWord talk_madam_ring_return[54];
+#endif
+
+static s32 iri_23_item_tbl[2];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord talk_madam[183];
+#else
+static EvtWord talk_madam[185];
+#endif
+
+static EvtWord init_sarary[12];
+static EvtWord talk_sarary[8];
 static NpcSetupInfo npc_data[7];
-const char* ie1_mobj[2];
+static EvtWord evt_door[15];
+static EvtWord evt_door2[12];
+static EvtWord evt_wall[22];
+static const char* ie1_mobj[2];
+static EvtWord door_1_open[12];
+static EvtWord door_1_close[14];
 static DoorParam door_1;
-const char* door_2_npc[2];
+static EvtWord evt_door_2[12];
+static EvtWord evt_door2_2[12];
+static EvtWord evt_wall_2[29];
+static const char* door_2_npc[2];
+static EvtWord door_2_open[12];
+static EvtWord door_2_close[14];
 static DoorParam door_2;
+static EvtWord evt_rot_door_sub[63];
+static EvtWord evt_rot_door[9];
+static EvtWord evt_pik_00_arrival[86];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord evt_seacret[];
+#else
+EvtWord evt_seacret[131];
+#endif
+
+static EvtWord mobj_box00[34];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord pik_00_init_evt[];
+#else
+EvtWord pik_00_init_evt[410];
+#endif
 
 /** Return point of the hazard floor mod_1 of the station area. */
 static HitDamageReturn dmgReturnPt[] = {
@@ -89,10 +191,6 @@ static HitDamageReturn dmgReturnPt[] = {
     {0},
 };
 
-/**
- * Wheels of the train standing at the station: each wheel map object (sha_N_M) with how it turns and its
- * speed.
- */
 static SharinData sharinDt[] = {
     {"sha_1_1", 0, 0, FLOAT(1.0f)},
     {"sha_1_2", 0, 0, FLOAT(1.0f)},
@@ -161,7 +259,7 @@ static EVT_BEGIN(evt_sharin_main)
         CALL(evt_mapobj_rotate, 1, LW(0), 0, 0, LW(12))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -183,7 +281,6 @@ static EVT_BEGIN(evt_sharin)
     RETURN
 EVT_END()
 
-/** Connecting rods (bou_N) of the train, each moved in a circle together with its wheel. */
 static ClankData clankDt[] = {
     {"bou_1", 0, 0, FLOAT(20.0f), FLOAT(1.0f)},
     {"bou_2", 1, 1, FLOAT(16.5f), FLOAT(1.0f)},
@@ -197,8 +294,8 @@ static ClankData clankDt[] = {
 };
 
 /**
- * Moves one connecting rod (bou_n) in a small circle every frame according to the wheel speed,
- * so the rods move with the wheels.
+ * Moves one connecting rod (map object LW(0)) round a small circle each frame in step with the wheels,
+ * from the train speed GW(0) or GW(1) (chosen by LW(2)); waits while GSWF_HOM_TRAIN_MOVING is clear.
  */
 static EVT_BEGIN(evt_clank_main)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
@@ -236,7 +333,7 @@ static EVT_BEGIN(evt_clank_main)
         CALL(evt_mapobj_trans, 1, LW(0), LW(14), LW(13), FLOAT(0.0f))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -287,7 +384,7 @@ static EVT_BEGIN(evt_bg)
         CALL(evt_mapobj_trans, 1, STRING("iwayama"), LW(11), 0, 0)
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -297,8 +394,8 @@ static EVT_BEGIN(evt_bg)
 EVT_END()
 
 /**
- * Rotates the star objects (hosi_left, hosi_center,
- * hosi_right and the _c copies) every frame by the train speed GW(0).
+ * Rotates the star objects (hosi_left, hosi_center, hosi_right and their _c copies) each frame by the
+ * train speed GW(0); waits while GSWF_HOM_TRAIN_MOVING is clear.
  */
 static EVT_BEGIN(evt_hoshi)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
@@ -321,7 +418,7 @@ static EVT_BEGIN(evt_hoshi)
         CALL(evt_mapobj_rotate, 0, STRING("hosi_center_c"), LW(10), 0, 0)
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -337,24 +434,24 @@ EVT_END()
  * the train's speed, which also scrolls the scenery; GW(1) drives the big drive wheels sha_1_4/sha_1_5 and rods
  * bou_2/bou_4: it follows GW(0), and after 1.5 seconds runs up to 10 faster for 2 seconds; Guess: wheel spin).
  */
-static EVT_BEGIN(hom_10_evt_resha_start)
+EVT_BEGIN(hom_10_evt_resha_start)
     // The train starts moving: the station flags are cleared.
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
     CALL(evt_mapobj_get_position, STRING("ranpu"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(200)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
-    // The departure sound and the first speeds depend on the station (Rogueport, Riverside or Poshley
-    // Heights).
+
+    // The departure sound depends on the station (Rogueport, Riverside or Poshley Heights).
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("gor_04"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1"), 0)
     END_IF
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_54_WELCOME_BACK)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG6_54_WELCOME_BACK)
             CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_2"), 0)
         ELSE
             CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_2_2"), 0)
@@ -386,7 +483,7 @@ static EVT_BEGIN(hom_10_evt_resha_start)
     END_IF
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-        CALL(evt_sub_intpl_msec_init, 11, 0, -1500, 20000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -1500, 20000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -401,7 +498,7 @@ static EVT_BEGIN(hom_10_evt_resha_start)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        // The train accelerates over about 20 seconds.
+        // GW(1) follows GW(0); 1.5 seconds in it runs up to 10 faster for 2 seconds.
         SPAWN_EVENT_GET_ID(PTR(evt_sub_stopwatch), LW(0))
         LOOP(0)
             SET_FLOAT_VALUE(GW(1), GW(0))
@@ -411,7 +508,7 @@ static EVT_BEGIN(hom_10_evt_resha_start)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, 0, -1000, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -1000, 1000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -421,7 +518,7 @@ static EVT_BEGIN(hom_10_evt_resha_start)
         IF_INT_EQUAL(LW(1), 1)
             GOTO(1)
         END_IF
-        CALL(evt_sub_intpl_msec_init, 11, -1000, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -1000, 0, 1000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -440,17 +537,18 @@ static EVT_BEGIN(hom_10_evt_resha_start)
 EVT_END()
 
 /** Same as hom_10_evt_resha_start but for the return trip: the train accelerates in the opposite direction to +15. */
-static EVT_BEGIN(hom_10_evt_resha_start2)
+EVT_BEGIN(hom_10_evt_resha_start2)
     // The train starts moving on the return trip: the station flags are cleared.
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
     CALL(evt_mapobj_get_position, STRING("ranpu"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(200)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
-    // The departure sound and the first speeds depend on the station.
+
+    // The departure sound depends on the station.
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("gor_04"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1"), 0)
@@ -494,7 +592,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
     END_IF
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-        CALL(evt_sub_intpl_msec_init, 11, 0, 1500, 20000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1500, 20000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -509,7 +607,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        // The train accelerates over about 20 seconds.
+        // GW(1) follows GW(0); 1.5 seconds in it runs up to 10 faster for 2 seconds.
         SPAWN_EVENT_GET_ID(PTR(evt_sub_stopwatch), LW(0))
         LOOP(0)
             SET_FLOAT_VALUE(GW(1), GW(0))
@@ -519,7 +617,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, 0, 1000, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1000, 1000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -529,7 +627,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
         IF_INT_EQUAL(LW(1), 1)
             GOTO(1)
         END_IF
-        CALL(evt_sub_intpl_msec_init, 11, 1000, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1000, 0, 1000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -551,8 +649,8 @@ EVT_END()
  * Sets the train to travel at its cruising speed of -15 immediately (the outbound direction),
  * without the departure acceleration; used by the running-train scenes.
  */
-static EVT_BEGIN(hom_10_evt_resha_start3)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+EVT_BEGIN(hom_10_evt_resha_start3)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(-15.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(-15.0f))
     RETURN
@@ -562,19 +660,20 @@ EVT_END()
  * Sets the train to travel at its cruising speed of +15 immediately (the return direction),
  * without the departure acceleration.
  */
-static EVT_BEGIN(hom_10_evt_resha_start4)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+EVT_BEGIN(hom_10_evt_resha_start4)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(15.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(15.0f))
     RETURN
 EVT_END()
 
 /**
- * Arrival braking of the outbound train: plays the stop sounds and slows the wheel speeds to 0,
- * then clears GSWF_TRAIN_MOVING.
+ * Braking of the train: sets GSWF_HOM_TRAIN_MOVING, plays the stop sound for the current map (gor_04, hom_00 or
+ * pik_00), slides the train from 3000 to 0 over 10 seconds while feeding the wheel speeds GW(0)/GW(1), then
+ * clears GSWF_HOM_TRAIN_MOVING.
  */
 static EVT_BEGIN(stop_1)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(3000.0f))
@@ -588,7 +687,7 @@ static EVT_BEGIN(stop_1)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE2_3"), 0)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 11, 3000, 0, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 3000, 0, 10000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     MULTIPLY_FLOAT(LW(0), FLOAT(1.0f))
@@ -603,13 +702,13 @@ static EVT_BEGIN(stop_1)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     RETURN
 EVT_END()
 
 /** Arrival braking of the return-trip train: like stop_1 with the return-trip sound variants. */
 static EVT_BEGIN(stop_2)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(-3000.0f))
@@ -623,7 +722,7 @@ static EVT_BEGIN(stop_2)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE2_3"), 0)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 11, -3000, 0, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -3000, 0, 10000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     MULTIPLY_FLOAT(LW(0), FLOAT(1.0f))
@@ -638,7 +737,7 @@ static EVT_BEGIN(stop_2)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     RETURN
 EVT_END()
 
@@ -647,7 +746,7 @@ EVT_END()
  * gor_04 and hom_00 and the trip direction), which brings the train speed to zero
  * and clears the train-moving flag.
  */
-static EVT_BEGIN(hom_10_evt_resha_stop)
+EVT_BEGIN(hom_10_evt_resha_stop)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         SPAWN_EVENT(stop_1)
@@ -658,7 +757,7 @@ static EVT_BEGIN(hom_10_evt_resha_stop)
     END_IF
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
             SPAWN_EVENT(stop_1)
         ELSE
             SPAWN_EVENT(stop_2)
@@ -666,6 +765,18 @@ static EVT_BEGIN(hom_10_evt_resha_stop)
     END_IF
     RETURN
 EVT_END()
+
+/**
+ * Script helper: writes into LW(10) a sine wobble (1.8 times |GW(0)| times sin(frame count / 15));
+ * evt_ramp rotates the lamps (ranpu, ranpu_c) by it, so they sway with the train's speed and stay still when it stops.
+ */
+static USER_FUNC(ramp_r) {
+    f32 amp = __fabsf(evtGetFloat(event, GW(0)));
+    f32 wave = sin(gp->retraceCount / 15.0f);
+
+    evtSetFloat(event, LW(10), 1.8f * amp * wave);
+    return EVT_RETURN_DONE;
+}
 
 /** Keeps the lamp objects (ranpu, ranpu_c) swinging every frame by the amount from ramp_r while the train is moving. */
 static EVT_BEGIN(evt_ramp)
@@ -675,7 +786,7 @@ static EVT_BEGIN(evt_ramp)
         CALL(evt_mapobj_rotate, 1, STRING("ranpu_c"), 0, 0, LW(10))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -684,10 +795,6 @@ static EVT_BEGIN(evt_ramp)
     RETURN
 EVT_END()
 
-/**
- * Map object groups of the train (pika_*) that hom_10_evt_resha_sub hooks to the TEV callback resha_tev,
- * which adds environment effect 7 (an env.tpl reflection or shine texture) to them; NULL ends the list.
- */
 static const char* pika_tbl[] = {
     "pika_1_1",
     "pika_1_2",
@@ -706,7 +813,6 @@ static const char* pika_tbl[] = {
     NULL,
 };
 
-/** The shorter list used instead on the map rsh_06_a: the same groups without the *_c ones. */
 static const char* pika_tbl_rsh_06[] = {
     "pika_1_1",
     "pika_1_2",
@@ -720,13 +826,18 @@ static const char* pika_tbl_rsh_06[] = {
     NULL,
 };
 
+/** Map TEV callback for the train model: forwards the map object's TEV info to envAddTev with index 7. */
+static void resha_tev(MapTevCallbackInfo* info) {
+    envAddTev(7, info);
+}
+
 /**
  * Common start of the train-exterior scenes: marks the train as not moving,
- * zeroes the wheel speeds and spawns the wheel, rod,
- * background and star scripts (plus lamp and sparks on the maps that have them).
+ * zeroes the wheel speeds and spawns the wheel, rod, star and lamp scripts (the background scroll only on
+ * hom_10, hom_11, hom_12 and rsh_06_a), then puts the pika_* objects on the map TEV callback resha_tev.
  */
 static EVT_BEGIN(hom_10_evt_resha_sub)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SPAWN_EVENT(evt_sharin)
@@ -761,9 +872,9 @@ static EVT_BEGIN(hom_10_evt_resha_sub)
         IF_INT_EQUAL(LW(0), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_TEV_CALLBACK(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_DISPLAY_LIST)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_COLOR_STAGE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAP_OBJ_FLAG_DISPLAY_LIST)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_FLAG_NO_COLOR_STAGE)
     END_LOOP
     RETURN
 EVT_END()
@@ -772,14 +883,14 @@ EVT_END()
  * Sets up the train scene with the outbound (right-moving) train:
  * runs the shared set-up and hides the rear cars unless the map is rsh_06_a.
  */
-static EVT_BEGIN(hom_10_evt_resha_right)
+EVT_BEGIN(hom_10_evt_resha_right)
     CALL_CHILD(hom_10_evt_resha_sub)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_NOT_EQUAL(LW(0), STRING("rsh_06_a"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_8"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_6"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_7"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_8"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_6"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_7"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
@@ -788,42 +899,43 @@ EVT_END()
  * Sets up the train scene with the return (left-moving) train:
  * runs the shared set-up and hides the cars that are not part of the return view.
  */
-static EVT_BEGIN(hom_10_evt_resha_left)
+EVT_BEGIN(hom_10_evt_resha_left)
     CALL_CHILD(hom_10_evt_resha_sub)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_5"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_5"), MAP_OBJ_FLAG_HIDDEN)
     RETURN
 EVT_END()
 
 /**
- * Map init of the train-exterior scene: fades the music out, starts the Chapter 6 train ambience,
- * parks Mario and the partners off-screen and sets up the train for the outbound
- * or (GSWF_TRAIN_RETURN_TRIP) return view.
- * A letterboxed camera pans along the train for 4 seconds, then the game changes to rsh_02_a ("nidome").
+ * Init script of the train-exterior scene: fades the music out, starts ENV_STG6_RSH2, locks Mario and the
+ * partners and parks them off the map. Unless the train is bound for Rogueport
+ * (GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT) it runs hom_10_evt_resha_right and _start3 (JP and later also swap the
+ * renketu coupling groups); otherwise hom_10_evt_resha_left and _start4 with the train at -1500. A letterboxed
+ * camera pans along the train over 8 seconds; after 4 seconds the map changes to rsh_02_a ("nidome").
  */
-static EVT_BEGIN(hom_10_init_evt)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH2"))
+EVT_BEGIN(hom_10_init_evt)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH2"))
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_party_cont_onoff, 1, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_party_set_pos, 1, 0, -1000, 0)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         CALL_CHILD(hom_10_evt_resha_right)
         CALL_CHILD(hom_10_evt_resha_start3)
         SET_VALUE(LW(0), 500)
         SET_VALUE(LW(1), -500)
 #if VERSION >= VERSION_JP
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_3"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_4"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_5"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_3"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_4"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_5"), MAP_OBJ_FLAG_HIDDEN)
 #endif
     ELSE
         CALL_CHILD(hom_10_evt_resha_left)
@@ -833,10 +945,10 @@ static EVT_BEGIN(hom_10_init_evt)
         CALL(evt_mapobj_trans, 1, STRING("train"), -1500, 0, 0)
     END_IF
     CALL(evt_cam_letter_box_onoff, 1, 1)
-    CALL(evt_cam3d_evt_set, LW(0), 300, 1400, LW(0), 125, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, LW(0), 300, 1400, LW(0), 125, 0, 0, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
-        CALL(evt_seq_wait, 2)
-        CALL(evt_cam3d_evt_set, LW(1), 300, 1400, LW(1), 125, 0, 8000, 0)
+        CALL(evt_seq_wait, SEQ_GAME)
+        CALL(evt_cam3d_evt_set, LW(1), 300, 1400, LW(1), 125, 0, 8000, EASING_LINEAR)
         WAIT_MS(4000)
         CALL(evt_bero_mapchange, STRING("rsh_02_a"), STRING("nidome"))
     END_INLINE_EVENT
@@ -845,9 +957,9 @@ EVT_END()
 
 /**
  * Exit event of the n_bero door towards the Excess Express (rsh_01_a):
- * sets GF(11) and clears LW(0) so the train-door script does not reset anything on the way out.
+ * sets GF(11) (which keeps ie_1 hidden, see under) and returns 0 in LW(0), so the normal door exit goes ahead.
  */
-EVT_BEGIN(resha_noru)
+static EVT_BEGIN(resha_noru)
     SET_VALUE(GF(11), 1)
     SET_VALUE(LW(0), 0)
     RETURN
@@ -881,7 +993,7 @@ static BeroEntry bero_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)resha_noru, // exitEvent
+        resha_noru, // exitEvent
         "rsh_01_a", // nextMapName
         "s_bero", // nextBeroName
         1, // enterAnimeType
@@ -892,7 +1004,6 @@ static BeroEntry bero_data[] = {
     {0},
 };
 
-/** Map objects of the arrow signs (yajirusi_N) that evt_pik_yajirushi animates. */
 static const char* name_tbl[] = {
     "yajirusi_1",
     "yajirusi_2",
@@ -909,7 +1020,7 @@ static const char* name_tbl[] = {
  */
 EVT_BEGIN(evt_pik_yajirushi)
     LABEL(0)
-    CALL(evt_sub_intpl_msec_init, 11, 20, -20, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 20, -20, 1000)
     LABEL(10)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_rotate, 0, LW(9), 0, LW(0), 0)
@@ -919,9 +1030,9 @@ EVT_BEGIN(evt_pik_yajirushi)
     END_IF
     CALL(evt_sub_random, 100, LW(0))
     IF_INT_LESS(LW(0), 90)
-        CALL(evt_sub_intpl_msec_init, 11, -20, 20, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -20, 20, 1000)
     ELSE
-        CALL(evt_sub_intpl_msec_init, 11, -20, 380, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -20, 380, 1000)
     END_IF
     LABEL(20)
     CALL(evt_sub_intpl_msec_get_value)
@@ -935,15 +1046,13 @@ EVT_BEGIN(evt_pik_yajirushi)
 EVT_END()
 
 /**
- * Boarding the Excess Express back to Rogueport:
- * the train door (tobira) slides open with the sliding door sound,
- * the camera is released and Mario and the partners walk to the door and step aboard;
- * the door slides shut, and the station attendant (駅員) walks over,
- * looks both ways and calls "All aboard!" (train_07).
- * Then everyone is hidden and the train pulls out (hom_10_evt_resha_start2);
- * ten seconds later GSWF_RSH_NEW_RIDE_PENDING is set if the story has reached STORY_STG6_56_ROGUEPORT_STATION,
- * the return trip flags are set (GSWF_TRAIN_RETURN_TRIP, GSWF_TRAIN_DEPARTED, GSW_TRAIN_LEG = 2)
- * and the game changes to rsh_02_a (entrance nidome_start).
+ * Boarding the train back to Rogueport: the door (tobira) slides open, Mario and the partners walk aboard, the
+ * door slides shut and the station attendant (駅員) looks both ways and says train_07. Everyone is parked off the
+ * map and the train pulls out (hom_10_evt_resha_start2); ten seconds later GSWF_RSH_NEW_PASSENGERS_PENDING is
+ * set if the story has reached STG6_56_ROGUEPORT_STATION, GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT and
+ * GSWF_HOM_TRAIN_BOARDED_UNUSED are set, GSWF_HOM_TRAIN_AT_POSHLEY is cleared (JP and later also
+ * GSWF_HOM_TRAIN_AT_ROGUEPORT), GSW_HOM_TRAIN_LEG = 2, and the map changes to rsh_02_a (nidome_start). JP and
+ * later set GF(11) first; the early demos clear GSWF_RSH_02_DRIED_SHROOM_DRAWER.
  */
 static EVT_BEGIN(evt_train)
 #if VERSION >= VERSION_JP
@@ -951,12 +1060,11 @@ static EVT_BEGIN(evt_train)
 #endif
     CALL(evt_hitobj_onoff, STRING("n_bero"), 1, 0)
 #if VERSION <= VERSION_DEMO_JP
-    // the demo also clears flag 3462 here (the dried-shroom shelf flag in the releases)
-    SET_VALUE(GSWF(GSWF_RSH02_SHELF_DRIED_SHROOM), 0)
+    SET_VALUE(GSWF_RSH_02_DRIED_SHROOM_DRAWER, 0)
 #endif
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_SLIDE1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -40, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -40, 500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, STRING("tobira"), LW(0), 0, 0)
@@ -996,7 +1104,7 @@ static EVT_BEGIN(evt_train)
     CALL(evt_party_stop, 1)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_SLIDE1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, -40, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -40, 0, 500)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, STRING("tobira"), LW(0), 0, 0)
@@ -1028,41 +1136,41 @@ static EVT_BEGIN(evt_train)
     END_INLINE_EVENT
     SPAWN_EVENT(hom_10_evt_resha_start2)
     WAIT_MS(10000)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_56_ROGUEPORT_STATION)
-        SET_VALUE(GSWF(GSWF_RSH_NEW_RIDE_PENDING), 1)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_56_ROGUEPORT_STATION)
+        SET_VALUE(GSWF_RSH_NEW_PASSENGERS_PENDING, 1)
     END_IF
-    SET_VALUE(GSWF(GSWF_TRAIN_RETURN_TRIP), 1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 1)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
 #if VERSION >= VERSION_JP
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
 #endif
-    SET_VALUE(GSWF(GSWF_TRAIN_DEPARTED), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_BOARDED_UNUSED, 1)
     WAIT_FRAMES(1)
-    SET_VALUE(GSW(GSW_TRAIN_LEG), 2)
+    SET_VALUE(GSW_HOM_TRAIN_LEG, 2)
     CALL(evt_bero_mapchange, STRING("rsh_02_a"), STRING("nidome_start"))
     RETURN
 EVT_END()
 
 /** Init for the station attendant (駅員): puts him at (-250, 60, -350) next to the train door. */
-EVT_BEGIN(init_ekiin)
+static EVT_BEGIN(init_ekiin)
     CALL(evt_npc_set_position, STRING("me"), -250, 60, -350)
     RETURN
 EVT_END()
 
 /**
  * Talk script for the station attendant.
- * Before the return to Rogueport (STORY_STG6_54_WELCOME_BACK) he gives a plain greeting;
- * later he tells Mario the train is not ready until the return trip has started,
- * and otherwise offers a ride back on the Excess Express.
+ * Before the return to Rogueport (STG6_54_WELCOME_BACK) he says there is time before departure;
+ * later, while the train is not bound for Rogueport (GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT clear), he says the same
+ * (train_06), and otherwise offers a ride back on the Excess Express.
  * If Mario has the Train Ticket he shows it, the attendant steps aside and evt_train boards the train;
  * without it he says Mario needs one.
  */
 EVT_BEGIN(talk_ekiin)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_54_WELCOME_BACK)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_54_WELCOME_BACK)
         CALL(evt_msg_print, 0, STRING("stg6_pik_00"), 0, 0)
         RETURN
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
             CALL(evt_msg_print, 0, STRING("train_06"), 0, 0)
             RETURN
         END_IF
@@ -1084,20 +1192,22 @@ EVT_BEGIN(talk_ekiin)
                     ADD(LW(0), 20)
                     ADD(LW(1), 15)
                 END_IF
-                CALL(evt_item_entry, STRING("ticket"), ITEM_TRAIN_TICKET, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+                CALL(evt_item_entry, STRING("ticket"), ITEM_TRAIN_TICKET, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
                 WAIT_MS(1000)
                 CALL(evt_item_delete, STRING("ticket"))
                 CALL(evt_mario_set_pose, STRING("M_S_1"))
                 CALL(evt_msg_print, 0, STRING("train_04"), 0, 0)
-                CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_INTANGIBLE)
-                CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+                CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_NO_HIT)
+                CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
                 CALL(evt_npc_move_position, STRING("me"), -260, -335, 0, FLOAT(120.0f), 1)
                 CALL(evt_npc_set_ry, STRING("me"), 90)
-                SET_VALUE(GSWF(GSWF_TRAIN_ARRIVED_POSHLEY), 0)
-#if VERSION >= VERSION_JP
-                SET_VALUE(GSWF(GSWF_TRAIN_ARRIVED_ROGUEPORT), 0)
-#endif
+                SET_VALUE(GSWF_RSH_TRAIN_AT_POSHLEY, 0)
+#if VERSION <= VERSION_DEMO_JP
                 CALL_CHILD(evt_train)
+#else
+                SET_VALUE(GSWF_RSH_TRAIN_AT_ROGUEPORT, 0)
+                CALL_CHILD(evt_train)
+#endif
             END_IF
         ELSE
             CALL(evt_msg_print_add, 0, STRING("train_02"))
@@ -1106,29 +1216,61 @@ EVT_BEGIN(talk_ekiin)
     RETURN
 EVT_END()
 
-/** Init for Goldbob's husband (ナリキンパパ, Mr. Goldbob): puts him at (-195, 0, 350). */
+/** Init for Goldbob (ナリキンパパ, Mr. Goldbob): puts him at (-195, 0, 350). */
 static EVT_BEGIN(init_papa)
     CALL(evt_npc_set_position, STRING("me"), -195, 0, 350)
     RETURN
 EVT_END()
 
+/**
+ * Script helper for the Goldbob scene's camera:
+ * computes a camera position 70 percent of the way from the current camera target to the camera,
+ * shifted in x to the middle between Mario and Goldbob, so the shot frames both.
+ * Writes the 3D camera position to args[0] to args[2] and the target to args[3] to args[5];
+ * used with evt_cam3d_evt_set.
+ */
+static USER_FUNC(zoom) {
+    EvtWord* args = event->args;
+
+    // ナリキンパパ
+    NpcEntry* npc = npcNameToPtr("ナリキンパパ");
+    MarioWork* mario = marioGetPtr();
+    CameraEntry* cam = camGetPtr(CAMERA_3D);
+    Vec v;
 #if VERSION >= VERSION_US
-// FAKE: the zero Vec initialisers of zoom sit here in .rodata
-static const Vec zoom_zero_a = {0.0f, 0.0f, 0.0f};
-static const Vec zoom_zero_b = {0.0f, 0.0f, 0.0f};
+    CameraParams out;
+    f32 bank = 0.0f;
+
+    camShiftMain(cam, mario, &bank);
+    camRoadMain(&out, cam->blendPos.x, cam->blendPos.y, cam->blendPos.z, cam->blendAt.x, cam->blendAt.y, cam->blendAt.z, bank);
+
+    PSVECSubtract(&(Vec){out.pos.x, out.pos.y, out.pos.z}, &(Vec){out.at.x, out.at.y, out.at.z}, &v);
+#else
+    PSVECSubtract(&cam->cameraPos, &cam->cameraAt, &v);
 #endif
+    PSVECScale(&v, &v, 0.7f);
+    PSVECAdd(&cam->cameraAt, &v, &v);
+    evtSetFloat(event, args[0], (npc->position.x + mario->position.x) / 2);
+    evtSetFloat(event, args[1], v.y);
+    evtSetFloat(event, args[2], v.z);
+    evtSetFloat(event, args[3], (npc->position.x + mario->position.x) / 2);
+    evtSetFloat(event, args[4], cam->cameraAt.y);
+    evtSetFloat(event, args[5], cam->cameraAt.z);
+    return EVT_RETURN_DONE;
+}
 
 /**
  * Talk script for Goldbob (ナリキンパパ) in chapter 7:
  * the first time he explains the Fahr Outpost cannon situation, and then he asks Mario a question.
  * The right answers take Mario's coins (a bribe) in a counter animation,
- * give the Goldbob Guide and then return the coins, set GSWF_PIK00_GOLDBOB_CANNON_APPROVAL and,
- * if General White has also been woken (GSWF_BOM02_GENERAL_WHITE_WOKEN),
- * advance the story to STORY_STG7_03_WHERES_WHITE. The camera zooms in on the pair for the conversation.
+ * give the Goldbob Guide and then return the coins, set GSWF_PIK_GOLDBOB_PERMISSION_GIVEN and,
+ * if General White has also been woken (GSWF_BOM_GENERAL_WHITE_AGREED),
+ * advance the story to STG7_03_GOLDBOB. The camera zooms in on the pair for the conversation.
  */
-EVT_BEGIN(talk_papa_taihou_kyoka)
-    IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_FIRST_TALK), 0)
-        SET_VALUE(GSWF(GSWF_PIK00_GOLDBOB_CANNON_FIRST_TALK), 1)
+static EVT_BEGIN(talk_papa_taihou_kyoka)
+    IF_INT_EQUAL(GSWF_PIK_GOLDBOB_CANNON_TALK_DONE, 0)
+        SET_VALUE(GSWF_PIK_GOLDBOB_CANNON_TALK_DONE, 1)
+
         // Goldbob greets Mario and hears about the Fahr Outpost cannon.
         CALL(evt_msg_print, 0, STRING("stg7_pik_01"), 0, STRING("ナリキンパパ"))
         CALL(evt_mario_set_pose, STRING("M_I_2"))
@@ -1140,16 +1282,18 @@ EVT_BEGIN(talk_papa_taihou_kyoka)
         WAIT_MS(500)
         CALL(evt_msg_print, 0, STRING("stg7_pik_03"), 0, STRING("ナリキンパパ"))
         CALL(zoom, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5))
-        CALL(evt_cam3d_evt_set, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), 500, 11)
+        CALL(evt_cam3d_evt_set, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), 500, EASING_SINE_IN_OUT)
         WAIT_MS(500)
         CALL(evt_msg_print, 0, STRING("stg7_pik_04"), 0, STRING("ナリキンパパ"))
     ELSE
         CALL(zoom, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5))
-        CALL(evt_cam3d_evt_set, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), 500, 11)
+        CALL(evt_cam3d_evt_set, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), 500, EASING_SINE_IN_OUT)
         WAIT_MS(500)
+
         // On later visits he asks how much Mario would pay.
         CALL(evt_msg_print, 0, STRING("stg7_pik_05"), 0, STRING("ナリキンパパ"))
     END_IF
+
     // Mario names a price: nothing, 1 coin, 64 coins or everything.
     CALL(evt_msg_select, 0, STRING("stg7_pik_04_yn"))
     DEBUG_PUT_REG(LW(0))
@@ -1181,37 +1325,38 @@ EVT_BEGIN(talk_papa_taihou_kyoka)
             CALL(evt_msg_select, 0, STRING("stg7_pik_11_yn"))
             IF_INT_EQUAL(LW(0), 1)
                 CALL(evt_msg_print_add, 0, STRING("stg7_pik_06"))
-                CALL(evt_cam3d_evt_off, 500, 11)
+                CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
                 RETURN
             END_IF
             CALL(evt_msg_print_add, 0, STRING("stg7_pik_12"))
             CALL(evt_msg_select, 0, STRING("stg7_pik_11_yn"))
             IF_INT_EQUAL(LW(0), 1)
                 CALL(evt_msg_print_add, 0, STRING("stg7_pik_06"))
-                CALL(evt_cam3d_evt_off, 500, 11)
+                CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
                 RETURN
             END_IF
             CALL(evt_msg_print_add, 0, STRING("stg7_pik_13"))
             CALL(evt_msg_select, 0, STRING("stg7_pik_11_yn"))
             IF_INT_EQUAL(LW(0), 1)
                 CALL(evt_msg_print_add, 0, STRING("stg7_pik_06"))
-                CALL(evt_cam3d_evt_off, 500, 11)
+                CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
                 RETURN
             END_IF
             CALL(evt_msg_print_add, 0, STRING("stg7_pik_14"))
             CALL(evt_msg_select, 0, STRING("stg7_pik_11_yn"))
             IF_INT_EQUAL(LW(0), 1)
                 CALL(evt_msg_print_add, 0, STRING("stg7_pik_06"))
-                CALL(evt_cam3d_evt_off, 500, 11)
+                CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
                 RETURN
             END_IF
             CALL(evt_msg_print_add, 0, STRING("stg7_pik_15"))
             CALL(evt_msg_select, 0, STRING("stg7_pik_11_yn"))
             IF_INT_EQUAL(LW(0), 1)
                 CALL(evt_msg_print_add, 0, STRING("stg7_pik_06"))
-                CALL(evt_cam3d_evt_off, 500, 11)
+                CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
                 RETURN
             END_IF
+
             // Mario agrees to hand over all his coins.
             CALL(evt_msg_print_add, 0, STRING("stg7_pik_16"))
             CALL(evt_pouch_get_coin, LW(10))
@@ -1228,8 +1373,9 @@ EVT_BEGIN(talk_papa_taihou_kyoka)
             WAIT_MS(500)
             CALL(evt_sub_status_gauge_force_close)
             CALL(evt_msg_print, 0, STRING("stg7_pik_17"), 0, STRING("ナリキンパパ"))
+
             // Goldbob gives Mario the Goldbob Guide and returns the coins.
-            CALL(evt_item_entry, STRING("a"), ITEM_GOLDBOB_GUIDE, 0, -1000, 0, ITEM_ENTRY_FIXED, -1, 0)
+            CALL(evt_item_entry, STRING("a"), ITEM_GOLDBOB_GUIDE, 0, -1000, 0, ITEM_TYPE_STILL, -1, 0)
             CALL(evt_item_get_item, STRING("a"))
             CALL(evt_item_get_item_end_wait, STRING("a"))
             WAIT_MS(500)
@@ -1250,22 +1396,23 @@ EVT_BEGIN(talk_papa_taihou_kyoka)
             CALL(pik_00_statuswin_force_off)
 #endif
             CALL(evt_msg_print, 0, STRING("stg7_pik_19"), 0, STRING("ナリキンパパ"))
+
             // His approval of the cannon is recorded.
-            SET_VALUE(GSWF(GSWF_PIK00_GOLDBOB_CANNON_APPROVAL), 1)
+            SET_VALUE(GSWF_PIK_GOLDBOB_PERMISSION_GIVEN, 1)
             SET_VALUE(LW(0), 0)
-            IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_APPROVAL), 1)
+            IF_INT_EQUAL(GSWF_PIK_GOLDBOB_PERMISSION_GIVEN, 1)
                 ADD(LW(0), 1)
             END_IF
-            IF_INT_EQUAL(GSWF(GSWF_BOM02_GENERAL_WHITE_WOKEN), 1)
+            IF_INT_EQUAL(GSWF_BOM_GENERAL_WHITE_AGREED, 1)
                 ADD(LW(0), 1)
             END_IF
             IF_INT_EQUAL(LW(0), 2)
                 // If General White has also been woken, the story advances.
-                SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_03_WHERES_WHITE)
+                SET_VALUE(GSW_STORY_PROGRESS, STG7_03_GOLDBOB)
             END_IF
         END_IF
     END_SWITCH
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     RETURN
 EVT_END()
 
@@ -1284,43 +1431,43 @@ EVT_END()
  * and stg7_pik_19_01 after, and stg7_pik_19_01_2 after the game.
  */
 static EVT_BEGIN(talk_papa)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 25)
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_BASE), 0)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_DELIVERY_PLEASE)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(0), 0)
             CALL(evt_msg_print, 0, STRING("irai_25_00"), 0, 0)
-            CALL(evt_item_entry, STRING("butu"), ITEM_PACKAGE, 0, -1000, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("butu"), ITEM_PACKAGE, 0, -1000, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_item_get_item, STRING("butu"))
             CALL(evt_item_get_item_end_wait, STRING("butu"))
             CALL(evt_msg_print, 0, STRING("irai_25_01"), 0, 0)
-            SET_VALUE(GSWF(GSWF_TROUBLE_WORK_BASE), 1)
+            SET_VALUE(GSWF_TROUBLE_WORK(0), 1)
             RETURN
         END_IF
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_3), 0)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(3), 0)
             CALL(evt_msg_print, 0, STRING("irai_25_02"), 0, 0)
             RETURN
         END_IF
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_6), 0)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(6), 0)
             CALL(evt_msg_print, 0, STRING("irai_25_03"), 0, 0)
-            SET_VALUE(GSWF(GSWF_TROUBLE_WORK_4), 1)
+            SET_VALUE(GSWF_TROUBLE_WORK(4), 1)
             RETURN
         END_IF
         CALL(evt_msg_print, 0, STRING("irai_25_04"), 0, 0)
         CALL(evt_sub_get_coin, 64)
-        SET_VALUE(GSW(GSW_TROUBLE_ACTIVE), 0)
-        SET_VALUE(GSWF(GSWF_TROUBLE_25_SOLVED), 1)
+        SET_VALUE(GSW_TROUBLE_ACCEPTED, TROUBLE_NONE)
+        SET_VALUE(GSWF_TROUBLE_DONE(TROUBLE_DELIVERY_PLEASE), 1)
         CALL(evt_msg_print, 0, STRING("sys_request_finish"), 0, 0)
         RETURN
     END_IF
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 29)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_HELP_ME_MAKE_UP)
         CALL(evt_msg_print, 0, STRING("irai_29_18_1"), 0, 0)
         RETURN
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_54_WELCOME_BACK)
         CALL(evt_msg_print, 0, STRING("stg6_pik_01"), 0, 0)
-        CASE_LESS(STORY_STG7_02_MAYOR_BOB)
+        CASE_LESS(STG7_02_MAYOR_BOB)
         CALL(evt_msg_print, 0, STRING("stg7_pik_19_01_1"), 0, 0)
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_APPROVAL), 0)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        IF_INT_EQUAL(GSWF_PIK_GOLDBOB_PERMISSION_GIVEN, 0)
             CALL_CHILD(talk_papa_taihou_kyoka)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg7_pik_19_01"), 0, 0)
@@ -1338,7 +1485,7 @@ static EVT_BEGIN(init_mama)
 EVT_END()
 
 /** Items the player may offer for Trouble Center request 29: the Present only, ended by -1. */
-s32 iri_29_item_tbl[] = {
+static s32 iri_29_item_tbl[] = {
     ITEM_PRESENT, -1,
 };
 
@@ -1357,8 +1504,8 @@ s32 iri_29_item_tbl[] = {
  * stg7_pik_20 until the cannon is approved and stg7_pik_21 after, and stg7_pik_21_2 after the game.
  */
 static EVT_BEGIN(talk_mama)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 29)
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_1), 0)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_HELP_ME_MAKE_UP)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(1), 0)
             CALL(evt_pouch_check_item, ITEM_PRESENT, LW(0))
             IF_INT_GREATER(LW(0), 0)
                 // Trouble Center request 29: Goldbob's wife asks what Mario needs, and he shows the Present.
@@ -1370,6 +1517,7 @@ static EVT_BEGIN(talk_mama)
 #endif
                 IF_INT_NOT_EQUAL(LW(0), -1)
                     CALL(evt_pouch_remove_item, ITEM_PRESENT, LW(0))
+
                     // She learns the Present is from Little Bub and is moved.
                     CALL(evt_msg_print, 0, STRING("irai_29_15"), PTR(irai_29_15_cb), 0)
                     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1399,12 +1547,12 @@ static EVT_BEGIN(talk_mama)
                             CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
                             CALL(evt_party_move_pos, 0, LW(0), LW(8), 150)
                         END_INLINE_EVENT
-                        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_DIR_LOCK)
-                        CALL(evt_mario_dispflag_onoff, 1, 4)
+                        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_NO_MAKE_DISP_DIR)
+                        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_NO_REAR_POSE)
                         CALL(evt_mario_mov_pos, LW(7), LW(8), 150)
                         CALL(evt_mario_adjust_dir)
-                        CALL(evt_mario_dispflag_onoff, 0, 4)
-                        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_DIR_LOCK)
+                        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_NO_REAR_POSE)
+                        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_NO_MAKE_DISP_DIR)
                     END_IF
                     BEGIN_INLINE_EVENT
                         WAIT_MS(500)
@@ -1414,10 +1562,11 @@ static EVT_BEGIN(talk_mama)
                         WAIT_MS(500)
                         CALL(evt_party_set_dir_npc, 0, STRING("ナリキンママ"))
                     END_INLINE_EVENT
-                    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_INTANGIBLE)
-                    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+                    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_NO_HIT)
+                    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
                     CALL(evt_npc_move_position, STRING("me"), 115, 330, 0, 150, 0)
                     WAIT_MS(1000)
+
                     // She is delighted with the gift.
                     CALL(evt_msg_print, 0, STRING("irai_29_16"), 0, 0)
                     WAIT_MS(1500)
@@ -1430,13 +1579,13 @@ static EVT_BEGIN(talk_mama)
                         CALL(evt_party_set_dir_npc, 0, STRING("ナリキンママ"))
                     END_INLINE_EVENT
                     CALL(evt_npc_move_position, STRING("me"), -133, 330, 0, 60, 0)
-                    CALL(evt_npc_status_onoff, 0, STRING("me"), 2)
-                    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_INTANGIBLE)
+                    CALL(evt_npc_status_onoff, 0, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
+                    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_NO_HIT)
                     CALL(evt_set_dir_to_target, STRING("me"), STRING("mario"))
                     WAIT_MS(300)
                     CALL(evt_msg_print, 0, STRING("irai_29_17"), 0, 0)
-                    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-                    SET_VALUE(GSWF(GSWF_TROUBLE_WORK_1), 1)
+                    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+                    SET_VALUE(GSWF_TROUBLE_WORK(1), 1)
                 END_IF
                 RETURN
             ELSE
@@ -1444,20 +1593,21 @@ static EVT_BEGIN(talk_mama)
                 RETURN
             END_IF
         ELSE
-            // She thanks Mario and the request moves on.
+            // After the handover she only repeats her thanks.
             CALL(evt_msg_print, 0, STRING("irai_29_18"), 0, 0)
             RETURN
         END_IF
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_54_WELCOME_BACK)
+
         // With no request pending, her talk follows the story.
         CALL(evt_msg_print, 0, STRING("stg6_pik_02"), 0, 0)
-        CASE_LESS(STORY_STG7_02_MAYOR_BOB)
+        CASE_LESS(STG7_02_MAYOR_BOB)
         CALL(evt_msg_print, 0, STRING("stg7_pik_21_1"), 0, 0)
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_APPROVAL), 0)
-            IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_FIRST_TALK), 0)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        IF_INT_EQUAL(GSWF_PIK_GOLDBOB_PERMISSION_GIVEN, 0)
+            IF_INT_EQUAL(GSWF_PIK_GOLDBOB_CANNON_TALK_DONE, 0)
                 CALL(evt_msg_print, 0, STRING("stg7_pik_21_1"), 0, 0)
             ELSE
                 CALL(evt_msg_print, 0, STRING("stg7_pik_20"), 0, 0)
@@ -1472,11 +1622,11 @@ static EVT_BEGIN(talk_mama)
 EVT_END()
 
 /**
- * Init for Bub (コナリ), the Goldbobs' son: puts him at (-150, 0, 400), unless Trouble Center request 29 is active,
- * when he keeps his position from npc_data.
+ * Init for Bub (コナリキン), the Goldbobs' son: puts him at (-150, 0, 400), unless Trouble Center request 29 is active,
+ * when this init leaves his position unchanged.
  */
 static EVT_BEGIN(init_konari)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 29)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_HELP_ME_MAKE_UP)
         RETURN
     END_IF
     CALL(evt_npc_set_position, STRING("me"), -150, 0, 400)
@@ -1490,14 +1640,14 @@ EVT_END()
  * and stg7_pik_23_2 after the game.
  */
 static EVT_BEGIN(talk_konari)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_54_WELCOME_BACK)
         CALL(evt_msg_print, 0, STRING("stg6_pik_03"), 0, 0)
-        CASE_LESS(STORY_STG7_02_MAYOR_BOB)
+        CASE_LESS(STG7_02_MAYOR_BOB)
         CALL(evt_msg_print, 0, STRING("stg7_pik_23_1"), 0, 0)
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_APPROVAL), 0)
-            IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLDBOB_CANNON_FIRST_TALK), 0)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        IF_INT_EQUAL(GSWF_PIK_GOLDBOB_PERMISSION_GIVEN, 0)
+            IF_INT_EQUAL(GSWF_PIK_GOLDBOB_CANNON_TALK_DONE, 0)
                 CALL(evt_msg_print, 0, STRING("stg7_pik_23_1"), 0, 0)
             ELSE
                 CALL(evt_msg_print, 0, STRING("stg7_pik_22"), 0, 0)
@@ -1523,13 +1673,12 @@ static s32 item_tbl_madam[] = {
 };
 
 /**
- * Talk script for returning the Gold Ring to the madam:
- * dips the music, asks which item to give (stg6_pik_04_06 with an item window of item_tbl_madam).
- * If Mario gives the ring she pays 30 coins, takes the Gold Ring,
- * and GSWF_PIK00_GOLD_RING_RETURNED is set (stg6_pik_04_07 and 08); if he cancels she says stg6_pik_04_10.
+ * Talk script for returning the Gold Ring to the madam: lowers the music and asks for the item (stg6_pik_04_06,
+ * item window of item_tbl_madam). Unless Mario cancels she pays 30 coins (stg6_pik_04_07 and 08), takes the Gold
+ * Ring and sets GSWF_PIK_MADAM_GOLD_RING_RETURNED; a cancel gets stg6_pik_04_10.
  */
 static EVT_BEGIN(talk_madam_ring_return)
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
     CALL(evt_msg_print, 0, STRING("stg6_pik_04_06"), 0, STRING("マダム"))
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_win_item_select, PTR(item_tbl_madam), LW(1))
@@ -1541,35 +1690,31 @@ static EVT_BEGIN(talk_madam_ring_return)
         CALL(evt_sub_get_coin, 30)
         CALL(evt_msg_print, 0, STRING("stg6_pik_04_08"), 0, STRING("マダム"))
         CALL(evt_pouch_remove_item, ITEM_GOLD_RING, LW(0))
-        SET_VALUE(GSWF(GSWF_PIK00_GOLD_RING_RETURNED), 1)
+        SET_VALUE(GSWF_PIK_MADAM_GOLD_RING_RETURNED, 1)
     ELSE
         CALL(evt_msg_print, 0, STRING("stg6_pik_04_10"), 0, STRING("マダム"))
     END_IF
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
     RETURN
 EVT_END()
 
 /** Items the player may offer for Trouble Center request 23: the Wrestling Mag only, ended by -1. */
-s32 iri_23_item_tbl[] = {
+static s32 iri_23_item_tbl[] = {
     ITEM_WRESTLING_MAG, -1,
 };
 
 /**
- * Talk script for Toodles (マダム).
- * During Trouble Center request 23 she asks for the Wrestling Mag she lent to Jolene (irai_23_00);
- * if Mario has it she asks for it (irai_23_01), takes it from the item window, thanks him (irai_23_02),
- * gives him the Platinum Card, talks about the magazine (irai_23_03) and finishes the request.
- * Until Mario agrees to help her, she dips the music and asks him (stg6_pik_04_01 the first time,
- * stg6_pik_04_04 after), with a choice (stg6_pik_04_05):
- * yes has her ask him to find her lost Gold Ring (stg6_pik_04_02) and sets GSWF_RSH_TOODLES_HELP_ACCEPTED,
- * no gets stg6_pik_04_03.
- * After that, if Mario carries the Gold Ring she takes it (talk_madam_ring_return);
- * otherwise she says stg6_pik_04, and once the ring is returned
- * and the story has reached STORY_STG6_70_THOUSAND_YEAR_DOOR,
- * stg7_pik_clear_01 (stg7_pik_clear_01_1 after the game).
+ * Talk script of the madam (マダム). While Trouble Center request TROUBLE_I_MUST_HAVE_THAT_BOOK is accepted:
+ * without a Wrestling Mag she says irai_23_00; with one she asks for it (irai_23_01), and unless Mario cancels
+ * takes it, gives the Platinum Card and finishes the request. Otherwise, until Mario has accepted her ring
+ * request (GSWF_RSH_MADAM_RING_REQUEST_ACCEPTED), she lowers the music and asks (stg6_pik_04_01 the first time,
+ * stg6_pik_04_04 after) with a yes/no; yes sets the flag. Later, when Mario carries the Gold Ring, she runs
+ * talk_madam_ring_return; else she says stg6_pik_04, or from STG6_70_THOUSAND_YEAR_DOOR on, once the ring is
+ * returned (GSWF_PIK_MADAM_GOLD_RING_RETURNED), stg7_pik_clear_01 (stg7_pik_clear_01_1 after
+ * STG8_END_AFTER_THE_BATTLE).
  */
 static EVT_BEGIN(talk_madam)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 23)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_I_MUST_HAVE_THAT_BOOK)
         CALL(evt_pouch_check_item, ITEM_WRESTLING_MAG, LW(0))
         IF_INT_GREATER(LW(0), 0)
             CALL(evt_msg_print, 0, STRING("irai_23_01"), 0, 0)
@@ -1581,12 +1726,12 @@ static EVT_BEGIN(talk_madam)
             IF_INT_NOT_EQUAL(LW(0), -1)
                 CALL(evt_pouch_remove_item, ITEM_WRESTLING_MAG, LW(0))
                 CALL(evt_msg_print, 0, STRING("irai_23_02"), 0, 0)
-                CALL(evt_item_entry, STRING("mg2"), ITEM_PLATINUM_CARD, 0, -1000, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+                CALL(evt_item_entry, STRING("mg2"), ITEM_PLATINUM_CARD, 0, -1000, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
                 CALL(evt_item_get_item, STRING("mg2"))
                 CALL(evt_item_get_item_end_wait, STRING("mg2"))
                 CALL(evt_msg_print, 0, STRING("irai_23_03"), 0, 0)
-                SET_VALUE(GSW(GSW_TROUBLE_ACTIVE), 0)
-                SET_VALUE(GSWF(GSWF_TROUBLE_23_SOLVED), 1)
+                SET_VALUE(GSW_TROUBLE_ACCEPTED, TROUBLE_NONE)
+                SET_VALUE(GSWF_TROUBLE_DONE(TROUBLE_I_MUST_HAVE_THAT_BOOK), 1)
                 CALL(evt_msg_print, 0, STRING("sys_request_finish"), 0, 0)
             END_IF
         ELSE
@@ -1594,10 +1739,10 @@ static EVT_BEGIN(talk_madam)
         END_IF
         RETURN
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_RSH_TOODLES_HELP_ACCEPTED), 0)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-        IF_INT_EQUAL(GSWF(GSWF_RSH_TOODLES_ASKED_HELP), 0)
-            SET_VALUE(GSWF(GSWF_RSH_TOODLES_ASKED_HELP), 1)
+    IF_INT_EQUAL(GSWF_RSH_MADAM_RING_REQUEST_ACCEPTED, 0)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+        IF_INT_EQUAL(GSWF_RSH_MADAM_RING_REQUEST_HEARD, 0)
+            SET_VALUE(GSWF_RSH_MADAM_RING_REQUEST_HEARD, 1)
             CALL(evt_msg_print, 0, STRING("stg6_pik_04_01"), 0, 0)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg6_pik_04_04"), 0, 0)
@@ -1605,11 +1750,11 @@ static EVT_BEGIN(talk_madam)
         CALL(evt_msg_select, 0, STRING("stg6_pik_04_05"))
         IF_INT_EQUAL(LW(0), 0)
             CALL(evt_msg_print_add, 0, STRING("stg6_pik_04_02"))
-            SET_VALUE(GSWF(GSWF_RSH_TOODLES_HELP_ACCEPTED), 1)
+            SET_VALUE(GSWF_RSH_MADAM_RING_REQUEST_ACCEPTED, 1)
         ELSE
             CALL(evt_msg_print_add, 0, STRING("stg6_pik_04_03"))
         END_IF
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
         RETURN
     END_IF
     CALL(evt_pouch_check_item, ITEM_GOLD_RING, LW(0))
@@ -1617,14 +1762,14 @@ static EVT_BEGIN(talk_madam)
         CALL_CHILD(talk_madam_ring_return)
         RETURN
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_70_THOUSAND_YEAR_DOOR)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_70_THOUSAND_YEAR_DOOR)
         CALL(evt_msg_print, 0, STRING("stg6_pik_04"), 0, 0)
         CASE_DEFAULT
-        IF_INT_EQUAL(GSWF(GSWF_PIK00_GOLD_RING_RETURNED), 0)
+        IF_INT_EQUAL(GSWF_PIK_MADAM_GOLD_RING_RETURNED, 0)
             CALL(evt_msg_print, 0, STRING("stg6_pik_04"), 0, 0)
         ELSE
-            IF_INT_LESS_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_END_AFTER_THE_BATTLE)
+            IF_INT_LESS_OR_EQUAL(GSW_STORY_PROGRESS, STG8_END_AFTER_THE_BATTLE)
                 CALL(evt_msg_print, 0, STRING("stg7_pik_clear_01"), 0, 0)
             ELSE
                 CALL(evt_msg_print, 0, STRING("stg7_pik_clear_01_1"), 0, 0)
@@ -1636,10 +1781,10 @@ EVT_END()
 
 /**
  * Init for the salaryman (サラリーマン), sightseeing while he waits for business partners (stg6_pik_05):
- * before STORY_STG6_56_ROGUEPORT_STATION it puts him at (85, -5, 35).
+ * before STG6_56_ROGUEPORT_STATION it puts him at (85, -5, 35).
  */
 static EVT_BEGIN(init_sarary)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_56_ROGUEPORT_STATION)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_56_ROGUEPORT_STATION)
         CALL(evt_npc_set_position, STRING("me"), 85, -5, 35)
     END_IF
     RETURN
@@ -1657,8 +1802,8 @@ EVT_END()
  */
 static NpcSetupInfo npc_data[] = {
     {
-        "駅員", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "駅員", // name (a Poshley Heights Station worker)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_ekiin, // initEvent
         NULL, // regularEvent
@@ -1669,8 +1814,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ナリキンママ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ナリキンママ", // name (Sylvia)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_mama, // initEvent
         NULL, // regularEvent
@@ -1681,8 +1826,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ナリキンパパ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ナリキンパパ", // name (Goldbob)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_papa, // initEvent
         NULL, // regularEvent
@@ -1693,8 +1838,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "コナリキン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "コナリキン", // name (Bub)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_konari, // initEvent
         NULL, // regularEvent
@@ -1705,8 +1850,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "マダム", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "マダム", // name (Toodles)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_madam, // initEvent
         NULL, // regularEvent
@@ -1717,8 +1862,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "サラリーマン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "サラリーマン", // name (the Ratooey businessman)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_sarary, // initEvent
         NULL, // regularEvent
@@ -1764,7 +1909,7 @@ static EVT_BEGIN(evt_wall)
 EVT_END()
 
 /** Map objects inside the first villa: the badge chest. */
-const char* ie1_mobj[] = {
+static const char* ie1_mobj[] = {
     "mobj_badge_gat",
     NULL,
 };
@@ -1774,16 +1919,16 @@ const char* ie1_mobj[] = {
  * and low-pass filters the ambience (the muffled indoor/outdoor change).
  */
 static EVT_BEGIN(door_1_open)
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-    CALL(evt_snd_envoff, PSND_FADE_DIP_TO(50))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+    CALL(evt_snd_envoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
     CALL(evt_snd_env_lpf, 0, 800)
     RETURN
 EVT_END()
 
 /** Door 1 close callback: resumes the BGM and ambience from the dip and removes the ambience low-pass filter. */
 static EVT_BEGIN(door_1_close)
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-    CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_snd_envon, PSND_CONTINUE | PSND_UNSILENT, 0)
     CALL(evt_snd_env_lpf, 0, 0)
     RETURN
 EVT_END()
@@ -1843,15 +1988,15 @@ static EVT_BEGIN(evt_wall_2)
 EVT_END()
 
 /** NPCs inside the second villa: the madam. */
-const char* door_2_npc[] = {
+static const char* door_2_npc[] = {
     "マダム",
     NULL,
 };
 
 /** Door 2 open callback: dips the BGM and ambience to 50 and low-pass filters the ambience, like door_1_open. */
 static EVT_BEGIN(door_2_open)
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-    CALL(evt_snd_envoff, PSND_FADE_DIP_TO(50))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+    CALL(evt_snd_envoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
     CALL(evt_snd_env_lpf, 0, 800)
     RETURN
 EVT_END()
@@ -1861,8 +2006,8 @@ EVT_END()
  * like door_1_close.
  */
 static EVT_BEGIN(door_2_close)
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-    CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_snd_envon, PSND_CONTINUE | PSND_UNSILENT, 0)
     CALL(evt_snd_env_lpf, 0, 0)
     RETURN
 EVT_END()
@@ -1893,7 +2038,7 @@ static DoorParam door_2 = {
  * its spin speed (GW(10)) decays by about 4 percent per frame, the angle accumulates in GW(11),
  * and a turning sound plays while the speed stays above 0.3.
  */
-EVT_BEGIN(evt_rot_door_sub)
+static EVT_BEGIN(evt_rot_door_sub)
     SET_FLOAT_VALUE(GW(10), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(11), FLOAT(0.0f))
     CALL(evt_hit_bind_mapobj, STRING("a_door_3"), STRING("door_3"))
@@ -1920,15 +2065,18 @@ EVT_BEGIN(evt_rot_door_sub)
 EVT_END()
 
 /** Called when Mario pushes the spinning door: adds 0.5 to its spin speed GW(10), capped at 10. */
-EVT_BEGIN(evt_rot_door)
+static EVT_BEGIN(evt_rot_door)
     IF_INT_LESS(GW(10), 10)
         ADD_FLOAT(GW(10), FLOAT(0.5f))
     END_IF
     RETURN
 EVT_END()
 
+/**
+ * Case event (CASE_UNDER) of the house floor a_home_yuka: unless GF(11) is set, hides the house shell ie_1 once Mario
+ * is under it (GF(10) tracks it). Early demos only (with appear_house).
+ */
 #if VERSION <= VERSION_DEMO_JP
-/** The demo hides the house while Mario rides Yoshi under its floor (case events; the releases poll in `under`). */
 static EVT_BEGIN(erase_house)
     IF_INT_EQUAL(GF(11), 1)
         RETURN
@@ -1936,15 +2084,14 @@ static EVT_BEGIN(erase_house)
     CALL(under)
     IF_INT_EQUAL(GF(10), 1)
         SET_VALUE(GF(10), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_1"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Demo-only counterpart of erase_house (inside the demo's #if):
- * unless GF(11) is set (the JP and later builds set it when boarding the train), it calls under and,
- * once (GF(10) goes from 0 to 1), shows the left villa (ie_1) and hides its interior (naka).
+ * Case event (CASE_NOT_UNDER) of the house floor a_home_yuka: unless GF(11) is set, shows the house shell ie_1 again
+ * and hides the inside group naka when Mario leaves. Early demos only.
  */
 static EVT_BEGIN(appear_house)
     IF_INT_EQUAL(GF(11), 1)
@@ -1953,8 +2100,8 @@ static EVT_BEGIN(appear_house)
     CALL(under)
     IF_INT_EQUAL(GF(10), 0)
         SET_VALUE(GF(10), 1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("ie_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("naka"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("ie_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("naka"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
@@ -1962,31 +2109,31 @@ EVT_END()
 
 /**
  * Cutscene when the Excess Express pulls into Poshley Heights (entered through "resha"):
- * Mario and the partner are hidden, the camera pulls back over the station with the "Poshley Heights" title
+ * Mario and the partner are hidden, the camera moves in over the station with the "Poshley Heights" title
  * card, and after ten seconds the game
- * changes to a train map where Mario steps off (which one depends on story progress).  Sets GSWF_TRAIN_AT_POSHLEY.
+ * changes to a train map where Mario steps off (which one depends on story progress).  Sets GSWF_HOM_TRAIN_AT_POSHLEY.
  */
-EVT_BEGIN(evt_pik_00_arrival)
+static EVT_BEGIN(evt_pik_00_arrival)
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set, 507, 309, 1118, 3, 81, -72, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 507, 309, 1118, 3, 81, -72, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
         CALL(evt_telop_entry, 12)
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, 347, 236, 740, 3, 81, -72, 10000, 11)
+    CALL(evt_cam3d_evt_set, 347, 236, 740, 3, 81, -72, 10000, EASING_SINE_IN_OUT)
     WAIT_MS(10000)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 1)
     CALL(evt_snd_bgm_scope, 0, 0)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_49_POSHLEY_HEIGHTS)
-        SET_VALUE(GSWF(GSWF_RSH_SCRIPTED_ENTRY_PENDING), 1)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_49_POSHLEY_HEIGHTS)
+        SET_VALUE(GSWF_RSH_EVENT_ENTRY_PENDING, 1)
         CALL(evt_bero_mapchange, STRING("rsh_02_a"), 0)
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+        CASE_LESS(STG6_54_WELCOME_BACK)
         CALL(evt_bero_mapchange, STRING("rsh_01_a"), STRING("w_bero"))
         CASE_DEFAULT
         CALL(evt_bero_mapchange, STRING("rsh_02_a"), STRING("pik_touchaku"))
@@ -1995,9 +2142,9 @@ EVT_BEGIN(evt_pik_00_arrival)
 EVT_END()
 
 /**
- * Secret of the left villa: when Mario steps on the floor of ie_1_2 a paper-flip effect (offscreen capture of
- * the interior with the OFF_d_two_meku_up paper animation) reveals the interior of naka_1,
- * and when he returns to the ie_1_1 floor the flip plays backwards and the interior is hidden again.
+ * Secret of the left villa: when Mario steps on the floor of ie_1_2 a paper-flip effect (offscreen capture with
+ * the OFF_d_two_meku_up paper animation A_1) flips naka_1 away and leaves it hidden (the early demos hide e and
+ * ie_1_sakai instead), and when he returns to the ie_1_1 floor a second flip (A_2) shows naka_1 again.
  */
 EVT_BEGIN(evt_seacret)
     CALL(evt_paper_entry, STRING("OFF_d_two_meku_up"))
@@ -2018,12 +2165,12 @@ EVT_BEGIN(evt_seacret)
     CALL(evt_img_onoff, STRING("img"), 1)
     CALL(img_flag)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("e"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_1_sakai"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("e"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_1_sakai"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_set_offscreen, 1, STRING("e"), STRING("ofs"))
     CALL(evt_mapobj_set_offscreen, 1, STRING("ie_1_sakai"), STRING("ofs"))
 #else
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("naka_1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("naka_1"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_set_offscreen, 1, STRING("naka_1"), STRING("ofs"))
 #endif
     WAIT_FRAMES(1)
@@ -2041,7 +2188,7 @@ EVT_BEGIN(evt_seacret)
     CALL(evt_img_set_paper_anim, STRING("img"), STRING("A_2"))
     CALL(evt_img_onoff, STRING("img"), 1)
     CALL(evt_img_wait_animend, STRING("img"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("naka_1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("naka_1"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_clear_offscreen, 1, STRING("naka_1"))
     CALL(evt_img_onoff, STRING("img"), 0)
     CALL(evt_img_release, STRING("img"))
@@ -2051,19 +2198,17 @@ EVT_BEGIN(evt_seacret)
 EVT_END()
 
 /**
- * Opens the chest that holds the HP Drain P badge (map object mobj_badge_gat):
- * locks Mario's controls, makes the badge item appear from the chest,
- * waits for the chest animation to end and shows the badge pickup.
- * The release after the US demo also marks the badge as returning if it is dropped (ITEM_FLAG_BADGE_RETURN).
+ * Item of treasure chest mobj_badge_gat (GSWF_PIK_00_HP_DRAIN_P_CHEST): an HP Drain P badge (ITEM_HP_DRAIN_P) appears
+ * at the chest and Mario takes it when the opening animation ends.
  */
 static EVT_BEGIN(mobj_box00)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mobj_get_position, STRING("mobj_badge_gat"), LW(0), LW(1), LW(2))
-    CALL(evt_item_entry, STRING("item00"), ITEM_HP_DRAIN_P, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED, -1, 0)
+    CALL(evt_item_entry, STRING("item00"), ITEM_HP_DRAIN_P, LW(0), LW(1), LW(2), ITEM_TYPE_STILL, -1, 0)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET)
 #else
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_BADGE_RETURN | ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item00"), 258)
 #endif
     CALL(evt_mobj_wait_animation_end, STRING("mobj_badge_gat"))
     CALL(evt_item_get_item, STRING("item00"))
@@ -2076,86 +2221,87 @@ EVT_END()
  * depending on the story and on the door Mario came in through), starts the arrow signs, music, NPCs,
  * save block, star piece panel, the HP Drain P chest and two Star Pieces, the two villa doors and the entrances,
  * the spinning platform, the secret floor trigger, pit-fall return points,
- * and sets GF(11) so the villa roof stays visible when entering through n_bero.
+ * and temporarily sets GF(11) so the villa roof stays hidden when entering through n_bero.
  */
 EVT_BEGIN(pik_00_init_evt)
 #if VERSION >= VERSION_JP
     SET_VALUE(GF(11), 0)
 #endif
-    // The train is at Poshley Heights; arrival or return trip is chosen from the story and the door Mario
-    // came through.
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 1)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_54_WELCOME_BACK)
-        SET_VALUE(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 1)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_54_WELCOME_BACK)
+        SET_VALUE(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         CALL_CHILD(hom_10_evt_resha_right)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
     ELSE
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("resha"))
-            SET_VALUE(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+            SET_VALUE(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
             CALL_CHILD(hom_10_evt_resha_right)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
         END_IF
         IF_STR_EQUAL(LW(0), STRING("n_bero"))
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
                 CALL_CHILD(hom_10_evt_resha_right)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
             ELSE
                 CALL_CHILD(hom_10_evt_resha_left)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAP_OBJ_FLAG_HIDDEN)
             END_IF
         END_IF
         IF_STR_EQUAL(LW(0), STRING("se_bero"))
-            SET_VALUE(GSWF(GSWF_TRAIN_RETURN_TRIP), 1)
+            SET_VALUE(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 1)
             CALL_CHILD(hom_10_evt_resha_left)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAP_OBJ_FLAG_HIDDEN)
         END_IF
         CALL(evt_sub_get_system_flag, LW(0))
-        IF_BITS_SET(LW(0), GLOBAL_FLAG_LOADED)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+        IF_BITS_SET(LW(0), GW_FLAG_SAVE_LOADED)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
                 CALL_CHILD(hom_10_evt_resha_right)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
             ELSE
                 CALL_CHILD(hom_10_evt_resha_left)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAP_OBJ_FLAG_HIDDEN)
             END_IF
         END_IF
         CALL(evt_sub_get_system_flag, LW(0))
-        IF_BITS_SET(LW(0), GLOBAL_FLAG_SKIP_MAP_EVENTS)
-            SET_VALUE(GSWF(GSWF_TRAIN_RETURN_TRIP), 1)
+        IF_BITS_SET(LW(0), GW_FLAG_NO_ENTRANCE)
+            SET_VALUE(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 1)
             CALL_CHILD(hom_10_evt_resha_left)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAP_OBJ_FLAG_HIDDEN)
         END_IF
     END_IF
     SET_INT_READ_ADDR(PTR(&name_tbl))
     LOOP(6)
         READ_INT(LW(9))
+
         // Start the arrow signs and the background music.
         SPAWN_EVENT(evt_pik_yajirushi)
     END_LOOP
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_PIK1"))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_PIK1"))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
     CALL(evt_npc_setup, PTR(npc_data))
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -100, 60, 25, 0, 0)
+
     // Place the spinning platform, the HP Drain P chest and the two Star Pieces.
-    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 8, -5, 130, STRING("jimenn"), 125, GSWF(GSWF_PIK00_STAR_PIECE_PANEL))
-    CALL(evt_mobj_itembox, STRING("mobj_badge_gat"), -225, 15, -15, 0, 0, PTR(mobj_box00), GSWF(GSWF_PIK00_HP_DRAIN_P_CHEST_OPENED))
-    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, 488, 0, 15, ITEM_ENTRY_FIXED, GSWF(GSWF_PIK00_STAR_PIECE_1), 0)
-    CALL(evt_item_entry, STRING("item_01"), ITEM_STAR_PIECE, -460, 0, 100, ITEM_ENTRY_FIXED, GSWF(GSWF_PIK00_STAR_PIECE_2), 0)
+    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 8, -5, 130, STRING("jimenn"), 125, GSWF_STARPIECE_88)
+    CALL(evt_mobj_itembox, STRING("mobj_badge_gat"), -225, 15, -15, MOBJ_ITEMBOX_NORMAL, 0, PTR(mobj_box00), GSWF_PIK_00_HP_DRAIN_P_CHEST)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, 488, 0, 15, ITEM_TYPE_STILL, GSWF_STARPIECE_87, 0)
+    CALL(evt_item_entry, STRING("item_01"), ITEM_STAR_PIECE, -460, 0, 100, ITEM_TYPE_STILL, GSWF_STARPIECE_89, 0)
     SET_VALUE(LW(0), PTR(&door_1))
+
     // Set up the two villa doors.
     CALL_CHILD(evt_door_entry)
     SET_VALUE(LW(0), PTR(&door_2))
@@ -2163,6 +2309,7 @@ EVT_BEGIN(pik_00_init_evt)
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("resha"))
         CALL(evt_npc_set_position, STRING("サラリーマン"), 0, -1000, 0)
+
         // Entering from the train plays the arrival scene.
         SPAWN_EVENT(evt_pik_00_arrival)
         CALL_CHILD(hom_10_evt_resha_stop)
@@ -2173,7 +2320,7 @@ EVT_BEGIN(pik_00_init_evt)
         CALL_CHILD(evt_bero_info_run)
         WAIT_FRAMES(1)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 1)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 1)
         SET_VALUE(LW(0), STRING("n_bero"))
         CALL_CHILD(bero_case_switch_off)
     END_IF
@@ -2185,11 +2332,11 @@ EVT_BEGIN(pik_00_init_evt)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bero_"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("ie_1_N"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bero_"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("ie_1_N"), MAP_OBJ_FLAG_CLIP)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_run_case_evt, CASE_COND_UNDER, 1, STRING("a_home_yuka"), 0, PTR(erase_house), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_UNDER, 1, STRING("a_home_yuka"), 0, PTR(appear_house), 0)
+    CALL(evt_run_case_evt, CASE_UNDER, 1, STRING("a_home_yuka"), 0, PTR(erase_house), 0)
+    CALL(evt_run_case_evt, CASE_NOT_UNDER, 1, STRING("a_home_yuka"), 0, PTR(appear_house), 0)
 #else
     BEGIN_INLINE_EVENT
         CALL(under)
@@ -2198,53 +2345,51 @@ EVT_BEGIN(pik_00_init_evt)
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("n_bero"))
         SET_VALUE(GF(11), 1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_1"), MAP_OBJ_FLAG_HIDDEN)
         BEGIN_INLINE_EVENT
             WAIT_MS(1000)
             SET_VALUE(GF(11), 0)
         END_INLINE_EVENT
     END_IF
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_ie_1_2_yuka"), 0, PTR(evt_seacret), 0)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_ie_1_2_yuka"), 0, PTR(evt_seacret), 0)
     CALL(evt_hitobj_attr_onoff, 0, 1, STRING("se_bero"), 4)
     CALL(evt_hit_damage_return_set, PTR(dmgReturnPt))
-    // Finally the entrances, the biting Gazigazi and the mail check.
+
+    // Finally the biting Gazigazi and the mail check.
     CALL_CHILD(evt_gazigazi_entry)
     SPAWN_EVENT(evt_sub_mail_event)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_2"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group1878"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_2"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group1878"), MAP_OBJ_FLAG_CLIP)
     RETURN
 EVT_END()
 
-/**
- * Script helper: switches off blending on the paper image "img" used by evt_seacret (ANIM_MATERIAL_FLAG_NO_BLEND
- * and NO_BLEND2).
- */
-static USER_FUNC(img_flag) {
-    animPoseSetMaterialFlagOn(imgNameToPtr("img", gp->inBattle != 0)->poseId, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+#if VERSION >= VERSION_US
+/** Script helper: releases the status window's forced-open or forced-close state (statusWinForceOff). */
+USER_FUNC(pik_00_statuswin_force_off) {
+    statusWinForceOff();
     return EVT_RETURN_DONE;
 }
+#endif
 
-#if VERSION <= VERSION_DEMO_JP
 /**
- * The demo's version: while Yoshi is ridden it updates the hit object under Mario,
- * which the house floor's case events (erase_house, appear_house) react to.
- */
-static USER_FUNC(under) {
-    PartyEntry* party = partyGetPtr(0);
+ * Message callback for Trouble Center request 29 (irai_29_15):
+ * when the second page of the text appears (curPage 1) it starts the BGM_EVT_NOKO_SAIKAI1 (reunion) music.
 
-    if (party != NULL && party->currentMemberId == PARTY_MEMBER_YOSHI && (party->flags & PARTY_FLAG_IS_BEING_USED)) {
-        marioGetPtr()->hitobjUnder = marioSearchUnder();
+ */
+static void irai_29_15_cb(s32 type, smartEntry* smart) {
+    MsgWinData* info = smart->address;
+
+    if (type == 3 && info->curPage == 1) {
+        psndBGMOn(PSND_FADEOUT, "BGM_EVT_NOKO_SAIKAI1");
     }
-    return EVT_RETURN_DONE;
 }
-#else
+
+#if VERSION >= VERSION_JP
 /**
- * Script helper (US and later): every frame it checks whether Mario stands on the a_home_yuka floor of the left
- * villa.
- * While he does (or GF(11) is set) the villa roof group ie_1 is hidden through mapGrpFlagOn,
- * and when he leaves it is shown again. Blocks the script so it keeps polling.
+ * Retail house-floor watcher: hides ie_1 while Mario is over a_home_yuka or GF(11) is set,
+ * restores it after he leaves, and keeps running.
  */
-static USER_FUNC(under) {
+USER_FUNC(under) {
     HitEntry* hit;
     BOOL flag;
 
@@ -2260,99 +2405,34 @@ static USER_FUNC(under) {
     }
     if ((hit != NULL && strcmp(hitGetName(hit), "a_home_yuka") == 0) || flag) {
         if (event->userdata[0] == 0 || flag) {
-            mapGrpFlagOn("ie_1", 1);
+            mapGrpFlagOn("ie_1", MAP_OBJ_FLAG_HIDDEN);
             event->userdata[0] = 1;
         }
     } else if (event->userdata[0] != 0) {
-        mapGrpFlagOff("ie_1", 1);
+        mapGrpFlagOff("ie_1", MAP_OBJ_FLAG_HIDDEN);
         event->userdata[0] = 0;
     }
     return EVT_RETURN_BLOCK;
 }
 #endif
 
+#if VERSION <= VERSION_DEMO_JP
 /**
- * Message callback for Trouble Center request 29 (irai_29_15):
- * when the second page of the text appears it starts the BGM_EVT_NOKO_SAIKAI1 (reunion) music.
+ * The demo's version: while Yoshi is ridden it updates the hit object under Mario,
+ * which the house floor's case events (erase_house, appear_house) react to.
  */
-static void irai_29_15_cb(s32 type, smartEntry* smart) {
-    MsgWinData* info = smart->address;
+static USER_FUNC(under) {
+    PartyEntry* party = partyGetPtr(0);
 
-    if (type == 3 && info->curPage == 1) {
-        psndBGMOn(PSND_FADE_OUT, "BGM_EVT_NOKO_SAIKAI1");
+    if (party != NULL && party->currentMemberId == PARTY_YOSHI && (party->flags & PARTY_FLAG_IS_BEING_USED)) {
+        marioGetPtr()->hitobjUnder = marioSearchUnder();
     }
-}
-
-#if VERSION >= VERSION_US
-
-/** Script helper: force-closes the status window (statusWinForceOff). */
-USER_FUNC(pik_00_statuswin_force_off) {
-    statusWinForceOff();
     return EVT_RETURN_DONE;
 }
 #endif
 
-/**
- * Script helper for the Goldbob scene's camera:
- * computes a camera position 70 percent of the way from the current camera target to the camera,
- * shifted in x to the middle between Mario and Goldbob, so the shot frames both.
- * Writes the 3D camera position to args[0] to args[2] and the target to args[3] to args[5];
- * used with evt_cam3d_evt_set.
- */
-static USER_FUNC(zoom) {
-    EvtWord* args = event->args;
-    // ナリキンパパ
-    NpcEntry* npc = npcNameToPtr("\x83\x69\x83\x8A\x83\x4C\x83\x93\x83\x70\x83\x70");
-    MarioWork* mario = marioGetPtr();
-    CameraEntry* cam = camGetPtr(CAMERA_3D);
-    Vec v;
-#if VERSION >= VERSION_US
-    CameraParams out;
-    f32 bank = 0.0f;
-
-    camShiftMain(cam, mario, &bank);
-    camRoadMain(&out, cam->blendPos.x, cam->blendPos.y, cam->blendPos.z, cam->blendAt.x, cam->blendAt.y, cam->blendAt.z, bank);
-    {
-        Vec pos;
-        Vec at;
-
-        at = zoom_zero_b;
-        pos = zoom_zero_a;
-        at.x = out.at.x;
-        at.y = out.at.y;
-        at.z = out.at.z;
-        pos.x = out.pos.x;
-        pos.y = out.pos.y;
-        pos.z = out.pos.z;
-        PSVECSubtract(&pos, &at, &v);
-    }
-#else
-    PSVECSubtract(&cam->cameraPos, &cam->cameraAt, &v);
-#endif
-    PSVECScale(&v, &v, 0.7f);
-    PSVECAdd(&cam->cameraAt, &v, &v);
-    evtSetFloat(event, args[0], (npc->position.x + mario->position.x) / 2);
-    evtSetFloat(event, args[1], v.y);
-    evtSetFloat(event, args[2], v.z);
-    evtSetFloat(event, args[3], (npc->position.x + mario->position.x) / 2);
-    evtSetFloat(event, args[4], cam->cameraAt.y);
-    evtSetFloat(event, args[5], cam->cameraAt.z);
-    return EVT_RETURN_DONE;
-}
-
-/** Map TEV callback for the train model: forwards the map object's TEV info to envAddTev with index 7. */
-static void resha_tev(MapTevCallbackInfo* info) {
-    envAddTev(7, info);
-}
-
-/**
- * Script helper: writes into LW(10) a sine wobble (1.8 times |GW(0)| times sin(frame count / 15));
- * evt_ramp rotates the station's ramp (ranpu) by it, so the boarding ramp sways while the train stands there.
- */
-static USER_FUNC(ramp_r) {
-    f32 amp = __fabsf(evtGetFloat(event, GW(0)));
-    f32 wave = sin(gp->retraceCount / 15.0f);
-
-    evtSetFloat(event, LW(10), 1.8f * amp * wave);
+/** Script helper: sets the two no-map-blend material flags on image "img" (the battle one when in battle). */
+static USER_FUNC(img_flag) {
+    animPoseSetMaterialFlagOn(imgNameToPtr("img", gp->inBattle != 0)->poseId, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
     return EVT_RETURN_DONE;
 }

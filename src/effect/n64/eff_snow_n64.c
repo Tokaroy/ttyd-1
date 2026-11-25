@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: a single snowflake that falls while tumbling for `lifetime` frames.
+
 #include "eff/n64/eff_snow_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -19,9 +20,10 @@ typedef struct EffSnowN64Work {
 } EffSnowN64Work;
 
 static void effSnowMain(EffectEntry* effect);
-static void effSnowDisp(CameraId cameraId, EffectEntry* effect);
+static void effSnowDisp(CameraId cameraId, void* param);
 
-/** Spawns one snowflake at (x, y, z) living `lifetime` frames. Spawned by event scripts through evt_eff. */
+/** Spawns one snowflake at (x, y, z) living `lifetime` frames; consecutive flakes alternate their spin direction.
+ * Reached only through evt_eff64 "snow_n64"; no script callers found. */
 EffectEntry* effSnowN64Entry(s32 lifetime, f32 x, f32 y, f32 z) {
     static s32 kaiten;
     EffectEntry* effect;
@@ -94,14 +96,35 @@ static void effSnowMain(EffectEntry* effect) {
     } else if (mario->position.z - work->position.z > 200.0f) {
         work->position.z += 400.0f;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effSnowDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effSnowDisp, effect);
+}
+
+/** Sets up the GX state for the flake quad: one texture stage, texture alpha, direct f32 position and texcoord. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void snow_init_dl(void) {
+    GXSetNumChans(0);
+    GXSetNumTexGens(1);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ONE);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetCullMode(GX_CULL_NONE);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
 }
 
 /**
  * Draws the flake as a 32x32 white quad of texture 7 (tiled twice) at its position,
  * facing the camera and then tilted and turned by its rotation.
  */
-static void effSnowDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSnowDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffSnowN64Work* work;
     Mtx trans;
@@ -121,21 +144,7 @@ static void effSnowDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx, rot, mtx);
     GXLoadPosMtxImm(mtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
-    GXSetNumChans(0);
-    GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
-    GXSetNumTevStages(1);
-    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ONE);
-    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
-    GXSetCullMode(GX_CULL_NONE);
-    GXClearVtxDesc();
-    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
-    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    snow_init_dl();
     effGetTexObjN64(7, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);

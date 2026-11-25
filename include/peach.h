@@ -1,21 +1,20 @@
 // peach.c: Peach as the player character in the Peach interludes (peach_walk, peach_dash, peachSetSts* states).
-#pragma once
 
-#include <dolphin/types.h>
-
+void peachChgPose(const char* name);
 void peach_dash(void);
 void peach_walk(void);
-
-void peachTransformOff(void);
-void peachSetStsNormal(void);
-void peachSetStsAftershower(void);
-void peachSetStsInvisible(void);
-void peachSetStsHappy(void);
-void peachSetStsUneasy(void);
-void peachSetStsAngry(void);
-void peachSetStsOrdinary(void);
-void peachSetStsCarry(void);
-void peachTransformOn(void);
 void peachPreInit(void);
+void peachPostClear(void);
+void peachSetStsAftershower(void);
+void peachSetStsAngry(void);
+void peachSetStsCarry(void);
+void peachSetStsHappy(void);
+void peachSetStsInvisible(void);
+void peachSetStsNormal(void);
+void peachSetStsOrdinary(void);
+void peachSetStsUneasy(void);
+void peachTransformOff(void);
+void peachTransformOn(void);
 void peach_stay(void);
 void peach_talk(void);
+s32 peachMain(void);

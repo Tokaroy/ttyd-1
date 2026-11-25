@@ -1,23 +1,10 @@
 // jin_07 (ダイム寺院, Creepy Steeple): Boo (teresa) room with flames and a treasure chest, and a Star Piece;
 // doors to jin_06 and jin_08.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-// Deferred code generation: without it the functions are not emitted in the original order (jin.rel differs).
-#pragma defer_codegen on
-#include "manager/evtmgr_cmd.h"
-#include "driver/npcdrv.h"
-#include "dolphin/mtx.h"
-#include "driver/camdrv.h"
-#include "driver/dispdrv.h"
-#include "driver/extdrv.h"
-#include "driver/itemdrv.h"
-#include "mario/mario.h"
-#include "mario/mariost.h"
-#include "memory.h"
-#include "evt/evt_bero.h"
-#include "jin.h"
-#include "evt/evt_npc.h"
+#include "libc_decls.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_case.h"
 #include "evt/evt_ext.h"
@@ -27,36 +14,48 @@
 #include "evt/evt_msg.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "data_tables.h"
-#include "evt/evt_story.h"
-#include "libc_decls.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+
+#include "manager/evtmgr_cmd.h"
+#include "driver/npcdrv.h"
+#include "dolphin/mtx.h"
+#include "driver/camdrv.h"
+#include "driver/dispdrv.h"
+#include "driver/extdrv.h"
+#include "mario/mario.h"
+#include "mario/mariost.h"
+#include "memory.h"
+#include "evt/evt_bero.h"
+#include "jin.h"
+#include "evt/evt_npc.h"
+#include "data_tables.h"
+#include "driver/seqdrv.h"
 
 static void senteresa_ext_disp(CameraId camera, void* param);
-typedef struct SenTeresaPath {
+typedef struct Teresa {
     Vec pos;
     Vec dst;
     f32 t;
-    f32 bobPhase;
-    f32 angleSpeed;
-    f32 tangentX;
+    f32 reserved_1C;   // 0x1C, only set to 0, never read
+    f32 reserved_20;   // 0x20, set to randf(-0.1, 0.1) at setup, never read
+    f32 startTangentX; // start tangent (x) of the Hermite path
     s32 wait;
     u8 state;
-} SenTeresaPath;
-static SenTeresaPath* pTeresa;
+} Teresa;
+static Teresa* pTeresa;
 static s32 g_nNumEndProc[1];
-s32 g_nNumOutBox[1];
-static void computePosHermite(ExtdrvPose* pose, SenTeresaPath* ter);
-/**
- * Float wrapper of cos(), the inline cosf of the original C library headers (renamed: the math.h used here
- * declares cosf as an external function).
- */
-static inline f32 cosf_inline(f32 x) {
-    return cos(x);
-}
+static s32 g_nNumOutBox[1];
 
+static USER_FUNC(senteresa_okure_move);
+static USER_FUNC(senteresa_okure_move_init);
+static USER_FUNC(senteresa_get_position);
 static void senteresa_ext_shadow_disp(void);
 static void senteresa_ext_dispent(void);
 static void senteresa_ext_main(void);
@@ -64,12 +63,24 @@ static f32 computePos(f32 a, f32 b, f32 t);
 static void senteresa_ext_init(void);
 static f32 randf(f32 min, f32 max);
 
-extern EvtWord jin_07_juyo_oumu_vivian[];
+static EvtWord w_close[12];
+static EvtWord w_open[12];
+static EvtWord e_close[12];
+static EvtWord e_open[12];
+static EvtWord jin_07_juyo_oumu_vivian[59];
+static EvtWord check_roll[16];
 static BeroEntry bero_entry_data[4];
-extern EvtWord evt_locked[];
+static EvtWord evt_locked[14];
+static EvtWord evt_unlock[7];
 static NpcSetupInfo npcEnt[2];
 static ExtTexInfo senteresa_ext_entry_data[5];
-extern EvtWord evt_teresa_box_open[];
+static EvtWord evt_teresa_box_open[576];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord jin_07_init_evt[];
+#else
+EvtWord jin_07_init_evt[151];
+#endif
 
 /**
  * Door animation callback: closes door08 as Mario arrives through w_bero_1 (from jin_08);
@@ -115,23 +126,23 @@ EVT_END()
  * Script run on entering jin_07 after the parrot room:
  * the partner comments (stg4_jin_46 and 47; Vivian's lines say they overheard Doopliss's name)
  * and the camera goes
- * back to normal. It runs once after the parrot's first special talk in jin_08 (oumu_juyo_talk sets LSWF(1)).
+ * back to normal. It runs once after the parrot's first special talk in jin_08 (oumu_juyo_talk sets LSWF_JIN_PARROT_SCENE_PENDING).
  */
-EVT_BEGIN(jin_07_juyo_oumu_vivian)
-    IF_INT_NOT_EQUAL(LSWF(1), 0)
-        SET_VALUE(LSWF(1), 0)
+static EVT_BEGIN(jin_07_juyo_oumu_vivian)
+    IF_INT_NOT_EQUAL(LSWF_JIN_PARROT_SCENE_PENDING, 0)
+        SET_VALUE(LSWF_JIN_PARROT_SCENE_PENDING, 0)
         CALL(evt_mario_key_onoff, 0)
-        CALL(evt_seq_wait, 2)
-        CALL(evt_bero_exec_wait, 65536)
+        CALL(evt_seq_wait, SEQ_GAME)
+        CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
         CALL(evt_party_stop, 0)
         CALL(evt_mario_set_dir, 270, 300, 0)
-        CALL(evt_cam3d_evt_set, -214, 129, 454, -214, 57, 48, 500, 11)
+        CALL(evt_cam3d_evt_set, -214, 129, 454, -214, 57, 48, 500, EASING_SINE_IN_OUT)
         WAIT_MS(500)
         CALL(evt_msg_print_party, STRING("stg4_jin_46"))
         CALL(evt_mario_set_pose, STRING("M_N_2"))
         WAIT_MS(500)
         CALL(evt_msg_print_party, STRING("stg4_jin_47"))
-        CALL(evt_cam3d_evt_off, 1000, 11)
+        CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
         CALL(evt_party_run, 0)
         CALL(evt_mario_key_onoff, 1)
     END_IF
@@ -139,12 +150,12 @@ EVT_BEGIN(jin_07_juyo_oumu_vivian)
 EVT_END()
 
 /**
- * Exit event of the roll-through doorway: returns 0 in LW(0), which blocks the exit,
- * while Mario is in motion 22 (MARIO_MOTION_ROLL, the paper-roll form), and 1 otherwise.
+ * Exit event of the roll-through doorway: returns 0 in LW(0), allowing the exit,
+ * while Mario is in motion 22 (MARIO_MOTION_ROLL, the paper-roll form), and 1 to block it otherwise.
  */
 static EVT_BEGIN(check_roll)
     CALL(evt_mario_get_motion, LW(0))
-    IF_INT_EQUAL(LW(0), 22)
+    IF_INT_EQUAL(LW(0), MARIO_MOTION_ROLL)
         SET_VALUE(LW(0), 0)
     ELSE
         SET_VALUE(LW(0), 1)
@@ -166,7 +177,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)check_roll, // exitEvent
+        check_roll, // exitEvent
         "jin_08", // nextMapName
         "e_bero_2", // nextBeroName
         1, // enterAnimeType
@@ -213,7 +224,7 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /** Case script for the locked west door: Mario is told the door is locked (stg4_jin_48). */
-EVT_BEGIN(evt_locked)
+static EVT_BEGIN(evt_locked)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_msg_print, 0, STRING("stg4_jin_48"), 0, 0)
     CALL(evt_mario_key_onoff, 1)
@@ -230,8 +241,8 @@ EVT_END()
 /** NPC of the room: the Boo (Teresa), which cannot be touched. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "テレサ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE, // flags
+        "テレサ", // name (the Boo who asks the Boo-counting quiz)
+        NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // reactionFlags..returnEvent
         NULL, 0, // blowEvent..territoryType
         {0}, // territoryBase
@@ -269,9 +280,9 @@ static void senteresa_ext_init(void) {
     f32 a;
     f32 r;
 
-    pTeresa = _mapAlloc(sizeof(SenTeresaPath) * 200);
+    pTeresa = _mapAlloc(sizeof(Teresa) * 200);
     for (i = 0; i < n; i++, pose++) {
-        pose->flags = 2;
+        pose->flags = EXT_POSE_FLAG_BILLBOARD;
         pose->dir = 270.0f;
         PSMTXIdentity(*pose->mtx);
         pTeresa[i].pos.x = 0.0f;
@@ -284,13 +295,13 @@ static void senteresa_ext_init(void) {
         r = randf(10.0f, 30.0f);
         pTeresa[i].dst.x = 200.0f;
         pTeresa[i].dst.y = pTeresa[i].pos.y + randf(27.0f, 170.0f);
-        pTeresa[i].dst.z = pTeresa[i].pos.z + r * cosf_inline(a);
-        pTeresa[i].bobPhase = 0.0f;
-        pTeresa[i].angleSpeed = randf(-0.1f, 0.1f);
+        pTeresa[i].dst.z = pTeresa[i].pos.z + r * cosf(a);
+        pTeresa[i].reserved_1C = 0.0f;
+        pTeresa[i].reserved_20 = randf(-0.1f, 0.1f);
         pTeresa[i].t = 0.0f;
         pTeresa[i].wait = 1.7f * (i + 1);
         pTeresa[i].state = 0;
-        pTeresa[i].tangentX = randf(0.0f, 350.0f);
+        pTeresa[i].startTangentX = randf(0.0f, 350.0f);
     }
     g_nNumOutBox[0] = 0;
     g_nNumEndProc[0] = 0;
@@ -302,6 +313,7 @@ static f32 computePos(f32 a, f32 b, f32 t) {
 }
 
 /** Returns the product of the three arguments (an inline kept for the Hermite curve code). */
+// FAKE: one-use inline helper; writing the call out changes the object in both versions
 inline f32 jin07HermiteMul3(f32 a, f32 b, f32 c) {
     return (a * b) * c;
 }
@@ -310,7 +322,7 @@ inline f32 jin07HermiteMul3(f32 a, f32 b, f32 c) {
  * Moves a Boo along a cubic Hermite curve from the box to its target using the Boo's tangent values
  * and its progress t, writing the position into the pose matrix.
  */
-static void computePosHermite(ExtdrvPose* pose, SenTeresaPath* ter) {
+static void computePosHermite(ExtdrvPose* pose, Teresa* ter) {
     Vec m0 = {0.0f, 0.0f, 0.0f};
     Vec m1 = {1.0f, 0.0f, 0.0f};
     f32 t = ter->t;
@@ -323,7 +335,7 @@ static void computePosHermite(ExtdrvPose* pose, SenTeresaPath* ter) {
     h10 = t * u * u;
     h11 = (t * t) * (t - 1.0f);
     h01 = (3.0f - t2) * (t * t);
-    m0.x = ter->tangentX;
+    m0.x = ter->startTangentX;
     m0.y = 3.4f * ter->dst.y;
     (*pose->mtx)[0][3] = ter->pos.x * h00 + m0.x * h10 + m1.x * h11 + ter->dst.x * h01;
     (*pose->mtx)[1][3] = ter->pos.y * h00 + m0.y * h10 + m1.y * h11 + ter->dst.y * h01;
@@ -348,7 +360,7 @@ static void senteresa_ext_main(void) {
                 pose->texId = 0;
                 pTeresa[i].wait--;
                 if (pTeresa[i].wait == 0) {
-                    pose->flags |= 1;
+                    pose->flags |= EXT_POSE_FLAG_VISIBLE;
                     g_nNumOutBox[0]++;
                     pTeresa[i].state++;
                 }
@@ -380,7 +392,7 @@ static void senteresa_ext_main(void) {
 
 /** Registers the swarm's draw callback with the 3D camera. */
 static void senteresa_ext_dispent(void) {
-    dispEntry(CAMERA_3D, 0.0f, 1, senteresa_ext_disp, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, senteresa_ext_disp, NULL);
 }
 
 /** Draw callback of the Boo swarm: loads the ext-pose render setup, vertices, textures and TEV setup and draws them. */
@@ -466,12 +478,13 @@ static USER_FUNC(senteresa_okure_move) {
  * a late Boo then flies out, asks Mario a question (stg4_jin_69) and gives him an item before disappearing.
  * Sets the story to "Boo box".
  */
-EVT_BEGIN(evt_teresa_box_open)
+static EVT_BEGIN(evt_teresa_box_open)
     // The music stops and Mario freezes.
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envoff, PSND_FADE_HOLD)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envoff, PSND_PAUSE)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_cam3d_evt_set, 1, 100, 400, 0, 38, 48, 500, 11)
+    CALL(evt_cam3d_evt_set, 1, 100, 400, 0, 38, 48, 500, EASING_SINE_IN_OUT)
+
     // The box shakes violently.
     CALL(evt_mapobj_get_position, STRING("hako"), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_BOX_SWING1"), LW(10), LW(11), LW(12), LW(13))
@@ -487,11 +500,12 @@ EVT_BEGIN(evt_teresa_box_open)
     CALL(evt_snd_sfxoff, LW(13))
     CALL(evt_mapobj_trans, 1, STRING("hako"), 0, 0, 0)
     WAIT_MS(300)
+
     // Its lid swings open.
     CALL(evt_mapobj_get_position, STRING("hako"), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_TBOX_OPEN1"), LW(10), LW(11), LW(12), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 950, 50, 800)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 950, 50, 800)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -504,15 +518,16 @@ EVT_BEGIN(evt_teresa_box_open)
     WAIT_MS(100)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_cam3d_evt_set, 0, 175, 703, 0, 57, 26, 300, 4)
+        CALL(evt_cam3d_evt_set, 0, 175, 703, 0, 57, 26, 300, EASING_QUADRATIC_OUT)
         WAIT_MS(350)
-        CALL(evt_cam3d_evt_set, 0, 152, 567, 0, 57, 26, 250, 1)
+        CALL(evt_cam3d_evt_set, 0, 152, 567, 0, 57, 26, 250, EASING_QUADRATIC_IN)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
+
     // A swarm of 200 little Boos pours out of the box.
     CALL(evt_ext_entry, 200, PTR(senteresa_ext_entry_data), PTR(senteresa_ext_init), PTR(senteresa_ext_main), PTR(senteresa_ext_dispent))
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SURPRISED2"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SURPRISED2"))
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_TELESA_APPEAR1"), LW(0), LW(1), LW(2), 0)
@@ -521,6 +536,7 @@ EVT_BEGIN(evt_teresa_box_open)
         WAIT_MS(5500)
         CALL(evt_mario_set_pose, STRING("M_S_1"))
     END_INLINE_EVENT
+
     // The Boos jeer at Mario with speech bubbles as they fly out.
     BEGIN_INLINE_EVENT
         LOOP(0)
@@ -539,7 +555,7 @@ EVT_BEGIN(evt_teresa_box_open)
                 CALL(evt_sub_random, 50, LW(1))
                 ADD(LW(1), 30)
                 CALL(evt_sub_random, LW(1), LW(0))
-                CALL(evt_msg_toge, 3, LW(0), LW(1), 100)
+                CALL(evt_msg_toge, MSG_TOGE_AT_POS_FAR, LW(0), LW(1), 100)
                 CALL(evt_sub_random, 1000, LW(0))
                 MODULO(LW(0), 3)
                 SWITCH(LW(0))
@@ -556,7 +572,8 @@ EVT_BEGIN(evt_teresa_box_open)
             WAIT_MS(LW(0))
         END_LOOP
     END_INLINE_EVENT
-    // Waits until the whole swarm has left the box.
+
+    // Waits until the whole swarm has finished its flight.
     LOOP(0)
         PEEK_INT(LW(0), PTR(g_nNumEndProc))
         IF_INT_EQUAL(LW(0), 200)
@@ -565,11 +582,12 @@ EVT_BEGIN(evt_teresa_box_open)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(1200)
+
     // A late Boo floats in after the others and asks Mario a question; it tosses him an item depending on
     // his answer.
     CALL(evt_npc_set_position, STRING("テレサ"), 0, 6, 80)
     CALL(evt_npc_set_ry, STRING("テレサ"), 90)
-    CALL(evt_npc_flag_onoff, 0, STRING("テレサ"), NPC_FLAG_HIDDEN)
+    CALL(evt_npc_flag_onoff, 0, STRING("テレサ"), NPC_FLAG_NO_DRAW)
     BEGIN_INLINE_EVENT
         SET_VALUE(LW(14), 0)
         SET_VALUE(LW(15), 0)
@@ -626,13 +644,13 @@ EVT_BEGIN(evt_teresa_box_open)
                     CALL(evt_msg_print_add, 0, STRING("stg4_jin_70"))
                     SET_VALUE(LW(0), 150)
                 END_SWITCH
-                CALL(evt_item_entry, STRING("teresa"), LW(0), LW(1), LW(2), LW(3), ITEM_ENTRY_LAUNCH, -1, 0)
+                CALL(evt_item_entry, STRING("teresa"), LW(0), LW(1), LW(2), LW(3), ITEM_TYPE_SCATTER_NO_PICKUP, -1, 0)
                 ADD(LW(2), 5)
                 CALL(evt_item_set_move_dir_speed, STRING("teresa"), 0, FLOAT(0.0f))
                 CALL(evt_item_set_gravity, STRING("teresa"), FLOAT(1.0f))
                 CALL(evt_item_set_bound_rate, STRING("teresa"), FLOAT(1.0f))
                 CALL(evt_item_set_jump_power, STRING("teresa"), FLOAT(100.0f))
-                CALL(evt_item_status_on, STRING("teresa"), ITEM_STATUS_CUSTOM_LAUNCH)
+                CALL(evt_item_status_on, STRING("teresa"), ITEM_FLAG2_SKIP_BOUND_INIT)
                 CALL(evt_msg_print, 0, STRING("stg4_jin_72"), 0, STRING("テレサ"))
                 CALL(evt_npc_reverse_ry, STRING("テレサ"))
                 CALL(evt_npc_get_position, STRING("テレサ"), LW(0), LW(1), LW(2))
@@ -641,16 +659,17 @@ EVT_BEGIN(evt_teresa_box_open)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // The late Boo vanishes, the story advances to "Boo box" and control returns.
     CALL(evt_npc_set_position, STRING("テレサ"), 0, -1000, 0)
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_09_02_BOO_BOX)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_09_02_BOO_BOX)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_JIN1"))
-    CALL(evt_snd_envoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_JIN1"))
+    CALL(evt_snd_envoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_envon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_exit_case_evt)
     RETURN
 EVT_END()
@@ -659,11 +678,11 @@ EVT_END()
  * Creepy Steeple jin_07 map init: sets the music for the room, the shadow-Mario tint and the exits,
  * places the Star Piece, handles Mario falling in from the hole,
  * unlocks or locks the west door by the jin_08 lock flag,
- * closes the Boo box before the "Boo box" story step and hides the flame objects.
+ * closes the Boo box before the "Boo box" story step and replaces the four flame objects with torch effects.
  */
 EVT_BEGIN(jin_07_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_JIN1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_JIN3"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_JIN1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_JIN3"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
@@ -672,9 +691,9 @@ EVT_BEGIN(jin_07_init_evt)
     CALL_CHILD(evt_usu_kagemario_party_kill)
     CALL(evt_npc_setup, PTR(npcEnt))
     SPAWN_EVENT(jin_07_juyo_oumu_vivian)
-    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, 220, 75, -20, ITEM_ENTRY_FIXED, GSWF(GSWF_JIN07_STAR_PIECE), 0)
-    IF_INT_NOT_EQUAL(GSWF(GSWF_STG4_DROP_IN_ENTRANCE), 0)
-        SET_VALUE(GSWF(GSWF_STG4_DROP_IN_ENTRANCE), 0)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, 220, 75, -20, ITEM_TYPE_STILL, GSWF_STARPIECE_69, 0)
+    IF_INT_NOT_EQUAL(GSWF_JIN_SCRIPTED_ENTRY_PENDING, 0)
+        SET_VALUE(GSWF_JIN_SCRIPTED_ENTRY_PENDING, 0)
         BEGIN_INLINE_EVENT
             CALL(evt_mario_key_onoff, 0)
             CALL(evt_mario_set_pos, 0, 365, -50)
@@ -683,27 +702,27 @@ EVT_BEGIN(jin_07_init_evt)
                 CALL(evt_party_set_pos, 0, 0, 465, -50)
             END_IF
             CALL(evt_cam_road_reset)
-            CALL(evt_seq_wait, 2)
+            CALL(evt_seq_wait, SEQ_GAME)
             CALL(evt_mario_wait_landon)
 #if VERSION >= VERSION_JP
-            CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+            CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
             CALL(evt_mario_key_onoff, 1)
         END_INLINE_EVENT
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_JIN08_DOOR_UNLOCKED), 1)
+    IF_INT_EQUAL(GSWF_JIN_08_DOOR_UNLOCKED, 1)
         SET_VALUE(LW(0), STRING("w_bero_1"))
         CALL_CHILD(bero_case_switch_on)
     ELSE
         SET_VALUE(LW(0), STRING("w_bero_1"))
         CALL_CHILD(bero_case_switch_off)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_JIN08_DOOR_UNLOCKED), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("w_bero_1"), 0, PTR(evt_locked), 0)
+    IF_INT_EQUAL(GSWF_JIN_08_DOOR_UNLOCKED, 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("w_bero_1"), 0, PTR(evt_locked), 0)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_09_02_BOO_BOX)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_09_02_BOO_BOX)
         CALL(evt_mapobj_rotate, 1, STRING("hako_futa"), 95, 0, 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_hako"), 0, PTR(evt_teresa_box_open), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_hako"), 0, PTR(evt_teresa_box_open), 0)
     ELSE
         CALL(evt_mapobj_rotate, 1, STRING("hako_futa"), 5, 0, 0)
     END_IF

@@ -7,6 +7,7 @@ void MWInitializeCriticalSection(unsigned int* section);
 void MWEnterCriticalSection(unsigned int* section);
 void MWExitCriticalSection(unsigned int* section);
 
+/* Ring buffer: mBytesToRead = bytes stored, mBytesToWrite = free space. */
 typedef struct CircleBuffer {
     u8* read_ptr;
     u8* write_ptr;
@@ -17,16 +18,14 @@ typedef struct CircleBuffer {
     unsigned int mCriticalSection;
 } CircleBuffer;
 
-/** Returns how many bytes are queued in the circular buffer, ready to be read. */
 u32 CBGetBytesAvailableForRead(CircleBuffer* cb) {
     return cb->mBytesToRead;
 }
 
-/**
- * Points the circular buffer at the caller's storage:
- * empty, read and write positions at the start, all of the size free,
- * and a critical section created to guard it.
- */
+u32 CBGetBytesAvailableForWrite(CircleBuffer* cb) {
+    return cb->mBytesToWrite;
+}
+
 void CircleBufferInitialize(CircleBuffer* cb, u8* buf, u32 size) {
     cb->start_ptr = buf;
     cb->size = size;
@@ -37,10 +36,6 @@ void CircleBufferInitialize(CircleBuffer* cb, u8* buf, u32 size) {
     MWInitializeCriticalSection(&cb->mCriticalSection);
 }
 
-/**
- * Appends bytes at the write position, wrapping to the start of the storage when needed,
- * inside the critical section; returns -1 and writes nothing if they do not fit in the free space, otherwise 0.
- */
 int CircleBufferWriteBytes(CircleBuffer* cb, u8* buf, u32 size) {
     u32 bytesToWrite;
 
@@ -70,10 +65,6 @@ int CircleBufferWriteBytes(CircleBuffer* cb, u8* buf, u32 size) {
     return 0;
 }
 
-/**
- * Removes bytes from the read position into the caller's buffer, wrapping around the end of the storage,
- * inside the critical section; returns -1 and reads nothing if fewer bytes are queued, otherwise 0.
- */
 int CircleBufferReadBytes(CircleBuffer* cb, u8* buf, u32 size) {
     u32 bytesToRead;
 

@@ -1,4 +1,5 @@
 // Scanning: plays the EFF_Scan model animation once at a point, then removes itself.
+
 #include "eff/eff_scanning.h"
 #include "driver/animdrv.h"
 #include "driver/camdrv.h"
@@ -6,15 +7,16 @@
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
+#include "driver/effdrv.h"
 
 static void effScanningMain(EffectEntry* effect);
-static void effScanningDisp(CameraId camId, void* param);
+static void effScanningDisp(CameraId camId, EffectEntry* effect);
 
 /**
- * Spawns the scan animation at (x, y, z); `int2` is stored as the type but not otherwise used.
+ * Spawns the scan animation at (x, y, z); `type` is stored but not otherwise used.
  * Callers: Rampell's scan attack (jin, las) and evt_eff "scanning".
  */
-EffectEntry* effScanningEntry(s32 int2, f32 float3, f32 float4, f32 float5) {
+EffectEntry* effScanningEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* entry;
     effScanningData* data;
 
@@ -24,16 +26,16 @@ EffectEntry* effScanningEntry(s32 int2, f32 float3, f32 float4, f32 float5) {
     data = __memAlloc(HEAP_EFFECT, sizeof(effScanningData) * entry->count);
     entry->userdata = data;
     entry->callback = effScanningMain;
-    entry->flags |= EFFECT_FLAG_SOFT_DELETE;
+    entry->flags |= EFFECT_FLAG_SOFT_DELETABLE;
 
-    data->type = int2;
-    data->position.x = float3;
-    data->position.y = float4;
-    data->position.z = float5;
+    data->type = type;
+    data->position.x = x;
+    data->position.y = y;
+    data->position.z = z;
     data->scale = 1.0f;
     data->animId = -1;
     data->state = 0;
-    data->timer = 0;
+    data->reserved_1C = 0;
     data->alpha = 255;
 
     return entry;
@@ -43,13 +45,14 @@ EffectEntry* effScanningEntry(s32 int2, f32 float3, f32 float4, f32 float5) {
 static void effScanningMain(EffectEntry* effect) {
     effScanningData* data = effect->userdata;
     Vec position;
-    BOOL inBattle;
+    s32 inBattle;
 
     position = (Vec){data->position.x, data->position.y, data->position.z};
     inBattle = gp->inBattle != 0;
 
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) { // soft delete
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    // soft delete
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (data->animId != -1) {
             animPoseRelease(data->animId);
         }
@@ -61,7 +64,8 @@ static void effScanningMain(EffectEntry* effect) {
             if (!animGroupBaseAsync("EFF_Scan", inBattle, NULL)) {
                 return;
             }
-            data->animId = animPoseEntry("EFF_Scan", (u32)inBattle);
+
+            data->animId = animPoseEntry("EFF_Scan", inBattle);
             animPoseSetAnim(data->animId, "Z_1", TRUE);
             data->state++;
             break;
@@ -73,12 +77,12 @@ static void effScanningMain(EffectEntry* effect) {
             }
             break;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effScanningDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effScanningDisp, effect);
 }
 
 /** Draws the EFF_Scan pose billboarded to the camera yaw. */
-static void effScanningDisp(CameraId camId, void* param) {
-    effScanningData* data = ((EffectEntry*)param)->userdata;
+static void effScanningDisp(CameraId camId, EffectEntry* effect) {
+    effScanningData* data = effect->userdata;
     Mtx mtx;
     Mtx scale;
     Mtx rot;

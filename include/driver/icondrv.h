@@ -1,27 +1,33 @@
 // icondrv.c: the icon driver (IconEntry flags, icon.bin layout, iconEntry/iconDispGx): the button and item icons drawn on screen.
+
 #pragma once
 
 /*
-icon.bin structure:
-s16 numEntries
-s16 entryOffset[numEntries]
-s16 IconBinEntry[6][numEntries] (?, width override? height override? numImages, tplId, iconDelay?)
-2 extra bytes for some reason
+icon.bin structure (as icondrv.c reads it, iconBinPtr / IconBinaryEntry):
+u16 numEntries
+u16 entryOffset[numEntries], byte offsets from the file start
+per icon at its offset: u16 type (bit 0: animated), u16 width, u16 height, u16 numIcons,
+then numIcons frames of {u16 tplId, u16 delay}
 */
 
+#include "version.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "version.h"
+#include "sdk/texPalette.h"
 
 #define numBinEntries 0x218
 
+typedef struct IconFrame {
+    u16 tplId; // 0x0, tpl index of this frame
+    u16 delay; // 0x2, frames until the next one
+} IconFrame;
+
 typedef struct IconBinaryEntry {
-    u16 type;       // 0x0, 1 if animated
-    u16 width;      // 0x2, overrides tpl size
-    u16 height;     // 0x4, overrides tpl size
-    u16 numIcons;   // 0x6, for simple anims like button press
-    u16 tplId;      // 0x8, for tpl lookup
-    u16 frameDelay; // 0xA, if animated, number of frames until next
+    u16 type;            // 0x0, 1 if animated
+    u16 width;           // 0x2, overrides tpl size
+    u16 height;          // 0x4, overrides tpl size
+    u16 numIcons;        // 0x6, for simple anims like button press
+    IconFrame frames[1]; // 0x8, numIcons frames follow in the file
 } IconBinaryEntry;
 
 typedef struct IconBinary {
@@ -30,44 +36,50 @@ typedef struct IconBinary {
     IconBinaryEntry data[numBinEntries]; // 0x432
 } IconBinary;
 
-// IconEntry flags (the same in every version; the version-dependent ones follow)
-#define ICON_FLAG_USED 0x1
-#define ICON_FLAG_HIDDEN 0x2         // not drawn (iconMain skips the display entry)
-#define ICON_FLAG_GRAYSCALE 0x20     // drawn desaturated (luminance through TEV swap tables), then tinted by the entry colour;
-                                     // also accepted in the iconDispGx* flags argument
-#define ICON_FLAG_ANIMATED 0x1000    // the icon has several frames; iconMain steps them
-#define ICON_FLAG_PENDING_BIN 0x2000 // made before icon.bin had loaded; iconMain finishes the set-up
+// flags (JP and later): 1 = in use, 0x10 = 2D, 0x1000 = animated, 0x2000 = icon data not loaded yet (IconFlags)
 
-// IconEntry flags that the demo numbers differently
+// IconEntry.flags (iconFlagOn/iconFlagOff)
+typedef enum IconFlags {
+    ICON_FLAG_ACTIVE = (1 << 0), // 0x1, slot in use
+    ICON_FLAG_HIDDEN = (1 << 1), // 0x2, not drawn
 #if VERSION <= VERSION_DEMO_JP
-#define ICON_FLAG_2D 0x4
-#define ICON_FLAG_FLIP_X 0x8
-#define ICON_FLAG_FLIP_Y 0x10
-#define ICON_FLAG_EFFECT_A 0x40
-#define ICON_FLAG_NO_MAP_BLEND 0x80
-#define ICON_FLAG_EFFECT_B 0x100
-#define ICON_FLAG_CULL_BACK 0x200
-#define ICON_FLAG_CULL_FRONT 0x400
+    // The early demos number these differently (values from LLCOOLT's tree, confirmed by their code).
+    ICON_FLAG_2D = (1 << 2),
+    ICON_FLAG_FLIP_X = (1 << 3),
+    ICON_FLAG_FLIP_Y = (1 << 4),
+    ICON_FLAG_GRAY = (1 << 5),
+    ICON_FLAG_CAM_EFFECT_A = (1 << 6),
+    ICON_FLAG_ITEM_NO_MAP_BLEND = (1 << 7),
+    ICON_FLAG_CAM_EFFECT_B = (1 << 8),
+    ICON_FLAG_CULL_BACK = (1 << 9),
+    ICON_FLAG_CULL_FRONT = (1 << 10),
 #else
-#define ICON_FLAG_FLIP_X 0x4
-#define ICON_FLAG_FLIP_Y 0x8
-#define ICON_FLAG_2D 0x10
-#define ICON_FLAG_NO_MAP_BLEND 0x40 // the map's blend colour is not applied
-#define ICON_FLAG_EFFECT_A 0x100    // drawn by the 3deff_A camera
-#define ICON_FLAG_EFFECT_B 0x200    // drawn by the 3deff_B camera
-#define ICON_FLAG_CULL_BACK 0x400
-#define ICON_FLAG_CULL_FRONT 0x800
+    ICON_FLAG_FLIP_X = (1 << 2),            // 0x4
+    ICON_FLAG_FLIP_Y = (1 << 3),            // 0x8
+    ICON_FLAG_2D = (1 << 4),                // 0x10, iconEntry2D: 2D camera, no light, fog or Z
+    ICON_FLAG_GRAY = (1 << 5),              // 0x20, drawn in gray (channels mixed in equal parts)
+    ICON_FLAG_NO_MAP_BLEND = (1 << 6),      // 0x40, ignores mapSetBlend (set by iconEntry while a blend is on)
+    ICON_FLAG_ITEM_NO_MAP_BLEND = (1 << 7), // 0x80, ignores mapSetBlend (set by itemdrv)
+    ICON_FLAG_CAM_EFFECT_A = (1 << 8),      // 0x100, drawn by CAMERA_3D_EFFECTA
+    ICON_FLAG_CAM_EFFECT_B = (1 << 9),      // 0x200, drawn by CAMERA_3D_EFFECTB
+    ICON_FLAG_CULL_BACK = (1 << 10),        // 0x400
+    ICON_FLAG_CULL_FRONT = (1 << 11),       // 0x800
 #endif
-// Set on field item icons (itemdrv): the map's blend colour is not applied. The demo has it as ICON_FLAG_NO_MAP_BLEND;
-// the later versions test it beside their own ICON_FLAG_NO_MAP_BLEND.
-#define ICON_FLAG_ITEM_NO_BLEND 0x80
+    ICON_FLAG_ANIMATED = (1 << 12),     // 0x1000, frames advance (icon data type bit 0)
+    ICON_FLAG_DATA_PENDING = (1 << 13), // 0x2000, the icon data was not loaded yet at the entry
+} IconFlags;
+
+#include "version.h"
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICON_FLAG_NO_MAP_BLEND 0x80
+#endif
 
 typedef struct IconEntry {
     union {
-        s16 flags;  // 0x0
+        s16 flags;  // 0x0, IconFlags
         u16 uflags; // 0x0, unsigned view (icondrv uses lhz)
     };
-    u8 pad_02;      // 0x2, never accessed
     Vec position;   // 0x4
     f32 scale;      // 0x10
     GXColor color;  // 0x14
@@ -79,7 +91,6 @@ typedef struct IconEntry {
     u16 currIcon;   // 0x30, if animated, currently displayed icon (starts at 0)
     u16 tplId;      // 0x32
     u16 frameDelay; // 0x34
-    u8 pad_36[2];   // 0x36, never accessed
 } IconEntry;
 
 typedef struct IconWork {
@@ -89,37 +100,26 @@ typedef struct IconWork {
 
 void iconInit(void);
 void iconTexSetup(void);
+TEXPalette* iconGetTpl(void);
+s32 iconBinNum(void);
 void iconReInit(void);
 void iconMain(void);
 void iconEntry(const char* name, u16 iconId);
 void iconEntry2D(const char* name, s16 iconId);
 void iconDelete(const char* name);
 void iconChange(const char* name, u16 iconId);
-// iconDispGx flag bits: drawn with the 2D camera, mirrored in x. The demo's 2D bit is 4, with the flips after it
-// (x 8, y 0x10); retail moved the flips to 4 and 8 and the 2D bit to 0x10.
-#if VERSION <= VERSION_DEMO_JP
-#define ICON_DISP_2D 4
-#define ICON_DISP_FLIP_X 8
-#else
-#define ICON_DISP_2D 0x10
-#define ICON_DISP_FLIP_X 4
-#endif
-
-void iconDispGxAlpha(Vec* position, s16 flags, u16 iconId, u8 alpha, f32 scale);
-void iconDispGx(Vec* position, s16 flags, u16 iconId, f32 scale);
+void iconDispGxAlpha(Vec* position, u16 flags, f32 scale, u16 iconId, u8 alpha);
+void iconDispGx(Vec* position, u16 flags, f32 scale, u16 iconId);
+// The id is u16 from US on (every US caller's code fits it). Before US the definition takes s16 while some
+// callers need a u16 parameter, so those declare it locally with the US prototype's type (Mtx, s16, u16).
+#if VERSION >= VERSION_US
 void iconDispGx2(Mtx mtx, s16 flags, u16 iconId);
-void iconDispGxCol(Mtx pos, u16 flags, u16 iconId, GXColor color);
-#if VERSION >= VERSION_US
+#else
+void iconDispGx2(Mtx mtx, s16 flags, s16 iconId);
+#endif
+void iconDispGxCol(Mtx pos, u16 flags, s32 iconId, GXColor color);
 void iconGetTexObj(GXTexObj* texObj, s32 iconId);
-#else
-void iconGetTexObj(GXTexObj* texObj, s16 iconId);
-#endif
-void iconGetWidthHeight(u16* width, u16* height, s16 iconId);
-#if VERSION >= VERSION_US
 void iconGetWidthHight(u16* width, u16* height, s32 iconId);
-#else
-void iconGetWidthHight(u16* width, u16* height, s16 iconId);
-#endif
 IconEntry* iconNameToPtr(const char* name);
 void iconSetPos(const char* name, f32 x, f32 y, f32 z);
 void iconFlagOn(const char* name, s16 flags);

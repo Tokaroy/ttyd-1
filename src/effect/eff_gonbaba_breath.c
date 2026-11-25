@@ -1,6 +1,8 @@
 // Fire breath (gonbaba_breath, ファイアブレス): type % 10 picks the colour set in col_tbl (0 normal, 1 poison, 2 mega,
 // 3 cold, 4 confusion, 5 sleep, 6 mini, 7 Bowser); each type 0-7 also spawns its companion layer as type + 10.
-// Particles drift out along a yaw. Used by Hooktail, Bonetail and Bowser.
+// Particles drift out along a yaw. Used by Hooktail, Gloomtail, Bonetail and Bowser.
+
+#include "version.h"
 #include "eff/eff_gonbaba_breath.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -11,13 +13,9 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
-#include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
-
-#define PI 3.1415927f
-#define HALF_PI 1.5707964f
+#include "poly_trig.h"
 
 /**
  * Colour sets of the dragon breath, one per breath kind: normal fire (orange), poison (olive green), mega
@@ -48,84 +46,10 @@ static GXColor col_mini[] = {
 };
 static GXColor* col_tbl[] = {col_normal, col_poison, col_mega, col_cold, col_confu, col_sleep, col_mini, col_normal};
 
-/** cheap polynomial approximations, valid for x in [0, 2pi] */
-static inline f32 _sinf(f32 x) {
-    f32 a = 0.00761f;
-    f32 b = 0.16605f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        } else {
-            y = HALF_PI - (x - HALF_PI);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * y;
-        }
-    } else if (x < 4.712389f) {
-        y = x - PI;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    } else {
-        y = HALF_PI - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    }
-    return a;
-}
-
-/** Polynomial cosine approximation (radians). */
-static inline f32 _cosf(f32 x) {
-    f32 a = 0.03705f;
-    f32 b = 0.4967f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-        } else {
-            y = HALF_PI - (x - HALF_PI);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = -a;
-        }
-    } else if (x < 4.712389f) {
-        y = x - PI;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = -a;
-    } else {
-        y = HALF_PI - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-    }
-    return a;
-}
-
 static void effGonbabaBreathMain(EffectEntry* effect);
-static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect);
+static void effGonbabaBreathDisp(CameraId cameraId, void* param);
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
+// kept: without it init_breath changes; -opt noprop for the whole file changes other functions
 #pragma opt_propagation off
 // FAKE: lifetimes optimisation off for init_breath: the original register allocation and scheduling need it
 #pragma opt_lifetimes off
@@ -181,8 +105,8 @@ static void init_breath(EffGonbabaBreathWork* work, s32 idx, s32 type) {
             work->position.x = 0.0f;
             work->position.y = 0.0f;
             work->position.z = 0.0f;
-            work->velX = spd2 * _sinf(rad2);
-            work->velY = spd2 * _cosf(rad2);
+            work->velX = spd2 * polySinf(rad2);
+            work->velY = spd2 * polyCosf(rad2);
             work->scale = 1.0f;
             work->life = 30;
             work->alpha = 255;
@@ -192,7 +116,8 @@ static void init_breath(EffGonbabaBreathWork* work, s32 idx, s32 type) {
             work->to[0] = col_tbl[type % 10][0].r;
             work->to[1] = col_tbl[type % 10][0].g;
             work->to[2] = col_tbl[type % 10][0].b;
-        } break;
+            break;
+        }
         case 17:
             ang = 225.0f + irand(90);
             spd = (irand(50) + 10) / 10.0f;
@@ -202,8 +127,8 @@ static void init_breath(EffGonbabaBreathWork* work, s32 idx, s32 type) {
             work->position.y = 0.0f;
             work->position.z = 0.0f;
             rad = 6.2831855f * ang / 360.0f;
-            work->velX = spd * _sinf(rad);
-            work->velY = spd * _cosf(rad);
+            work->velX = spd * polySinf(rad);
+            work->velY = spd * polyCosf(rad);
             work->scale = 1.0f;
             work->life = 60;
             work->alpha = 255;
@@ -221,9 +146,10 @@ static void init_breath(EffGonbabaBreathWork* work, s32 idx, s32 type) {
 #pragma opt_lifetimes reset
 
 /**
- * Spawns a breath of the given type (0-7, plus companion layers 10-17) at (x, y, z) pointing along yaw;
+ * Spawns a breath of the given type (0-7, plus companion layers 10-17) at (x, y, z); the last argument (named
+ * yaw) is stored as the breath's scale, and the direction (work->yaw) starts at 0 for callers to set.
  * life <= 0 keeps it endless.
- * Spawned by the Hooktail Castle, Pit of 100 Trials and Palace of Shadow bosses and event scripts.
+ * Spawned via evt_eff by the dragon bosses (gon, jon, las, tst) and Bowser (las, tou2), and by koopa.c.
  */
 EffectEntry* effGonbabaBreathEntry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 yaw) {
     EffectEntry* effect;
@@ -261,7 +187,7 @@ EffectEntry* effGonbabaBreathEntry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffGonbabaBreathWork));
     effect->userdata = work;
     effect->callback = effGonbabaBreathMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -301,8 +227,8 @@ static void effGonbabaBreathMain(EffectEntry* effect) {
     v.y = work->position.y;
     v.z = work->position.z;
     position = v;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 32;
         if (work->child) {
             effSoftDelete(work->child);
@@ -394,9 +320,9 @@ static void effGonbabaBreathMain(EffectEntry* effect) {
                 work->velY *= 0.9f;
                 work->position.x += work->velX;
                 work->position.y += work->velY;
-                work->from[0] = intplGetValue(11, work->from[0], work->to[0], 30 - work->life, 30);
-                work->from[1] = intplGetValue(11, work->from[1], work->to[1], 30 - work->life, 30);
-                work->from[2] = intplGetValue(11, work->from[2], work->to[2], 30 - work->life, 30);
+                work->from[0] = intplGetValue(EASING_SINE_IN_OUT, work->from[0], work->to[0], 30 - work->life, 30);
+                work->from[1] = intplGetValue(EASING_SINE_IN_OUT, work->from[1], work->to[1], 30 - work->life, 30);
+                work->from[2] = intplGetValue(EASING_SINE_IN_OUT, work->from[2], work->to[2], 30 - work->life, 30);
                 break;
             case 17:
                 if (work->life == 0) {
@@ -416,17 +342,18 @@ static void effGonbabaBreathMain(EffectEntry* effect) {
                 work->velY *= 0.9f;
                 work->position.x += work->velX;
                 work->position.y += work->velY;
-                work->from[0] = intplGetValue(11, work->from[0], work->to[0], 60 - work->life, 60);
-                work->from[1] = intplGetValue(11, work->from[1], work->to[1], 60 - work->life, 60);
-                work->from[2] = intplGetValue(11, work->from[2], work->to[2], 60 - work->life, 60);
+                work->from[0] = intplGetValue(EASING_SINE_IN_OUT, work->from[0], work->to[0], 60 - work->life, 60);
+                work->from[1] = intplGetValue(EASING_SINE_IN_OUT, work->from[1], work->to[1], 60 - work->life, 60);
+                work->from[2] = intplGetValue(EASING_SINE_IN_OUT, work->from[2], work->to[2], 60 - work->life, 60);
                 break;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effGonbabaBreathDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effGonbabaBreathDisp, effect);
 }
 
 /** Draws the particles as camera-facing quads, coloured by type; companion layers sit slightly off the camera plane. */
-static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect) {
+static void effGonbabaBreathDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffGonbabaBreathWork* work = effect->userdata;
     Mtx trans;
     Mtx rot;
@@ -439,6 +366,7 @@ static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect) {
     s32 type;
     s32 alpha;
     f32 quadSize = 4.0f;
+
     cam = camGetPtr(cameraId);
     type = work->type;
     alpha = work->alpha;
@@ -461,13 +389,13 @@ static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect) {
     effGetTexObj(EFF_TEX(0x8e), &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, (GXBool)0, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, (GXBool)0, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
-    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC);
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_TEXA, GX_CA_ZERO);
     GXSetCullMode(GX_CULL_NONE);
@@ -489,22 +417,14 @@ static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect) {
         GXSetCurrentMtx(GX_PNMTX0);
         switch (work->type) {
             case 0:
-
             case 1:
-
             case 2:
-
             case 3:
-
             case 4:
-
             case 5:
-
             case 6:
-
             case 7:
                 for (j = 0; j < 3; j++) {
-                    f32 w;
                     col_tbl[type % 10][j].a = (work->alpha * alpha) / 255;
                     GXSetChanMatColor(GX_COLOR0A0, col_tbl[type % 10][j]);
                     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
@@ -517,23 +437,14 @@ static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect) {
                     GXPosition3f32((-(16.0f - (4.0f * j))) / 2.0f, (-(16.0f - (4.0f * j))) / 2.0f, 0.0f);
                     GXTexCoord2f32(0.0f, 1.0f);
                 }
-
                 break;
-
             case 10:
-
             case 11:
-
             case 12:
-
             case 13:
-
             case 14:
-
             case 15:
-
             case 16:
-
             case 17: {
                 GXColor c;
                 c.r = work->from[0];
@@ -541,7 +452,6 @@ static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect) {
                 c.b = work->from[2];
                 c.a = (work->alpha * alpha) / 255;
                 GXSetChanMatColor(GX_COLOR0A0, c);
-            }
                 GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                 GXPosition3f32((-quadSize / 2.0f), quadSize * 0.5f, 0.0f);
                 GXTexCoord2f32(0.0f, 0.0f);
@@ -552,6 +462,7 @@ static void effGonbabaBreathDisp(CameraId cameraId, EffectEntry* effect) {
                 GXPosition3f32((-quadSize / 2.0f), (-quadSize / 2.0f), 0.0f);
                 GXTexCoord2f32(0.0f, 1.0f);
                 break;
+            }
         }
     }
 }

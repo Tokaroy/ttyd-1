@@ -1,4 +1,5 @@
-// Action command: press A in time (ac_timing_wide); like ac_timing_a but with a wider success window.
+// Action command: press the shown input in time (ac_timing_wide); wider sibling of ac_timing_a.
+
 #include "icon_ids.h"
 #include "battle/ac/ac_table.h"
 #include "battle/battle.h"
@@ -10,27 +11,13 @@
 #include "system.h"
 #include <string.h>
 
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
-
-// BattleActions.acFlags for this command (btlevtcmd_AcSetFlag).
-enum {
-    TIMING_WIDE_NO_SLIDE_IN = 0x1,     // the icons start in place instead of sliding in
-    TIMING_WIDE_STAY_ON_SUCCESS = 0x2, // after a success the icons stay instead of sliding out
-    TIMING_WIDE_STAY_ON_FAIL = 0x4,    // the same after a failure
-    TIMING_WIDE_HOLD_AFTER_END = 0x8,  // when the window closes the command waits (state 0x3EB) with the icons shown
-    TIMING_WIDE_SWAP_ICONS = 0x10,     // the two button icons are drawn the other way round
-};
-
 typedef struct TimingWideWork {
     s32 button;   // 0x0
-    s8 mode;      // 0x4
+    s8 mode;      // 0x4, 1: press (trigger), 0: let go (not held), -1: release (BattlePadCheckUp)
     s32 frame;    // 0x8
     s32 state;    // 0xC
     s32 endTimer; // 0x10
 } TimingWideWork;
-
-#define TW_WORK(ac) ((TimingWideWork*)(ac)->work)
 
 static void actionCommandDisp(f32 x, f32 y);
 
@@ -44,8 +31,8 @@ static void actionCommandDisp(f32 x, f32 y);
  */
 s32 battleAcMain_TimingWide(BattleWork* work) {
     BattleActions* ac = &work->actionCommands;
-    TimingWideWork* tw = TW_WORK(ac);
-    BattleACDispParams* disp = (BattleACDispParams*)&ac->disp;
+    TimingWideWork* tw = (TimingWideWork*)ac->work;
+    BattleACDispParams* disp = &ac->disp;
     s32 autoCmd = 0;
     s32 pressed;
 
@@ -54,7 +41,7 @@ s32 battleAcMain_TimingWide(BattleWork* work) {
     }
 
     switch (ac->acState) {
-        case 0:
+        case AC_STATE_INIT:
             memset(disp, 0, sizeof(BattleACDispParams));
             disp->iconX = -300.0f;
             disp->iconY = 0.0f;
@@ -63,38 +50,39 @@ s32 battleAcMain_TimingWide(BattleWork* work) {
             tw->frame = 0;
             switch (ac->params[0]) {
                 case 5:
-                    tw->button = 0x100;
+                    tw->button = PAD_BUTTON_A;
                     tw->mode = 1;
                     break;
                 case 0:
-                    tw->button = 0x40000;
+                    tw->button = BATTLE_PAD_STICK_LEFT;
                     tw->mode = 0;
                     break;
                 case 1:
-                    tw->button = 0x80000;
+                    tw->button = BATTLE_PAD_STICK_RIGHT;
                     tw->mode = 0;
                     break;
                 case 2:
-                    tw->button = 0x40000;
+                    tw->button = BATTLE_PAD_STICK_LEFT;
                     tw->mode = -1;
                     break;
                 case 3:
-                    tw->button = 0x80000;
+                    tw->button = BATTLE_PAD_STICK_RIGHT;
                     tw->mode = -1;
                     break;
                 default:
-                    tw->button = 0x40000;
+                    tw->button = BATTLE_PAD_STICK_LEFT;
                     tw->mode = 0;
                     break;
             }
             ac->outputParams[0] = 0;
             ac->outputParams[1] = 0;
             ac->outputParams[2] = 0;
-            ac->acState = 99;
-            ac->result = 1;
+            ac->acState = AC_STATE_WAIT_START;
+            ac->result = AC_RESULT_RUNNING;
             break;
-        case 100:
-            if ((ac->setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && (ac->acUnit->tokenFlags & TOKEN_FLAG_CONFUSED_ACTION)) {
+        case AC_STATE_START:
+            if ((ac->setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && (ac->acUnit->tokenFlags & kConfusedAction)) {
+                // irand(100) is never negative: a confused auto-play always presses outside the window
                 if (irand(100) >= 0) {
                     ac->setupParam = 0;
                     if (ac->params[2] > 0) {
@@ -106,31 +94,31 @@ s32 battleAcMain_TimingWide(BattleWork* work) {
                 } else {
                     ac->setupParam = ac->params[2] + irand(ac->params[3] - ac->params[2]);
                 }
-                ac->acState = 0x3EA;
+                ac->acState = AC_STATE_RUN + 2;
                 tw->state = 2;
             } else {
                 if (ac->params[0] == 4) {
-                    ac->acState = 0x3E8;
+                    ac->acState = AC_STATE_RUN;
                 } else {
-                    ac->acState = 0x3E9;
+                    ac->acState = AC_STATE_RUN + 1;
                 }
                 tw->state = 1;
             }
             break;
-        case 0x3E8:
+        case AC_STATE_RUN:
             if (BattlePadCheckTrigger(tw->button)) {
                 ac->outputParams[1] = 1;
-                ac->acState = 0x3E9;
+                ac->acState = AC_STATE_RUN + 1;
             }
             break;
-        case 0x3E9:
+        case AC_STATE_RUN + 1:
             tw->frame++;
             if (tw->frame > ac->params[1]) {
                 ac->result = 0;
-                ac->acState = 0x3EC;
+                ac->acState = AC_STATE_RUN + 4;
                 tw->state = 4;
-                if ((s32)ac->acFlags & TIMING_WIDE_HOLD_AFTER_END) {
-                    ac->acState = 0x3EB;
+                if (ac->acFlags & AC_TIMING_WIDE_FLAG_HOLD_AFTER_RESULT) {
+                    ac->acState = AC_STATE_RUN + 3;
                     tw->state = 3;
                 }
             } else {
@@ -167,23 +155,23 @@ s32 battleAcMain_TimingWide(BattleWork* work) {
                 }
                 if (pressed) {
                     if (ac->outputParams[2]) {
-                        ac->result = 2;
+                        ac->result = AC_RESULT_SUCCESS;
                         ac->resultCount++;
                         ac->outputParams[0] = 1;
                     } else {
                         ac->result = 0;
                         ac->outputParams[0] = -1;
                     }
-                    ac->acState = 0x3EC;
+                    ac->acState = AC_STATE_RUN + 4;
                     tw->state = 4;
-                    if ((s32)ac->acFlags & TIMING_WIDE_HOLD_AFTER_END) {
-                        ac->acState = 0x3EB;
+                    if (ac->acFlags & AC_TIMING_WIDE_FLAG_HOLD_AFTER_RESULT) {
+                        ac->acState = AC_STATE_RUN + 3;
                         tw->state = 3;
                     }
                 }
             }
             break;
-        case 0x3EA:
+        case AC_STATE_RUN + 2:
             tw->frame++;
             ac->setupParam--;
             if (tw->frame > ac->params[1]) {
@@ -192,7 +180,7 @@ s32 battleAcMain_TimingWide(BattleWork* work) {
             }
             if (ac->setupParam < 0) {
                 if (tw->frame >= ac->params[2] && tw->frame < ac->params[3]) {
-                    ac->result = 2;
+                    ac->result = AC_RESULT_SUCCESS;
                     ac->resultCount++;
                     ac->outputParams[0] = 1;
                 } else {
@@ -202,20 +190,20 @@ s32 battleAcMain_TimingWide(BattleWork* work) {
                 return 0;
             }
             break;
-        case 0x3EB:
+        case AC_STATE_RUN + 3:
             break;
-        case 0x3EC:
+        case AC_STATE_RUN + 4:
             tw->endTimer = 60;
-            ac->acState = 0x3ED;
+            ac->acState = AC_STATE_RUN + 5;
             tw->state = 5;
-        case 0x3ED:
+        case AC_STATE_RUN + 5:
             tw->endTimer--;
             if (tw->endTimer <= 0) {
-                ac->acState = 0x3EE;
+                ac->acState = AC_STATE_RUN + 6;
                 tw->state = 6;
             }
             break;
-        case 0x3EE:
+        case AC_STATE_RUN + 6:
             ac->maincb = NULL;
             ac->dispcb = NULL;
             ac->resultcb = NULL;
@@ -238,16 +226,16 @@ s32 battleAcResult_TimingWide(BattleWork* work) {
 void battleAcDisp_TimingWide(CameraId cameraId, void* param) {
     BattleWork* work = (BattleWork*)param;
     BattleActions* ac = &work->actionCommands;
-    BattleACDispParams* disp = (BattleACDispParams*)&ac->disp;
+    BattleACDispParams* disp = &ac->disp;
     s32 show;
-    switch (TW_WORK(ac)->state) {
+    switch (((TimingWideWork*)ac->work)->state) {
         case 0:
         case 1:
         case 2:
-            if ((s32)ac->acFlags & TIMING_WIDE_NO_SLIDE_IN) {
+            if (ac->acFlags & AC_TIMING_WIDE_FLAG_NO_SLIDE_IN) {
                 disp->iconX = 30.0f;
             } else {
-                disp->iconX = intplGetValue(4, -300.0f, 30.0f, 20 - disp->slideTimer, 20);
+                disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, -300.0f, 30.0f, 20 - disp->slideTimer, 20);
             }
             actionCommandDisp(disp->iconX, disp->iconY);
             if (disp->slideTimer > 0) {
@@ -260,15 +248,15 @@ void battleAcDisp_TimingWide(CameraId cameraId, void* param) {
         case 4:
         case 5:
             show = 1;
-            if (((s32)ac->acFlags & TIMING_WIDE_STAY_ON_SUCCESS) && (ac->result & 2)) {
+            if ((ac->acFlags & AC_TIMING_WIDE_FLAG_KEEP_ICON_ON_SUCCESS_UNUSED) && (ac->result & AC_RESULT_SUCCESS)) {
                 show = 0;
             }
-            if (((s32)ac->acFlags & TIMING_WIDE_STAY_ON_FAIL) && !(ac->result & 2)) {
+            if ((ac->acFlags & AC_TIMING_WIDE_FLAG_KEEP_ICON_ON_FAIL_UNUSED) && !(ac->result & AC_RESULT_SUCCESS)) {
                 show = 0;
             }
             if (disp->slideTimer >= 40) {
                 if (show) {
-                    disp->iconX = intplGetValue(4, 30.0f, -300.0f, disp->slideTimer - 40, 20);
+                    disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, 30.0f, -300.0f, disp->slideTimer - 40, 20);
                 } else {
                     disp->iconX = 30.0f;
                 }
@@ -285,16 +273,19 @@ void battleAcDisp_TimingWide(CameraId cameraId, void* param) {
 
 /** Called by btlevtcmd_StopAC: starts the 60-frame end wait. */
 void battleAcDelete_TimingWide(BattleWork* work) {
-    work->actionCommands.acState = 0x3EC;
+    work->actionCommands.acState = AC_STATE_RUN + 4;
 }
 
-#define ICON(id)                                    \
+// Draws a button icon at the command's icon position. A macro: as an inline function the object
+// changes.
+#define DRAW_BUTTON_ICON(id)                        \
     {                                               \
         Vec pos = {0.0f, 0.0f, 0.0f};               \
         pos.x = -200.0f + x;                        \
         pos.y = 50.0f + y;                          \
-        iconDispGx(&pos, ICON_DISP_2D, (id), 1.0f); \
+        iconDispGx(&pos, ICON_FLAG_2D, 1.0f, (id)); \
     }
+
 /**
  * Draws the button or stick icon, flipping between its two poses as the cue
  * while the window is open (acFlags bit 4 swaps them after the input).
@@ -302,48 +293,48 @@ void battleAcDelete_TimingWide(BattleWork* work) {
 static void actionCommandDisp(f32 x, f32 y) {
     BattleWork* work = _battleWorkPointer;
     BattleActions* ac = &work->actionCommands;
-    s32* frame = (s32*)&ac->disp;
+    s32* blinkTimer = &ac->disp.blinkTimer;
     TimingWideWork* tw;
     u16 a;
     u16 b;
     camGetPtr(CAMERA_2D);
-    tw = TW_WORK(ac);
+    tw = (TimingWideWork*)ac->work;
     switch (tw->button) {
-        case 0x100:
-            b = ICON_065;
-            a = ICON_064;
+        case PAD_BUTTON_A:
+            b = ICON_BUTTON_A_PRESSED;
+            a = ICON_BUTTON_A;
             break;
-        case 0x200:
-            b = ICON_067;
-            a = ICON_066;
+        case PAD_BUTTON_B:
+            b = ICON_BUTTON_B_PRESSED;
+            a = ICON_BUTTON_B;
             break;
-        case 0x400:
-            b = ICON_069;
-            a = ICON_068;
+        case PAD_BUTTON_X:
+            b = ICON_BUTTON_X_PRESSED;
+            a = ICON_BUTTON_X;
             break;
-        case 0x800:
-            b = ICON_06B;
-            a = ICON_06A;
+        case PAD_BUTTON_Y:
+            b = ICON_BUTTON_Y_PRESSED;
+            a = ICON_BUTTON_Y;
             break;
-        case 0x40000:
-            b = ICON_078;
-            a = ICON_079;
+        case BATTLE_PAD_STICK_LEFT:
+            b = ICON_STICK_LEFT;
+            a = ICON_STICK_NEUTRAL;
             break;
-        case 0x80000:
-            b = ICON_07A;
-            a = ICON_079;
+        case BATTLE_PAD_STICK_RIGHT:
+            b = ICON_STICK_RIGHT;
+            a = ICON_STICK_NEUTRAL;
             break;
         default:
-            b = ICON_078;
-            a = ICON_079;
+            b = ICON_STICK_LEFT;
+            a = ICON_STICK_NEUTRAL;
             break;
     }
     switch (tw->state) {
         case 0:
             if (tw->mode > 0) {
-                ICON(a)
+                DRAW_BUTTON_ICON(a);
             } else {
-                ICON(b)
+                DRAW_BUTTON_ICON(b);
             }
             break;
         case 2:
@@ -351,39 +342,37 @@ static void actionCommandDisp(f32 x, f32 y) {
         case 4:
         case 5:
         case 6:
-            if (!((s32)ac->acFlags & TIMING_WIDE_SWAP_ICONS)) {
-                if (tw->mode > 0)
-                    ICON(a)
-                else
-                    ICON(b)
+            if (!(ac->acFlags & AC_TIMING_WIDE_FLAG_SWAP_RESULT_ICON)) {
+                if (tw->mode > 0) {
+                    DRAW_BUTTON_ICON(a);
+                } else {
+                    DRAW_BUTTON_ICON(b);
+                }
+            } else if (tw->mode > 0) {
+                DRAW_BUTTON_ICON(b);
             } else {
-                if (tw->mode > 0)
-                    ICON(b)
-                else
-                    ICON(a)
+                DRAW_BUTTON_ICON(a);
             }
             break;
         case 1:
             if (tw->mode != -1) {
                 if (tw->frame >= ac->params[2] && tw->frame < ac->params[3]) {
-                    if (tw->mode > 0)
-                        ICON(b)
-                    else
-                        ICON(a)
+                    if (tw->mode > 0) {
+                        DRAW_BUTTON_ICON(b);
+                    } else {
+                        DRAW_BUTTON_ICON(a);
+                    }
+                } else if (tw->mode > 0) {
+                    DRAW_BUTTON_ICON(a);
                 } else {
-                    if (tw->mode > 0)
-                        ICON(a)
-                    else
-                        ICON(b)
+                    DRAW_BUTTON_ICON(b);
                 }
+            } else if (tw->frame >= ac->params[2]) {
+                DRAW_BUTTON_ICON(a);
             } else {
-                if (tw->frame >= ac->params[2]) {
-                    ICON(a)
-                } else {
-                    ICON(b)
-                }
+                DRAW_BUTTON_ICON(b);
             }
             break;
     }
-    (*frame)++;
+    (*blinkTimer)++;
 }

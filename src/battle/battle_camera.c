@@ -1,4 +1,5 @@
 // Battle camera: modes, zoom, movement and tracking of units and the audience during battle.
+
 #include "battle/battle_camera.h"
 #include "battle/battle.h"
 #include "battle/battle_audience.h"
@@ -8,17 +9,8 @@
 #include "manager/evtmgr_cmd.h"
 #include "system.h"
 #include <string.h>
+
 #include "libc_decls.h"
-
-// FAKE: inlining off for the whole file (FAKES.md); without it 18 functions change length, e.g. battleCameraMain 1422 -> 1775 instructions
-#pragma dont_inline on
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
-
-void btl_camera_nomove_x_onoff(s32 pri, s32 on);
-void btl_camera_nomove_y_onoff(s32 pri, s32 on);
-void btl_camera_nomove_z_onoff(s32 pri, s32 on);
-void battleCameraMoveTo(s32 mode, s32 clamp, f32 x, f32 y, f32 z, f32 atX, f32 atY, f32 atZ, f32* dX, f32* dY, f32* dZ, f32* dAtX, f32* dAtY, f32* dAtZ);
 
 /** this file uses -O4,s */
 void battleCameraInit(void) {
@@ -28,22 +20,22 @@ void battleCameraInit(void) {
     camera = &wp->cameraWork;
     memset(camera, 0, sizeof(BattleCameraWork));
     camera->flags = 0;
-    switch (wp->fbatInfo->partyId) {
-        case 1:
-        case 2:
-        case 3:
-        case 4:
-        case 5:
-        case 6:
-        case 7:
-        case 8:
-            camera->mode = 15;
+    switch (wp->fbatInfo->firstAttack) {
+        case FIRST_ATTACK_JUMP:
+        case FIRST_ATTACK_SPIN_JUMP:
+        case FIRST_ATTACK_JUMP_UNUSED:
+        case FIRST_ATTACK_HAMMER:
+        case FIRST_ATTACK_SPIN_HAMMER:
+        case FIRST_ATTACK_ULTRA_HAMMER:
+        case FIRST_ATTACK_SHELL:
+        case FIRST_ATTACK_BOMB:
+            camera->mode = BTL_CAM_MODE_ENTRY_FIRST_STRIKE;
             break;
-        case 9:
-            camera->mode = 16;
+        case FIRST_ATTACK_ENEMY:
+            camera->mode = BTL_CAM_MODE_ENTRY_ENEMY_FIRST_STRIKE;
             break;
-        case 0:
-            camera->mode = 14;
+        case FIRST_ATTACK_NONE:
+            camera->mode = BTL_CAM_MODE_ENTRY_NORMAL;
             break;
     }
     camera->priLimit = 0;
@@ -58,8 +50,8 @@ void battleCameraInit(void) {
  * Per-frame battle camera: works out the target eye
  * and look-at point for cameraWork.mode (0 default view of the stage, 1 default zoomed, 2 raised for the cursor,
  * 3 scripted move-to, 4/5 from backstage, 6 on the audience, 7-13 following one or two units,
- * parts or an audience member, 14-16 the battle opening (normal, First Strike, enemy First Strike), 17 victory,
- * 18 defeat, 19 running away), applies zoom, axis locks, offsets and the W/H shakes,
+ * parts or an audience member, 14-16 the battle opening (normal, First Strike, enemy First Strike), 17/18 victory
+ * (18 aims 20 lower), 19 defeat, 20 running away), applies zoom, axis locks, offsets and the W/H shakes,
  * and eases the 3D camera there at the move/zoom speed level. Each mode's debug name is kept in a local buffer.
  */
 void battleCameraMain(void) {
@@ -77,7 +69,7 @@ void battleCameraMain(void) {
     BattleUnit* unit2;
     BattleUnitPart* part;
     BattleUnit* party;
-    BattleUnitPart* part2;
+    BattleUnitPart* part2 = NULL;
     BattleUnit* unit;
     f32 w, zz, y, ofs, t, d, yy, atX, atY, atZ;
     s16 moveLv, zoomLv;
@@ -85,8 +77,8 @@ void battleCameraMain(void) {
     s16 moveLv2, zoomLv2;
     s32 phase2;
     s16 moveLv3;
+    BattleAudienceMember* m;
 
-    part2 = 0;                    // FAKE: dead store, moves part2's variable record first so its case-8 web is a split temp (target r27)
     unit = BattleGetMarioPtr(wp); // FAKE: real zero-code first web of unit (the self-assign below emits nothing), so the case-8 unit web is a split temp (target r26)
     unit->position.x = unit->position.x;
     dX = 0.0f;
@@ -95,7 +87,7 @@ void battleCameraMain(void) {
     dAtX = 0.0f;
     dAtY = 0.0f;
     dAtZ = 0.0f;
-    if (wp->cameraWork.mode != 3) {
+    if (wp->cameraWork.mode != BTL_CAM_MODE_FREE) {
         wp->cameraWork.moveToTimer = 0;
     }
     cam->cameraPos.x = wp->cameraWork.pos.x;
@@ -111,19 +103,21 @@ void battleCameraMain(void) {
     wp->cameraWork.prevAt.y = cam->cameraAt.y;
     wp->cameraWork.prevAt.z = cam->cameraAt.z;
     switch (wp->cameraWork.mode) {
-        case 0:
+        case BTL_CAM_MODE_DEFAULT:
             battleCameraMoveTo(1, 1, 0.0f, 110.0f, 750.0f, 0.0f, 60.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　でふぉると");
             break;
-        case 1:
+        case BTL_CAM_MODE_DEFAULT_ZOOM:
             zz = 0.5f * wp->cameraWork.zoom;
             battleCameraMoveTo(1, 1, 0.0f, 110.0f, 750.0f - zz, 0.0f, 60.0f, -zz, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　でふぉるとズーム");
             break;
-        case 2:
+        case BTL_CAM_MODE_CURSOR_UP:
             battleCameraMoveTo(1, 1, 0.0f, 160.0f, 750.0f, 0.0f, 110.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　かーそるがうえに");
-        case 3:
+
+            // falls through
+        case BTL_CAM_MODE_FREE:
             if (wp->cameraWork.moveToTimer > 0) {
                 moveLv3 = wp->cameraWork.moveSpeedLv;
                 wp->cameraWork.moveToTimer--;
@@ -140,15 +134,15 @@ void battleCameraMain(void) {
             }
             strcpy(name, "かめら　ふりー");
             break;
-        case 4:
+        case BTL_CAM_MODE_BACKSTAGE:
             battleCameraMoveTo(1, 1, 0.0f, 110.0f, -750.0f, 0.0f, 60.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　ぶたいうら");
             break;
-        case 5:
+        case BTL_CAM_MODE_BACKSTAGE_2:
             battleCameraMoveTo(1, 1, 0.0f, 400.0f, -617.0f, 0.0f, 60.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　ぶたいうら２");
             break;
-        case 6:
+        case BTL_CAM_MODE_AUDIENCE:
             switch (pouchGetPtr()->rank) {
                 case 0:
                     zoomZ = 750.0f;
@@ -166,10 +160,10 @@ void battleCameraMain(void) {
             battleCameraMoveTo(1, 1, 0.0f, 110.0f, zoomZ, 0.0f, 60.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　かんきゃく");
             break;
-        case 7:
+        case BTL_CAM_MODE_UNIT:
             unit2 = (0, BattleGetUnitPtr(wp, wp->cameraWork.unitId)); // FAKE: comma makes this unit2 web a compiler temp coloured early (target r28)
             if (unit2 == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             BattleGetUnitPartsPtr(wp->cameraWork.unitId, wp->cameraWork.partsId);
@@ -194,12 +188,12 @@ void battleCameraMain(void) {
             battleCameraMoveTo(1, 1, pos.x, 110.0f + t + ofs, 750.0f - zz, pos.x, 60.0f + t + ofs, -zz, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　ゆにっとついび");
             break;
-        case 8: {
+        case BTL_CAM_MODE_UNIT_TO_UNIT: {
             f32 w, w2, d, ofs, t, zz, yy, atX, y;
             unit = BattleGetUnitPtr(wp, wp->cameraWork.unitId);
             unit2 = (0, BattleGetUnitPtr(wp, wp->cameraWork.unitId2)); // FAKE: comma makes this unit2 web a compiler temp coloured early (target r28)
             if (unit == NULL || unit2 == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             part2 = BattleGetUnitPartsPtr(wp->cameraWork.unitId, wp->cameraWork.partsId);
@@ -243,11 +237,11 @@ void battleCameraMain(void) {
             strcpy(name, "かめら　２ゆにっとかんついび");
             break;
         }
-        case 9:
+        case BTL_CAM_MODE_UNIT_MIDPOINT:
             unit = BattleGetUnitPtr(wp, wp->cameraWork.unitId);
             party = BattleGetUnitPtr(wp, wp->cameraWork.unitId2);
             if (unit == NULL || party == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             BattleGetUnitPartsPtr(wp->cameraWork.unitId, wp->cameraWork.partsId);
@@ -263,6 +257,9 @@ void battleCameraMain(void) {
             zz -= 1.5f * w;
             yy = 0.5f * (pos.y + hit.y);
             ofs = -zz / 10.0f;
+
+            // BUG: atX is set only when yy is above 50 or below 0; for 0..50 it is read uninitialized below (the clamp
+            // has no `atX = yy` before it)
             if (yy > 50.0f) {
                 atX = 50.0f;
             }
@@ -273,15 +270,15 @@ void battleCameraMain(void) {
             battleCameraMoveTo(1, 1, atY, 110.0f + atX + ofs, 750.0f - zz, atY, 60.0f + atX + ofs, -zz, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　ゆにっとついび");
             break;
-        case 10:
+        case BTL_CAM_MODE_PART:
             unit = BattleGetUnitPtr(wp, wp->cameraWork.unitId);
             if (unit == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             part = BattleGetUnitPartsPtr(wp->cameraWork.unitId, wp->cameraWork.partsId);
             if (part == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             BtlUnit_GetHitPos(unit, part, &pos.x, &pos.y, &pos.z);
@@ -305,18 +302,18 @@ void battleCameraMain(void) {
             battleCameraMoveTo(1, 1, pos.x, 110.0f + y + ofs, 750.0f - zz, pos.x, 60.0f + y + ofs, -zz, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　ぱーつついび");
             break;
-        case 11: {
+        case BTL_CAM_MODE_PART_TO_PART: {
             f32 w, w2, t, zz, yy, d, ofs, y, atX;
             unit = BattleGetUnitPtr(wp, wp->cameraWork.unitId);
             unit2 = (0, BattleGetUnitPtr(wp, wp->cameraWork.unitId2)); // FAKE: comma makes this unit2 web a compiler temp coloured early (target r28)
             if (unit == NULL || unit2 == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             party = (BattleUnit*)BattleGetUnitPartsPtr(wp->cameraWork.unitId, wp->cameraWork.partsId); // FAKE: case-11 part held in party (role swap)
             part = BattleGetUnitPartsPtr(wp->cameraWork.unitId2, wp->cameraWork.partsId2);
             if ((BattleUnitPart*)party == NULL || part == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             BtlUnit_GetPartsWorldPos((BattleUnitPart*)party, &pos.x, &pos.y, &pos.z);
@@ -356,22 +353,23 @@ void battleCameraMain(void) {
             strcpy(name, "かめら　２ぱーつかんついび");
             break;
         }
-        case 12: {
-            BattleAudienceMember* m = &aud->members[wp->cameraWork.audienceId];
+        case BTL_CAM_MODE_AUDIENCE_MEMBER:
+            m = &aud->members[wp->cameraWork.audienceId];
             battleCameraMoveTo(1, 0, m->position.x, 200.0f, 400.0f + m->position.z, m->position.x, 0.0f, m->position.z, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
-        }
             strcpy(name, "かめら　かんきゃくついび");
             break;
-        case 13:
+        case BTL_CAM_MODE_UNIT_TO_AUDIENCE:
             unit = BattleGetUnitPtr(wp, wp->cameraWork.unitId);
             if (unit == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
             if (BattleGetUnitPartsPtr(wp->cameraWork.unitId, wp->cameraWork.partsId) == NULL) {
-                btl_camera_set_mode(0, 0);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT);
                 break;
             }
+
+            // Original code overwrites the requested audience ID without changing homingOffset2.
             wp->cameraWork.audienceId = 10;
             d = wp->cameraWork.homingOffset2.x - wp->cameraWork.homingOffset.x;
             BtlUnit_GetPos(unit, &pos.x, &pos.y, &pos.z);
@@ -402,7 +400,7 @@ void battleCameraMain(void) {
             battleCameraMoveTo(1, 1, atX, 110.0f + y, 750.0f - zz, atX, 60.0f + y, -zz, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　ゆにっとかんきゃくかんついび");
             break;
-        case 14:
+        case BTL_CAM_MODE_ENTRY_NORMAL:
             wp->cameraWork.modeFrame++;
             if (wp->cameraWork.modeFrame == 1) {
                 switch (pouchGetPtr()->rank) {
@@ -425,25 +423,25 @@ void battleCameraMain(void) {
             }
             if (wp->cameraWork.modeFrame == 10) {
                 wp->cameraWork.modeFrame = 0;
-                btl_camera_set_mode(0, 3);
-                btl_camera_set_moveto(0, 0.0f, 110.0f, 750.0f, 0.0f, 60.0f, 0.0f, 120, 4);
+                btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_FREE);
+                btl_camera_set_moveto(BTL_CAM_PRI_NORMAL, 0.0f, 110.0f, 750.0f, 0.0f, 60.0f, 0.0f, 120, 4);
             }
             strcpy(name, "かめら　ふつうにはいった");
             break;
-        case 15:
+        case BTL_CAM_MODE_ENTRY_FIRST_STRIKE:
             wp->cameraWork.moveSpeedLv = 3;
             wp->cameraWork.zoomSpeedLv = 3;
             battleCameraMoveTo(1, 1, 0.0f, 110.0f, 500.0f, 0.0f, 60.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　うまくはいった");
             break;
-        case 16:
+        case BTL_CAM_MODE_ENTRY_ENEMY_FIRST_STRIKE:
             wp->cameraWork.moveSpeedLv = 3;
             wp->cameraWork.zoomSpeedLv = 3;
             battleCameraMoveTo(1, 1, -100.0f, 110.0f, 500.0f, -100.0f, 60.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　だめにはいった");
             break;
-        case 17:
-        case 18:
+        case BTL_CAM_MODE_VICTORY:
+        case BTL_CAM_MODE_VICTORY_AUDIENCE:
             mario = BattleGetMarioPtr(wp);
             party = BattleGetPartyPtr(wp);
             if (party != NULL) {
@@ -452,7 +450,7 @@ void battleCameraMain(void) {
                 atX = 0.5f * (mx + px);
                 atY = 0.5f * (my + py);
                 atZ = 0.5f * (mz + pz);
-                if (wp->cameraWork.mode == 18) {
+                if (wp->cameraWork.mode == BTL_CAM_MODE_VICTORY_AUDIENCE) {
                     atY -= 20.0f;
                 }
             } else {
@@ -466,10 +464,10 @@ void battleCameraMain(void) {
             battleCameraMoveTo(0, 1, atX, 100.0f + atY, 350.0f + atZ, atX, 50.0f + atY, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             strcpy(name, "かめら　しょうり");
             break;
-        case 19:
+        case BTL_CAM_MODE_DEFEAT:
             strcpy(name, "かめら　はいぼく");
             break;
-        case 20:
+        case BTL_CAM_MODE_ESCAPE:
             wp->cameraWork.moveSpeedLv = 2;
             wp->cameraWork.zoomSpeedLv = 2;
             battleCameraMoveTo(1, 1, -100.0f, 100.0f, 400.0f, -100.0f, 50.0f, 0.0f, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
@@ -482,19 +480,19 @@ void battleCameraMain(void) {
     if (cam->cameraPos.z >= 1000.0f) {
         cam->cameraPos.z = 1000.0f;
     }
-    if (wp->cameraWork.flags & CAMERA_FLAG_NOMOVE_X) {
+    if (wp->cameraWork.flags & BTL_CAM_FLAG_NOMOVE_X) {
         cam->cameraPos.x = wp->cameraWork.prevPos.x;
         cam->cameraAt.x = wp->cameraWork.prevAt.x;
         dX = 0.0f;
         dAtX = 0.0f;
     }
-    if (wp->cameraWork.flags & CAMERA_FLAG_NOMOVE_Y) {
+    if (wp->cameraWork.flags & BTL_CAM_FLAG_NOMOVE_Y) {
         cam->cameraPos.y = wp->cameraWork.prevPos.y;
         cam->cameraAt.y = wp->cameraWork.prevAt.y;
         dY = 0.0f;
         dAtY = 0.0f;
     }
-    if (wp->cameraWork.flags & CAMERA_FLAG_NOMOVE_Z) {
+    if (wp->cameraWork.flags & BTL_CAM_FLAG_NOMOVE_Z) {
         cam->cameraPos.z = wp->cameraWork.prevPos.z;
         cam->cameraAt.z = wp->cameraWork.prevAt.z;
         dZ = 0.0f;
@@ -508,13 +506,13 @@ void battleCameraMain(void) {
     wp->cameraWork.at.z = cam->cameraAt.z;
     wp->cameraWork.moveSpeed = (Vec){dX, dY, dZ};
     wp->cameraWork.moveSpeedAt = (Vec){dAtX, dAtY, dAtZ};
-    if (!(wp->cameraWork.flags & CAMERA_FLAG_SHAKE_W) && !(wp->cameraWork.flags & CAMERA_FLAG_SHAKE_H)) {
+    if (!(wp->cameraWork.flags & BTL_CAM_FLAG_SHAKE_W) && !(wp->cameraWork.flags & BTL_CAM_FLAG_SHAKE_H)) {
         padRumbleOff(0);
     }
-    if (wp->cameraWork.flags & CAMERA_FLAG_NO_RUMBLE) {
+    if (wp->cameraWork.flags & BTL_CAM_FLAG_NO_RUMBLE_UNUSED) {
         padRumbleOff(0);
     }
-    if (wp->cameraWork.flags & CAMERA_FLAG_SHAKE_W) {
+    if (wp->cameraWork.flags & BTL_CAM_FLAG_SHAKE_W) {
         moveLv = wp->cameraWork.moveSpeedLv;
         zoomLv = wp->cameraWork.zoomSpeedLv;
         phase = (wp->cameraWork.shakeWFrames - wp->cameraWork.shakeWTimer) & 2;
@@ -528,13 +526,13 @@ void battleCameraMain(void) {
                 battleCameraMoveTo(0, 0, cam->cameraPos.x - wp->cameraWork.shakeWOfs, cam->cameraPos.y, cam->cameraPos.z, cam->cameraAt.x - wp->cameraWork.shakeWOfs, cam->cameraAt.y, cam->cameraAt.z, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             }
         } else if (wp->cameraWork.shakeWTimer == 0) {
-            wp->cameraWork.flags &= ~CAMERA_FLAG_SHAKE_W;
+            wp->cameraWork.flags &= ~BTL_CAM_FLAG_SHAKE_W;
         }
         wp->cameraWork.moveSpeedLv = moveLv;
         wp->cameraWork.zoomSpeedLv = zoomLv;
         wp->cameraWork.shakeWTimer--;
     }
-    if (wp->cameraWork.flags & CAMERA_FLAG_SHAKE_H) {
+    if (wp->cameraWork.flags & BTL_CAM_FLAG_SHAKE_H) {
         moveLv2 = wp->cameraWork.moveSpeedLv;
         zoomLv2 = wp->cameraWork.zoomSpeedLv;
         phase2 = (wp->cameraWork.shakeHFrames - wp->cameraWork.shakeHTimer) & 2;
@@ -548,7 +546,7 @@ void battleCameraMain(void) {
                 battleCameraMoveTo(0, 0, cam->cameraPos.x, cam->cameraPos.y - wp->cameraWork.shakeHOfs, cam->cameraPos.z, cam->cameraAt.x, cam->cameraAt.y - wp->cameraWork.shakeHOfs, cam->cameraAt.z, &dX, &dY, &dZ, &dAtX, &dAtY, &dAtZ);
             }
         } else if (wp->cameraWork.shakeHTimer == 0) {
-            wp->cameraWork.flags &= ~CAMERA_FLAG_SHAKE_H;
+            wp->cameraWork.flags &= ~BTL_CAM_FLAG_SHAKE_H;
         }
         wp->cameraWork.moveSpeedLv = moveLv2;
         wp->cameraWork.zoomSpeedLv = zoomLv2;
@@ -559,12 +557,13 @@ void battleCameraMain(void) {
 /**
  * Moves the battle camera one step toward the eye (x, y, z) and target (atX, atY, atZ),
  * called each frame from battleCameraMain.
- * Mode 1 adds the manual offset (cameraWork.position) and the wide-stage shift;
- * clamp 1 keeps x within +-(100 + (600 - z) / 2).
+ * Mode 1 adds the manual offset (cameraWork.position) and, while BATTLE_FLAG_PARTY_IN_AUDIENCE is set, a shift by
+ * Mario's home z; clamp 1 keeps x within +-(100 + (600 - z) / 2).
  * The step is the remaining distance divided by 1.5, 15, 5, 1,
- * 200 or 100 for speed level 0-5 (moveSpeedLv for x/y, zoomSpeedLv for z); the steps are returned in dX..dAtZ.
+ * 200 or 100 for speed level 0-5 (moveSpeedLv for x/y, zoomSpeedLv for z; a moveSpeedLv of 5 or more is reset to
+ * 1); the steps are returned in dX..dAtZ.
  */
-void battleCameraMoveTo(s32 mode, s32 clamp, f32 x, f32 y, f32 z, f32 atX, f32 atY, f32 atZ,
+void battleCameraMoveTo(s32 applyOffsets, s32 clampX, f32 x, f32 y, f32 z, f32 atX, f32 atY, f32 atZ,
                         f32* dX, f32* dY, f32* dZ, f32* dAtX, f32* dAtY, f32* dAtZ) {
     CameraEntry* cam = camGetPtr(CAMERA_3D);
     BattleWork* wp = _battleWorkPointer;
@@ -577,8 +576,8 @@ void battleCameraMoveTo(s32 mode, s32 clamp, f32 x, f32 y, f32 z, f32 atX, f32 a
     if (wp->cameraWork.zoomSpeedLv < 0 || wp->cameraWork.zoomSpeedLv >= 6) {
         wp->cameraWork.zoomSpeedLv = 1;
     }
-    if (mode == 1) {
-        if (wp->flags & BATTLE_FLAG_WIDE_STAGE) {
+    if (applyOffsets == 1) {
+        if (wp->flags & BATTLE_FLAG_PARTY_IN_AUDIENCE) {
             f32 mz = mario->homePosition.z;
             f32 ox = 0.0f;
             f32 oy = 0.25f * -mz;
@@ -601,7 +600,7 @@ void battleCameraMoveTo(s32 mode, s32 clamp, f32 x, f32 y, f32 z, f32 atX, f32 a
     if (half < 0.0f) {
         half = 0.0f;
     }
-    if (clamp == 1) {
+    if (clampX == 1) {
         if (x > 100.0f + half) {
             x = 100.0f + half;
         }
@@ -636,6 +635,9 @@ void battleCameraMoveTo(s32 mode, s32 clamp, f32 x, f32 y, f32 z, f32 atX, f32 a
             *dAtY = (atY - cam->cameraAt.y) / 15.0f;
             cam->cameraPos.x += *dX;
             cam->cameraPos.y += *dY;
+
+            // BUG: only this speed level adds *dZ here; *dZ still holds the caller's value (0 on the frame's first call,
+            // the previous step on the shake calls), and the zoom switch below adds the new step again
             cam->cameraPos.z += *dZ;
             cam->cameraAt.x += *dAtX;
             cam->cameraAt.y += *dAtY;
@@ -736,12 +738,30 @@ void battleCameraMoveTo(s32 mode, s32 clamp, f32 x, f32 y, f32 z, f32 atX, f32 a
     }
 }
 
+/** The battle camera's current mode (btl_camera_set_mode). */
+// Original name and size (0xc) from the JP demo map (UNUSED there: nothing calls it); the getter of the camera
+// work's mode.
+s32 battleCameraGetCurrentMode(void) {
+    return _battleWorkPointer->cameraWork.mode;
+}
+
 /** Returns how far the battle camera's eye moved this frame (length of cameraWork.moveSpeed). */
 f32 battleCameraGetPosMoveSpeed(void) {
     BattleWork* wp = _battleWorkPointer;
     f32 x = wp->cameraWork.moveSpeed.x;
     f32 y = wp->cameraWork.moveSpeed.y;
     f32 z = wp->cameraWork.moveSpeed.z;
+    return sqrt(x * x + y * y + z * z);
+}
+
+/** Returns how far the battle camera's look-at point moved this frame (length of cameraWork.moveSpeedAt). */
+// Original name and size (0x40) from the JP demo map (UNUSED there: nothing calls it); battleCameraGetPosMoveSpeed
+// for the camera work's other move speed.
+f32 battleCameraGetTargetMoveSpeed(void) {
+    BattleWork* wp = _battleWorkPointer;
+    f32 x = wp->cameraWork.moveSpeedAt.x;
+    f32 y = wp->cameraWork.moveSpeedAt.y;
+    f32 z = wp->cameraWork.moveSpeedAt.z;
     return sqrt(x * x + y * y + z * z);
 }
 
@@ -756,12 +776,12 @@ void btl_camera_set_prilimit(s32 pri) {
 /** Script helper: args[0] = new camera priority floor (btl_camera_set_prilimit). */
 USER_FUNC(evt_btl_camera_set_prilimit) {
     btl_camera_set_prilimit(evtGetValue(event, event->args[0]));
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
  * Switches the battle camera to mode (see battleCameraMain) if pri passes the floor, resetting zoom,
- * speed levels, axis locks and the manual offset.
+ * speed levels and axis locks and clearing BTL_CAM_FLAG_POS_OFFSET (the manual offset itself stays).
  */
 void btl_camera_set_mode(s32 pri, s32 mode) {
     BattleWork* wp = _battleWorkPointer;
@@ -771,10 +791,10 @@ void btl_camera_set_mode(s32 pri, s32 mode) {
         wp->cameraWork.moveSpeedLv = 1;
         wp->cameraWork.zoomSpeedLv = 1;
         wp->cameraWork.modeFrame = 0;
-        btl_camera_nomove_x_onoff(0, 0);
-        btl_camera_nomove_y_onoff(0, 0);
-        btl_camera_nomove_z_onoff(0, 0);
-        wp->cameraWork.flags &= ~CAMERA_FLAG_POS_OFFSET;
+        btl_camera_nomove_x_onoff(BTL_CAM_PRI_NORMAL, 0);
+        btl_camera_nomove_y_onoff(BTL_CAM_PRI_NORMAL, 0);
+        btl_camera_nomove_z_onoff(BTL_CAM_PRI_NORMAL, 0);
+        wp->cameraWork.flags &= ~BTL_CAM_FLAG_POS_OFFSET;
     }
 }
 
@@ -784,7 +804,7 @@ USER_FUNC(evt_btl_camera_set_mode) {
     s32 pri = evtGetValue(event, args[0]);
     s32 val = evtGetValue(event, args[1]);
     btl_camera_set_mode(pri, val);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -821,7 +841,7 @@ USER_FUNC(evt_btl_camera_set_homing_unit) {
         BtlUnit_GetHitPos(u2, part, &hit.x, &hit.y, &hit.z);
         wp->cameraWork.homingOffset2 = (Vec){hit.x, hit.y, hit.z};
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -845,7 +865,7 @@ USER_FUNC(evt_btl_camera_set_homing_unitparts) {
     unit2 = evtGetValue(event, args[3]);
     parts2 = evtGetValue(event, args[4]);
     if ((EvtWord)u < (wp = _battleWorkPointer)->cameraWork.priLimit) {
-        return 2;
+        return EVT_RETURN_DONE;
     }
     wp->cameraWork.unitId = BattleTransID(event, unit);
     wp->cameraWork.partsId = parts;
@@ -861,7 +881,7 @@ USER_FUNC(evt_btl_camera_set_homing_unitparts) {
         BtlUnit_GetHitPos(u, part, &hit.x, &hit.y, &hit.z);
         wp->cameraWork.homingOffset2 = (Vec){hit.x, hit.y, hit.z};
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -878,6 +898,7 @@ USER_FUNC(evt_btl_camera_set_homing_unit_audience) {
     BattleUnitPart* part;
     Vec pos;
     Vec hit;
+    BattleAudienceMember* m;
 
     pri = evtGetValue(event, args[0]);
     unit = evtGetValue(event, args[1]);
@@ -886,7 +907,7 @@ USER_FUNC(evt_btl_camera_set_homing_unit_audience) {
     wp = _battleWorkPointer;
     aud = BattleAudienceBaseGetPtr();
     if (pri < wp->cameraWork.priLimit) {
-        return 2;
+        return EVT_RETURN_DONE;
     }
     wp->cameraWork.unitId = BattleTransID(event, unit);
     wp->cameraWork.partsId = parts;
@@ -896,11 +917,9 @@ USER_FUNC(evt_btl_camera_set_homing_unit_audience) {
     BtlUnit_GetHitPos(u, part, &hit.x, &hit.y, &hit.z);
     wp->cameraWork.homingOffset = (Vec){pos.x, pos.y, pos.z};
     wp->cameraWork.audienceId = audId;
-    {
-        BattleAudienceMember* m = &aud->members[audId];
-        wp->cameraWork.homingOffset2 = (Vec){m->position.x, m->position.y, m->position.z};
-    }
-    return 2;
+    m = &aud->members[audId];
+    wp->cameraWork.homingOffset2 = (Vec){m->position.x, m->position.y, m->position.z};
+    return EVT_RETURN_DONE;
 }
 
 /** Sets the camera zoom (distance pulled in, world units) if pri passes the floor. */
@@ -924,7 +943,7 @@ USER_FUNC(evt_btl_camera_set_zoom) {
     EvtWord* args = event->args;
     s32 pri = evtGetValue(event, args[0]);
     btl_camera_set_zoom(pri, (s32)evtGetFloat(event, args[1]));
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Script helper: args[0] priority, args[1] zoom to add (truncated to a whole number). */
@@ -932,7 +951,7 @@ USER_FUNC(evt_btl_camera_add_zoom) {
     EvtWord* args = event->args;
     s32 pri = evtGetValue(event, args[0]);
     btl_camera_add_zoom(pri, (s32)evtGetFloat(event, args[1]));
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Sets the camera's move and zoom easing level (0-5; out-of-range values mean 1) if pri passes the floor. */
@@ -966,7 +985,7 @@ USER_FUNC(evt_btl_camera_set_moveSpeedLv) {
     s32 pri = evtGetValue(event, args[0]);
     s32 val = evtGetValue(event, args[1]);
     btl_camera_set_moveSpeedLv(pri, val);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Script helper: args[0] priority, args[1] zoom speed level. */
@@ -975,7 +994,7 @@ USER_FUNC(evt_btl_camera_set_zoomSpeedLv) {
     s32 pri = evtGetValue(event, args[0]);
     s32 val = evtGetValue(event, args[1]);
     btl_camera_set_zoomSpeedLv(pri, val);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -1020,7 +1039,25 @@ USER_FUNC(evt_btl_camera_set_moveto) {
     f32 atZ = evtGetFloat(event, args[6]);
     s32 frames = evtGetValue(event, args[7]);
     btl_camera_set_moveto(pri, x, y, z, atX, atY, atZ, frames, evtGetValue(event, args[8]));
-    return 2;
+    return EVT_RETURN_DONE;
+}
+
+/** Stops a timed camera glide (btl_camera_set_moveto) if pri passes the priority floor. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it), right after the moveto pair.
+// The size is the priority test of its neighbours plus one store of zero; the glide runs only while moveToTimer is
+// above zero (battleCameraMain), and battleCameraMain clears that same field to stop it.
+void btl_camera_move_stop(s32 pri) {
+    BattleWork* wp = _battleWorkPointer;
+    if (pri >= wp->cameraWork.priLimit) {
+        wp->cameraWork.moveToTimer = 0;
+    }
+}
+
+/** Script helper: args[0] priority; stops the timed camera glide. */
+// Original name and size (0x30) from the JP demo map (UNUSED there: no script uses it); evt_btl_camera_noshake's form.
+USER_FUNC(evt_btl_camera_move_stop) {
+    btl_camera_move_stop(evtGetValue(event, event->args[0]));
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -1030,13 +1067,13 @@ USER_FUNC(evt_btl_camera_set_moveto) {
 void btl_camera_shake_w(s32 pri, f32 a, f32 b, s32 frames, s32 type) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
-        wp->cameraWork.flags |= CAMERA_FLAG_SHAKE_W;
+        wp->cameraWork.flags |= BTL_CAM_FLAG_SHAKE_W;
         wp->cameraWork.shakeWAmp[0] = a;
         wp->cameraWork.shakeWAmp[1] = b;
         wp->cameraWork.shakeWType = type;
         wp->cameraWork.shakeWFrames = frames;
         wp->cameraWork.shakeWTimer = frames;
-        if (!(wp->cameraWork.flags & CAMERA_FLAG_NO_RUMBLE)) {
+        if (!(wp->cameraWork.flags & BTL_CAM_FLAG_NO_RUMBLE_UNUSED)) {
             padRumbleOn(0);
         }
     }
@@ -1053,20 +1090,20 @@ USER_FUNC(evt_btl_camera_shake_w) {
     f32 b = evtGetValue(event, args[2]);
     s32 frames = evtGetValue(event, args[3]);
     btl_camera_shake_w(pri, a, b, frames, evtGetValue(event, args[4]));
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Starts a vertical camera shake (see btl_camera_shake_w), with controller rumble. */
 void btl_camera_shake_h(s32 pri, f32 a, f32 b, s32 frames, s32 type) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
-        wp->cameraWork.flags |= CAMERA_FLAG_SHAKE_H;
+        wp->cameraWork.flags |= BTL_CAM_FLAG_SHAKE_H;
         wp->cameraWork.shakeHAmp[0] = a;
         wp->cameraWork.shakeHAmp[1] = b;
         wp->cameraWork.shakeHType = type;
         wp->cameraWork.shakeHFrames = frames;
         wp->cameraWork.shakeHTimer = frames;
-        if (!(wp->cameraWork.flags & CAMERA_FLAG_NO_RUMBLE)) {
+        if (!(wp->cameraWork.flags & BTL_CAM_FLAG_NO_RUMBLE_UNUSED)) {
             padRumbleOn(0);
         }
     }
@@ -1080,22 +1117,22 @@ USER_FUNC(evt_btl_camera_shake_h) {
     f32 b = evtGetValue(event, args[2]);
     s32 frames = evtGetValue(event, args[3]);
     btl_camera_shake_h(pri, a, b, frames, evtGetValue(event, args[4]));
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Stops both camera shakes if pri passes the floor. */
 void btl_camera_noshake(s32 pri) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
-        wp->cameraWork.flags &= ~CAMERA_FLAG_SHAKE_W;
-        wp->cameraWork.flags &= ~CAMERA_FLAG_SHAKE_H;
+        wp->cameraWork.flags &= ~BTL_CAM_FLAG_SHAKE_W;
+        wp->cameraWork.flags &= ~BTL_CAM_FLAG_SHAKE_H;
     }
 }
 
 /** Script helper: args[0] priority; stops the camera shakes. */
 USER_FUNC(evt_btl_camera_noshake) {
     btl_camera_noshake(evtGetValue(event, event->args[0]));
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Locks (on == 1) or frees the camera's x movement if pri passes the floor. */
@@ -1103,9 +1140,9 @@ void btl_camera_nomove_x_onoff(s32 pri, s32 on) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
         if (on == 1) {
-            wp->cameraWork.flags |= CAMERA_FLAG_NOMOVE_X;
+            wp->cameraWork.flags |= BTL_CAM_FLAG_NOMOVE_X;
         } else {
-            wp->cameraWork.flags &= ~CAMERA_FLAG_NOMOVE_X;
+            wp->cameraWork.flags &= ~BTL_CAM_FLAG_NOMOVE_X;
         }
     }
 }
@@ -1116,7 +1153,7 @@ USER_FUNC(evt_btl_camera_nomove_x_onoff) {
     s32 pri = evtGetValue(event, args[0]);
     s32 val = evtGetValue(event, args[1]);
     btl_camera_nomove_x_onoff(pri, val);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Locks (on == 1) or frees the camera's y movement if pri passes the floor. */
@@ -1124,9 +1161,9 @@ void btl_camera_nomove_y_onoff(s32 pri, s32 on) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
         if (on == 1) {
-            wp->cameraWork.flags |= CAMERA_FLAG_NOMOVE_Y;
+            wp->cameraWork.flags |= BTL_CAM_FLAG_NOMOVE_Y;
         } else {
-            wp->cameraWork.flags &= ~CAMERA_FLAG_NOMOVE_Y;
+            wp->cameraWork.flags &= ~BTL_CAM_FLAG_NOMOVE_Y;
         }
     }
 }
@@ -1137,7 +1174,7 @@ USER_FUNC(evt_btl_camera_nomove_y_onoff) {
     s32 pri = evtGetValue(event, args[0]);
     s32 val = evtGetValue(event, args[1]);
     btl_camera_nomove_y_onoff(pri, val);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Locks (on == 1) or frees the camera's z movement if pri passes the floor. */
@@ -1145,9 +1182,9 @@ void btl_camera_nomove_z_onoff(s32 pri, s32 on) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
         if (on == 1) {
-            wp->cameraWork.flags |= CAMERA_FLAG_NOMOVE_Z;
+            wp->cameraWork.flags |= BTL_CAM_FLAG_NOMOVE_Z;
         } else {
-            wp->cameraWork.flags &= ~CAMERA_FLAG_NOMOVE_Z;
+            wp->cameraWork.flags &= ~BTL_CAM_FLAG_NOMOVE_Z;
         }
     }
 }
@@ -1158,14 +1195,17 @@ USER_FUNC(evt_btl_camera_nomove_z_onoff) {
     s32 pri = evtGetValue(event, args[0]);
     s32 val = evtGetValue(event, args[1]);
     btl_camera_nomove_z_onoff(pri, val);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
-/** Adds a fixed offset (x, y, z) to the camera position until btl_camera_off_posoffset_manual or a mode change. */
+/**
+ * Adds a fixed offset (x, y, z) to the camera position until btl_camera_off_posoffset_manual (a mode change clears
+ * only BTL_CAM_FLAG_POS_OFFSET, which nothing reads).
+ */
 void btl_camera_set_posoffset(s32 pri, f32 x, f32 y, f32 z) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
-        wp->cameraWork.flags |= CAMERA_FLAG_POS_OFFSET;
+        wp->cameraWork.flags |= BTL_CAM_FLAG_POS_OFFSET;
         wp->cameraWork.position.x = x;
         wp->cameraWork.position.y = y;
         wp->cameraWork.position.z = z;
@@ -1180,14 +1220,14 @@ USER_FUNC(evt_btl_camera_set_posoffset) {
     f32 y = evtGetFloat(event, args[2]);
     f32 z = evtGetFloat(event, args[3]);
     btl_camera_set_posoffset(pri, x, y, z);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Removes the manual camera position offset if pri passes the floor. */
 void btl_camera_off_posoffset_manual(s32 pri) {
     BattleWork* wp = _battleWorkPointer;
     if (pri >= wp->cameraWork.priLimit) {
-        wp->cameraWork.flags &= ~CAMERA_FLAG_POS_OFFSET;
+        wp->cameraWork.flags &= ~BTL_CAM_FLAG_POS_OFFSET;
         wp->cameraWork.position.x = 0.0f;
         wp->cameraWork.position.y = 0.0f;
         wp->cameraWork.position.z = 0.0f;
@@ -1197,13 +1237,48 @@ void btl_camera_off_posoffset_manual(s32 pri) {
 /** Script helper: args[0] priority; removes the manual camera offset. */
 USER_FUNC(evt_btl_camera_off_posoffset_manual) {
     btl_camera_off_posoffset_manual(evtGetValue(event, event->args[0]));
-    return 2;
+    return EVT_RETURN_DONE;
+}
+
+/** Turns the controller rumble of camera shakes off (on == 1) or back on if pri passes the floor. */
+// Original names and sizes (0x38, 0x58) from the JP demo map (UNUSED there: no script uses them), as the script
+// helper below: the btl_camera_nomove_x_onoff pair for the flag the shakes test before rumbling.
+void btl_camera_set_rumble_off_flag(s32 pri, s32 on) {
+    BattleWork* wp = _battleWorkPointer;
+    if (pri >= wp->cameraWork.priLimit) {
+        if (on == 1) {
+            wp->cameraWork.flags |= BTL_CAM_FLAG_NO_RUMBLE_UNUSED;
+        } else {
+            wp->cameraWork.flags &= ~BTL_CAM_FLAG_NO_RUMBLE_UNUSED;
+        }
+    }
+}
+
+/** Script helper: args[0] priority, args[1] 1 for shakes without rumble, 0 for rumble. */
+USER_FUNC(evt_btl_camera_set_rumble_off_flag) {
+    EvtWord* args = event->args;
+    s32 pri = evtGetValue(event, args[0]);
+    s32 val = evtGetValue(event, args[1]);
+    btl_camera_set_rumble_off_flag(pri, val);
+    return EVT_RETURN_DONE;
+}
+
+/** Sets the audience member the camera follows (BTL_CAM_MODE_AUDIENCE_MEMBER) if pri passes the floor. */
+// Original name and size (0x18) from the JP demo map (UNUSED there: nothing calls it), between
+// evt_btl_camera_set_rumble_off_flag and evt_btl_camera_wait_move_end: the priority test of every btl_camera_*
+// setter and one store (0x18), into audienceId, the member the audience modes follow (the field is taken from the
+// name; any one-word store has this size).
+void btl_camera_set_homing_audience(s32 pri, s32 audienceId) {
+    BattleWork* wp = _battleWorkPointer;
+    if (pri >= wp->cameraWork.priLimit) {
+        wp->cameraWork.audienceId = audienceId;
+    }
 }
 
 /** Script helper: blocks until the camera has settled (moving less than 2 units a frame). */
 USER_FUNC(evt_btl_camera_wait_move_end) {
     if (battleCameraGetPosMoveSpeed() >= 2.0f) {
-        return 0;
+        return EVT_RETURN_BLOCK;
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }

@@ -1,7 +1,5 @@
 // Battle drawing helpers: 2D and textured-quad drawing, pose lookup and unit item display.
-#pragma optimize_for_size on
-// no automatic inlining in this unit, as in the original (the object differs without it)
-#pragma auto_inline off
+
 #include "version.h"
 #include "battle/battle_disp.h"
 #include "battle/battle.h"
@@ -13,39 +11,32 @@
 #include "driver/dispdrv.h"
 #include "driver/icondrv.h"
 #include "data/item_data.h"
-#include "battle/battle_sub.h"
 #include "system.h"
 #include <string.h>
 #include "icon_ids.h"
-#include "battle/battle_seq_command.h"
+#include "battle/battle_status_effect.h"
+#include "battle/battle_audience.h"
+#include "battle/battle_status_icon.h"
+#include "manager/evtmgr.h"
+#include "battle/battle_break_slot.h"
+#include "battle/battle_stage.h"
+#include "battle/battle_sub.h"
+#include "dolphin/gx.h"
+#include "dolphin/mtx.h"
 #include "driver/shadowdrv.h"
-#include "unit/unit_koura.h"
-#include "unit/party/unit_party_vivian.h"
-#include <dolphin/gx.h>
-#include <dolphin/mtx.h>
+#include "battle/battle_seq_command.h"
+#include "driver/mapdrv.h"
+#include "battle/unit_work.h"
 
-// FAKE: battle_disp.c calls iconDispGx through this prototype (the types it was compiled with) instead of the one in driver/icondrv.h; same registers, behaviour-identical.
-typedef void (*IconDispGxArgOrderFn)(f32, Vec*, s16, u16);
-
-#define PART_GRAVITY(p) ((p)->gravityTimer)
-#define PART_FLOAT(p) ((p)->floatTimer)
-#define PART_POSENAME(p) ((p)->poseName)
-#define PART_ANIMSPEED(p) ((p)->animSpeed)
-#define PART_ANIMSPEED2(p) ((p)->animSpeed2)
-#define PART_POSESTATE(p) ((p)->poseState)
-#define PART_POSETYPE(p) ((p)->poseType)
-#define PART_POSETIMER(p) ((p)->poseTimer)
-
-//.sdata
-s32 _status_pose_table[] = {
-    STATUS_INSTANT_KILL,
+// Statuses that select the unit's pose, in priority order (_GetStatusPoseType)
+static s32 _status_pose_table[] = {
+    STATUS_DEAD,
 #if VERSION <= VERSION_DEMO_JP
     STATUS_SLEEP,
+#endif
     STATUS_STOP,
     STATUS_FREEZE,
-#else
-    STATUS_STOP,
-    STATUS_FREEZE,
+#if VERSION >= VERSION_JP
     STATUS_SLEEP,
 #endif
     STATUS_POISON,
@@ -55,11 +46,6 @@ s32 _status_pose_table[] = {
 };
 
 // local prototypes
-const char* searchPoseTbl(PoseTableEntry* table, s32 poseId);
-static void btlDispGXInit2DSub(void);
-static void btlDispTexPlaneInit(void);
-static void btlDispTexPlainGX(u32 id, GXColor color0, GXColor color1, GXColor color2, GXColor color3);
-void btlDispGetTexSize(u32 id, u16* width, u16* height);
 static void _partsBlurControl(BattleUnitPart* part, s32 flags, Mtx orientation, GXColor color, f32 rotation);
 static void btlUnitItemDisp(CameraId camId, BattleUnit* unit);
 static void _pose_def(BattleUnitPart* part);
@@ -70,15 +56,15 @@ static void _btlStockExpDisp(CameraId camId, void* param);
 
 /**
  * Returns the animation name for a pose type from a unit part's pose table:
- * the first entry that matches poseId or is the BTL_POSE_NORMAL fallback. NULL for no table.
+ * the first entry that matches type or is the POSE_TYPE_NORMAL fallback. NULL for no table.
  */
-const char* searchPoseTbl(PoseTableEntry* table, s32 poseId) {
+const char* searchPoseTbl(PoseTableEntry* table, s32 type) {
     int i;
 
     if (!table)
         return NULL;
-    for (i = 0; i < BTL_POSE_NORMAL; i++, table++) {
-        if (table->poseType == poseId || table->poseType == BTL_POSE_NORMAL) {
+    for (i = 0; i < POSE_TYPE_NORMAL; i++, table++) { // searches at most 28 entries
+        if (table->poseType == type || table->poseType == POSE_TYPE_NORMAL) {
             return table->poseName;
         }
     }
@@ -97,7 +83,7 @@ static void btlDispGXInit2DSub(void) {
     GXSetZMode(GX_TRUE, GX_ALWAYS, GX_FALSE);
     GXClearVtxDesc();
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_VTX, GX_SRC_VTX, 0, GX_DF_CLAMP, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_VTX, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
 }
 
 /**
@@ -146,6 +132,7 @@ f32 getFloatDispOffset(BattleUnitPart* part);
 f32 getGravityDispOffset(BattleUnitPart* part);
 static void gravityOffsetControl(BattleUnitPart* part);
 static void statusPoseControl(BattleUnitPart* part);
+
 /** Emits one vertex of a flat-coloured quad at (x, y) on the 2D plane. */
 void btlDispGXPoint2DRasta(f32 x, f32 y, u8 r, u8 g, u8 b, u8 a) {
     GXPosition3f32(x, y, 0.0f);
@@ -176,9 +163,10 @@ void btlDispGXQuads2D(f32 x0, f32 y0, f32 x1, f32 y1, u8 r, u8 g, u8 b, u8 a) {
     btlDispGXPoint2D(x1, y1, r, g, b, a, 1.0f, 1.0f);
     btlDispGXPoint2D(x0, y1, r, g, b, a, 0.0f, 1.0f);
 }
+
 /**
- * GX state for the battle texture planes: textured, vertex colour from the vertices,
- * alpha from the material register.
+ * GX state for the battle texture planes: textured, colour and alpha from the vertices
+ * (lighting off; only the ambient source is the register).
  */
 static void btlDispTexPlaneInit(void) {
     GXSetCullMode(GX_CULL_NONE);
@@ -190,7 +178,7 @@ static void btlDispTexPlaneInit(void) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_CLAMP, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
     GXSetNumTexGens(1);
     GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
 }
@@ -249,7 +237,7 @@ static void btlDispTexPlainGX(u32 id, GXColor color0, GXColor color1, GXColor co
  * Draws a battle menu texture as a flat plane in the 3D scene at (tX, tY, tZ), scaled by (sX, sY);
  * used for action command signs, status icons, the Yoshi gauge and similar in-world markers.
  */
-void btlDispTexPlane(u32 id, GXColor color, s32 unused, f32 tX, f32 tY, f32 tZ, f32 sX, f32 sY) {
+void btlDispTexPlane(f32 tX, f32 tY, f32 tZ, f32 sX, f32 sY, u32 id, GXColor color, s32 unused) {
     CameraEntry* camera;
     Mtx scale, trans, mtx;
 
@@ -259,7 +247,7 @@ void btlDispTexPlane(u32 id, GXColor color, s32 unused, f32 tX, f32 tY, f32 tZ, 
     PSMTXTrans(trans, tX, tY, tZ);
     PSMTXConcat(trans, scale, mtx);
     PSMTXConcat(camera->view, mtx, mtx);
-    GXLoadPosMtxImm(mtx, 0);
+    GXLoadPosMtxImm(mtx, GX_PNMTX0);
     btlDispTexPlainGX(id, color, color, color, color);
 }
 
@@ -272,7 +260,7 @@ void btlDispTexPlane2(Mtx mtx, u32 id, GXColor color, s32 unused) {
     MTXCopy(mtx, mtx2);
     camera = camGetCurPtr();
     MTXConcat(camera->view, mtx2, mtx2);
-    GXLoadPosMtxImm(mtx2, 0);
+    GXLoadPosMtxImm(mtx2, GX_PNMTX0);
     btlDispTexPlainGX(id, color, color, color, color);
 }
 
@@ -285,7 +273,7 @@ void btlDispTexPlane3(Mtx mtx, u32 id, GXColor color0, GXColor color1, GXColor c
     PSMTXCopy(mtx, mtx2);
     camera = camGetCurPtr();
     PSMTXConcat(camera->view, mtx2, mtx2);
-    GXLoadPosMtxImm(mtx2, 0);
+    GXLoadPosMtxImm(mtx2, GX_PNMTX0);
     btlDispTexPlainGX(id, color0, color1, color2, color3);
 }
 
@@ -312,40 +300,31 @@ void btlDispInit(void) {
 
 /**
  * Picks the status pose for a unit: the KO pose when it is inactive,
- * else the first status it has from _status_pose_table (the demos check sleep before stop and freeze,
- * retail checks it after), else BTL_POSE_NORMAL.
+ * else the first status it has from _status_pose_table (the early demos check sleep before stop and freeze,
+ * JP and later check it after), else STATUS_INVALID (the value of POSE_TYPE_NORMAL).
  */
-BattlePoseType _GetStatusPoseType(BattleUnit* unit) {
+StatusEffectType _GetStatusPoseType(BattleUnit* unit) {
     s32* table = _status_pose_table;
     StatusEffectType type;
 
-    if (unit->attributeFlags & UNIT_ATTR_INACTIVE) {
-        return (BattlePoseType)STATUS_INSTANT_KILL;
+    if (unit->attributeFlags & kInactive) {
+        return STATUS_DEAD;
     }
     while (1) {
         type = *table;
         if (*table == -1)
             break;
         if (BtlUnit_CheckStatus(unit, type)) {
-            return (BattlePoseType)type;
+            return type;
         }
         table++;
     }
-    return BTL_POSE_NORMAL;
+    return STATUS_INVALID;
 }
 
-typedef void (*PartsDispCb)(BattleUnitPart*, s32);
-static void BattleStockExpDisp(void);
-void btlDispAnimeSpeed(BattleUnitPart* part, f32 speed);
-static void gravityOffsetControl(BattleUnitPart* part);
-static void floatOffsetControl(BattleUnitPart* part);
-static void statusPoseControl(BattleUnitPart* part);
-f32 getGravityDispOffset(BattleUnitPart* part);
-f32 getFloatDispOffset(BattleUnitPart* part);
-static void btlUnitPartsBlurDisp(CameraId camId, BattleUnitPart* part);
-static void btlUnitItemDisp2(CameraId camId, BattleUnit* unit);
+static void btlUnitPartsBlurDisp(CameraId camId, void* payload);
+static void btlUnitItemDisp2(CameraId camId, void* payload);
 static void btlUnitStolenItemDisp(CameraId camId, void* param);
-static void btlUnitPartsBlurControl(BattleUnitPart* part, s32 unused, Mtx orientation, GXColor color, f32 rotation);
 
 /**
  * Battle per-frame display update for every unit:
@@ -354,7 +333,7 @@ static void btlUnitPartsBlurControl(BattleUnitPart* part, s32 unused, Mtx orient
  * chooses each part's pose (status, peril, danger, defend), sets the animation speed for Fast and Slow,
  * picks normal, translucent (invisible) or dodgy draw types, queues the part,
  * blur and shadow draws and held-item icons, then the Star Point counter, stage, command menu,
- * audience and break slot. Retail drops the shell to the floor height.
+ * audience and break slot. JP and later drop the shell to the floor height.
  */
 void btlDispMain(void) {
     BattleUnit* unit;
@@ -368,7 +347,6 @@ void btlDispMain(void) {
     BattleUnit* partner;
     f32 h;
     f32 scale;
-    f64 dist;
     Vec tpos;
     s32 xlu;
     Vec pos;
@@ -382,16 +360,18 @@ void btlDispMain(void) {
     f32 wz;
     s8 turns;
     s8 strength;
+    s32 k;
+    f64 a;
 
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(_battleWorkPointer, i);
         if (!unit)
             continue;
-        if (unit->currentKind == UNIT_SHELL_SHIELD && unit->work[UW_KOURA_FOLLOWS_UNIT] != 0) {
-            target = BattleGetUnitPtr(wp, unit->work[UW_KOURA_SHIELDED_UNIT]);
+        if (unit->currentKind == UNIT_SHELL_SHIELD && unit->work[SHELL_SHIELD_WORK_FOLLOW] != 0) {
+            target = BattleGetUnitPtr(wp, unit->work[SHELL_SHIELD_WORK_TARGET]);
             if (target) {
                 if (target->attackEventId && evtCheckID(target->attackEventId)) {
-                    if (!((u32)target->attackEventFlags & ATTACK_EVENT_SHELL_FOLLOWS))
+                    if (!(target->attackEventFlags & ACT_EVENT_SHELL_FOLLOWS))
                         goto next;
                 }
                 if (target->damageEventId && evtCheckID(target->damageEventId))
@@ -402,15 +382,12 @@ void btlDispMain(void) {
                 tpos.z += 5.0f;
 #else
                 tpos.z += 7.0f;
-#endif
-#if VERSION >= VERSION_JP
-                // retail puts the shell on the floor; the demo keeps it at the target's height
                 h = BattleGetFloorHeight(wp, tpos.x, tpos.y, tpos.z);
 #endif
-                switch (unit->work[UW_KOURA_FOLLOWS_UNIT]) {
-                    case KOURA_FOLLOW_TRAIL:
-                        dist = __fabs(pos.x - tpos.x);
-                        if (dist > 10.0) {
+                switch (unit->work[SHELL_SHIELD_WORK_FOLLOW]) {
+                    case 2:
+                        a = __fabs(pos.x - tpos.x);
+                        if (a > 10.0) {
                             if (tpos.x > pos.x) {
                                 pos.x = pos.x + ((tpos.x - pos.x) - 10.0f);
                             } else {
@@ -419,14 +396,14 @@ void btlDispMain(void) {
                         }
                         BtlUnit_SetPos(unit, pos.x, tpos.y, tpos.z);
                         break;
-                    case KOURA_FOLLOW_SLIDE:
+                    case 3:
                         if (__fabs(pos.x - tpos.x) < 1.0) {
 #if VERSION <= VERSION_DEMO_JP
                             BtlUnit_SetPos(unit, tpos.x, tpos.y, tpos.z);
 #else
                             BtlUnit_SetPos(unit, tpos.x, h, tpos.z);
 #endif
-                            unit->work[UW_KOURA_FOLLOWS_UNIT] = KOURA_FOLLOW_ON;
+                            unit->work[SHELL_SHIELD_WORK_FOLLOW] = 1;
                         } else if (tpos.x > pos.x) {
                             pos.x += 1.0f;
 #if VERSION <= VERSION_DEMO_JP
@@ -455,9 +432,9 @@ void btlDispMain(void) {
         }
     next:
         loop = unit->moveColorLvDisp;
-        BtlUnit_OffUnitFlag(unit, 2);
+        BtlUnit_OffUnitFlag(unit, BATTLE_UNIT_FLAG_MOVE_COLOR_FADING);
         if (loop != unit->moveColorLv) {
-            BtlUnit_OnUnitFlag(unit, 2);
+            BtlUnit_OnUnitFlag(unit, BATTLE_UNIT_FLAG_MOVE_COLOR_FADING);
             if (unit->moveColorLv > loop) {
                 loop += 12;
                 if (loop > unit->moveColorLv)
@@ -491,25 +468,25 @@ void btlDispMain(void) {
         for (part = unit->parts; part; part = part->nextPart) {
             if (part->poseId == -1)
                 continue;
-            poseName = PART_POSENAME(part);
-            if (!(part->animFlags & PART_ANIM_MANUAL_POSE)) {
+            poseName = part->poseName;
+            if (!(part->animFlags & PART_ANIM_EVENT_POSE)) {
                 type = _GetStatusPoseType(unit);
                 if (unit->currentKind >= UNIT_GOOMBA && unit->currentKind < UNIT_UNUSED_TREE) {
                     poseName = searchPoseTbl(part->poseTable, type);
                 } else {
-                    if (type == BTL_POSE_NORMAL && !BtlUnit_CheckStatus(unit, STATUS_HOLD_FAST) && (unit->statusFlags & STATUS_FLAG_PERIL)) {
-                        poseName = BtlUnit_GetPoseNameFromType(part, BTL_POSE_PERIL);
+                    if (type == POSE_TYPE_NORMAL && !BtlUnit_CheckStatus(unit, STATUS_HOLD_FAST) && (unit->statusFlags & UNIT_STATUS_FLAG_PERIL)) {
+                        poseName = BtlUnit_GetPoseNameFromType(part, POSE_TYPE_PERIL);
                         if (!poseName)
-                            poseName = searchPoseTbl(part->poseTable, BTL_POSE_NORMAL);
-                    } else if (type == BTL_POSE_NORMAL && !BtlUnit_CheckStatus(unit, STATUS_HOLD_FAST) && (unit->statusFlags & STATUS_FLAG_DANGER)) {
-                        poseName = BtlUnit_GetPoseNameFromType(part, BTL_POSE_DANGER);
+                            poseName = searchPoseTbl(part->poseTable, POSE_TYPE_NORMAL);
+                    } else if (type == POSE_TYPE_NORMAL && !BtlUnit_CheckStatus(unit, STATUS_HOLD_FAST) && (unit->statusFlags & UNIT_STATUS_FLAG_DANGER)) {
+                        poseName = BtlUnit_GetPoseNameFromType(part, POSE_TYPE_DANGER);
                         if (!poseName)
-                            poseName = searchPoseTbl(part->poseTable, BTL_POSE_NORMAL);
+                            poseName = searchPoseTbl(part->poseTable, POSE_TYPE_NORMAL);
                     } else {
                         poseName = searchPoseTbl(part->poseTable, type);
                     }
-                    if (BtlUnit_CheckStatusFlag(unit, STATUS_FLAG_DEFENDING) && BtlUnit_CanActStatus(unit)) {
-                        poseName = BtlUnit_GetPoseNameFromType(part, BTL_POSE_DEFEND);
+                    if (BtlUnit_CheckStatusFlag(unit, UNIT_STATUS_FLAG_DEFEND) && BtlUnit_CanActStatus(unit)) {
+                        poseName = BtlUnit_GetPoseNameFromType(part, POSE_TYPE_DEFEND);
                     }
                 }
                 if (BtlUnit_CheckStatus(unit, STATUS_FAST)) {
@@ -522,41 +499,40 @@ void btlDispMain(void) {
             } else {
                 btlDispAnimeSpeed(part, 1.0f);
             }
-            if (part->animFlags & PART_ANIM_CHANGE) {
+            if (part->animFlags & PART_ANIM_CHANGED) {
                 xlu = 0;
-                part->animFlags &= ~PART_ANIM_CHANGE;
-                // BUG: `&=` where `&` was meant: this clears PART_ANIM_RESTART and tests the flags that are left (rlwinm. + stw),
-                // so the pose restarts whenever another flag (normally PART_ANIM_MANUAL_POSE) is set. The only
-                // script that sets PART_ANIM_RESTART (Hooktail, after a pose change) gets the restart anyway: no visible effect.
+                part->animFlags &= ~PART_ANIM_CHANGED;
+
+                // BUG: `&=` clears the restart bit and tests the bits left, so any other set bit restarts the animation
                 if (part->animFlags &= ~PART_ANIM_RESTART) {
                     animPoseSetAnim(part->poseId, poseName, TRUE);
                 } else {
                     animPoseSetAnim(part->poseId, poseName, FALSE);
                 }
-                PART_POSESTATE(part) = 0;
+                part->poseState = 0;
                 if (part->animFlags & PART_ANIM_PERA) {
-                    PART_POSETYPE(part) = 0;
+                    part->look = PART_LOOK_NONE;
                 } else {
-                    PART_POSETYPE(part) = 1;
+                    part->look = PART_LOOK_NORMAL;
                     if (BtlUnit_CheckStatus(unit, STATUS_INVISIBLE) || part->color.a != 0xFF) {
-                        PART_POSETYPE(part) = 7;
+                        part->look = PART_LOOK_XLU;
                         xlu = 1;
                     }
                 }
-                if (!(part->animFlags & PART_ANIM_MANUAL_POSE) || (part->animFlags & PART_ANIM_HURT_POSE) || (part->animFlags & PART_ANIM_COMMAND_WAIT)) {
-                    PART_POSETYPE(part) = 1;
+                if (!(part->animFlags & PART_ANIM_EVENT_POSE) || (part->animFlags & PART_ANIM_DAMAGE_POSE) || (part->animFlags & PART_ANIM_COMMAND_POSE)) {
+                    part->look = PART_LOOK_NORMAL;
                     if (BtlUnit_CheckStatus(unit, STATUS_INVISIBLE) || part->color.a != 0xFF) {
-                        PART_POSETYPE(part) = 7;
+                        part->look = PART_LOOK_XLU;
                         xlu = 1;
                     }
                     if (BtlUnit_CheckStatus(unit, STATUS_DODGY)) {
-                        PART_POSETYPE(part) = 4;
+                        part->look = PART_LOOK_DODGY;
                         xlu = 1;
                     }
                 }
-                if (xlu && (part->attributes & PART_ATTR_NO_TRANSLUCENT_POSE)) {
+                if (xlu && (part->attributes & kNoTranslucentLook)) {
                     xlu = 0;
-                    PART_POSETYPE(part) = 0;
+                    part->look = PART_LOOK_NONE;
                 }
                 if (!(part->animFlags & PART_ANIM_PERA)) {
                     if (xlu && !(part->animFlags & PART_ANIM_XLU)) {
@@ -573,33 +549,31 @@ void btlDispMain(void) {
             animPoseMain(part->poseId);
             zpos = (Vec){wx, wy, wz + part->dispZOffset};
             part->dispColor.a = part->kindPartParams->baseAlpha;
-            if (BtlUnit_CheckStatus(unit, STATUS_INVISIBLE) || (unit->attributeFlags & UNIT_ATTR_INTANGIBLE)) {
+            if (BtlUnit_CheckStatus(unit, STATUS_INVISIBLE) || (unit->attributeFlags & kPermanentlyInvisible)) {
                 part->dispColor.a = (part->dispColor.a << 7) / 255;
             }
             part->dispColor.a = part->dispColor.a * part->color.a / 255;
             part->dispColor.r = part->color.r;
             part->dispColor.g = part->color.g;
             part->dispColor.b = part->color.b;
-            if (!(unit->attributeFlags & UNIT_ATTR_HIDDEN) && !(part->attributes & PART_ATTR_HIDDEN)) {
-                if (!(part->attributes & PART_ATTR_MAIN) || !(unit->attributeFlags & UNIT_ATTR_VEILED)) {
+            if (!(unit->attributeFlags & kUnitHidden) && !(part->attributes & kHidden)) {
+                if (!(part->attributes & kMainPart) || !(unit->attributeFlags & kVeiled)) {
                     if (part->dispColor.a < 0xFF || animPoseTestXLU(part->poseId)) {
                         if (!(part->animFlags & PART_ANIM_NO_DISP)) {
-                            dispEntry(CAMERA_3D, dispCalcZ(&zpos), 2, (DispCallback)btlUnitPartsDisp, part);
+                            dispEntry(CAMERA_3D, dispCalcZ(&zpos), DISP_MODE_XLU, btlUnitPartsDisp, part);
                         }
-                    } else {
-                        if (!(part->animFlags & PART_ANIM_NO_DISP)) {
-                            dispEntry(CAMERA_3D, dispCalcZ(&zpos), 1, (DispCallback)btlUnitPartsDisp, part);
-                        }
+                    } else if (!(part->animFlags & PART_ANIM_NO_DISP)) {
+                        dispEntry(CAMERA_3D, dispCalcZ(&zpos), DISP_MODE_ALPHA_TEST, btlUnitPartsDisp, part);
                     }
                 }
-                if (part->attributes & PART_ATTR_BLUR) {
-                    dispEntry(CAMERA_3D, wz, 2, (DispCallback)btlUnitPartsBlurDisp, part);
+                if (part->attributes & kMotionBlur) {
+                    dispEntry(CAMERA_3D, wz, DISP_MODE_XLU, btlUnitPartsBlurDisp, part);
                 }
             }
-            if (!(unit->attributeFlags & UNIT_ATTR_NO_SHADOW) && !(part->attributes & PART_ATTR_NO_SHADOW)) {
+            if (!(unit->attributeFlags & kUnitNoShadow) && !(part->attributes & kNoShadow)) {
                 BtlUnit_GetPartsWorldPos(part, &ppos.x, &ppos.y, &ppos.z);
                 spos = ppos;
-                if ((unit->flags & UNIT_FLAG_SHARED_SHADOW) && (partner = BattleGetPartnerPtr(wp, unit)) != NULL) {
+                if ((unit->flags & BATTLE_UNIT_FLAG_SHADOW_WITH_PARTNER) && (partner = BattleGetPartnerPtr(wp, unit)) != NULL) {
                     BtlUnit_GetPos(partner, &vpos.x, &vpos.y, &vpos.z);
                     spos.x += vpos.x;
                     spos.x *= 0.5f;
@@ -619,34 +593,33 @@ void btlDispMain(void) {
                     scale = 1.0f;
                 if (scale < 0.1f)
                     scale = 0.1f;
-                scale = scale * ((f32)part->shadowSize * unit->scale.x * part->scale.x * unit->sizeMultiplier);
+                scale = scale * ((f32)part->shadowSize * unit->mScale.x * part->mScale.x * unit->sizeMultiplier);
                 scale = scale * part->shadowScale;
-                if ((unit->flags & UNIT_FLAG_SHARED_SHADOW) && scale < 16.0f)
+                if ((unit->flags & BATTLE_UNIT_FLAG_SHADOW_WITH_PARTNER) && scale < 16.0f)
                     scale = 16.0f;
                 if (scale < 10.0f)
                     scale = 8.0f;
                 shadowEntry(spos.x, 10.0f + h, spos.z, scale);
             }
-            {
-                s32 k = unit->currentKind;
-                if (k == UNIT_VIVIAN || k == UNIT_DOOPLISS_CHAPTER8_VIVIAN || k == UNIT_MARILYN_CHAPTER8 || (u32)(k - UNIT_BELDAM_CHAPTER2) <= 2 ||
-                    (u32)(k - UNIT_UNUSED_BELDAM2) <= 4 || k == UNIT_BELDAM_CHAPTER8) {
-                    viv.x = unit->work[UW_VIVIAN_SHADOW_X];
-                    viv.y = unit->work[UW_VIVIAN_SHADOW_Y];
-                    viv.z = unit->work[UW_VIVIAN_SHADOW_Z];
-                    animPoseVivianMain(part->poseId, &viv);
-                }
+
+            k = unit->currentKind;
+
+            if (k == UNIT_VIVIAN || k == UNIT_DOOPLISS_CHAPTER8_VIVIAN || k == UNIT_MARILYN_CHAPTER8 || k == UNIT_BELDAM_CHAPTER2 || k == UNIT_MARILYN_CHAPTER2 || k == UNIT_VIVIAN_CHAPTER2 || k == UNIT_UNUSED_BELDAM2 || k == UNIT_UNUSED_MARILYN2 || k == UNIT_UNUSED_VIVIAN2 || k == UNIT_UNUSED_BELDAM3 || k == UNIT_UNUSED_MARILYN3 || k == UNIT_BELDAM_CHAPTER8) {
+                viv.x = unit->work[SHADOW_TAIL_WORK_X];
+                viv.y = unit->work[SHADOW_TAIL_WORK_Y];
+                viv.z = unit->work[SHADOW_TAIL_WORK_Z];
+                animPoseVivianMain(part->poseId, &viv);
             }
             BtlUnit_ControlPoseSoundMain(part);
         }
         if (unit->heldItem) {
-            if ((unit->flags & UNIT_FLAG_HOLDING_STOLEN_ITEM) && !(unit->flags & UNIT_FLAG_HIDE_HELD_ITEM)) {
-                dispEntry(CAMERA_3D, 0.0f, 2, (DispCallback)btlUnitStolenItemDisp, unit);
-            } else if ((!(unit->flags & UNIT_FLAG_TURN_SKIPPED) || (unit->flags & UNIT_FLAG_FORCE_SHOW_ITEM)) && !(unit->flags & UNIT_FLAG_HIDE_HELD_ITEM)) {
-                dispEntry(CAMERA_3D, 0.0f, 2, (DispCallback)btlUnitItemDisp, unit);
+            if ((unit->flags & BATTLE_UNIT_FLAG_STOLEN_ITEM) && !(unit->flags & BATTLE_UNIT_FLAG_HIDE_HELD_ITEM)) {
+                dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, btlUnitStolenItemDisp, unit);
+            } else if ((!(unit->flags & BATTLE_UNIT_FLAG_ACTING) || (unit->flags & BATTLE_UNIT_FLAG_SHOW_ITEM_WHILE_ACTING)) && !(unit->flags & BATTLE_UNIT_FLAG_HIDE_HELD_ITEM)) {
+                dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, (DispCallback)btlUnitItemDisp, unit);
             }
-        } else if (wp->flags & BATTLE_FLAG_SHOW_HELD_ITEMS) {
-            dispEntry(CAMERA_3D, 0.0f, 2, (DispCallback)btlUnitItemDisp2, unit);
+        } else if (wp->flags & BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED) {
+            dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, btlUnitItemDisp2, unit);
         }
     }
     BattleStockExpDisp();
@@ -654,15 +627,11 @@ void btlDispMain(void) {
     BattleCommandDisplay(wp);
     BattleAudience_Disp();
     BattleBreakSlot_Disp();
-    if (wp->flags & BATTLE_FLAG_SHOW_ALL_STATUS_ICONS)
-        wp->flags &= ~BATTLE_FLAG_SHOW_ALL_STATUS_ICONS;
-    if (wp->flags & BATTLE_FLAG_SHOW_HELD_ITEMS)
-        wp->flags &= ~BATTLE_FLAG_SHOW_HELD_ITEMS;
+    if (wp->flags & BATTLE_FLAG_FORCE_STATUS_ICONS_UNUSED)
+        wp->flags &= ~BATTLE_FLAG_FORCE_STATUS_ICONS_UNUSED;
+    if (wp->flags & BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED)
+        wp->flags &= ~BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED;
 }
-
-#define MTX_TRANS_NEG(m, v) PSMTXTrans(m, -(v).x, -(v).y, -(v).z)
-#define MTX_TRANS(m, v) PSMTXTrans(m, (v).x, (v).y, (v).z)
-#define CAMDIR(c) angleABf((c)->cameraPos.x, (c)->cameraPos.z, (c)->cameraAt.x, (c)->cameraAt.z)
 
 /**
  * Draw callback for one unit part: builds the model matrix from the unit's and part's position,
@@ -671,7 +640,7 @@ void btlDispMain(void) {
  * then draws the pose tinted by its colour (black when blackened, green-tinted for poison,
  * dimmed by moveColorLv) with the Charge shine. Also records the matrix for the blur trail.
  */
-void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
+void btlUnitPartsDisp(CameraId camId, void* param) {
     Mtx uMtx;
     Mtx drawMtx;
     Mtx pS2;
@@ -684,6 +653,8 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
     Mtx pRy2;
     Mtx pRz2;
     Mtx pM;
+
+    // uPos is never read; its PSMTXTrans of unit->position is in the retail code
     Mtx uPos;
     Mtx uDisp;
     Mtx uRx;
@@ -704,7 +675,6 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
     BattleWork* wp;
     BattleUnitPart* part;
     BattleUnit* unit;
-    s32 gz;
     CameraEntry* cam;
     f32 rotY;
     f32 ex;
@@ -723,20 +693,15 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
     unit = part->owner;
     if (part->poseId < 0)
         return;
-    // FAKE: dead int guard (COLOURING W). part becomes a multi-def named local (not folded back into the param), so it
-    // numbers above unit, and gz adds wp's missing neighbour; the arm is deleted after colouring and leaves no code.
-    gz = 0;
-    if (gz != 0)
-        part = (BattleUnitPart*)unit;
 
-    MTX_TRANS_NEG(uTN, unit->rotationOffset);
-    MTX_TRANS(uT, unit->rotationOffset);
-    MTX_TRANS(uDisp, unit->displayOffset);
-    MTX_TRANS(uPos, unit->position);
+    PSMTXTrans(uTN, -unit->rotationOffset.x, -unit->rotationOffset.y, -unit->rotationOffset.z);
+    PSMTXTrans(uT, unit->rotationOffset.x, unit->rotationOffset.y, unit->rotationOffset.z);
+    PSMTXTrans(uDisp, unit->displayOffset.x, unit->displayOffset.y, unit->displayOffset.z);
+    PSMTXTrans(uPos, unit->position.x, unit->position.y, unit->position.z);
     PSMTXRotRad(uRx, 'x', 0.017453292f * (unit->rotation.x + unit->baseRotation.x));
     PSMTXRotRad(uRy, 'y', 0.017453292f * (unit->rotation.y + unit->baseRotation.y));
     PSMTXRotRad(uRz, 'z', 0.017453292f * (unit->rotation.z + unit->baseRotation.z));
-    PSMTXScale(uS, unit->sizeMultiplier * (unit->baseScale.x * unit->scale.x), unit->sizeMultiplier * (unit->baseScale.y * unit->scale.y), unit->baseScale.z * unit->scale.z);
+    PSMTXScale(uS, unit->sizeMultiplier * (unit->baseScale.x * unit->mScale.x), unit->sizeMultiplier * (unit->baseScale.y * unit->mScale.y), unit->baseScale.z * unit->mScale.z);
     PSMTXIdentity(uM);
     PSMTXConcat(uS, uM, uM);
     PSMTXConcat(uTN, uM, uM);
@@ -747,17 +712,17 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
     PSMTXConcat(uDisp, uMtx, uMtx);
 
     angle = 270.0f;
-    if (part->attributes & PART_ATTR_WORLD_POSITION) {
+    if (part->attributes & kAbsolutePosition) {
         if (part->faceDirection >= 0)
             angle = 90.0f;
         x = part->position.x;
         y = part->position.y + getGravityDispOffset(part) + getFloatDispOffset(part);
         z = part->position.z;
         cam = camGetCurPtr();
-        a = CAMDIR(cam);
+        a = angleABf(cam->cameraPos.x, cam->cameraPos.z, cam->cameraAt.x, cam->cameraAt.z);
         dir = reviseAngle(a - angleABf(cam->cameraPos.x, cam->cameraPos.z, x, z));
-        MTX_TRANS_NEG(pTN2, part->rotationOffset);
-        MTX_TRANS(pT2, part->rotationOffset);
+        PSMTXTrans(pTN2, -part->rotationOffset.x, -part->rotationOffset.y, -part->rotationOffset.z);
+        PSMTXTrans(pT2, part->rotationOffset.x, part->rotationOffset.y, part->rotationOffset.z);
         PSMTXRotRad(pRx2, 'x', 0.017453292f * (part->rotation.x + part->baseRotation.x));
         PSMTXRotRad(pRy2, 'y', 0.017453292f * (dir + (part->rotation.y + part->baseRotation.y)));
         PSMTXRotRad(pRz2, 'z', 0.017453292f * (part->rotation.z + part->baseRotation.z));
@@ -765,16 +730,16 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
         rotY = reviseAngle(-1.0f * angle - 90.0f);
         z = reviseAngle(part->baseRotation.y + (rotY + part->rotation.y));
         cam = camGetCurPtr();
-        camAngle = CAMDIR(cam);
+        camAngle = angleABf(cam->cameraPos.x, cam->cameraPos.z, cam->cameraAt.x, cam->cameraAt.z);
         a = reviseAngle(z + camAngle);
         if (a >= 90.0f && a <= 270.0f) {
             zscale *= -1.0f;
             PSMTXRotRad(pRy2, 'y', 0.017453292f * ((dir + (part->rotation.y + part->baseRotation.y)) - 2.0f * (180.0f - (a - camAngle))));
         }
-        if (part->attributes & PART_ATTR_IGNORE_UNIT_SCALE) {
-            PSMTXScale(pS2, part->baseScale.x * part->scale.x, part->baseScale.y * part->scale.y, zscale * (part->baseScale.z * part->scale.z));
+        if (part->attributes & kIgnoreUnitSize) {
+            PSMTXScale(pS2, part->baseScale.x * part->mScale.x, part->baseScale.y * part->mScale.y, zscale * (part->baseScale.z * part->mScale.z));
         } else {
-            PSMTXScale(pS2, unit->sizeMultiplier * (part->baseScale.x * part->scale.x), unit->sizeMultiplier * (part->baseScale.y * part->scale.y), zscale * (part->baseScale.z * part->scale.z));
+            PSMTXScale(pS2, unit->sizeMultiplier * (part->baseScale.x * part->mScale.x), unit->sizeMultiplier * (part->baseScale.y * part->mScale.y), zscale * (part->baseScale.z * part->mScale.z));
         }
         PSMTXIdentity(pM);
         PSMTXConcat(pS2, pM, pM);
@@ -802,25 +767,25 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
         ey = unit->position.y + part->positionOffset.y + getGravityDispOffset(part) + getFloatDispOffset(part);
         ez = unit->position.z + part->positionOffset.z;
         dir = 0.0f;
-        if (part->owner->attributeFlags & UNIT_ATTR_BILLBOARD) {
+        if (part->owner->attributeFlags & kUnitFaceCamera) {
             cam = camGetCurPtr();
-            a = CAMDIR(cam);
+            a = angleABf(cam->cameraPos.x, cam->cameraPos.z, cam->cameraAt.x, cam->cameraAt.z);
             dir = reviseAngle(a - angleABf(cam->cameraPos.x, cam->cameraPos.z, ex, ez));
         }
-        MTX_TRANS_NEG(pTN, part->rotationOffset);
-        MTX_TRANS(pT, part->rotationOffset);
+        PSMTXTrans(pTN, -part->rotationOffset.x, -part->rotationOffset.y, -part->rotationOffset.z);
+        PSMTXTrans(pT, part->rotationOffset.x, part->rotationOffset.y, part->rotationOffset.z);
         PSMTXRotRad(pRx, 'x', 0.017453292f * (part->rotation.x + part->baseRotation.x));
         PSMTXRotRad(pRy, 'y', 0.017453292f * (dir + (part->rotation.y + part->baseRotation.y)));
         PSMTXRotRad(pRz, 'z', 0.017453292f * (part->rotation.z + part->baseRotation.z));
         PSMTXTrans(pPos, ex, ey, ez);
-        MTX_TRANS(pDisp, part->displayOffset);
+        PSMTXTrans(pDisp, part->displayOffset.x, part->displayOffset.y, part->displayOffset.z);
         rotY = reviseAngle(-1.0f * angle - 90.0f);
-        if (!(part->owner->flags & UNIT_FLAG_NO_BACKFACE_FLIP)) {
+        if (!(part->owner->flags & BATTLE_UNIT_FLAG_SOLID_MODEL)) {
             a = reviseAngle(rotY + unit->rotation.y + part->rotation.y + unit->baseRotation.y + part->baseRotation.y);
             cam = camGetCurPtr();
-            a = reviseAngle(a + CAMDIR(cam));
+            a = reviseAngle(a + angleABf(cam->cameraPos.x, cam->cameraPos.z, cam->cameraAt.x, cam->cameraAt.z));
             if (a >= 90.0f && a <= 270.0f) {
-                PSMTXScale(uS, unit->sizeMultiplier * (unit->baseScale.x * unit->scale.x), unit->sizeMultiplier * (unit->baseScale.y * unit->scale.y), -1.0f * (unit->baseScale.z * unit->scale.z));
+                PSMTXScale(uS, unit->sizeMultiplier * (unit->baseScale.x * unit->mScale.x), unit->sizeMultiplier * (unit->baseScale.y * unit->mScale.y), -1.0f * (unit->baseScale.z * unit->mScale.z));
                 PSMTXIdentity(uM);
                 PSMTXConcat(uS, uM, uM);
                 PSMTXConcat(uTN, uM, uM);
@@ -860,7 +825,7 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
                 PSMTXConcat(uDisp, uMtx, uMtx);
             }
         }
-        PSMTXScale(pS, part->baseScale.x * part->scale.x, part->baseScale.y * part->scale.y, zscale * (part->baseScale.z * part->scale.z));
+        PSMTXScale(pS, part->baseScale.x * part->mScale.x, part->baseScale.y * part->mScale.y, zscale * (part->baseScale.z * part->mScale.z));
         PSMTXIdentity(uM);
         PSMTXConcat(uMtx, uM, uM);
         PSMTXConcat(pS, uM, uM);
@@ -907,12 +872,12 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
 
     color = &part->drawColor;
     *color = part->dispColor;
-    if (part->animFlags & PART_ANIM_BLACKEN) {
+    if (part->animFlags & PART_ANIM_BURNT) {
         color->r = 0;
         color->g = 0;
         color->b = 0;
     }
-    if (part->animFlags & PART_ANIM_BLACKEN_EVT) {
+    if (part->animFlags & PART_ANIM_INKED) {
         color->r = 0;
         color->g = 0;
         color->b = 0;
@@ -920,6 +885,8 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
     if (color->r == 0xFF && color->g == 0xFF && color->b == 0xFF) {
         if (BtlUnit_CheckStatus(unit, STATUS_POISON)) {
             color->r = color->r * 160 / 255;
+
+            // BUG: scales the already reduced r (160), so b becomes 100, not 160.
             color->b = color->r * 160 / 255;
         }
         color->r = color->r * unit->moveColorLvDisp / 255;
@@ -927,14 +894,14 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
         color->b = color->b * unit->moveColorLvDisp / 255;
     }
     animPoseSetMaterialEvtColor(part->poseId, *color);
-    animPoseSetMaterialFlagOn(part->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(part->poseId, MAP_OBJ_FLAG_COLOR);
     if (part->dispCallback) {
         part->dispCallback(part, 0);
     }
     if (BtlUnit_CheckStatus(unit, STATUS_CHARGE)) {
-        animPoseSetMaterialFlagOn(part->poseId, ANIM_MATERIAL_FLAG_CHARGE_SHINE);
+        animPoseSetMaterialFlagOn(part->poseId, MAP_OBJ_FLAG_WAVE_TEX);
     } else {
-        animPoseSetMaterialFlagOff(part->poseId, ANIM_MATERIAL_FLAG_CHARGE_SHINE);
+        animPoseSetMaterialFlagOff(part->poseId, MAP_OBJ_FLAG_WAVE_TEX);
     }
     animPoseDrawMtx(part->poseId, drawMtx, 1, rotY, 2.0f);
     animPoseDrawMtx(part->poseId, drawMtx, 2, rotY, 2.0f);
@@ -945,13 +912,14 @@ void btlUnitPartsDisp(CameraId camId, BattleUnitPart* param) {
     btlUnitPartsBlurControl(part, 0, blurMtx, *color, rotY);
 }
 
-#pragma push
-// dead assignments optimisation off for btlUnitItemDisp, btlUnitItemDisp2, btlUnitStolenItemDisp and 15 more: the original register allocation and scheduling need it
-#pragma opt_dead_assignments off
 /**
- * Draws the enemy's held item icon above its head when it is an item the enemy can use;
- * with BATTLE_FLAG_SHOW_HELD_ITEMS a Mushroom stands in when it has none usable.
+ * Draws the icon of the unit's held item at its held-item offsets when an enemy can use that item
+ * (BtlUnit_EnemyItemCanUseCheck); with BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED a Mushroom is drawn otherwise (no item too).
  */
+// FAKE: per-function opt_dead_assignments off keeps the unused height store; without it the object changes
+#pragma push
+// Dead-assignment optimisation off for btlUnitItemDisp only (until the pop): the original register allocation needs it.
+#pragma opt_dead_assignments off
 static void btlUnitItemDisp(CameraId camId, BattleUnit* unit) {
     BattleWork* wp = _battleWorkPointer;
     s32 item;
@@ -961,8 +929,8 @@ static void btlUnitItemDisp(CameraId camId, BattleUnit* unit) {
     height = BtlUnit_GetHeight(unit);
 
     item = BtlUnit_EnemyItemCanUseCheck(unit->heldItem);
-    if (wp->flags & BATTLE_FLAG_SHOW_HELD_ITEMS && !item) {
-        item = 0x94;
+    if ((wp->flags & BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED) && !item) {
+        item = ITEM_MUSHROOM;
     }
     if (item) {
         BtlUnit_GetPos(unit, &pos.x, &pos.y, &pos.z);
@@ -972,32 +940,30 @@ static void btlUnitItemDisp(CameraId camId, BattleUnit* unit) {
         pos.x += unit->heldItemOffset.x;
         pos.y += unit->heldItemOffset.y;
         pos.z += unit->heldItemOffset.z;
-        ((IconDispGxArgOrderFn)iconDispGx)(1.0f, &pos, 0, itemDataTable[item].icon_id);
+        iconDispGx(&pos, 0, 1.0f, itemDataTable[item].icon_id);
     }
 }
 #pragma pop
 
 /**
- * Held-item draw for units with no held item while BATTLE_FLAG_SHOW_HELD_ITEMS is set;
- * only for enemy kinds (below 0xD8, 0xDE-0xDF and 0xE0-0xE6).
+ * Draw callback for one unit's held item: for enemy kinds (UNIT_GOOMBA to before UNIT_UNUSED_TREE), Mario and the
+ * partners, draws it with BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED set for the call (btlUnitItemDisp).
  */
-static void btlUnitItemDisp2(CameraId camId, BattleUnit* unit) {
+static void btlUnitItemDisp2(CameraId camId, void* payload) {
+    BattleUnit* unit = payload;
     BattleWork* wp = _battleWorkPointer;
     s32 kind = unit->currentKind;
 
-    if (kind >= UNIT_GOOMBA && kind < UNIT_UNUSED_TREE)
-        goto disp;
-    if (kind >= UNIT_MARIO && kind < UNIT_GOOMBELLA)
-        goto disp;
-    if (kind < UNIT_GOOMBELLA || kind >= UNIT_MAX)
+    if (!((kind >= UNIT_GOOMBA && kind < UNIT_UNUSED_TREE) || (kind >= UNIT_MARIO && kind < TYPE_PARTNER_MIN) ||
+          (kind >= TYPE_PARTNER_MIN && kind < TYPE_PARTNER_MAX))) {
         return;
-disp:
-    if (wp->flags & BATTLE_FLAG_SHOW_HELD_ITEMS) {
+    }
+    if (wp->flags & BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED) {
         btlUnitItemDisp(camId, unit);
     } else {
-        wp->flags |= BATTLE_FLAG_SHOW_HELD_ITEMS;
+        wp->flags |= BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED;
         btlUnitItemDisp(camId, unit);
-        wp->flags &= ~BATTLE_FLAG_SHOW_HELD_ITEMS;
+        wp->flags &= ~BATTLE_FLAG_FORCE_ITEM_ICONS_UNUSED;
     }
 }
 
@@ -1009,14 +975,16 @@ static void btlUnitStolenItemDisp(CameraId camId, void* param) {
 
     BtlUnit_GetPos(unit, &pos.x, &pos.y, &pos.z);
     pos.y += 5.0f + unit->sizeMultiplier * (f32)BtlUnit_GetHeight(unit);
-    ((IconDispGxArgOrderFn)iconDispGx)(1.0f, &pos, 0, itemDataTable[item].icon_id);
+    iconDispGx(&pos, 0, 1.0f, itemDataTable[item].icon_id);
 }
 
-/** Records this frame's blur entry for a part, active only for parts with PART_ATTR_BLUR. */
+/**
+ * Runs the part's motion blur (_partsBlurControl), drawing its blur entries (PART_BLUR_ENTRY_DRAW) only when the part
+ * has kMotionBlur.
+ */
 static void btlUnitPartsBlurControl(BattleUnitPart* part, s32 unused, Mtx orientation, GXColor color, f32 rotation) {
-
-    if (part->attributes & PART_ATTR_BLUR) {
-        _partsBlurControl(part, 1, orientation, color, rotation);
+    if (part->attributes & kMotionBlur) {
+        _partsBlurControl(part, PART_BLUR_ENTRY_DRAW, orientation, color, rotation);
     } else {
         _partsBlurControl(part, 0, orientation, color, rotation);
     }
@@ -1040,8 +1008,8 @@ static void _partsBlurControl(BattleUnitPart* part, s32 flags, Mtx orientation, 
     blur->work[0].base = color;
     blur->work[0].blurColor[0] = blur->color[0];
     blur->work[0].blurColor[1] = blur->color[1];
-    if (blur->flags & 1 && blur->work[1].flags & 1) {
-        blur->work[0].flags &= ~1;
+    if ((blur->flags & PART_BLUR_SKIP_FRAME_UNUSED) && (blur->work[1].flags & PART_BLUR_ENTRY_DRAW)) {
+        blur->work[0].flags &= ~PART_BLUR_ENTRY_DRAW;
     }
 }
 
@@ -1049,7 +1017,8 @@ static void _partsBlurControl(BattleUnitPart* part, s32 flags, Mtx orientation, 
  * Draws the part's afterimage trail: each history entry is redrawn with the base colour faded between the two
  * blur colours along the trail.
  */
-static void btlUnitPartsBlurDisp(CameraId camId, BattleUnitPart* part) {
+static void btlUnitPartsBlurDisp(CameraId camId, void* payload) {
+    BattleUnitPart* part = payload;
     BattleWorkUnitPartBlur* blur;
     BattleWorkUnitPartBlurEntry* entry;
     GXColor color;
@@ -1060,7 +1029,7 @@ static void btlUnitPartsBlurDisp(CameraId camId, BattleUnitPart* part) {
     for (i = 0; i < 10; i++) {
         entry = &blur->work[i];
         color = entry->base;
-        if (entry->flags & 1) {
+        if (entry->flags & PART_BLUR_ENTRY_DRAW) {
             c = entry->blurColor;
             color.r = color.r * (u8)((c[0].r * (10 - i)) / 10 + (c[1].r * i) / 10) / 255;
             color.g = color.g * (u8)((c[0].g * (10 - i)) / 10 + (c[1].g * i) / 10) / 255;
@@ -1068,7 +1037,7 @@ static void btlUnitPartsBlurDisp(CameraId camId, BattleUnitPart* part) {
             color.a = color.a * (u8)((c[0].a * (10 - i)) / 10 + (c[1].a * i) / 10) / 255;
             if (color.a) {
                 animPoseSetMaterialEvtColor(part->poseId, color);
-                animPoseSetMaterialFlagOn(part->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                animPoseSetMaterialFlagOn(part->poseId, MAP_OBJ_FLAG_COLOR);
                 animPoseDrawMtx(part->poseId, entry->orientation, 1, entry->rotation, 2.0f);
                 animPoseDrawMtx(part->poseId, entry->orientation, 2, entry->rotation, 2.0f);
                 animPoseDrawMtx(part->poseId, entry->orientation, 3, entry->rotation, 2.0f);
@@ -1093,7 +1062,7 @@ void btlDispEntAnime(BattleUnit* unit) {
             if (!name) {
                 part->poseId = -1;
             } else {
-                strcpy(PART_POSENAME(part), searchPoseTbl(part->poseTable, BTL_POSE_NORMAL));
+                strcpy(part->poseName, searchPoseTbl(part->poseTable, POSE_TYPE_NORMAL));
                 part->poseId = animPoseEntry(name, 1);
             }
         }
@@ -1102,26 +1071,26 @@ void btlDispEntAnime(BattleUnit* unit) {
 
 /**
  * Plays a named animation on a part, taking manual control of its pose (status poses no longer override it).
- * flag marks it as a hurt pose, which keeps the status draw types.
+ * damagePose marks it as a hurt pose, which keeps the status draw types.
  */
-void btlDispChangeAnime(BattleUnitPart* part, const char* name, BOOL flag) {
-    strcpy(PART_POSENAME(part), name);
-    part->animFlags |= PART_ANIM_MANUAL_POSE;
-    part->animFlags |= PART_ANIM_CHANGE;
-    part->animFlags &= ~PART_ANIM_COMMAND_WAIT;
+void btlDispChangeAnime(BattleUnitPart* part, const char* name, BOOL damagePose) {
+    strcpy(part->poseName, name);
+    part->animFlags |= PART_ANIM_EVENT_POSE;
+    part->animFlags |= PART_ANIM_CHANGED;
+    part->animFlags &= ~PART_ANIM_COMMAND_POSE;
     part->animFlags &= ~PART_ANIM_RESTART;
-    part->animFlags &= ~PART_ANIM_BLACKEN;
-    if (flag) {
-        part->animFlags |= PART_ANIM_HURT_POSE;
+    part->animFlags &= ~PART_ANIM_BURNT;
+    if (damagePose) {
+        part->animFlags |= PART_ANIM_DAMAGE_POSE;
     } else {
-        part->animFlags &= ~PART_ANIM_HURT_POSE;
+        part->animFlags &= ~PART_ANIM_DAMAGE_POSE;
     }
 }
 
 /** Plays a paper effect animation (pera) on a part, for flattened and similar effects, with the plain draw type. */
 void btlDispChangePeraAnime(BattleUnitPart* part, const char* name) {
     part->animFlags |= PART_ANIM_PERA;
-    PART_POSETYPE(part) = 0;
+    part->look = PART_LOOK_NONE;
     animPoseSetEffectAnim(part->poseId, name, 1);
 }
 
@@ -1130,9 +1099,9 @@ void btlDispChangePeraAnime(BattleUnitPart* part, const char* name) {
  * command-wait and pera states.
  */
 void btlDispPoseAnime(BattleUnitPart* part) {
-    part->animFlags &= ~(PART_ANIM_MANUAL_POSE | PART_ANIM_BLACKEN);
-    part->animFlags |= PART_ANIM_CHANGE;
-    part->animFlags &= ~PART_ANIM_COMMAND_WAIT;
+    part->animFlags &= ~(PART_ANIM_EVENT_POSE | PART_ANIM_BURNT);
+    part->animFlags |= PART_ANIM_CHANGED;
+    part->animFlags &= ~PART_ANIM_COMMAND_POSE;
     part->animFlags &= ~PART_ANIM_PERA;
 }
 
@@ -1146,64 +1115,59 @@ static void gravityOffsetControl(BattleUnitPart* part) {
     BattleWork* wp = _battleWorkPointer;
     BattleUnit* unit = part->owner;
 
-    if (!(wp->flags & BATTLE_FLAG_ZERO_GRAVITY)) {
+    if (!(wp->flags & BATTLE_FLAG_ZERO_GRAVITY_UNUSED)) {
         active = FALSE;
-    } else if (unit->attributeFlags & (UNIT_ATTR_FLOATING | UNIT_ATTR_NO_GRAVITY_BOB)) {
+    } else if (unit->attributeFlags & (kFloating | kNoGravityBob)) {
         active = FALSE;
     }
     if (active) {
-        PART_GRAVITY(part)
-        ++;
-    } else if (PART_GRAVITY(part)) {
-        PART_GRAVITY(part) %= 120;
-        if (PART_GRAVITY(part) >= 60) {
-            PART_GRAVITY(part)
-            ++;
-        } else if (PART_GRAVITY(part)) {
-            PART_GRAVITY(part)
-            --;
+        part->gravityTimer++;
+    } else if (part->gravityTimer) {
+        part->gravityTimer %= 120;
+        if (part->gravityTimer >= 60) {
+            part->gravityTimer++;
+        } else if (part->gravityTimer) {
+            part->gravityTimer--;
         }
     }
 }
 
 /** Vertical display offset from zero gravity: 0 to 8 units, following the bob timer. */
 f32 getGravityDispOffset(BattleUnitPart* part) {
-    return 4.0f * sinfd((PART_GRAVITY(part) * 3 + 270) % 360) + 4.0f;
+    return 4.0f * sinfd((part->gravityTimer * 3 + 270) % 360) + 4.0f;
 }
 
 /**
- * Advances the float bob timer while the unit floats (UNIT_FLAG_FLOAT and active, not KO),
- * easing back to rest otherwise; the cycle is 90 frames.
+ * Advances the part's float bob timer while its unit floats (BATTLE_UNIT_FLAG_FLOAT_CAPABLE and
+ * BATTLE_UNIT_FLAG_FLOAT_ACTIVE, not STATUS_DEAD); otherwise the timer runs on to the end of its 90-frame cycle or
+ * back to its start, whichever is nearer.
  */
 static void floatOffsetControl(BattleUnitPart* part) {
     BOOL active = TRUE;
     BattleUnit* unit = part->owner;
 
-    if (!(unit->flags & UNIT_FLAG_FLOAT)) {
+    if (!(unit->flags & BATTLE_UNIT_FLAG_FLOAT_CAPABLE)) {
         active = FALSE;
-    } else if (!(unit->flags & UNIT_FLAG_FLOAT_ACTIVE)) {
+    } else if (!(unit->flags & BATTLE_UNIT_FLAG_FLOAT_ACTIVE)) {
         active = FALSE;
-    } else if (BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+    } else if (BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
         active = FALSE;
     }
     if (active) {
-        PART_FLOAT(part)
-        ++;
-    } else if (PART_FLOAT(part)) {
-        PART_FLOAT(part) %= 90;
-        if (PART_FLOAT(part) >= 45) {
-            PART_FLOAT(part)
-            ++;
-        } else if (PART_FLOAT(part)) {
-            PART_FLOAT(part)
-            --;
+        part->floatTimer++;
+    } else if (part->floatTimer) {
+        part->floatTimer %= 90;
+        if (part->floatTimer >= 45) {
+            part->floatTimer++;
+        } else if (part->floatTimer) {
+            part->floatTimer--;
         }
     }
 }
 
 /** Vertical display offset from floating: 0 to 4 units, following the float timer. */
 f32 getFloatDispOffset(BattleUnitPart* part) {
-    return 2.0f * sinfd((PART_FLOAT(part) * 4 + 270) % 360) + 2.0f;
+    return 2.0f * sinfd((part->floatTimer * 4 + 270) % 360) + 2.0f;
 }
 
 /**
@@ -1211,17 +1175,17 @@ f32 getFloatDispOffset(BattleUnitPart* part) {
  * one-shot effects for types 2, 3 and 7, cycling effects for 4 to 6, default (no effect) otherwise.
  */
 static void statusPoseControl(BattleUnitPart* part) {
-    switch (PART_POSETYPE(part)) {
-        case 0:
+    switch (part->look) {
+        case PART_LOOK_NONE:
             break;
-        case 2:
-        case 3:
-        case 7:
+        case PART_LOOK_PM_C_UNUSED:
+        case PART_LOOK_PM_F_UNUSED:
+        case PART_LOOK_XLU:
             _pose_one_pattern(part);
             break;
-        case 4:
-        case 5:
-        case 6:
+        case PART_LOOK_DODGY:
+        case PART_LOOK_PM_C2_UNUSED:
+        case PART_LOOK_PM_F2_UNUSED:
             _pose_two_pattern(part);
             break;
         default:
@@ -1232,12 +1196,12 @@ static void statusPoseControl(BattleUnitPart* part) {
 
 /** Clears the part's effect animation once; paper-craft units (no backface flip) also get the paper-craft light. */
 static void _pose_def(BattleUnitPart* part) {
-    switch (PART_POSESTATE(part)) {
+    switch (part->poseState) {
         case 0:
-            PART_POSESTATE(part) = 1;
+            part->poseState = 1;
             animPoseSetEffect(part->poseId, NULL, 0);
-            if (part->owner->flags & UNIT_FLAG_NO_BACKFACE_FLIP) {
-                animPoseSetMaterialLightFlagOn(part->poseId, ANIM_MATERIAL_LIGHT_PAPER_CRAFT);
+            if (part->owner->flags & BATTLE_UNIT_FLAG_SOLID_MODEL) {
+                animPoseSetMaterialLightFlagOn(part->poseId, MATERIAL_LIGHT_PAPER_CRAFT);
             }
             break;
     }
@@ -1250,19 +1214,19 @@ static void _pose_def(BattleUnitPart* part) {
  * Guess: C and F are a stone-like and a frozen look, from the effect names.
  */
 static void _pose_one_pattern(BattleUnitPart* part) {
-    switch (PART_POSESTATE(part)) {
+    switch (part->poseState) {
         case 0:
-            PART_POSESTATE(part) = 1;
-            switch (PART_POSETYPE(part)) {
-                case 2:
+            part->poseState = 1;
+            switch (part->look) {
+                case PART_LOOK_PM_C_UNUSED:
                     animPoseSetEffect(part->poseId, "p_b_st", 1);
                     animPoseSetEffectAnim(part->poseId, "PM_C_1A", 1);
                     break;
-                case 3:
+                case PART_LOOK_PM_F_UNUSED:
                     animPoseSetEffect(part->poseId, "p_b_st", 1);
                     animPoseSetEffectAnim(part->poseId, "PM_F_1A", 1);
                     break;
-                case 7:
+                case PART_LOOK_XLU:
                     animPoseSetEffect(part->poseId, "p_b_st", 1);
                     animPoseSetEffectAnim(part->poseId, "PM_Y_1A", 1);
                     break;
@@ -1277,80 +1241,74 @@ static void _pose_one_pattern(BattleUnitPart* part) {
  * then play PM_C_1B or PM_F_1B for 22 frames and start over.
  */
 static void _pose_two_pattern(BattleUnitPart* part) {
-    switch (PART_POSESTATE(part)) {
+    switch (part->poseState) {
         case 0:
-            PART_POSESTATE(part) = 1;
-            switch (PART_POSETYPE(part)) {
-                case 4:
+            part->poseState = 1;
+            switch (part->look) {
+                case PART_LOOK_DODGY:
                     animPoseSetEffect(part->poseId, "p_b_st", 1);
                     animPoseSetEffectAnim(part->poseId, "PM_Y_1B", 1);
-                    PART_POSETIMER(part) = sysMsec2Frame(2200);
+                    part->poseTimer = sysMsec2Frame(2200);
                     break;
-                case 5:
+                case PART_LOOK_PM_C2_UNUSED:
                     animPoseSetEffect(part->poseId, "p_b_st", 1);
                     animPoseSetEffectAnim(part->poseId, "PM_C_1A", 1);
-                    PART_POSETIMER(part) = (irand(4) + 6) * sysMsec2Frame(2200);
+                    part->poseTimer = (irand(4) + 6) * sysMsec2Frame(2200);
                     break;
-                case 6:
+                case PART_LOOK_PM_F2_UNUSED:
                     animPoseSetEffect(part->poseId, "p_b_st", 1);
                     animPoseSetEffectAnim(part->poseId, "PM_F_2", 1);
-                    PART_POSETIMER(part) = (irand(4) + 7) * 22;
+                    part->poseTimer = (irand(4) + 7) * 22;
                     break;
             }
             break;
         case 1:
-            switch (PART_POSETYPE(part)) {
-                case 4:
-                    PART_POSETIMER(part)
-                    --;
-                    if (PART_POSETIMER(part) == 0) {
+            switch (part->look) {
+                case PART_LOOK_DODGY:
+                    part->poseTimer--;
+                    if (part->poseTimer == 0) {
                         animPoseSetEffectAnim(part->poseId, "PM_Y_1B", 1);
-                        PART_POSETIMER(part) = sysMsec2Frame(2200);
+                        part->poseTimer = sysMsec2Frame(2200);
                     }
                     break;
-                case 5:
-                    PART_POSETIMER(part)
-                    --;
-                    if (PART_POSETIMER(part) == 0) {
-                        PART_POSESTATE(part) = 2;
+                case PART_LOOK_PM_C2_UNUSED:
+                    part->poseTimer--;
+                    if (part->poseTimer == 0) {
+                        part->poseState = 2;
                         animPoseSetEffectAnim(part->poseId, "PM_C_1B", 1);
-                        PART_POSETIMER(part) = 22;
+                        part->poseTimer = 22;
                     }
                     break;
-                case 6:
-                    PART_POSETIMER(part)
-                    --;
-                    if (PART_POSETIMER(part) == 0) {
-                        PART_POSESTATE(part) = 2;
+                case PART_LOOK_PM_F2_UNUSED:
+                    part->poseTimer--;
+                    if (part->poseTimer == 0) {
+                        part->poseState = 2;
                         animPoseSetEffectAnim(part->poseId, "PM_F_1B", 1);
-                        PART_POSETIMER(part) = 22;
+                        part->poseTimer = 22;
                     }
                     break;
             }
             break;
         case 2:
-            switch (PART_POSETYPE(part)) {
-                case 4:
-                    PART_POSETIMER(part)
-                    --;
-                    if (PART_POSETIMER(part) == 0) {
-                        PART_POSESTATE(part) = 0;
+            switch (part->look) {
+                case PART_LOOK_DODGY:
+                    part->poseTimer--;
+                    if (part->poseTimer == 0) {
+                        part->poseState = 0;
                         _pose_two_pattern(part);
                     }
                     break;
-                case 5:
-                    PART_POSETIMER(part)
-                    --;
-                    if (PART_POSETIMER(part) == 0) {
-                        PART_POSESTATE(part) = 0;
+                case PART_LOOK_PM_C2_UNUSED:
+                    part->poseTimer--;
+                    if (part->poseTimer == 0) {
+                        part->poseState = 0;
                         _pose_two_pattern(part);
                     }
                     break;
-                case 6:
-                    PART_POSETIMER(part)
-                    --;
-                    if (PART_POSETIMER(part) == 0) {
-                        PART_POSESTATE(part) = 0;
+                case PART_LOOK_PM_F2_UNUSED:
+                    part->poseTimer--;
+                    if (part->poseTimer == 0) {
+                        part->poseState = 0;
                         _pose_two_pattern(part);
                     }
                     break;
@@ -1359,16 +1317,22 @@ static void _pose_two_pattern(BattleUnitPart* part) {
     }
 }
 
-#pragma push
-// dead assignments optimisation off for btlDispAnimeSpeed, btlGetScreenPoint, btlDispTex4 and 3 more: the original register allocation and scheduling need it
-#pragma opt_dead_assignments off
 /** Sets a part's status animation speed (2 for Fast, 0.5 for Slow) and applies it times its scripted speed. */
 void btlDispAnimeSpeed(BattleUnitPart* part, f32 speed) {
-    f32 unusedOne = 1.0f; // unused; kept because the original emits its initialiser
-    PART_ANIMSPEED(part) = speed;
-    animPoseSetLocalTimeRate(part->poseId, PART_ANIMSPEED(part) * PART_ANIMSPEED2(part));
+    part->animSpeed = speed;
+    animPoseSetLocalTimeRate(part->poseId, part->animSpeed * part->animSpeed2);
 }
-#pragma pop
+
+/** Sets every part of unit unitId back to the normal animation speed (1). */
+// Original name and size (0x50) from the JP demo's link map (UNUSED there): nothing calls it, so the linker strips it;
+// its emitted copy places the 1.0f in this object's constant pool.
+void btlDispAnimeSpeedUnit(s32 unitId) {
+    BattleUnit* unit = BattleGetUnitPtr(_battleWorkPointer, unitId);
+    BattleUnitPart* part;
+    for (part = unit->parts; part != NULL; part = part->nextPart) {
+        btlDispAnimeSpeed(part, 1.0f);
+    }
+}
 
 /** Projects a 3D battle position to 2D screen coordinates (the 608x480 2D camera space centred on the screen). */
 void btlGetScreenPoint(Vec* in, Vec* out) {
@@ -1395,10 +1359,6 @@ void btlDispTex4(u32 id, Vec pos, Vec scale, Vec rot, GXColor color) {
     u16 width, height;
     f32 hw, hh;
     Vec off;
-    Vec unused;
-    unused.x = 0.0f;
-    unused.y = 0.0f;
-    unused.z = 0.0f;
 
     off.z = 0.0f;
 
@@ -1420,8 +1380,8 @@ void btlDispTex4(u32 id, Vec pos, Vec scale, Vec rot, GXColor color) {
 }
 
 /**
- * Draws one quadrant of btlDispTex4: offset by pos2, mirrored by scale2, then scaled,
- * rotated (Z, X, Y) and placed at pos.
+ * Draws one quadrant of btlDispTex4: scaled, mirrored by scale2, offset by pos2,
+ * then rotated (Z, X, Y) and placed at pos.
  */
 static void _btlDispTex4(u32 id, Vec pos, Vec scale, Vec rot, Vec pos2, Vec scale2, GXColor color) {
     Mtx mtx, trans, scl, rotX, rotY, rotZ, trans2, scl2;
@@ -1459,7 +1419,7 @@ static void BattleStockExpDisp(void) {
         }
     }
     if (wp->dispFlags & BATTLE_DISP_FLAG_STAR_POINTS) {
-        dispEntry(CAMERA_2D, 901.0f, 1, _btlStockExpDisp, NULL);
+        dispEntry(CAMERA_2D, 901.0f, DISP_MODE_ALPHA_TEST, _btlStockExpDisp, NULL);
     }
 }
 
@@ -1488,13 +1448,13 @@ static void _btlStockExpDisp(CameraId camId, void* param) {
             Vec pos = {0.0f, 0.0f, -100.0f};
             pos.x = 308.0f + x - 3.5f - 13.0f * i;
             pos.y = y - 220.0f;
-            iconDispGx(&pos, ICON_DISP_2D, ICON_18C, 0.35f);
+            iconDispGx(&pos, ICON_FLAG_2D, 0.35f, ICON_STAR_POINT);
         }
         for (i = 0; i < tens; i++) {
             Vec pos = {0.0f, 0.0f, -100.0f};
             pos.x = 4.0f + (308.0f + x - 10.0f - 20.0f * i);
             pos.y = 16.0f + (y - 220.0f);
-            iconDispGx(&pos, ICON_DISP_2D, ICON_18C, 0.5f);
+            iconDispGx(&pos, ICON_FLAG_2D, 0.5f, ICON_STAR_POINT);
         }
     }
 }

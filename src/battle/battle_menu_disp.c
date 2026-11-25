@@ -1,8 +1,11 @@
 // Battle menu drawing: the action, weapon-select and operation menus and the pieces they are built from.
-#pragma optimize_for_size on
-// FAKE: inlining off for the whole file (FAKES.md); without it 11 functions change length, e.g. DrawChangePartyWin 98 -> 259 instructions
-#pragma dont_inline on
+
 #include "version.h"
+#include "battle/battle_disp.h"
+
+#define SUBMENU_ICON_VISIBLE (1)
+#define SUBMENU_ICON_SPEECH_BUBBLE (2)
+#define SUBMENU_ROW_VISIBLE (1)
 #include "battle/battle_menu_disp.h"
 #include "battle/battle_seq_command.h"
 #include "battle/battle_unit.h"
@@ -13,56 +16,52 @@
 #include "driver/windowdrv.h"
 #include "manager/fontmgr.h"
 #include "battle/battle.h"
-#include "battle/battle_disp.h"
 #include "battle/battle_item_data.h"
 #include "libc_decls.h"
-// FAKE: battle_menu_disp.c calls FontDrawStringCenterMtx through this prototype (the types it was compiled with) instead of the one in manager/fontmgr.h; same registers, behaviour-identical.
-typedef void (*FontDrawStringCenterMtxLocalFn)(Mtx, const char*);
-
-#define WP_SUBMENU(wp) ((wp)->commandMenu.subMenu)
 
 void DrawMultiItemWin(void);
-static void DrawSubMenuCommonProcess(f32* x, f32* y, Mtx* a, Vec* b, f32* c, Mtx* d);
-static void DrawMainIcon(BattleSubMenu* menu, BattleCommandAct* acts, Mtx* a, Vec* b, f32* c);
-#if VERSION <= VERSION_DEMO_JP
-static void DrawSubIcon(BattleSubMenu* menu, Mtx* a, s32* enabled, u16* icons, const char** names, s32* costs, s32* p34, void* party);
-#else
-static void DrawSubIcon(BattleSubMenu* menu, Mtx* a, s32* enabled, u16* icons, const char** names, s32* costs, s32* p34, void* party, s32 y);
-#endif
-static void DrawMenuCursorAndScrollArrow(const Vec* v);
-static void DrawMenuHelpWin(const char* help, f32 x, f32 y);
 void DrawChangePartyWin(void);
 void DrawOperationWin(void);
 void DrawWeaponWin(void);
 void DrawMainMenu(BattleWork* wp);
-static void DrawMenuPinchMark(void);
 #include "battle/battle_audience.h"
 #include "driver/camdrv.h"
 #include "driver/icondrv.h"
 #include "pmario_sound.h"
+
 #if VERSION <= VERSION_DEMO_JP
-static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 icon, const char* name, s32 cost, s32 p34, void* party);
+static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, s32 icon, const char* name, s32 cost, s32 spCost, void* party);
 #else
-static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 icon, const char* name, s32 cost, s32 p34, void* party, s32 y);
+static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, s32 icon, const char* name, s32 cost, s32 spCost, void* party, s32 squeezeName);
 #endif
+
 static void DrawMainIconCircle(BattleSubMenu* menu, BattleCommandAct* act, Mtx m, Vec v, f32 s);
 static void DrawMainIconHukidasi(BattleSubMenu* menu, BattleCommandAct* act, Mtx m, f32 s);
 static void DrawMenuPartyChangeButton_Sub(u32 id, f32 x, f32 y, f32 angle);
-static void DrawMenuPartyChangeButton(void);
-static void DrawSubMenuCommonProcessSub1(BattleSubMenu* menu, BattleCursor* cursor, s32 prev, s32 key);
 #include "mario/mariost.h"
 #include "sdk/texPalette.h"
 #include "icon_ids.h"
-static void GetRingCenter(Vec* out);
-static void GetRingOffset(f32 angle, f32* x, f32* y);
+// US and later: menu animation lengths scale with the display rate (gp->framerate is 60 or 50)
+#if VERSION >= VERSION_US
+#define FRAMES(n) (gp->framerate * (n) / 60)
+#define FRAMES_STEP(jp, n, x) ((x) * ((n) / gp->framerate))
+#else
+#define FRAMES(n) (n)
+#define FRAMES_STEP(jp, n, x) ((jp) * (x))
+#endif
+
+// Old-style (non-prototype) declaration: fontmgr.c defines FontDrawStringCenterMtx(Mtx mtx, const s8* msg), and the
+// call here passes a const char* message.
+void FontDrawStringCenterMtx();
+
 /**
  * Angles in degrees of the command icons around the battle menu's ring, one row each for 3, 4 and 5 commands
  * (indexed by the icon's slot); used to place and turn the icons when the ring spins.
  */
-f32 kakutable[3][5] = {{240.0f, 120.0f, 0.0f, 0.0f, 0.0f}, {270.0f, 180.0f, 90.0f, 0.0f, 0.0f}, {270.0f, 203.0f, 157.0f, 90.0f, 0.0f}};
+static f32 kakutable[3][5] = {{240.0f, 120.0f, 0.0f, 0.0f, 0.0f}, {270.0f, 180.0f, 90.0f, 0.0f, 0.0f}, {270.0f, 203.0f, 157.0f, 90.0f, 0.0f}};
 
 //.sdata
-GXColor seleItemCoordCol = {0xFF, 0xC0, 0xC0, 0xCF};
+static GXColor seleItemCoordCol = {0xFF, 0xC0, 0xC0, 0xCF};
 
 /**
  * Cycles seleItemCoordCol, the highlight colour of the selected list row, one step per frame through pale red,
@@ -111,7 +110,7 @@ void SelectedItemCoordinateColorUpDate(void) {
  * Polled by the battle_seq_command.c menu loops.
  */
 BOOL BattleMenuKeyOKInACT(BattleWork* wp) {
-    if (!wp->commandMenu.attackAudience && !WP_SUBMENU(wp)->shown) {
+    if (!wp->commandMenu.attackAudience && !wp->commandMenu.subMenu->shown) {
         return FALSE;
     }
     return TRUE;
@@ -126,7 +125,7 @@ void battleMenuDispInit(void) {
     char path[256];
 
     sprintf(path, "%s/battle/common/battle_common.tpl", getMarioStDvdRoot());
-    wp->menuTex = fileAlloc(path, 4);
+    wp->menuTex = fileAlloc(path, FILE_TYPE_TPL);
 }
 
 /** Frees the battle menu textures loaded by battleMenuDispInit; called at battle end. */
@@ -166,9 +165,9 @@ static void GetRingOffset(f32 angle, f32* x, f32* y) {
  * the selected one as a speech-bubble label (iconFlags bit 1), the rest as round icons.
  * Only icons with iconFlags bit 0 are drawn.
  */
-static void DrawMainIcon(BattleSubMenu* menu, BattleCommandAct* acts, Mtx* a, Vec* b, f32* c) {
+static void DrawMainIcon(BattleSubMenu* menu, BattleCommandAct* acts, Mtx* iconMtx, Vec* iconPos, f32* iconAngle) {
     s32 order[5];
-    f32 z[6];
+    f32 sortY[6];
     BattleWork* wp = _battleWorkPointer;
     BattleCursor* cursor;
     f32 tf;
@@ -184,27 +183,27 @@ static void DrawMainIcon(BattleSubMenu* menu, BattleCommandAct* acts, Mtx* a, Ve
     }
     for (i = 0; i < cursor->count; i++) {
         order[i] = i;
-        z[i] = b[i].y;
+        sortY[i] = iconPos[i].y;
     }
     for (i = 0; i < cursor->count - 1; i++) {
         for (j = i + 1; j < cursor->count; j++) {
-            if (z[i] < z[j]) {
-                tf = z[i];
+            if (sortY[i] < sortY[j]) {
+                tf = sortY[i];
                 ti = order[i];
-                z[i] = z[j];
+                sortY[i] = sortY[j];
                 order[i] = order[j];
-                z[j] = tf;
+                sortY[j] = tf;
                 order[j] = ti;
             }
         }
     }
     for (i = 0; i < cursor->count; i++) {
         k = order[i];
-        if (menu->iconFlags[k] & 1) {
-            if (menu->iconFlags[k] & 2) {
-                DrawMainIconHukidasi(menu, &acts[k], a[k], c[k]);
+        if (menu->iconFlags[k] & SUBMENU_ICON_VISIBLE) {
+            if (menu->iconFlags[k] & SUBMENU_ICON_SPEECH_BUBBLE) {
+                DrawMainIconHukidasi(menu, &acts[k], iconMtx[k], iconAngle[k]);
             } else {
-                DrawMainIconCircle(menu, &acts[k], a[k], b[k], c[k]);
+                DrawMainIconCircle(menu, &acts[k], iconMtx[k], iconPos[k], iconAngle[k]);
             }
         }
     }
@@ -214,9 +213,10 @@ static void DrawMainIcon(BattleSubMenu* menu, BattleCommandAct* acts, Mtx* a, Ve
  * Hukidasi = speech bubble.
  * Draws the selected command as a bubble with its icon and name,
  * with a drop shadow that shifts as the bubble turns about y by s degrees; disabled commands are greyed.
- * The US release squeezes names wider than 90 units.
+ * US and later squeeze names wider than 90 units.
  */
 static void DrawMainIconHukidasi(BattleSubMenu* menu, BattleCommandAct* act, Mtx m, f32 s) {
+    void iconDispGx2(Mtx mtx, s16 flags, u16 iconId); // the id is u16 here; before US the definition takes s16
     GXColor tev;
     GXColor col;
     Mtx rot;
@@ -249,7 +249,7 @@ static void DrawMainIconHukidasi(BattleSubMenu* menu, BattleCommandAct* act, Mtx
     PSMTXConcat(out, scl, out);
     PSMTXConcat(out, trn, out);
     PSMTXConcat(cam->view, out, out);
-    GXLoadPosMtxImm(out, 0);
+    GXLoadPosMtxImm(out, GX_PNMTX0);
     TEXGetGXTexObjFromPalette(*wp->menuTex->data, &texobj, 1);
     GXLoadTexObj(&texobj, GX_TEXMAP0);
     if (s >= 0.0f && s <= 180.0f) {
@@ -273,18 +273,18 @@ static void DrawMainIconHukidasi(BattleSubMenu* menu, BattleCommandAct* act, Mtx
     PSMTXConcat(out, scl, out);
     icon = act->icon;
     if (!icon) {
-        icon = ICON_18B;
+        icon = ICON_ITEM_COIN;
     }
     if (act->enabled == 1) {
-        iconDispGx2(out, ICON_DISP_2D, icon);
+        iconDispGx2(out, ICON_FLAG_2D, icon);
     } else {
-        iconDispGx2(out, ICON_DISP_2D | ICON_FLAG_GRAYSCALE, icon);
+        iconDispGx2(out, ICON_FLAG_2D | ICON_FLAG_GRAY, icon);
     }
     name = act->name;
     PSMTXTrans(trn, 0.0f, 52.5f, 0.0f);
 #if VERSION >= VERSION_US
     {
-        // US: long command names are squeezed to 90 units wide
+        // US and later: long command names are squeezed to 90 units wide
         f32 w = FontGetMessageWidth(name);
         PSMTXScale(scl, w > 90.0f ? 0.9f * (90.0f / w) : 0.9f, 0.9f, 0.9f);
     }
@@ -302,7 +302,7 @@ static void DrawMainIconHukidasi(BattleSubMenu* menu, BattleCommandAct* act, Mtx
         col = (GXColor){0x80, 0x80, 0x80, 0xFF};
     }
     FontDrawColor(col);
-    ((FontDrawStringCenterMtxLocalFn)FontDrawStringCenterMtx)(out, name);
+    FontDrawStringCenterMtx(out, name);
 }
 
 /**
@@ -320,7 +320,7 @@ static void DrawMainIconCircle(BattleSubMenu* menu, BattleCommandAct* act, Mtx m
     BattleWork* wp = _battleWorkPointer;
     CameraEntry* cam;
     u8 c;
-    u16 icon;
+    u32 icon;
     f32 rad;
     f32 ofs;
     f32 sc;
@@ -345,7 +345,7 @@ static void DrawMainIconCircle(BattleSubMenu* menu, BattleCommandAct* act, Mtx m
     PSMTXConcat(m, rot, out);
     PSMTXConcat(out, scl, out);
     PSMTXConcat(cam->view, out, out);
-    GXLoadPosMtxImm(out, 0);
+    GXLoadPosMtxImm(out, GX_PNMTX0);
     TEXGetGXTexObjFromPalette(*wp->menuTex->data, &texobj, 0);
     GXLoadTexObj(&texobj, GX_TEXMAP0);
     if (s >= 0.0f && s <= 180.0f) {
@@ -355,8 +355,16 @@ static void DrawMainIconCircle(BattleSubMenu* menu, BattleCommandAct* act, Mtx m
         ofs = (-4.0f + 8.0f * (s - 180.0f) / 180.0f) / 1.3f;
     }
     {
-        f32 pos[4][8] = {{-20.0f, 40.0f, 0.0f, 40.0f, 0.0f, 20.0f, -20.0f, 20.0f}, {20.0f, 40.0f, 20.0f, 20.0f, 0.0f, 20.0f, 0.0f, 40.0f}, {-20.0f, 20.0f, 0.0f, 20.0f, 0.0f, 0.0f, -20.0f, 0.0f}, {0.0f, 20.0f, 20.0f, 20.0f, 20.0f, 0.0f, 0.0f, 0.0f}};
-        f32 uv[4][8] = {{0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f}, {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f}, {0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f}, {1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f}};
+        f32 pos[4][8] = {
+            {-20.0f, 40.0f, 0.0f, 40.0f, 0.0f, 20.0f, -20.0f, 20.0f},
+            {20.0f, 40.0f, 20.0f, 20.0f, 0.0f, 20.0f, 0.0f, 40.0f},
+            {-20.0f, 20.0f, 0.0f, 20.0f, 0.0f, 0.0f, -20.0f, 0.0f},
+            {0.0f, 20.0f, 20.0f, 20.0f, 20.0f, 0.0f, 0.0f, 0.0f}};
+        f32 uv[4][8] = {
+            {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f},
+            {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f},
+            {0.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.0f, 0.0f, 0.0f},
+            {1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f}};
         for (i = 0; i < 4; i++) {
             GXBegin(GX_QUADS, GX_VTXFMT0, 4);
             for (j = 0; j < 7; j += 2) {
@@ -374,34 +382,30 @@ static void DrawMainIconCircle(BattleSubMenu* menu, BattleCommandAct* act, Mtx m
     sc = 0.66f * (1.3f - 0.005f * v.z);
     PSMTXScale(scl, sc, sc, 1.0f);
     PSMTXRotRad(rot, 'y', rad);
+
+    // Original code replaces the local rotation matrix with identity.
     PSMTXIdentity(rot);
     PSMTXConcat(m, rot, out);
     PSMTXConcat(out, scl, out);
     PSMTXConcat(out, trn, out);
     icon = act->icon;
     if (!icon) {
-        icon = ICON_18B;
+        icon = ICON_ITEM_COIN;
     }
     if (act->enabled == 1) {
-        iconDispGxCol(out, ICON_DISP_2D, icon, (GXColor){c, c, c, 0xFF});
-
+        iconDispGxCol(out, ICON_FLAG_2D, icon, (GXColor){c, c, c, 0xFF});
     } else {
-        iconDispGxCol(out, ICON_DISP_2D | ICON_FLAG_GRAYSCALE, icon, (GXColor){c, c, c, 0xFF});
+        iconDispGxCol(out, ICON_FLAG_2D | ICON_FLAG_GRAY, icon, (GXColor){c, c, c, 0xFF});
     }
 }
 
-/**
- * Draws the visible rows (up to 7) of a sub-menu list,
- * 24 units apart and shifted by the fractional part of scrollPos, through DrawSubIconSub.
- * The retail versions pass y on: in the US it is 1 to squeeze long party names,
- * in PAL it is the name width that labels are scaled down to fit.
- */
+/** JP and later signature: y is the name-width setting (see DrawSubIconSub). */
 #if VERSION <= VERSION_DEMO_JP
-static void DrawSubIcon(BattleSubMenu* menu, Mtx* a, s32* enabled, u16* icons, const char** names, s32* costs, s32* p34, void* party) {
+static void DrawSubIcon(BattleSubMenu* menu, Mtx* a, s32* enabled, u16* icons, const char** names, s32* costs, s32* spCost, void* party) {
 #else
-/** Retail signature: y is the name-width setting described above. */
-static void DrawSubIcon(BattleSubMenu* menu, Mtx* a, s32* enabled, u16* icons, const char** names, s32* costs, s32* p34, void* party, s32 y) {
+static void DrawSubIcon(BattleSubMenu* menu, Mtx* a, s32* enabled, u16* icons, const char** names, s32* costs, s32* spCost, void* party, s32 squeezeName) {
 #endif
+
     Mtx out[7];
     Mtx m;
     BattleWork* wp = _battleWorkPointer;
@@ -414,30 +418,23 @@ static void DrawSubIcon(BattleSubMenu* menu, Mtx* a, s32* enabled, u16* icons, c
     ofs = menu->scrollPos - (f32)(s32)menu->scrollPos;
     ofs = 24.0f * ofs;
     for (i = 0; i < 7; i++) {
-        if ((s32)menu->scrollPos + i < cursor->count && (menu->rowFlags[i] & 1)) {
+        if ((s32)menu->scrollPos + i < cursor->count && (menu->rowFlags[i] & SUBMENU_ROW_VISIBLE)) {
             PSMTXTrans(m, 100.0f, 35.0f - 24.0f * i + ofs, 0.0f);
             PSMTXConcat(m, a[i], out[i]);
 #if VERSION <= VERSION_DEMO_JP
-            DrawSubIconSub(menu, i, out[i], enabled[i], icons[i], names[i], costs[i], p34[i], party);
+            DrawSubIconSub(menu, i, out[i], enabled[i], icons[i], names[i], costs[i], spCost[i], party);
 #else
-            DrawSubIconSub(menu, i, out[i], enabled[i], icons[i], names[i], costs[i], p34[i], party, y);
+            DrawSubIconSub(menu, i, out[i], enabled[i], icons[i], names[i], costs[i], spCost[i], party, squeezeName);
 #endif
         }
     }
 }
 
-/**
- * Draws one sub-menu row: the row bar, icon (greyed when disabled), name, FP cost,
- * Star Power cost (btl_cost_disp_AP) and, for the partner list, HP/max HP.
- * The cursor row uses the cycling seleItemCoordCol; the top and bottom rows fade as the list scrolls.
- * The demos place the HP numbers differently; the US release squeezes party names over 150 units
- * and PAL scales names to the width y.
- */
+/** JP and later signature: squeezeName selects the name squeezing in the body below. */
 #if VERSION <= VERSION_DEMO_JP
-static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 icon, const char* name, s32 cost, s32 p34, void* party) {
+static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, s32 icon, const char* name, s32 cost, s32 spCost, void* party) {
 #else
-/** Retail signature: y selects the name squeezing described above. */
-static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 icon, const char* name, s32 cost, s32 p34, void* party, s32 y) {
+static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, s32 icon, const char* name, s32 cost, s32 spCost, void* party, s32 squeezeName) {
 #endif
     BattleWork* wp = _battleWorkPointer;
     CameraEntry* cam;
@@ -465,7 +462,7 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
     s32 n;
 
     cam = camGetPtr(CAMERA_2D);
-    frac = menu->scrollPos - ((s32)menu->scrollPos);
+    frac = menu->scrollPos - (s32)menu->scrollPos;
     alpha = 0xFF;
     if (i == 0) {
         alpha = 255.0f * (1.0f - frac);
@@ -473,7 +470,7 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
     if (i == 6) {
         alpha = 255.0f * frac;
     }
-    j = ((s32)menu->scrollPos) + i;
+    j = (s32)menu->scrollPos + i;
     if (j == cursor->absPos) {
         r = seleItemCoordCol.r;
         g = seleItemCoordCol.g;
@@ -483,11 +480,11 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
         b = 0xFF;
         g = 0xFF;
         r = 0xFF;
-        a = (144.0f * ((u8)alpha)) / 255.0f;
+        a = 144.0f * alpha / 255.0f;
     }
     btlDispGXInit2D();
     PSMTXConcat(cam->view, m, out);
-    GXLoadPosMtxImm(out, 0);
+    GXLoadPosMtxImm(out, GX_PNMTX0);
     TEXGetGXTexObjFromPalette(*wp->menuTex->data, &texobj, 2);
     GXLoadTexObj(&texobj, GX_TEXMAP0);
     btlDispGXQuads2D(-152.0f, 24.0f, -136.0f, 0.0f, r, g, b, a);
@@ -499,13 +496,13 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
     PSMTXScale(scl, 0.5f, 0.5f, 1.0f);
     PSMTXConcat(m, trn, out);
     PSMTXConcat(out, scl, out);
-    if (!((u16)icon)) {
-        icon = ICON_18B;
+    if (!(u16)icon) {
+        icon = ICON_ITEM_COIN;
     }
     if (enabled == 1) {
-        iconDispGxCol(out, ICON_DISP_2D, icon, (GXColor){0xFF, 0xFF, 0xFF, alpha});
+        iconDispGxCol(out, ICON_FLAG_2D, icon, (GXColor){0xFF, 0xFF, 0xFF, alpha});
     } else {
-        iconDispGxCol(out, ICON_DISP_2D | ICON_FLAG_GRAYSCALE, icon, (GXColor){0xFF, 0xFF, 0xFF, alpha});
+        iconDispGxCol(out, ICON_FLAG_2D | ICON_FLAG_GRAY, icon, (GXColor){0xFF, 0xFF, 0xFF, alpha});
     }
     FontDrawStart();
     {
@@ -520,26 +517,31 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
     PSMTXTrans(trn, -104.0f, 22.0f, 0.0f);
 #if VERSION <= VERSION_DEMO_JP
     PSMTXScale(scl, 0.8f, 0.8f, 0.8f);
-#else
-#if VERSION >= VERSION_DEMO_EU
-    if (y != 0) {
-        PSMTXScale(scl, (FontGetMessageWidth(name) > y) ? (0.8f * y / FontGetMessageWidth(name)) : (0.8f), 0.8f, 0.8f);
+#elif VERSION <= VERSION_DEMO_US_2
+    if (squeezeName == 1) {
+        PSMTXScale(scl, FontGetMessageWidth(name) > 150 ? 120.0f / FontGetMessageWidth(name) : 0.8f, 0.8f, 0.8f);
     } else {
-#else
-    if (y == 1) {
-        PSMTXScale(scl, (FontGetMessageWidth(name) > 150) ? (120.0f / FontGetMessageWidth(name)) : (0.8f), 0.8f, 0.8f);
-    } else {
-#endif
         PSMTXScale(scl, 0.8f, 0.8f, 0.8f);
     }
+#else
+if (squeezeName != 0) {
+    PSMTXScale(scl, FontGetMessageWidth(name) > squeezeName ? 0.8f * squeezeName / FontGetMessageWidth(name) : 0.8f, 0.8f, 0.8f);
+} else {
+    PSMTXScale(scl, 0.8f, 0.8f, 0.8f);
+}
 #endif
     PSMTXConcat(m, trn, out);
     PSMTXConcat(out, scl, out);
     FontDrawStringMtx(out, name);
     if (cost != 0) {
         d1[2] = cost / 100;
+#if VERSION <= VERSION_DEMO_JP
         d1[1] = (cost - (d1[2] * 100)) / 10;
         d1[0] = (cost - (d1[2] * 100)) - (d1[1] * 10);
+#else
+        d1[1] = (cost - d1[2] * 100) / 10;
+        d1[0] = cost - d1[2] * 100 - d1[1] * 10;
+#endif
         if (d1[2] > 0) {
             o1[0] = 28;
             o1[1] = 14;
@@ -571,11 +573,17 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
         PSMTXConcat(out, scl, out);
         FontDrawStringMtx(out, msgSearch("btl_cost_disp_FP"));
     }
-    if (p34 != 0) {
+    if (spCost != 0) {
+#if VERSION <= VERSION_DEMO_JP
         s32 n;
-        d2[2] = p34 / 100;
-        d2[1] = (p34 - (d2[2] * 100)) / 10;
-        d2[0] = (p34 - (d2[2] * 100)) - (d2[1] * 10);
+        d2[2] = spCost / 100;
+        d2[1] = (spCost - (d2[2] * 100)) / 10;
+        d2[0] = (spCost - (d2[2] * 100)) - (d2[1] * 10);
+#else
+        d2[2] = spCost / 100;
+        d2[1] = (spCost - d2[2] * 100) / 10;
+        d2[0] = spCost - d2[2] * 100 - d2[1] * 10;
+#endif
         if (d2[2] > 0) {
             o2[0] = 28;
             o2[1] = 14;
@@ -607,103 +615,38 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
         PSMTXConcat(out, scl, out);
         FontDrawStringMtx(out, msgSearch("btl_cost_disp_AP"));
     }
-    // Two copies: the demos place the HP numbers from a running x; the releases use fixed spots per language.
-#if VERSION <= VERSION_DEMO_JP
     if (party != NULL) {
-        s16* p = (s16*)(((u8*)party) + ((i + ((s32)menu->scrollPos)) * 0x18));
+#if VERSION <= VERSION_DEMO_JP
+        BattleCommandParty* entry = (BattleCommandParty*)(((u8*)party) + ((i + ((s32)menu->scrollPos)) * 0x18));
+#else
+        BattleCommandParty* entry = (BattleCommandParty*)party + (i + (s32)menu->scrollPos);
+#endif
         s32 n;
         s32 hp;
         s32 maxhp;
+#if VERSION <= VERSION_DEMO_JP
         f32 x;
-        hp = p[10];
-        maxhp = p[11];
+        hp = entry->hp;
+        maxhp = entry->maxHp;
         x = 30.0f;
         PSMTXTrans(trn, x, 22.0f, 0.0f);
-        PSMTXScale(scl, 0.8f, 0.8f, 0.8f);
-        PSMTXConcat(m, trn, out);
-        PSMTXConcat(out, scl, out);
-        FontDrawStringMtx(out, msgSearch("btl_disp_HP"));
-        d3[2] = hp / 100;
-        d3[1] = (hp - (d3[2] * 100)) / 10;
-        d3[0] = (hp - (d3[2] * 100)) - (d3[1] * 10);
-        if (d3[2] > 0) {
-            o3[0] = 28;
-            o3[1] = 14;
-            o3[2] = 0;
-            n = 3;
-        } else if (d3[1] > 0) {
-            o3[0] = 21;
-            o3[1] = 7;
-            o3[2] = 0;
-            n = 2;
-        } else {
-            o3[0] = 14;
-            o3[1] = 0;
-            o3[2] = 0;
-            n = 1;
-        }
-        PSMTXScale(scl, 1.0f, 1.0f, 1.0f);
-        for (j = 0; j < n; j++) {
-            buf3[0] = d3[j] + '0';
-            buf3[1] = 0;
-            PSMTXTrans(trn, 32.0f + (30.0f + o3[j]), 25.0f, 0.0f);
-            PSMTXConcat(m, trn, out);
-            PSMTXConcat(out, scl, out);
-            FontDrawStringMtx(out, buf3);
-        }
-        if (((u32)gp->language) == 1) {
-            x += 10.0f;
-        }
-        PSMTXTrans(trn, 64.0f + x, 22.0f, 0.0f);
-        PSMTXScale(scl, 0.8f, 0.8f, 0.8f);
-        PSMTXConcat(m, trn, out);
-        PSMTXConcat(out, scl, out);
-        FontDrawStringMtx(out, msgSearch("btl_disp_slash"));
-        d3[2] = maxhp / 100;
-        d3[1] = (maxhp - (d3[2] * 100)) / 10;
-        d3[0] = (maxhp - (d3[2] * 100)) - (d3[1] * 10);
-        if (d3[2] > 0) {
-            o3[0] = 28;
-            o3[1] = 14;
-            o3[2] = 0;
-            n = 3;
-        } else if (d3[1] > 0) {
-            o3[0] = 21;
-            o3[1] = 7;
-            o3[2] = 0;
-            n = 2;
-        } else {
-            o3[0] = 14;
-            o3[1] = 0;
-            o3[2] = 0;
-            n = 1;
-        }
-        PSMTXScale(scl, 1.0f, 1.0f, 1.0f);
-        for (j = 0; j < n; j++) {
-            buf3[0] = d3[j] + '0';
-            buf3[1] = 0;
-            PSMTXTrans(trn, 72.0f + (x + o3[j]), 25.0f, 0.0f);
-            PSMTXConcat(m, trn, out);
-            PSMTXConcat(out, scl, out);
-            FontDrawStringMtx(out, buf3);
-        }
-    }
 #else
-    if (party != NULL) {
-        s16* p = (s16*)(((u8*)party) + ((i + ((s32)menu->scrollPos)) * 0x18));
-        s32 n;
-        s32 hp;
-        s32 maxhp;
-        hp = p[10];
-        maxhp = p[11];
+        hp = entry->hp;
+        maxhp = entry->maxHp;
         PSMTXTrans(trn, 30.0f, 22.0f, 0.0f);
+#endif
         PSMTXScale(scl, 0.8f, 0.8f, 0.8f);
         PSMTXConcat(m, trn, out);
         PSMTXConcat(out, scl, out);
         FontDrawStringMtx(out, msgSearch("btl_disp_HP"));
         d3[2] = hp / 100;
+#if VERSION <= VERSION_DEMO_JP
         d3[1] = (hp - (d3[2] * 100)) / 10;
         d3[0] = (hp - (d3[2] * 100)) - (d3[1] * 10);
+#else
+        d3[1] = (hp - d3[2] * 100) / 10;
+        d3[0] = hp - d3[2] * 100 - d3[1] * 10;
+#endif
         if (d3[2] > 0) {
             o3[0] = 28;
             o3[1] = 14;
@@ -724,27 +667,43 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
         for (j = 0; j < n; j++) {
             buf3[0] = d3[j] + '0';
             buf3[1] = 0;
-            if (((u32)gp->language) == 0) {
+#if VERSION <= VERSION_DEMO_JP
+            PSMTXTrans(trn, 32.0f + (30.0f + o3[j]), 25.0f, 0.0f);
+#else
+            if (gp->language == LANGUAGE_JP) {
                 PSMTXTrans(trn, 26.0f + (30.0f + o3[j]), 25.0f, 0.0f);
             } else {
                 PSMTXTrans(trn, 28.0f + (30.0f + o3[j]), 25.0f, 0.0f);
             }
+#endif
             PSMTXConcat(m, trn, out);
             PSMTXConcat(out, scl, out);
             FontDrawStringMtx(out, buf3);
         }
-        if (((u32)gp->language) == 0) {
+#if VERSION <= VERSION_DEMO_JP
+        if ((gp->language) == 1) {
+            x += 10.0f;
+        }
+        PSMTXTrans(trn, 64.0f + x, 22.0f, 0.0f);
+#else
+        if (gp->language == LANGUAGE_JP) {
             PSMTXTrans(trn, 92.0f, 22.0f, 0.0f);
         } else {
             PSMTXTrans(trn, 100.0f, 22.0f, 0.0f);
         }
+#endif
         PSMTXScale(scl, 0.8f, 0.8f, 0.8f);
         PSMTXConcat(m, trn, out);
         PSMTXConcat(out, scl, out);
         FontDrawStringMtx(out, msgSearch("btl_disp_slash"));
         d3[2] = maxhp / 100;
+#if VERSION <= VERSION_DEMO_JP
         d3[1] = (maxhp - (d3[2] * 100)) / 10;
         d3[0] = (maxhp - (d3[2] * 100)) - (d3[1] * 10);
+#else
+        d3[1] = (maxhp - d3[2] * 100) / 10;
+        d3[0] = maxhp - d3[2] * 100 - d3[1] * 10;
+#endif
         if (d3[2] > 0) {
             o3[0] = 28;
             o3[1] = 14;
@@ -765,17 +724,20 @@ static void DrawSubIconSub(BattleSubMenu* menu, s32 i, Mtx m, s32 enabled, u16 i
         for (j = 0; j < n; j++) {
             buf3[0] = d3[j] + '0';
             buf3[1] = 0;
-            if (((u32)gp->language) == 0) {
+#if VERSION <= VERSION_DEMO_JP
+            PSMTXTrans(trn, 72.0f + (x + o3[j]), 25.0f, 0.0f);
+#else
+            if (gp->language == LANGUAGE_JP) {
                 PSMTXTrans(trn, 76.0f + (30.0f + o3[j]), 25.0f, 0.0f);
             } else {
                 PSMTXTrans(trn, 78.0f + (30.0f + o3[j]), 25.0f, 0.0f);
             }
+#endif
             PSMTXConcat(m, trn, out);
             PSMTXConcat(out, scl, out);
             FontDrawStringMtx(out, buf3);
         }
     }
-#endif
 }
 
 /**
@@ -801,7 +763,7 @@ static void DrawMenuPartyChangeButton(void) {
     f32 y;
 
     wp = _battleWorkPointer;
-    menu = WP_SUBMENU(wp);
+    menu = wp->commandMenu.subMenu;
     camGetPtr(CAMERA_2D);
     mario = BattleGetMarioPtr(wp);
     party = BattleGetPartyPtr(wp);
@@ -853,7 +815,7 @@ static void DrawMenuPartyChangeButton_Sub(u32 id, f32 x, f32 y, f32 angle) {
 }
 
 #if VERSION >= VERSION_US
-// US: per-language "DANGER"/"PERIL" textures, the marks drawn larger outside Japanese, and the
+// US and later: per-language "DANGER"/"PERIL" textures, the marks drawn larger outside Japanese, and the
 // Mario and partner marks split into two functions drawn in an order that keeps the front one on top.
 u16 danger_icon_tbl[6] = {6, 7, 8, 7, 9, 10};
 u16 peril_icon_tbl[6] = {11, 12, 13, 14, 15, 16};
@@ -862,8 +824,9 @@ u16 peril_icon_tbl[6] = {11, 12, 13, 14, 15, 16};
  * Draws Mario's DANGER mark when his HP is 5 or less (and below max),
  * or the PERIL mark flashing yellow/red every 25 frames at 1 HP, using the texture for the current language,
  * 1.5x larger outside Japanese.
+ * Descriptive name by Zephiles (not in the symbol maps): the demo's DrawMenuPinchMark, split for Mario and the partner.
  */
-void N_DrawMenuMarioPinchMark(void) {
+void DrawMenuMarioPinchMark(void) {
     Mtx m;
     Mtx out;
     Mtx s;
@@ -910,20 +873,21 @@ void N_DrawMenuMarioPinchMark(void) {
             PSMTXTrans(m, p.x - 20.0f, 60.0f + p.y, 0.0f);
         }
         PSMTXConcat(cam->view, m, out);
-        if ((u32)gp->language != 0) {
+        if (gp->language != LANGUAGE_JP) {
             PSMTXScale(s, 1.5f, 1.5f, 1.5f);
             PSMTXConcat(out, s, out);
         }
-        GXLoadPosMtxImm(out, 0);
+        GXLoadPosMtxImm(out, GX_PNMTX0);
         btlDispGXQuads2D(-28.0f, 12.0f, 28.0f, -12.0f, r, g, b, a);
     }
 }
 
 /**
- * Draws the partner's DANGER or PERIL mark, the same as N_DrawMenuMarioPinchMark,
+ * Draws the partner's DANGER or PERIL mark, the same as DrawMenuMarioPinchMark,
  * slightly further back than Mario's.
+ * Descriptive name by Zephiles (not in the symbol maps): the demo's DrawMenuPinchMark, split for Mario and the partner.
  */
-void N_DrawMenuPartyPinchMark(void) {
+void DrawMenuPartyPinchMark(void) {
     Mtx m;
     Mtx out;
     Mtx s;
@@ -970,11 +934,11 @@ void N_DrawMenuPartyPinchMark(void) {
             PSMTXTrans(m, p.x - 20.0f, 60.0f + p.y, 0.0f);
         }
         PSMTXConcat(cam->view, m, out);
-        if ((u32)gp->language != 0) {
+        if (gp->language != LANGUAGE_JP) {
             PSMTXScale(s, 1.5f, 1.5f, 1.5f);
             PSMTXConcat(out, s, out);
         }
-        GXLoadPosMtxImm(out, 0);
+        GXLoadPosMtxImm(out, GX_PNMTX0);
         btlDispGXQuads2D(-28.0f, 12.0f, 28.0f, -12.0f, r, g, b, a);
     }
 }
@@ -987,17 +951,16 @@ static void DrawMenuPinchMark(void) {
     BattleUnit* unit = BattleGetMarioPtr(_battleWorkPointer);
     btlDispGXInit2D();
     if (unit->position.x > -120.0f) {
-        N_DrawMenuPartyPinchMark();
-        N_DrawMenuMarioPinchMark();
+        DrawMenuPartyPinchMark();
+        DrawMenuMarioPinchMark();
     } else {
-        N_DrawMenuMarioPinchMark();
-        N_DrawMenuPartyPinchMark();
+        DrawMenuMarioPinchMark();
+        DrawMenuPartyPinchMark();
     }
 }
 #else
 /**
- * Draws the DANGER mark (HP 5 or less and below max) or flashing PERIL mark (1 HP) above Mario and his partner,
- * with Japanese or English textures by language.
+ * Draws the DANGER/PERIL marks for Mario, then for his partner.
  */
 static void DrawMenuPinchMark(void) {
     Mtx m;
@@ -1032,7 +995,7 @@ static void DrawMenuPinchMark(void) {
                 a = 0xFF;
             }
         } else {
-            id = gp->language == 0 ? 6 : 7;
+            id = gp->language == LANGUAGE_JP ? 6 : 7;
             r = 0xFF;
             g = 0xE9;
             b = 0x40;
@@ -1043,7 +1006,7 @@ static void DrawMenuPinchMark(void) {
         btlGetScreenPoint(&unit->position, &p);
         PSMTXTrans(m, p.x - 20.0f, 60.0f + p.y, 0.0f);
         PSMTXConcat(cam->view, m, out);
-        GXLoadPosMtxImm(out, 0);
+        GXLoadPosMtxImm(out, GX_PNMTX0);
         btlDispGXQuads2D(-28.0f, 12.0f, 28.0f, -12.0f, r, g, b, a);
     }
     unit = BattleGetPartyPtr(wp);
@@ -1073,7 +1036,7 @@ static void DrawMenuPinchMark(void) {
         btlGetScreenPoint(&unit->position, &q);
         PSMTXTrans(m, q.x - 20.0f, 60.0f + q.y, 0.0f);
         PSMTXConcat(cam->view, m, out);
-        GXLoadPosMtxImm(out, 0);
+        GXLoadPosMtxImm(out, GX_PNMTX0);
         btlDispGXQuads2D(-28.0f, 12.0f, 28.0f, -12.0f, r, g, b, a);
     }
 }
@@ -1092,7 +1055,7 @@ static void DrawMenuHelpWin(const char* msg, f32 x, f32 y) {
     s8* dst;
     s32 i;
 
-    windowDispGX_Waku_col(0, (GXColor){0xFF, 0xFF, 0xFF, 0xCF}, x, y, 400.0f, 50.0f, 10.0f);
+    windowDispGX_Waku_col(x, y, 400.0f, 50.0f, 10.0f, 0, (GXColor){0xFF, 0xFF, 0xFF, 0xCF});
     FontDrawStart();
     FontDrawColorIDX(0);
     FontDrawScale(0.8f);
@@ -1149,12 +1112,12 @@ static void DrawMenuHelpWin(const char* msg, f32 x, f32 y) {
 static void DrawMenuCursorAndScrollArrow(const Vec* v) {
     Vec pos;
     BattleWork* wp = _battleWorkPointer;
-    BattleSubMenu* menu = WP_SUBMENU(wp);
+    BattleSubMenu* menu = wp->commandMenu.subMenu;
     BattleCursor* cursor = menu->cursor;
     f32 bob;
     s32 n;
 
-    bob = intplGetValue(4, 0.0f, 10.0f, menu->bobTimer, 6);
+    bob = intplGetValue(EASING_QUADRATIC_OUT, 0.0f, 10.0f, menu->bobTimer, 6);
     menu->bobTimer++;
 #if VERSION >= VERSION_US
     if (menu->bobTimer >= gp->framerate * 12 / 60) {
@@ -1167,13 +1130,13 @@ static void DrawMenuCursorAndScrollArrow(const Vec* v) {
         pos.x = 155.0f + v->x;
         pos.y = 15.0f + v->y + bob;
         pos.z = 0.0f;
-        iconDispGx(&pos, ICON_DISP_2D, ICON_1B5, 0.75f);
+        iconDispGx(&pos, ICON_FLAG_2D, 0.75f, ICON_ARROW_UP);
     }
     if (cursor->relPos < cursor->count - 6) {
         pos.x = 155.0f + v->x;
         pos.y = 20.0f + v->y - 164.0f - bob;
         pos.z = 0.0f;
-        iconDispGx(&pos, ICON_DISP_2D, ICON_1B6, 0.75f);
+        iconDispGx(&pos, ICON_FLAG_2D, 0.75f, ICON_ARROW_DOWN);
     }
     n = cursor->absPos - cursor->relPos;
     if (n < 0) {
@@ -1185,7 +1148,7 @@ static void DrawMenuCursorAndScrollArrow(const Vec* v) {
     pos.x = v->x;
     pos.y = v->y - (f32)n * 24.0f;
     pos.z = 0.0f;
-    iconDispGx(&pos, ICON_DISP_2D | ICON_DISP_FLIP_X, ICON_1F0, 1.0f);
+    iconDispGx(&pos, ICON_FLAG_2D | ICON_FLAG_FLIP_X, 1.0f, ICON_YUBI_CURSOR);
 }
 
 /**
@@ -1197,14 +1160,14 @@ static void InitSubMenuCommonProcess(BattleSubMenu** out, BattleCursor** mainCur
     BattleWork* wp = _battleWorkPointer;
     s32 i;
 
-    if (WP_SUBMENU(wp)) {
-        BattleFree(WP_SUBMENU(wp));
+    if (wp->commandMenu.subMenu) {
+        BattleFree(wp->commandMenu.subMenu);
     }
-    WP_SUBMENU(wp) = BattleAlloc(sizeof(BattleSubMenu));
-    *out = WP_SUBMENU(wp);
+    wp->commandMenu.subMenu = BattleAlloc(sizeof(BattleSubMenu));
+    *out = wp->commandMenu.subMenu;
     (*out)->cursor = cursor;
     (*out)->scrollState = 0;
-    (*out)->scrollTimer = 0;
+    (*out)->reserved_10 = 0;
     (*out)->shown = 0;
     (*out)->prevAbsPos = cursor->absPos;
     if (BattleGetUnitPtr(wp, wp->activeUnitId)->currentKind == UNIT_MARIO) {
@@ -1236,7 +1199,7 @@ static void InitSubMenuCommonProcess2(BattleSubMenu* menu, BattleCursor* cursor)
         menu->iconTimer[idx] = 0;
         menu->iconSlot[idx] = i;
         menu->iconFlags[idx] = 0;
-        menu->iconFlags[idx] |= 1;
+        menu->iconFlags[idx] |= SUBMENU_ICON_VISIBLE;
         if (i == cursor->count - 1) {
             menu->iconState[idx] = 0;
         } else {
@@ -1260,7 +1223,7 @@ static void InitSubMenuCommonProcess3(BattleSubMenu* menu, BattleCursor* cursor)
         menu->iconTimer[idx] = 0;
         menu->iconSlot[idx] = i;
         menu->iconFlags[idx] = 0;
-        menu->iconFlags[idx] |= 1;
+        menu->iconFlags[idx] |= SUBMENU_ICON_VISIBLE;
         if (i == cursor->count - 1) {
             menu->iconState[idx] = 1;
         } else {
@@ -1279,7 +1242,7 @@ static void DrawSubMenuCommonProcessSub1(BattleSubMenu* menu, BattleCursor* curs
 
     if (key == 6 && cursor->count > 6 && prev == cursor->count - 6 && cursor->relPos == 0 && cursor->absPos != 1) {
         menu->scrollState = 30;
-        menu->scrollTimer = 0;
+        menu->reserved_10 = 0;
         menu->scrollFrom = cursor->count - 6;
         menu->scrollTo = 0.0f;
         for (i = 0; i < 7; i++) {
@@ -1288,7 +1251,7 @@ static void DrawSubMenuCommonProcessSub1(BattleSubMenu* menu, BattleCursor* curs
         }
     } else if (key == 6 && cursor->count > 6 && prev == 0 && cursor->relPos == cursor->count - 6 && cursor->absPos != 5) {
         menu->scrollState = 40;
-        menu->scrollTimer = 0;
+        menu->reserved_10 = 0;
         menu->scrollFrom = 0.0f;
         menu->scrollTo = cursor->count - 6;
         for (i = 0; i < 7; i++) {
@@ -1297,7 +1260,7 @@ static void DrawSubMenuCommonProcessSub1(BattleSubMenu* menu, BattleCursor* curs
         }
     } else if (cursor->relPos == prev + 1) {
         menu->scrollState = 10;
-        menu->scrollTimer = 0;
+        menu->reserved_10 = 0;
         menu->scrollFrom = prev;
         menu->scrollTo = prev + 1;
         for (i = 0; i < 7; i++) {
@@ -1306,7 +1269,7 @@ static void DrawSubMenuCommonProcessSub1(BattleSubMenu* menu, BattleCursor* curs
         }
     } else if (cursor->relPos == prev - 1) {
         menu->scrollState = 20;
-        menu->scrollTimer = 0;
+        menu->reserved_10 = 0;
         menu->scrollFrom = prev;
         menu->scrollTo = prev - 1;
         for (i = 0; i < 7; i++) {
@@ -1322,13 +1285,13 @@ static void DrawSubMenuCommonProcessSub1(BattleSubMenu* menu, BattleCursor* curs
  * the ring icons leaving for the bubble (filling a, b and c with their matrices, positions and angles)
  * and the rows flipping in (d). Returns the help window position in x, y.
  */
-static void DrawSubMenuCommonProcess(f32* x, f32* y, Mtx* a, Vec* b, f32* c, Mtx* d) {
+static void DrawSubMenuCommonProcess(f32* x, f32* y, Mtx* iconMtx, Vec* iconPos, f32* iconAngle, Mtx* rowMtx) {
     Mtx tm;
     Mtx sm;
     f32 ox;
     f32 oy;
     BattleWork* wp = _battleWorkPointer;
-    BattleSubMenu* menu = WP_SUBMENU(wp);
+    BattleSubMenu* menu = wp->commandMenu.subMenu;
     BattleCursor* cursor = menu->cursor;
     BattleCursor* mainCursor;
     s32 steps;
@@ -1340,13 +1303,20 @@ static void DrawSubMenuCommonProcess(f32* x, f32* y, Mtx* a, Vec* b, f32* c, Mtx
     f32 ang;
     f32 s;
     s32 sw;
+    f32 px;
+    f32 py;
 
     if (BattleGetUnitPtr(wp, wp->activeUnitId)->currentKind == UNIT_MARIO) {
         mainCursor = &wp->commandMenu.cursor[0];
     } else {
         mainCursor = &wp->commandMenu.cursor[1];
     }
-    n = (6 <= cursor->count) ? 6 : cursor->count;
+
+    if (6 <= cursor->count) {
+        n = 6;
+    } else {
+        n = cursor->count;
+    }
     prev = cursor->relPos;
     if (cursor->absPos <= cursor->relPos) {
         cursor->relPos = cursor->absPos - 1;
@@ -1410,86 +1380,83 @@ static void DrawSubMenuCommonProcess(f32* x, f32* y, Mtx* a, Vec* b, f32* c, Mtx
     for (i = 0; i < mainCursor->count; i++) {
         switch (menu->iconState[i]) {
             case 0:
-                menu->iconFlags[i] |= 1;
-                menu->iconFlags[i] |= 2;
-                GetRingCenter(&b[i]);
-                {
-                    f32 px = b[i].x;
-                    f32 py;
-                    b[i].x = intplGetValue(4, px, -60.0f, menu->iconTimer[i], FPS_FRAMES(12));
-                    py = b[i].y;
-                    b[i].y = intplGetValue(4, py, 55.0f, menu->iconTimer[i], FPS_FRAMES(12));
-                }
-                PSMTXTrans(a[i], 20.0f + b[i].x, b[i].y, b[i].z);
-                c[i] = intplGetValue(0, 0.0f, 360.0f, menu->iconTimer[i], FPS_FRAMES(12));
-                if (c[i] > 360.0f) {
-                    c[i] -= 360.0f;
+                menu->iconFlags[i] |= SUBMENU_ICON_VISIBLE;
+                menu->iconFlags[i] |= SUBMENU_ICON_SPEECH_BUBBLE;
+                GetRingCenter(&iconPos[i]);
+                px = iconPos[i].x;
+                iconPos[i].x = intplGetValue(EASING_QUADRATIC_OUT, px, -60.0f, menu->iconTimer[i], FRAMES(12));
+                py = iconPos[i].y;
+                iconPos[i].y = intplGetValue(EASING_QUADRATIC_OUT, py, 55.0f, menu->iconTimer[i], FRAMES(12));
+                PSMTXTrans(iconMtx[i], 20.0f + iconPos[i].x, iconPos[i].y, iconPos[i].z);
+                iconAngle[i] = intplGetValue(EASING_LINEAR, 0.0f, 360.0f, menu->iconTimer[i], FRAMES(12));
+                if (iconAngle[i] > 360.0f) {
+                    iconAngle[i] -= 360.0f;
                 }
                 if (menu->iconTimer[i] >= 3) {
                     menu->iconsArrived = 1;
                 }
                 menu->iconTimer[i]++;
-                if (menu->iconTimer[i] > FPS_FRAMES(12)) {
+                if (menu->iconTimer[i] > FRAMES(12)) {
                     menu->iconState[i] = 1;
                 }
                 break;
             case 1:
-                menu->iconFlags[i] |= 1;
-                menu->iconFlags[i] |= 2;
-                PSMTXTrans(a[i], -40.0f, 55.0f, 0.0f);
-                c[i] = 360.0f;
+                menu->iconFlags[i] |= SUBMENU_ICON_VISIBLE;
+                menu->iconFlags[i] |= SUBMENU_ICON_SPEECH_BUBBLE;
+                PSMTXTrans(iconMtx[i], -40.0f, 55.0f, 0.0f);
+                iconAngle[i] = 360.0f;
                 menu->iconsArrived = 1;
                 break;
             case 10:
-                menu->iconFlags[i] |= 1;
-                menu->iconFlags[i] &= ~2;
+                menu->iconFlags[i] |= SUBMENU_ICON_VISIBLE;
+                menu->iconFlags[i] &= ~SUBMENU_ICON_SPEECH_BUBBLE;
                 ang = 3.1415927f * kakutable[mainCursor->count - 3][menu->iconSlot[i]] / 180.0f;
-                GetRingCenter(&b[i]);
+                GetRingCenter(&iconPos[i]);
                 GetRingOffset(ang, &ox, &oy);
-                b[i].x += ox;
-                b[i].y += oy;
-                b[i].z = oy;
+                iconPos[i].x += ox;
+                iconPos[i].y += oy;
+                iconPos[i].z = oy;
                 s = 1.0f - 0.1f * menu->iconTimer[i];
                 if (s <= 0.0f) {
                     menu->iconState[i] = 11;
                 }
                 PSMTXScale(sm, s, s, 1.0f);
-                PSMTXTrans(tm, b[i].x, b[i].y, b[i].z);
-                PSMTXConcat(tm, sm, a[i]);
-                c[i] = 0.0f;
+                PSMTXTrans(tm, iconPos[i].x, iconPos[i].y, iconPos[i].z);
+                PSMTXConcat(tm, sm, iconMtx[i]);
+                iconAngle[i] = 0.0f;
                 menu->iconTimer[i]++;
                 break;
             case 11:
-                menu->iconFlags[i] &= ~1;
+                menu->iconFlags[i] &= ~SUBMENU_ICON_VISIBLE;
                 break;
         }
     }
     for (i = 0; i < 7; i++) {
         switch (sw = menu->rowState[i]) {
             case 0:
-                menu->rowFlags[i] &= ~1;
+                menu->rowFlags[i] &= ~SUBMENU_ROW_VISIBLE;
                 menu->reserved_114[i] = 0xFF;
                 break;
             case 1:
-                menu->rowFlags[i] &= ~1;
+                menu->rowFlags[i] &= ~SUBMENU_ROW_VISIBLE;
                 menu->reserved_114[i] = 0xFF;
                 if (menu->rowTimer[i] >= 0 && i != 6) {
-                    s = intplGetValue(0, 90.0f, 0.0f, menu->rowTimer[i], FPS_FRAMES(12));
-                    menu->rowFlags[i] |= 1;
-                    PSMTXRotRad(d[i], 'y', 0.017453292f * s);
+                    s = intplGetValue(EASING_LINEAR, 90.0f, 0.0f, menu->rowTimer[i], FRAMES(12));
+                    menu->rowFlags[i] |= SUBMENU_ROW_VISIBLE;
+                    PSMTXRotRad(rowMtx[i], 'y', 0.017453292f * s);
                 }
                 menu->rowTimer[i]++;
-                if (menu->rowTimer[i] > FPS_FRAMES(12)) {
+                if (menu->rowTimer[i] > FRAMES(12)) {
                     menu->rowState[i] = 2;
                 }
                 break;
             case 2:
                 menu->reserved_114[i] = 0xFF;
                 if (i != 6) {
-                    menu->rowFlags[i] |= 1;
-                    PSMTXIdentity(d[i]);
+                    menu->rowFlags[i] |= SUBMENU_ROW_VISIBLE;
+                    PSMTXIdentity(rowMtx[i]);
                 } else {
-                    menu->rowFlags[i] &= ~1;
+                    menu->rowFlags[i] &= ~SUBMENU_ROW_VISIBLE;
                 }
                 break;
             case 10:
@@ -1502,9 +1469,9 @@ static void DrawSubMenuCommonProcess(f32* x, f32* y, Mtx* a, Vec* b, f32* c, Mtx
                 if (sw == 30 || sw == 40) {
                     steps = (cursor->count - 6) / 2 + 12;
                 }
-                menu->rowFlags[i] |= 1;
-                PSMTXIdentity(d[i]);
-                menu->scrollPos = intplGetValue(4, menu->scrollFrom, menu->scrollTo, menu->rowTimer[i], steps);
+                menu->rowFlags[i] |= SUBMENU_ROW_VISIBLE;
+                PSMTXIdentity(rowMtx[i]);
+                menu->scrollPos = intplGetValue(EASING_QUADRATIC_OUT, menu->scrollFrom, menu->scrollTo, menu->rowTimer[i], steps);
                 menu->rowTimer[i]++;
                 if (menu->rowTimer[i] > steps) {
                     menu->rowState[i] = 2;
@@ -1525,12 +1492,12 @@ void BattleMenuDisp_ActSelect_Init(BattleWork* wp, BattleCursor* cursor, BattleC
     s32 idx;
     BattleSubMenu* menu;
 
-    if (WP_SUBMENU(wp)) {
-        BattleFree(WP_SUBMENU(wp));
+    if (wp->commandMenu.subMenu) {
+        BattleFree(wp->commandMenu.subMenu);
     }
-    WP_SUBMENU(wp) = BattleAlloc(sizeof(BattleSubMenu));
+    wp->commandMenu.subMenu = BattleAlloc(sizeof(BattleSubMenu));
     if (flag & 1) {
-        menu = WP_SUBMENU(wp);
+        menu = wp->commandMenu.subMenu;
         menu->cursor = cursor;
         menu->acts = acts;
         menu->scrollState = 10;
@@ -1554,7 +1521,7 @@ void BattleMenuDisp_ActSelect_Init(BattleWork* wp, BattleCursor* cursor, BattleC
             }
         }
     } else {
-        menu = WP_SUBMENU(wp);
+        menu = wp->commandMenu.subMenu;
         menu->cursor = cursor;
         menu->acts = acts;
         menu->scrollState = 0;
@@ -1588,9 +1555,9 @@ void BattleMenuDisp_ActSelect_Disp(BattleWork* wp) {
 
 /** Closes the command ring and frees its BattleSubMenu. */
 void BattleMenuDisp_ActSelect_End(BattleWork* wp) {
-    if (WP_SUBMENU(wp)) {
-        BattleFree(WP_SUBMENU(wp));
-        WP_SUBMENU(wp) = NULL;
+    if (wp->commandMenu.subMenu) {
+        BattleFree(wp->commandMenu.subMenu);
+        wp->commandMenu.subMenu = NULL;
     }
 }
 
@@ -1606,11 +1573,11 @@ void DrawMainMenu(BattleWork* wp_) {
     Mtx trans;
     Mtx rot;
     Mtx scale;
-    f32 z[5];
+    f32 iconAngle[5];
     f32 a;
     s32 i;
     BattleWork* wp = _battleWorkPointer;
-    BattleSubMenu* menu = WP_SUBMENU(wp);
+    BattleSubMenu* menu = wp->commandMenu.subMenu;
     BattleCursor* cursor = menu->cursor;
     f32 c;
     f32 ox;
@@ -1651,7 +1618,6 @@ void DrawMainMenu(BattleWork* wp_) {
                     }
                 }
             } else if (diff == -1 || mc->count - 1 == diff) {
-
                 menu->scrollState = 2;
                 menu->shown = 0;
                 menu->prevAbsPos = menu->cursor->absPos;
@@ -1694,13 +1660,10 @@ void DrawMainMenu(BattleWork* wp_) {
                 }
                 break;
             case 1:
-                menu->iconFlags[i] |= 1;
+                menu->iconFlags[i] |= SUBMENU_ICON_VISIBLE;
+
                 c = 0.0f;
-#if VERSION >= VERSION_US
-                a = c + menu->iconTimer[i] * (12.0f / gp->framerate);
-#else
-                a = c + 0.2f * menu->iconTimer[i];
-#endif
+                a = 3.1415927f * c / 180.0f + FRAMES_STEP(0.2f, 12.0f, menu->iconTimer[i]);
                 b = 3.1415927f * kakutable[cursor->count - 3][menu->iconSlot[i]] / 180.0f;
                 if (a >= b) {
                     a = b;
@@ -1711,16 +1674,16 @@ void DrawMainMenu(BattleWork* wp_) {
                 pos[i].y += oy;
                 pos[i].z = oy;
                 if (i == cursor->absPos) {
-                    c = 270.0f + 90.0f * menu->iconTimer[i] / (f32)FPS_FRAMES(10);
+                    c = 270.0f + 90.0f * menu->iconTimer[i] / (f32)FRAMES(10);
                     if (c >= 360.0f) {
                         c = 0.0f;
                     }
                     PSMTXRotRad(rot, 'x', 0.017453292f * c);
                     PSMTXTrans(trans, 20.0f + pos[i].x, pos[i].y, pos[i].z);
                     PSMTXConcat(trans, rot, mtx[i]);
-                    menu->iconFlags[i] |= 2;
+                    menu->iconFlags[i] |= SUBMENU_ICON_SPEECH_BUBBLE;
                 } else {
-                    c = 270.0f + 90.0f * menu->iconTimer[i] / (f32)FPS_FRAMES(10);
+                    c = 270.0f + 90.0f * menu->iconTimer[i] / (f32)FRAMES(10);
                     if (c >= 360.0f) {
                         c = 0.0f;
                     }
@@ -1728,8 +1691,8 @@ void DrawMainMenu(BattleWork* wp_) {
                     PSMTXTrans(trans, pos[i].x, pos[i].y, pos[i].z);
                     PSMTXConcat(trans, rot, mtx[i]);
                 }
-                z[i] = 0.0f;
-                if (a >= b && menu->iconTimer[i] >= FPS_FRAMES(10)) {
+                iconAngle[i] = 0.0f;
+                if (a >= b && menu->iconTimer[i] >= FRAMES(10)) {
                     menu->iconState[i] = 3;
                     menu->iconTimer[i] = -1;
                 }
@@ -1744,11 +1707,11 @@ void DrawMainMenu(BattleWork* wp_) {
                 pos[i].z = oy;
                 if (i == cursor->absPos) {
                     PSMTXTrans(mtx[i], 20.0f + pos[i].x, pos[i].y, pos[i].z);
-                    menu->iconFlags[i] |= 2;
+                    menu->iconFlags[i] |= SUBMENU_ICON_SPEECH_BUBBLE;
                 } else {
                     PSMTXTrans(mtx[i], pos[i].x, pos[i].y, pos[i].z);
                 }
-                z[i] = 0.0f;
+                iconAngle[i] = 0.0f;
                 break;
             case 4:
                 c = kakutable[cursor->count - 3][menu->iconTimer[i + 10]];
@@ -1756,11 +1719,7 @@ void DrawMainMenu(BattleWork* wp_) {
                 if (0.0f == b) {
                     b = 360.0f;
                 }
-#if VERSION >= VERSION_US
-                a = 3.1415927f * c / 180.0f + menu->iconTimer[i] * (12.0f / gp->framerate);
-#else
-                a = 3.1415927f * c / 180.0f + 0.2f * menu->iconTimer[i];
-#endif
+                a = 3.1415927f * c / 180.0f + FRAMES_STEP(0.2f, 12.0f, menu->iconTimer[i]);
                 b = 3.1415927f * b / 180.0f;
                 if (a >= b) {
                     a = b;
@@ -1773,8 +1732,8 @@ void DrawMainMenu(BattleWork* wp_) {
                 pos[i].y += oy;
                 pos[i].z = oy;
                 PSMTXTrans(mtx[i], pos[i].x, pos[i].y, pos[i].z);
-                z[i] = 0.0f;
-                menu->iconFlags[i] &= ~2;
+                iconAngle[i] = 0.0f;
+                menu->iconFlags[i] &= ~SUBMENU_ICON_SPEECH_BUBBLE;
                 menu->iconTimer[i]++;
                 break;
             case 5:
@@ -1782,11 +1741,7 @@ void DrawMainMenu(BattleWork* wp_) {
                 if (0.0f == c) {
                     c = 360.0f;
                 }
-#if VERSION >= VERSION_US
-                a = 3.1415927f * c / 180.0f - menu->iconTimer[i] * (12.0f / gp->framerate);
-#else
-                a = 3.1415927f * c / 180.0f - 0.2f * menu->iconTimer[i];
-#endif
+                a = 3.1415927f * c / 180.0f - FRAMES_STEP(0.2f, 12.0f, menu->iconTimer[i]);
                 b = 3.1415927f * kakutable[cursor->count - 3][menu->iconSlot[i]] / 180.0f;
                 if (a <= b) {
                     a = b;
@@ -1799,30 +1754,30 @@ void DrawMainMenu(BattleWork* wp_) {
                 pos[i].y += oy;
                 pos[i].z = oy;
                 PSMTXTrans(mtx[i], pos[i].x, pos[i].y, pos[i].z);
-                z[i] = 0.0f;
-                menu->iconFlags[i] &= ~2;
+                iconAngle[i] = 0.0f;
+                menu->iconFlags[i] &= ~SUBMENU_ICON_SPEECH_BUBBLE;
                 menu->iconTimer[i]++;
                 break;
             case 10:
-                menu->iconFlags[i] |= 1;
-                menu->iconFlags[i] |= 2;
+                menu->iconFlags[i] |= SUBMENU_ICON_VISIBLE;
+                menu->iconFlags[i] |= SUBMENU_ICON_SPEECH_BUBBLE;
                 GetRingCenter(&pos[i]);
                 GetRingOffset(0.0f, &ox, &oy);
                 pos[i].x += ox;
                 pos[i].y += oy;
                 pos[i].z = oy;
-                pos[i].x = intplGetValue(4, -60.0f, pos[i].x, menu->iconTimer[i], FPS_FRAMES(12));
-                pos[i].y = intplGetValue(4, 55.0f, pos[i].y, menu->iconTimer[i], FPS_FRAMES(12));
+                pos[i].x = intplGetValue(EASING_QUADRATIC_OUT, -60.0f, pos[i].x, menu->iconTimer[i], FRAMES(12));
+                pos[i].y = intplGetValue(EASING_QUADRATIC_OUT, 55.0f, pos[i].y, menu->iconTimer[i], FRAMES(12));
                 PSMTXTrans(mtx[i], 20.0f + pos[i].x, pos[i].y, pos[i].z);
-                z[i] = intplGetValue(0, 360.0f, 0.0f, menu->iconTimer[i], FPS_FRAMES(12));
+                iconAngle[i] = intplGetValue(EASING_LINEAR, 360.0f, 0.0f, menu->iconTimer[i], FRAMES(12));
                 menu->iconTimer[i]++;
-                if (menu->iconTimer[i] > FPS_FRAMES(12)) {
+                if (menu->iconTimer[i] > FRAMES(12)) {
                     menu->iconState[i] = 3;
                 }
                 break;
             case 11:
-                menu->iconFlags[i] |= 1;
-                menu->iconFlags[i] &= ~2;
+                menu->iconFlags[i] |= SUBMENU_ICON_VISIBLE;
+                menu->iconFlags[i] &= ~SUBMENU_ICON_SPEECH_BUBBLE;
                 a = 3.1415927f * kakutable[cursor->count - 3][menu->iconSlot[i]] / 180.0f;
                 GetRingCenter(&pos[i]);
                 GetRingOffset(a, &ox, &oy);
@@ -1836,12 +1791,12 @@ void DrawMainMenu(BattleWork* wp_) {
                 PSMTXScale(scale, a, a, 1.0f);
                 PSMTXTrans(trans, pos[i].x, pos[i].y, pos[i].z);
                 PSMTXConcat(trans, scale, mtx[i]);
-                z[i] = 0.0f;
+                iconAngle[i] = 0.0f;
                 menu->iconTimer[i]++;
                 break;
         }
     }
-    DrawMainIcon(menu, menu->acts, mtx, pos, z);
+    DrawMainIcon(menu, menu->acts, mtx, pos, iconAngle);
     DrawMenuPartyChangeButton();
     DrawMenuPinchMark();
 }
@@ -1874,9 +1829,9 @@ void BattleMenuDisp_WeaponSelect_Disp(BattleWork* wp) {
 
 /** Closes the move list and frees its BattleSubMenu. */
 void BattleMenuDisp_WeaponSelect_End(BattleWork* wp) {
-    if (WP_SUBMENU(wp)) {
-        BattleFree(WP_SUBMENU(wp));
-        WP_SUBMENU(wp) = NULL;
+    if (wp->commandMenu.subMenu) {
+        BattleFree(wp->commandMenu.subMenu);
+        wp->commandMenu.subMenu = NULL;
     }
 }
 
@@ -1893,7 +1848,7 @@ void DrawWeaponWin(void) {
     s32 enabled[7];
     const char* names[7];
     s32 costs[7];
-    s32 p34[7];
+    s32 spCost[7];
     u16 icons[8];
     Vec v;
     f32 x;
@@ -1926,21 +1881,19 @@ void DrawWeaponWin(void) {
                 costs[i] = 0;
             }
             if (menu->weapons[idx].weapon) {
-                p34[i] = (u8)menu->weapons[idx].weapon->baseSpCost;
+                spCost[i] = (u8)menu->weapons[idx].weapon->baseSpCost;
             } else {
-                p34[i] = 0;
+                spCost[i] = 0;
             }
         }
     }
     DrawMainIcon(menu, wp->commandMenu.act, iconMtx, iconPos, iconAngle);
-#if VERSION >= VERSION_DEMO_EU
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, NULL, 220); // name width that the label is scaled down to fit
-#else
 #if VERSION <= VERSION_DEMO_JP
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, NULL);
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, NULL);
+#elif VERSION >= VERSION_DEMO_EU
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, NULL, 220); // name width that the label is scaled down to fit
 #else
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, NULL, 0);
-#endif
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, NULL, 0);
 #endif
     v = (Vec){-60.0f, 35.0f, 0.0f};
     DrawMenuCursorAndScrollArrow(&v);
@@ -1990,15 +1943,15 @@ void BattleMenuDisp_Operation_Disp(BattleWork* wp) {
 
 /** Closes the Tactics list and frees its BattleSubMenu. */
 void BattleMenuDisp_Operation_End(BattleWork* wp) {
-    if (WP_SUBMENU(wp)) {
-        BattleFree(WP_SUBMENU(wp));
-        WP_SUBMENU(wp) = NULL;
+    if (wp->commandMenu.subMenu) {
+        BattleFree(wp->commandMenu.subMenu);
+        wp->commandMenu.subMenu = NULL;
     }
 }
 
 /**
  * Draws the Tactics list (Change Partner, Defend, Run Away, ...) with its FP costs, cursor and help window.
- * In the demos every row shows the first row's cost.
+ * In the early demos every row shows the first row's cost.
  */
 void DrawOperationWin(void) {
     Mtx rowMtx[7];
@@ -2008,13 +1961,13 @@ void DrawOperationWin(void) {
     s32 enabled[7];
     const char* names[7];
     s32 costs[7];
-    s32 p34[7];
+    s32 spCost[7];
     u16 icons[8];
     Vec v;
     f32 x;
     f32 y;
     BattleWork* wp = _battleWorkPointer;
-    BattleSubMenu* menu = WP_SUBMENU(wp);
+    BattleSubMenu* menu = wp->commandMenu.subMenu;
     BattleCursor* cursor = menu->cursor;
     BattleCommandOperation* items;
     s32 i;
@@ -2027,25 +1980,28 @@ void DrawOperationWin(void) {
         idx = (s32)menu->scrollPos + i;
         if (idx < cursor->count) {
             enabled[i] = items[idx].enabled;
+
+            // BUG: tests row i of the list instead of row idx, so once the list scrolls the coin fallback follows the
+            // wrong entry (every version).
             if (items[i].icon) {
                 icons[i] = items[idx].icon;
             } else {
-                icons[i] = ICON_18B;
+                icons[i] = ICON_ITEM_COIN;
             }
             names[i] = items[idx].name;
 #if VERSION <= VERSION_DEMO_JP
-            costs[i] = items->cost; // the demo reads the first row's cost for every row
+            costs[i] = items->cost;
 #else
             costs[i] = items[idx].cost;
 #endif
-            p34[i] = 0;
+            spCost[i] = 0;
         }
     }
     DrawMainIcon(menu, wp->commandMenu.act, iconMtx, iconPos, iconAngle);
 #if VERSION <= VERSION_DEMO_JP
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, NULL);
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, NULL);
 #else
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, NULL, 0);
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, NULL, 0);
 #endif
     v = (Vec){-60.0f, 35.0f, 0.0f};
     DrawMenuCursorAndScrollArrow(&v);
@@ -2081,9 +2037,9 @@ void BattleMenuDisp_ChangePartySelect_Disp(BattleWork* wp) {
 
 /** Closes the Change Partner list and frees its BattleSubMenu. */
 void BattleMenuDisp_ChangePartySelect_End(BattleWork* wp) {
-    if (WP_SUBMENU(wp)) {
-        BattleFree(WP_SUBMENU(wp));
-        WP_SUBMENU(wp) = NULL;
+    if (wp->commandMenu.subMenu) {
+        BattleFree(wp->commandMenu.subMenu);
+        wp->commandMenu.subMenu = NULL;
     }
 }
 
@@ -2096,13 +2052,13 @@ void DrawChangePartyWin(void) {
     s32 enabled[7];
     const char* names[7];
     s32 costs[7];
-    s32 p34[7];
+    s32 spCost[7];
     u16 icons[8];
     Vec v;
     f32 x;
     f32 y;
     BattleWork* wp = _battleWorkPointer;
-    BattleSubMenu* menu = WP_SUBMENU(wp);
+    BattleSubMenu* menu = wp->commandMenu.subMenu;
     BattleCursor* cursor = menu->cursor;
     BattleCommandParty* items;
     s32 i;
@@ -2118,22 +2074,20 @@ void DrawChangePartyWin(void) {
             if (items[idx].icon) {
                 icons[i] = items[idx].icon;
             } else {
-                icons[i] = ICON_18B;
+                icons[i] = ICON_ITEM_COIN;
             }
             names[i] = items[idx].name;
             costs[i] = 0;
-            p34[i] = 0;
+            spCost[i] = 0;
         }
     }
     DrawMainIcon(menu, wp->commandMenu.act, iconMtx, iconPos, iconAngle);
-#if VERSION >= VERSION_DEMO_EU
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, items, 150); // name width that the label is scaled down to fit
-#else
 #if VERSION <= VERSION_DEMO_JP
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, items);
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, items);
+#elif VERSION >= VERSION_DEMO_EU
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, items, 150); // name width that the label is scaled down to fit
 #else
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, items, 1);
-#endif
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, items, 1);
 #endif
     v = (Vec){-60.0f, 35.0f, 0.0f};
     DrawMenuCursorAndScrollArrow(&v);
@@ -2166,9 +2120,9 @@ void BattleMenuDisp_MultiItem_Disp(BattleWork* wp) {
 
 /** Closes the Double/Triple Dip list and frees its BattleSubMenu. */
 void BattleMenuDisp_MultiItem_End(BattleWork* wp) {
-    if (WP_SUBMENU(wp)) {
-        BattleFree(WP_SUBMENU(wp));
-        WP_SUBMENU(wp) = NULL;
+    if (wp->commandMenu.subMenu) {
+        BattleFree(wp->commandMenu.subMenu);
+        wp->commandMenu.subMenu = NULL;
     }
 }
 
@@ -2184,13 +2138,13 @@ void DrawMultiItemWin(void) {
     s32 enabled[7];
     const char* names[7];
     s32 costs[7];
-    s32 p34[7];
+    s32 spCost[7];
     u16 icons[8];
     Vec v;
     f32 x;
     f32 y;
     BattleWork* wp = _battleWorkPointer;
-    BattleSubMenu* menu = WP_SUBMENU(wp);
+    BattleSubMenu* menu = wp->commandMenu.subMenu;
     BattleCursor* cursor = menu->cursor;
     BattleCommandMultiItem* items;
     s32 i;
@@ -2206,18 +2160,18 @@ void DrawMultiItemWin(void) {
             if (items[idx].icon) {
                 icons[i] = items[idx].icon;
             } else {
-                icons[i] = ICON_18B;
+                icons[i] = ICON_ITEM_COIN;
             }
             names[i] = items[idx].name;
             costs[i] = items[idx].cost;
-            p34[i] = 0;
+            spCost[i] = 0;
         }
     }
     DrawMainIcon(menu, wp->commandMenu.act, iconMtx, iconPos, iconAngle);
 #if VERSION <= VERSION_DEMO_JP
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, NULL);
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, NULL);
 #else
-    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, p34, NULL, 0);
+    DrawSubIcon(menu, rowMtx, enabled, icons, names, costs, spCost, NULL, 0);
 #endif
     v = (Vec){-60.0f, 35.0f, 0.0f};
     DrawMenuCursorAndScrollArrow(&v);

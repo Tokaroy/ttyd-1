@@ -1,15 +1,13 @@
 // Wizzerd effect (mahorn: Wizzerd) of rings growing and fading around a point; count and duration come from the caller.
+
 #include "eff/eff_mahorn.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "version.h"
-
 static void effMahornDisp(CameraId cameraId, EffectEntry* effect);
 static void effMahornMain(EffectEntry* effect);
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
 
 typedef struct EffMahornWork {
     s32 type;     // 0x0
@@ -39,7 +37,6 @@ static u8 scale_dt2[] = {
 EffectEntry* effMahornEntry(s32 type, s32 count, s32 duration, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffMahornWork* work;
-    EffMahornWork* ring;
     s32 i, num;
 
     effect = effEntry();
@@ -61,23 +58,22 @@ EffectEntry* effMahornEntry(s32 type, s32 count, s32 duration, f32 x, f32 y, f32
     work->position.z = z;
     work->scale = scale;
     work->alpha = 255;
-
-    ring = work + 1;
-    for (i = 1; i < effect->count; i++, ring++) {
-        ring->position.x = 0.0f;
-        ring->position.y = 0.0f;
-        ring->position.z = 0.0f;
-        ring->scale = 0.0f;
-        ring->scale2 = 0.0f;
-        ring->alpha = 255;
-        ring->delay = i * 4;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->scale = 0.0f;
+        work->scale2 = 0.0f;
+        work->alpha = 255;
+        work->delay = i * 4;
     }
     return effect;
 }
 
 /**
- * Per frame: counts down each ring's delay, grows its scale along the scale curve,
- * fades it out near the end of the duration and deletes the effect when the last ring is gone.
+ * Per frame: counts down each ring's delay, pulses its scale along its scale curve while its own alpha decays
+ * slowly, fades all rings out over the last 16 frames of the duration and then deletes the effect.
  */
 static void effMahornMain(EffectEntry* effect) {
     EffMahornWork* work = effect->userdata;
@@ -113,7 +109,7 @@ static void effMahornMain(EffectEntry* effect) {
         work->scale2 += (20.0f - work->scale2) / 8.0f;
         work->alpha += -work->alpha / 64;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMahornDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effMahornDisp, effect);
 }
 
 /** Draws each ring as a camera-facing textured quad (effect texture 0x82) with its own scale and alpha. */

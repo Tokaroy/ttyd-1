@@ -1,3 +1,4 @@
+// The #line directives keep the original source line numbers of the asserts that follow them.
 #include "musyx/assert.h"
 #include "musyx/musyx.h"
 #include "musyx/hardware.h"
@@ -32,7 +33,9 @@ typedef struct ARAMTransferQueue {
 } ARAMTransferQueue;
 
 static u32 aramTop;                                               // size: 0x4
+#if MUSY_VERSION < MUSY_VERSION_CHECK(2, 0, 2)
 static u32 aramWrite;                                             // size: 0x4
+#endif
 static u32 aramStream;                                            // size: 0x4
 static void* (*aramUploadCallback)(u32, u32); // size: 0x4
 static u32 aramUploadChunkSize;                                   // size: 0x4
@@ -47,27 +50,24 @@ static STREAM_BUFFER* aramIdleStreamBuffers;
 
 static void InitStreamBuffers();
 
-/** Empties the low- and high-priority ARAM transfer queues (write and valid counters). */
 static void aramQueueInit() {
   aramQueueLo.write = aramQueueLo.valid = 0;
   aramQueueHi.write = aramQueueHi.valid = 0;
 }
 
-/** ARQ completion callback: finds which queue slot the finished request belongs to (high priority requests use the Hi
- * queue), calls that slot's user callback with its user value, and decrements the queue's valid count. */
 static void aramQueueCallback(unsigned long ptr) {
-  u32 i;                        // r31
-  ARQRequest* arq;              // r29
-  ARAMTransferQueue* aramQueue; // r30
+  u32 i;
+  ARQRequest* arq;
+  ARAMTransferQueue* aramQueue;
 
   arq = (ARQRequest*)ptr;
-  if (arq->priority == 1) {
+  if (arq->priority == ARQ_PRIORITY_HIGH) {
     aramQueue = &aramQueueHi;
   } else {
     aramQueue = &aramQueueLo;
   }
 
-  for (i = 0; i < 16; ++i) {
+  for (i = 0; i < sizeof(aramQueue->queue) / sizeof(aramQueue->queue[0]); ++i) {
     if (arq == &aramQueue->queue[i].arq && aramQueue->queue[i].callback) {
       aramQueue->queue[i].callback(aramQueue->queue[i].user);
     }
@@ -76,13 +76,10 @@ static void aramQueueCallback(unsigned long ptr) {
   --aramQueue->valid;
 }
 
-/** Queues a main-memory to ARAM copy of len bytes through ARQ, at high or low priority. It spins, with interrupts
- * re-enabled between tries, until one of the 16 queue slots is free; the callback is called with user when the copy
- * completes. */
 void aramUploadData(void* mram, unsigned long aram, unsigned long len, unsigned long highPrio,
                     void (*callback)(unsigned long), unsigned long user) {
-  ARAMTransferQueue* aramQueue; // r31
-  int old;                      // r30
+  ARAMTransferQueue* aramQueue;
+  int old;
 
   aramQueue = highPrio != 0 ? &aramQueueHi : &aramQueueLo;
 
@@ -115,19 +112,15 @@ void aramUploadData(void* mram, unsigned long aram, unsigned long len, unsigned 
   }
 }
 
-/** Spins until the low-priority ARAM queue has no pending requests. */
 void aramSyncTransferQueue() {
   while (aramQueueLo.valid != 0) {
   }
 }
 
-/** Prepares ARAM for MusyX: clears a 640-sample zero buffer at the ARAM base (uploaded and waited for), sets aramTop to
- * base + length (capped at the real ARAM size), clears the upload callback and resets the stream buffers. Asserts that
- * length exceeds the zero buffer. */
 void aramInit(unsigned long length) {
-  signed short* tmpMem;   // r30
-  unsigned long i;        // r29
-  unsigned long aramBase; // r28
+  signed short* tmpMem;
+  unsigned long i;
+  unsigned long aramBase;
 #line 173
   MUSY_ASSERT_MSG(length > sizeof(s16) * 640, "ARAM size is too small");
 
@@ -163,37 +156,37 @@ void aramInit(unsigned long length) {
   MUSY_DEBUG("MusyX ARAM handler initialized\n");
 }
 
-/** Empty. */
 void aramExit() {}
 
-/** Returns the ARAM base address, where the zero buffer lives. */
 unsigned long aramGetZeroBuffer() { return ARGetBaseAddress(); }
 
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
-/** Returns the first ARAM address after the 640-sample zero buffer, where sample data may start. */
 unsigned long aramGetFirstUserAddress() { return ARGetBaseAddress() + sizeof(s16) * 640; }
 
-/** Returns len minus the bytes taken by the zero buffer. */
 unsigned long aramGetUserBytes(unsigned long len) { return len - sizeof(s16) * 640; }
 #endif
 
 void aramSetUploadCallback(void* (*callback)(unsigned long, unsigned long),
-                           unsigned long chunckSize) {
-  unsigned long acs; // r30
+                           unsigned long chunkSize) {
+  unsigned long acs;
 
   if (callback != NULL) {
-    chunckSize = (chunckSize + 31) & ~31;
+    chunkSize = (chunkSize + 31) & ~31;
     acs = ARQGetChunkSize();
-    aramUploadChunkSize = chunckSize < acs ? acs : chunckSize;
+    aramUploadChunkSize = chunkSize < acs ? acs : chunkSize;
   }
 
   aramUploadCallback = callback;
 }
 
+u32 aramGetAvailableBytes(ARAMInfo* ai) {
+  if (ai->aramBase == aramGetFirstUserAddress()) {
+    return aramStream - ai->aramWrite;
+  }
+  return ai->aramTop - ai->aramWrite;
+}
+
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 2)
-/** Uploads len bytes (rounded up to 32) of sample data into ARAM at info->aramWrite and advances it; returns the ARAM
- * address or NULL if the data would run into the stream buffer area (or the group's top). With an upload callback the
- * data is fetched and sent in chunks. */
 void* aramStoreData(void* src, unsigned long len, ARAMInfo* info) {
   unsigned long addr;
   void* buffer;
@@ -230,13 +223,10 @@ void* aramStoreData(void* src, unsigned long len, ARAMInfo* info) {
   return (void*)addr;
 }
 #else
-/** Uploads len bytes (rounded up to 32) of sample data into ARAM at aramWrite and advances it; returns the ARAM
- * address. Asserts that the data fits below the stream buffers. With an upload callback the data is fetched and sent
- * in chunks. */
 void* aramStoreData(void* src, unsigned long len) {
-  unsigned long addr;    // r26
-  void* buffer;          // r27
-  unsigned long blkSize; // r30
+  unsigned long addr;
+  void* buffer;
+  unsigned long blkSize;
   len = (len + 31) & ~31;
 #line 266
   MUSY_ASSERT_MSG(aramWrite + len <= aramStream, "Data will not fit in remaining ARAM space");
@@ -267,14 +257,10 @@ void* aramStoreData(void* src, unsigned long len) {
 #endif
 
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 2)
-/** Frees the most recent ARAM block (len rounded up to 32) by moving info->aramWrite back; asserts it is the last block
- * stored (blocks are freed stack-style). */
 void aramRemoveData(void* aram, unsigned long len, ARAMInfo* info) {
   len = (len + 31) & ~31;
   info->aramWrite -= len;
 #else
-/** Frees the most recent ARAM block (len rounded up to 32) by moving aramWrite back; asserts it is the last block
- * stored (blocks are freed stack-style). */
 void aramRemoveData(void* aram, unsigned long len) {
   len = (len + 31) & ~31;
   aramWrite -= len;
@@ -284,27 +270,23 @@ void aramRemoveData(void* aram, unsigned long len) {
                   "Current ARAM address does not match originally allocated one");
 }
 
-/** Resets the 64-entry stream buffer table to a single idle list and puts the stream area top at aramTop. */
 static void InitStreamBuffers() {
-  unsigned long i; // r31
+  unsigned long i;
   aramUsedStreamBuffers = NULL;
   aramFreeStreamBuffers = NULL;
   aramIdleStreamBuffers = aramStreamBuffers;
-  for (i = 1; i < 64; ++i) {
+  for (i = 1; i < sizeof(aramStreamBuffers) / sizeof(aramStreamBuffers[0]); ++i) {
     aramStreamBuffers[i - 1].next = &aramStreamBuffers[i];
   }
   aramStreamBuffers[i - 1].next = NULL;
   aramStream = aramTop;
 }
 
-/** Gets an ARAM stream buffer of len bytes (rounded up to 32): reuses the smallest freed buffer that fits, else carves
- * a new one downward from the top of ARAM if it does not collide with the sample data. Returns its table index or 0xFF
- * if none. */
 unsigned char aramAllocateStreamBuffer(unsigned long len) {
-  STREAM_BUFFER* sb;     // r30
-  STREAM_BUFFER* oSb;    // r31
-  STREAM_BUFFER* lastSb; // r28
-  u32 minLen;            // r27
+  STREAM_BUFFER* sb;
+  STREAM_BUFFER* oSb;
+  STREAM_BUFFER* lastSb;
+  u32 minLen;
 
   len = (len + 31) & ~31;
   lastSb = oSb = NULL;
@@ -339,6 +321,9 @@ unsigned char aramAllocateStreamBuffer(unsigned long len) {
       aramUsedStreamBuffers = oSb;
     }
   } else {
+    // BUG: lastSb is the predecessor only for an exact-size match (the loop breaks there). For a larger
+    // best fit the loop runs to the end, so lastSb is the last free buffer and the unlink below patches
+    // the wrong node.
     if (lastSb != NULL) {
       lastSb->next = oSb->next;
     } else {
@@ -358,7 +343,6 @@ unsigned char aramAllocateStreamBuffer(unsigned long len) {
   return (oSb - aramStreamBuffers);
 }
 
-/** Returns the ARAM address of stream buffer id and, if len is not NULL, its length. Asserts the ID is valid. */
 unsigned long aramGetStreamBufferAddress(unsigned char id, unsigned long* len) {
 #line 467
   MUSY_ASSERT_MSG(id != 0xFF, "Stream buffer ID is invalid");
@@ -370,14 +354,12 @@ unsigned long aramGetStreamBufferAddress(unsigned char id, unsigned long* len) {
   return aramStreamBuffers[id].aram;
 }
 
-/** Returns stream buffer id to the pool. If it was the lowest one, the stream area top is raised again and any free
- * buffers below the new lowest used one become idle. */
 void aramFreeStreamBuffer(unsigned char id) {
-  struct STREAM_BUFFER* fSb;    // r30
-  struct STREAM_BUFFER* sb;     // r31
-  struct STREAM_BUFFER* lastSb; // r29
-  struct STREAM_BUFFER* nextSb; // r27
-  unsigned long minAddr;        // r28
+  struct STREAM_BUFFER* fSb;
+  struct STREAM_BUFFER* sb;
+  struct STREAM_BUFFER* lastSb;
+  struct STREAM_BUFFER* nextSb;
+  unsigned long minAddr;
 
   MUSY_ASSERT_MSG(id != 0xFF, "Stream buffer ID is invalid");
   fSb = &aramStreamBuffers[id];
@@ -441,14 +423,14 @@ void aramFreeStreamBuffer(unsigned char id) {
 //   void (*callback)(unsigned long); // offset 0x20, size 0x4
 //   unsigned long user;              // offset 0x24, size 0x4
 // } ARAMTransferJob;
-//
+
 // typedef struct ARAMTransferQueue {
 //   // total size: 0x284
 //   ARAMTransferJob queue[16]; // offset 0x0, size 0x280
 //   vu8 write;                 // offset 0x280, size 0x1
 //   vu8 valid;                 // offset 0x281, size 0x1
 // } ARAMTransferQueue;
-//
+
 // typedef struct STREAM_BUFFER {
 //   // total size: 0x10
 //   struct STREAM_BUFFER* next; // offset 0x0, size 0x4
@@ -456,13 +438,13 @@ void aramFreeStreamBuffer(unsigned char id) {
 //   unsigned long length;       // offset 0x8, size 0x4
 //   unsigned long allocLength;  // offset 0xC, size 0x4
 // } STREAM_BUFFER;
-//
+
 // static unsigned long aramTop;                                     // size: 0x4
 // static unsigned long aramWrite;                                   // size: 0x4
 // static unsigned long aramStream;                                  // size: 0x4
 // static void* (*aramUploadCallback)(unsigned long, unsigned long); // size: 0x4
 // static unsigned long aramUploadChunkSize;                         // size: 0x4
-//
+
 // static ARAMTransferQueue aramQueueLo;
 // static ARAMTransferQueue aramQueueHi;
 
@@ -473,54 +455,42 @@ void aramFreeStreamBuffer(unsigned char id) {
 
 static void InitStreamBuffers();
 
-/** PC build stub; there is no ARAM. */
 static void aramQueueInit() {}
 
-/** PC build stub; there is no ARAM. */
 static void aramQueueCallback(unsigned long ptr) {}
 
 void aramUploadData(void* mram, unsigned long aram, unsigned long len, unsigned long highPrio,
                     void (*callback)(unsigned long), unsigned long user) {}
 
-/** PC build stub; there are no transfers to wait for. */
 void aramSyncTransferQueue() {}
 
-/** PC build stub; there is no ARAM. */
 void aramInit(unsigned long length) {}
 
-/** PC build stub. */
 void aramExit() {}
 
-/** PC build stub: returns 0. */
 unsigned long aramGetZeroBuffer() { return 0; }
 
 void aramSetUploadCallback(void* (*callback)(unsigned long, unsigned long),
-                           unsigned long chunckSize) {}
+                           unsigned long chunkSize) {}
 
-/** PC build stub; there is no ARAM to store into. */
 void* aramStoreData(void* src, unsigned long len) {}
 
-/** PC build stub; there is no ARAM. */
 void aramRemoveData(void* aram, unsigned long len) {}
 
-/** PC build stub; there are no stream buffers. */
 static void InitStreamBuffers() {}
 
-/** PC build stub: always returns buffer 0. */
 unsigned char aramAllocateStreamBuffer(u32 len) { return 0; }
 
-/** PC build stub: only asserts the ID is valid. */
 size_t aramGetStreamBufferAddress(u8 id, size_t* len) {
   MUSY_ASSERT_MSG(id != 0xFF, "Stream buffer ID is invalid");
 }
 
-/** PC build stub: only asserts the ID is valid. */
 void aramFreeStreamBuffer(unsigned char id) {
-  STREAM_BUFFER* fSb;    // r30
-  STREAM_BUFFER* sb;     // r31
-  STREAM_BUFFER* lastSb; // r29
-  STREAM_BUFFER* nextSb; // r27
-  unsigned long minAddr; // r28
+  STREAM_BUFFER* fSb;
+  STREAM_BUFFER* sb;
+  STREAM_BUFFER* lastSb;
+  STREAM_BUFFER* nextSb;
+  unsigned long minAddr;
 
   MUSY_ASSERT_MSG(id != 0xFF, "Stream buffer ID is invalid");
 }

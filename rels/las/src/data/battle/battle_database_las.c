@@ -1,8 +1,13 @@
-// Palace of Shadow (las, the "last" dungeon): battle database: the enemy groups (BattleSetup) and stages of the palace and its bosses.
+// Palace of Shadow (las): battle database: the enemy groups (BattleSetup) and stages of the palace and its bosses.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_map.h"
+#include "driver/mapdrv.h"
+#include "eff/eff_fire.h"
 
 #include "driver/effdrv.h"
 #include "battle/battle.h"
@@ -12,10 +17,6 @@
 #include "las.h"
 #include "battle/battle_stage.h"
 #include "driver/npcdrv.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_map.h"
-#include "eff/eff_fire.h"
-#include "driver/mapdrv.h"
 
 #if VERSION >= VERSION_JP
 EffectEntry* hi_fire_eff[6];
@@ -24,260 +25,266 @@ s8 hi_fire_end_flag[4];
 
 static USER_FUNC(_gear_rotate);
 static USER_FUNC(check_battle_end);
-#if VERSION >= VERSION_JP
+USER_FUNC(hi_fire_end);
 USER_FUNC(hi_fire_main);
-#endif
+extern BattleUnitKind unit_black_karon;
+extern BattleUnitKind unit_boss_batten_leader;
+extern BattleUnitKind unit_boss_koopa;
+extern BattleUnitKind unit_boss_rampell_las;
 extern BattleUnitKind unit_red_honenoko;
 extern BattleUnitKind unit_super_killer_cannon;
 
-BattleStageObjectData las_btlobject_data[38];
-BattleStageData las_btlstage_data[10];
-BattleUnitSetup btlparty_las_las_05_01[5];
-BattleGroupSetup btlgrp_las_las_05_01;
-BattleUnitSetup btlparty_las_las_17_01_off_1[1];
-BattleGroupSetup btlgrp_las_las_17_01_off_1;
-BattleUnitSetup btlparty_las_las_17_02_off_1[1];
-BattleGroupSetup btlgrp_las_las_17_02_off_1;
-BattleUnitSetup btlparty_las_las_17_03_off_1[1];
-BattleGroupSetup btlgrp_las_las_17_03_off_1;
-BattleUnitSetup btlparty_las_las_17_04_off_1[1];
-BattleGroupSetup btlgrp_las_las_17_04_off_1;
-BattleUnitSetup btlparty_las_las_09_rampell[1];
-BattleGroupSetup btlgrp_las_las_09_rampell;
-BattleUnitSetup btlparty_las_las_bunbaba[1];
-BattleGroupSetup btlgrp_las_las_bunbaba;
-BattleUnitSetup btlparty_las_las_28_batten_leader[1];
-BattleGroupSetup btlgrp_las_las_28_batten_leader;
-BattleUnitSetup btlparty_las_las_28_koopa[1];
-BattleGroupSetup btlgrp_las_las_28_koopa;
-BattleUnitSetup btlparty_las_las_29_black_peach_1[1];
-BattleGroupSetup btlgrp_las_las_29_black_peach_1;
-BattleUnitSetup btlparty_las_las_29_black_peach_2[1];
-BattleGroupSetup btlgrp_las_las_29_black_peach_2;
-BattleUnitSetup btlparty_las_las_01_01_off_1[2];
-BattleGroupSetup btlgrp_las_las_01_01_off_1;
-BattleUnitSetup btlparty_las_las_01_02_off_1[3];
-BattleGroupSetup btlgrp_las_las_01_02_off_1;
-BattleUnitSetup btlparty_las_las_01_03_off_1[4];
-BattleGroupSetup btlgrp_las_las_01_03_off_1;
-BattleUnitSetup btlparty_las_las_01_01_off_2[2];
-BattleGroupSetup btlgrp_las_las_01_01_off_2;
-BattleUnitSetup btlparty_las_las_01_02_off_2[3];
-BattleGroupSetup btlgrp_las_las_01_02_off_2;
-BattleUnitSetup btlparty_las_las_01_03_off_2[4];
-BattleGroupSetup btlgrp_las_las_01_03_off_2;
-BattleUnitSetup btlparty_las_las_02_01_off_1[2];
-BattleGroupSetup btlgrp_las_las_02_01_off_1;
-BattleUnitSetup btlparty_las_las_02_02_off_1[3];
-BattleGroupSetup btlgrp_las_las_02_02_off_1;
-BattleUnitSetup btlparty_las_las_02_03_off_1[3];
-BattleGroupSetup btlgrp_las_las_02_03_off_1;
-BattleUnitSetup btlparty_las_las_02_04_off_1[4];
-BattleGroupSetup btlgrp_las_las_02_04_off_1;
-BattleUnitSetup btlparty_las_las_02_05_off_1[2];
-BattleGroupSetup btlgrp_las_las_02_05_off_1;
-BattleUnitSetup btlparty_las_las_02_06_off_1[2];
-BattleGroupSetup btlgrp_las_las_02_06_off_1;
-BattleUnitSetup btlparty_las_las_02_99_off_1[2];
-BattleGroupSetup btlgrp_las_las_02_99_off_1;
-BattleUnitSetup btlparty_las_las_03_01_off_1[1];
-BattleGroupSetup btlgrp_las_las_03_01_off_1;
-BattleUnitSetup btlparty_las_las_03_02_off_1[1];
-BattleGroupSetup btlgrp_las_las_03_02_off_1;
-BattleUnitSetup btlparty_las_las_03_03_off_1[1];
-BattleGroupSetup btlgrp_las_las_03_03_off_1;
-BattleUnitSetup btlparty_las_las_03_01_off_2[1];
-BattleGroupSetup btlgrp_las_las_03_01_off_2;
-BattleUnitSetup btlparty_las_las_03_02_off_2[1];
-BattleGroupSetup btlgrp_las_las_03_02_off_2;
-BattleUnitSetup btlparty_las_las_03_03_off_2[1];
-BattleGroupSetup btlgrp_las_las_03_03_off_2;
-BattleUnitSetup btlparty_las_las_04_01_off_1[1];
-BattleGroupSetup btlgrp_las_las_04_01_off_1;
-BattleUnitSetup btlparty_las_las_06_01_off_1[2];
-BattleGroupSetup btlgrp_las_las_06_01_off_1;
-BattleUnitSetup btlparty_las_las_06_02_off_1[2];
-BattleGroupSetup btlgrp_las_las_06_02_off_1;
-BattleUnitSetup btlparty_las_las_06_03_off_1[2];
-BattleGroupSetup btlgrp_las_las_06_03_off_1;
-BattleUnitSetup btlparty_las_las_06_04_off_1[4];
-BattleGroupSetup btlgrp_las_las_06_04_off_1;
-BattleUnitSetup btlparty_las_las_06_05_off_1[2];
-BattleGroupSetup btlgrp_las_las_06_05_off_1;
-BattleUnitSetup btlparty_las_las_06_06_off_1[2];
-BattleGroupSetup btlgrp_las_las_06_06_off_1;
-BattleUnitSetup btlparty_las_las_06_99_off_1[2];
-BattleGroupSetup btlgrp_las_las_06_99_off_1;
-BattleUnitSetup btlparty_las_las_07_01_off_1[3];
-BattleGroupSetup btlgrp_las_las_07_01_off_1;
-BattleUnitSetup btlparty_las_las_07_02_off_1[3];
-BattleGroupSetup btlgrp_las_las_07_02_off_1;
-BattleUnitSetup btlparty_las_las_07_03_off_1[3];
-BattleGroupSetup btlgrp_las_las_07_03_off_1;
-BattleUnitSetup btlparty_las_las_09_01_off_1[2];
-BattleGroupSetup btlgrp_las_las_09_01_off_1;
-BattleUnitSetup btlparty_las_las_09_02_off_1[3];
-BattleGroupSetup btlgrp_las_las_09_02_off_1;
-BattleUnitSetup btlparty_las_las_19_01_off_1[1];
-BattleGroupSetup btlgrp_las_las_19_01_off_1;
-BattleUnitSetup btlparty_las_las_19_02_off_1[2];
-BattleGroupSetup btlgrp_las_las_19_02_off_1;
-BattleUnitSetup btlparty_las_las_19_03_off_1[3];
-BattleGroupSetup btlgrp_las_las_19_03_off_1;
-BattleUnitSetup btlparty_las_las_20_01_off_1[1];
-BattleGroupSetup btlgrp_las_las_20_01_off_1;
-BattleUnitSetup btlparty_las_las_21_01_off_1[2];
-BattleGroupSetup btlgrp_las_las_21_01_off_1;
-BattleUnitSetup btlparty_las_las_21_02_off_1[2];
-BattleGroupSetup btlgrp_las_las_21_02_off_1;
-BattleUnitSetup btlparty_las_las_22_01_off_1[2];
-BattleGroupSetup btlgrp_las_las_22_01_off_1;
-BattleUnitSetup btlparty_las_las_22_02_off_1[4];
-BattleGroupSetup btlgrp_las_las_22_02_off_1;
-BattleUnitSetup btlparty_las_las_22_03_off_1[2];
-BattleGroupSetup btlgrp_las_las_22_03_off_1;
-BattleUnitSetup btlparty_las_las_24_01_off_1[2];
-BattleGroupSetup btlgrp_las_las_24_01_off_1;
-BattleUnitSetup btlparty_las_las_25_01_off_1[1];
-BattleGroupSetup btlgrp_las_las_25_01_off_1;
-BattleUnitSetup btlparty_las_las_25_02_off_1[3];
-BattleGroupSetup btlgrp_las_las_25_02_off_1;
-BattleUnitSetup btlparty_las_las_25_03_off_1[4];
-BattleGroupSetup btlgrp_las_las_25_03_off_1;
-BattleUnitSetup btlparty_las_las_25_04_off_1[2];
-BattleGroupSetup btlgrp_las_las_25_04_off_1;
-BattleUnitSetup btlparty_las_las_25_05_off_1[3];
-BattleGroupSetup btlgrp_las_las_25_05_off_1;
-BattleUnitSetup btlparty_las_las_25_06_off_1[3];
-BattleGroupSetup btlgrp_las_las_25_06_off_1;
-NpcBattleSelect btlgrpsel_las_btlno_las_test1_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_test2_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_test3_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_test4_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_test5_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_test6_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_test7_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_05_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_09_rampell_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_17_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_17_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_17_03_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_17_04_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_28_koopa_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_bunbaba_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_28_batten_leader_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_1_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_2_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_01_01_off[3];
-NpcBattleSelect btlgrpsel_las_btlno_las_01_02_off[3];
-NpcBattleSelect btlgrpsel_las_btlno_las_01_03_off[3];
-NpcBattleSelect btlgrpsel_las_btlno_las_02_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_02_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_02_03_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_02_04_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_02_05_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_02_06_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_02_99_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_03_01_off[3];
-NpcBattleSelect btlgrpsel_las_btlno_las_03_02_off[3];
-NpcBattleSelect btlgrpsel_las_btlno_las_03_03_off[3];
-NpcBattleSelect btlgrpsel_las_btlno_las_04_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_06_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_06_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_06_03_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_06_04_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_06_05_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_06_06_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_06_99_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_07_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_07_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_07_03_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_09_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_09_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_19_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_19_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_19_03_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_20_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_21_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_21_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_22_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_22_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_22_03_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_24_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_25_01_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_25_02_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_25_03_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_25_04_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_25_05_off[2];
-NpcBattleSelect btlgrpsel_las_btlno_las_25_06_off[2];
+static BattleStageObjectData las_btlobject_data[38];
+static BattleStageData las_btlstage_data[10];
+static BattleUnitSetup btlparty_las_las_05_01[5];
+static BattleGroupSetup btlgrp_las_las_05_01;
+static BattleUnitSetup btlparty_las_las_17_01_off_1[1];
+static BattleGroupSetup btlgrp_las_las_17_01_off_1;
+static BattleUnitSetup btlparty_las_las_17_02_off_1[1];
+static BattleGroupSetup btlgrp_las_las_17_02_off_1;
+static BattleUnitSetup btlparty_las_las_17_03_off_1[1];
+static BattleGroupSetup btlgrp_las_las_17_03_off_1;
+static BattleUnitSetup btlparty_las_las_17_04_off_1[1];
+static BattleGroupSetup btlgrp_las_las_17_04_off_1;
+static BattleUnitSetup btlparty_las_las_09_rampell[1];
+static BattleGroupSetup btlgrp_las_las_09_rampell;
+static BattleUnitSetup btlparty_las_las_bunbaba[1];
+static BattleGroupSetup btlgrp_las_las_bunbaba;
+static BattleUnitSetup btlparty_las_las_28_batten_leader[1];
+static BattleGroupSetup btlgrp_las_las_28_batten_leader;
+static BattleUnitSetup btlparty_las_las_28_koopa[1];
+static BattleGroupSetup btlgrp_las_las_28_koopa;
+static BattleUnitSetup btlparty_las_las_29_black_peach_1[1];
+static BattleGroupSetup btlgrp_las_las_29_black_peach_1;
+static BattleUnitSetup btlparty_las_las_29_black_peach_2[1];
+static BattleGroupSetup btlgrp_las_las_29_black_peach_2;
+static BattleUnitSetup btlparty_las_las_01_01_off_1[2];
+static BattleGroupSetup btlgrp_las_las_01_01_off_1;
+static BattleUnitSetup btlparty_las_las_01_02_off_1[3];
+static BattleGroupSetup btlgrp_las_las_01_02_off_1;
+static BattleUnitSetup btlparty_las_las_01_03_off_1[4];
+static BattleGroupSetup btlgrp_las_las_01_03_off_1;
+static BattleUnitSetup btlparty_las_las_01_01_off_2[2];
+static BattleGroupSetup btlgrp_las_las_01_01_off_2;
+static BattleUnitSetup btlparty_las_las_01_02_off_2[3];
+static BattleGroupSetup btlgrp_las_las_01_02_off_2;
+static BattleUnitSetup btlparty_las_las_01_03_off_2[4];
+static BattleGroupSetup btlgrp_las_las_01_03_off_2;
+static BattleUnitSetup btlparty_las_las_02_01_off_1[2];
+static BattleGroupSetup btlgrp_las_las_02_01_off_1;
+static BattleUnitSetup btlparty_las_las_02_02_off_1[3];
+static BattleGroupSetup btlgrp_las_las_02_02_off_1;
+static BattleUnitSetup btlparty_las_las_02_03_off_1[3];
+static BattleGroupSetup btlgrp_las_las_02_03_off_1;
+static BattleUnitSetup btlparty_las_las_02_04_off_1[4];
+static BattleGroupSetup btlgrp_las_las_02_04_off_1;
+static BattleUnitSetup btlparty_las_las_02_05_off_1[2];
+static BattleGroupSetup btlgrp_las_las_02_05_off_1;
+static BattleUnitSetup btlparty_las_las_02_06_off_1[2];
+static BattleGroupSetup btlgrp_las_las_02_06_off_1;
+static BattleUnitSetup btlparty_las_las_02_99_off_1[2];
+static BattleGroupSetup btlgrp_las_las_02_99_off_1;
+static BattleUnitSetup btlparty_las_las_03_01_off_1[1];
+static BattleGroupSetup btlgrp_las_las_03_01_off_1;
+static BattleUnitSetup btlparty_las_las_03_02_off_1[1];
+static BattleGroupSetup btlgrp_las_las_03_02_off_1;
+static BattleUnitSetup btlparty_las_las_03_03_off_1[1];
+static BattleGroupSetup btlgrp_las_las_03_03_off_1;
+static BattleUnitSetup btlparty_las_las_03_01_off_2[1];
+static BattleGroupSetup btlgrp_las_las_03_01_off_2;
+static BattleUnitSetup btlparty_las_las_03_02_off_2[1];
+static BattleGroupSetup btlgrp_las_las_03_02_off_2;
+static BattleUnitSetup btlparty_las_las_03_03_off_2[1];
+static BattleGroupSetup btlgrp_las_las_03_03_off_2;
+static BattleUnitSetup btlparty_las_las_04_01_off_1[1];
+static BattleGroupSetup btlgrp_las_las_04_01_off_1;
+static BattleUnitSetup btlparty_las_las_06_01_off_1[2];
+static BattleGroupSetup btlgrp_las_las_06_01_off_1;
+static BattleUnitSetup btlparty_las_las_06_02_off_1[2];
+static BattleGroupSetup btlgrp_las_las_06_02_off_1;
+static BattleUnitSetup btlparty_las_las_06_03_off_1[2];
+static BattleGroupSetup btlgrp_las_las_06_03_off_1;
+static BattleUnitSetup btlparty_las_las_06_04_off_1[4];
+static BattleGroupSetup btlgrp_las_las_06_04_off_1;
+static BattleUnitSetup btlparty_las_las_06_05_off_1[2];
+static BattleGroupSetup btlgrp_las_las_06_05_off_1;
+static BattleUnitSetup btlparty_las_las_06_06_off_1[2];
+static BattleGroupSetup btlgrp_las_las_06_06_off_1;
+static BattleUnitSetup btlparty_las_las_06_99_off_1[2];
+static BattleGroupSetup btlgrp_las_las_06_99_off_1;
+static BattleUnitSetup btlparty_las_las_07_01_off_1[3];
+static BattleGroupSetup btlgrp_las_las_07_01_off_1;
+static BattleUnitSetup btlparty_las_las_07_02_off_1[3];
+static BattleGroupSetup btlgrp_las_las_07_02_off_1;
+static BattleUnitSetup btlparty_las_las_07_03_off_1[3];
+static BattleGroupSetup btlgrp_las_las_07_03_off_1;
+static BattleUnitSetup btlparty_las_las_09_01_off_1[2];
+static BattleGroupSetup btlgrp_las_las_09_01_off_1;
+static BattleUnitSetup btlparty_las_las_09_02_off_1[3];
+static BattleGroupSetup btlgrp_las_las_09_02_off_1;
+static BattleUnitSetup btlparty_las_las_19_01_off_1[1];
+static BattleGroupSetup btlgrp_las_las_19_01_off_1;
+static BattleUnitSetup btlparty_las_las_19_02_off_1[2];
+static BattleGroupSetup btlgrp_las_las_19_02_off_1;
+static BattleUnitSetup btlparty_las_las_19_03_off_1[3];
+static BattleGroupSetup btlgrp_las_las_19_03_off_1;
+static BattleUnitSetup btlparty_las_las_20_01_off_1[1];
+static BattleGroupSetup btlgrp_las_las_20_01_off_1;
+static BattleUnitSetup btlparty_las_las_21_01_off_1[2];
+static BattleGroupSetup btlgrp_las_las_21_01_off_1;
+static BattleUnitSetup btlparty_las_las_21_02_off_1[2];
+static BattleGroupSetup btlgrp_las_las_21_02_off_1;
+static BattleUnitSetup btlparty_las_las_22_01_off_1[2];
+static BattleGroupSetup btlgrp_las_las_22_01_off_1;
+static BattleUnitSetup btlparty_las_las_22_02_off_1[4];
+static BattleGroupSetup btlgrp_las_las_22_02_off_1;
+static BattleUnitSetup btlparty_las_las_22_03_off_1[2];
+static BattleGroupSetup btlgrp_las_las_22_03_off_1;
+static BattleUnitSetup btlparty_las_las_24_01_off_1[2];
+static BattleGroupSetup btlgrp_las_las_24_01_off_1;
+static BattleUnitSetup btlparty_las_las_25_01_off_1[1];
+static BattleGroupSetup btlgrp_las_las_25_01_off_1;
+static BattleUnitSetup btlparty_las_las_25_02_off_1[3];
+static BattleGroupSetup btlgrp_las_las_25_02_off_1;
+static BattleUnitSetup btlparty_las_las_25_03_off_1[4];
+static BattleGroupSetup btlgrp_las_las_25_03_off_1;
+static BattleUnitSetup btlparty_las_las_25_04_off_1[2];
+static BattleGroupSetup btlgrp_las_las_25_04_off_1;
+static BattleUnitSetup btlparty_las_las_25_05_off_1[3];
+static BattleGroupSetup btlgrp_las_las_25_05_off_1;
+static BattleUnitSetup btlparty_las_las_25_06_off_1[3];
+static BattleGroupSetup btlgrp_las_las_25_06_off_1;
+static NpcBattleSelect btlgrpsel_las_btlno_las_test1_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_test2_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_test3_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_test4_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_test5_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_test6_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_test7_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_05_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_09_rampell_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_03_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_04_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_28_koopa_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_bunbaba_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_28_batten_leader_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_1_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_2_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_01_01_off[3];
+static NpcBattleSelect btlgrpsel_las_btlno_las_01_02_off[3];
+static NpcBattleSelect btlgrpsel_las_btlno_las_01_03_off[3];
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_03_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_04_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_05_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_06_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_99_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_03_01_off[3];
+static NpcBattleSelect btlgrpsel_las_btlno_las_03_02_off[3];
+static NpcBattleSelect btlgrpsel_las_btlno_las_03_03_off[3];
+static NpcBattleSelect btlgrpsel_las_btlno_las_04_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_03_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_04_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_05_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_06_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_99_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_07_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_07_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_07_03_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_09_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_09_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_19_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_19_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_19_03_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_20_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_21_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_21_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_22_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_22_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_22_03_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_24_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_01_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_02_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_03_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_04_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_05_off[2];
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_06_off[2];
 NpcSetupBattleInfo btlsetup_las_tbl[61];
 NpcTerritoryInfo btl_las_setup_no_tbl[61];
-extern EvtWord bgset_las_gear_event[];
-extern EvtWord stg_08_1_init_event[];
-extern EvtWord stg_08_6_init_event[];
+static EvtWord bgset_las_gear_event[38];
 
-#if VERSION >= VERSION_JP
-/**
- * Script helper: raises hi_fire_end_flag so hi_fire_main stops
- * and deletes the six torch flame effects at the end of a battle (JP and later).
- */
-static USER_FUNC(hi_fire_end) {
-    hi_fire_end_flag[0] = 1;
-    return EVT_RETURN_DONE;
-}
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord stg_08_1_init_sub_event[];
+#else
+EvtWord stg_08_1_init_sub_event[97];
 #endif
+
+EvtWord stg_08_1_init_event[4];
+
+#if VERSION == VERSION_DEMO_JP
+static EvtWord stg_08_6_init_sub_event[154];
+#else
+static EvtWord stg_08_6_init_sub_event[46];
+#endif
+
+EvtWord stg_08_6_init_event[4];
 
 /**
  * Scenery pieces of the Palace of Shadow battle stages
  * (floor, wall, rotating gears, pedestals, corridor segments); las_btlstage_data entries point into this
  * array.
  */
-BattleStageObjectData las_btlobject_data[] = {
-    {"A1", 2, 0, {93.0f, 0.0f, -64.0f}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C_kabe", 2, 3, {0}, 0, 60, {0}},
-    {"gear_01a", 2, 3, {0}, 0, 60, {0}},
-    {"gear_01b", 2, 3, {0}, 0, 60, {0}},
-    {"gear_02a", 2, 3, {0}, 0, 60, {0}},
-    {"gear_02b", 2, 3, {0}, 0, 60, {0}},
-    {"gear_03a", 2, 3, {0}, 0, 60, {0}},
-    {"gear_03b", 2, 3, {0}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"if_wire", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
-    {"if_body", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
-    {"C", 2, 3, {0.0f, 0.0f, -99.0f}, 0, 60, {0}},
-    {"C", 2, 3, {0.0f, 0.0f, -99.0f}, 0, 60, {0}},
-    {"if_wire", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
-    {"if_body", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
-    {"daiza_01", 2, 0, {158.0f, 0.0f, -28.0f}, 0, 60, {0}},
-    {"daiza_02", 2, 0, {95.0f, 0.0f, -50.0f}, 10, 50, {0}},
-    {"daiza_03", 2, 0, {-158.0f, 0.0f, -28.0f}, 20, 40, {0}},
-    {"daiza_04", 2, 0, {-95.0f, 0.0f, -50.0f}, 30, 30, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"rou1", 2, 0, {58.0f, 0.0f, -81.0f}, 0, 60, {0}},
-    {"rou2", 2, 0, {-109.0f, 0.0f, -69.0f}, 0, 60, {0}},
-    {"rou3", 2, 0, {-58.0f, 0.0f, -81.0f}, 0, 60, {0}},
-    {"rou4", 2, 0, {179.0f, 0.0f, -54.0f}, 0, 60, {0}},
-    {"rou5", 2, 0, {109.0f, 0.0f, -69.0f}, 0, 60, {0}},
-    {"rou6", 2, 0, {-179.0f, 0.0f, -54.0f}, 0, 60, {0}},
-    {"B", 2, 2, {91.0f, 0.0f, -57.0f}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"A2", 2, 1, {0.0f, 0.0f, 80.0f}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
+static BattleStageObjectData las_btlobject_data[] = {
+    {"A1", 2, STAGE_LAYER_A1, {93.0f, 0.0f, -64.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C_kabe", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gear_01a", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gear_01b", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gear_02a", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gear_02b", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gear_03a", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gear_03b", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"if_wire", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+    {"if_body", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+    {"C", 2, STAGE_LAYER_C, {0.0f, 0.0f, -99.0f}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0.0f, 0.0f, -99.0f}, 0, 60, {0}},
+    {"if_wire", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+    {"if_body", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+    {"daiza_01", 2, STAGE_LAYER_A1, {158.0f, 0.0f, -28.0f}, 0, 60, {0}},
+    {"daiza_02", 2, STAGE_LAYER_A1, {95.0f, 0.0f, -50.0f}, 10, 50, {0}},
+    {"daiza_03", 2, STAGE_LAYER_A1, {-158.0f, 0.0f, -28.0f}, 20, 40, {0}},
+    {"daiza_04", 2, STAGE_LAYER_A1, {-95.0f, 0.0f, -50.0f}, 30, 30, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"rou1", 2, STAGE_LAYER_A1, {58.0f, 0.0f, -81.0f}, 0, 60, {0}},
+    {"rou2", 2, STAGE_LAYER_A1, {-109.0f, 0.0f, -69.0f}, 0, 60, {0}},
+    {"rou3", 2, STAGE_LAYER_A1, {-58.0f, 0.0f, -81.0f}, 0, 60, {0}},
+    {"rou4", 2, STAGE_LAYER_A1, {179.0f, 0.0f, -54.0f}, 0, 60, {0}},
+    {"rou5", 2, STAGE_LAYER_A1, {109.0f, 0.0f, -69.0f}, 0, 60, {0}},
+    {"rou6", 2, STAGE_LAYER_A1, {-179.0f, 0.0f, -54.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {91.0f, 0.0f, -57.0f}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"A2", 2, STAGE_LAYER_A2, {0.0f, 0.0f, 80.0f}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
 };
 
 /**
  * Battle stages of the Palace of Shadow: the backdrop folders, the pieces from las_btlobject_data and the
  * background hit and event scripts (the gear-room backdrop rotates its gears).
  */
-BattleStageData las_btlstage_data[] = {
+static BattleStageData las_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_08_5", // specificStageDataDir
@@ -387,11 +394,10 @@ BattleStageData las_btlstage_data[] = {
     },
 };
 
-/** Lineup of battle las_05_01: Dry Bones x2, Dark Bones and Dry Bones x2. */
-BattleUnitSetup btlparty_las_las_05_01[] = {
+static BattleUnitSetup btlparty_las_las_05_01[] = {
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {10.0f, 0.0f, -20.0f}, // position
@@ -401,7 +407,7 @@ BattleUnitSetup btlparty_las_las_05_01[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -411,7 +417,7 @@ BattleUnitSetup btlparty_las_las_05_01[] = {
     },
     {
         &unit_black_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -421,7 +427,7 @@ BattleUnitSetup btlparty_las_las_05_01[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -431,7 +437,7 @@ BattleUnitSetup btlparty_las_las_05_01[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {170.0f, 0.0f, 20.0f}, // position
@@ -441,8 +447,7 @@ BattleUnitSetup btlparty_las_las_05_01[] = {
     },
 };
 
-/** Battle group las_05_01: its 5 enemies; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_05_01 = {
+static BattleGroupSetup btlgrp_las_las_05_01 = {
     5, // numEnemies
     btlparty_las_las_05_01, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -452,11 +457,10 @@ BattleGroupSetup btlgrp_las_las_05_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_17_01_off_1: Dull Bones. */
-BattleUnitSetup btlparty_las_las_17_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_17_01_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -466,8 +470,7 @@ BattleUnitSetup btlparty_las_las_17_01_off_1[] = {
     },
 };
 
-/** Battle group las_17_01_off_1: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_17_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_17_01_off_1 = {
     1, // numEnemies
     btlparty_las_las_17_01_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -477,11 +480,10 @@ BattleGroupSetup btlgrp_las_las_17_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_17_02_off_1: Red Bones. */
-BattleUnitSetup btlparty_las_las_17_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_17_02_off_1[] = {
     {
         &unit_red_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -491,8 +493,7 @@ BattleUnitSetup btlparty_las_las_17_02_off_1[] = {
     },
 };
 
-/** Battle group las_17_02_off_1: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_17_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_17_02_off_1 = {
     1, // numEnemies
     btlparty_las_las_17_02_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -502,11 +503,10 @@ BattleGroupSetup btlgrp_las_las_17_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_17_03_off_1: Dry Bones. */
-BattleUnitSetup btlparty_las_las_17_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_17_03_off_1[] = {
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -516,8 +516,7 @@ BattleUnitSetup btlparty_las_las_17_03_off_1[] = {
     },
 };
 
-/** Battle group las_17_03_off_1: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_17_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_17_03_off_1 = {
     1, // numEnemies
     btlparty_las_las_17_03_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -527,11 +526,10 @@ BattleGroupSetup btlgrp_las_las_17_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_17_04_off_1: Dark Bones. */
-BattleUnitSetup btlparty_las_las_17_04_off_1[] = {
+static BattleUnitSetup btlparty_las_las_17_04_off_1[] = {
     {
         &unit_black_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -541,8 +539,7 @@ BattleUnitSetup btlparty_las_las_17_04_off_1[] = {
     },
 };
 
-/** Battle group las_17_04_off_1: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_17_04_off_1 = {
+static BattleGroupSetup btlgrp_las_las_17_04_off_1 = {
     1, // numEnemies
     btlparty_las_las_17_04_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -552,11 +549,10 @@ BattleGroupSetup btlgrp_las_las_17_04_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_09_rampell: Doopliss. */
-BattleUnitSetup btlparty_las_las_09_rampell[] = {
+static BattleUnitSetup btlparty_las_las_09_rampell[] = {
     {
         &unit_boss_rampell_las, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {55.0f, 0.0f, 0.0f}, // position
@@ -566,8 +562,7 @@ BattleUnitSetup btlparty_las_las_09_rampell[] = {
     },
 };
 
-/** Battle group las_09_rampell: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_09_rampell = {
+static BattleGroupSetup btlgrp_las_las_09_rampell = {
     1, // numEnemies
     btlparty_las_las_09_rampell, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -577,11 +572,10 @@ BattleGroupSetup btlgrp_las_las_09_rampell = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_bunbaba: Gloomtail. */
-BattleUnitSetup btlparty_las_las_bunbaba[] = {
+static BattleUnitSetup btlparty_las_las_bunbaba[] = {
     {
         &unit_boss_bunbaba, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {365.0f, 0.0f, 0.0f}, // position
@@ -591,8 +585,7 @@ BattleUnitSetup btlparty_las_las_bunbaba[] = {
     },
 };
 
-/** Battle group las_bunbaba: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_bunbaba = {
+static BattleGroupSetup btlgrp_las_las_bunbaba = {
     1, // numEnemies
     btlparty_las_las_bunbaba, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -602,11 +595,10 @@ BattleGroupSetup btlgrp_las_las_bunbaba = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_28_batten_leader: Grodus. */
-BattleUnitSetup btlparty_las_las_28_batten_leader[] = {
+static BattleUnitSetup btlparty_las_las_28_batten_leader[] = {
     {
         &unit_boss_batten_leader, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -616,8 +608,7 @@ BattleUnitSetup btlparty_las_las_28_batten_leader[] = {
     },
 };
 
-/** Battle group las_28_batten_leader: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_28_batten_leader = {
+static BattleGroupSetup btlgrp_las_las_28_batten_leader = {
     1, // numEnemies
     btlparty_las_las_28_batten_leader, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -627,11 +618,10 @@ BattleGroupSetup btlgrp_las_las_28_batten_leader = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_28_koopa: Bowser. */
-BattleUnitSetup btlparty_las_las_28_koopa[] = {
+static BattleUnitSetup btlparty_las_las_28_koopa[] = {
     {
         &unit_boss_koopa, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -641,8 +631,7 @@ BattleUnitSetup btlparty_las_las_28_koopa[] = {
     },
 };
 
-/** Battle group las_28_koopa: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_28_koopa = {
+static BattleGroupSetup btlgrp_las_las_28_koopa = {
     1, // numEnemies
     btlparty_las_las_28_koopa, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -652,11 +641,10 @@ BattleGroupSetup btlgrp_las_las_28_koopa = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_29_black_peach_1: Shadow Queen. */
-BattleUnitSetup btlparty_las_las_29_black_peach_1[] = {
+static BattleUnitSetup btlparty_las_las_29_black_peach_1[] = {
     {
         &unit_boss_black_peach, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -666,8 +654,7 @@ BattleUnitSetup btlparty_las_las_29_black_peach_1[] = {
     },
 };
 
-/** Battle group las_29_black_peach_1: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_29_black_peach_1 = {
+static BattleGroupSetup btlgrp_las_las_29_black_peach_1 = {
     1, // numEnemies
     btlparty_las_las_29_black_peach_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -677,11 +664,10 @@ BattleGroupSetup btlgrp_las_las_29_black_peach_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_29_black_peach_2: Shadow Queen. */
-BattleUnitSetup btlparty_las_las_29_black_peach_2[] = {
+static BattleUnitSetup btlparty_las_las_29_black_peach_2[] = {
     {
         &unit_boss_black_peach, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -691,8 +677,7 @@ BattleUnitSetup btlparty_las_las_29_black_peach_2[] = {
     },
 };
 
-/** Battle group las_29_black_peach_2: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_las_las_29_black_peach_2 = {
+static BattleGroupSetup btlgrp_las_las_29_black_peach_2 = {
     1, // numEnemies
     btlparty_las_las_29_black_peach_2, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -702,11 +687,10 @@ BattleGroupSetup btlgrp_las_las_29_black_peach_2 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_01_01_off_1: Swoopula x2. */
-BattleUnitSetup btlparty_las_las_01_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_01_01_off_1[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 130.0f, 0.0f}, // position
@@ -716,7 +700,7 @@ BattleUnitSetup btlparty_las_las_01_01_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 130.0f, 10.0f}, // position
@@ -726,8 +710,7 @@ BattleUnitSetup btlparty_las_las_01_01_off_1[] = {
     },
 };
 
-/** Battle group las_01_01_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_01_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_01_01_off_1 = {
     2, // numEnemies
     btlparty_las_las_01_01_off_1, // enemyData
     25, // heldItemWeight
@@ -738,11 +721,10 @@ BattleGroupSetup btlgrp_las_las_01_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_01_02_off_1: Swoopula x3. */
-BattleUnitSetup btlparty_las_las_01_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_01_02_off_1[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 130.0f, -10.0f}, // position
@@ -752,7 +734,7 @@ BattleUnitSetup btlparty_las_las_01_02_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -762,7 +744,7 @@ BattleUnitSetup btlparty_las_las_01_02_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 130.0f, 10.0f}, // position
@@ -772,8 +754,7 @@ BattleUnitSetup btlparty_las_las_01_02_off_1[] = {
     },
 };
 
-/** Battle group las_01_02_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_01_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_01_02_off_1 = {
     3, // numEnemies
     btlparty_las_las_01_02_off_1, // enemyData
     25, // heldItemWeight
@@ -784,11 +765,10 @@ BattleGroupSetup btlgrp_las_las_01_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_01_03_off_1: Swoopula x4. */
-BattleUnitSetup btlparty_las_las_01_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_01_03_off_1[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 130.0f, -10.0f}, // position
@@ -798,7 +778,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 130.0f, 0.0f}, // position
@@ -808,7 +788,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 130.0f, 10.0f}, // position
@@ -818,7 +798,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 130.0f, 20.0f}, // position
@@ -828,8 +808,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_1[] = {
     },
 };
 
-/** Battle group las_01_03_off_1: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_01_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_01_03_off_1 = {
     4, // numEnemies
     btlparty_las_las_01_03_off_1, // enemyData
     25, // heldItemWeight
@@ -840,11 +819,10 @@ BattleGroupSetup btlgrp_las_las_01_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_01_01_off_2: Swoopula x2. */
-BattleUnitSetup btlparty_las_las_01_01_off_2[] = {
+static BattleUnitSetup btlparty_las_las_01_01_off_2[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 130.0f, 0.0f}, // position
@@ -854,7 +832,7 @@ BattleUnitSetup btlparty_las_las_01_01_off_2[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 130.0f, 10.0f}, // position
@@ -864,8 +842,7 @@ BattleUnitSetup btlparty_las_las_01_01_off_2[] = {
     },
 };
 
-/** Battle group las_01_01_off_2: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_01_01_off_2 = {
+static BattleGroupSetup btlgrp_las_las_01_01_off_2 = {
     2, // numEnemies
     btlparty_las_las_01_01_off_2, // enemyData
     25, // heldItemWeight
@@ -876,11 +853,10 @@ BattleGroupSetup btlgrp_las_las_01_01_off_2 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_01_02_off_2: Swoopula x3. */
-BattleUnitSetup btlparty_las_las_01_02_off_2[] = {
+static BattleUnitSetup btlparty_las_las_01_02_off_2[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 130.0f, -10.0f}, // position
@@ -890,7 +866,7 @@ BattleUnitSetup btlparty_las_las_01_02_off_2[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -900,7 +876,7 @@ BattleUnitSetup btlparty_las_las_01_02_off_2[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 130.0f, 10.0f}, // position
@@ -910,8 +886,7 @@ BattleUnitSetup btlparty_las_las_01_02_off_2[] = {
     },
 };
 
-/** Battle group las_01_02_off_2: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_01_02_off_2 = {
+static BattleGroupSetup btlgrp_las_las_01_02_off_2 = {
     3, // numEnemies
     btlparty_las_las_01_02_off_2, // enemyData
     25, // heldItemWeight
@@ -922,11 +897,10 @@ BattleGroupSetup btlgrp_las_las_01_02_off_2 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_01_03_off_2: Swoopula x4. */
-BattleUnitSetup btlparty_las_las_01_03_off_2[] = {
+static BattleUnitSetup btlparty_las_las_01_03_off_2[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 130.0f, -10.0f}, // position
@@ -936,7 +910,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_2[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 130.0f, 0.0f}, // position
@@ -946,7 +920,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_2[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 130.0f, 10.0f}, // position
@@ -956,7 +930,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_2[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 130.0f, 20.0f}, // position
@@ -966,8 +940,7 @@ BattleUnitSetup btlparty_las_las_01_03_off_2[] = {
     },
 };
 
-/** Battle group las_01_03_off_2: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_01_03_off_2 = {
+static BattleGroupSetup btlgrp_las_las_01_03_off_2 = {
     4, // numEnemies
     btlparty_las_las_01_03_off_2, // enemyData
     25, // heldItemWeight
@@ -978,11 +951,10 @@ BattleGroupSetup btlgrp_las_las_01_03_off_2 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_02_01_off_1: Dry Bones x2. */
-BattleUnitSetup btlparty_las_las_02_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_02_01_off_1[] = {
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -992,7 +964,7 @@ BattleUnitSetup btlparty_las_las_02_01_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1002,8 +974,7 @@ BattleUnitSetup btlparty_las_las_02_01_off_1[] = {
     },
 };
 
-/** Battle group las_02_01_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_02_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_02_01_off_1 = {
     2, // numEnemies
     btlparty_las_las_02_01_off_1, // enemyData
     25, // heldItemWeight
@@ -1014,11 +985,10 @@ BattleGroupSetup btlgrp_las_las_02_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_02_02_off_1: Swoopula, Dry Bones and Swoopula. */
-BattleUnitSetup btlparty_las_las_02_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_02_02_off_1[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 130.0f, -10.0f}, // position
@@ -1028,7 +998,7 @@ BattleUnitSetup btlparty_las_las_02_02_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1038,7 +1008,7 @@ BattleUnitSetup btlparty_las_las_02_02_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 130.0f, 10.0f}, // position
@@ -1048,8 +1018,7 @@ BattleUnitSetup btlparty_las_las_02_02_off_1[] = {
     },
 };
 
-/** Battle group las_02_02_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_02_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_02_02_off_1 = {
     3, // numEnemies
     btlparty_las_las_02_02_off_1, // enemyData
     25, // heldItemWeight
@@ -1060,11 +1029,10 @@ BattleGroupSetup btlgrp_las_las_02_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_02_03_off_1: Dry Bones x2 and Swoopula. */
-BattleUnitSetup btlparty_las_las_02_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_02_03_off_1[] = {
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -1074,7 +1042,7 @@ BattleUnitSetup btlparty_las_las_02_03_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1084,7 +1052,7 @@ BattleUnitSetup btlparty_las_las_02_03_off_1[] = {
     },
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 130.0f, 10.0f}, // position
@@ -1094,8 +1062,7 @@ BattleUnitSetup btlparty_las_las_02_03_off_1[] = {
     },
 };
 
-/** Battle group las_02_03_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_02_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_02_03_off_1 = {
     3, // numEnemies
     btlparty_las_las_02_03_off_1, // enemyData
     25, // heldItemWeight
@@ -1106,11 +1073,10 @@ BattleGroupSetup btlgrp_las_las_02_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_02_04_off_1: Dry Bones x4. */
-BattleUnitSetup btlparty_las_las_02_04_off_1[] = {
+static BattleUnitSetup btlparty_las_las_02_04_off_1[] = {
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -1120,7 +1086,7 @@ BattleUnitSetup btlparty_las_las_02_04_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1130,7 +1096,7 @@ BattleUnitSetup btlparty_las_las_02_04_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1140,7 +1106,7 @@ BattleUnitSetup btlparty_las_las_02_04_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -1150,8 +1116,7 @@ BattleUnitSetup btlparty_las_las_02_04_off_1[] = {
     },
 };
 
-/** Battle group las_02_04_off_1: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_02_04_off_1 = {
+static BattleGroupSetup btlgrp_las_las_02_04_off_1 = {
     4, // numEnemies
     btlparty_las_las_02_04_off_1, // enemyData
     25, // heldItemWeight
@@ -1162,11 +1127,10 @@ BattleGroupSetup btlgrp_las_las_02_04_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_02_05_off_1: B. Bill Blaster x2. */
-BattleUnitSetup btlparty_las_las_02_05_off_1[] = {
+static BattleUnitSetup btlparty_las_las_02_05_off_1[] = {
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1176,7 +1140,7 @@ BattleUnitSetup btlparty_las_las_02_05_off_1[] = {
     },
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1186,8 +1150,7 @@ BattleUnitSetup btlparty_las_las_02_05_off_1[] = {
     },
 };
 
-/** Battle group las_02_05_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_02_05_off_1 = {
+static BattleGroupSetup btlgrp_las_las_02_05_off_1 = {
     2, // numEnemies
     btlparty_las_las_02_05_off_1, // enemyData
     25, // heldItemWeight
@@ -1198,11 +1161,10 @@ BattleGroupSetup btlgrp_las_las_02_05_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_02_06_off_1: B. Bill Blaster x2. */
-BattleUnitSetup btlparty_las_las_02_06_off_1[] = {
+static BattleUnitSetup btlparty_las_las_02_06_off_1[] = {
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1212,7 +1174,7 @@ BattleUnitSetup btlparty_las_las_02_06_off_1[] = {
     },
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1222,8 +1184,7 @@ BattleUnitSetup btlparty_las_las_02_06_off_1[] = {
     },
 };
 
-/** Battle group las_02_06_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_02_06_off_1 = {
+static BattleGroupSetup btlgrp_las_las_02_06_off_1 = {
     2, // numEnemies
     btlparty_las_las_02_06_off_1, // enemyData
     25, // heldItemWeight
@@ -1234,11 +1195,10 @@ BattleGroupSetup btlgrp_las_las_02_06_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_02_99_off_1: Bombshell Bill x2. */
-BattleUnitSetup btlparty_las_las_02_99_off_1[] = {
+static BattleUnitSetup btlparty_las_las_02_99_off_1[] = {
     {
         &unit_super_killer, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -1248,7 +1208,7 @@ BattleUnitSetup btlparty_las_las_02_99_off_1[] = {
     },
     {
         &unit_super_killer, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -1258,8 +1218,7 @@ BattleUnitSetup btlparty_las_las_02_99_off_1[] = {
     },
 };
 
-/** Battle group las_02_99_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_02_99_off_1 = {
+static BattleGroupSetup btlgrp_las_las_02_99_off_1 = {
     2, // numEnemies
     btlparty_las_las_02_99_off_1, // enemyData
     25, // heldItemWeight
@@ -1270,11 +1229,10 @@ BattleGroupSetup btlgrp_las_las_02_99_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_03_01_off_1: Swoopula. */
-BattleUnitSetup btlparty_las_las_03_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_03_01_off_1[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -1284,8 +1242,7 @@ BattleUnitSetup btlparty_las_las_03_01_off_1[] = {
     },
 };
 
-/** Battle group las_03_01_off_1: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_03_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_03_01_off_1 = {
     1, // numEnemies
     btlparty_las_las_03_01_off_1, // enemyData
     25, // heldItemWeight
@@ -1296,11 +1253,10 @@ BattleGroupSetup btlgrp_las_las_03_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_03_02_off_1: Swoopula. */
-BattleUnitSetup btlparty_las_las_03_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_03_02_off_1[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -1310,8 +1266,7 @@ BattleUnitSetup btlparty_las_las_03_02_off_1[] = {
     },
 };
 
-/** Battle group las_03_02_off_1: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_03_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_03_02_off_1 = {
     1, // numEnemies
     btlparty_las_las_03_02_off_1, // enemyData
     25, // heldItemWeight
@@ -1322,11 +1277,10 @@ BattleGroupSetup btlgrp_las_las_03_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_03_03_off_1: Swoopula. */
-BattleUnitSetup btlparty_las_las_03_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_03_03_off_1[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -1336,8 +1290,7 @@ BattleUnitSetup btlparty_las_las_03_03_off_1[] = {
     },
 };
 
-/** Battle group las_03_03_off_1: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_03_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_03_03_off_1 = {
     1, // numEnemies
     btlparty_las_las_03_03_off_1, // enemyData
     25, // heldItemWeight
@@ -1348,11 +1301,10 @@ BattleGroupSetup btlgrp_las_las_03_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_03_01_off_2: Swoopula. */
-BattleUnitSetup btlparty_las_las_03_01_off_2[] = {
+static BattleUnitSetup btlparty_las_las_03_01_off_2[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -1362,8 +1314,7 @@ BattleUnitSetup btlparty_las_las_03_01_off_2[] = {
     },
 };
 
-/** Battle group las_03_01_off_2: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_03_01_off_2 = {
+static BattleGroupSetup btlgrp_las_las_03_01_off_2 = {
     1, // numEnemies
     btlparty_las_las_03_01_off_2, // enemyData
     25, // heldItemWeight
@@ -1374,11 +1325,10 @@ BattleGroupSetup btlgrp_las_las_03_01_off_2 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_03_02_off_2: Swoopula. */
-BattleUnitSetup btlparty_las_las_03_02_off_2[] = {
+static BattleUnitSetup btlparty_las_las_03_02_off_2[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -1388,8 +1338,7 @@ BattleUnitSetup btlparty_las_las_03_02_off_2[] = {
     },
 };
 
-/** Battle group las_03_02_off_2: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_03_02_off_2 = {
+static BattleGroupSetup btlgrp_las_las_03_02_off_2 = {
     1, // numEnemies
     btlparty_las_las_03_02_off_2, // enemyData
     25, // heldItemWeight
@@ -1400,11 +1349,10 @@ BattleGroupSetup btlgrp_las_las_03_02_off_2 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_03_03_off_2: Swoopula. */
-BattleUnitSetup btlparty_las_las_03_03_off_2[] = {
+static BattleUnitSetup btlparty_las_las_03_03_off_2[] = {
     {
         &unit_basabasa_chururu, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 130.0f, 0.0f}, // position
@@ -1414,8 +1362,7 @@ BattleUnitSetup btlparty_las_las_03_03_off_2[] = {
     },
 };
 
-/** Battle group las_03_03_off_2: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_03_03_off_2 = {
+static BattleGroupSetup btlgrp_las_las_03_03_off_2 = {
     1, // numEnemies
     btlparty_las_las_03_03_off_2, // enemyData
     25, // heldItemWeight
@@ -1426,11 +1373,10 @@ BattleGroupSetup btlgrp_las_las_03_03_off_2 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_04_01_off_1: Phantom Ember. */
-BattleUnitSetup btlparty_las_las_04_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_04_01_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1440,8 +1386,7 @@ BattleUnitSetup btlparty_las_las_04_01_off_1[] = {
     },
 };
 
-/** Battle group las_04_01_off_1: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_04_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_04_01_off_1 = {
     1, // numEnemies
     btlparty_las_las_04_01_off_1, // enemyData
     25, // heldItemWeight
@@ -1452,11 +1397,10 @@ BattleGroupSetup btlgrp_las_las_04_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_06_01_off_1: B. Bill Blaster x2. */
-BattleUnitSetup btlparty_las_las_06_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_06_01_off_1[] = {
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1466,7 +1410,7 @@ BattleUnitSetup btlparty_las_las_06_01_off_1[] = {
     },
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1476,8 +1420,7 @@ BattleUnitSetup btlparty_las_las_06_01_off_1[] = {
     },
 };
 
-/** Battle group las_06_01_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_06_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_06_01_off_1 = {
     2, // numEnemies
     btlparty_las_las_06_01_off_1, // enemyData
     25, // heldItemWeight
@@ -1488,11 +1431,10 @@ BattleGroupSetup btlgrp_las_las_06_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_06_02_off_1: B. Bill Blaster x2. */
-BattleUnitSetup btlparty_las_las_06_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_06_02_off_1[] = {
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1502,7 +1444,7 @@ BattleUnitSetup btlparty_las_las_06_02_off_1[] = {
     },
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1512,8 +1454,7 @@ BattleUnitSetup btlparty_las_las_06_02_off_1[] = {
     },
 };
 
-/** Battle group las_06_02_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_06_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_06_02_off_1 = {
     2, // numEnemies
     btlparty_las_las_06_02_off_1, // enemyData
     25, // heldItemWeight
@@ -1524,11 +1465,10 @@ BattleGroupSetup btlgrp_las_las_06_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_06_03_off_1: Phantom Ember x2. */
-BattleUnitSetup btlparty_las_las_06_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_06_03_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1538,7 +1478,7 @@ BattleUnitSetup btlparty_las_las_06_03_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1548,8 +1488,7 @@ BattleUnitSetup btlparty_las_las_06_03_off_1[] = {
     },
 };
 
-/** Battle group las_06_03_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_06_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_06_03_off_1 = {
     2, // numEnemies
     btlparty_las_las_06_03_off_1, // enemyData
     25, // heldItemWeight
@@ -1560,11 +1499,10 @@ BattleGroupSetup btlgrp_las_las_06_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_06_04_off_1: Phantom Ember x4. */
-BattleUnitSetup btlparty_las_las_06_04_off_1[] = {
+static BattleUnitSetup btlparty_las_las_06_04_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -1574,7 +1512,7 @@ BattleUnitSetup btlparty_las_las_06_04_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1584,9 +1522,9 @@ BattleUnitSetup btlparty_las_las_06_04_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -1594,9 +1532,9 @@ BattleUnitSetup btlparty_las_las_06_04_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -1604,8 +1542,7 @@ BattleUnitSetup btlparty_las_las_06_04_off_1[] = {
     },
 };
 
-/** Battle group las_06_04_off_1: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_06_04_off_1 = {
+static BattleGroupSetup btlgrp_las_las_06_04_off_1 = {
     4, // numEnemies
     btlparty_las_las_06_04_off_1, // enemyData
     25, // heldItemWeight
@@ -1616,11 +1553,10 @@ BattleGroupSetup btlgrp_las_las_06_04_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_06_05_off_1: B. Bill Blaster x2. */
-BattleUnitSetup btlparty_las_las_06_05_off_1[] = {
+static BattleUnitSetup btlparty_las_las_06_05_off_1[] = {
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1630,7 +1566,7 @@ BattleUnitSetup btlparty_las_las_06_05_off_1[] = {
     },
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1640,8 +1576,7 @@ BattleUnitSetup btlparty_las_las_06_05_off_1[] = {
     },
 };
 
-/** Battle group las_06_05_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_06_05_off_1 = {
+static BattleGroupSetup btlgrp_las_las_06_05_off_1 = {
     2, // numEnemies
     btlparty_las_las_06_05_off_1, // enemyData
     25, // heldItemWeight
@@ -1652,11 +1587,10 @@ BattleGroupSetup btlgrp_las_las_06_05_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_06_06_off_1: B. Bill Blaster x2. */
-BattleUnitSetup btlparty_las_las_06_06_off_1[] = {
+static BattleUnitSetup btlparty_las_las_06_06_off_1[] = {
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1666,7 +1600,7 @@ BattleUnitSetup btlparty_las_las_06_06_off_1[] = {
     },
     {
         &unit_super_killer_cannon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1676,8 +1610,7 @@ BattleUnitSetup btlparty_las_las_06_06_off_1[] = {
     },
 };
 
-/** Battle group las_06_06_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_06_06_off_1 = {
+static BattleGroupSetup btlgrp_las_las_06_06_off_1 = {
     2, // numEnemies
     btlparty_las_las_06_06_off_1, // enemyData
     25, // heldItemWeight
@@ -1688,11 +1621,10 @@ BattleGroupSetup btlgrp_las_las_06_06_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_06_99_off_1: Bombshell Bill x2. */
-BattleUnitSetup btlparty_las_las_06_99_off_1[] = {
+static BattleUnitSetup btlparty_las_las_06_99_off_1[] = {
     {
         &unit_super_killer, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -1702,7 +1634,7 @@ BattleUnitSetup btlparty_las_las_06_99_off_1[] = {
     },
     {
         &unit_super_killer, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -1712,8 +1644,7 @@ BattleUnitSetup btlparty_las_las_06_99_off_1[] = {
     },
 };
 
-/** Battle group las_06_99_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_06_99_off_1 = {
+static BattleGroupSetup btlgrp_las_las_06_99_off_1 = {
     2, // numEnemies
     btlparty_las_las_06_99_off_1, // enemyData
     25, // heldItemWeight
@@ -1724,11 +1655,10 @@ BattleGroupSetup btlgrp_las_las_06_99_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_07_01_off_1: Phantom Ember x3. */
-BattleUnitSetup btlparty_las_las_07_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_07_01_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -1738,7 +1668,7 @@ BattleUnitSetup btlparty_las_las_07_01_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1748,9 +1678,9 @@ BattleUnitSetup btlparty_las_las_07_01_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -1758,8 +1688,7 @@ BattleUnitSetup btlparty_las_las_07_01_off_1[] = {
     },
 };
 
-/** Battle group las_07_01_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_07_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_07_01_off_1 = {
     3, // numEnemies
     btlparty_las_las_07_01_off_1, // enemyData
     25, // heldItemWeight
@@ -1770,11 +1699,10 @@ BattleGroupSetup btlgrp_las_las_07_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_07_02_off_1: Dry Bones x2 and Phantom Ember. */
-BattleUnitSetup btlparty_las_las_07_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_07_02_off_1[] = {
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -1784,7 +1712,7 @@ BattleUnitSetup btlparty_las_las_07_02_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1794,9 +1722,9 @@ BattleUnitSetup btlparty_las_las_07_02_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -1804,8 +1732,7 @@ BattleUnitSetup btlparty_las_las_07_02_off_1[] = {
     },
 };
 
-/** Battle group las_07_02_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_07_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_07_02_off_1 = {
     3, // numEnemies
     btlparty_las_las_07_02_off_1, // enemyData
     25, // heldItemWeight
@@ -1816,11 +1743,10 @@ BattleGroupSetup btlgrp_las_las_07_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_07_03_off_1: Dry Bones x2 and Phantom Ember. */
-BattleUnitSetup btlparty_las_las_07_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_07_03_off_1[] = {
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -1830,7 +1756,7 @@ BattleUnitSetup btlparty_las_las_07_03_off_1[] = {
     },
     {
         &unit_karon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1840,9 +1766,9 @@ BattleUnitSetup btlparty_las_las_07_03_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -1850,8 +1776,7 @@ BattleUnitSetup btlparty_las_las_07_03_off_1[] = {
     },
 };
 
-/** Battle group las_07_03_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_07_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_07_03_off_1 = {
     3, // numEnemies
     btlparty_las_las_07_03_off_1, // enemyData
     25, // heldItemWeight
@@ -1862,11 +1787,10 @@ BattleGroupSetup btlgrp_las_las_07_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_09_01_off_1: Chain-Chomp x2. */
-BattleUnitSetup btlparty_las_las_09_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_09_01_off_1[] = {
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1876,7 +1800,7 @@ BattleUnitSetup btlparty_las_las_09_01_off_1[] = {
     },
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1886,8 +1810,7 @@ BattleUnitSetup btlparty_las_las_09_01_off_1[] = {
     },
 };
 
-/** Battle group las_09_01_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_09_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_09_01_off_1 = {
     2, // numEnemies
     btlparty_las_las_09_01_off_1, // enemyData
     25, // heldItemWeight
@@ -1898,11 +1821,10 @@ BattleGroupSetup btlgrp_las_las_09_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_09_02_off_1: Chain-Chomp x3. */
-BattleUnitSetup btlparty_las_las_09_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_09_02_off_1[] = {
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -1912,7 +1834,7 @@ BattleUnitSetup btlparty_las_las_09_02_off_1[] = {
     },
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1922,7 +1844,7 @@ BattleUnitSetup btlparty_las_las_09_02_off_1[] = {
     },
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -1932,8 +1854,7 @@ BattleUnitSetup btlparty_las_las_09_02_off_1[] = {
     },
 };
 
-/** Battle group las_09_02_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_09_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_09_02_off_1 = {
     3, // numEnemies
     btlparty_las_las_09_02_off_1, // enemyData
     25, // heldItemWeight
@@ -1944,11 +1865,10 @@ BattleGroupSetup btlgrp_las_las_09_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_19_01_off_1: Dark Wizzerd. */
-BattleUnitSetup btlparty_las_las_19_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_19_01_off_1[] = {
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1958,8 +1878,7 @@ BattleUnitSetup btlparty_las_las_19_01_off_1[] = {
     },
 };
 
-/** Battle group las_19_01_off_1: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_19_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_19_01_off_1 = {
     1, // numEnemies
     btlparty_las_las_19_01_off_1, // enemyData
     25, // heldItemWeight
@@ -1970,11 +1889,10 @@ BattleGroupSetup btlgrp_las_las_19_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_19_02_off_1: Dark Wizzerd x2. */
-BattleUnitSetup btlparty_las_las_19_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_19_02_off_1[] = {
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1984,7 +1902,7 @@ BattleUnitSetup btlparty_las_las_19_02_off_1[] = {
     },
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1994,8 +1912,7 @@ BattleUnitSetup btlparty_las_las_19_02_off_1[] = {
     },
 };
 
-/** Battle group las_19_02_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_19_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_19_02_off_1 = {
     2, // numEnemies
     btlparty_las_las_19_02_off_1, // enemyData
     25, // heldItemWeight
@@ -2006,11 +1923,10 @@ BattleGroupSetup btlgrp_las_las_19_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_19_03_off_1: Dark Wizzerd x3. */
-BattleUnitSetup btlparty_las_las_19_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_19_03_off_1[] = {
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -2020,7 +1936,7 @@ BattleUnitSetup btlparty_las_las_19_03_off_1[] = {
     },
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -2030,7 +1946,7 @@ BattleUnitSetup btlparty_las_las_19_03_off_1[] = {
     },
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -2040,8 +1956,7 @@ BattleUnitSetup btlparty_las_las_19_03_off_1[] = {
     },
 };
 
-/** Battle group las_19_03_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_19_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_19_03_off_1 = {
     3, // numEnemies
     btlparty_las_las_19_03_off_1, // enemyData
     25, // heldItemWeight
@@ -2052,11 +1967,10 @@ BattleGroupSetup btlgrp_las_las_19_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_20_01_off_1: Dark Wizzerd. */
-BattleUnitSetup btlparty_las_las_20_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_20_01_off_1[] = {
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -2066,8 +1980,7 @@ BattleUnitSetup btlparty_las_las_20_01_off_1[] = {
     },
 };
 
-/** Battle group las_20_01_off_1: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_20_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_20_01_off_1 = {
     1, // numEnemies
     btlparty_las_las_20_01_off_1, // enemyData
     25, // heldItemWeight
@@ -2078,11 +1991,10 @@ BattleGroupSetup btlgrp_las_las_20_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_21_01_off_1: Chain-Chomp x2. */
-BattleUnitSetup btlparty_las_las_21_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_21_01_off_1[] = {
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2092,7 +2004,7 @@ BattleUnitSetup btlparty_las_las_21_01_off_1[] = {
     },
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -2102,8 +2014,7 @@ BattleUnitSetup btlparty_las_las_21_01_off_1[] = {
     },
 };
 
-/** Battle group las_21_01_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_21_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_21_01_off_1 = {
     2, // numEnemies
     btlparty_las_las_21_01_off_1, // enemyData
     25, // heldItemWeight
@@ -2114,11 +2025,10 @@ BattleGroupSetup btlgrp_las_las_21_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_21_02_off_1: Chain-Chomp x2. */
-BattleUnitSetup btlparty_las_las_21_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_21_02_off_1[] = {
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2128,7 +2038,7 @@ BattleUnitSetup btlparty_las_las_21_02_off_1[] = {
     },
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -2138,8 +2048,7 @@ BattleUnitSetup btlparty_las_las_21_02_off_1[] = {
     },
 };
 
-/** Battle group las_21_02_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_21_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_21_02_off_1 = {
     2, // numEnemies
     btlparty_las_las_21_02_off_1, // enemyData
     25, // heldItemWeight
@@ -2150,11 +2059,10 @@ BattleGroupSetup btlgrp_las_las_21_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_22_01_off_1: Dark Wizzerd x2. */
-BattleUnitSetup btlparty_las_las_22_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_22_01_off_1[] = {
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2164,7 +2072,7 @@ BattleUnitSetup btlparty_las_las_22_01_off_1[] = {
     },
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -2174,8 +2082,7 @@ BattleUnitSetup btlparty_las_las_22_01_off_1[] = {
     },
 };
 
-/** Battle group las_22_01_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_22_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_22_01_off_1 = {
     2, // numEnemies
     btlparty_las_las_22_01_off_1, // enemyData
     25, // heldItemWeight
@@ -2186,11 +2093,10 @@ BattleGroupSetup btlgrp_las_las_22_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_22_02_off_1: Phantom Ember x4. */
-BattleUnitSetup btlparty_las_las_22_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_22_02_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -2200,7 +2106,7 @@ BattleUnitSetup btlparty_las_las_22_02_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2210,9 +2116,9 @@ BattleUnitSetup btlparty_las_las_22_02_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -2220,9 +2126,9 @@ BattleUnitSetup btlparty_las_las_22_02_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -2230,8 +2136,7 @@ BattleUnitSetup btlparty_las_las_22_02_off_1[] = {
     },
 };
 
-/** Battle group las_22_02_off_1: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_22_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_22_02_off_1 = {
     4, // numEnemies
     btlparty_las_las_22_02_off_1, // enemyData
     25, // heldItemWeight
@@ -2242,11 +2147,10 @@ BattleGroupSetup btlgrp_las_las_22_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_22_03_off_1: Chain-Chomp and Phantom Ember. */
-BattleUnitSetup btlparty_las_las_22_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_22_03_off_1[] = {
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2256,7 +2160,7 @@ BattleUnitSetup btlparty_las_las_22_03_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -2266,8 +2170,7 @@ BattleUnitSetup btlparty_las_las_22_03_off_1[] = {
     },
 };
 
-/** Battle group las_22_03_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_22_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_22_03_off_1 = {
     2, // numEnemies
     btlparty_las_las_22_03_off_1, // enemyData
     25, // heldItemWeight
@@ -2278,11 +2181,10 @@ BattleGroupSetup btlgrp_las_las_22_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_24_01_off_1: Chain-Chomp and Dark Wizzerd. */
-BattleUnitSetup btlparty_las_las_24_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_24_01_off_1[] = {
     {
         &unit_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2292,7 +2194,7 @@ BattleUnitSetup btlparty_las_las_24_01_off_1[] = {
     },
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -2302,8 +2204,7 @@ BattleUnitSetup btlparty_las_las_24_01_off_1[] = {
     },
 };
 
-/** Battle group las_24_01_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_24_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_24_01_off_1 = {
     2, // numEnemies
     btlparty_las_las_24_01_off_1, // enemyData
     25, // heldItemWeight
@@ -2314,11 +2215,10 @@ BattleGroupSetup btlgrp_las_las_24_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_25_01_off_1: Phantom Ember. */
-BattleUnitSetup btlparty_las_las_25_01_off_1[] = {
+static BattleUnitSetup btlparty_las_las_25_01_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -2328,8 +2228,7 @@ BattleUnitSetup btlparty_las_las_25_01_off_1[] = {
     },
 };
 
-/** Battle group las_25_01_off_1: its single enemy; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_25_01_off_1 = {
+static BattleGroupSetup btlgrp_las_las_25_01_off_1 = {
     1, // numEnemies
     btlparty_las_las_25_01_off_1, // enemyData
     25, // heldItemWeight
@@ -2340,11 +2239,10 @@ BattleGroupSetup btlgrp_las_las_25_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_25_02_off_1: Phantom Ember x3. */
-BattleUnitSetup btlparty_las_las_25_02_off_1[] = {
+static BattleUnitSetup btlparty_las_las_25_02_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -2354,7 +2252,7 @@ BattleUnitSetup btlparty_las_las_25_02_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -2364,9 +2262,9 @@ BattleUnitSetup btlparty_las_las_25_02_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -2374,8 +2272,7 @@ BattleUnitSetup btlparty_las_las_25_02_off_1[] = {
     },
 };
 
-/** Battle group las_25_02_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_25_02_off_1 = {
+static BattleGroupSetup btlgrp_las_las_25_02_off_1 = {
     3, // numEnemies
     btlparty_las_las_25_02_off_1, // enemyData
     25, // heldItemWeight
@@ -2386,11 +2283,10 @@ BattleGroupSetup btlgrp_las_las_25_02_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_25_03_off_1: Phantom Ember x3 and Dark Wizzerd. */
-BattleUnitSetup btlparty_las_las_25_03_off_1[] = {
+static BattleUnitSetup btlparty_las_las_25_03_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -2400,7 +2296,7 @@ BattleUnitSetup btlparty_las_las_25_03_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2410,9 +2306,9 @@ BattleUnitSetup btlparty_las_las_25_03_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -2420,7 +2316,7 @@ BattleUnitSetup btlparty_las_las_25_03_off_1[] = {
     },
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -2430,8 +2326,7 @@ BattleUnitSetup btlparty_las_las_25_03_off_1[] = {
     },
 };
 
-/** Battle group las_25_03_off_1: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_25_03_off_1 = {
+static BattleGroupSetup btlgrp_las_las_25_03_off_1 = {
     4, // numEnemies
     btlparty_las_las_25_03_off_1, // enemyData
     25, // heldItemWeight
@@ -2442,11 +2337,10 @@ BattleGroupSetup btlgrp_las_las_25_03_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_25_04_off_1: Phantom Ember x2. */
-BattleUnitSetup btlparty_las_las_25_04_off_1[] = {
+static BattleUnitSetup btlparty_las_las_25_04_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -2456,7 +2350,7 @@ BattleUnitSetup btlparty_las_las_25_04_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -2466,8 +2360,7 @@ BattleUnitSetup btlparty_las_las_25_04_off_1[] = {
     },
 };
 
-/** Battle group las_25_04_off_1: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_25_04_off_1 = {
+static BattleGroupSetup btlgrp_las_las_25_04_off_1 = {
     2, // numEnemies
     btlparty_las_las_25_04_off_1, // enemyData
     25, // heldItemWeight
@@ -2478,11 +2371,10 @@ BattleGroupSetup btlgrp_las_las_25_04_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_25_05_off_1: Phantom Ember x2 and Dark Wizzerd. */
-BattleUnitSetup btlparty_las_las_25_05_off_1[] = {
+static BattleUnitSetup btlparty_las_las_25_05_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -2492,7 +2384,7 @@ BattleUnitSetup btlparty_las_las_25_05_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -2502,7 +2394,7 @@ BattleUnitSetup btlparty_las_las_25_05_off_1[] = {
     },
     {
         &unit_super_mahorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -2512,8 +2404,7 @@ BattleUnitSetup btlparty_las_las_25_05_off_1[] = {
     },
 };
 
-/** Battle group las_25_05_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_25_05_off_1 = {
+static BattleGroupSetup btlgrp_las_las_25_05_off_1 = {
     3, // numEnemies
     btlparty_las_las_25_05_off_1, // enemyData
     25, // heldItemWeight
@@ -2524,11 +2415,10 @@ BattleGroupSetup btlgrp_las_las_25_05_off_1 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle las_25_06_off_1: Phantom Ember x3. */
-BattleUnitSetup btlparty_las_las_25_06_off_1[] = {
+static BattleUnitSetup btlparty_las_las_25_06_off_1[] = {
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -2538,7 +2428,7 @@ BattleUnitSetup btlparty_las_las_25_06_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -2548,9 +2438,9 @@ BattleUnitSetup btlparty_las_las_25_06_off_1[] = {
     },
     {
         &unit_phantom, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -2558,8 +2448,7 @@ BattleUnitSetup btlparty_las_las_25_06_off_1[] = {
     },
 };
 
-/** Battle group las_25_06_off_1: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_las_las_25_06_off_1 = {
+static BattleGroupSetup btlgrp_las_las_25_06_off_1 = {
     3, // numEnemies
     btlparty_las_las_25_06_off_1, // enemyData
     25, // heldItemWeight
@@ -2570,395 +2459,308 @@ BattleGroupSetup btlgrp_las_las_25_06_off_1 = {
     5, // reserved_1C
 };
 
-/** Battle choice BTLNO_LAS_TEST1_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_test1_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_test1_off[] = {
     {50, &btlgrp_las_las_05_01, &las_btlstage_data[1]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_TEST2_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_test2_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_test2_off[] = {
     {50, &btlgrp_las_las_05_01, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_TEST3_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_test3_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_test3_off[] = {
     {50, &btlgrp_las_las_05_01, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_TEST4_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_test4_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_test4_off[] = {
     {50, &btlgrp_las_las_05_01, &las_btlstage_data[9]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_TEST5_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_test5_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_test5_off[] = {
     {50, &btlgrp_las_las_05_01, &las_btlstage_data[5]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_TEST6_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_test6_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_test6_off[] = {
     {50, &btlgrp_las_las_05_01, las_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_TEST7_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_test7_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_test7_off[] = {
     {50, &btlgrp_las_las_05_01, &las_btlstage_data[7]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_05_01_OFF (group and stage by weight): las_05_01 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_05_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_05_01_off[] = {
     {50, &btlgrp_las_las_05_01, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_09_RAMPELL_OFF (group and stage by weight): las_09_rampell (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_09_rampell_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_09_rampell_off[] = {
     {50, &btlgrp_las_las_09_rampell, &las_btlstage_data[9]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_17_01_OFF (group and stage by weight): las_17_01_off_1 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_17_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_01_off[] = {
     {50, &btlgrp_las_las_17_01_off_1, &las_btlstage_data[6]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_17_02_OFF (group and stage by weight): las_17_02_off_1 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_17_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_02_off[] = {
     {50, &btlgrp_las_las_17_02_off_1, &las_btlstage_data[6]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_17_03_OFF (group and stage by weight): las_17_03_off_1 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_17_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_03_off[] = {
     {50, &btlgrp_las_las_17_03_off_1, &las_btlstage_data[6]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_17_04_OFF (group and stage by weight): las_17_04_off_1 (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_17_04_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_17_04_off[] = {
     {50, &btlgrp_las_las_17_04_off_1, &las_btlstage_data[6]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_28_KOOPA_OFF (group and stage by weight): las_28_koopa (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_28_koopa_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_28_koopa_off[] = {
     {50, &btlgrp_las_las_28_koopa, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_BUNBABA_OFF (group and stage by weight): las_bunbaba (weight 50). */
-NpcBattleSelect btlgrpsel_las_btlno_las_bunbaba_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_bunbaba_off[] = {
     {50, &btlgrp_las_las_bunbaba, &las_btlstage_data[3]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_28_BATTEN_LEADER_OFF (group and stage by weight): las_28_batten_leader
- * (weight 50).
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_28_batten_leader_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_28_batten_leader_off[] = {
     {50, &btlgrp_las_las_28_batten_leader, &las_btlstage_data[3]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_29_BLACK_PEACH_1_OFF (group and stage by weight): las_29_black_peach_1
- * (weight 50).
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_1_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_1_off[] = {
     {50, &btlgrp_las_las_29_black_peach_1, &las_btlstage_data[7]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_29_BLACK_PEACH_2_OFF (group and stage by weight): las_29_black_peach_2
- * (weight 50).
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_2_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_29_black_peach_2_off[] = {
     {50, &btlgrp_las_las_29_black_peach_2, &las_btlstage_data[7]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_01_01_OFF (group and stage by weight): las_01_01_off_1 (weight 20);
- * las_01_01_off_2 follows the weight-0 end of the table and is never rolled.
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_01_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_01_01_off[] = {
     {20, &btlgrp_las_las_01_01_off_1, &las_btlstage_data[1]},
     {0, &btlgrp_las_las_01_01_off_2, &las_btlstage_data[2]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_01_02_OFF (group and stage by weight): las_01_02_off_1 (weight 20);
- * las_01_02_off_2 follows the weight-0 end of the table and is never rolled.
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_01_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_01_02_off[] = {
     {20, &btlgrp_las_las_01_02_off_1, &las_btlstage_data[1]},
     {0, &btlgrp_las_las_01_02_off_2, &las_btlstage_data[2]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_01_03_OFF (group and stage by weight): las_01_03_off_1 (weight 20);
- * las_01_03_off_2 follows the weight-0 end of the table and is never rolled.
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_01_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_01_03_off[] = {
     {20, &btlgrp_las_las_01_03_off_1, &las_btlstage_data[1]},
     {0, &btlgrp_las_las_01_03_off_2, &las_btlstage_data[2]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_02_01_OFF (group and stage by weight): las_02_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_02_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_01_off[] = {
     {20, &btlgrp_las_las_02_01_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_02_02_OFF (group and stage by weight): las_02_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_02_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_02_off[] = {
     {20, &btlgrp_las_las_02_02_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_02_03_OFF (group and stage by weight): las_02_03_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_02_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_03_off[] = {
     {20, &btlgrp_las_las_02_03_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_02_04_OFF (group and stage by weight): las_02_04_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_02_04_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_04_off[] = {
     {20, &btlgrp_las_las_02_04_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_02_05_OFF (group and stage by weight): las_02_05_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_02_05_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_05_off[] = {
     {20, &btlgrp_las_las_02_05_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_02_06_OFF (group and stage by weight): las_02_06_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_02_06_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_06_off[] = {
     {20, &btlgrp_las_las_02_06_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_02_99_OFF (group and stage by weight): las_02_99_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_02_99_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_02_99_off[] = {
     {20, &btlgrp_las_las_02_99_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_03_01_OFF (group and stage by weight): las_03_01_off_1 (weight 20);
- * las_03_01_off_2 follows the weight-0 end of the table and is never rolled.
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_03_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_03_01_off[] = {
     {20, &btlgrp_las_las_03_01_off_1, &las_btlstage_data[3]},
     {0, &btlgrp_las_las_03_01_off_2, &las_btlstage_data[4]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_03_02_OFF (group and stage by weight): las_03_02_off_1 (weight 20);
- * las_03_02_off_2 follows the weight-0 end of the table and is never rolled.
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_03_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_03_02_off[] = {
     {20, &btlgrp_las_las_03_02_off_1, &las_btlstage_data[3]},
     {0, &btlgrp_las_las_03_02_off_2, &las_btlstage_data[4]},
     {0},
 };
 
-/**
- * Battle choice BTLNO_LAS_03_03_OFF (group and stage by weight): las_03_03_off_1 (weight 20);
- * las_03_03_off_2 follows the weight-0 end of the table and is never rolled.
- */
-NpcBattleSelect btlgrpsel_las_btlno_las_03_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_03_03_off[] = {
     {20, &btlgrp_las_las_03_03_off_1, &las_btlstage_data[3]},
     {0, &btlgrp_las_las_03_03_off_2, &las_btlstage_data[4]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_04_01_OFF (group and stage by weight): las_04_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_04_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_04_01_off[] = {
     {20, &btlgrp_las_las_04_01_off_1, &las_btlstage_data[1]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_06_01_OFF (group and stage by weight): las_06_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_06_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_01_off[] = {
     {20, &btlgrp_las_las_06_01_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_06_02_OFF (group and stage by weight): las_06_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_06_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_02_off[] = {
     {20, &btlgrp_las_las_06_02_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_06_03_OFF (group and stage by weight): las_06_03_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_06_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_03_off[] = {
     {20, &btlgrp_las_las_06_03_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_06_04_OFF (group and stage by weight): las_06_04_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_06_04_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_04_off[] = {
     {20, &btlgrp_las_las_06_04_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_06_05_OFF (group and stage by weight): las_06_05_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_06_05_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_05_off[] = {
     {20, &btlgrp_las_las_06_05_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_06_06_OFF (group and stage by weight): las_06_06_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_06_06_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_06_off[] = {
     {20, &btlgrp_las_las_06_06_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_06_99_OFF (group and stage by weight): las_06_99_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_06_99_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_06_99_off[] = {
     {20, &btlgrp_las_las_06_99_off_1, &las_btlstage_data[8]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_07_01_OFF (group and stage by weight): las_07_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_07_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_07_01_off[] = {
     {20, &btlgrp_las_las_07_01_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_07_02_OFF (group and stage by weight): las_07_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_07_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_07_02_off[] = {
     {20, &btlgrp_las_las_07_02_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_07_03_OFF (group and stage by weight): las_07_03_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_07_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_07_03_off[] = {
     {20, &btlgrp_las_las_07_03_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_09_01_OFF (group and stage by weight): las_09_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_09_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_09_01_off[] = {
     {20, &btlgrp_las_las_09_01_off_1, &las_btlstage_data[9]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_09_02_OFF (group and stage by weight): las_09_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_09_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_09_02_off[] = {
     {20, &btlgrp_las_las_09_02_off_1, &las_btlstage_data[9]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_19_01_OFF (group and stage by weight): las_19_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_19_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_19_01_off[] = {
     {20, &btlgrp_las_las_19_01_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_19_02_OFF (group and stage by weight): las_19_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_19_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_19_02_off[] = {
     {20, &btlgrp_las_las_19_02_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_19_03_OFF (group and stage by weight): las_19_03_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_19_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_19_03_off[] = {
     {20, &btlgrp_las_las_19_03_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_20_01_OFF (group and stage by weight): las_20_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_20_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_20_01_off[] = {
     {20, &btlgrp_las_las_20_01_off_1, las_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_21_01_OFF (group and stage by weight): las_21_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_21_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_21_01_off[] = {
     {20, &btlgrp_las_las_21_01_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_21_02_OFF (group and stage by weight): las_21_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_21_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_21_02_off[] = {
     {20, &btlgrp_las_las_21_02_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_22_01_OFF (group and stage by weight): las_22_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_22_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_22_01_off[] = {
     {20, &btlgrp_las_las_22_01_off_1, las_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_22_02_OFF (group and stage by weight): las_22_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_22_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_22_02_off[] = {
     {20, &btlgrp_las_las_22_02_off_1, las_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_22_03_OFF (group and stage by weight): las_22_03_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_22_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_22_03_off[] = {
     {20, &btlgrp_las_las_22_03_off_1, las_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_24_01_OFF (group and stage by weight): las_24_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_24_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_24_01_off[] = {
     {20, &btlgrp_las_las_24_01_off_1, las_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_25_01_OFF (group and stage by weight): las_25_01_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_25_01_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_01_off[] = {
     {20, &btlgrp_las_las_25_01_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_25_02_OFF (group and stage by weight): las_25_02_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_25_02_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_02_off[] = {
     {20, &btlgrp_las_las_25_02_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_25_03_OFF (group and stage by weight): las_25_03_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_25_03_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_03_off[] = {
     {20, &btlgrp_las_las_25_03_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_25_04_OFF (group and stage by weight): las_25_04_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_25_04_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_04_off[] = {
     {20, &btlgrp_las_las_25_04_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_25_05_OFF (group and stage by weight): las_25_05_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_25_05_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_05_off[] = {
     {20, &btlgrp_las_las_25_05_off_1, &las_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_LAS_25_06_OFF (group and stage by weight): las_25_06_off_1 (weight 20). */
-NpcBattleSelect btlgrpsel_las_btlno_las_25_06_off[] = {
+static NpcBattleSelect btlgrpsel_las_btlno_las_25_06_off[] = {
     {20, &btlgrp_las_las_25_06_off_1, &las_btlstage_data[3]},
     {0},
 };
@@ -2974,7 +2776,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -2984,7 +2786,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_test2_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -2994,7 +2796,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_test3_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3004,7 +2806,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_test4_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3014,7 +2816,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_test5_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3024,7 +2826,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_test6_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3034,7 +2836,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_test7_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3044,7 +2846,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_05_01_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         0, // randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_CHUBOSS_BATTLE1", // bgmName
@@ -3056,7 +2858,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_09_rampell_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         6, // randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG3_3WOMEN1", // bgmName
@@ -3067,7 +2869,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_17_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3077,7 +2879,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_17_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3087,7 +2889,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_17_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3097,7 +2899,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_17_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3108,7 +2910,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_28_koopa_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         6, // randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG8_KOOPA", // bgmName
@@ -3121,9 +2923,9 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         NULL, // altSelect
         btlgrpsel_las_btlno_las_bunbaba_off, // select
 #if VERSION <= VERSION_DEMO_JP
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_STORY,
 #else
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_NO_PLAYER_ENTRY | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_NO_PARTY_ENTRY | NPC_BATTLE_STORY), // battleFlags
 #endif
         6, // randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
@@ -3136,7 +2938,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_28_batten_leader_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         5, // randomMode
         {{0}, {10, 10}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG8_3RDHEAD1", // bgmName
@@ -3148,7 +2950,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_29_black_peach_1_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         6, // randomMode
         {{10, 10}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {10, 10}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG8_WITCH", // bgmName
@@ -3160,7 +2962,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_29_black_peach_2_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         6, // randomMode
         {{10, 10}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {10, 10}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG8_LAST_BOSS2", // bgmName
@@ -3171,7 +2973,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_01_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3181,7 +2983,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_01_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3191,7 +2993,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_01_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3201,7 +3003,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_02_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3211,7 +3013,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_02_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3221,7 +3023,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_02_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3231,7 +3033,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_02_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3241,7 +3043,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_02_05_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3251,7 +3053,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_02_06_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3261,7 +3063,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_02_99_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3271,7 +3073,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_03_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3281,7 +3083,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_03_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3291,7 +3093,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_03_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3301,7 +3103,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_04_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3311,7 +3113,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_06_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3321,7 +3123,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_06_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3331,7 +3133,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_06_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3341,7 +3143,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_06_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3351,7 +3153,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_06_05_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3361,7 +3163,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_06_06_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3371,7 +3173,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_06_99_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3381,7 +3183,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_07_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3391,7 +3193,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_07_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3401,7 +3203,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_07_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {10, 10}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3411,7 +3213,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_09_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3421,7 +3223,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_09_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3431,7 +3233,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_19_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3441,7 +3243,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_19_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3451,7 +3253,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_19_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3461,7 +3263,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_20_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3471,7 +3273,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_21_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3481,7 +3283,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_21_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3491,7 +3293,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_22_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3501,7 +3303,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_22_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3511,7 +3313,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_22_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3521,7 +3323,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_24_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3531,7 +3333,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_25_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3541,7 +3343,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_25_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3551,7 +3353,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_25_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3561,7 +3363,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_25_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3571,7 +3373,7 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_25_05_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -3581,17 +3383,13 @@ NpcSetupBattleInfo btlsetup_las_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_las_btlno_las_25_06_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
     {0},
 };
 
-/**
- * Names the Palace of Shadow battle ids (BTLNO_LAS_*) and the btlsetup_las_tbl entry each one uses;
- * registered with relSetBtlAddr.
- */
 NpcTerritoryInfo btl_las_setup_no_tbl[] = {
     {"BTLNO_LAS_TEST1", 0},
     {"BTLNO_LAS_TEST2", 1},
@@ -3657,137 +3455,6 @@ NpcTerritoryInfo btl_las_setup_no_tbl[] = {
 };
 
 /**
- * Battle background event for the gear stage: turns three pairs of gear objects (gear_01..03) forever,
- * at different speeds and directions, one step per frame.
- */
-EVT_BEGIN(bgset_las_gear_event)
-    SET_VALUE(LW(0), 0)
-    SET_VALUE(LW(1), 0)
-    SET_VALUE(LW(2), 0)
-    LABEL(0)
-    CALL(_gear_rotate, STRING("gear_01a"), STRING("gear_01b"), LW(0), 400, -1)
-    CALL(_gear_rotate, STRING("gear_02a"), STRING("gear_02b"), LW(1), 600, 1)
-    CALL(_gear_rotate, STRING("gear_03a"), STRING("gear_03b"), LW(2), 800, 1)
-    WAIT_FRAMES(1)
-    GOTO(0)
-    RETURN
-EVT_END()
-
-/**
- * Battle stage event for stage stg_08_1: lights three torch flames (hi1..hi3) on the stage's torch map objects
- * and removes them softly when the battle ends.
- */
-EVT_BEGIN(stg_08_1_init_sub_event)
-    CALL(evt_mapobj_get_position, STRING("hi1"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("_hi1"), STRING("fire"), 3, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_get_position, STRING("hi2"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("_hi2"), STRING("fire"), 3, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_get_position, STRING("hi3"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("_hi3"), STRING("fire"), 3, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-#if VERSION >= VERSION_JP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi3"), MAPOBJ_FLAG_HIDE)
-#endif
-    CALL(check_battle_end)
-    CALL(evt_eff_softdelete, STRING("_hi1"))
-    CALL(evt_eff_softdelete, STRING("_hi2"))
-    CALL(evt_eff_softdelete, STRING("_hi3"))
-    RETURN
-EVT_END()
-
-/** Init event of battle stage stg_08_1: starts the torch flame event. */
-EVT_BEGIN(stg_08_1_init_event)
-    SPAWN_EVENT(stg_08_1_init_sub_event)
-    RETURN
-EVT_END()
-
-/**
- * Battle stage event for stage stg_08_6: lights six dark-flame torches (hi1..hi6);
- * in JP and later the flames follow the torch objects through hi_fire_main, and all are removed at battle end.
- */
-EVT_BEGIN(stg_08_6_init_sub_event)
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mapobj_get_position, STRING("hi1"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("__hi1"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_get_position, STRING("hi2"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("__hi2"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_get_position, STRING("hi3"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("__hi3"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_get_position, STRING("hi4"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("__hi4"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_get_position, STRING("hi5"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("__hi5"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-    CALL(evt_mapobj_get_position, STRING("hi6"), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("__hi6"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
-#else
-    BEGIN_SIBLING_EVENT
-        CALL(hi_fire_main)
-    END_SIBLING_EVENT
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi3"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi4"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi5"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi6"), MAPOBJ_FLAG_HIDE)
-#endif
-    CALL(check_battle_end)
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_eff_softdelete, STRING("__hi1"))
-    CALL(evt_eff_softdelete, STRING("__hi2"))
-    CALL(evt_eff_softdelete, STRING("__hi3"))
-    CALL(evt_eff_softdelete, STRING("__hi4"))
-    CALL(evt_eff_softdelete, STRING("__hi5"))
-    CALL(evt_eff_softdelete, STRING("__hi6"))
-#else
-    CALL(hi_fire_end)
-#endif
-    RETURN
-EVT_END()
-
-#if VERSION >= VERSION_JP
-/**
- * Script helper (runs every frame until hi_fire_end_flag is set):
- * creates six dark flame effects and keeps each one over the torch object hi1..hi6 whenever that torch is above
- * the floor; deletes them softly when the end flag is raised. JP and later.
- */
-USER_FUNC(hi_fire_main) {
-    const char* names[6] = {"hi1", "hi2", "hi3", "hi4", "hi5", "hi6"};
-    Vec pos;
-    s32 i;
-
-    if (isFirstCall) {
-        hi_fire_end_flag[0] = 0;
-        for (i = 0; i < 6; i++) {
-            hi_fire_eff[i] = effFireEntry(8, 1000, 0.0f, -1000.0f, 0.0f, 1.0f);
-        }
-    }
-    if (hi_fire_end_flag[0]) {
-        for (i = 0; i < 6; i++) {
-            effSoftDelete(hi_fire_eff[i]);
-        }
-        return EVT_RETURN_DONE;
-    }
-    for (i = 0; i < 6; i++) {
-        mapObjGetPos(names[i], &pos);
-        if (pos.y > 0.0f) {
-            f32* wk = hi_fire_eff[i]->userdata;
-
-            wk[1] = pos.x;
-            wk[2] = pos.y - 15.0f;
-            wk[3] = pos.z;
-        }
-    }
-    return EVT_RETURN_BLOCK;
-}
-#endif
-
-/** Script helper: blocks until the battle sequence has ended. */
-static USER_FUNC(check_battle_end) {
-    return battleSeqEndCheck() ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
-}
-
-/**
  * Script helper: turns a pair of gear objects (names args[0] and args[1]) to the angle given by a frame counter:
  * the counter is in the variable args[2], the full turn takes args[3] frames and args[4] is the step (+1 or -1);
  * the counter wraps around.
@@ -3814,6 +3481,157 @@ static USER_FUNC(_gear_rotate) {
     evtSetValue(event, frameVar, frame);
     return EVT_RETURN_DONE;
 }
+
+/**
+ * Background event of the gear battle stage: turns the gear pairs gear_01a/b, gear_02a/b and gear_03a/b
+ * forever (_gear_rotate), one full turn in 400, 600 and 800 frames, gear_01 in the other direction.
+ */
+static EVT_BEGIN(bgset_las_gear_event)
+    SET_VALUE(LW(0), 0)
+    SET_VALUE(LW(1), 0)
+    SET_VALUE(LW(2), 0)
+    LABEL(0)
+    CALL(_gear_rotate, STRING("gear_01a"), STRING("gear_01b"), LW(0), 400, -1)
+    CALL(_gear_rotate, STRING("gear_02a"), STRING("gear_02b"), LW(1), 600, 1)
+    CALL(_gear_rotate, STRING("gear_03a"), STRING("gear_03b"), LW(2), 800, 1)
+    WAIT_FRAMES(1)
+    GOTO(0)
+    RETURN
+EVT_END()
+
+/** Script helper: blocks until the battle sequence has ended. */
+static USER_FUNC(check_battle_end) {
+    return battleSeqEndCheck() ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
+}
+
+/**
+ * Battle stage event for stage stg_08_1: lights three torch flames (hi1..hi3) on the stage's torch map objects
+ * and removes them softly when the battle ends.
+ */
+EVT_BEGIN(stg_08_1_init_sub_event)
+    CALL(evt_mapobj_get_position, STRING("hi1"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("_hi1"), STRING("fire"), 3, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(evt_mapobj_get_position, STRING("hi2"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("_hi2"), STRING("fire"), 3, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(evt_mapobj_get_position, STRING("hi3"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("_hi3"), STRING("fire"), 3, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+#if VERSION >= VERSION_JP
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi3"), MAP_OBJ_FLAG_HIDDEN)
+#endif
+    CALL(check_battle_end)
+    CALL(evt_eff_softdelete, STRING("_hi1"))
+    CALL(evt_eff_softdelete, STRING("_hi2"))
+    CALL(evt_eff_softdelete, STRING("_hi3"))
+    RETURN
+EVT_END()
+
+/** Init event of battle stage stg_08_1: starts the torch flame event. */
+EVT_BEGIN(stg_08_1_init_event)
+    SPAWN_EVENT(stg_08_1_init_sub_event)
+    RETURN
+EVT_END()
+
+#if VERSION >= VERSION_JP
+/**
+ * Battle stage event for stage stg_08_6: lights six dark-flame torches (hi1..hi6);
+ * in JP and later the flames follow the torch objects through hi_fire_main, and all are removed at battle end.
+ */
+static EVT_BEGIN(stg_08_6_init_sub_event)
+    BEGIN_SIBLING_EVENT
+        CALL(hi_fire_main)
+    END_SIBLING_EVENT
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi3"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi4"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi5"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hi6"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(check_battle_end)
+    CALL(hi_fire_end)
+    RETURN
+EVT_END()
+#endif
+
+#if VERSION <= VERSION_DEMO_JP
+/**
+ * Battle stage event for stage stg_08_6: lights six dark-flame torches (hi1..hi6);
+ * in JP and later the flames follow the torch objects through hi_fire_main, and all are removed at battle end.
+ */
+static EVT_BEGIN(stg_08_6_init_sub_event)
+    CALL(evt_mapobj_get_position, STRING("hi1"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("__hi1"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(evt_mapobj_get_position, STRING("hi2"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("__hi2"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(evt_mapobj_get_position, STRING("hi3"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("__hi3"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(evt_mapobj_get_position, STRING("hi4"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("__hi4"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(evt_mapobj_get_position, STRING("hi5"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("__hi5"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(evt_mapobj_get_position, STRING("hi6"), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("__hi6"), STRING("fire"), 8, LW(0), LW(1), LW(2), FLOAT(1.0f), 1000, 0, 0, 0, 0, 0, 0)
+    CALL(check_battle_end)
+    CALL(evt_eff_softdelete, STRING("__hi1"))
+    CALL(evt_eff_softdelete, STRING("__hi2"))
+    CALL(evt_eff_softdelete, STRING("__hi3"))
+    CALL(evt_eff_softdelete, STRING("__hi4"))
+    CALL(evt_eff_softdelete, STRING("__hi5"))
+    CALL(evt_eff_softdelete, STRING("__hi6"))
+    RETURN
+EVT_END()
+#endif
+
+// Descriptive name (not in the symbol maps); placeholder unk_las_00007774, JP las .text+0x76A8. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
+/**
+ * Script helper (runs every frame until hi_fire_end_flag is set):
+ * creates six dark flame effects and keeps each one over the torch object hi1..hi6 whenever that torch is above
+ * the floor; deletes them softly when the end flag is raised. JP and later.
+ */
+USER_FUNC(hi_fire_main) {
+    const char* names[6] = {"hi1", "hi2", "hi3", "hi4", "hi5", "hi6"};
+    Vec pos;
+    s32 i;
+
+    if (isFirstCall) {
+        hi_fire_end_flag[0] = 0;
+        for (i = 0; i < 6; i++) {
+            hi_fire_eff[i] = effFireEntry(8, 1000, 0.0f, -1000.0f, 0.0f, 1.0f);
+        }
+    }
+    if (hi_fire_end_flag[0]) {
+        for (i = 0; i < 6; i++) {
+            effSoftDelete(hi_fire_eff[i]);
+        }
+        return EVT_RETURN_DONE;
+    }
+    for (i = 0; i < 6; i++) {
+        mapObjGetPos(names[i], &pos);
+        if (pos.y > 0.0f) {
+            EffFireWork* wk = hi_fire_eff[i]->userdata;
+
+            wk->position.x = pos.x;
+            wk->position.y = pos.y - 15.0f;
+            wk->position.z = pos.z;
+        }
+    }
+    return EVT_RETURN_BLOCK;
+}
+#endif
+
+// Descriptive name (not in the symbol maps); placeholder unk_las_0000775c, JP las .text+0x7690. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
+/**
+ * Script helper: raises hi_fire_end_flag so hi_fire_main stops
+ * and deletes the six torch flame effects at the end of a battle (JP and later).
+ */
+USER_FUNC(hi_fire_end) {
+    hi_fire_end_flag[0] = 1;
+    return EVT_RETURN_DONE;
+}
+#endif
 
 /** Init event of battle stage stg_08_6: starts the six-torch flame event. */
 EVT_BEGIN(stg_08_6_init_event)

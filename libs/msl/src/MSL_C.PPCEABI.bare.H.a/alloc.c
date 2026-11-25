@@ -50,10 +50,23 @@ typedef struct __mem_pool_obj {
     FixStart fix_start[num_fix_pools];
 } __mem_pool_obj;
 
-/** Block sizes of the allocator's fixed-size pools; each request is rounded up to one of these. */
+/* The pool as callers see it (MSL pool_alloc.h): opaque storage at least as large as __mem_pool_obj. */
+typedef struct __mem_pool {
+    void* reserved[14];
+} __mem_pool;
+
 static const mem_size fix_pool_sizes[] = {4, 12, 20, 36, 52, 68};
 
 #define max_fix_pool_size 68
+
+/* Pool layout, as the free path below reads it (only free() and its helpers are in this source):
+   - A Block holds variable-size SubBlocks; the last word of a Block points to its first free SubBlock.
+   - A SubBlock's size_ is a multiple of 8; flag 0x2 set = in use, flag 0x4 set = the previous SubBlock is in
+     use. A free SubBlock repeats its size in its last word, so the next one can find its start. bp_ is the owning
+     Block with bit 0 set.
+   - Requests up to max_fix_pool_size come from fixed pools (one per fix_pool_sizes entry): a FixSubBlock has a
+     one-word header (its FixBlock), whose bit 0 is clear. classify() reads that header word just before the client
+     pointer: 1 = variable pool (8-byte header), 0 = fixed pool (4-byte header). */
 
 #define Block_size(ths) ((ths)->size_ & ~7)
 #define Block_start(ths) (*(SubBlock**)((char*)(ths) + Block_size((ths)) - sizeof(mem_size)))
@@ -66,11 +79,6 @@ static const mem_size fix_pool_sizes[] = {4, 12, 20, 36, 52, 68};
 
 #define classify(ptr) (*(mem_size*)((char*)(ptr) - sizeof(mem_size)) & 1)
 
-/**
- * Marks a sub-block as free: clears its in-use flag (bit 2),
- * clears the next sub-block's previous-in-use flag (bit 4)
- * and writes the size footer into the last word of the sub-block.
- */
 static inline void SubBlock_set_free(SubBlock* ths) {
     mem_size this_size = SubBlock_size(ths);
     ths->size_ &= ~2;
@@ -84,12 +92,34 @@ static inline void SubBlock_set_free(SubBlock* ths) {
     if (SubBlock_is_free((ths)))                                           \
         *(mem_size*)((char*)(ths) + (sz) - sizeof(mem_size)) = (sz)
 
-/**
- * If the sub-block before this one is free (bit 4 of the size word clear and its footer not in use),
- * merges this sub- block into it, unlinks this one from the free list and returns the merged sub-block;
- * otherwise returns it unchanged.
- */
-static inline SubBlock* SubBlock_merge_prev(SubBlock* ths, SubBlock** start) {
+static SubBlock* SubBlock_merge_prev(SubBlock* ths, SubBlock** start);
+static void SubBlock_merge_next(SubBlock* ths, SubBlock** start);
+
+void Block_link(Block* ths, SubBlock* sb) {
+    SubBlock** st;
+
+    SubBlock_set_free(sb);
+    st = &Block_start(ths);
+
+    if (*st != NULL) {
+        sb->prev_ = (*st)->prev_;
+        sb->prev_->next_ = sb;
+        sb->next_ = *st;
+        (*st)->prev_ = sb;
+        *st = sb;
+        *st = SubBlock_merge_prev(*st, st);
+        SubBlock_merge_next(*st, st);
+    } else {
+        *st = sb;
+        sb->prev_ = sb;
+        sb->next_ = sb;
+    }
+
+    if (ths->max_size_ < SubBlock_size(*st))
+        ths->max_size_ = SubBlock_size(*st);
+}
+
+static SubBlock* SubBlock_merge_prev(SubBlock* ths, SubBlock** start) {
     mem_size prevsz;
     SubBlock* p;
 
@@ -108,11 +138,7 @@ static inline SubBlock* SubBlock_merge_prev(SubBlock* ths, SubBlock** start) {
     return ths;
 }
 
-/**
- * If the sub-block right after this one is free, absorbs it:
- * grows this sub-block by its size and unlinks it from the free list.
- */
-static inline void SubBlock_merge_next(SubBlock* ths, SubBlock** start) {
+static void SubBlock_merge_next(SubBlock* ths, SubBlock** start) {
     SubBlock* next_sub;
     mem_size this_size;
 
@@ -133,67 +159,56 @@ static inline void SubBlock_merge_next(SubBlock* ths, SubBlock** start) {
     }
 }
 
-#define Block_link(ths, sb)                                  \
-    {                                                        \
-        SubBlock** st;                                       \
-        SubBlock_set_free((sb));                             \
-        st = &Block_start((ths));                            \
-        if (*st != NULL) {                                   \
-            (sb)->prev_ = (*st)->prev_;                      \
-            (sb)->prev_->next_ = (sb);                       \
-            (sb)->next_ = *st;                               \
-            (*st)->prev_ = (sb);                             \
-            *st = (sb);                                      \
-            *st = SubBlock_merge_prev(*st, st);              \
-            SubBlock_merge_next(*st, st);                    \
-        } else {                                             \
-            *st = (sb);                                      \
-            (sb)->prev_ = (sb);                              \
-            (sb)->next_ = (sb);                              \
-        }                                                    \
-        if ((ths)->max_size_ < SubBlock_size(*st))           \
-            (ths)->max_size_ = SubBlock_size(*st);           \
+static Block* __unlink(__mem_pool_obj* pool_obj, Block* bp) {
+    Block* result = bp->next_;
+
+    if (result == bp)
+        result = NULL;
+
+    if (pool_obj->start_ == bp)
+        pool_obj->start_ = result;
+
+    if (result != NULL) {
+        result->prev_ = bp->prev_;
+        result->prev_->next_ = result;
     }
 
-/**
- * True when the block's first sub-block is free
- * and spans the whole block (block size minus the 24 bytes of headers), so nothing in the block is allocated.
- */
+    bp->next_ = NULL;
+    bp->prev_ = NULL;
+    return result;
+}
+
 static inline int Block_empty(Block* ths) {
-    SubBlock* sb = (SubBlock*)((char*)ths + 16);
+    SubBlock* sb = (SubBlock*)((char*)ths + sizeof(Block));
     return SubBlock_is_free(sb) && SubBlock_size(sb) == Block_size(ths) - 24;
 }
 
-/**
- * Frees a pointer from the variable-size pools:
- * links its sub-block back into the owning block's free list (merging with free neighbours) and,
- * if the block is then entirely free, unlinks it from the pool and returns it to the system with __sys_free.
- */
-void deallocate_from_var_pools(__mem_pool_obj* pool_obj, void* ptr) {
+static void deallocate_from_var_pools(__mem_pool_obj* pool_obj, void* ptr) {
     SubBlock* sb = SubBlock_from_pointer(ptr);
     Block* bp = SubBlock_block(sb);
 
     Block_link(bp, sb);
     if (Block_empty(bp)) {
-        Block* next = bp->next_;
-        if (next == bp)
-            next = NULL;
-        if (pool_obj->start_ == bp)
-            pool_obj->start_ = next;
-        if (next != NULL) {
-            next->prev_ = bp->prev_;
-            next->prev_->next_ = next;
-        }
-        bp->prev_ = bp->next_ = NULL;
+        __unlink(pool_obj, bp);
         __sys_free(bp);
     }
 }
 
-/**
- * Frees a small allocation into its size-class fixed pool:
- * pushes the sub-block on its block's free list, moves the block to the head of the pool when it had been full,
- * and hands the block back to the variable-size pools once none of its sub-blocks are allocated.
- */
+void __init_pool_obj(__mem_pool* pool_obj) {
+    memset(pool_obj, 0, sizeof(__mem_pool_obj));
+}
+
+static __mem_pool* get_malloc_pool(void) {
+    static __mem_pool protopool;
+    static unsigned char init = 0;
+
+    if (!init) {
+        __init_pool_obj(&protopool);
+        init = 1;
+    }
+    return &protopool;
+}
+
 void deallocate_from_fixed_pools(__mem_pool_obj* pool_obj, void* ptr, mem_size size) {
     mem_size i = 0;
     FixSubBlock* p;
@@ -240,16 +255,14 @@ void deallocate_from_fixed_pools(__mem_pool_obj* pool_obj, void* ptr, mem_size s
     }
 }
 
-/**
- * Frees ptr in a pool object (null is ignored):
- * reads the allocation size from the header, then uses the fixed-size pools when it is at most max_fix_pool_size
- * and the variable-size pools otherwise.
- */
-void __pool_free(__mem_pool_obj* pool_obj, void* ptr) {
+void __pool_free(__mem_pool* pool, void* ptr) {
+    __mem_pool_obj* pool_obj;
     mem_size size;
 
     if (ptr == NULL)
         return;
+
+    pool_obj = (__mem_pool_obj*)pool;
 
     size = !classify(ptr) ? FixSubBlock_from_pointer(ptr)->block_->client_size_ : SubBlock_size(SubBlock_from_pointer(ptr)) - 8;
 
@@ -259,19 +272,6 @@ void __pool_free(__mem_pool_obj* pool_obj, void* ptr) {
         deallocate_from_var_pools(pool_obj, ptr);
 }
 
-/** Returns the static pool object that backs malloc()/free(); it is zeroed with memset on first use. */
-static inline __mem_pool_obj* get_malloc_pool(void) {
-    static __mem_pool_obj protopool;
-    static unsigned char init = 0;
-
-    if (!init) {
-        memset(&protopool, 0, sizeof(__mem_pool_obj));
-        init = 1;
-    }
-    return &protopool;
-}
-
-/** Standard free(): frees ptr in the malloc pool inside the malloc critical region; null is ignored. */
 void free(void* ptr) {
     __begin_critical_region(malloc_pool_access);
     __pool_free(get_malloc_pool(), ptr);

@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 12 (kemuri: smoke) with a duration and scale; types 0-2.
+
 #include "eff/n64/eff_kemuri12_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,16 +8,16 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 
-/** Camera-facing 32x32 smoke puff, used by types 0-2. */
-static effN64Vtx size32x32_tex32x32_vtx[] = {
+/** Camera-facing 32x32 smoke puff, used by types 0 and 2. */
+static effN64Vtx size32x32_tex32x32_vtx[] ATTRIBUTE_ALIGN(8) = {
     {-16, -16, 0, 0, 0, 0, 0, 0, 255},
     {16, -16, 0, -1024, 0, 0, 0, 0, 255},
     {16, 16, 0, -1024, 1024, 0, 0, 0, 255},
     {-16, 16, 0, 0, 1024, 0, 0, 0, 255},
 };
 
-/** Lava-coloured (yougan) smoke mesh with extra quads, used by types above 2. */
-effN64Vtx size32x32_tex32x32_yougan_vtx[] = {
+/** Lava (yougan) smoke mesh with two extra quads behind the front one, used by type 1 and types above 2. */
+static effN64Vtx size32x32_tex32x32_yougan_vtx[] ATTRIBUTE_ALIGN(8) = {
     {-16, -16, 15, 0, 0, 0, 0, 0, 255},
     {16, -16, 15, -1024, 0, 0, 0, 0, 255},
     {16, 16, 15, -1024, 1024, 0, 0, 0, 255},
@@ -32,12 +33,12 @@ effN64Vtx size32x32_tex32x32_yougan_vtx[] = {
 };
 
 static void effKemuri12Main(EffectEntry* effect);
-static void effKemuri12Disp(CameraId cameraId, EffectEntry* effect);
+static void effKemuri12Disp(CameraId cameraId, void* param);
 
 /**
  * Spawns an expanding smoke puff at (x, y, z) for duration frames.
  * Type 0 is black, 1 red, anything else white-purple.
- * battle_damage.c uses type 0 for explosion hits, gor_01 uses scale 2; event scripts via evt_eff.
+ * battle_damage.c uses type 0 for fire and explosion hits, gor_01 uses scale 2; event scripts via evt_eff64.
  */
 EffectEntry* effKemuri12N64Entry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -98,18 +99,16 @@ static void effKemuri12Main(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKemuri12Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effKemuri12Disp, effect);
 }
-
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_propagation off
 
 /**
  * Draws the smoke with texture 0xE, cross-fading two 32-pixel texture windows,
  * the current animation frame and the next, by the fraction of progress (TEV register 1 alpha);
- * types above 2 use the lava-coloured (yougan) mesh with extra quads.
+ * type 1 and types above 2 use the lava (yougan) mesh with extra quads.
  */
-static void effKemuri12Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri12Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     s32 type;
     CameraEntry* camera;
     s32 last;
@@ -122,28 +121,33 @@ static void effKemuri12Disp(CameraId cameraId, EffectEntry* effect) {
     Mtx scaleMtx;
     Mtx rot;
     GXTexObj texObj;
+
     camera = camGetPtr(cameraId);
     work = effect->userdata;
     idx = (s32)work->progress;
-    alpha = 256.0f * (work->progress - ((f32)idx));
-    // FAKE: integer-cast load makes type an unnamed temp (numbered above the camera copy, coloured first)
-    type = (u16)(u32)work->type;
-    last = idx == 7;
+    alpha = 256.0f * (work->progress - (f32)idx);
+
+    type = work->type;
+    if (idx == 7) {
+        last = 1;
+    } else {
+        last = 0;
+    }
     GXSetNumChans(0);
     GXSetNumTevStages(3);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
     GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
-    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
     GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_APREV, GX_CA_TEXA, GX_CA_A1, GX_CA_ZERO);
     GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
-    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
     GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_APREV, GX_CA_A0, GX_CA_ZERO);
     effGetTexObjN64(0xE, &texObj);
@@ -162,8 +166,8 @@ static void effKemuri12Disp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevColor(GX_TEVREG0, (GXColor){work->r, work->g, work->b, work->a});
     GXSetTevColor(GX_TEVREG1, (GXColor){0, 0, 0, alpha});
     GXSetNumTexGens(2);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, (GXBool)0, GX_PTIDENTITY);
-    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, (GXBool)0, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
     ofs = idx << 5;
     PSMTXScale(scaleMtx, 0.00390625f, 0.03125f, 0.0f);
     PSMTXTrans(mtx, ofs, 0.0f, 0.0f);
@@ -182,15 +186,10 @@ static void effKemuri12Disp(CameraId cameraId, EffectEntry* effect) {
     }
     switch (type) {
         case 0:
-
         case 2:
             vtx = size32x32_tex32x32_vtx;
             break;
-
         default:
-            work->position.z = work->position.z;
-            // FAKE: float self-assign keeps the camera web live through the switch pre-RA (gives it degree >= K); emits no code
-            camera->near = camera->near;
             vtx = size32x32_tex32x32_yougan_vtx;
             break;
     }
@@ -199,12 +198,10 @@ static void effKemuri12Disp(CameraId cameraId, EffectEntry* effect) {
     effSetVtxDescN64(vtx);
     switch (type) {
         case 0:
-
         case 2:
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(0, 1, 2, 0, 0, 2, 3, 0);
             break;
-
         default:
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 18);
             tri2(8, 9, 10, 0, 8, 10, 11, 0);
@@ -213,4 +210,3 @@ static void effKemuri12Disp(CameraId cameraId, EffectEntry* effect) {
             break;
     }
 }
-#pragma opt_propagation reset

@@ -57,15 +57,20 @@ int ddh_cc_post_stop(void);
 int ddh_cc_peek(void);
 int ddh_cc_initinterrupts(void);
 
-/** Callbacks of the debugger communication channel in use; filled in when the channel is chosen. */
-DBCommTable gDBCommTable = {0};
+/*
+ * The UART buffers and counters of the stripped TRKReadUARTPoll, WriteUART1 and WriteUARTFlush (JP demo map,
+ * UNUSED); declarations as in the Animal Crossing and BfBB decompilations (CC0).
+ */
+u8 gWriteBuf[0x110A];
+u8 gReadBuf[0x110A];
 BOOL _MetroTRK_Has_Framing;
+int gReadCount;
+int gReadPos;
+int gWritePos;
 u8 TRK_Use_BBA;
 
-/**
- * Assembly: loads r0-r2, the general registers, CR, LR, CTR, XER and SRR0/SRR1 from a saved context at ctx,
- * puts val in r3 and jumps to TRKInterruptHandler as if that exception had just been taken.
- */
+DBCommTable gDBCommTable = {0};
+
 asm void TRKLoadContext(void* ctx, u32 val) {
     nofralloc
     lwz r0, 0x0(r3)
@@ -73,14 +78,14 @@ asm void TRKLoadContext(void* ctx, u32 val) {
     lwz r2, 0x8(r3)
     lhz r5, 0x1a2(r3)
     rlwinm. r6, r5, 0, 30, 30
-    beq L_8025D63C
+    beq skip
     rlwinm r5, r5, 0, 31, 29
     sth r5, 0x1a2(r3)
     lmw r5, 0x14(r3)
-    b L_8025D640
-L_8025D63C:
+    b done
+skip:
     lmw r13, 0x34(r3)
-L_8025D640:
+done:
     mr r31, r3
     mr r3, r4
     lwz r4, 0x80(r31)
@@ -106,23 +111,11 @@ L_8025D640:
     b TRKInterruptHandler
 }
 
-
-
-/**
- * Callback the debug channel runs when the host sends data:
- * re-enables the OS scheduler and enters the stub as an external interrupt (exception 0x500) with the saved
- * context.
- */
 void TRKEXICallBack(int interrupt, void* ctx) {
     OSEnableScheduler();
     TRKLoadContext(ctx, 0x500);
 }
 
-/**
- * Fills gDBCommTable with the functions of the channel for the given hardware id (0 AMC DDH, 1 GDEV, 2 BBA/UDP;
- * anything else falls back to GDEV) and prints which one was chosen.
- * Returns the Hu_IsStub/AMC_IsStub result, 0 for BBA.
- */
 int InitMetroTRKCommTable(int hwId) {
     int result = 1;
 
@@ -178,17 +171,13 @@ int InitMetroTRKCommTable(int hwId) {
     return result;
 }
 
-/**
- * Starts the debug channel: its initialize function gets the input-pending flag pointer and TRKEXICallBack,
- * then its open function runs. The other parameters are unused. Returns 0.
- */
-int TRKInitializeIntDrivenUART(u32 param_0, u32 param_1, u32 param_2, void* param_3) {
-    gDBCommTable.initialize_func(param_3, TRKEXICallBack);
+/* The first three arguments are not used. */
+int TRKInitializeIntDrivenUART(u32 param_0, u32 param_1, u32 param_2, void* inputPendingPtrRef) {
+    gDBCommTable.initialize_func(inputPendingPtrRef, TRKEXICallBack);
     gDBCommTable.open_func();
     return 0;
 }
 
-/** Calls the channel's interrupt-enable function if it has one; skipped when the BBA channel is in use. */
 void EnableEXI2Interrupts(void) {
     if (!TRK_Use_BBA) {
         if (gDBCommTable.init_interrupts_func != 0)
@@ -196,51 +185,89 @@ void EnableEXI2Interrupts(void) {
     }
 }
 
-/** Returns how many bytes the debug channel has waiting for the stub (the channel's peek function). */
 int TRKPollUART(void) {
     return gDBCommTable.peek_func();
 }
 
-/** Reads length bytes from the debug channel into bytes; returns 0 on success, -1 on any channel error. */
 int TRKReadUARTN(void* bytes, u32 length) {
     int readErr = gDBCommTable.read_func(bytes, length);
     return readErr == 0 ? 0 : -1;
 }
 
-/** Writes length bytes to the debug channel; returns 0 on success, -1 on any channel error. */
 int TRKWriteUARTN(const void* bytes, u32 length) {
     int writeErr = gDBCommTable.write_func(bytes, length);
     return writeErr == 0 ? 0 : -1;
 }
 
-/** Takes the debug channel back for the stub when the game stops (calls the channel's post-stop hook). */
+int WriteUARTFlush(void) {
+    int readErr = 0;
+
+    while (gWritePos < 0x800) {
+        gWriteBuf[gWritePos] = 0;
+        gWritePos++;
+    }
+
+    if (gWritePos != 0) {
+        readErr = TRKWriteUARTN(gWriteBuf, gWritePos);
+        gWritePos = 0;
+    }
+
+    return readErr;
+}
+
+int WriteUART1(u8 arg0) {
+    gWriteBuf[gWritePos++] = arg0;
+    return 0;
+}
+
+int TRKReadUARTPoll(u8* arg0) {
+    int readErr = 4;
+    int cnt;
+
+    if (gReadPos >= gReadCount) {
+        gReadPos = 0;
+        cnt = gReadCount = TRKPollUART();
+
+        if (cnt > 0) {
+            if (cnt > 0x110A)
+                gReadCount = 0x110A;
+
+            readErr = TRKReadUARTN(gReadBuf, gReadCount);
+
+            if (readErr != 0)
+                gReadCount = 0;
+        }
+    }
+
+    if (gReadPos < gReadCount) {
+        *arg0 = gReadBuf[gReadPos++];
+        readErr = 0;
+    }
+
+    return readErr;
+}
+
 void ReserveEXI2Port(void) {
     gDBCommTable.post_stop_func();
 }
 
-/** Hands the debug channel back before the game resumes (calls the channel's pre-continue hook). */
 void UnreserveEXI2Port(void) {
     gDBCommTable.pre_continue_func();
 }
 
-/** Shows a stub message; on this board it just prints the string with OSReport. */
 void TRK_board_display(char* str) {
     OSReport("%s\n", str);
 }
 
-/**
- * Overwrites the second instruction of PPCHalt with the bytes 00 45 4E 44 ("END"), an invalid instruction,
- * so halting the program traps into the debugger, and flushes the data and instruction caches over it.
- */
 void InitializeProgramEndTrap(void) {
     static const u8 EndofProgramInstruction[4] = {0x00, 0x45, 0x4E, 0x44};
     u8* endOfProgramInstructionBytes = (u8*)EndofProgramInstruction;
     u8* ppcHaltPtr = (u8*)PPCHalt;
 
-    TRK_memcpy(ppcHaltPtr + 4, endOfProgramInstructionBytes, 4);
-    ICInvalidateRange(ppcHaltPtr + 4, 4);
-    DCFlushRange(ppcHaltPtr + 4, 4);
+    TRK_memcpy(ppcHaltPtr + 4, endOfProgramInstructionBytes, sizeof(EndofProgramInstruction));
+    ICInvalidateRange(ppcHaltPtr + 4, sizeof(EndofProgramInstruction));
+    DCFlushRange(ppcHaltPtr + 4, sizeof(EndofProgramInstruction));
 }
 
-/** Called from the stub's interrupt entry for the debug link interrupt; intentionally empty. */
+/* Empty: called from the TRK interrupt code, nothing to do here. */
 void TRKUARTInterruptHandler(void) {}

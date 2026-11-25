@@ -1,4 +1,5 @@
 // eff_mahorn2.c: Wizzerd (mahorn) projectile effect entry (effMahorn2Entry) and its work struct (effMahorn2Data).
+
 #pragma once
 
 #include <dolphin/mtx.h>
@@ -15,7 +16,7 @@ typedef struct effMahorn2Data {
     s32 type;        // 0x2C, what type of entity is it (inside this effect)
     BOOL unused2;    // 0x30
     s32 counter;     // 0x34
-    BOOL hasHit;     // 0x38, have we hit the target yet?
+    BOOL hasHit;     // 0x38, set once the target is hit
 } effMahorn2Data;
 
 EffectEntry* effMahorn2Entry(BOOL unused, f32 posX, f32 posY, f32 posZ, f32 dstX, f32 dstY, f32 dstZ, f32 scale, f32 radius);

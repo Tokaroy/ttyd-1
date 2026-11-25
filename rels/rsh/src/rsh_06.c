@@ -1,8 +1,25 @@
 // rsh_06 (列車, Excess Express): the car of the Smorg (moamoa) boss fight, with the train wheel/coupling animation and
 // departure/stop scenes; door to rsh_05.
+
 #include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "sfx_name_word.h"
+#include "libc_decls.h"
+#include "party/party_nokonoko.h"
+#include "eff/eff_magic1_n64.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_ext.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "driver/envdrv.h"
 
 #include "manager/evtmgr.h"
 #include "driver/mapdrv.h"
@@ -29,41 +46,24 @@
 #include "evt/evt_sub.h"
 #include "data_tables.h"
 #include "driver/extdrv.h"
+#include "driver/seqdrv.h"
+#include "moamoa.h"
 #include "map/sharin.h"
-#include "map/moamoa.h"
-#include "driver/envdrv.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_ext.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_party.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "party/party_nokonoko.h"
-#include "rsh.h"
-#include "evt/evt_story.h"
-#include "libc_decls.h"
-
-// target .bss/.sbss pad (uninitialised objects are emitted in reverse order, so this sits last)
+#include "map/sharin.h"
+#include <dolphin/pad.h>
 
 static MoamoaWork* wp;
 static f32 randf(f32 min, f32 max);
 static void moamoa_pose_init(void);
 static void moamoa_pose_main(void);
 static void moamoa_pose_change(Moamoa* moa, const char* model, const char* anim);
-static void evalOn(void);
 static void ext_moamoa_main(void);
-// The unit's inlining budget: the default limit changes which of the moamoa helpers are inlined (checked by
-// removing it; eki_00 and rsh_05 use their own limits).
-#pragma inline_max_total_size(100000)
+
 /**
  * Polynomial approximation of sin(x) for an angle in radians in [0, 2*pi);
- * the Smorg (moamoa) swarm code uses its own sine to keep results identical on every frame without calling the
- * libm. Inlined into the swarm code.
+ * the Smorg (moamoa) swarm code uses its own sine without calling libm. Inlined into the swarm code.
  */
+// moa_sin/moa_cos and moa_sinx/moa_cosx: two copies of the polySinf/polyCosf bodies (poly_trig.h).
 static inline f32 moa_sin(f32 x) {
     f32 a = 0.00761f;
     f32 b = 0.16605f;
@@ -99,6 +99,7 @@ static inline f32 moa_sin(f32 x) {
     }
     return a;
 }
+
 /**
  * Polynomial approximation of cos(x) for an angle in radians in [0, 2*pi), companion of moa_sin.
  * Inlined into the swarm code.
@@ -134,8 +135,9 @@ static inline f32 moa_cos(f32 x) {
     }
     return a;
 }
+
 /**
- * Variant of moa_sin that reduces its argument in place instead of using a second local;
+ * Variant of moa_sin using the same in-place argument reduction;
  * same polynomial sine for an angle in radians in [0, 2*pi).
  */
 static inline f32 moa_sinx(f32 x) {
@@ -173,6 +175,7 @@ static inline f32 moa_sinx(f32 x) {
     }
     return a;
 }
+
 /**
  * Variant of moa_cos that reduces its argument in place;
  * same polynomial cosine for an angle in radians in [0, 2*pi).
@@ -208,128 +211,145 @@ static inline f32 moa_cosx(f32 x) {
     }
     return a;
 }
-static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa);
-static void moamoa_jump(ExtdrvPose* pose, Moamoa* moa, s32 next, s32 checkGround, f32 x, f32 y, f32 z, f32 speed, f32 gravity);
-static void moamoa_joint_position(Moamoa* moa, Vec* out);
-static void ext_disp(CameraId camera, void* param);
-static void ext_shadow_disp(CameraId camera, void* param);
 
-static s32 evt_moamoa_blow(EventEntry* event, BOOL isFirstCall);
-static s32 evt_moamoa_flag_onoff(EventEntry* event, BOOL isFirstCall);
-static s32 evt_moamoa_fusion(EventEntry* event, BOOL isFirstCall);
-static s32 evt_moamoa_fusion_debug(EventEntry* event, BOOL isFirstCall);
-static s32 evt_moamoa_kind_onoff(EventEntry* event, BOOL isFirstCall);
+static void moamoa_joint_position(Moamoa* moa, Vec* out);
+
 static s32 npc_anim_wait(EventEntry* event, BOOL isFirstCall);
 static s32 ramp_r(EventEntry* event, BOOL isFirstCall);
 static void resha_tev(MapTevCallbackInfo* info);
-static void ext_moamoa_dispent(void);
-static void ext_moamoa_init(void);
-static s32 evt_moamoa_target_off(EventEntry* event, BOOL isFirstCall);
-static s32 evt_moamoa_end_wait(EventEntry* event, BOOL isFirstCall);
-static s32 evt_moamoa_ry_reset(EventEntry* event, BOOL isFirstCall);
-static s32 evt_moamoa_exit(EventEntry* event, BOOL isFirstCall);
 
-static MoamoaData ext_moamoa_data[71];
+static ExtTexInfo ext_moamoa_data[71];
 static SharinData sharinDt[29];
+static EvtWord evt_sharin_main[87];
+static EvtWord evt_sharin[19];
 static ClankData clankDt[9];
+static EvtWord evt_clank_main[104];
+static EvtWord evt_clank[21];
+static EvtWord evt_bg[81];
+static EvtWord evt_hoshi[88];
+EvtWord hom_10_evt_resha_start[244];
+EvtWord hom_10_evt_resha_start2[259];
+EvtWord hom_10_evt_resha_start3[11];
+EvtWord hom_10_evt_resha_start4[11];
+static EvtWord stop_1[90];
+static EvtWord stop_2[90];
+EvtWord hom_10_evt_resha_stop[36];
+static EvtWord evt_ramp[33];
 static const char* pika_tbl[15];
 static const char* pika_tbl_rsh_06[10];
+static EvtWord hom_10_evt_resha_sub[102];
+EvtWord hom_10_evt_resha_right[35];
+EvtWord hom_10_evt_resha_left[28];
+
+#if VERSION <= VERSION_DEMO_JP
+EvtWord hom_10_init_evt[104];
 extern EvtWord evt_resha_init[];
+#else
+EvtWord hom_10_init_evt[140];
+EvtWord evt_resha_init[13];
+#endif
+
 static BeroEntry bero_data_a[2];
-extern EvtWord evt_great_moamoa[];
-const char* pose_name[8];
-extern EvtWord moamoa_debug[];
-extern EvtWord rsh_06_init_evt[];
+static EvtWord evt_moamoa_init[187];
+static EvtWord evt_great_moamoa[737];
+static const char* pose_name[8];
+static EvtWord moamoa_debug[230];
+static EvtWord rsh_06_init_evt[84];
+EvtWord rsh_06_a_init_evt[32];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord rsh_06_init_evt_nidome[];
+#else
+EvtWord rsh_06_init_evt_nidome[41];
+#endif
+
+EvtWord rsh_06_a_init_evt_nidome[11];
 
 /**
- * Animation table of the swarm of small Smorgs (c_n_moa_a) that merge into the giant Smorg:
- * the figure, its animation set and a start offset for each.
+ * Animation table of the small Smorgs (c_n_moa_a and c_n_moa_b) and the swallowed passengers:
+ * the model, its animation and a sampled frame for each.
  */
-static MoamoaData ext_moamoa_data[] = {
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 0.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 2.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 4.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 6.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 8.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 10.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 12.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 14.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 16.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 18.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 20.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 22.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 24.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 26.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 28.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 30.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 32.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 34.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 36.0f},
-    {((char*)"c_n_moa_a"), ((char*)"S_1"), 38.0f},
-    {((char*)"c_n_moa_a"), ((char*)"D_1"), 0.0f},
-    {((char*)"c_n_moa_a"), ((char*)"D_1"), 4.0f},
-    {((char*)"c_n_moa_a"), ((char*)"D_1"), 8.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 0.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 2.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 4.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 6.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 8.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 10.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 12.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 14.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 16.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 18.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 20.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 22.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 24.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 26.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 28.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 30.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 32.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 34.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 36.0f},
-    {((char*)"c_n_moa_b"), ((char*)"S_1"), 38.0f},
-    {((char*)"c_n_moa_b"), ((char*)"D_1"), 0.0f},
-    {((char*)"c_n_moa_b"), ((char*)"D_1"), 4.0f},
-    {((char*)"c_n_moa_b"), ((char*)"D_1"), 8.0f},
-    {((char*)"c_kinodebu"), ((char*)"G_1"), 0.0f},
-    {((char*)"c_kinodebu"), ((char*)"G_1"), 4.0f},
-    {((char*)"c_kinodebu"), ((char*)"G_1"), 8.0f},
-    {((char*)"c_puku_c"), ((char*)"U_1"), 0.0f},
-    {((char*)"c_puku_c"), ((char*)"U_1"), 4.0f},
-    {((char*)"c_puku_c"), ((char*)"U_1"), 8.0f},
-    {((char*)"c_powan"), ((char*)"O_1"), 0.0f},
-    {((char*)"c_powan"), ((char*)"O_1"), 4.0f},
-    {((char*)"c_powan"), ((char*)"O_1"), 8.0f},
-    {((char*)"c_smoko"), ((char*)"T_2"), 0.0f},
-    {((char*)"c_smoko"), ((char*)"T_2"), 4.0f},
-    {((char*)"c_smoko"), ((char*)"T_2"), 8.0f},
-    {((char*)"c_rose"), ((char*)"G_1"), 0.0f},
-    {((char*)"c_rose"), ((char*)"G_1"), 4.0f},
-    {((char*)"c_rose"), ((char*)"G_1"), 8.0f},
-    {((char*)"c_papab"), ((char*)"G_1"), 0.0f},
-    {((char*)"c_papab"), ((char*)"G_1"), 4.0f},
-    {((char*)"c_papab"), ((char*)"G_1"), 8.0f},
-    {((char*)"c_mamab"), ((char*)"G_1"), 0.0f},
-    {((char*)"c_mamab"), ((char*)"G_1"), 4.0f},
-    {((char*)"c_mamab"), ((char*)"G_1"), 8.0f},
-    {((char*)"c_konari"), ((char*)"G_1"), 0.0f},
-    {((char*)"c_konari"), ((char*)"G_1"), 4.0f},
-    {((char*)"c_konari"), ((char*)"G_1"), 8.0f},
+static ExtTexInfo ext_moamoa_data[] = {
+    {"c_n_moa_a", "S_1", 0.0f},
+    {"c_n_moa_a", "S_1", 2.0f},
+    {"c_n_moa_a", "S_1", 4.0f},
+    {"c_n_moa_a", "S_1", 6.0f},
+    {"c_n_moa_a", "S_1", 8.0f},
+    {"c_n_moa_a", "S_1", 10.0f},
+    {"c_n_moa_a", "S_1", 12.0f},
+    {"c_n_moa_a", "S_1", 14.0f},
+    {"c_n_moa_a", "S_1", 16.0f},
+    {"c_n_moa_a", "S_1", 18.0f},
+    {"c_n_moa_a", "S_1", 20.0f},
+    {"c_n_moa_a", "S_1", 22.0f},
+    {"c_n_moa_a", "S_1", 24.0f},
+    {"c_n_moa_a", "S_1", 26.0f},
+    {"c_n_moa_a", "S_1", 28.0f},
+    {"c_n_moa_a", "S_1", 30.0f},
+    {"c_n_moa_a", "S_1", 32.0f},
+    {"c_n_moa_a", "S_1", 34.0f},
+    {"c_n_moa_a", "S_1", 36.0f},
+    {"c_n_moa_a", "S_1", 38.0f},
+    {"c_n_moa_a", "D_1", 0.0f},
+    {"c_n_moa_a", "D_1", 4.0f},
+    {"c_n_moa_a", "D_1", 8.0f},
+    {"c_n_moa_b", "S_1", 0.0f},
+    {"c_n_moa_b", "S_1", 2.0f},
+    {"c_n_moa_b", "S_1", 4.0f},
+    {"c_n_moa_b", "S_1", 6.0f},
+    {"c_n_moa_b", "S_1", 8.0f},
+    {"c_n_moa_b", "S_1", 10.0f},
+    {"c_n_moa_b", "S_1", 12.0f},
+    {"c_n_moa_b", "S_1", 14.0f},
+    {"c_n_moa_b", "S_1", 16.0f},
+    {"c_n_moa_b", "S_1", 18.0f},
+    {"c_n_moa_b", "S_1", 20.0f},
+    {"c_n_moa_b", "S_1", 22.0f},
+    {"c_n_moa_b", "S_1", 24.0f},
+    {"c_n_moa_b", "S_1", 26.0f},
+    {"c_n_moa_b", "S_1", 28.0f},
+    {"c_n_moa_b", "S_1", 30.0f},
+    {"c_n_moa_b", "S_1", 32.0f},
+    {"c_n_moa_b", "S_1", 34.0f},
+    {"c_n_moa_b", "S_1", 36.0f},
+    {"c_n_moa_b", "S_1", 38.0f},
+    {"c_n_moa_b", "D_1", 0.0f},
+    {"c_n_moa_b", "D_1", 4.0f},
+    {"c_n_moa_b", "D_1", 8.0f},
+    {"c_kinodebu", "G_1", 0.0f},
+    {"c_kinodebu", "G_1", 4.0f},
+    {"c_kinodebu", "G_1", 8.0f},
+    {"c_puku_c", "U_1", 0.0f},
+    {"c_puku_c", "U_1", 4.0f},
+    {"c_puku_c", "U_1", 8.0f},
+    {"c_powan", "O_1", 0.0f},
+    {"c_powan", "O_1", 4.0f},
+    {"c_powan", "O_1", 8.0f},
+    {"c_smoko", "T_2", 0.0f},
+    {"c_smoko", "T_2", 4.0f},
+    {"c_smoko", "T_2", 8.0f},
+    {"c_rose", "G_1", 0.0f},
+    {"c_rose", "G_1", 4.0f},
+    {"c_rose", "G_1", 8.0f},
+    {"c_papab", "G_1", 0.0f},
+    {"c_papab", "G_1", 4.0f},
+    {"c_papab", "G_1", 8.0f},
+    {"c_mamab", "G_1", 0.0f},
+    {"c_mamab", "G_1", 4.0f},
+    {"c_mamab", "G_1", 8.0f},
+    {"c_konari", "G_1", 0.0f},
+    {"c_konari", "G_1", 4.0f},
+    {"c_konari", "G_1", 8.0f},
     {0},
 };
 
-// FAKE: dont_inline: MWCC would inline this function into its callers; the original calls it (checked by removing it).
-#pragma dont_inline on
 /**
  * Builds the swarm's animation table (wp->defs) from ext_moamoa_data:
- * consecutive rows with the same model and animation name become one MoamoaPoseDef (first texture frame,
- * frame count, speed, and looping unless the animation name starts with J).
- * Kept out of line to match the original.
+ * consecutive rows with the same model and animation name become one MoamoaPoseDef (first texture index,
+ * sampled-frame count, duration in frames, and a loop flag cleared when the animation name starts with J).
  */
 static void moamoa_pose_init(void) {
-    MoamoaData* data = ext_moamoa_data;
+    ExtTexInfo* data = ext_moamoa_data;
     s32 i = 0;
     s32 start;
     char model[32];
@@ -339,8 +359,8 @@ static void moamoa_pose_init(void) {
     strcpy(anim, "");
     wp->numDefs = -1;
     do {
-        if (strcmp(data->model, model)) {
-            strcpy(model, data->model);
+        if (strcmp(data->group, model)) {
+            strcpy(model, data->group);
             strcpy(anim, "");
         }
         if (strcmp(data->anim, anim)) {
@@ -352,16 +372,16 @@ static void moamoa_pose_init(void) {
         strcpy(wp->defs[wp->numDefs].anim, anim);
         wp->defs[wp->numDefs].start = start;
         wp->defs[wp->numDefs].count = i - start + 1;
-        wp->defs[wp->numDefs].speed = data->speed;
+        wp->defs[wp->numDefs].frames = data->frame;
         wp->defs[wp->numDefs].loop = 1;
         if (!strncmp(anim, "J", 1)) {
             wp->defs[wp->numDefs].loop = 0;
         }
         i++;
-    } while ((++data)->model != NULL);
+    } while ((++data)->group != NULL);
     wp->numDefs++;
 }
-#pragma dont_inline reset
+
 /**
  * Per-frame update of every Moamoa sprite's animation:
  * turns the time since its pose started into a texture frame index in the sprite's ExtdrvPose.
@@ -379,7 +399,7 @@ static void moamoa_pose_main(void) {
     for (i = 0; i < wp->count; i++, moa++, pose++) {
         now = gp->renderTime;
         def = &wp->defs[moa->pose];
-        t = 60.0f * OSTicksToMilliseconds(now - moa->startTime) / 1000.0f / def->speed;
+        t = 60.0f * OSTicksToMilliseconds(now - moa->startTime) / 1000.0f / def->frames;
 
         if (t >= 1.0f) {
             moa->startTime = now;
@@ -388,36 +408,37 @@ static void moamoa_pose_main(void) {
         pose->texId = def->start + (s32)((def->count - 1) * t);
     }
 }
+
 /**
- * Switches one Moamoa to the named model/animation pair (a swarm member with MOAMOA_FLAG_KIND_MODEL set uses the
- * model of its kind from group_tbl instead) and restarts its animation clock.
- * A damaged Moamoa only accepts D_ poses and an escaping one only R_ poses.
- * Out-of-line copy of moamoa_pose_change_i.
+ * Switches one Moamoa sprite to the pose def of model/anim and restarts its animation clock. With MOAMOA_FLAG_SHOW_KIND
+ * set, the model (and from MOAMOA_KIND_KINOPIO on also the animation) comes from its kind's group_tbl row, S_2 for
+ * MOAMOA_KIND_MOA_A_S2_UNUSED. A hit sprite only takes D poses and an escaping one only R poses; nothing changes when
+ * the pose is not found or already set.
  */
 static void moamoa_pose_change(Moamoa* moa, const char* model, const char* anim) {
     static const char* group_tbl[][2] = {
-        {(char*)"c_n_moa_a", (char*)"S_1"},
-        {(char*)"c_n_moa_b", (char*)"S_1"},
-        {(char*)"c_kinodebu", (char*)"G_1"},
-        {(char*)"c_puku_c", (char*)"U_1"},
-        {(char*)"c_powan", (char*)"O_1"},
-        {(char*)"c_smoko", (char*)"T_2"},
-        {(char*)"c_rose", (char*)"G_1"},
-        {(char*)"c_papab", (char*)"G_1"},
-        {(char*)"c_mamab", (char*)"G_1"},
-        {(char*)"c_konari", (char*)"G_1"},
-        {(char*)"c_n_moa_a", (char*)"S_1"},
+        {"c_n_moa_a", "S_1"},
+        {"c_n_moa_b", "S_1"},
+        {"c_kinodebu", "G_1"},
+        {"c_puku_c", "U_1"},
+        {"c_powan", "O_1"},
+        {"c_smoko", "T_2"},
+        {"c_rose", "G_1"},
+        {"c_papab", "G_1"},
+        {"c_mamab", "G_1"},
+        {"c_konari", "G_1"},
+        {"c_n_moa_a", "S_1"},
     };
     MoamoaPoseDef* def = wp->defs;
     s32 i;
 
-    if (moa->flags & MOAMOA_FLAG_KIND_MODEL) {
+    if (moa->flags & MOAMOA_FLAG_SHOW_KIND) {
         model = group_tbl[moa->kind][0];
-        if (moa->kind >= 2) {
+        if (moa->kind >= MOAMOA_KIND_KINOPIO) {
             anim = group_tbl[moa->kind][1];
         }
-        if (moa->kind == 10) {
-            anim = (char*)"S_2";
+        if (moa->kind == MOAMOA_KIND_MOA_A_S2_UNUSED) {
+            anim = "S_2";
         }
     }
     for (i = 0; i < wp->numDefs; i++, def++) {
@@ -426,13 +447,13 @@ static void moamoa_pose_change(Moamoa* moa, const char* model, const char* anim)
         }
     }
     if (i < wp->numDefs && moa->pose != i) {
-        if (moa->flags & MOAMOA_FLAG_DAMAGED) {
-            if (strncmp(anim, (char*)"D", 1)) {
+        if (moa->flags & MOAMOA_FLAG_HIT) {
+            if (strncmp(anim, "D", 1)) {
                 return;
             }
         }
         if (moa->flags & MOAMOA_FLAG_ESCAPING) {
-            if (strncmp(anim, (char*)"R", 1)) {
+            if (strncmp(anim, "R", 1)) {
                 return;
             }
         }
@@ -440,10 +461,8 @@ static void moamoa_pose_change(Moamoa* moa, const char* model, const char* anim)
         moa->startTime = gp->renderTime;
     }
 }
-/**
- * Script helper: sets (args[0] nonzero) or clears the MOAMOA_WORK_* bits args[1] in the swarm's work flags,
- * e.g. to start drawing the swarm, turn its hit checks off, or draw it offscreen.
- */
+
+/** Script helper: sets (args[0] nonzero) or clears the MOAMOA_WORK_* bits args[1] in the swarm's work flags. */
 static s32 evt_moamoa_flag_onoff(EventEntry* event, BOOL isFirstCall) {
     EvtWord* args = event->args;
     s32 on = evtGetValue(event, args[0]);
@@ -456,11 +475,13 @@ static s32 evt_moamoa_flag_onoff(EventEntry* event, BOOL isFirstCall) {
     }
     return EVT_RETURN_DONE;
 }
+
 /** Script helper: removes the swarm effect (extReset). */
 static s32 evt_moamoa_exit(EventEntry* event, BOOL isFirstCall) {
     extReset();
     return EVT_RETURN_DONE;
 }
+
 /** Script helper: resets the facing (ry and target ry) of every Moamoa sprite to 0. */
 static s32 evt_moamoa_ry_reset(EventEntry* event, BOOL isFirstCall) {
     s32 i;
@@ -472,6 +493,7 @@ static s32 evt_moamoa_ry_reset(EventEntry* event, BOOL isFirstCall) {
     }
     return EVT_RETURN_DONE;
 }
+
 /** Script helper: blocks the calling script until every Moamoa has finished leaving (MOAMOA_FLAG_GONE). */
 static s32 evt_moamoa_end_wait(EventEntry* event, BOOL isFirstCall) {
     s32 i;
@@ -486,10 +508,11 @@ static s32 evt_moamoa_end_wait(EventEntry* event, BOOL isFirstCall) {
     }
     return EVT_RETURN_DONE;
 }
+
 /**
- * Script helper: makes the whole swarm gather at its target and merge into one body.
- * The first call puts every Moamoa into the gather state with a staggered delay;
- * the helper then blocks until all have arrived (MOAMOA_FLAG_GATHERED) and switches them to the merged state.
+ * Script helper: resets every Moamoa's scale to 1 and puts it in MOAMOA_STATE_FUSION_WAIT (MOAMOA_FLAG_FUSING) with
+ * staggered timers, and blocks until all have MOAMOA_FLAG_FUSION_ARRIVED; then it marks them all as merged into the
+ * big Smorg (MOAMOA_STATE_FUSED, MOAMOA_FLAG_FUSED, no shadow) and gives them the pose c_n_moa_a S_1.
  */
 static s32 evt_moamoa_fusion(EventEntry* event, BOOL isFirstCall) {
     s32 i;
@@ -503,8 +526,8 @@ static s32 evt_moamoa_fusion(EventEntry* event, BOOL isFirstCall) {
             (*pose->mtx)[2][2] = 1.0f;
             (*pose->mtx)[1][1] = 1.0f;
             (*pose->mtx)[0][0] = 1.0f;
-            moa->next = 14;
-            moa->state = 14;
+            moa->next = MOAMOA_STATE_FUSION_WAIT;
+            moa->state = MOAMOA_STATE_FUSION_WAIT;
             moa->timer = i < 100 ? i % 100 : i % 60 + 100;
             moa->flags |= MOAMOA_FLAG_FUSING;
         }
@@ -512,25 +535,25 @@ static s32 evt_moamoa_fusion(EventEntry* event, BOOL isFirstCall) {
     extGetPosePtr();
     moa = wp->moa;
     for (i = 0; i < wp->count; i++, moa++) {
-        if (!(moa->flags & MOAMOA_FLAG_GATHERED)) {
+        if (!(moa->flags & MOAMOA_FLAG_FUSION_ARRIVED)) {
             return EVT_RETURN_BLOCK;
         }
     }
     pose = extGetPosePtr();
     moa = wp->moa;
     for (i = 0; i < wp->count; i++, pose++, moa++) {
-        pose->flags |= 4;
-        moa->flags |= MOAMOA_FLAG_MERGED;
-        moa->state = 61;
-        moamoa_pose_change(moa, (char*)"c_n_moa_a", (char*)"S_1");
+        pose->flags |= EXT_POSE_FLAG_NO_SHADOW;
+        moa->flags |= MOAMOA_FLAG_FUSED;
+        moa->state = MOAMOA_STATE_FUSED;
+        moamoa_pose_change(moa, "c_n_moa_a", "S_1");
     }
     return EVT_RETURN_DONE;
 }
+
 /**
- * Script helper: args[0] turns the per-kind model on or off (MOAMOA_FLAG_KIND_MODEL),
- * args[1] applies it to every Moamoa or only to those of kind 1; each sprite then refreshes its pose.
- * rsh_06 uses it as the Smorg merges; kinds 2-9 are passenger models (c_kinodebu, c_powan, c_rose, c_papab ...).
- * Guess: the swarm is meant to show the passengers it has swallowed.
+ * Script helper (args[0] = on, args[1] = all): sets (on) or clears MOAMOA_FLAG_SHOW_KIND on every Moamoa; with all = 0,
+ * turning it on affects only the MOA_B ones and turning it off only the others. Then it refreshes every sprite's pose
+ * (moamoa_pose_change with c_n_moa_a S_1).
  */
 static s32 evt_moamoa_kind_onoff(EventEntry* event, BOOL isFirstCall) {
     EvtWord* args = event->args;
@@ -544,25 +567,24 @@ static s32 evt_moamoa_kind_onoff(EventEntry* event, BOOL isFirstCall) {
     for (i = 0; i < wp->count; i++, moa++) {
         if (on) {
             if (!all) {
-                if (moa->kind == 1) {
-                    moa->flags |= MOAMOA_FLAG_KIND_MODEL;
+                if (moa->kind == MOAMOA_KIND_MOA_B) {
+                    moa->flags |= MOAMOA_FLAG_SHOW_KIND;
                 }
             } else {
-                moa->flags |= MOAMOA_FLAG_KIND_MODEL;
+                moa->flags |= MOAMOA_FLAG_SHOW_KIND;
+            }
+        } else if (!all) {
+            if (moa->kind != MOAMOA_KIND_MOA_B) {
+                moa->flags &= ~MOAMOA_FLAG_SHOW_KIND;
             }
         } else {
-            if (!all) {
-                if (moa->kind != 1) {
-                    moa->flags &= ~MOAMOA_FLAG_KIND_MODEL;
-                }
-            } else {
-                moa->flags &= ~MOAMOA_FLAG_KIND_MODEL;
-            }
+            moa->flags &= ~MOAMOA_FLAG_SHOW_KIND;
         }
-        moamoa_pose_change(moa, (char*)"c_n_moa_a", (char*)"S_1");
+        moamoa_pose_change(moa, "c_n_moa_a", "S_1");
     }
     return EVT_RETURN_DONE;
 }
+
 /**
  * Script helper: breaks the merged Smorg apart;
  * every Moamoa leaves the merged state and goes to the blown-away state (63).
@@ -575,11 +597,12 @@ static s32 evt_moamoa_blow(EventEntry* event, BOOL isFirstCall) {
     extGetPosePtr();
     moa = wp->moa;
     for (i = 0; i < wp->count; i++, moa++) {
-        moa->flags &= ~MOAMOA_FLAG_MERGED;
-        moa->state = 63;
+        moa->flags &= ~MOAMOA_FLAG_FUSED;
+        moa->state = MOAMOA_STATE_BLOW_START;
     }
     return EVT_RETURN_DONE;
 }
+
 /**
  * Debug leftover: instantly puts every Moamoa into the fully merged state with kind models,
  * skipping the gathering. Used by moamoa_debug.
@@ -590,20 +613,21 @@ static s32 evt_moamoa_fusion_debug(EventEntry* event, BOOL isFirstCall) {
     Moamoa* moa = wp->moa;
 
     for (i = 0; i < wp->count; i++, pose++, moa++) {
-        pose->flags |= 4;
-        moa->flags |= MOAMOA_FLAG_MERGED;
+        pose->flags |= EXT_POSE_FLAG_NO_SHADOW;
+        moa->flags |= MOAMOA_FLAG_FUSED;
         moa->flags |= MOAMOA_FLAG_FUSING;
-        moa->flags |= MOAMOA_FLAG_GATHERED;
-        moa->state = 61;
-        moa->flags |= MOAMOA_FLAG_KIND_MODEL;
-        moamoa_pose_change(moa, (char*)"c_n_moa_a", (char*)"S_1");
+        moa->flags |= MOAMOA_FLAG_FUSION_ARRIVED;
+        moa->state = MOAMOA_STATE_FUSED;
+        moa->flags |= MOAMOA_FLAG_SHOW_KIND;
+        moamoa_pose_change(moa, "c_n_moa_a", "S_1");
     }
     return EVT_RETURN_DONE;
 }
+
 /**
  * Prepares the giant Smorg's body: turns on world-position evaluation for the "base" NPC's skeleton,
- * hides its joints, sets up the chains of Moamoa along the bones and divides the swarm among them.
- * Gives some chains the models of the swallowed passengers (kinds 1 to 9).
+ * initializes its stored joint positions below the scene, sets up the chains of Moamoa along the bones
+ * and divides the swarm among them. Gives some chains the models of the swallowed passengers (kinds 2 to 9).
  */
 static void evalOn(void) {
     NpcEntry* npc = npcNameToPtr("base");
@@ -617,14 +641,14 @@ static void evalOn(void) {
     animPoseWorldPositionEvalOn(npc->poseId);
     wp->animPoseId = npc->poseId;
     anim = animPoseGetAnimPosePtr(npc->poseId);
-    pos = anim->worldPositions[0];
+    pos = ((Vec*)anim->worldPositions->address);
     n = anim->numWorldPositions;
     for (i = 0; i < n; i++) {
         pos[i] = (Vec){0.0f, -1000.0f, 0.0f};
     }
     for (i = 0; i < g_moamoa_chain_max; i++) {
-        wp->chainIdx[i][0] = animPoseGetGroupIdx(npc->poseId, g_moamoa_chain_tbl[i].from);
-        wp->chainIdx[i][1] = animPoseGetGroupIdx(npc->poseId, g_moamoa_chain_tbl[i].to);
+        wp->chainIdx[i][0] = animPoseGetGroupIdx(npc->poseId, g_moamoa_chain_tbl[i].parent);
+        wp->chainIdx[i][1] = animPoseGetGroupIdx(npc->poseId, g_moamoa_chain_tbl[i].child);
     }
     moa = wp->moa;
     for (j = 0; j < wp->count; j++, moa++) {
@@ -635,40 +659,40 @@ static void evalOn(void) {
     for (j = 0; j < wp->count; j++, moa++) {
         if (moa->group == 0 || moa->group == 5 || moa->group == 10 || moa->group == 15 || moa->group == 30 ||
             moa->group == 34 || moa->group == 38 || moa->group == 42 || moa->group == 46) {
-            moa->kind = 1;
+            moa->kind = MOAMOA_KIND_MOA_B;
         }
         if (moa->order == 0) {
             if (moa->group == 3) {
-                moa->kind = 2;
+                moa->kind = MOAMOA_KIND_KINOPIO;
             }
             if (moa->group == 4) {
-                moa->kind = 3;
+                moa->kind = MOAMOA_KIND_COOK;
             }
             if (moa->group == 7) {
-                moa->kind = 4;
+                moa->kind = MOAMOA_KIND_POWAN;
             }
             if (moa->group == 8) {
-                moa->kind = 5;
+                moa->kind = MOAMOA_KIND_SARARY;
             }
             if (moa->group == 9) {
-                moa->kind = 6;
+                moa->kind = MOAMOA_KIND_ROSE;
             }
             if (moa->group == 12) {
-                moa->kind = 7;
+                moa->kind = MOAMOA_KIND_PAPA;
             }
             if (moa->group == 13) {
-                moa->kind = 8;
+                moa->kind = MOAMOA_KIND_MAMA;
             }
             if (moa->group == 14) {
-                moa->kind = 9;
+                moa->kind = MOAMOA_KIND_KONARI;
             }
         }
     }
 }
+
 /**
- * Script helper: retires one of the swarm's targets.
- * args[0] picks target 0 or 1; its hit count is set to 100,
- * the target is replaced by the other one and the matching MOAMOA_WORK_TARGETn_OFF bit is set.
+ * Script helper (args[0] = 0 or 1): moves swarm target args[0] onto the other one (1 - args[0]), sets its hit count to
+ * 100 and marks it cleared (MOAMOA_WORK_FLAG_TARGET0_CLEARED or _TARGET1_CLEARED).
  */
 static s32 evt_moamoa_target_off(EventEntry* event, BOOL isFirstCall) {
     s32 i = evtGetValue(event, event->args[0]);
@@ -676,26 +700,28 @@ static s32 evt_moamoa_target_off(EventEntry* event, BOOL isFirstCall) {
     wp->target[i] = wp->target[1 - i];
     wp->targetHits[i] = 100;
     if (i == 0) {
-        wp->flags |= MOAMOA_WORK_TARGET0_OFF;
+        wp->flags |= MOAMOA_WORK_FLAG_TARGET0_CLEARED;
     } else {
-        wp->flags |= MOAMOA_WORK_TARGET1_OFF;
+        wp->flags |= MOAMOA_WORK_FLAG_TARGET1_CLEARED;
     }
     return EVT_RETURN_DONE;
 }
+
 /** Returns a random float between min and max using rand(). */
 static f32 randf(f32 min, f32 max) {
     f32 r = rand() / 32767.0f;
 
     return r * (max - min) + min;
 }
+
 /**
- * Init callback of the swarm effect on the roof (evt_ext_entry):
- * allocates the work area, puts all three targets at the center of the roof (10, 215, 0),
- * scatters the sprites over the roof (a sprite with no floor under it is put in the background and flagged
- * MOAMOA_FLAG_OFF_FLOOR), gives each a small random jitter,
- * builds the body chains (evalOn) and runs 600 frames of the swarm logic so it starts spread out.
+ * Ext-pose init of the Smorg swarm: allocates the work and one Moamoa per pose, puts all three targets at (10, 215, 0)
+ * and scatters the sprites at random x -500 to 500 and z -45 to 45, dropped onto the floor; one that finds no floor
+ * goes off the roof (y 100 to 215, z 70 to 75, MOAMOA_FLAG_OFF_ROOF). Each gets a random jitter; then it calls evalOn
+ * and runs ext_moamoa_main 600 times.
  */
 static void ext_moamoa_init(void) {
+    void moamoa_pose_init(void);
     s32 i;
     ExtdrvPose* pose;
     Moamoa* moa;
@@ -715,24 +741,24 @@ static void ext_moamoa_init(void) {
     moa = wp->moa;
     for (i = 0; i < wp->count; i++, pose++, moa++) {
         moa->flags = 0;
-        moa->state = 0;
+        moa->state = MOAMOA_STATE_WANDER;
         moa->timer = 0;
         moamoa_pose_change(moa, "c_n_moa_a", "S_1");
-        pose->flags |= 7;
+        pose->flags |= (EXT_POSE_FLAG_VISIBLE | EXT_POSE_FLAG_BILLBOARD | EXT_POSE_FLAG_NO_SHADOW);
         PSMTXIdentity(*pose->mtx);
         (*pose->mtx)[0][3] = randf(-500.0f, 500.0f);
         (*pose->mtx)[1][3] = 215.0f;
         (*pose->mtx)[2][3] = randf(-45.0f, 45.0f);
         hitX = hitY = hitZ = 0.0f;
         dist = 1000000.0f;
-        if (hitCheckFilter(NULL, &hitX, &hitY, &hitZ, &dist, &nx, &ny, &nz, (*pose->mtx)[0][3], 100.0f + (*pose->mtx)[1][3], (*pose->mtx)[2][3], 0.0f, -1.0f, 0.0f)) {
+        if (hitCheckFilter(NULL, (*pose->mtx)[0][3], 100.0f + (*pose->mtx)[1][3], (*pose->mtx)[2][3], 0.0f, -1.0f, 0.0f, &hitX, &hitY, &hitZ, &dist, &nx, &ny, &nz)) {
             (*pose->mtx)[1][3] = hitY;
         } else {
-            pose->flags |= 4;
+            pose->flags |= EXT_POSE_FLAG_NO_SHADOW;
             (*pose->mtx)[0][3] = randf(-500.0f, 500.0f);
             (*pose->mtx)[1][3] = randf(100.0f, 215.0f);
             (*pose->mtx)[2][3] = randf(70.0f, 75.0f);
-            moa->flags |= MOAMOA_FLAG_OFF_FLOOR;
+            moa->flags |= MOAMOA_FLAG_OFF_ROOF;
             moamoa_pose_change(moa, "c_n_moa_a", "S_1");
         }
         v = (Vec){0.0f, 0.0f, 0.0f};
@@ -742,10 +768,13 @@ static void ext_moamoa_init(void) {
         moa->jitter = v;
     }
     evalOn();
+
+    // Warm up synchronously: 600 simulation updates, not 600 rendered frames.
     for (i = 0; i < 600; i++) {
         ext_moamoa_main();
     }
 }
+
 /**
  * Draw callback of the swarm sprites: loads the ext driver state and draws all sprites.
  * When drawn into the offscreen camera it also records the bounding box of what was drawn.
@@ -767,9 +796,10 @@ static void ext_disp(CameraId camera, void* param) {
     if (camera == CAMERA_OFFSCREEN2) {
         sysWaitDrawSync();
         GXReadBoundingBox(&left, &top, &right, &bottom);
-        offscreenAddBoundingBox(offscreenNameToId((char*)"offscreen"), left, top, right, bottom);
+        offscreenAddBoundingBox(offscreenNameToId("offscreen"), left, top, right, bottom);
     }
 }
+
 /**
  * Draw callback of the swarm's shadows: loads the shadow matrix and TEV state
  * and draws the flat shadow of every sprite (also records the bounding box for the offscreen camera).
@@ -793,17 +823,20 @@ static void ext_shadow_disp(CameraId camera, void* param) {
     if (camera == CAMERA_OFFSCREEN2) {
         sysWaitDrawSync();
         GXReadBoundingBox(&left, &top, &right, &bottom);
-        offscreenAddBoundingBox(offscreenNameToId((char*)"offscreen"), left, top, right, bottom);
+        offscreenAddBoundingBox(offscreenNameToId("offscreen"), left, top, right, bottom);
     }
 }
 
-// FAKE: dont_inline: MWCC would inline this function into its callers; the original calls it (checked by removing it).
+// Kept: the JP demo REL map lists this Smorg helper as its own function, and the target calls it, not inlined;
+// under -inline auto nothing else keeps a short static function out of line.
 #pragma dont_inline on
+
 /**
  * Starts a hop for one Moamoa toward (x, y, z) with the given horizontal speed and gravity:
  * optionally snaps y to the ground below the target, computes the flight time and initial vertical speed,
  * turns the sprite toward the target, and sets its state to the jump state (3) with `next` as the state to
  * return to.
+ * The int-first parameter order is part of ext_moamoa_main's FAKE (eki_00 and rsh_05 take the floats first).
  */
 static void moamoa_jump(ExtdrvPose* pose, Moamoa* moa, s32 next, s32 checkGround, f32 x, f32 y, f32 z, f32 speed, f32 gravity) {
     f32 hitX, hitY, hitZ, dist, nx, ny, nz;
@@ -814,7 +847,7 @@ static void moamoa_jump(ExtdrvPose* pose, Moamoa* moa, s32 next, s32 checkGround
     if (checkGround) {
         hitX = hitY = hitZ = 0.0f;
         dist = 1000000.0f;
-        if (hitCheckFilter(NULL, &hitX, &hitY, &hitZ, &dist, &nx, &ny, &nz, x, 100.0f + y, z, 0.0f, -1.0f, 0.0f)) {
+        if (hitCheckFilter(NULL, x, 100.0f + y, z, 0.0f, -1.0f, 0.0f, &hitX, &hitY, &hitZ, &dist, &nx, &ny, &nz)) {
             if (__fabs(y - hitY) > 30.0) {
                 speed -= 0.1f;
                 gravity += 0.1f;
@@ -830,23 +863,27 @@ static void moamoa_jump(ExtdrvPose* pose, Moamoa* moa, s32 next, s32 checkGround
     angle = angleABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], moa->target.x, moa->target.z);
     moa->jumpTimer = d / moa->speed;
     moa->vy = dy / moa->jumpTimer + moa->gravity * moa->jumpTimer / 2;
-    moa->state = 3;
+    moa->state = MOAMOA_STATE_JUMP;
     moa->next = next;
     pose->dir = 180.0f + angle;
     moa->flags |= MOAMOA_FLAG_JUMPING;
-    pose->flags |= 0x10;
-    pose->flags &= ~4;
+    pose->flags |= EXT_POSE_FLAG_SHADOW_POS;
+    pose->flags &= ~EXT_POSE_FLAG_NO_SHADOW;
 }
 #pragma dont_inline reset
-// FAKE: built with copy propagation and lifetime analysis off: the plain build allocates registers differently (checked by
-// removing them).
+
+// Kept (pattern): propagation and lifetimes off for the extdrv, npc_jump and depthDisp functions of bom_01, eki_00,
+// gor_10, hei_10, rsh_05, rsh_06, tik_05 and tou_02 (one half is a -opt file flag where configure.py sets it); the
+// target needs it and no natural form was found (cleanup_notes/mweppc_pilot.md, pragma review rels).
 #pragma opt_propagation off
 #pragma opt_lifetimes off
+
 /**
  * Checks whether something hits one Moamoa.
- * Returns 0 for nothing, 1 for Mario jumping on it (Mario bounces), 2 for a hammer swing or Koops's shell,
+ * Returns 0 for nothing, 1 for Mario jumping on it (requests a bounce except while rolling or riding Yoshi in retail),
+ * 2 for a hammer swing or Koops's shell,
  * 3 for Flurrie's breath and 4 for Bobbery's bomb.
- * As a side effect it also pushes Mario out when he walks into a Moamoa on the ground.
+ * As a side effect it restores an overlapping Moamoa's previous X/Z and computes Mario's floorMove correction.
  */
 static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa) {
     MarioWork* mario = marioGetPtr();
@@ -856,6 +893,7 @@ static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa) {
     f32 angle;
     f32 rad;
     Vec a, b, c, d, e, f;
+    f32 yaw;
 
     if (mario->position.y > 20.0f + (*pose->mtx)[1][3]) {
         return 0;
@@ -863,12 +901,13 @@ static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa) {
     if ((*pose->mtx)[1][3] > mario->position.y + mario->wPlayerCollisionBox.y) {
         return 0;
     }
-    if (distABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], mario->position.x, mario->position.z) < (20.0f + mario->wPlayerCollisionBox.x) / 2 && mario->position.y > 10.0f + (*pose->mtx)[1][3] && (mario->flags & MARIO_FLAG_IS_FALLING) && !(mario->flags & MARIO_FLAG_IS_JUMPING) && wp->bounceCount < 2) {
 #if VERSION <= VERSION_DEMO_JP
-        marioChgMot(5);
+    if (distABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], mario->position.x, mario->position.z) < (20.0f + mario->wPlayerCollisionBox.x) / 2 && mario->position.y > 10.0f + (*pose->mtx)[1][3] && (mario->flags & MARIO_FLAG_IS_FALLING) && !(mario->flags & MARIO_FLAG_IS_JUMPING) && wp->bounceCount < 2) {
+        marioChgMot(MARIO_MOTION_JUMP_SW);
 #else
+    if (distABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], mario->position.x, mario->position.z) < (20.0f + mario->wPlayerCollisionBox.x) / 2 && mario->position.y > 10.0f + (*pose->mtx)[1][3] && (mario->flags & MARIO_FLAG_IS_FALLING) && !(mario->flags & MARIO_FLAG_IS_JUMPING) && wp->bounceCount < 2) {
         if (mario->currMotionId != MARIO_MOTION_ROLL && mario->currMotionId != MARIO_MOTION_YOSHI) {
-            marioChgMot(5);
+            marioChgMot(MARIO_MOTION_JUMP_SW);
         }
 #endif
         wp->bounceCount++;
@@ -879,17 +918,15 @@ static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa) {
     }
     if (mario->currMotionId == MARIO_MOTION_HAMMER && wp->hammerFrames > 10) {
         cam = camGetPtr(CAMERA_3D);
-        {
-            f32 yaw = cam->viewYaw;
-            rad = reviseAngle((mario->displayDirection - 90.0f) + yaw);
-        }
+        yaw = cam->viewYaw;
+        rad = reviseAngle((mario->displayDirection - 90.0f) + yaw);
         angle = 35.0f * moa_sin((6.2831855f * rad) / 360.0f) + mario->position.x;
         dist = mario->position.z - 35.0f * moa_cos((6.2831855f * rad) / 360.0f);
         if (distABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], angle, dist) < 35.0f) {
             return 2;
         }
     }
-    if (mario->currMotionId == MARIO_MOTION_HAMMER_2 && (s32)mario->currSubMotionId == 0x14) {
+    if (mario->currMotionId == MARIO_MOTION_HAMMER_2 && mario->currSubMotionId == HAMMER2_SUB_SPIN) {
         {
             f32(*m)[4] = *pose->mtx;
             a = (Vec){m[0][3], m[1][3], m[2][3]};
@@ -907,7 +944,7 @@ static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa) {
             return 3;
         }
     }
-    if (nokonokoGetStatus(partyGetPtr(0)) == 2) {
+    if (nokonokoGetStatus(partyGetPtr(0)) == NOKONOKO_STATUS_SHELL_OUT) {
         {
             f32(*m)[4] = *pose->mtx;
             c = (Vec){m[0][3], m[1][3], m[2][3]};
@@ -916,7 +953,7 @@ static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa) {
             return 2;
         }
     }
-    if (partyGetPtr(0)->currentMemberId == PARTY_MEMBER_BOBBERY && partyGetPtr(0)->useMotionId == 0x46) {
+    if (partyGetPtr(0)->currentMemberId == PARTY_BOBBERY && partyGetPtr(0)->useMotionId == 0x46) {
         {
             f32(*m)[4] = *pose->mtx;
             d = (Vec){m[0][3], m[1][3], m[2][3]};
@@ -953,25 +990,19 @@ static s32 moamoa_hit_check(ExtdrvPose* pose, Moamoa* moa) {
     }
     return 0;
 }
-#pragma opt_propagation reset
-#pragma opt_lifetimes reset
-// FAKE: built with copy propagation and lifetime analysis off: the plain build allocates registers differently (checked by
-// removing them).
-#pragma opt_propagation off
-#pragma opt_lifetimes off
+
+// FAKE: placed in .rodata; without it the object changes
 __declspec(section ".rodata") static Vec moamoa_zero_vec = {0.0f, 0.0f, 0.0f};
-#pragma opt_dead_assignments off // FAKE: keeps the named in-argument holder `aa` of case 15 (dead store otherwise dropped by IRO), so the sum is a low-numbered named vreg as in the target
-// FAKE: identity function used so the compiler keeps the original code shape of the swarm main loop; it returns its
-// argument.
+#pragma opt_dead_assignments off // FAKE (reset after ext_moamoa_main): keeps the named in-argument holder `aa` of case 15 (dead store otherwise dropped by IRO), so the sum is a low-numbered named vreg as in the target
 static inline f32 mmI(f32 x) {
     return x;
 } // FAKE: identity; replaces the dead `(k = A - B)` holders of the hand-inlined randf sites, which opt_dead_assignments off would otherwise keep as named vregs
+
 /**
  * Per-frame callback of the Smorg swarm.
- * Tracks hammer and idle time, Flurrie's breath and partner use, counts hits on the swarm's targets,
+ * Tracks hammer and idle time, Flurrie's breath and partner use, records hits,
  * and runs each Moamoa's state machine (idle hopping toward its target or Mario, jumps, damage and knock-off,
- * escape, gathering and merging, being blown away).
- * When both targets have been freed it starts the swarm's escape.
+ * gathering and merging, being blown away).
  */
 static void ext_moamoa_main(void) {
     MarioWork* mario = marioGetPtr();
@@ -985,7 +1016,7 @@ static void ext_moamoa_main(void) {
     ExtdrvPose* pose;
     ExtdrvPose* other;
     Moamoa* m;
-    f32 jumpSpeed;
+    f32 a2;
     f32 spd;
     f32 rad;
     f32 angle;
@@ -1006,6 +1037,15 @@ static void ext_moamoa_main(void) {
     f32 a;
     f32 d;
     f32 r;
+    f32 k;
+    f32 r1;
+    f32 a3;
+    f32 tz;
+    f32 x2;
+    f32 y2;
+    f32 z2;
+    f32 s2;
+    f32 g2;
 
     if (mario->currMotionId == MARIO_MOTION_HAMMER) {
         wp->hammerFrames++;
@@ -1021,13 +1061,13 @@ static void ext_moamoa_main(void) {
         wp->idleFrames = 0;
     }
     if (party->flags & PARTY_FLAG_IS_BEING_USED) {
-        wp->flags |= MOAMOA_WORK_PARTNER_IN_USE;
+        wp->flags |= MOAMOA_WORK_FLAG_PARTY_IN_USE;
     } else {
-        wp->flags &= ~MOAMOA_WORK_PARTNER_IN_USE;
+        wp->flags &= ~MOAMOA_WORK_FLAG_PARTY_IN_USE;
     }
     wp->breathDir = -1.0f;
     wp->breathDist = -1.0f;
-    if ((party->currentMemberId == PARTY_MEMBER_FLURRIE) && (party->flags & PARTY_FLAG_IS_BEING_USED)) {
+    if ((party->currentMemberId == PARTY_FLURRIE) && (party->flags & PARTY_FLAG_IS_BEING_USED)) {
         wp->breathDir = cloudGetBreathDir();
         wp->breathDist = cloudGetBreathDist();
         wp->breathPos.x = (wp->breathDist * moa_sinx((6.2831855f * wp->breathDir) / 360.0f)) + party->position.x;
@@ -1041,24 +1081,24 @@ static void ext_moamoa_main(void) {
     for (i = 0; i < wp->count; i++, pose++, m++) {
         wp->angle = angleABf(mario->position.x, mario->position.z, (*pose->mtx)[0][3], (*pose->mtx)[2][3]);
         wp->dist = distABf(mario->position.x, mario->position.z, (*pose->mtx)[0][3], (*pose->mtx)[2][3]);
-        if (((!(m->flags & (MOAMOA_FLAG_DAMAGED | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_FLOOR | MOAMOA_FLAG_FUSING))) && (mario->position.y > 200.0f)) && (wp->dist < 30.0f)) {
+        if (((!(m->flags & (MOAMOA_FLAG_HIT | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_ROOF | MOAMOA_FLAG_FUSING))) && (mario->position.y > 200.0f)) && (wp->dist < 30.0f)) {
             cnt += 1.0f;
         }
 #if VERSION <= VERSION_DEMO_JP
-        if ((((wp->flags & MOAMOA_WORK_ACTIVE) && (!(wp->flags & MOAMOA_WORK_NO_HIT))) && (!hit)) && (!(m->flags & (MOAMOA_FLAG_DAMAGED | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_FLOOR | MOAMOA_FLAG_FUSING)))) {
+        if ((((wp->flags & MOAMOA_WORK_FLAG_ACTIVE) && (!(wp->flags & MOAMOA_WORK_FLAG_NO_HIT))) && (!hit)) && (!(m->flags & (MOAMOA_FLAG_HIT | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_ROOF | MOAMOA_FLAG_FUSING)))) {
 #else
-        if ((((((wp->flags & MOAMOA_WORK_ACTIVE) && (!(wp->flags & MOAMOA_WORK_NO_HIT))) && (!marioKeyOffChk())) && (!marioCtrlOffChk())) && (!hit)) && (!(m->flags & (MOAMOA_FLAG_DAMAGED | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_FLOOR | MOAMOA_FLAG_FUSING)))) {
+        if ((((((wp->flags & MOAMOA_WORK_FLAG_ACTIVE) && (!(wp->flags & MOAMOA_WORK_FLAG_NO_HIT))) && (!marioKeyOffChk())) && (!marioCtrlOffChk())) && (!hit)) && (!(m->flags & (MOAMOA_FLAG_HIT | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_ROOF | MOAMOA_FLAG_FUSING)))) {
 #endif
             ret = moamoa_hit_check(pose, m);
             if (ret == 1) {
-                m->flags |= MOAMOA_FLAG_DAMAGED;
-                m->state = 36;
+                m->flags |= MOAMOA_FLAG_HIT;
+                m->state = MOAMOA_STATE_STOMPED;
                 wp->hitCount++;
                 moamoa_pose_change(m, "c_n_moa_a", "D_1");
                 hit = 1;
             } else if ((ret == 2) || (ret == 4)) {
-                m->flags |= MOAMOA_FLAG_DAMAGED | MOAMOA_FLAG_KNOCKED;
-                m->state = 47;
+                m->flags |= (MOAMOA_FLAG_HIT | MOAMOA_FLAG_KNOCKED_AWAY);
+                m->state = MOAMOA_STATE_KNOCKED_AWAY;
                 wp->hitCount++;
                 moamoa_pose_change(m, "c_n_moa_a", "D_1");
                 if (ret != 4) {
@@ -1066,23 +1106,23 @@ static void ext_moamoa_main(void) {
                 }
             } else if (ret == 3) {
                 angle = (wp->breathDir + wp->angle) / 2.0f;
-                m->flags |= MOAMOA_FLAG_DAMAGED | MOAMOA_FLAG_BLOWN;
-                m->state = 48;
-                m->target = moamoa_zero_vec;
+                m->flags |= (MOAMOA_FLAG_HIT | MOAMOA_FLAG_BLOWN);
+                m->state = MOAMOA_STATE_BLOWN_DRIFT;
+                m->driftVel = moamoa_zero_vec;
                 {
                     spd = randf(0.1f, 0.2f);
                     rad = (6.2831855f * angle) / 360.0f;
-                    m->vy = spd * moa_sinx(rad);
-                    m->speed = randf(0.03f, 0.06f);
-                    m->gravity = spd * (-moa_cosx(rad));
+                    m->driftAccelX = spd * moa_sinx(rad);
+                    m->driftAccelY = randf(0.03f, 0.06f);
+                    m->driftAccelZ = spd * (-moa_cosx(rad));
                 }
-                m->jumpTimer = 120;
+                m->driftTimer = 120;
                 wp->hitCount++;
                 moamoa_pose_change(m, "c_n_moa_a", "D_1");
                 hit = 1;
             }
         }
-        if ((wp->flags & MOAMOA_WORK_ACTIVE) && (!(m->flags & (MOAMOA_FLAG_TO_TARGET | MOAMOA_FLAG_DAMAGED | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_FLOOR | MOAMOA_FLAG_FUSING)))) {
+        if ((wp->flags & MOAMOA_WORK_FLAG_ACTIVE) && (!(m->flags & (MOAMOA_FLAG_TO_TARGET | MOAMOA_FLAG_HIT | MOAMOA_FLAG_ESCAPING | MOAMOA_FLAG_OFF_ROOF | MOAMOA_FLAG_FUSING)))) {
 #if VERSION <= VERSION_DEMO_JP
             if (mario->currMotionId == MARIO_MOTION_STAY || mario->currMotionId == MARIO_MOTION_WALK || mario->currMotionId == MARIO_MOTION_DASH) {
 #else
@@ -1091,20 +1131,20 @@ static void ext_moamoa_main(void) {
 #endif
                 if ((((mario->position.y > 200.0f) && (wp->dist > 30.0f)) && (wp->dist < 100.0f)) && (i & 1)) {
                     if (m->flags & MOAMOA_FLAG_JUMPING) {
-                        m->next = 2;
+                        m->next = MOAMOA_STATE_APPROACH;
                     } else {
-                        m->state = 2;
+                        m->state = MOAMOA_STATE_APPROACH;
                     }
                 }
             } else if (wp->dist < 50.0f) {
                 if (m->flags & MOAMOA_FLAG_JUMPING) {
-                    m->next = 1;
+                    m->next = MOAMOA_STATE_FLEE;
                 } else {
-                    m->state = 1;
+                    m->state = MOAMOA_STATE_FLEE;
                 }
             }
         }
-        if ((((wp->flags & MOAMOA_WORK_ACTIVE) && (!(m->flags & (MOAMOA_FLAG_DAMAGED | MOAMOA_FLAG_OFF_FLOOR | MOAMOA_FLAG_MERGED)))) && (i == (gp->retraceCount % wp->count))) && (irand(1000) < 200)) {
+        if ((((wp->flags & MOAMOA_WORK_FLAG_ACTIVE) && (!(m->flags & (MOAMOA_FLAG_HIT | MOAMOA_FLAG_OFF_ROOF | MOAMOA_FLAG_FUSED)))) && (i == (gp->retraceCount % wp->count))) && (irand(1000) < 200)) {
             {
                 Vec tmp = {0.0f, 0.0f, 0.0f};
                 tmp.x = (*pose->mtx)[0][3];
@@ -1112,326 +1152,320 @@ static void ext_moamoa_main(void) {
                 tmp.z = (*pose->mtx)[2][3];
                 sp = tmp;
             }
-            psndSFXOn_3D(SFX_NAME_WORD("SFX_STG6_MOAMOA_VOICE1"), &sp); /* FAKE: integer cast hoists the literal as an @ temp (sfx local removed) */
+            psndSFXOn_3D(SFX_NAME_WORD("SFX_STG6_MOAMOA_VOICE1"), &sp);
         }
         switch (m->state) {
-            case 0:
-                if (m->flags & MOAMOA_FLAG_OFF_FLOOR) {
+            case MOAMOA_STATE_WANDER:
+                if (m->flags & MOAMOA_FLAG_OFF_ROOF) {
                     break;
                 }
+                // FAKE: hand-inlined randf(0.0f, 360.0f) (same rand() call, r*360+0) with the 6.28 factor first, so its pool address is created before 360/0 as in the target
                 {
+                    f32 k;
                     f32 mn;
                     f32 rr;
-                    f32 rnd = rand() / 32767.0f;
-                    rr = (6.2831855f * ((rnd * mmI(360.0f - 0.0f)) + (mn = 0.0f))) / 360.0f; // FAKE: hand-inlined randf(0.0f, 360.0f) (same rand() call, rnd*360+0) with the 6.28 factor first, so its pool address is created before 360/0 as in the target
+                    f32 r = rand() / 32767.0f;
+                    rr = (6.2831855f * ((r * mmI(360.0f - 0.0f)) + (mn = 0.0f))) / 360.0f;
                     x0 = (5.0f * moa_sinx(rr)) + (*pose->mtx)[0][3];
                     z0 = (*pose->mtx)[2][3] - (5.0f * moa_cosx(rr));
                 }
                 {
                     f32 k1;
                     f32 k2;
-                    f32 rand1 = rand() / 32767.0f;
-                    f32 rand2 = rand() / 32767.0f;
-                    moamoa_jump(pose, m, m->state, 0, x0, 215.0f, z0, (rand1 * (k1 = 0.5f - 0.3f)) + 0.3f, (rand2 * (k2 = 0.8f - 0.5f)) + 0.5f);
+                    f32 r1 = rand() / 32767.0f;
+                    f32 r2 = rand() / 32767.0f;
+                    moamoa_jump(pose, m, m->state, 0, x0, 215.0f, z0, (r1 * (k1 = 0.5f - 0.3f)) + 0.3f, (r2 * (k2 = 0.8f - 0.5f)) + 0.5f);
                 }
                 break;
-            case 14:
+            case MOAMOA_STATE_FUSION_WAIT:
                 if ((--m->timer) < 0) {
                     m->timer = 0;
                     m->state++;
                 }
                 break;
-            case 15:
+            case MOAMOA_STATE_FUSION_MOVE:
                 dist = distABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], wp->target[i % 3].x, wp->target[i % 3].z);
                 angle = angleABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], wp->target[i % 3].x, wp->target[i % 3].z);
                 if (dist > 31.0f) {
                     x1 = (30.0f * moa_sinx((6.2831855f * angle) / 360.0f)) + (*pose->mtx)[0][3];
                     dist = (*pose->mtx)[2][3] - (30.0f * moa_cosx((6.2831855f * angle) / 360.0f));
                     {
-                        f32 k1;
-                        f32 k2;
-                        f32 rand2;
+                        // FAKE: `aa` is a never-read holder kept by opt_dead_assignments off (in-argument sum stays in argument order, numbered below k/r2)
+                        f32 k;
+                        f32 r2;
                         f32 aa;
                         s = rand() / 32767.0f;
-                        rand2 = rand() / 32767.0f;
-                        moamoa_jump(pose, m, m->state, 0, x1, 215.0f, dist, 2.0f * (aa = (s * (k1 = 1.0f - 1.0f)) + 1.0f), 2.0f * ((rand2 * (k2 = 0.4f - 0.4f)) + 0.4f));
-                    } // FAKE: `aa` is a never-read holder kept by opt_dead_assignments off (in-argument sum stays in argument order, numbered below k/rand2)
+                        r2 = rand() / 32767.0f;
+                        moamoa_jump(pose, m, m->state, 0, x1, 215.0f, dist, 2.0f * (aa = (s * (k = 1.0f - 1.0f)) + 1.0f), 2.0f * ((r2 * k) + 0.4f));
+                    }
                 } else {
                     moamoa_joint_position(m, &jv);
                     PSVECAdd(&jv, &m->jitter, &jv);
                     {
-                        f32 k1;
-                        f32 k2;
-                        f32 rand2;
+                        f32 k;
+                        f32 r2;
                         d = rand() / 32767.0f;
-                        rand2 = rand() / 32767.0f;
-                        moamoa_jump(pose, m, 61, 0, jv.x, jv.y, jv.z, 2.0f * ((d * (k1 = 1.5f - 1.5f)) + 1.5f), 2.0f * ((rand2 * (k2 = 0.8f - 0.8f)) + 0.8f));
+                        r2 = rand() / 32767.0f;
+                        moamoa_jump(pose, m, MOAMOA_STATE_FUSED, 0, jv.x, jv.y, jv.z, 2.0f * ((d * (k = 1.5f - 1.5f)) + 1.5f), 2.0f * ((r2 * k) + 0.8f));
                     }
-                    m->flags |= MOAMOA_FLAG_GATHERED;
-                    pose->flags |= 4;
+                    m->flags |= MOAMOA_FLAG_FUSION_ARRIVED;
+                    pose->flags |= EXT_POSE_FLAG_NO_SHADOW;
                 }
                 break;
-            case 61:
+            case MOAMOA_STATE_FUSED:
                 moamoa_joint_position(m, &pv);
                 PSVECAdd(&pv, &m->jitter, &pv);
                 (*pose->mtx)[0][3] = pv.x;
                 (*pose->mtx)[1][3] = pv.y;
                 (*pose->mtx)[2][3] = pv.z;
                 break;
-            case 50:
+            case MOAMOA_STATE_GATHER_WAIT_UNUSED:
                 if ((--m->timer) < 0) {
                     m->timer = 0;
                     m->state++;
                 }
                 break;
-            case 51:
-                m->speed = randf(0.0f, 200.0f);
-                m->gravity = randf(0.0f, 300.0f * m->speed / 200.0f);
+            case MOAMOA_STATE_GATHER_INIT_UNUSED:
+                m->circleHeight = randf(0.0f, 200.0f);
+                m->circleRadius = randf(0.0f, 300.0f * m->circleHeight / 200.0f);
                 m->state++;
                 m->timer = 0;
-            case 52: {
-                f32 orbitX;
-                f32 orbitY;
-                f32 orbitZ;
-                f32 orbitScale;
-                orbitScale = (m->timer < 200) ? (1.0f) : ((800 - m->timer) / 600.0f);
-                if (orbitScale < 0.0f) {
-                    orbitScale = 0.0f;
-                    m->flags |= MOAMOA_FLAG_GATHERED;
+            case MOAMOA_STATE_GATHER_UNUSED: {
+                f32 tx;
+                f32 ty;
+                f32 tz;
+                f32 s;
+                s = (m->timer < 200) ? (1.0f) : ((800 - m->timer) / 600.0f);
+                if (s < 0.0f) {
+                    s = 0.0f;
+                    m->flags |= MOAMOA_FLAG_FUSION_ARRIVED;
                 }
-                orbitX = wp->target[i % 3].x;
-                orbitY = wp->target[i % 3].y;
-                orbitZ = wp->target[i % 3].z;
-                orbitX += orbitScale * (m->gravity * ((f32)sin(((f32)(i + gp->retraceCount)) / 4.0f)));
+                tx = wp->target[i % 3].x;
+                ty = wp->target[i % 3].y;
+                tz = wp->target[i % 3].z;
+                tx += s * (m->circleRadius * ((f32)sin(((f32)(i + gp->retraceCount)) / 4.0f)));
                 r = i + gp->retraceCount;
-                orbitY += m->speed * orbitScale;
-                orbitZ += orbitScale * ((-m->gravity) * ((f32)cos(r / 4.0f)));
-                (*pose->mtx)[0][3] += (orbitX - (*pose->mtx)[0][3]) / 15.0f;
-                (*pose->mtx)[1][3] += (orbitY - (*pose->mtx)[1][3]) / 15.0f;
-                (*pose->mtx)[2][3] += (orbitZ - (*pose->mtx)[2][3]) / 15.0f;
+                ty += m->circleHeight * s;
+                tz += s * ((-m->circleRadius) * ((f32)cos(r / 4.0f)));
+                (*pose->mtx)[0][3] += (tx - (*pose->mtx)[0][3]) / 15.0f;
+                (*pose->mtx)[1][3] += (ty - (*pose->mtx)[1][3]) / 15.0f;
+                (*pose->mtx)[2][3] += (tz - (*pose->mtx)[2][3]) / 15.0f;
                 m->timer++;
                 break;
             }
-            case 1: {
-                f32 hopRad;
+            case MOAMOA_STATE_FLEE: {
+                f32 rad;
                 {
                     f32 k;
-                    f32 rand1 = rand() / 32767.0f;
-                    f32 hopAngle = wp->angle + ((rand1 * (k = 45.0f - -45.0f)) + -45.0f);
-                    hopRad = (6.2831855f * hopAngle) / 360.0f;
+                    f32 r1 = rand() / 32767.0f;
+                    f32 a = wp->angle + ((r1 * (k = 45.0f - -45.0f)) + -45.0f);
+                    rad = (6.2831855f * a) / 360.0f;
                 }
                 d = wp->dist;
-                x = (*pose->mtx)[0][3] + (15.0f * moa_sinx(hopRad));
+                x = (*pose->mtx)[0][3] + (15.0f * moa_sinx(rad));
                 z = (*pose->mtx)[1][3];
-                dist = (*pose->mtx)[2][3] - (15.0f * moa_cosx(hopRad));
+                dist = (*pose->mtx)[2][3] - (15.0f * moa_cosx(rad));
                 {
                     f32 hopSpeed;
-                    f32 rand1 = rand() / 32767.0f;
-                    hopSpeed = rand1 * mmI(1.0f - 1.0f) + 1.0f;
+                    f32 k;
+                    f32 r1 = rand() / 32767.0f;
+                    hopSpeed = r1 * mmI(1.0f - 1.0f) + 1.0f;
+
                     // FAKE: block-local copies of the float args (behaviour-identical) put the f1..f5 arg moves ahead of the ?: as in the target
+                    // (part of the same fake: moamoa_jump keeps the int-first parameter order here; the copies of
+                    // this code in eki_00/rsh_05 show the original floats-first order, which needs no copies;
+                    // with it rsh_06 differs only by an FPR colour swap, cleanup_notes\bf\X0\log.md)
+                    g2 = randf(0.4f, 0.4f);
                     {
-                        f32 g2 = randf(0.4f, 0.4f);
-                        {
-                            f32 x2 = x;
-                            f32 y2 = z;
-                            f32 z2 = dist;
-                            f32 s2 = hopSpeed;
-                            f32 g3 = g2;
-                            moamoa_jump(pose, m, (d < 100.0f) ? (m->state) : (0), 0, x2, y2, z2, s2, g3);
-                        }
+                        f32 x2 = x;
+                        f32 y2 = z;
+                        f32 z2 = dist;
+                        f32 s2 = hopSpeed;
+                        f32 g3 = g2;
+                        moamoa_jump(pose, m, (d < 100.0f) ? (m->state) : (0), 0, x2, y2, z2, s2, g3);
                     }
                 }
             } break;
 
-            case 2: {
-                f32 hopZ;
-                f32 hopX;
-                {
-                    f32 turn = randf(-45.0f, 45.0f);
-                    a = wp->angle;
-                    a += turn;
-                }
+            case MOAMOA_STATE_APPROACH: {
+                f32 z;
+                f32 x;
+                r = randf(-45.0f, 45.0f);
+                a = wp->angle;
+                a += r;
                 a += 180.0f;
                 d = wp->dist;
-                hopX = (*pose->mtx)[0][3] + (30.0f * moa_sinx((6.2831855f * a) / 360.0f));
+                x = (*pose->mtx)[0][3] + (30.0f * moa_sinx((6.2831855f * a) / 360.0f));
                 y = (*pose->mtx)[1][3];
-                hopZ = (*pose->mtx)[2][3];
+                z = (*pose->mtx)[2][3];
                 {
                     f32 b;
                     f32 k;
-                    f32 rand1 = rand() / 32767.0f;
-                    f32 rand2;
-                    jumpSpeed = 2.0f * ((rand1 * mmI(1.0f - 1.0f)) + 1.0f);
-                    rand2 = rand() / 32767.0f;
-                    b = 2.0f * ((rand2 * (k = 0.4f - 0.4f)) + 0.4f);
+                    f32 r1 = rand() / 32767.0f;
+                    f32 r2;
+                    a2 = 2.0f * ((r1 * mmI(1.0f - 1.0f)) + 1.0f);
+                    r2 = rand() / 32767.0f;
+                    b = 2.0f * ((r2 * (k = 0.4f - 0.4f)) + 0.4f);
+
                     // FAKE: block-local copies of the float args (behaviour-identical) put the f1..f5 arg moves ahead of the ?: as in the target
-                    {
-                        f32 x2 = hopX;
-                        f32 y2 = y;
-                        f32 z2 = hopZ;
-                        f32 s2 = jumpSpeed;
-                        f32 g2 = b;
-                        moamoa_jump(pose, m, (d < 100.0f) ? (m->state) : (0), 0, x2, y2, z2, s2, g2);
-                    }
+                    x2 = x;
+                    y2 = y;
+                    z2 = z;
+                    s2 = a2;
+                    g2 = b;
+                    moamoa_jump(pose, m, (d < 100.0f) ? (m->state) : (0), 0, x2, y2, z2, s2, g2);
                 }
                 break;
             }
 
-            case 3:
+            case MOAMOA_STATE_JUMP:
                 (*pose->mtx)[1][3] += m->vy;
                 m->vy -= m->gravity;
                 {
-                    f32 moveRad = (6.2831855f * angleABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], m->target.x, m->target.z)) / 360.0f;
-                    (*pose->mtx)[0][3] += m->speed * moa_sinx(moveRad);
-                    (*pose->mtx)[2][3] = (*pose->mtx)[2][3] + (m->speed * (-moa_cosx(moveRad)));
+                    f32 rad = (6.2831855f * angleABf((*pose->mtx)[0][3], (*pose->mtx)[2][3], m->target.x, m->target.z)) / 360.0f;
+                    (*pose->mtx)[0][3] += m->speed * moa_sinx(rad);
+                    (*pose->mtx)[2][3] = (*pose->mtx)[2][3] + (m->speed * (-moa_cosx(rad)));
                 }
                 if ((--m->jumpTimer) < 0) {
                     (*pose->mtx)[0][3] = m->target.x;
                     (*pose->mtx)[1][3] = m->target.y;
                     (*pose->mtx)[2][3] = m->target.z;
                     m->flags &= ~MOAMOA_FLAG_JUMPING;
-                    pose->flags &= ~0x10;
+                    pose->flags &= ~EXT_POSE_FLAG_SHADOW_POS;
                     m->timer = 0;
                     m->state++;
                 }
                 break;
 
-            case 4:
+            case MOAMOA_STATE_LAND:
                 if ((++m->timer) > 4) {
                     m->state = m->next;
                 }
                 break;
-            case 36:
+            case MOAMOA_STATE_STOMPED:
 
-            case 37:
+            case MOAMOA_STATE_STOMPED_HOP2:
 
-            case 38: {
-                f32 targetZ;
+            case MOAMOA_STATE_STOMPED_HOP3:
                 if (!(m->flags & MOAMOA_FLAG_TO_TARGET)) {
                     tx = mario->position.x;
-                    targetZ = mario->position.z;
+                    tz = mario->position.z;
                 } else {
                     tx = wp->target[i % 3].x;
-                    targetZ = wp->target[i % 3].z;
+                    tz = wp->target[i % 3].z;
                 }
                 {
-                    f32 hopZ;
+                    f32 z;
                     {
-                        f32 hopRad;
+                        f32 rad;
                         f32 k;
                         s = rand() / 32767.0f;
-                        {
-                            f32 hopAngle = angleABf(tx, targetZ, (*pose->mtx)[0][3], (*pose->mtx)[2][3]);
-                            hopAngle += ((s * (k = 45.0f - -45.0f)) + -45.0f);
-                            hopRad = (6.2831855f * hopAngle) / 360.0f;
-                        }
-                        x = (*pose->mtx)[0][3] + (15.0f * moa_sinx(hopRad));
+                        a3 = angleABf(tx, tz, (*pose->mtx)[0][3], (*pose->mtx)[2][3]);
+                        a3 += ((s * (k = 45.0f - -45.0f)) + -45.0f);
+                        rad = (6.2831855f * a3) / 360.0f;
+                        x = (*pose->mtx)[0][3] + (15.0f * moa_sinx(rad));
                         y = (*pose->mtx)[1][3];
-                        hopZ = (*pose->mtx)[2][3] - (15.0f * moa_cosx(hopRad));
+                        z = (*pose->mtx)[2][3] - (15.0f * moa_cosx(rad));
                     }
                     {
                         f32 k;
-                        f32 rand1 = rand() / 32767.0f;
-                        f32 rand2 = rand() / 32767.0f;
+                        f32 r1 = rand() / 32767.0f;
+                        f32 r2 = rand() / 32767.0f;
                         k = 1.0f - 1.0f;
-                        moamoa_jump(pose, m, m->state + 1, 1, x, y, hopZ, (rand1 * k) + 1.0f, (rand2 * k) + 1.0f);
+                        moamoa_jump(pose, m, m->state + 1, 1, x, y, z, (r1 * k) + 1.0f, (r2 * k) + 1.0f);
                     }
                 }
-            } break;
+                break;
 
-            case 39:
+            case MOAMOA_STATE_SHRINK:
                 if ((++m->timer) < 30) {
                     (*pose->mtx)[0][0] *= 0.9f;
                     (*pose->mtx)[1][1] *= 0.9f;
                     (*pose->mtx)[2][2] *= 0.9f;
                 } else {
-                    m->state = 49;
+                    m->state = MOAMOA_STATE_RESPAWN;
                 }
                 break;
-            case 47: {
-                f32 hopRad;
+            case MOAMOA_STATE_KNOCKED_AWAY: {
+                f32 rad;
                 s = rand() / 32767.0f;
                 dist = randf(300.0f, 500.0f);
                 {
                     f32 k;
-                    hopRad = (6.2831855f * ((s * (k = 225.0f - 135.0f)) + 135.0f)) / 360.0f;
+                    rad = (6.2831855f * ((s * (k = 225.0f - 135.0f)) + 135.0f)) / 360.0f;
                 }
-                x = (dist * moa_sinx(hopRad)) + (*pose->mtx)[0][3];
-                y = (*pose->mtx)[2][3] - (dist * moa_cosx(hopRad));
+                x = (dist * moa_sinx(rad)) + (*pose->mtx)[0][3];
+                y = (*pose->mtx)[2][3] - (dist * moa_cosx(rad));
             }
-                {
-                    f32 rand1 = rand() / 32767.0f;
-                    spd = (rand1 * mmI(6.0f - 5.0f)) + 5.0f;
-                }
-                {
-                    f32 rand1 = rand() / 32767.0f;
-                    s = (rand1 * mmI(0.3f - 0.2f)) + 0.2f;
-                }
+                r1 = rand() / 32767.0f;
+                spd = (r1 * mmI(6.0f - 5.0f)) + 5.0f;
+                r1 = rand() / 32767.0f;
+                s = (r1 * mmI(0.3f - 0.2f)) + 0.2f;
                 if (!sndFlag) {
                     Vec pos = {0.0f, 0.0f, 0.0f};
                     pos.x = (*pose->mtx)[0][3];
                     pos.y = (*pose->mtx)[1][3];
                     pos.z = (*pose->mtx)[2][3];
-                    psndSFXOn_3D((const char*)0x6c3, &pos);
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_STG6_MOAMOA_DAMAGED1), &pos);
                     sndFlag = 1;
                 }
                 dist = -100.0f;
-                moamoa_jump(pose, m, 49, 0, x, dist, y, spd, s);
+                moamoa_jump(pose, m, MOAMOA_STATE_RESPAWN, 0, x, dist, y, spd, s);
                 break;
 
-            case 48:
-                if ((--m->jumpTimer) > 0) {
-                    m->target.x += m->vy;
-                    m->target.y += m->speed;
-                    m->target.z += m->gravity;
-                    (*pose->mtx)[0][3] += m->target.x;
-                    (*pose->mtx)[1][3] += m->target.y;
-                    (*pose->mtx)[2][3] += m->target.z;
+            case MOAMOA_STATE_BLOWN_DRIFT:
+                if ((--m->driftTimer) > 0) {
+                    m->driftVel.x += m->driftAccelX;
+                    m->driftVel.y += m->driftAccelY;
+                    m->driftVel.z += m->driftAccelZ;
+                    (*pose->mtx)[0][3] += m->driftVel.x;
+                    (*pose->mtx)[1][3] += m->driftVel.y;
+                    (*pose->mtx)[2][3] += m->driftVel.z;
                 } else {
-                    m->state = 49;
+                    m->state = MOAMOA_STATE_RESPAWN;
                 }
                 break;
-            case 49:
+            case MOAMOA_STATE_RESPAWN:
+
+                // Reuse a randomly chosen on-roof wander/jump member; retry until one is found.
                 PSMTXIdentity(*pose->mtx);
                 {
                     Moamoa* mm;
                     do {
                         idx = rand() % 700;
                         mm = &wp->moa[idx];
-                    } while (((mm->state != 0) && (mm->state != 3)) || (mm->flags & MOAMOA_FLAG_OFF_FLOOR));
+                    } while (((mm->state != MOAMOA_STATE_WANDER) && (mm->state != MOAMOA_STATE_JUMP)) || (mm->flags & MOAMOA_FLAG_OFF_ROOF));
                 }
                 other = extGetPosePtr() + idx;
                 (*pose->mtx)[0][3] = (*other->mtx)[0][3];
                 (*pose->mtx)[1][3] = 215.0f;
                 (*pose->mtx)[2][3] = (*other->mtx)[2][3];
                 m->flags = 0;
-                m->state = 0;
+                m->state = MOAMOA_STATE_WANDER;
                 m->timer = 0;
                 break;
-            case 62:
+            case MOAMOA_STATE_GONE:
                 m->flags |= MOAMOA_FLAG_GONE;
-                pose->flags &= ~1;
-                pose->flags |= 4;
+                pose->flags &= ~EXT_POSE_FLAG_VISIBLE;
+                pose->flags |= EXT_POSE_FLAG_NO_SHADOW;
                 break;
-            case 63: {
-                f32 k;
+            case MOAMOA_STATE_BLOW_START:
                 s = rand() / 32767.0f;
                 spd = randf(2.0f, 3.0f);
                 m->timer = irand(i / 2);
                 rad = (6.2831855f * ((s * (k = 315.0f - 225.0f)) + 225.0f)) / 360.0f;
-            }
                 m->target.x = spd * moa_sinx(rad);
                 m->target.y = randf(1.0f, 2.0f);
                 m->target.z = spd * (-moa_cosx(rad));
                 m->state++;
                 break;
 
-            case 64:
+            case MOAMOA_STATE_BLOW_WAIT:
                 if ((--m->timer) < 0) {
                     m->state++;
                 }
                 break;
-            case 65:
+            case MOAMOA_STATE_BLOW_AWAY:
                 m->target.x *= 1.1f;
                 m->target.y *= 1.02f;
                 m->target.z *= 1.1f;
@@ -1440,13 +1474,13 @@ static void ext_moamoa_main(void) {
                 (*pose->mtx)[2][3] += m->target.z;
                 PSMTXRotRad(rot, 'y', 0.20943952f);
                 PSMTXConcat(*pose->mtx, rot, *pose->mtx);
-                pose->flags &= ~2;
+                pose->flags &= ~EXT_POSE_FLAG_BILLBOARD;
                 if ((*pose->mtx)[0][3] < (-1000.0f)) {
-                    m->state = 62;
+                    m->state = MOAMOA_STATE_GONE;
                 }
                 break;
         }
-        if (!(m->flags & (MOAMOA_FLAG_KNOCKED | MOAMOA_FLAG_BLOWN | MOAMOA_FLAG_FUSING | MOAMOA_FLAG_MERGED))) {
+        if (!(m->flags & (MOAMOA_FLAG_KNOCKED_AWAY | MOAMOA_FLAG_BLOWN | MOAMOA_FLAG_FUSING | MOAMOA_FLAG_FUSED))) {
             f32 nx;
             if ((cam->cameraAt.x - (*pose->mtx)[0][3]) > 250.0f) {
                 nx = 450.0f + (*pose->mtx)[0][3];
@@ -1460,30 +1494,35 @@ static void ext_moamoa_main(void) {
                 }
             }
         }
-        if (!(m->flags & (MOAMOA_FLAG_KNOCKED | MOAMOA_FLAG_BLOWN | MOAMOA_FLAG_FUSING | MOAMOA_FLAG_MERGED))) {
+        if (!(m->flags & (MOAMOA_FLAG_KNOCKED_AWAY | MOAMOA_FLAG_BLOWN | MOAMOA_FLAG_FUSING | MOAMOA_FLAG_FUSED))) {
             if ((*pose->mtx)[0][3] > 100.0f) {
                 {
-                    f32 rnd = rand() / 32767.0f;
-                    (*pose->mtx)[0][3] = 100.0f + ((rnd * mmI(5.0f - 0.0f)) + mmI(0.0f));
-                } // FAKE: hand-inlined randf(0.0f, 5.0f) (same rand() call, same r*5+0 then +c), so the constant is reloaded after the call as in the target
+                    // FAKE: hand-inlined randf(0.0f, 5.0f) (same rand() call, same r*5+0 then +c), so the constant is reloaded after the call as in the target
+                    f32 k;
+                    f32 r = rand() / 32767.0f;
+                    (*pose->mtx)[0][3] = 100.0f + ((r * mmI(5.0f - 0.0f)) + mmI(0.0f));
+                }
             }
             if ((*pose->mtx)[0][3] < -1870.0f) {
                 {
-                    f32 rnd = rand() / 32767.0f;
-                    (*pose->mtx)[0][3] = -1870.0f + ((rnd * mmI(5.0f - 0.0f)) + mmI(0.0f));
+                    f32 k;
+                    f32 r = rand() / 32767.0f;
+                    (*pose->mtx)[0][3] = -1870.0f + ((r * mmI(5.0f - 0.0f)) + mmI(0.0f));
                 }
             }
-            if (!(m->flags & MOAMOA_FLAG_OFF_FLOOR)) {
+            if (!(m->flags & MOAMOA_FLAG_OFF_ROOF)) {
                 if ((*pose->mtx)[2][3] > 45.0f) {
                     {
-                        f32 rnd = rand() / 32767.0f;
-                        (*pose->mtx)[2][3] = 45.0f + ((rnd * mmI(5.0f - 0.0f)) + mmI(0.0f));
+                        f32 k;
+                        f32 r = rand() / 32767.0f;
+                        (*pose->mtx)[2][3] = 45.0f + ((r * mmI(5.0f - 0.0f)) + mmI(0.0f));
                     }
                 }
                 if ((*pose->mtx)[2][3] < -45.0f) {
                     {
-                        f32 rnd = rand() / 32767.0f;
-                        (*pose->mtx)[2][3] = -45.0f + ((rnd * mmI(5.0f - 0.0f)) + mmI(0.0f));
+                        f32 k;
+                        f32 r = rand() / 32767.0f;
+                        (*pose->mtx)[2][3] = -45.0f + ((r * mmI(5.0f - 0.0f)) + mmI(0.0f));
                     }
                 }
             }
@@ -1495,80 +1534,82 @@ static void ext_moamoa_main(void) {
     mario->floorMove.x = 0.0f;
     mario->floorMove.y = 0.0f;
     mario->floorMove.z = 0.0f;
-    if (!(wp->flags & 0x18)) {
 #if VERSION <= VERSION_DEMO_JP
-        // the demo moves Mario himself instead of setting his floor movement
+    if (!(wp->flags & 0x18)) {
         mario->position.x -= cnt / 20.0f;
 #else
+    if (!(wp->flags & (MOAMOA_WORK_FLAG_NO_PUSH | MOAMOA_WORK_FLAG_PARTY_IN_USE))) {
         mario->floorMove.x = (-cnt) / 20.0f;
 #endif
     }
 }
+#pragma opt_dead_assignments reset
 #pragma opt_propagation reset
 #pragma opt_lifetimes reset
-#pragma opt_dead_assignments reset
+
 /**
  * Registers the swarm's draw callbacks each frame (sprites and shadows on the 3D camera and, if enabled,
  * on the offscreen camera).
  */
 static void ext_moamoa_dispent(void) {
-    if (wp->flags & MOAMOA_WORK_ACTIVE) {
-        dispEntry(CAMERA_3D, 0.0f, 1, ext_disp, NULL);
-        dispEntry(CAMERA_3D, 0.0f, 2, ext_shadow_disp, NULL);
+    if (wp->flags & MOAMOA_WORK_FLAG_ACTIVE) {
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, ext_disp, NULL);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, ext_shadow_disp, NULL);
     }
-    if (wp->flags & MOAMOA_WORK_DRAW_OFFSCREEN) {
-        dispEntry(CAMERA_OFFSCREEN2, -5000.0f, 1, ext_disp, NULL);
-        dispEntry(CAMERA_OFFSCREEN2, -5000.0f, 2, ext_shadow_disp, NULL);
+    if (wp->flags & MOAMOA_WORK_FLAG_DRAW_OFFSCREEN) {
+        dispEntry(CAMERA_OFFSCREEN2, -5000.0f, DISP_MODE_ALPHA_TEST, ext_disp, NULL);
+        dispEntry(CAMERA_OFFSCREEN2, -5000.0f, DISP_MODE_XLU, ext_shadow_disp, NULL);
     }
 }
+
 /**
  * Computes the world position of one Moamoa on the giant Smorg's body:
  * a point along the bone chain of its group, interpolated by its order in the chain,
  * taken from the base model's joint positions.
  */
 static void moamoa_joint_position(Moamoa* moa, Vec* out) {
-    NpcEntry* npc = npcNameToPtr((char*)"base");
+    NpcEntry* npc = npcNameToPtr("base");
     AnimationPose* anim = animPoseGetAnimPosePtr(npc->poseId);
     f32 t;
-    Vec* b = anim->worldPositions[0] + wp->chainIdx[moa->group][1];
+    Vec* b = ((Vec*)anim->worldPositions->address) + wp->chainIdx[moa->group][1];
     Vec tmp;
 
+    // order/count stays below 1: order zero is at the child joint, later members approach the parent.
     t = (f32)moa->order / (f32)wp->chainNum[moa->group];
-    PSVECScale(anim->worldPositions[0] + wp->chainIdx[moa->group][0], out, t);
+    PSVECScale(((Vec*)anim->worldPositions->address) + wp->chainIdx[moa->group][0], out, t);
     PSVECScale(b, &tmp, 1.0f - t);
     PSVECAdd(out, &tmp, out);
 }
 
-/** Wheels of the train: each wheel map object (sha_N_M) with how it turns and its speed. */
 static SharinData sharinDt[] = {
-    {((char*)"sha_1_1"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_1_2"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_1_3"), 2, 0, FLOAT(1.0f)},
-    {((char*)"sha_1_4"), 1, 1, FLOAT(1.0f)},
-    {((char*)"sha_1_5"), 1, 1, FLOAT(1.0f)},
-    {((char*)"sha_2_1"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_2_2"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_2_3"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_3_1"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_3_2"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_3_3"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_4_1"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_4_2"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_4_3"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_5_1"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_5_2"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_5_3"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_6_1"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_6_2"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_6_3"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_1_1_c"), 0, 0, FLOAT(-1.0f)},
-    {((char*)"sha_1_2_c"), 0, 0, FLOAT(-1.0f)},
-    {((char*)"sha_1_3_c"), 2, 0, FLOAT(-1.0f)},
-    {((char*)"sha_1_4_c"), 1, 1, FLOAT(-1.0f)},
-    {((char*)"sha_1_5_c"), 1, 1, FLOAT(-1.0f)},
-    {((char*)"sha_6_1_c"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_6_2_c"), 0, 0, FLOAT(1.0f)},
-    {((char*)"sha_6_3_c"), 0, 0, FLOAT(1.0f)},
+    {"sha_1_1", 0, 0, FLOAT(1.0f)},
+    {"sha_1_2", 0, 0, FLOAT(1.0f)},
+    {"sha_1_3", 2, 0, FLOAT(1.0f)},
+    {"sha_1_4", 1, 1, FLOAT(1.0f)},
+    {"sha_1_5", 1, 1, FLOAT(1.0f)},
+    {"sha_2_1", 0, 0, FLOAT(1.0f)},
+    {"sha_2_2", 0, 0, FLOAT(1.0f)},
+    {"sha_2_3", 0, 0, FLOAT(1.0f)},
+    {"sha_3_1", 0, 0, FLOAT(1.0f)},
+    {"sha_3_2", 0, 0, FLOAT(1.0f)},
+    {"sha_3_3", 0, 0, FLOAT(1.0f)},
+    {"sha_4_1", 0, 0, FLOAT(1.0f)},
+    {"sha_4_2", 0, 0, FLOAT(1.0f)},
+    {"sha_4_3", 0, 0, FLOAT(1.0f)},
+    {"sha_5_1", 0, 0, FLOAT(1.0f)},
+    {"sha_5_2", 0, 0, FLOAT(1.0f)},
+    {"sha_5_3", 0, 0, FLOAT(1.0f)},
+    {"sha_6_1", 0, 0, FLOAT(1.0f)},
+    {"sha_6_2", 0, 0, FLOAT(1.0f)},
+    {"sha_6_3", 0, 0, FLOAT(1.0f)},
+    {"sha_1_1_c", 0, 0, FLOAT(-1.0f)},
+    {"sha_1_2_c", 0, 0, FLOAT(-1.0f)},
+    {"sha_1_3_c", 2, 0, FLOAT(-1.0f)},
+    {"sha_1_4_c", 1, 1, FLOAT(-1.0f)},
+    {"sha_1_5_c", 1, 1, FLOAT(-1.0f)},
+    {"sha_6_1_c", 0, 0, FLOAT(1.0f)},
+    {"sha_6_2_c", 0, 0, FLOAT(1.0f)},
+    {"sha_6_3_c", 0, 0, FLOAT(1.0f)},
     {0},
 };
 
@@ -1577,6 +1618,8 @@ static SharinData sharinDt[] = {
  * LW(1) picks the wheel's radius and LW(2) picks which wheel speed, GW(0) or GW(1), drives it;
  * every frame the angle grows by speed over radius and the object is rotated.
  */
+
+// GW(0)/GW(1) supply per-update travel; radius converts it to wheel angle.
 static EVT_BEGIN(evt_sharin_main)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
     SWITCH(LW(1))
@@ -1608,7 +1651,7 @@ static EVT_BEGIN(evt_sharin_main)
         CALL(evt_mapobj_rotate, 1, LW(0), 0, 0, LW(12))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -1630,22 +1673,21 @@ static EVT_BEGIN(evt_sharin)
     RETURN
 EVT_END()
 
-/** Connecting rods (bou_N) of the train, each moved in a circle together with its wheel. */
 static ClankData clankDt[] = {
-    {((char*)"bou_1"), 0, 0, FLOAT(20.0f), FLOAT(1.0f)},
-    {((char*)"bou_2"), 1, 1, FLOAT(16.5f), FLOAT(1.0f)},
-    {((char*)"bou_3"), 0, 0, FLOAT(20.0f), FLOAT(1.0f)},
-    {((char*)"bou_4"), 1, 1, FLOAT(16.5f), FLOAT(1.0f)},
-    {((char*)"bou_1_c"), 0, 0, FLOAT(20.0f), FLOAT(-1.0f)},
-    {((char*)"bou_2_c"), 1, 1, FLOAT(16.5f), FLOAT(-1.0f)},
-    {((char*)"bou_3_c"), 0, 0, FLOAT(20.0f), FLOAT(-1.0f)},
-    {((char*)"bou_4_c"), 1, 1, FLOAT(16.5f), FLOAT(-1.0f)},
+    {"bou_1", 0, 0, FLOAT(20.0f), FLOAT(1.0f)},
+    {"bou_2", 1, 1, FLOAT(16.5f), FLOAT(1.0f)},
+    {"bou_3", 0, 0, FLOAT(20.0f), FLOAT(1.0f)},
+    {"bou_4", 1, 1, FLOAT(16.5f), FLOAT(1.0f)},
+    {"bou_1_c", 0, 0, FLOAT(20.0f), FLOAT(-1.0f)},
+    {"bou_2_c", 1, 1, FLOAT(16.5f), FLOAT(-1.0f)},
+    {"bou_3_c", 0, 0, FLOAT(20.0f), FLOAT(-1.0f)},
+    {"bou_4_c", 1, 1, FLOAT(16.5f), FLOAT(-1.0f)},
     {0},
 };
 
 /**
- * Moves one connecting rod (bou_n) in a small circle every frame according to the wheel speed,
- * so the rods move with the wheels.
+ * Moves one connecting rod (map object LW(0)) round a small circle each frame in step with the wheels,
+ * from the train speed GW(0) or GW(1) (chosen by LW(2)); waits while GSWF_HOM_TRAIN_MOVING is clear.
  */
 static EVT_BEGIN(evt_clank_main)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
@@ -1683,7 +1725,7 @@ static EVT_BEGIN(evt_clank_main)
         CALL(evt_mapobj_trans, 1, LW(0), LW(14), LW(13), FLOAT(0.0f))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -1707,17 +1749,17 @@ static EVT_BEGIN(evt_clank)
 EVT_END()
 
 /**
- * US and PAL wrap the two scrolling layers with float compares over a shorter range
- * and move "yama" with the far layer; JP and the demos wrap them with integer compares
- * and move "yama" with the near one.
+ * Scrolls the scenery by the train's travel GW(0) each frame while GSWF_HOM_TRAIN_MOVING is set: the ground jimen wraps
+ * every 800 units, the mountains iwayama and yama every 2400 (before US: ground and yama every 2400, iwayama every
+ * 7200); spawned by the map's init script.
  */
-#if VERSION >= VERSION_US
 static EVT_BEGIN(evt_bg)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(11), FLOAT(0.0f))
     LOOP(0)
         SET_FLOAT_VALUE(LW(0), GW(0))
         ADD_FLOAT(LW(10), LW(0))
+#if VERSION >= VERSION_US
         IF_FLOAT_GREATER(LW(10), FLOAT(0.0f))
             ADD_FLOAT(LW(10), FLOAT(-800.0f))
         END_IF
@@ -1734,27 +1776,7 @@ static EVT_BEGIN(evt_bg)
         CALL(evt_mapobj_trans, 1, STRING("jimen"), LW(10), 0, 0)
         CALL(evt_mapobj_trans, 1, STRING("iwayama"), LW(11), 0, 0)
         CALL(evt_mapobj_trans, 1, STRING("yama"), LW(11), 0, 0)
-        WAIT_FRAMES(1)
-        LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_LOOP
-    RETURN
-EVT_END()
-/**
- * Scrolls the background layers (ground, mountains) sideways every frame by speeds derived from the train speed
- * GW(0), so the scenery flows past the train.
- */
 #else
-static EVT_BEGIN(evt_bg)
-    SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
-    SET_FLOAT_VALUE(LW(11), FLOAT(0.0f))
-    LOOP(0)
-        SET_FLOAT_VALUE(LW(0), GW(0))
-        ADD_FLOAT(LW(10), LW(0))
         IF_INT_GREATER(LW(10), FLOAT(1200.0f))
             SUBTRACT_FLOAT(LW(10), FLOAT(2400.0f))
         END_IF
@@ -1771,9 +1793,10 @@ static EVT_BEGIN(evt_bg)
         CALL(evt_mapobj_trans, 1, STRING("jimen"), LW(10), 0, 0)
         CALL(evt_mapobj_trans, 1, STRING("yama"), LW(10), 0, 0)
         CALL(evt_mapobj_trans, 1, STRING("iwayama"), LW(11), 0, 0)
+#endif
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -1781,11 +1804,10 @@ static EVT_BEGIN(evt_bg)
     END_LOOP
     RETURN
 EVT_END()
-#endif
 
 /**
- * Rotates the star objects (hosi_left, hosi_center,
- * hosi_right and the _c copies) every frame by the train speed GW(0).
+ * Rotates the star objects (hosi_left, hosi_center, hosi_right and their _c copies) each frame by the
+ * train speed GW(0); waits while GSWF_HOM_TRAIN_MOVING is clear.
  */
 static EVT_BEGIN(evt_hoshi)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
@@ -1808,7 +1830,7 @@ static EVT_BEGIN(evt_hoshi)
         CALL(evt_mapobj_rotate, 0, STRING("hosi_center_c"), LW(10), 0, 0)
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -1821,12 +1843,12 @@ EVT_END()
  * Departure of the train outbound: clears the at-station flags, rings the bell,
  * plays the engine sounds and ramps the wheel speeds GW(0) and GW(1) up to -15 (leftward).
  */
-static EVT_BEGIN(hom_10_evt_resha_start)
+EVT_BEGIN(hom_10_evt_resha_start)
     // The train starts moving: the station flags are cleared and the bell rings.
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
     CALL(evt_mapobj_get_position, STRING("ranpu"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(200)
@@ -1836,8 +1858,9 @@ static EVT_BEGIN(hom_10_evt_resha_start)
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1"), 0)
     END_IF
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
+
         // The engine sounds start and the wheel speeds ramp up to the left (outbound).
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_54_WELCOME_BACK)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG6_54_WELCOME_BACK)
             CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_2"), 0)
         ELSE
             CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_2_2"), 0)
@@ -1869,7 +1892,7 @@ static EVT_BEGIN(hom_10_evt_resha_start)
     END_IF
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-        CALL(evt_sub_intpl_msec_init, 11, 0, -1500, 20000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -1500, 20000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1893,7 +1916,7 @@ static EVT_BEGIN(hom_10_evt_resha_start)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, 0, -1000, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -1000, 1000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1903,7 +1926,7 @@ static EVT_BEGIN(hom_10_evt_resha_start)
         IF_INT_EQUAL(LW(1), 1)
             GOTO(1)
         END_IF
-        CALL(evt_sub_intpl_msec_init, 11, -1000, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -1000, 0, 1000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1925,12 +1948,12 @@ EVT_END()
  * Departure of the train on the return trip: like hom_10_evt_resha_start
  * but ramps the speeds up to +15 (rightward).
  */
-static EVT_BEGIN(hom_10_evt_resha_start2)
+EVT_BEGIN(hom_10_evt_resha_start2)
     // The train starts moving on the return trip: the station flags are cleared.
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
     CALL(evt_mapobj_get_position, STRING("ranpu"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(200)
@@ -1978,7 +2001,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
     END_IF
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-        CALL(evt_sub_intpl_msec_init, 11, 0, 1500, 20000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1500, 20000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1993,6 +2016,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
+
         // The wheel speeds ramp up to the right.
         SPAWN_EVENT_GET_ID(PTR(evt_sub_stopwatch), LW(0))
         LOOP(0)
@@ -2003,7 +2027,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, 0, 1000, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1000, 1000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -2013,7 +2037,7 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
         IF_INT_EQUAL(LW(1), 1)
             GOTO(1)
         END_IF
-        CALL(evt_sub_intpl_msec_init, 11, 1000, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1000, 0, 1000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -2032,27 +2056,28 @@ static EVT_BEGIN(hom_10_evt_resha_start2)
 EVT_END()
 
 /** Puts the train at full outbound speed at once: marks it moving and sets GW(0) and GW(1) to -15. */
-static EVT_BEGIN(hom_10_evt_resha_start3)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+EVT_BEGIN(hom_10_evt_resha_start3)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(-15.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(-15.0f))
     RETURN
 EVT_END()
 
 /** Puts the train at full return speed at once: marks it moving and sets GW(0) and GW(1) to +15. */
-static EVT_BEGIN(hom_10_evt_resha_start4)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+EVT_BEGIN(hom_10_evt_resha_start4)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(15.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(15.0f))
     RETURN
 EVT_END()
 
 /**
- * Arrival braking of the outbound train: plays the stop sounds and slows the wheel speeds to 0,
- * then clears GSWF_TRAIN_MOVING.
+ * Braking of the train: sets GSWF_HOM_TRAIN_MOVING, plays the stop sound for the current map (gor_04, hom_00 or
+ * pik_00), slides the train from 3000 to 0 over 10 seconds, writing each frame's change (new minus old) into the
+ * wheel speeds GW(0)/GW(1), then clears GSWF_HOM_TRAIN_MOVING.
  */
 static EVT_BEGIN(stop_1)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(3000.0f))
@@ -2066,7 +2091,7 @@ static EVT_BEGIN(stop_1)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE2_3"), 0)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 11, 3000, 0, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 3000, 0, 10000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     MULTIPLY_FLOAT(LW(0), FLOAT(1.0f))
@@ -2081,13 +2106,13 @@ static EVT_BEGIN(stop_1)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     RETURN
 EVT_END()
 
 /** Arrival braking of the return-trip train: like stop_1 with the return-trip sound variants. */
 static EVT_BEGIN(stop_2)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(-3000.0f))
@@ -2101,7 +2126,7 @@ static EVT_BEGIN(stop_2)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE2_3"), 0)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 11, -3000, 0, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -3000, 0, 10000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     MULTIPLY_FLOAT(LW(0), FLOAT(1.0f))
@@ -2116,12 +2141,15 @@ static EVT_BEGIN(stop_2)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     RETURN
 EVT_END()
 
-/** Stops the train: runs stop_1 or stop_2 depending on the trip direction (GSWF_TRAIN_RETURN_TRIP). */
-static EVT_BEGIN(hom_10_evt_resha_stop)
+/**
+ * Stops the train: stop_1 in pik_00, stop_2 in gor_04; in hom_00 stop_1, or stop_2 when the train is bound for
+ * Rogueport (GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT).
+ */
+EVT_BEGIN(hom_10_evt_resha_stop)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         SPAWN_EVENT(stop_1)
@@ -2132,7 +2160,7 @@ static EVT_BEGIN(hom_10_evt_resha_stop)
     END_IF
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
             SPAWN_EVENT(stop_1)
         ELSE
             SPAWN_EVENT(stop_2)
@@ -2140,6 +2168,19 @@ static EVT_BEGIN(hom_10_evt_resha_stop)
     END_IF
     RETURN
 EVT_END()
+
+/**
+ * Script helper used by evt_ramp: writes into LW(10) a swaying angle,
+ * 1.8 times the absolute value of GW(0) times sin(retraceCount / 15),
+ * which the script applies to the lamp objects (ranpu, ranpu_c) so they swing with the train.
+ */
+static s32 ramp_r(EventEntry* event, BOOL isFirstCall) {
+    f32 amp = __fabsf(evtGetFloat(event, GW(0)));
+    f32 wave = sin(gp->retraceCount / 15.0f);
+
+    evtSetFloat(event, LW(10), 1.8f * amp * wave);
+    return EVT_RETURN_DONE;
+}
 
 /** Keeps the lamp objects (ranpu, ranpu_c) swinging every frame by the amount from ramp_r while the train is moving. */
 static EVT_BEGIN(evt_ramp)
@@ -2149,7 +2190,7 @@ static EVT_BEGIN(evt_ramp)
         CALL(evt_mapobj_rotate, 1, STRING("ranpu_c"), 0, 0, LW(10))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -2158,29 +2199,32 @@ static EVT_BEGIN(evt_ramp)
     RETURN
 EVT_END()
 
-/**
- * Map object groups of the train (pika_*) that hom_10_evt_resha_sub hooks to the TEV callback resha_tev,
- * which adds environment effect 7 (an env.tpl reflection or shine texture) to them; NULL ends the list.
- */
 static const char* pika_tbl[] = {
     "pika_1_1", "pika_1_2", "pika_1_3", "pika_1_4", "pika_2",
     "pika_3", "pika_4", "pika_5", "pika_6", "pika_1_1_c",
     "pika_1_2_c", "pika_1_3_c", "pika_1_4_c", "pika_6_c", NULL,
 };
 
-/** The shorter list used instead on the map rsh_06_a: the same groups without the *_c ones. */
 static const char* pika_tbl_rsh_06[] = {
     "pika_1_1", "pika_1_2", "pika_1_3", "pika_1_4", "pika_2",
     "pika_3", "pika_4", "pika_5", "pika_6", NULL,
 };
 
 /**
+ * Map TEV callback 1, installed by the map init with evt_map_set_tevcallback: adds environment effect type 7
+ * (envAddTev) to the material of each map object that uses that callback slot.
+ */
+static void resha_tev(MapTevCallbackInfo* info) {
+    envAddTev(7, info);
+}
+
+/**
  * Common start of the train-exterior scenes: marks the train as not moving,
- * zeroes the wheel speeds and spawns the wheel, rod,
- * background and star scripts (plus lamp and sparks on the maps that have them).
+ * zeroes the wheel speeds and spawns the wheel, rod, star and lamp scripts
+ * (the background script only on hom_10, hom_11, hom_12 and rsh_06_a), then puts TEV callback 1 on the pika objects.
  */
 static EVT_BEGIN(hom_10_evt_resha_sub)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SPAWN_EVENT(evt_sharin)
@@ -2215,9 +2259,9 @@ static EVT_BEGIN(hom_10_evt_resha_sub)
         IF_INT_EQUAL(LW(0), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_TEV_CALLBACK(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_DISPLAY_LIST)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_COLOR_STAGE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAP_OBJ_FLAG_DISPLAY_LIST)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_FLAG_NO_COLOR_STAGE)
     END_LOOP
     RETURN
 EVT_END()
@@ -2226,54 +2270,54 @@ EVT_END()
  * Train facing right: runs hom_10_evt_resha_sub and, outside rsh_06_a,
  * hides the rear cars (train_7, train_8) and their couplings.
  */
-static EVT_BEGIN(hom_10_evt_resha_right)
+EVT_BEGIN(hom_10_evt_resha_right)
     CALL_CHILD(hom_10_evt_resha_sub)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_NOT_EQUAL(LW(0), STRING("rsh_06_a"))
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("train_7"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("train_8"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("renketu_6"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("renketu_7"), 1)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_8"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_6"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_7"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
 
 /** Train facing left: runs hom_10_evt_resha_sub and hides the front cars (train_1, train_6) and their couplings. */
-static EVT_BEGIN(hom_10_evt_resha_left)
+EVT_BEGIN(hom_10_evt_resha_left)
     CALL_CHILD(hom_10_evt_resha_sub)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("train_1"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("train_6"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("renketu_1"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("renketu_5"), 1)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_5"), MAP_OBJ_FLAG_HIDDEN)
     RETURN
 EVT_END()
 
 /**
  * Copy of the hom_10 init event (the outside view of the train at the start of the second trip) that this module
- * does not use: the train drives past a fixed camera for about 4 seconds,
+ * does not use: the train drives past while the camera pans for about 4 seconds,
  * then the map changes to rsh_02_a (entrance nidome).
  */
-static EVT_BEGIN(hom_10_init_evt)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH2"))
+EVT_BEGIN(hom_10_init_evt)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH2"))
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_party_cont_onoff, 1, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_party_set_pos, 1, 0, -1000, 0)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         CALL_CHILD(hom_10_evt_resha_right)
         CALL_CHILD(hom_10_evt_resha_start3)
         SET_VALUE(LW(0), 500)
         SET_VALUE(LW(1), -500)
 #if VERSION >= VERSION_JP
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("renketu"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("renketu_1"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("renketu_2"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("renketu_3"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("renketu_4"), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("renketu_5"), 1)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_3"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_4"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_5"), MAP_OBJ_FLAG_HIDDEN)
 #endif
     ELSE
         CALL_CHILD(hom_10_evt_resha_left)
@@ -2283,10 +2327,10 @@ static EVT_BEGIN(hom_10_init_evt)
         CALL(evt_mapobj_trans, 1, STRING("train"), -1500, 0, 0)
     END_IF
     CALL(evt_cam_letter_box_onoff, 1, 1)
-    CALL(evt_cam3d_evt_set, LW(0), 300, 1400, LW(0), 125, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, LW(0), 300, 1400, LW(0), 125, 0, 0, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
-        CALL(evt_seq_wait, 2)
-        CALL(evt_cam3d_evt_set, LW(1), 300, 1400, LW(1), 125, 0, 8000, 0)
+        CALL(evt_seq_wait, SEQ_GAME)
+        CALL(evt_cam3d_evt_set, LW(1), 300, 1400, LW(1), 125, 0, 8000, EASING_LINEAR)
         WAIT_MS(4000)
         CALL(evt_bero_mapchange, STRING("rsh_02_a"), STRING("nidome"))
     END_INLINE_EVENT
@@ -2294,15 +2338,15 @@ static EVT_BEGIN(hom_10_init_evt)
 EVT_END()
 
 /**
- * Starts the train-exterior effects of the roof map using the train scripts shared with hom_10
- * (hom_10_evt_resha_right: wheels, clanking, train cars shown or hidden),
- * marks the train as moving (GSWF_TRAIN_MOVING, JP and later) and sets the wheel rotation speeds GW(0)
- * and GW(1) to -15.
+ * Runs hom_10_evt_resha_right, in JP and later sets GSWF_HOM_TRAIN_MOVING, and sets the wheel speeds GW(0) and
+ * GW(1) to -15.0.
  */
 EVT_BEGIN(evt_resha_init)
+#if VERSION <= VERSION_DEMO_JP
     CALL_CHILD(hom_10_evt_resha_right)
-#if VERSION >= VERSION_JP
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+#else
+    CALL_CHILD(hom_10_evt_resha_right)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
 #endif
     SET_VALUE(GW(0), FLOAT(-15.0f))
     SET_VALUE(GW(1), FLOAT(-15.0f))
@@ -2312,7 +2356,7 @@ EVT_END()
 /** Doors and exits of rsh_06 variant a: w_bero to rsh_05_a. */
 static BeroEntry bero_data_a[] = {
     {
-        ((char*)"w_bero"), // hitName
+        "w_bero", // hitName
         0, // type
         8, // sfxId
         BERO_DIR_E, // directionId
@@ -2323,7 +2367,7 @@ static BeroEntry bero_data_a[] = {
         -1, // caseType
         NULL, // exitEvent
         "rsh_05_a", // nextMapName
-        ((char*)"w_bero"), // nextBeroName
+        "w_bero", // nextBeroName
         1, // enterAnimeType
         1, // exitAnimeType
         0, 0, // enterAnimeArg..exitAnimeArg
@@ -2336,18 +2380,18 @@ static BeroEntry bero_data_a[] = {
  * the swarm effect for 700 sprites and the voice sound, turns the swarm on and runs the giant Smorg cutscene.
  */
 static EVT_BEGIN(evt_moamoa_init)
-    CALL(evt_npc_entry, STRING("moa_a"), STRING("c_n_moa_a"))
-    CALL(evt_npc_entry, STRING("moa_b"), STRING("c_n_moa_b"))
+    CALL(evt_npc_entry, STRING("moa_a"), STRING("c_n_moa_a")) // hidden Smorg model A for the roof swarm sprites
+    CALL(evt_npc_entry, STRING("moa_b"), STRING("c_n_moa_b")) // hidden Smorg model B for the roof swarm sprites
     CALL(evt_npc_set_position, STRING("moa_a"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("moa_b"), 0, -1000, 0)
-    CALL(evt_npc_entry, STRING("kinopio"), STRING("c_kinodebu"))
-    CALL(evt_npc_entry, STRING("cook"), STRING("c_puku_c"))
-    CALL(evt_npc_entry, STRING("powan"), STRING("c_powan"))
-    CALL(evt_npc_entry, STRING("sarary"), STRING("c_smoko"))
-    CALL(evt_npc_entry, STRING("rose"), STRING("c_rose"))
-    CALL(evt_npc_entry, STRING("papa"), STRING("c_papab"))
-    CALL(evt_npc_entry, STRING("mama"), STRING("c_mamab"))
-    CALL(evt_npc_entry, STRING("konari"), STRING("c_konari"))
+    CALL(evt_npc_entry, STRING("kinopio"), STRING("c_kinodebu")) // Heff T., passenger (hidden during the Smorg scene)
+    CALL(evt_npc_entry, STRING("cook"), STRING("c_puku_c")) // Chef Shimi, passenger (hidden during the Smorg scene)
+    CALL(evt_npc_entry, STRING("powan"), STRING("c_powan")) // Pennington, passenger (hidden during the Smorg scene)
+    CALL(evt_npc_entry, STRING("sarary"), STRING("c_smoko")) // the Ratooey businessman (hidden during the Smorg scene)
+    CALL(evt_npc_entry, STRING("rose"), STRING("c_rose")) // Toodles, passenger (hidden during the Smorg scene)
+    CALL(evt_npc_entry, STRING("papa"), STRING("c_papab")) // Goldbob, passenger (hidden during the Smorg scene)
+    CALL(evt_npc_entry, STRING("mama"), STRING("c_mamab")) // Sylvia, passenger (hidden during the Smorg scene)
+    CALL(evt_npc_entry, STRING("konari"), STRING("c_konari")) // Bub, passenger (hidden during the Smorg scene)
     CALL(evt_npc_set_position, STRING("kinopio"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("cook"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("powan"), 0, -1000, 0)
@@ -2356,19 +2400,19 @@ static EVT_BEGIN(evt_moamoa_init)
     CALL(evt_npc_set_position, STRING("papa"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("mama"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("konari"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("kinopio"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("cook"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("powan"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("sarary"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("rose"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("papa"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("mama"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("konari"), NPC_FLAG_NO_DISPLAY)
+    CALL(evt_npc_flag_onoff, 1, STRING("kinopio"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("cook"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("powan"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("sarary"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("rose"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("papa"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("mama"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("konari"), NPC_FLAG_HIDE)
     CALL(evt_snd_sfxon, STRING("SFX_STG6_MOAMOA_VOICE2"), GW(2))
-    CALL(evt_npc_entry, STRING("base"), STRING("c_g_moamoa"))
+    CALL(evt_npc_entry, STRING("base"), STRING("c_g_moamoa")) // the giant Smorg body (the boss NPC)
     CALL(evt_npc_set_position, STRING("base"), 0, -1000, 0)
     CALL(evt_ext_entry, 700, PTR(ext_moamoa_data), PTR(ext_moamoa_init), PTR(ext_moamoa_main), PTR(ext_moamoa_dispent))
-    CALL(evt_moamoa_flag_onoff, 1, 1)
+    CALL(evt_moamoa_flag_onoff, 1, MOAMOA_WORK_FLAG_ACTIVE)
     BEGIN_INLINE_EVENT
         LABEL(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -2382,23 +2426,38 @@ static EVT_BEGIN(evt_moamoa_init)
 EVT_END()
 
 /**
+ * Script helper: blocks until the current animation of the base NPC (the giant Smorg model)
+ * has played through once.
+ */
+static s32 npc_anim_wait(EventEntry* event, BOOL isFirstCall) {
+    NpcEntry* npc = npcNameToPtr("base");
+
+    if (animPoseGetLoopTimes(npc->poseId) >= 1.0f) {
+        return EVT_RETURN_DONE;
+    }
+    return EVT_RETURN_BLOCK;
+}
+
+/**
  * Cutscene and boss fight with the giant Smorg (moamoa) on the roof of the train:
  * the swarm gathers and merges (evt_moamoa_fusion) into a giant body with the passengers' faces (kinds),
- * the camera sweeps over it, Mario and the partner react (stg6_rsh_244 to 246),
+ * the camera sweeps over it, the Smorg cries out (stg6_rsh_244), the partner reacts (stg6_rsh_245) and the
+ * swallowed passengers cry out (stg6_rsh_246_02, 246_03),
  * the battle starts with the "base" NPC and, after the fight, the Smorg falls apart (evt_moamoa_blow),
- * the story advances to STORY_STG6_48_SMORG_MIASMA and the map changes to rsh_01_a.
+ * the story advances to STG6_48_SMORG_MIASMA and the map changes to rsh_01_a.
  */
-EVT_BEGIN(evt_great_moamoa)
+static EVT_BEGIN(evt_great_moamoa)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
-    CALL(evt_moamoa_flag_onoff, 1, 8)
-    CALL(evt_moamoa_flag_onoff, 1, 4)
+    CALL(evt_moamoa_flag_onoff, 1, MOAMOA_WORK_FLAG_NO_PUSH)
+    CALL(evt_moamoa_flag_onoff, 1, MOAMOA_WORK_FLAG_NO_HIT)
+
     // The swarm gathers and merges into the giant Smorg.
     CALL(evt_msg_print, 0, STRING("stg6_rsh_244"), 0, 0)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("group339"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("group340"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("group341"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("senro"), 1)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group339"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group340"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group341"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("senro"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_npc_set_position, STRING("base"), 10, 190, 0)
     CALL(evt_npc_pera_onoff, STRING("base"), 0)
     CALL(evt_npc_set_anim, STRING("base"), STRING("Z_1"))
@@ -2408,13 +2467,13 @@ EVT_BEGIN(evt_great_moamoa)
         WAIT_MS(1000)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_3"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, STRING("eff0"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
-        CALL(evt_eff_fukidashi, 3, STRING("eff1"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING("eff0"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING("eff1"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
         WAIT_MS(1000)
         CALL(evt_mario_set_dir, 90, 200, 0)
         CALL(evt_party_set_dir, 0, 90, 200)
         WAIT_MS(300)
-        CALL(evt_cam3d_evt_set, 10, 349, 516, 10, 253, -25, 3000, 11)
+        CALL(evt_cam3d_evt_set, 10, 349, 516, 10, 253, -25, 3000, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         LOOP(15)
@@ -2425,11 +2484,11 @@ EVT_BEGIN(evt_great_moamoa)
     CALL(evt_moamoa_fusion)
     CALL(evt_snd_sfxoff, GW(2))
     CALL(evt_snd_sfxon, STRING("SFX_STG6_MOAMOA_VOICE2"), GW(2))
-    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("group166"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("group339"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("group340"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("group341"), 1)
-    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("senro"), 1)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group166"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group339"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group340"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group341"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("senro"), MAP_OBJ_FLAG_HIDDEN)
     WAIT_MS(2000)
     CALL(evt_moamoa_kind_onoff, 1, 0)
     BEGIN_INLINE_EVENT
@@ -2444,7 +2503,7 @@ EVT_BEGIN(evt_great_moamoa)
     END_INLINE_EVENT
     CALL(evt_npc_set_anim, STRING("base"), STRING("H_1"))
     CALL(npc_anim_wait)
-    CALL(evt_cam3d_evt_set, 10, 335, 369, 10, 265, -25, 1000, 11)
+    CALL(evt_cam3d_evt_set, 10, 335, 369, 10, 265, -25, 1000, EASING_SINE_IN_OUT)
     CALL(evt_moamoa_kind_onoff, 1, 1)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("base"), LW(0), LW(1), LW(2))
@@ -2459,7 +2518,7 @@ EVT_BEGIN(evt_great_moamoa)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
-        CALL(evt_cam3d_evt_set, 10, 300, 450, 10, 300, -25, 1000, 11)
+        CALL(evt_cam3d_evt_set, 10, 300, 450, 10, 300, -25, 1000, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
     CALL(evt_npc_set_anim, STRING("base"), STRING("H_2"))
     CALL(npc_anim_wait)
@@ -2469,25 +2528,26 @@ EVT_BEGIN(evt_great_moamoa)
     CALL(evt_party_set_pos, 0, -200, 215, -10)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_party_set_dir, 0, 90, 0)
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_set_pose, STRING("M_I_Y"))
-    CALL(evt_cam3d_evt_set, -180, 308, 270, -180, 255, -25, 0, 11)
+    CALL(evt_cam3d_evt_set, -180, 308, 270, -180, 255, -25, 0, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_party_stop, 0)
     WAIT_MS(300)
-    // Mario and his partner react.
+
+    // The partner reacts.
     CALL(evt_msg_print_party, STRING("stg6_rsh_245"))
     WAIT_MS(300)
     CALL(evt_party_run, 0)
-    CALL(evt_cam3d_evt_set, 10, 498, 467, 10, 410, -25, 0, 11)
+    CALL(evt_cam3d_evt_set, 10, 498, 467, 10, 410, -25, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_246_02"), 0, 0)
     WAIT_MS(300)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_246_03"), 0, 0)
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, 1000, 20, 841, -50, 200, -66, 0, 11)
+    CALL(evt_cam3d_evt_set, 1000, 20, 841, -50, 200, -66, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
-    CALL(evt_cam3d_evt_set, -440, 230, 180, 5, 300, -36, 4000, 11)
+    CALL(evt_cam3d_evt_set, -440, 230, 180, 5, 300, -36, 4000, EASING_SINE_IN_OUT)
     WAIT_MS(4000)
     WAIT_MS(500)
     CALL(evt_npc_get_position, STRING("base"), LW(0), LW(1), LW(2))
@@ -2498,28 +2558,29 @@ EVT_BEGIN(evt_great_moamoa)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_246_01"), 0, 0)
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, -100, 488, 1370, -100, 245, -8, 4000, 11)
+    CALL(evt_cam3d_evt_set, -100, 488, 1370, -100, 245, -8, 4000, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
     CALL(evt_snd_sfxoff, GW(2))
     CALL(evt_npc_set_battle_info, STRING("base"), 1)
+
     // The battle with the giant Smorg starts.
     CALL(evt_npc_battle_start, STRING("base"))
     CALL(evt_npc_wait_battle_end)
-    CALL(evt_cam3d_evt_set, -50, 355, 534, -50, 260, -8, 0, 11)
+    CALL(evt_cam3d_evt_set, -50, 355, 534, -50, 260, -8, 0, EASING_SINE_IN_OUT)
     CALL(evt_npc_set_anim, STRING("base"), STRING("Z_1"))
-    CALL(evt_mario_dispflag_onoff, 0, 2)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     ADD(LW(0), -25)
     CALL(evt_party_set_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_npc_flag_onoff, 0, STRING("kinopio"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 0, STRING("cook"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 0, STRING("powan"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 0, STRING("sarary"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 0, STRING("rose"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 0, STRING("papa"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 0, STRING("mama"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 0, STRING("konari"), NPC_FLAG_NO_DISPLAY)
+    CALL(evt_npc_flag_onoff, 0, STRING("kinopio"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 0, STRING("cook"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 0, STRING("powan"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 0, STRING("sarary"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 0, STRING("rose"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 0, STRING("papa"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 0, STRING("mama"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 0, STRING("konari"), NPC_FLAG_HIDE)
     CALL(evt_npc_set_position, STRING("kinopio"), 0, 215, 0)
     CALL(evt_npc_set_position, STRING("cook"), 0, 215, 1)
     CALL(evt_npc_set_position, STRING("sarary"), 0, 215, 2)
@@ -2545,6 +2606,7 @@ EVT_BEGIN(evt_great_moamoa)
     CALL(evt_npc_set_anim, STRING("konari"), STRING("Z_1"))
     CALL(evt_npc_set_anim, STRING("powan"), STRING("Z_1"))
     CALL(evt_moamoa_kind_onoff, 0, 0)
+
     // After the fight the Smorg falls apart.
     CALL(evt_msg_print, 0, STRING("stg6_rsh_247"), 0, STRING("base"))
     WAIT_MS(500)
@@ -2552,7 +2614,7 @@ EVT_BEGIN(evt_great_moamoa)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_MOAMOA_G_ESCAPE1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_moamoa_blow)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, -150, 485, 1469, -150, 225, -8, 4000, 11)
+    CALL(evt_cam3d_evt_set, -150, 485, 1469, -150, 225, -8, 4000, EASING_SINE_IN_OUT)
     WAIT_MS(4000)
     BEGIN_INLINE_EVENT
         LOOP(0)
@@ -2567,24 +2629,25 @@ EVT_BEGIN(evt_great_moamoa)
         END_LOOP
     END_INLINE_EVENT
     WAIT_MS(2000)
+
     // The story advances and the map changes to rsh_01_a.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_48_SMORG_MIASMA)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_48_SMORG_MIASMA)
     CALL(evt_bero_mapchange, STRING("rsh_01_a"), STRING("w_bero"))
     RETURN
 EVT_END()
 
 /** Animation names the Smorg debug leftover cycles through when a button is pressed. */
-const char* pose_name[] = {
+static const char* pose_name[] = {
     "Z_1", "H_1", "S_1", "U_1", "H_2", "S_2", "P_1",
     "S_3",
 };
 
 /**
- * Debug leftover run when map events are skipped (GLOBAL_FLAG_SKIP_MAP_EVENTS):
- * spawns all the Smorg models, the swarm and the pre-merged giant body
- * so it can be inspected without the cutscene.
+ * Debug scene, spawned by rsh_06_a's init in place of the normal set-up when the system flag GW_FLAG_NO_ENTRANCE
+ * is set: the Smorg models, the passenger NPCs (hidden), the giant body (base, c_g_moamoa), the swarm ext (700
+ * entries, ACTIVE and NO_HIT), evt_moamoa_fusion_debug, and A cycles the body's animation through pose_name.
  */
-EVT_BEGIN(moamoa_debug)
+static EVT_BEGIN(moamoa_debug)
     CALL(evt_npc_entry, STRING("moa_a"), STRING("c_n_moa_a"))
     CALL(evt_npc_entry, STRING("moa_b"), STRING("c_n_moa_b"))
     CALL(evt_npc_set_position, STRING("moa_a"), 0, -1000, 0)
@@ -2605,19 +2668,19 @@ EVT_BEGIN(moamoa_debug)
     CALL(evt_npc_set_position, STRING("papa"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("mama"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("konari"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("kinopio"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("cook"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("powan"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("sarary"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("rose"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("papa"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("mama"), NPC_FLAG_NO_DISPLAY)
-    CALL(evt_npc_flag_onoff, 1, STRING("konari"), NPC_FLAG_NO_DISPLAY)
+    CALL(evt_npc_flag_onoff, 1, STRING("kinopio"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("cook"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("powan"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("sarary"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("rose"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("papa"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("mama"), NPC_FLAG_HIDE)
+    CALL(evt_npc_flag_onoff, 1, STRING("konari"), NPC_FLAG_HIDE)
     CALL(evt_npc_entry, STRING("base"), STRING("c_g_moamoa"))
     CALL(evt_npc_set_position, STRING("base"), 0, -1000, 0)
     CALL(evt_ext_entry, 700, PTR(ext_moamoa_data), PTR(ext_moamoa_init), PTR(ext_moamoa_main), PTR(ext_moamoa_dispent))
-    CALL(evt_moamoa_flag_onoff, 1, 1)
-    CALL(evt_moamoa_flag_onoff, 1, 4)
+    CALL(evt_moamoa_flag_onoff, 1, MOAMOA_WORK_FLAG_ACTIVE)
+    CALL(evt_moamoa_flag_onoff, 1, MOAMOA_WORK_FLAG_NO_HIT)
     CALL(evt_moamoa_fusion_debug)
     CALL(evt_npc_set_position, STRING("base"), 10, 190, 0)
     CALL(evt_npc_pera_onoff, STRING("base"), 0)
@@ -2627,7 +2690,7 @@ EVT_BEGIN(moamoa_debug)
         SET_VALUE(LW(0), 0)
         LOOP(0)
             CALL(evt_key_get_buttontrg, 0, LW(10))
-            IF_BITS_SET(LW(10), 256)
+            IF_BITS_SET(LW(10), PAD_BUTTON_A)
                 ADD(LW(0), 1)
                 MODULO(LW(0), 8)
                 SET_VALUE(LW(1), LW(0))
@@ -2648,40 +2711,39 @@ EVT_END()
  * Shared map init for rsh_06 on the first trip:
  * starts the train-exterior scene and the music and ambience for the story stage.
  */
-EVT_BEGIN(rsh_06_init_evt)
+static EVT_BEGIN(rsh_06_init_evt)
     CALL_CHILD(evt_resha_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_02_A_CASE_OF_LOST_STEW, STORY_STG6_04_GRILLING_HEFF_T)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_POWAN1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_22_DOCUMENT, STORY_STG6_26_ZIP_TOAD_CAUGHT)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_POWAN1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_HOM1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-        CASE_BETWEEN(STORY_STG6_44_END_OF_DAY_2, STORY_STG6_45_DAY_3_STARTS)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_46_ENGINEER, STORY_STG6_47_ESCAPING_THE_SMORGS)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_49_POSHLEY_HEIGHTS, STORY_STG6_55_04_BOWSER_RAWK_HAWK)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_02_A_CASE_OF_LOST_STEW, STG6_04_GRILLING_HEFF_T)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_POWAN1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_22_DOCUMENT, STG6_26_ZIP_TOAD_CAUGHT)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_POWAN1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_HOM1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
+        CASE_BETWEEN(STG6_44_END_OF_DAY_2, STG6_45_DAY_3_STARTS)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_46_ENGINEER, STG6_47_ESCAPING_THE_SMORGS)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_49_POSHLEY_HEIGHTS, STG6_55_04_BOWSER_RAWK_HAWK)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         CASE_DEFAULT
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH2"))
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH2"))
     END_SWITCH
     RETURN
 EVT_END()
 
 /**
- * Init script of rsh_06_a (first trip): places Mario at (-500, 250, 0) on the roof,
- * sets the door back to rsh_05, runs the shared init and, before STORY_STG6_48_SMORG_MIASMA,
- * sets up the swarm and the giant Smorg scenes (or the debug scene when map events are skipped).
+ * Init script of rsh_06_a: places Mario, runs the arrival (bero_data_a) and rsh_06_init_evt; with GW_FLAG_NO_ENTRANCE
+ * set it spawns moamoa_debug instead, otherwise before STG6_48_SMORG_MIASMA it sets up the Smorg (evt_moamoa_init).
  */
 EVT_BEGIN(rsh_06_a_init_evt)
     CALL(evt_mario_set_pos, -500, 250, 0)
@@ -2690,11 +2752,11 @@ EVT_BEGIN(rsh_06_a_init_evt)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(rsh_06_init_evt)
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_SET(LW(0), GLOBAL_FLAG_SKIP_MAP_EVENTS)
+    IF_BITS_SET(LW(0), GW_FLAG_NO_ENTRANCE)
         SPAWN_EVENT(moamoa_debug)
         RETURN
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_48_SMORG_MIASMA)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_48_SMORG_MIASMA)
         CALL_CHILD(evt_moamoa_init)
     END_IF
     RETURN
@@ -2706,22 +2768,22 @@ EVT_END()
  */
 EVT_BEGIN(rsh_06_init_evt_nidome)
     CALL_CHILD(evt_resha_init)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_POSHLEY), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_POSHLEY, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_ROGUEPORT), 1)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
+        IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_ROGUEPORT, 1)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
 #if VERSION <= VERSION_DEMO_JP
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR5"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR5"))
 #else
-            CALL(evt_snd_envoff, PSND_FADE_OUT)
+            CALL(evt_snd_envoff, PSND_FADEOUT)
 #endif
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         ELSE
-            CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH2"))
+            CALL(evt_snd_bgmoff, PSND_FADEOUT)
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH2"))
         END_IF
     END_IF
     RETURN
@@ -2735,35 +2797,3 @@ EVT_BEGIN(rsh_06_a_init_evt_nidome)
     CALL_CHILD(rsh_06_init_evt_nidome)
     RETURN
 EVT_END()
-
-/**
- * Script helper used by evt_ramp: writes into LW(10) a swaying angle,
- * 1.8 times the absolute value of GW(0) times sin(retraceCount / 15),
- * which the script applies to the lamp objects (ranpu, ranpu_c) so they swing with the train.
- */
-static s32 ramp_r(EventEntry* event, BOOL isFirstCall) {
-    f32 amp = __fabsf(evtGetFloat(event, GW(0)));
-    f32 wave = sin(gp->retraceCount / 15.0f);
-
-    evtSetFloat(event, LW(10), 1.8f * amp * wave);
-    return EVT_RETURN_DONE;
-}
-/**
- * Map TEV callback 1, installed by the map init with evt_map_set_tevcallback: adds environment effect type 7
- * (envAddTev) to the material of each map object that uses that callback slot.
- */
-static void resha_tev(MapTevCallbackInfo* info) {
-    envAddTev(7, info);
-}
-/**
- * Script helper: blocks until the current animation of the base NPC (the giant Smorg model)
- * has played through once.
- */
-static s32 npc_anim_wait(EventEntry* event, BOOL isFirstCall) {
-    NpcEntry* npc = npcNameToPtr((char*)"base");
-
-    if (animPoseGetLoopTimes(npc->poseId) >= 1.0f) {
-        return EVT_RETURN_DONE;
-    }
-    return EVT_RETURN_BLOCK;
-}

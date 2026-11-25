@@ -1,5 +1,6 @@
 // las_20 (ラストダンジョン, Palace of Shadow): the room of star switches (hosi).
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -12,19 +13,39 @@
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_story.h"
 #include "driver/mapdrv.h"
-#include "driver/camdrv.h"
+#include "pmario_sound.h"
 
 static USER_FUNC(get_hosi_name);
 
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
 static BeroEntry bero_entry_data[4];
 static const char* haguruma_hontai[14];
 static const char* haguruma_hontai2[6];
 static const char* haguruma_kage[12];
 static const char* haguruma_kage2[5];
-const char* hosi_name[14];
+static EvtWord haguruma_evt[194];
+static EvtWord dai_evt[13];
+static const char* hosi_name[14];
+static EvtWord hosi_sw_check[303];
+static EvtWord hosi_onoff[69];
+static EvtWord hosi_02_sw_evt[15];
+static EvtWord hosi_03_sw_evt[15];
+static EvtWord hosi_04_sw_evt[15];
+static EvtWord hosi_05_sw_evt[15];
+static EvtWord hosi_06_sw_evt[15];
+static EvtWord hosi_07_sw_evt[15];
+static EvtWord hosi_08_sw_evt[15];
+static EvtWord hosi_init[175];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_20_init_evt[];
+#else
+EvtWord las_20_init_evt[103];
+#endif
 
 /**
  * Door animation script (closing) for the east door, used as the enter/exit animation of this room's bero entry.
@@ -241,8 +262,7 @@ static EVT_BEGIN(dai_evt)
     RETURN
 EVT_END()
 
-/** The seven stars of the puzzle as pairs of lit and unlit models (S_hosi_NNa and S_hosi_NNb). */
-const char* hosi_name[] = {
+static const char* hosi_name[] = {
     "S_hosi_02a",
     "S_hosi_02b",
     "S_hosi_03a",
@@ -260,57 +280,59 @@ const char* hosi_name[] = {
 };
 
 /**
- * Event script: after each star switch press, checks whether the seven stars match the solution (switches 1, 3,
- * 4 and 6 on, the rest off, as kept in LSWF(1..7)).
+ * Event script: after each star switch press, checks whether the seven stars match the solution (stars 2, 4, 5
+ * and 7 lit, that is the 1st, 3rd, 4th and 6th switch on, the rest off, as kept in LSWF(1..7)).
  * When solved it flashes the stars in a running light, shakes the camera,
- * removes the switches and sets the story to STORY_STG8_11_STAR_PUZZLE.
+ * removes the switches and sets the story to STG8_11_STAR_PUZZLE.
  */
-EVT_BEGIN(hosi_sw_check)
+static EVT_BEGIN(hosi_sw_check)
     SET_VALUE(LW(0), 0)
-    // Compare the seven star switches against the solution (1, 3, 4 and 6 on, the others off).
-    IF_INT_EQUAL(LSWF(1), 1)
+
+    // Compare the seven star switches against the solution (stars 2, 4, 5 and 7 lit, the others off).
+    IF_INT_EQUAL(LSWF_LAS_20_STAR_02_LIT, 1)
         ADD(LW(0), 1)
     END_IF
-    IF_INT_EQUAL(LSWF(2), 0)
+    IF_INT_EQUAL(LSWF_LAS_20_STAR_03_LIT, 0)
         ADD(LW(0), 1)
     END_IF
-    IF_INT_EQUAL(LSWF(3), 1)
+    IF_INT_EQUAL(LSWF_LAS_20_STAR_04_LIT, 1)
         ADD(LW(0), 1)
     END_IF
-    IF_INT_EQUAL(LSWF(4), 1)
+    IF_INT_EQUAL(LSWF_LAS_20_STAR_05_LIT, 1)
         ADD(LW(0), 1)
     END_IF
-    IF_INT_EQUAL(LSWF(5), 0)
+    IF_INT_EQUAL(LSWF_LAS_20_STAR_06_LIT, 0)
         ADD(LW(0), 1)
     END_IF
-    IF_INT_EQUAL(LSWF(6), 1)
+    IF_INT_EQUAL(LSWF_LAS_20_STAR_07_LIT, 1)
         ADD(LW(0), 1)
     END_IF
-    IF_INT_EQUAL(LSWF(7), 0)
+    IF_INT_EQUAL(LSWF_LAS_20_STAR_08_LIT, 0)
         ADD(LW(0), 1)
     END_IF
+
     // Solved: controls off and the camera looks up at the stars.
     IF_INT_EQUAL(LW(0), 7)
         CALL(evt_mario_key_onoff, 0)
         WAIT_MS(1000)
-        CALL(evt_cam3d_evt_set, -289, 112, 1038, -289, -43, -63, 800, 11)
+        CALL(evt_cam3d_evt_set, -289, 112, 1038, -289, -43, -63, 800, EASING_SINE_IN_OUT)
         WAIT_MS(800)
         SET_VALUE(LW(0), 0)
         LOOP(7)
             CALL(get_hosi_name, LW(0), LW(1), LW(2))
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(2), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(2), MAP_OBJ_FLAG_HIDDEN)
             ADD(LW(0), 1)
         END_LOOP
         SET_VALUE(LW(0), 0)
         SET_VALUE(LW(1), 6)
         LOOP(50)
             CALL(get_hosi_name, LW(0), LW(2), LW(3))
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(2), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(3), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(2), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(3), MAP_OBJ_FLAG_HIDDEN)
             CALL(get_hosi_name, LW(1), LW(2), LW(3))
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(3), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(3), MAP_OBJ_FLAG_HIDDEN)
             WAIT_MS(50)
             SET_VALUE(LW(1), LW(0))
             ADD(LW(0), 1)
@@ -321,28 +343,29 @@ EVT_BEGIN(hosi_sw_check)
                 BREAK_LOOP
             END_IF
             CALL(get_hosi_name, LW(0), LW(2), LW(3))
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(2), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(3), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(2), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(3), MAP_OBJ_FLAG_HIDDEN)
             CALL(get_hosi_name, LW(1), LW(2), LW(3))
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(3), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(3), MAP_OBJ_FLAG_HIDDEN)
             WAIT_MS(50)
             SET_VALUE(LW(1), LW(0))
             ADD(LW(0), 1)
             MODULO(LW(0), 7)
         END_LOOP
         CALL(get_hosi_name, LW(1), LW(2), LW(3))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(3), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(3), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(200)
         SET_VALUE(LW(0), 0)
         LOOP(7)
             CALL(get_hosi_name, LW(0), LW(1), LW(2))
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(2), MAP_OBJ_FLAG_HIDDEN)
             ADD(LW(0), 1)
         END_LOOP
-        // The stars flash in a running light, the room quakes, and the switches vanish.
+
+        // After the running light all stars stay lit: a sound plays, the room quakes, and the switches vanish.
         CALL(evt_snd_sfxon, STRING("SFX_STG8_STAR_LIGHTUP2"), 0)
         WAIT_MS(100)
         CALL(evt_snd_sfxon, STRING("SFX_STG8_QUAKE3"), LW(10))
@@ -355,9 +378,10 @@ EVT_BEGIN(hosi_sw_check)
         CALL(evt_mobj_delete, STRING("hosi_06_sw"))
         CALL(evt_mobj_delete, STRING("hosi_07_sw"))
         CALL(evt_mobj_delete, STRING("hosi_08_sw"))
+
         // The story advances to the solved star puzzle and Mario regains control.
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_11_STAR_PUZZLE)
-        CALL(evt_cam3d_evt_off, 800, 11)
+        SET_VALUE(GSW_STORY_PROGRESS, STG8_11_STAR_PUZZLE)
+        CALL(evt_cam3d_evt_off, 800, EASING_SINE_IN_OUT)
         CALL(evt_mario_key_onoff, 1)
     END_IF
     RETURN
@@ -367,11 +391,11 @@ EVT_END()
  * Event script: toggles one star (LW(0) lit model, LW(1) dark model, LW(2) the switch state flag in LSWF):
  * lighting it plays a stardust effect and sound, switching it off hides the lit model again.
  */
-EVT_BEGIN(hosi_onoff)
+static EVT_BEGIN(hosi_onoff)
     GET_INT_INDEXED(LW(2), LW(3))
     IF_INT_EQUAL(LW(3), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
         SET_INT_INDEXED(LW(2), 1)
         CALL(evt_mapobj_get_position, LW(0), LW(3), LW(4), LW(5))
 #if VERSION <= VERSION_DEMO_JP
@@ -381,105 +405,104 @@ EVT_BEGIN(hosi_onoff)
 #endif
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_STAR_LIGHTUP1"), LW(3), LW(4), LW(5), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAP_OBJ_FLAG_HIDDEN)
         SET_INT_INDEXED(LW(2), 0)
     END_IF
     RETURN
 EVT_END()
 
-/** Event script: red switch for star 2. Toggles the star (LSWF(1)) and then checks the puzzle. */
-EVT_BEGIN(hosi_02_sw_evt)
+/** Event script: red switch for star 2. Toggles the star (LSWF_LAS_20_STAR_02_LIT) and then checks the puzzle. */
+static EVT_BEGIN(hosi_02_sw_evt)
     SET_VALUE(LW(0), STRING("S_hosi_02a"))
     SET_VALUE(LW(1), STRING("S_hosi_02b"))
-    SET_RAW_VALUE(LW(2), LSWF(1))
+    SET_RAW_VALUE(LW(2), LSWF_LAS_20_STAR_02_LIT)
     CALL_CHILD(hosi_onoff)
     CALL_CHILD(hosi_sw_check)
     RETURN
 EVT_END()
 
-/** Event script: red switch for star 3. Toggles the star (LSWF(2)) and then checks the puzzle. */
-EVT_BEGIN(hosi_03_sw_evt)
+/** Event script: red switch for star 3. Toggles the star (LSWF_LAS_20_STAR_03_LIT) and then checks the puzzle. */
+static EVT_BEGIN(hosi_03_sw_evt)
     SET_VALUE(LW(0), STRING("S_hosi_03a"))
     SET_VALUE(LW(1), STRING("S_hosi_03b"))
-    SET_RAW_VALUE(LW(2), LSWF(2))
+    SET_RAW_VALUE(LW(2), LSWF_LAS_20_STAR_03_LIT)
     CALL_CHILD(hosi_onoff)
     CALL_CHILD(hosi_sw_check)
     RETURN
 EVT_END()
 
-/** Event script: red switch for star 4. Toggles the star (LSWF(3)) and then checks the puzzle. */
-EVT_BEGIN(hosi_04_sw_evt)
+/** Event script: red switch for star 4. Toggles the star (LSWF_LAS_20_STAR_04_LIT) and then checks the puzzle. */
+static EVT_BEGIN(hosi_04_sw_evt)
     SET_VALUE(LW(0), STRING("S_hosi_04a"))
     SET_VALUE(LW(1), STRING("S_hosi_04b"))
-    SET_RAW_VALUE(LW(2), LSWF(3))
+    SET_RAW_VALUE(LW(2), LSWF_LAS_20_STAR_04_LIT)
     CALL_CHILD(hosi_onoff)
     CALL_CHILD(hosi_sw_check)
     RETURN
 EVT_END()
 
-/** Event script: red switch for star 5. Toggles the star (LSWF(4)) and then checks the puzzle. */
-EVT_BEGIN(hosi_05_sw_evt)
+/** Event script: red switch for star 5. Toggles the star (LSWF_LAS_20_STAR_05_LIT) and then checks the puzzle. */
+static EVT_BEGIN(hosi_05_sw_evt)
     SET_VALUE(LW(0), STRING("S_hosi_05a"))
     SET_VALUE(LW(1), STRING("S_hosi_05b"))
-    SET_RAW_VALUE(LW(2), LSWF(4))
+    SET_RAW_VALUE(LW(2), LSWF_LAS_20_STAR_05_LIT)
     CALL_CHILD(hosi_onoff)
     CALL_CHILD(hosi_sw_check)
     RETURN
 EVT_END()
 
-/** Event script: red switch for star 6. Toggles the star (LSWF(5)) and then checks the puzzle. */
-EVT_BEGIN(hosi_06_sw_evt)
+/** Event script: red switch for star 6. Toggles the star (LSWF_LAS_20_STAR_06_LIT) and then checks the puzzle. */
+static EVT_BEGIN(hosi_06_sw_evt)
     SET_VALUE(LW(0), STRING("S_hosi_06a"))
     SET_VALUE(LW(1), STRING("S_hosi_06b"))
-    SET_RAW_VALUE(LW(2), LSWF(5))
+    SET_RAW_VALUE(LW(2), LSWF_LAS_20_STAR_06_LIT)
     CALL_CHILD(hosi_onoff)
     CALL_CHILD(hosi_sw_check)
     RETURN
 EVT_END()
 
-/** Event script: red switch for star 7. Toggles the star (LSWF(6)) and then checks the puzzle. */
-EVT_BEGIN(hosi_07_sw_evt)
+/** Event script: red switch for star 7. Toggles the star (LSWF_LAS_20_STAR_07_LIT) and then checks the puzzle. */
+static EVT_BEGIN(hosi_07_sw_evt)
     SET_VALUE(LW(0), STRING("S_hosi_07a"))
     SET_VALUE(LW(1), STRING("S_hosi_07b"))
-    SET_RAW_VALUE(LW(2), LSWF(6))
+    SET_RAW_VALUE(LW(2), LSWF_LAS_20_STAR_07_LIT)
     CALL_CHILD(hosi_onoff)
     CALL_CHILD(hosi_sw_check)
     RETURN
 EVT_END()
 
-/** Event script: red switch for star 8. Toggles the star (LSWF(7)) and then checks the puzzle. */
-EVT_BEGIN(hosi_08_sw_evt)
+/** Event script: red switch for star 8. Toggles the star (LSWF_LAS_20_STAR_08_LIT) and then checks the puzzle. */
+static EVT_BEGIN(hosi_08_sw_evt)
     SET_VALUE(LW(0), STRING("S_hosi_08a"))
     SET_VALUE(LW(1), STRING("S_hosi_08b"))
-    SET_RAW_VALUE(LW(2), LSWF(7))
+    SET_RAW_VALUE(LW(2), LSWF_LAS_20_STAR_08_LIT)
     CALL_CHILD(hosi_onoff)
     CALL_CHILD(hosi_sw_check)
     RETURN
 EVT_END()
 
 /**
- * Event script: sets up the star puzzle.
- * Before STORY_STG8_11_STAR_PUZZLE it hides the lit stars,
- * clears the seven switch flags and creates seven red floating switches;
- * afterwards it shows the lit stars permanently.
+ * Star puzzle set-up (spawned by the map init): before STG8_11_STAR_PUZZLE hides the star groups S_hosi_02a to 08a,
+ * clears LSWF_LAS_20_STAR_02_LIT to 08_LIT and places the seven red float switches (hosi_02_sw_evt to hosi_08_sw_evt);
+ * from then hides the S_hosi_02b to 08b groups instead.
  */
-EVT_BEGIN(hosi_init)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_11_STAR_PUZZLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_02a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_03a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_04a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_05a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_06a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_07a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_08a"), MAPOBJ_FLAG_HIDE)
-        SET_VALUE(LSWF(1), 0)
-        SET_VALUE(LSWF(2), 0)
-        SET_VALUE(LSWF(3), 0)
-        SET_VALUE(LSWF(4), 0)
-        SET_VALUE(LSWF(5), 0)
-        SET_VALUE(LSWF(6), 0)
-        SET_VALUE(LSWF(7), 0)
+static EVT_BEGIN(hosi_init)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_11_STAR_PUZZLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_02a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_03a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_04a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_05a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_06a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_07a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_08a"), MAP_OBJ_FLAG_HIDDEN)
+        SET_VALUE(LSWF_LAS_20_STAR_02_LIT, 0)
+        SET_VALUE(LSWF_LAS_20_STAR_03_LIT, 0)
+        SET_VALUE(LSWF_LAS_20_STAR_04_LIT, 0)
+        SET_VALUE(LSWF_LAS_20_STAR_05_LIT, 0)
+        SET_VALUE(LSWF_LAS_20_STAR_06_LIT, 0)
+        SET_VALUE(LSWF_LAS_20_STAR_07_LIT, 0)
+        SET_VALUE(LSWF_LAS_20_STAR_08_LIT, 0)
         CALL(evt_mobj_floatswitch_red, 0, STRING("hosi_02_sw"), -545, -50, -120, PTR(hosi_02_sw_evt), 0)
         CALL(evt_mobj_floatswitch_red, 0, STRING("hosi_03_sw"), -460, -50, -120, PTR(hosi_03_sw_evt), 0)
         CALL(evt_mobj_floatswitch_red, 0, STRING("hosi_04_sw"), -376, -50, -120, PTR(hosi_04_sw_evt), 0)
@@ -488,13 +511,13 @@ EVT_BEGIN(hosi_init)
         CALL(evt_mobj_floatswitch_red, 0, STRING("hosi_07_sw"), -121, -50, -120, PTR(hosi_07_sw_evt), 0)
         CALL(evt_mobj_floatswitch_red, 0, STRING("hosi_08_sw"), -37, -50, -120, PTR(hosi_08_sw_evt), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_02b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_03b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_04b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_05b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_06b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_07b"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_08b"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_02b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_03b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_04b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_05b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_06b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_07b"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hosi_08b"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
@@ -502,38 +525,35 @@ EVT_END()
 /**
  * Map init script for las_20, the star switch room of the Palace:
  * music and ambience, the door, the gear animation, the moving platform with its red switch, the star puzzle,
- * and two hidden blocks with a Repel Cape and a Life Shroom.
+ * and two ? blocks with a Repel Cape and a Life Shroom.
  */
 EVT_BEGIN(las_20_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST3"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS5"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST3"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS5"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_01a"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_08a"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_09a"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_12a"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_19a"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_01a"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_08a"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_09a"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_12a"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_19a"), MAP_OBJ_FLAG_CLIP)
     SPAWN_EVENT(haguruma_evt)
-    CALL(evt_map_playanim, STRING("kusari"), 1, 0)
+    CALL(evt_map_playanim, STRING("kusari"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_hit_bind_mapobj, STRING("A_move_dai"), STRING("S_move_dai"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_move_dai"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_move_dai"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_move_dai"), 0, 0)
     CALL(evt_mobj_switch_red, 0, STRING("dai_switch"), -250, -290, 100, PTR(dai_evt), 0)
     SPAWN_EVENT(hosi_init)
-    CALL(evt_mobj_badgeblk, STRING("mobj_item00"), 295, -440, -15, ITEM_REPEL_CAPE, 0, GSWF(GSWF_LAS20_REPEL_CAPE_BLOCK_HIT), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_item01"), 640, -320, -135, ITEM_LIFE_SHROOM, 0, GSWF(GSWF_LAS20_LIFE_SHROOM_BLOCK_HIT), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_item00"), 295, -440, -15, ITEM_REPEL_CAPE, 0, GSWF_LAS_20_REPEL_CAPE_BLOCK, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_item01"), 640, -320, -135, ITEM_LIFE_SHROOM, 0, GSWF_LAS_20_LIFE_SHROOM_BLOCK, 0)
     RETURN
 EVT_END()
 
-/**
- * Script helper: for star index args[0] returns the lit-star map object name in args[1]
- * and the dark-star name in args[2].
- */
+/** Script helper: returns the two names of hosi_name pair args[0] in args[1] and args[2]. */
 static USER_FUNC(get_hosi_name) {
     EvtWord* args = event->args;
     s32 idx = evtGetValue(event, args[0]);

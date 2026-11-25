@@ -1,13 +1,13 @@
+/* Word copies behind memcpy/memmove (mem.c) for forward and reverse direction, with an aligned or an unaligned
+   source. The destination is first aligned with byte copies; an unaligned source is then read a word at a time
+   and each destination word is merged from two source words by shifts. cps/cpd/lps/lpd reuse the src and dst
+   parameters through casts used as lvalues (an MWCC extension). */
 #define cps ((unsigned char*)src)
 #define cpd ((unsigned char*)dst)
 #define lps ((unsigned long*)src)
 #define lpd ((unsigned long*)dst)
 #define deref_auto_inc(p) *++(p)
 
-/**
- * Copies n bytes backwards (high to low addresses) a word at a time when source
- * and destination differ in alignment, shifting words together.
- */
 void __copy_longs_rev_unaligned(void* dst, const void* src, unsigned long n) {
     unsigned long i, v1, v2;
     unsigned int src_offset, left_shift, right_shift;
@@ -60,10 +60,6 @@ void __copy_longs_rev_unaligned(void* dst, const void* src, unsigned long n) {
     return;
 }
 
-/**
- * Copies n bytes forwards a word at a time when source and destination differ in alignment,
- * shifting words together.
- */
 void __copy_longs_unaligned(void* dst, const void* src, unsigned long n) {
     unsigned long i, v1, v2;
     unsigned int src_offset, left_shift, right_shift;
@@ -122,10 +118,6 @@ void __copy_longs_unaligned(void* dst, const void* src, unsigned long n) {
     return;
 }
 
-/**
- * Copies n bytes backwards a word at a time when source
- * and destination share the same alignment (used by memmove for overlapping copies).
- */
 void __copy_longs_rev_aligned(void* dst, const void* src, unsigned long n) {
     unsigned long i;
 
@@ -173,7 +165,6 @@ void __copy_longs_rev_aligned(void* dst, const void* src, unsigned long n) {
     return;
 }
 
-/** Copies n bytes forwards a word at a time when source and destination share the same alignment (memcpy fast path). */
 void __copy_longs_aligned(void* dst, const void* src, unsigned long n) {
     unsigned long i;
 

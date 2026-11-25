@@ -1,5 +1,7 @@
-// The Great Tree (mri, mori: forest): battle database: the enemy groups (BattleSetup) and stages of the tree's rooms
+// The Great Tree (mri): battle database: the enemy groups (BattleSetup) and stages of the tree's rooms
 // and of the Magnus von Grapple boss fight.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "battle/battle_weapon_power.h"
@@ -9,121 +11,120 @@
 #include "battle/battle_stage_object.h"
 #include "driver/npcdrv.h"
 #include "evt/evt_map.h"
-#include "version.h"
 #include "driver/mapdrv.h"
 
 extern BattleUnitKind unit_barriern;
 
-BattleStageObjectData mri_btlobject_data[43];
-BattleStageData mri_btlstage_data[4];
-BattleUnitSetup btlparty_mri_mri_01_01[2];
-BattleGroupSetup btlgrp_mri_mri_01_01;
-BattleUnitSetup btlparty_mri_mri_04_01[1];
-BattleGroupSetup btlgrp_mri_mri_04_01;
-BattleUnitSetup btlparty_mri_mri_05_01[2];
-BattleGroupSetup btlgrp_mri_mri_05_01;
-BattleUnitSetup btlparty_mri_mri_06_2F_02[3];
-BattleGroupSetup btlgrp_mri_mri_06_2F_02;
-BattleUnitSetup btlparty_mri_mri_06_2F_03[4];
-BattleGroupSetup btlgrp_mri_mri_06_2F_03;
-BattleUnitSetup btlparty_mri_mri_12_01[2];
-BattleGroupSetup btlgrp_mri_mri_12_01;
-BattleUnitSetup btlparty_mri_mri_12_02[4];
-BattleGroupSetup btlgrp_mri_mri_12_02;
-BattleUnitSetup btlparty_mri_mri_15_01[2];
-BattleGroupSetup btlgrp_mri_mri_15_01;
-BattleUnitSetup btlparty_mri_mri_17_01[2];
-BattleGroupSetup btlgrp_mri_mri_17_01;
-BattleUnitSetup btlparty_mri_mri_18_02[3];
-BattleGroupSetup btlgrp_mri_mri_18_02;
-BattleUnitSetup btlparty_mri_mri_18_03[3];
-BattleGroupSetup btlgrp_mri_mri_18_03;
-BattleUnitSetup btlparty_mri_mri_19_01[2];
-BattleGroupSetup btlgrp_mri_mri_19_01;
-BattleUnitSetup btlparty_mri_mri_19_02[2];
-BattleGroupSetup btlgrp_mri_mri_19_02;
-BattleUnitSetup btlparty_mri_mri_19_04[4];
-BattleGroupSetup btlgrp_mri_mri_19_04;
-BattleUnitSetup btlparty_mri_mri_20_02[2];
-BattleGroupSetup btlgrp_mri_mri_20_02;
-BattleUnitSetup btlparty_mri_mri_20_03[3];
-BattleGroupSetup btlgrp_mri_mri_20_03;
-BattleUnitSetup btlparty_mri_mri_mb[1];
-BattleGroupSetup btlgrp_mri_mri_mb;
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test1_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test2_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test3_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test4_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_01_01_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_04_01_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_05_01_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_02_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_03_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_12_01_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_12_02_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_15_01_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_17_01_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_18_02_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_18_03_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_19_01_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_19_02_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_19_04_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_20_02_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_20_03_off[2];
-NpcBattleSelect btlgrpsel_mri_btlno_mri_mb_off[2];
+static BattleStageObjectData mri_btlobject_data[43];
+static BattleStageData mri_btlstage_data[4];
+static BattleUnitSetup btlparty_mri_mri_01_01[2];
+static BattleGroupSetup btlgrp_mri_mri_01_01;
+static BattleUnitSetup btlparty_mri_mri_04_01[1];
+static BattleGroupSetup btlgrp_mri_mri_04_01;
+static BattleUnitSetup btlparty_mri_mri_05_01[2];
+static BattleGroupSetup btlgrp_mri_mri_05_01;
+static BattleUnitSetup btlparty_mri_mri_06_2F_02[3];
+static BattleGroupSetup btlgrp_mri_mri_06_2F_02;
+static BattleUnitSetup btlparty_mri_mri_06_2F_03[4];
+static BattleGroupSetup btlgrp_mri_mri_06_2F_03;
+static BattleUnitSetup btlparty_mri_mri_12_01[2];
+static BattleGroupSetup btlgrp_mri_mri_12_01;
+static BattleUnitSetup btlparty_mri_mri_12_02[4];
+static BattleGroupSetup btlgrp_mri_mri_12_02;
+static BattleUnitSetup btlparty_mri_mri_15_01[2];
+static BattleGroupSetup btlgrp_mri_mri_15_01;
+static BattleUnitSetup btlparty_mri_mri_17_01[2];
+static BattleGroupSetup btlgrp_mri_mri_17_01;
+static BattleUnitSetup btlparty_mri_mri_18_02[3];
+static BattleGroupSetup btlgrp_mri_mri_18_02;
+static BattleUnitSetup btlparty_mri_mri_18_03[3];
+static BattleGroupSetup btlgrp_mri_mri_18_03;
+static BattleUnitSetup btlparty_mri_mri_19_01[2];
+static BattleGroupSetup btlgrp_mri_mri_19_01;
+static BattleUnitSetup btlparty_mri_mri_19_02[2];
+static BattleGroupSetup btlgrp_mri_mri_19_02;
+static BattleUnitSetup btlparty_mri_mri_19_04[4];
+static BattleGroupSetup btlgrp_mri_mri_19_04;
+static BattleUnitSetup btlparty_mri_mri_20_02[2];
+static BattleGroupSetup btlgrp_mri_mri_20_02;
+static BattleUnitSetup btlparty_mri_mri_20_03[3];
+static BattleGroupSetup btlgrp_mri_mri_20_03;
+static BattleUnitSetup btlparty_mri_mri_mb[1];
+static BattleGroupSetup btlgrp_mri_mri_mb;
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test1_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test2_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test3_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test4_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_01_01_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_04_01_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_05_01_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_02_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_03_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_12_01_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_12_02_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_15_01_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_17_01_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_18_02_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_18_03_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_19_01_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_19_02_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_19_04_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_20_02_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_20_03_off[2];
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_mb_off[2];
 NpcSetupBattleInfo btlsetup_mri_tbl[22];
 NpcTerritoryInfo btl_mri_setup_no_tbl[22];
-extern EvtWord stg_02_1_init_evt[];
+EvtWord stg_02_1_init_evt[8];
 
 /** Scenery pieces of the Great Tree battle stages; mri_btlstage_data entries point into this array. */
-BattleStageObjectData mri_btlobject_data[] = {
-    {"S_isk_01", 2, 0, {19.0f, 0.0f, -55.0f}, 0, 60, {0}},
-    {"S_ueki_01", 2, 1, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
-    {"S_ueki_02", 2, 1, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
-    {"S_ueki_03", 2, 1, {-56.0f, 0.0f, -36.0f}, 0, 60, {0}},
-    {"S_ueki_04", 2, 1, {38.0f, 0.0f, -28.0f}, 0, 60, {0}},
-    {"S_ueki_05", 2, 1, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
-    {"S_ueki_06", 2, 1, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
-    {"S_ueki_07", 2, 1, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
-    {"S_kusa_01", 2, 1, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"S_isk_02", 2, 0, {25.0f, 0.0f, -55.0f}, 0, 60, {0}},
-    {"S_ueki_01", 2, 1, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
-    {"S_ueki_02", 2, 1, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
-    {"S_ueki_03", 2, 1, {-56.0f, 0.0f, -36.0f}, 0, 60, {0}},
-    {"S_ueki_04", 2, 1, {38.0f, 0.0f, -28.0f}, 0, 60, {0}},
-    {"S_ueki_05", 2, 1, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
-    {"S_ueki_06", 2, 1, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
-    {"S_ueki_07", 2, 1, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
-    {"S_kusa_01", 2, 1, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"S_isk_03", 2, 0, {12.0f, 0.0f, -55.0f}, 0, 60, {0}},
-    {"S_ueki_01", 2, 1, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
-    {"S_ueki_02", 2, 1, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
-    {"S_ueki_03", 2, 1, {-56.0f, 0.0f, -36.0f}, 0, 60, {0}},
-    {"S_ueki_04", 2, 1, {38.0f, 0.0f, -28.0f}, 0, 60, {0}},
-    {"S_ueki_05", 2, 1, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
-    {"S_ueki_06", 2, 1, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
-    {"S_ueki_07", 2, 1, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
-    {"S_kusa_01", 2, 1, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"S_ueki_01", 2, 1, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
-    {"S_ueki_02", 2, 1, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
-    {"S_ueki_03", 2, 1, {-56.0f, 0.0f, -46.0f}, 0, 60, {0}},
-    {"S_ueki_04", 2, 1, {38.0f, 0.0f, -57.0f}, 0, 60, {0}},
-    {"S_ueki_05", 2, 1, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
-    {"S_ueki_06", 2, 1, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
-    {"S_ueki_07", 2, 1, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
-    {"S_kusa_01", 2, 1, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
+static BattleStageObjectData mri_btlobject_data[] = {
+    {"S_isk_01", 2, STAGE_LAYER_A1, {19.0f, 0.0f, -55.0f}, 0, 60, {0}},
+    {"S_ueki_01", 2, STAGE_LAYER_A2, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
+    {"S_ueki_02", 2, STAGE_LAYER_A2, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
+    {"S_ueki_03", 2, STAGE_LAYER_A2, {-56.0f, 0.0f, -36.0f}, 0, 60, {0}},
+    {"S_ueki_04", 2, STAGE_LAYER_A2, {38.0f, 0.0f, -28.0f}, 0, 60, {0}},
+    {"S_ueki_05", 2, STAGE_LAYER_A2, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
+    {"S_ueki_06", 2, STAGE_LAYER_A2, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
+    {"S_ueki_07", 2, STAGE_LAYER_A2, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
+    {"S_kusa_01", 2, STAGE_LAYER_A2, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"S_isk_02", 2, STAGE_LAYER_A1, {25.0f, 0.0f, -55.0f}, 0, 60, {0}},
+    {"S_ueki_01", 2, STAGE_LAYER_A2, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
+    {"S_ueki_02", 2, STAGE_LAYER_A2, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
+    {"S_ueki_03", 2, STAGE_LAYER_A2, {-56.0f, 0.0f, -36.0f}, 0, 60, {0}},
+    {"S_ueki_04", 2, STAGE_LAYER_A2, {38.0f, 0.0f, -28.0f}, 0, 60, {0}},
+    {"S_ueki_05", 2, STAGE_LAYER_A2, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
+    {"S_ueki_06", 2, STAGE_LAYER_A2, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
+    {"S_ueki_07", 2, STAGE_LAYER_A2, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
+    {"S_kusa_01", 2, STAGE_LAYER_A2, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"S_isk_03", 2, STAGE_LAYER_A1, {12.0f, 0.0f, -55.0f}, 0, 60, {0}},
+    {"S_ueki_01", 2, STAGE_LAYER_A2, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
+    {"S_ueki_02", 2, STAGE_LAYER_A2, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
+    {"S_ueki_03", 2, STAGE_LAYER_A2, {-56.0f, 0.0f, -36.0f}, 0, 60, {0}},
+    {"S_ueki_04", 2, STAGE_LAYER_A2, {38.0f, 0.0f, -28.0f}, 0, 60, {0}},
+    {"S_ueki_05", 2, STAGE_LAYER_A2, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
+    {"S_ueki_06", 2, STAGE_LAYER_A2, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
+    {"S_ueki_07", 2, STAGE_LAYER_A2, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
+    {"S_kusa_01", 2, STAGE_LAYER_A2, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"S_ueki_01", 2, STAGE_LAYER_A2, {-188.0f, 0.0f, 48.0f}, 0, 60, {0}},
+    {"S_ueki_02", 2, STAGE_LAYER_A2, {-147.0f, 0.0f, -52.0f}, 0, 60, {0}},
+    {"S_ueki_03", 2, STAGE_LAYER_A2, {-56.0f, 0.0f, -46.0f}, 0, 60, {0}},
+    {"S_ueki_04", 2, STAGE_LAYER_A2, {38.0f, 0.0f, -57.0f}, 0, 60, {0}},
+    {"S_ueki_05", 2, STAGE_LAYER_A2, {157.0f, 0.0f, -50.0f}, 0, 60, {0}},
+    {"S_ueki_06", 2, STAGE_LAYER_A2, {198.0f, 0.0f, 57.0f}, 0, 60, {0}},
+    {"S_ueki_07", 2, STAGE_LAYER_A2, {-204.0f, 0.0f, -64.0f}, 0, 60, {0}},
+    {"S_kusa_01", 2, STAGE_LAYER_A2, {-1.0f, 0.0f, 76.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
 };
 
 /** Battle stages of the Great Tree: backdrop folders, scenery pieces and background scripts. */
-BattleStageData mri_btlstage_data[] = {
+static BattleStageData mri_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_02_1", // specificStageDataDir
@@ -178,11 +179,10 @@ BattleStageData mri_btlstage_data[] = {
     },
 };
 
-/** Lineup of battle mri_01_01: X-Naut x2. */
-BattleUnitSetup btlparty_mri_mri_01_01[] = {
+static BattleUnitSetup btlparty_mri_mri_01_01[] = {
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -192,7 +192,7 @@ BattleUnitSetup btlparty_mri_mri_01_01[] = {
     },
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -202,8 +202,7 @@ BattleUnitSetup btlparty_mri_mri_01_01[] = {
     },
 };
 
-/** Battle group mri_01_01: its 2 enemies; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_mri_mri_01_01 = {
+static BattleGroupSetup btlgrp_mri_mri_01_01 = {
     2, // numEnemies
     btlparty_mri_mri_01_01, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -213,11 +212,10 @@ BattleGroupSetup btlgrp_mri_mri_01_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_04_01: X-Naut. */
-BattleUnitSetup btlparty_mri_mri_04_01[] = {
+static BattleUnitSetup btlparty_mri_mri_04_01[] = {
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -227,8 +225,7 @@ BattleUnitSetup btlparty_mri_mri_04_01[] = {
     },
 };
 
-/** Battle group mri_04_01: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_mri_mri_04_01 = {
+static BattleGroupSetup btlgrp_mri_mri_04_01 = {
     1, // numEnemies
     btlparty_mri_mri_04_01, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -238,11 +235,10 @@ BattleGroupSetup btlgrp_mri_mri_04_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_05_01: X-Naut x2. */
-BattleUnitSetup btlparty_mri_mri_05_01[] = {
+static BattleUnitSetup btlparty_mri_mri_05_01[] = {
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -252,7 +248,7 @@ BattleUnitSetup btlparty_mri_mri_05_01[] = {
     },
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -262,8 +258,7 @@ BattleUnitSetup btlparty_mri_mri_05_01[] = {
     },
 };
 
-/** Battle group mri_05_01: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_05_01 = {
+static BattleGroupSetup btlgrp_mri_mri_05_01 = {
     2, // numEnemies
     btlparty_mri_mri_05_01, // enemyData
     25, // heldItemWeight
@@ -274,11 +269,10 @@ BattleGroupSetup btlgrp_mri_mri_05_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_06_2F_02: Pider x3. */
-BattleUnitSetup btlparty_mri_mri_06_2F_02[] = {
+static BattleUnitSetup btlparty_mri_mri_06_2F_02[] = {
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -288,7 +282,7 @@ BattleUnitSetup btlparty_mri_mri_06_2F_02[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -298,7 +292,7 @@ BattleUnitSetup btlparty_mri_mri_06_2F_02[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -308,8 +302,7 @@ BattleUnitSetup btlparty_mri_mri_06_2F_02[] = {
     },
 };
 
-/** Battle group mri_06_2F_02: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_06_2F_02 = {
+static BattleGroupSetup btlgrp_mri_mri_06_2F_02 = {
     3, // numEnemies
     btlparty_mri_mri_06_2F_02, // enemyData
     25, // heldItemWeight
@@ -320,11 +313,10 @@ BattleGroupSetup btlgrp_mri_mri_06_2F_02 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_06_2F_03: Pider x4. */
-BattleUnitSetup btlparty_mri_mri_06_2F_03[] = {
+static BattleUnitSetup btlparty_mri_mri_06_2F_03[] = {
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 40.0f, -10.0f}, // position
@@ -334,7 +326,7 @@ BattleUnitSetup btlparty_mri_mri_06_2F_03[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -344,7 +336,7 @@ BattleUnitSetup btlparty_mri_mri_06_2F_03[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -354,7 +346,7 @@ BattleUnitSetup btlparty_mri_mri_06_2F_03[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 40.0f, 20.0f}, // position
@@ -364,8 +356,7 @@ BattleUnitSetup btlparty_mri_mri_06_2F_03[] = {
     },
 };
 
-/** Battle group mri_06_2F_03: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_06_2F_03 = {
+static BattleGroupSetup btlgrp_mri_mri_06_2F_03 = {
     4, // numEnemies
     btlparty_mri_mri_06_2F_03, // enemyData
     25, // heldItemWeight
@@ -376,11 +367,10 @@ BattleGroupSetup btlgrp_mri_mri_06_2F_03 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_12_01: Pale Piranha x2. */
-BattleUnitSetup btlparty_mri_mri_12_01[] = {
+static BattleUnitSetup btlparty_mri_mri_12_01[] = {
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -390,7 +380,7 @@ BattleUnitSetup btlparty_mri_mri_12_01[] = {
     },
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -400,8 +390,7 @@ BattleUnitSetup btlparty_mri_mri_12_01[] = {
     },
 };
 
-/** Battle group mri_12_01: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_12_01 = {
+static BattleGroupSetup btlgrp_mri_mri_12_01 = {
     2, // numEnemies
     btlparty_mri_mri_12_01, // enemyData
     25, // heldItemWeight
@@ -412,11 +401,10 @@ BattleGroupSetup btlgrp_mri_mri_12_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_12_02: Pale Piranha x4. */
-BattleUnitSetup btlparty_mri_mri_12_02[] = {
+static BattleUnitSetup btlparty_mri_mri_12_02[] = {
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -426,7 +414,7 @@ BattleUnitSetup btlparty_mri_mri_12_02[] = {
     },
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -436,7 +424,7 @@ BattleUnitSetup btlparty_mri_mri_12_02[] = {
     },
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -446,7 +434,7 @@ BattleUnitSetup btlparty_mri_mri_12_02[] = {
     },
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -456,8 +444,7 @@ BattleUnitSetup btlparty_mri_mri_12_02[] = {
     },
 };
 
-/** Battle group mri_12_02: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_12_02 = {
+static BattleGroupSetup btlgrp_mri_mri_12_02 = {
     4, // numEnemies
     btlparty_mri_mri_12_02, // enemyData
     25, // heldItemWeight
@@ -468,11 +455,10 @@ BattleGroupSetup btlgrp_mri_mri_12_02 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_15_01: X-Naut x2. */
-BattleUnitSetup btlparty_mri_mri_15_01[] = {
+static BattleUnitSetup btlparty_mri_mri_15_01[] = {
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -482,7 +468,7 @@ BattleUnitSetup btlparty_mri_mri_15_01[] = {
     },
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -492,8 +478,7 @@ BattleUnitSetup btlparty_mri_mri_15_01[] = {
     },
 };
 
-/** Battle group mri_15_01: its 2 enemies; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_mri_mri_15_01 = {
+static BattleGroupSetup btlgrp_mri_mri_15_01 = {
     2, // numEnemies
     btlparty_mri_mri_15_01, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -503,11 +488,10 @@ BattleGroupSetup btlgrp_mri_mri_15_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_17_01: Pider x2. */
-BattleUnitSetup btlparty_mri_mri_17_01[] = {
+static BattleUnitSetup btlparty_mri_mri_17_01[] = {
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -517,7 +501,7 @@ BattleUnitSetup btlparty_mri_mri_17_01[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -527,8 +511,7 @@ BattleUnitSetup btlparty_mri_mri_17_01[] = {
     },
 };
 
-/** Battle group mri_17_01: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_17_01 = {
+static BattleGroupSetup btlgrp_mri_mri_17_01 = {
     2, // numEnemies
     btlparty_mri_mri_17_01, // enemyData
     25, // heldItemWeight
@@ -539,11 +522,10 @@ BattleGroupSetup btlgrp_mri_mri_17_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_18_02: X-Naut x2 and Yux. */
-BattleUnitSetup btlparty_mri_mri_18_02[] = {
+static BattleUnitSetup btlparty_mri_mri_18_02[] = {
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -553,7 +535,7 @@ BattleUnitSetup btlparty_mri_mri_18_02[] = {
     },
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -563,7 +545,7 @@ BattleUnitSetup btlparty_mri_mri_18_02[] = {
     },
     {
         &unit_barriern, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -573,8 +555,7 @@ BattleUnitSetup btlparty_mri_mri_18_02[] = {
     },
 };
 
-/** Battle group mri_18_02: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_18_02 = {
+static BattleGroupSetup btlgrp_mri_mri_18_02 = {
     3, // numEnemies
     btlparty_mri_mri_18_02, // enemyData
     25, // heldItemWeight
@@ -585,15 +566,14 @@ BattleGroupSetup btlgrp_mri_mri_18_02 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_18_03: Yux x3. */
-BattleUnitSetup btlparty_mri_mri_18_03[] = {
+static BattleUnitSetup btlparty_mri_mri_18_03[] = {
     {
         &unit_barriern, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
 #if VERSION <= VERSION_DEMO_JP
-        {50.0f, 40.0f, -10.0f}, // position
+        {50.0f, 40.0f, -10.0f},
 #else
         {0.0f, 40.0f, -20.0f}, // position
 #endif
@@ -603,11 +583,11 @@ BattleUnitSetup btlparty_mri_mri_18_03[] = {
     },
     {
         &unit_barriern, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
 #if VERSION <= VERSION_DEMO_JP
-        {90.0f, 40.0f, 0.0f}, // position
+        {90.0f, 40.0f, 0.0f},
 #else
         {75.0f, 40.0f, 0.0f}, // position
 #endif
@@ -617,11 +597,11 @@ BattleUnitSetup btlparty_mri_mri_18_03[] = {
     },
     {
         &unit_barriern, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
 #if VERSION <= VERSION_DEMO_JP
-        {130.0f, 40.0f, 10.0f}, // position
+        {130.0f, 40.0f, 10.0f},
 #else
         {150.0f, 40.0f, 20.0f}, // position
 #endif
@@ -631,8 +611,7 @@ BattleUnitSetup btlparty_mri_mri_18_03[] = {
     },
 };
 
-/** Battle group mri_18_03: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_18_03 = {
+static BattleGroupSetup btlgrp_mri_mri_18_03 = {
     3, // numEnemies
     btlparty_mri_mri_18_03, // enemyData
     25, // heldItemWeight
@@ -643,11 +622,10 @@ BattleGroupSetup btlgrp_mri_mri_18_03 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_19_01: Pider x2. */
-BattleUnitSetup btlparty_mri_mri_19_01[] = {
+static BattleUnitSetup btlparty_mri_mri_19_01[] = {
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -657,7 +635,7 @@ BattleUnitSetup btlparty_mri_mri_19_01[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -667,8 +645,7 @@ BattleUnitSetup btlparty_mri_mri_19_01[] = {
     },
 };
 
-/** Battle group mri_19_01: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_19_01 = {
+static BattleGroupSetup btlgrp_mri_mri_19_01 = {
     2, // numEnemies
     btlparty_mri_mri_19_01, // enemyData
     25, // heldItemWeight
@@ -679,11 +656,10 @@ BattleGroupSetup btlgrp_mri_mri_19_01 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_19_02: Pale Piranha and Pider. */
-BattleUnitSetup btlparty_mri_mri_19_02[] = {
+static BattleUnitSetup btlparty_mri_mri_19_02[] = {
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -693,7 +669,7 @@ BattleUnitSetup btlparty_mri_mri_19_02[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -703,8 +679,7 @@ BattleUnitSetup btlparty_mri_mri_19_02[] = {
     },
 };
 
-/** Battle group mri_19_02: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_19_02 = {
+static BattleGroupSetup btlgrp_mri_mri_19_02 = {
     2, // numEnemies
     btlparty_mri_mri_19_02, // enemyData
     25, // heldItemWeight
@@ -715,11 +690,10 @@ BattleGroupSetup btlgrp_mri_mri_19_02 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_19_04: Pale Piranha, Pider, Pale Piranha and Pider. */
-BattleUnitSetup btlparty_mri_mri_19_04[] = {
+static BattleUnitSetup btlparty_mri_mri_19_04[] = {
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -729,7 +703,7 @@ BattleUnitSetup btlparty_mri_mri_19_04[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -739,7 +713,7 @@ BattleUnitSetup btlparty_mri_mri_19_04[] = {
     },
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -749,7 +723,7 @@ BattleUnitSetup btlparty_mri_mri_19_04[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 40.0f, 20.0f}, // position
@@ -759,8 +733,7 @@ BattleUnitSetup btlparty_mri_mri_19_04[] = {
     },
 };
 
-/** Battle group mri_19_04: its 4 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_19_04 = {
+static BattleGroupSetup btlgrp_mri_mri_19_04 = {
     4, // numEnemies
     btlparty_mri_mri_19_04, // enemyData
     25, // heldItemWeight
@@ -771,11 +744,10 @@ BattleGroupSetup btlgrp_mri_mri_19_04 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_20_02: X-Naut and Yux. */
-BattleUnitSetup btlparty_mri_mri_20_02[] = {
+static BattleUnitSetup btlparty_mri_mri_20_02[] = {
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -785,7 +757,7 @@ BattleUnitSetup btlparty_mri_mri_20_02[] = {
     },
     {
         &unit_barriern, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -795,8 +767,7 @@ BattleUnitSetup btlparty_mri_mri_20_02[] = {
     },
 };
 
-/** Battle group mri_20_02: its 2 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_20_02 = {
+static BattleGroupSetup btlgrp_mri_mri_20_02 = {
     2, // numEnemies
     btlparty_mri_mri_20_02, // enemyData
     25, // heldItemWeight
@@ -807,15 +778,14 @@ BattleGroupSetup btlgrp_mri_mri_20_02 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_20_03: Yux x2 and X-Naut. */
-BattleUnitSetup btlparty_mri_mri_20_03[] = {
+static BattleUnitSetup btlparty_mri_mri_20_03[] = {
     {
         &unit_barriern, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
 #if VERSION <= VERSION_DEMO_JP
-        {50.0f, 40.0f, -10.0f}, // position
+        {50.0f, 40.0f, -10.0f},
 #else
         {10.0f, 40.0f, -20.0f}, // position
 #endif
@@ -825,7 +795,7 @@ BattleUnitSetup btlparty_mri_mri_20_03[] = {
     },
     {
         &unit_barriern, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -835,7 +805,7 @@ BattleUnitSetup btlparty_mri_mri_20_03[] = {
     },
     {
         &unit_gundan_zako, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -845,8 +815,7 @@ BattleUnitSetup btlparty_mri_mri_20_03[] = {
     },
 };
 
-/** Battle group mri_20_03: its 3 enemies; item weights held 25, random 25, none 50. */
-BattleGroupSetup btlgrp_mri_mri_20_03 = {
+static BattleGroupSetup btlgrp_mri_mri_20_03 = {
     3, // numEnemies
     btlparty_mri_mri_20_03, // enemyData
     25, // heldItemWeight
@@ -857,11 +826,10 @@ BattleGroupSetup btlgrp_mri_mri_20_03 = {
     5, // reserved_1C
 };
 
-/** Lineup of battle mri_mb: Magnus. */
-BattleUnitSetup btlparty_mri_mri_mb[] = {
+static BattleUnitSetup btlparty_mri_mri_mb[] = {
     {
         &unit_boss_magnum_battender, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -871,8 +839,7 @@ BattleUnitSetup btlparty_mri_mri_mb[] = {
     },
 };
 
-/** Battle group mri_mb: its single enemy; item weights held 0, random 0, none 100. */
-BattleGroupSetup btlgrp_mri_mri_mb = {
+static BattleGroupSetup btlgrp_mri_mri_mb = {
     1, // numEnemies
     btlparty_mri_mri_mb, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -882,128 +849,107 @@ BattleGroupSetup btlgrp_mri_mri_mb = {
     5, // reserved_1C
 };
 
-/** Battle choice BTLNO_MRI_TEST1_OFF (group and stage by weight): mri_01_01 (weight 50). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test1_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test1_off[] = {
     {50, &btlgrp_mri_mri_01_01, mri_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_TEST2_OFF (group and stage by weight): mri_01_01 (weight 50). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test2_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test2_off[] = {
     {50, &btlgrp_mri_mri_01_01, &mri_btlstage_data[1]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_TEST3_OFF (group and stage by weight): mri_01_01 (weight 50). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test3_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test3_off[] = {
     {50, &btlgrp_mri_mri_01_01, &mri_btlstage_data[2]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_TEST4_OFF (group and stage by weight): mri_01_01 (weight 50). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_test4_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_test4_off[] = {
     {50, &btlgrp_mri_mri_01_01, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_01_01_OFF (group and stage by weight): mri_01_01 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_01_01_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_01_01_off[] = {
     {10, &btlgrp_mri_mri_01_01, mri_btlstage_data},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_04_01_OFF (group and stage by weight): mri_04_01 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_04_01_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_04_01_off[] = {
     {10, &btlgrp_mri_mri_04_01, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_05_01_OFF (group and stage by weight): mri_05_01 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_05_01_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_05_01_off[] = {
     {10, &btlgrp_mri_mri_05_01, &mri_btlstage_data[1]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_06_2F_02_OFF (group and stage by weight): mri_06_2F_02 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_02_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_02_off[] = {
     {10, &btlgrp_mri_mri_06_2F_02, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_06_2F_03_OFF (group and stage by weight): mri_06_2F_03 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_03_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_06_2f_03_off[] = {
     {10, &btlgrp_mri_mri_06_2F_03, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_12_01_OFF (group and stage by weight): mri_12_01 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_12_01_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_12_01_off[] = {
     {10, &btlgrp_mri_mri_12_01, &mri_btlstage_data[1]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_12_02_OFF (group and stage by weight): mri_12_02 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_12_02_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_12_02_off[] = {
     {10, &btlgrp_mri_mri_12_02, &mri_btlstage_data[1]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_15_01_OFF (group and stage by weight): mri_15_01 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_15_01_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_15_01_off[] = {
     {10, &btlgrp_mri_mri_15_01, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_17_01_OFF (group and stage by weight): mri_17_01 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_17_01_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_17_01_off[] = {
     {10, &btlgrp_mri_mri_17_01, &mri_btlstage_data[1]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_18_02_OFF (group and stage by weight): mri_18_02 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_18_02_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_18_02_off[] = {
     {10, &btlgrp_mri_mri_18_02, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_18_03_OFF (group and stage by weight): mri_18_03 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_18_03_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_18_03_off[] = {
     {10, &btlgrp_mri_mri_18_03, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_19_01_OFF (group and stage by weight): mri_19_01 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_19_01_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_19_01_off[] = {
     {10, &btlgrp_mri_mri_19_01, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_19_02_OFF (group and stage by weight): mri_19_02 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_19_02_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_19_02_off[] = {
     {10, &btlgrp_mri_mri_19_02, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_19_04_OFF (group and stage by weight): mri_19_04 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_19_04_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_19_04_off[] = {
     {10, &btlgrp_mri_mri_19_04, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_20_02_OFF (group and stage by weight): mri_20_02 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_20_02_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_20_02_off[] = {
     {10, &btlgrp_mri_mri_20_02, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_20_03_OFF (group and stage by weight): mri_20_03 (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_20_03_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_20_03_off[] = {
     {10, &btlgrp_mri_mri_20_03, &mri_btlstage_data[3]},
     {0},
 };
 
-/** Battle choice BTLNO_MRI_MB_OFF (group and stage by weight): mri_mb (weight 10). */
-NpcBattleSelect btlgrpsel_mri_btlno_mri_mb_off[] = {
+static NpcBattleSelect btlgrpsel_mri_btlno_mri_mb_off[] = {
     {10, &btlgrp_mri_mri_mb, mri_btlstage_data},
     {0},
 };
@@ -1019,7 +965,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1029,7 +975,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_test2_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1039,7 +985,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_test3_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1049,7 +995,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_test4_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1059,7 +1005,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_01_01_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         0, // randomMode
         {{5, 5}, {10, 10}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_KOBOSS_BATTLE1", // bgmName
@@ -1070,7 +1016,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_04_01_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         0, // randomMode
         {{5, 5}, {10, 10}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_KOBOSS_BATTLE1", // bgmName
@@ -1081,7 +1027,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_05_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {10, 10}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1091,7 +1037,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_06_2f_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {5, 5}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1101,7 +1047,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_06_2f_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {5, 5}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1111,7 +1057,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_12_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1121,7 +1067,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_12_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1131,7 +1077,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_15_01_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         0, // randomMode
         {{4, 4}, {10, 10}, {0}, {0}, {4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_KOBOSS_BATTLE1", // bgmName
@@ -1142,7 +1088,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_17_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1152,7 +1098,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_18_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{4, 4}, {10, 10}, {0}, {0}, {4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1162,7 +1108,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_18_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{4, 4}, {10, 10}, {0}, {0}, {4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1172,7 +1118,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_19_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {10, 10}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1182,7 +1128,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_19_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {5, 5}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1192,7 +1138,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_19_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {5, 5}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1202,7 +1148,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_20_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {10, 10}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1212,7 +1158,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_20_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {10, 10}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {5, 5}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1223,7 +1169,7 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_mri_btlno_mri_mb_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         2, // randomMode
         {{0}, {10, 10}, {0}, {0}, {0}, {0}, {0}, {10, 10}, {0}, {0}, {0}, {0}, {0}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG3_3RDLEADER1", // bgmName
@@ -1231,10 +1177,6 @@ NpcSetupBattleInfo btlsetup_mri_tbl[] = {
     {0},
 };
 
-/**
- * Names the Great Tree battle ids (BTLNO_MRI_*) and the btlsetup_mri_tbl entry each one uses; registered
- * with relSetBtlAddr.
- */
 NpcTerritoryInfo btl_mri_setup_no_tbl[] = {
     {"BTLNO_MRI_TEST1", 0},
     {"BTLNO_MRI_TEST2", 1},
@@ -1265,6 +1207,6 @@ NpcTerritoryInfo btl_mri_setup_no_tbl[] = {
  * turns on the planter model group (S_ueki) so it is visible in the battle backdrop.
  */
 EVT_BEGIN(stg_02_1_init_evt)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_ueki"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_ueki"), MAP_OBJ_FLAG_HIDDEN)
     RETURN
 EVT_END()

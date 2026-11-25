@@ -1,35 +1,43 @@
 // dou_00 (洞窟, Pirate's Grotto): entrance cave reached from Keelhaul Key (muj_05).
-// Arrival cutscene (story 242 to 243), a save block and Ruin Powder; the door leads to dou_01.
-#include "battle/battle_unit.h"
-#include "evt/evt_cmd.h"
-#include "driver/animdrv.h"
+// Arrival cutscene (story STG5_19_GEMS_AND_JINGLES to STG5_19_01_ENTERING_THE_GROTTO), a save block and Ruin Powder; the door leads to dou_01.
 
-#include "driver/mapdrv.h"
-#include "driver/envdrv.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_item.h"
+#include "battle/battle_unit.h"
+#include "driver/animdrv.h"
+#include "evt/evt_cmd.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_seq.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
 #include "evt/evt_telop.h"
-#include "dou.h"
-#include "evt/evt_story.h"
+#include "evt/evt_item.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+
+#include "driver/mapdrv.h"
+#include "driver/envdrv.h"
+#include "evt/evt_bero.h"
+#include "driver/seqdrv.h"
 
 static void water_tev(MapTevCallbackInfo* info);
 
+static EvtWord bero_in_event[11];
 static BeroEntry bero_entry_data[3];
-extern EvtWord totsunyu_event[];
+static EvtWord back_light[35];
+static EvtWord totsunyu_event[46];
+EvtWord dou_00_init_evt[61];
 
 /**
- * Entry event of the grotto's entrance door: on the first arrival (STORY_STG5_19_SKULL_ROCK) it starts the
+ * Entry event of the grotto's entrance door: on the first arrival (STG5_19_GEMS_AND_JINGLES) it starts the
  * arrival cutscene totsunyu_event; leaves LW(0) = 0.
  */
 static EVT_BEGIN(bero_in_event)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_19_SKULL_ROCK)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_19_GEMS_AND_JINGLES)
         CALL_CHILD(totsunyu_event)
     END_IF
     SET_VALUE(LW(0), 0)
@@ -45,7 +53,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)bero_in_event, // enterEvent
+        bero_in_event, // enterEvent
         -1, // caseType
         NULL, // exitEvent
         "muj_05", // nextMapName
@@ -78,7 +86,7 @@ static BeroEntry bero_entry_data[] = {
  * then lets Mario's model ignore the blend and switches the map blend off. Spawned by the arrival cutscene.
  */
 static EVT_BEGIN(back_light)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 2000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 2000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_map_set_blend, 0, LW(0), LW(0), LW(0), 255)
@@ -93,21 +101,20 @@ static EVT_BEGIN(back_light)
 EVT_END()
 
 /**
- * Entrance cutscene of Pirate's Grotto (first entry, story step STORY_STG5_19_SKULL_ROCK):
- * Mario arrives in darkness, speaks (stg5_dou_00), the lights come up and the area-title telop (id 10) is shown.
- * Advances the story to STORY_STG5_19_01_ENTERING_THE_GROTTO.
+ * Arrival cutscene of dou_00 (run from the map init): blends the map to black, prints stg5_dou_00 after a second,
+ * spawns back_light, sets STG5_19_01_ENTERING_THE_GROTTO and shows title card 10 (evt_telop_entry).
  */
-EVT_BEGIN(totsunyu_event)
+static EVT_BEGIN(totsunyu_event)
     CALL(evt_map_set_blend, 0, 0, 0, 0, 255)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(1000)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg5_dou_00"), 0, 0)
     SPAWN_EVENT(back_light)
     WAIT_MS(200)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_19_01_ENTERING_THE_GROTTO)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_19_01_ENTERING_THE_GROTTO)
     CALL(evt_mario_key_onoff, 1)
     BEGIN_INLINE_EVENT
         CALL(evt_telop_entry, 10)
@@ -121,23 +128,23 @@ EVT_END()
  * a Ruin Powder item and the water-surface shader on the pool.
  */
 EVT_BEGIN(dou_00_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_DOU1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_DOU1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_DOU1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_DOU1"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     WAIT_FRAMES(1)
-    CALL(evt_map_playanim, STRING("nami"), 1, 0)
+    CALL(evt_map_playanim, STRING("nami"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), 30, 85, -75, 0, 0)
-    CALL(evt_item_entry, STRING("item_01"), ITEM_RUIN_POWDER, -245, 0, 85, ITEM_ENTRY_FIXED, GSWF(GSWF_DOU00_RUIN_POWDER_TAKEN), 0)
+    CALL(evt_item_entry, STRING("item_01"), ITEM_RUIN_POWDER, -245, 0, 85, ITEM_TYPE_STILL, GSWF_DOU_00_RUIN_POWDER, 0)
     CALL(evt_map_set_tevcallback, 1, PTR(water_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("s00_suimen"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("s00_suimen"), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("s00_suimen"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("s00_suimen"), MAP_OBJ_FLAG_DISPLAY_LIST)
     RETURN
 EVT_END()
 
-/** Map TEV callback for the pool surface (s00_suimen): applies the standard water shading. */
+/** Map TEV callback: hands the stage setup to envSetWater. */
 static void water_tev(MapTevCallbackInfo* info) {
     envSetWater(info);
 }

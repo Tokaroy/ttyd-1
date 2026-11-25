@@ -1,11 +1,13 @@
 // Script commands for animated cloud overlays: an image drawn through an offscreen target over a
 // map group, with its own hit object and end event.
-#include "evt/evt_cloud.h"
+
+#include "version.h"
 #include "driver/camdrv.h"
 #include "driver/animdrv.h"
 #include "driver/hitdrv.h"
 #include "driver/imgdrv.h"
 #include "driver/offscreendrv.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "mario/mario.h"
 #include "mario/mariost.h"
@@ -18,9 +20,12 @@
 #include "stdio.h"
 #include "string.h"
 #include "dolphin/mtx.h"
-#include "evt/evt_img.h"
 #include "driver/mapdrv.h"
-#include "version.h"
+#include "evt/evt_img.h"
+
+// CloudWork.flags
+#define CLOUD_FLAG_IN_USE 1     // slot taken (evt_cloud_ent)
+#define CLOUD_FLAG_GROUP_LIST 2 // groupNames holds a NULL-terminated list of names
 
 typedef struct CloudWork {
     u16 flags;                // 0x0
@@ -41,17 +46,12 @@ typedef struct CloudWork {
     f32 lastFrame;            // 0xC4
 } CloudWork;
 
-// CloudWork.flags bits.
-enum CloudFlags {
-    CLOUD_FLAG_USED = 0x1,        // the slot is in use
-    CLOUD_FLAG_MULTI_GROUP = 0x2, // groupNames lists several map groups (evt_cloud_entry's first argument)
-};
-
 static CloudWork cloud[16];
-static u8 cloud_once_flag;
+static s8 cloud_once_flag;
 static CloudWork* cloud_p;
 
 static USER_FUNC(evt_cloud_main);
+
 /**
  * Per-object event started by the cloud registration command for each blowable scenery piece;
  * runs evt_cloud_main (LW(0) = its CloudWork).
@@ -62,10 +62,38 @@ static EVT_BEGIN(evt_cloud_main_evt)
 EVT_END()
 
 /**
- * Per-object state machine for a scenery piece Flurrie's Gale Force can blow away:
- * once her breath hits it, the map group is drawn through an offscreen capture as a flapping paper image;
- * after enough blowing the end event runs, the hit object is disabled
- * and the piece flies off (P_oof_cloud anims).
+ * Calls evt_img_alloc_capture with these eight values as its script arguments: image name, capture slot,
+ * offscreen name (or 0), allocation mode and the screen rectangle x, y, width, height.
+ */
+// Original name, size (0x50) and slot (first .text function) from the JP demo map (UNUSED there: every call is
+// inlined); the call in evt_cloud_main replaces a written-out copy that built the same. Same function as
+// fadedrv.c's test_img_alloc_capture (see there for the parameter types).
+static void _img_alloc_capture(EvtWord name, EvtWord slot, EvtWord off, EvtWord mode, EvtWord x, EvtWord y,
+                               EvtWord w, EvtWord h) {
+    EventEntry evt;
+    EvtWord args[10];
+
+    evt.args = args;
+    args[0] = name;
+    args[1] = slot;
+    args[2] = off;
+    args[3] = mode;
+    args[4] = x;
+    args[5] = y;
+    args[6] = w;
+    args[7] = h;
+    evt_img_alloc_capture(&evt, TRUE);
+}
+
+/**
+ * Per-frame states of one blow-away piece (LW(0) = its CloudWork); it never finishes. It waits until one of the four
+ * breath hits (cloudGetHitBreathout) is on the piece's hit object, then loads the paper pose "P_oof_cloud_2" or
+ * "P_oof_cloud_1" (by Mario's facing), draws the map group(s) into the offscreen target, captures the piece's screen
+ * area into its image and shows the image in place of the group. While Mario stays in MARIO_MOTION_CLOUD each frame
+ * adds 2 to the counter; a breath frame that takes it past the limit blows the piece away (end event, image animation
+ * "A_2", hit object off, 60 frames' wait), while 30 frames without breath or leaving the motion show the group. Then
+ * the pose, image and offscreen target are freed and the slot returns to waiting. cloud_once_flag lets one piece at a
+ * time start; the early demos also wait while the partner is not Flurrie.
  */
 static USER_FUNC(evt_cloud_main) {
     CloudWork* wp = (CloudWork*)event->lwData[0];
@@ -86,7 +114,7 @@ static USER_FUNC(evt_cloud_main) {
         return EVT_RETURN_BLOCK;
     }
 #if VERSION <= VERSION_DEMO_JP
-    if (party->currentMemberId != PARTY_MEMBER_FLURRIE) {
+    if (party->currentMemberId != PARTY_FLURRIE) {
         return EVT_RETURN_BLOCK;
     }
 #endif
@@ -95,8 +123,8 @@ static USER_FUNC(evt_cloud_main) {
     hit2 = cloudGetHitBreathout(2);
     hit3 = cloudGetHitBreathout(3);
     switch (wp->state) {
-        case 0:
-            if ((s32)cloud_once_flag == 1) {
+        case CLOUD_STATE_WAIT_BREATH:
+            if (cloud_once_flag == 1) {
                 break;
             }
             hit = hitNameToPtr(wp->hitName);
@@ -105,7 +133,7 @@ static USER_FUNC(evt_cloud_main) {
             }
             wp->counter = 0;
             break;
-        case 1:
+        case CLOUD_STATE_LOAD_POSE:
             if (mario->displayDirectionTarget > 90.0f && mario->displayDirectionTarget <= 270.0f) {
                 strcpy(wp->animName, "P_oof_cloud_2");
             } else {
@@ -117,7 +145,7 @@ static USER_FUNC(evt_cloud_main) {
             cloud_once_flag = 1;
             animPaperPoseEntry(wp->animName, group);
             offscreenEntry(wp->offscreenName);
-            if (!(wp->flags & CLOUD_FLAG_MULTI_GROUP)) {
+            if (!(wp->flags & CLOUD_FLAG_GROUP_LIST)) {
                 mapGrpSetOffScreen(wp->groupName, wp->offscreenName);
             } else {
                 char** p = wp->groupNames;
@@ -128,13 +156,12 @@ static USER_FUNC(evt_cloud_main) {
             }
             wp->state++;
             break;
-        case 2: {
+        case CLOUD_STATE_CAPTURE: {
             s32 x, y;
             s32 w, h;
             u16 uw, uh;
+            s32 halfWidth, halfHeight;
             Vec pos;
-            EventEntry evt;
-            EvtWord args[10];
 
             if (wp->w != 0 && wp->h != 0) {
                 mapObjGetPos(wp->groupName, &pos);
@@ -146,8 +173,11 @@ static USER_FUNC(evt_cloud_main) {
                 uh = wp->h;
                 w = uw;
                 h = uh;
-                x = (s32)(pos.x - (f32)(s32)((u32)uw >> 1));
-                y = (s32)(pos.y - (f32)(s32)(uh >> 1));
+
+                halfWidth = uw / 2U;
+                halfHeight = uh / 2U;
+                x = (s32)(pos.x - halfWidth);
+                y = (s32)(pos.y - halfHeight);
                 if (x < 0) {
                     x = 0;
                 }
@@ -157,18 +187,19 @@ static USER_FUNC(evt_cloud_main) {
 #if VERSION <= VERSION_DEMO_JP
                 if (w > gp->fbWidth) {
                     w = gp->fbWidth;
-                }
-                if (h > gp->efbHeight) {
-                    h = gp->efbHeight;
-                }
 #else
                 if (w > gp->fbWidth - x) {
                     w = gp->fbWidth - x;
+#endif
                 }
+#if VERSION <= VERSION_DEMO_JP
+                if (h > gp->efbHeight) {
+                    h = gp->efbHeight;
+#else
                 if (h > gp->efbHeight - y) {
                     h = gp->efbHeight - y;
-                }
 #endif
+                }
             } else {
                 h = 0;
                 w = 0;
@@ -177,48 +208,39 @@ static USER_FUNC(evt_cloud_main) {
             }
             imgEntry(wp->imgName, group);
             img = imgNameToPtr(wp->imgName, group);
-            img->flags |= IMG_FLAG_HIDDEN;
+            img->flags |= IMAGE_FLAG_HIDE;
             img->poseId = animPaperPoseGetId(wp->animName, group);
             img->animTime = animTimeGetTime(group);
-            evt.args = args;
-            args[0] = (EvtWord)wp->imgName;
-            args[1] = 0;
-            args[2] = (EvtWord)wp->offscreenName;
-            args[3] = 1;
-            args[4] = x;
-            args[5] = y;
-            args[6] = w;
-            args[7] = h;
-            evt_img_alloc_capture(&evt, TRUE);
+            _img_alloc_capture((EvtWord)wp->imgName, 0, (EvtWord)wp->offscreenName, 1, x, y, w, h);
             imgClearVirtualPoint(img);
             imgSetShadow(img, 2);
             wp->state++;
             break;
         }
-        case 3:
+        case CLOUD_STATE_SHOW:
             img = imgNameToPtr(wp->imgName, group);
-            img->flags &= ~IMG_FLAG_HIDDEN;
+            img->flags &= ~IMAGE_FLAG_HIDE;
             img->animName = "A_1";
             img->animTime = animTimeGetTime(group);
-            mapGrpFlagOn(wp->groupName, MAPOBJ_FLAG_HIDE);
+            mapGrpFlagOn(wp->groupName, MAP_OBJ_FLAG_HIDDEN);
             wp->timer = 30;
             wp->state++;
             wp->lastFrame = 0.0f;
             break;
-        case 4:
+        case CLOUD_STATE_BLOWING:
             img = imgNameToPtr(wp->imgName, group);
             if (wp->lastFrame == 0.0f || wp->lastFrame + 1.0f < img->loopTimes) {
                 psndSFXOn_3D("SFX_OFF_CLAUD_WIND2", &mario->position);
                 wp->lastFrame = img->loopTimes;
             }
             if (mario->currMotionId != MARIO_MOTION_CLOUD) {
-                wp->state = 10;
+                wp->state = CLOUD_STATE_RESTORE;
                 break;
             }
             hit = hitNameToPtr(wp->hitName);
             if (hit0 != hit && hit1 != hit && hit2 != hit && hit3 != hit) {
                 if (wp->timer == 0) {
-                    wp->state = 10;
+                    wp->state = CLOUD_STATE_RESTORE;
                 } else {
                     wp->timer--;
                     wp->counter += 2;
@@ -227,15 +249,15 @@ static USER_FUNC(evt_cloud_main) {
                 wp->timer = 30;
                 wp->counter += 2;
                 if (wp->counter > wp->limit) {
-                    wp->state = 20;
+                    wp->state = CLOUD_STATE_BLOWN_AWAY;
                 }
             }
             break;
-        case 10:
-            mapGrpFlagOff(wp->groupName, MAPOBJ_FLAG_HIDE);
-            wp->state = 99;
+        case CLOUD_STATE_RESTORE:
+            mapGrpFlagOff(wp->groupName, MAP_OBJ_FLAG_HIDDEN);
+            wp->state = CLOUD_STATE_RELEASE;
             break;
-        case 20:
+        case CLOUD_STATE_BLOWN_AWAY:
             psndSFXOn_3D("SFX_OFF_CLAUD_WIND3", &mario->position);
             if (wp->endEvt != NULL) {
                 evtEntry(wp->endEvt, 0, 0);
@@ -247,18 +269,18 @@ static USER_FUNC(evt_cloud_main) {
             wp->timer = 60;
             wp->state++;
             break;
-        case 21:
+        case CLOUD_STATE_BLOWN_AWAY_WAIT:
             if (wp->timer != 0) {
                 wp->timer--;
                 break;
             }
             wp->timer = 30;
             wp->counter += 2;
-            wp->state = 99;
+            wp->state = CLOUD_STATE_RELEASE;
             break;
-        case 99:
+        case CLOUD_STATE_RELEASE:
             img = imgNameToPtr(wp->imgName, group);
-            if (!(wp->flags & CLOUD_FLAG_MULTI_GROUP)) {
+            if (!(wp->flags & CLOUD_FLAG_GROUP_LIST)) {
                 mapGrpClearOffScreen(wp->groupName);
             } else {
                 char** p = wp->groupNames;
@@ -273,7 +295,7 @@ static USER_FUNC(evt_cloud_main) {
             imgRelease(img, group);
             offscreenDelete(wp->offscreenName);
             cloud_once_flag = 0;
-            wp->state = 0;
+            wp->state = CLOUD_STATE_WAIT_BREATH;
             break;
     }
     return EVT_RETURN_BLOCK;
@@ -283,7 +305,7 @@ static USER_FUNC(evt_cloud_main) {
 USER_FUNC(evt_cloud_init) {
     s32 i;
 
-    for (i = 0; i < 16; i++) {
+    for (i = 0; i < (s32)(sizeof(cloud) / sizeof(cloud[0])); i++) {
         cloud[i].flags = 0;
         sprintf(cloud[i].imgName, "i_name_%1d", i);
         sprintf(cloud[i].offscreenName, "o_name_%1d", i);
@@ -311,27 +333,27 @@ USER_FUNC(evt_cloud_ent) {
     hitName = (char*)evtGetValue(event, args[2]);
     endEvt = (void*)evtGetValue(event, args[3]);
 
-    for (i = 0; i < 16; i++) {
-        if (!(cloud[i].flags & CLOUD_FLAG_USED)) {
+    for (i = 0; i < (s32)(sizeof(cloud) / sizeof(cloud[0])); i++) {
+        if (!(cloud[i].flags & CLOUD_FLAG_IN_USE)) {
             break;
         }
     }
-    if (i >= 16) {
+    if (i >= (s32)(sizeof(cloud) / sizeof(cloud[0]))) {
         return EVT_RETURN_DONE;
     }
     wp = &cloud[i];
-    wp->flags |= CLOUD_FLAG_USED;
-    strncpy(wp->animName, "P_oof_cloud_1", 0x20);
+    wp->flags |= CLOUD_FLAG_IN_USE;
+    strncpy(wp->animName, "P_oof_cloud_1", sizeof(wp->animName));
     if (multi == 0) {
-        strncpy(wp->groupName, groupName, 0x20);
+        strncpy(wp->groupName, groupName, sizeof(wp->groupName));
     } else {
-        strncpy(wp->groupName, *(char**)groupName, 0x20);
+        strncpy(wp->groupName, *(char**)groupName, sizeof(wp->groupName));
     }
-    strncpy(wp->hitName, hitName, 0x20);
+    strncpy(wp->hitName, hitName, sizeof(wp->hitName));
     wp->endEvt = endEvt;
     wp->limit = 180;
     wp->counter = 0;
-    wp->state = 0;
+    wp->state = CLOUD_STATE_WAIT_BREATH;
     wp->timer = 0;
     wp->w = 0;
     wp->h = 0;
@@ -340,7 +362,7 @@ USER_FUNC(evt_cloud_ent) {
     cloud_p = wp;
     if (multi != 0) {
         wp->groupNames = (char**)groupName;
-        wp->flags |= CLOUD_FLAG_MULTI_GROUP;
+        wp->flags |= CLOUD_FLAG_GROUP_LIST;
     }
     return EVT_RETURN_DONE;
 }

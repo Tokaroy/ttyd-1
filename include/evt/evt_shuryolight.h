@@ -1,12 +1,12 @@
-// Shuryo (Grodus) staff lights: the five lamps on the staff NPC, carried as evt_shuryolight.c by both
+// Shuryo (Grodus) lights: the five lamps (power, three head, staff) drawn on Sir Grodus's NPC, carried as evt_shuryolight.c by both
 // aji (X-Naut fortress) and las (Palace of Shadow).
 #pragma once
 
-#include "driver/npcdrv.h"
 #include "evt/evt_cmd.h"
-#include <dolphin/types.h>
 
-// One lamp: an animated shape of the staff NPC drawn at a group of the base pose.
+#include "driver/npcdrv.h"
+
+// One lamp: a shape of a hidden c_shuryo helper NPC, drawn at a locator group of Grodus's pose.
 typedef struct ShuryoLight {
     NpcEntry* npc;      // 0x00
     const char** anims; // 0x04, five animation names (green / orange / red / yellow lamp tables)
@@ -16,9 +16,9 @@ typedef struct ShuryoLight {
 } ShuryoLight;
 
 typedef struct ShuryoWork {
-    s32 powerEvtId;        // 0x00, eventId of the running "pow" script, 0 if none
-    s32 headEvtId;         // 0x04, "head" script
-    s32 tueEvtId;          // 0x08, "tue" (staff) script
+    s32 powerEvt;          // 0x00, eventId of the running "pow" script, 0 if none
+    s32 headEvt;           // 0x04, "head" script
+    s32 tueEvt;            // 0x08, "tue" (staff) script
     ShuryoLight lights[5]; // 0x0C
 } ShuryoWork;
 

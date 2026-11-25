@@ -1,4 +1,5 @@
 // Declares the battle information functions used to set up and read back a battle.
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -7,7 +8,7 @@
 
 void BattleInformationSetMode(FieldBattleInfo* info, u32 mode);
 void BattleInformationSetParty(FieldBattleInfo* info, BattleUnitType party);
-void BattleInformationSetFirstAttack(FieldBattleInfo* info, u32 partyId);
+void BattleInformationSetFirstAttack(FieldBattleInfo* info, u32 type);
 void BattleInformationInit(FieldBattleInfo* info);
 void BattleInfomationSetBattleSetupInfo(FieldBattleInfo* info, NpcBattleInfo* setup);
 void BattleInformationSetResult(FieldBattleInfo* info, u32 result);

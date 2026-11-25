@@ -1,433 +1,40 @@
-#define _MATH_H_
-#define SND3D_LISTENER_NO_ROOM 1
-#define SND3D_EMITTER_NO_ROOM 1
 #include "musyx/musyx.h"
+#include <math.h>
 
 #include "musyx/hardware.h"
 #include "musyx/sal.h"
 #include "musyx/synth.h"
-#include "musyx/s3d_key.h"
-
-#define S3D_DEFINE_SQRT(name)                    \
-  extern inline float name(float x) {            \
-    volatile float y;                            \
-    if (x > 0.0f) {                              \
-      double guess = __frsqrte((double)x);       \
-      guess = 0.5 * guess * (3.0 - guess * guess * x); \
-      guess = 0.5 * guess * (3.0 - guess * guess * x); \
-      guess = 0.5 * guess * (3.0 - guess * guess * x); \
-      y = (float)(x * guess);                    \
-      return y;                                  \
-    }                                            \
-    return x;                                    \
-  }
-S3D_DEFINE_SQRT(sqrtf)
 
 static u8 s3dCallCnt;
 static SND_EMITTER* s3dEmitterRoot;
 static SND_LISTENER* s3dListenerRoot;
-#ifdef SND3D_UNUSED /* dead-stripped from this game build */
-static SND_ROOM* s3dRoomRoot;
-static SND_DOOR* s3dDoorRoot;
-#endif
+
+// The room list (s3dRoomRoot) of the original source is not reconstructed: only the room functions this
+// game does not link use it.
 static u32 snd_used_studios;
 static u8 snd_base_studio;
 static u8 snd_max_studios;
 static u8 s3dUseMaxVoices;
-u8 s3dUseLegacyLogic;
-extern void (*s3dOcclusionCallback)(struct SND_EMITTER*, SND_FVECTOR*, SND_FVECTOR*, void*, SND_FVECTOR*, SND_FVECTOR*, f32*, f32*);
+static u8 s3dUseLegacyLogic;
+static void (*s3dOcclusionCallback)(struct SND_EMITTER*, SND_FVECTOR*, SND_FVECTOR*, void*, SND_FVECTOR*, SND_FVECTOR*, f32*, f32*);
 
-#ifdef SND3D_UNUSED /* dead-stripped from this game build */
-/**
- * Sets the distance of each room that owns a studio to the average squared distance between the room
- * and the listeners (not compiled into this game build).
- */
-static inline void UpdateRoomDistances() {
-  struct SND_ROOM* r;      // r30
-  struct SND_LISTENER* li; // r31
-  float distance;          // f31
-  unsigned long n;         // r29
-  struct SND_FVECTOR d;    // r1+0x8
-
-  for (n = 0, li = s3dListenerRoot; li != NULL; li = li->next, ++n)
-    ;
-
-  if (n != 0) {
-    for (r = s3dRoomRoot; r != NULL; r = r->next) {
-      if (r->studio != 0xFF) {
-        distance = 0.f;
-        for (li = s3dListenerRoot; li != NULL; li = li->next) {
-          d.x = r->pos.x - li->pos.x;
-          d.y = r->pos.y - li->pos.y;
-          d.z = r->pos.z - li->pos.z;
-          distance += d.x * d.x + d.y * d.y + d.z * d.z;
-        }
-
-        r->distance = distance / n;
-      }
-    }
-  }
-}
-
-/**
- * Hands out studios to rooms near the listeners:
- * a room without a studio gets a free one (or takes the studio of the farthest room if it is nearer or has a
- * listener, shutting that room's emitters off), activates it and its reverb,
- * and fades the room's master volume up or down while listeners enter or leave.
- * Not compiled into this game build.
- */
-static inline void CheckRoomStatus() {
-  SND_LISTENER* li;   // r30
-  SND_EMITTER* em;    // r28
-  SND_ROOM* r;        // r27
-  SND_ROOM* max_room; // r29
-  SND_ROOM* room;     // r31
-  SND_FVECTOR d;      // r1+0x8
-  f32 distance;       // r63
-  f32 maxDis;         // r62
-  u32 li_num;         // r25
-  u32 i;              // r26
-  u32 mask;           // r23
-  u8 has_listener;    // r24
-
-  UpdateRoomDistances();
-
-  for (li_num = 0, li = s3dListenerRoot; li != NULL; li = li->next, ++li_num)
-    ;
-
-  if (li_num != 0) {
-    for (room = s3dRoomRoot; room != NULL; room = room->next) {
-      if (room->studio == 0xff) {
-        distance = 0.f;
-        for (li = s3dListenerRoot; li != NULL; li = li->next) {
-          d.x = room->pos.x - li->pos.x;
-          d.y = room->pos.y - li->pos.y;
-          d.z = room->pos.z - li->pos.z;
-          distance += d.x * d.x + d.y * d.y + d.z * d.z;
-        }
-
-        distance = distance / li_num;
-
-        has_listener = FALSE;
-        for (li = s3dListenerRoot; li != NULL; li = li->next) {
-          if (li->room == room) {
-            has_listener = TRUE;
-            break;
-          }
-        }
-
-        mask = ~(-1 << snd_max_studios);
-
-        if (mask != (snd_used_studios & mask)) {
-          for (i = 0; i < snd_max_studios; ++i) {
-            if (!(snd_used_studios & (1 << i))) {
-              break;
-            }
-          }
-
-          snd_used_studios |= (1 << i);
-          room->studio = i + snd_base_studio;
-        } else {
-          maxDis = -1.f;
-
-          for (r = s3dRoomRoot; r != NULL; r = r->next) {
-            if (r->studio != 0xFF && maxDis < r->distance) {
-              maxDis = r->distance;
-              max_room = r;
-            }
-          }
-
-          if (has_listener || maxDis > distance) {
-
-            for (em = s3dEmitterRoot; em != NULL; em = em->next) {
-              if (em->room == max_room) {
-                synthSendKeyOff(em->vid);
-                em->flags |= 0x80000;
-                em->vid = -1;
-              }
-            }
-
-            if (max_room->deActivateReverb != NULL) {
-              max_room->deActivateReverb(max_room->studio);
-            }
-
-            synthDeactivateStudio(max_room->studio);
-            room->studio = max_room->studio;
-            max_room->studio = 0xff;
-            max_room->flags = 0;
-          } else {
-            continue;
-          }
-        }
-        room->distance = distance;
-        room->curMVol = has_listener ? 0x7f0000 : 0;
-
-        if (room->curMVol * 1.2014794e-07f >= 0.5) {
-          synthActivateStudio(room->studio, TRUE, SND_STUDIO_TYPE_STD);
-        } else {
-          synthActivateStudio(room->studio, FALSE, SND_STUDIO_TYPE_STD);
-        }
-
-        if (room->activateReverb != NULL) {
-          room->activateReverb(room->studio, room->user);
-        }
-      } else {
-        if (room->flags & 0x80000000) {
-          room->curMVol += 0x40000;
-          if (room->curMVol >= 0x7F0000) {
-            room->curMVol = 0x7F0000;
-            room->flags &= ~0x80000000;
-          }
-
-          if (room->curMVol * 1.2014794e-07f >= 0.5) {
-            synthActivateStudio(room->studio, TRUE, SND_STUDIO_TYPE_STD);
-          } else {
-            synthActivateStudio(room->studio, FALSE, SND_STUDIO_TYPE_STD);
-          }
-        }
-
-        if ((room->flags & 0x40000000) != 0) {
-          room->curMVol = room->curMVol - 0x40000;
-          if ((int)room->curMVol >= 0) {
-            room->curMVol = 0;
-            room->flags &= ~0x40000000;
-          }
-          if (room->curMVol * 1.2014794e-07f >= 0.5) {
-            synthActivateStudio(room->studio, TRUE, SND_STUDIO_TYPE_STD);
-          } else {
-            synthActivateStudio(room->studio, FALSE, SND_STUDIO_TYPE_STD);
-          }
-        }
-      }
-    }
-  }
-}
-
-static inline bool sndAddRoom(SND_ROOM* room, SND_FVECTOR* pos, void (*activateReverb)(u8 studio, void* user),
-                void (*deActivateReverb)(u8 studio)) {
-  if (sndActive) {
-    hwDisableIrq();
-
-    if ((room->next = s3dRoomRoot) != NULL) {
-      room->next->prev = room;
-    }
-
-    room->prev = NULL;
-    s3dRoomRoot = room;
-    room->flags = 0;
-    room->studio = 0xff;
-    room->activateReverb = activateReverb;
-    room->deActivateReverb = deActivateReverb;
-    room->pos = *pos;
-
-    hwEnableIrq();
-    return TRUE;
-  }
-
-  return FALSE;
-}
-
-/**
- * Unlinks a room from the room list and, if it holds a studio,
- * frees and deactivates that studio and its reverb (not compiled into this game build).
- */
-static inline bool sndRemoveRoom(SND_ROOM* room) {
-  if (sndActive) {
-    hwDisableIrq();
-    if (room->prev != NULL) {
-      room->prev->next = room->next;
-    } else {
-      s3dRoomRoot = room->next;
-    }
-
-    if (room->next != NULL) {
-      room->next->prev = room->prev;
-    }
-
-    if (room->studio != 0xFF) {
-      snd_used_studios &= ~(1 << room->studio - snd_base_studio);
-
-      if (room->deActivateReverb) {
-        room->deActivateReverb(room->studio);
-      }
-
-      synthDeactivateStudio(room->studio);
-    }
-
-    room->flags = 0;
-    hwEnableIrq();
-
-    return TRUE;
-  }
-
-  return FALSE;
-}
-
-/** Moves a room to a new position (not compiled into this game build). */
-static inline bool sndUpdateRoom(SND_ROOM* room, SND_FVECTOR* pos) {
-
-  if (sndActive) {
-    hwDisableIrq();
-    room->pos = *pos;
-    hwEnableIrq();
-    return TRUE;
-  }
-
-  return FALSE;
-}
-
-/**
- * Marks a room as having a listener entering (starts its volume fade-in) unless it is already fading in
- * or audible (not compiled into this game build).
- */
-static inline void AddListener2Room(SND_ROOM* room) {
-  if (room->flags & 0x80000000) {
-    return;
-  }
-
-  if (room->curMVol != 0) {
-    return;
-  }
-
-  room->flags |= 0x80000000;
-}
-
-/**
- * If the given listener is the only one in the room,
- * starts the room's volume fade-out (not compiled into this game build).
- */
-static inline void RemoveListenerFromRoom(SND_ROOM* room) {
-  u32 n;            // r30
-  SND_LISTENER* li; // r31
-
-  for (n = 0, li = s3dListenerRoot; li != NULL; li = li->next) {
-    if (li->room == room) {
-      ++n;
-    }
-  }
-
-  if (n == 1) {
-    room->flags &= ~0x80000000;
-    room->flags |= 0x40000000;
-  }
-}
-
-/**
- * Sets the studio input of a door from how open it is:
- * the main volume is open * 127, aux A is the fx volume times open
- * and aux B is 0 (not compiled into this game build).
- */
-static inline void CalcDoorParameters(SND_DOOR* door) {
-  f32 f; // r1+0xC
-  f32 v; // r63
-  v = door->open;
-  f = (1.f - door->open) * door->dampen;
-  door->input.volA = door->fxVol * v;
-  door->input.volB = 0;
-  door->input.vol = v * 127.f;
-}
-
-/**
- * Connects the two rooms of each door through a studio input once both rooms have studios,
- * updates the volume while connected and disconnects the input
- * when either room loses its studio (not compiled into this game build).
- */
-static inline void CheckDoorStatus() {
-  SND_DOOR* door; // r31
-
-  for (door = s3dDoorRoot; door != NULL; door = door->next) {
-    if (!(door->flags & 0x80000000)) {
-      if (door->a->studio != 0xFF) {
-        if (door->b->studio != 0xFF) {
-          CalcDoorParameters(door);
-          if (door->flags & 1) {
-            door->input.srcStudio = door->b->studio;
-            synthAddStudioInput(door->a->studio, &door->input);
-          } else {
-            door->input.srcStudio = door->a->studio;
-            synthAddStudioInput(door->b->studio, &door->input);
-          }
-
-          door->flags |= 0x80000000;
-        }
-      }
-    } else if (door->a->studio == 0xFF || door->b->studio == 0xFF) {
-      if ((door->a->studio != 0xFF && door->a->studio == door->destStudio) ||
-          (door->b->studio != 0xFF && door->b->studio == door->destStudio)) {
-        synthRemoveStudioInput(door->destStudio, &door->input);
-      }
-
-      door->flags &= ~0x80000000;
-    } else {
-      CalcDoorParameters(door);
-    }
-  }
-}
-
-/**
- * Adds a door between rooms a and b to the door list with its position, opening,
- * damping and effect volume (not compiled into this game build).
- */
-static inline bool sndAddDoor(SND_DOOR* door, SND_ROOM* a, SND_ROOM* b, SND_FVECTOR* pos, f32 dampen, f32 open,
-                unsigned char fxVol, s16 filterCoef[4], u32 flags) {
-
-  hwDisableIrq();
-
-  if ((door->next = s3dDoorRoot) != NULL) {
-    door->next->prev = door;
-  }
-
-  door->prev = NULL;
-  s3dDoorRoot = door;
-  door->pos = *pos;
-  door->open = open;
-  door->dampen = dampen;
-  door->fxVol = fxVol;
-  door->a = a;
-  door->b = b;
-  door->flags = flags;
-  hwEnableIrq();
-  return 1;
-}
-
-/** Unlinks a door from the door list (not compiled into this game build). */
-static inline bool sndRemoveDoor(SND_DOOR* door) {
-  hwDisableIrq();
-  if (door->prev != NULL) {
-    door->prev->next = door->next;
-  } else {
-    s3dDoorRoot = door->next;
-  }
-  if (door->next != NULL) {
-    door->next->prev = door->prev;
-  }
-  hwEnableIrq();
-  return 1;
-}
-
-#endif
-/**
- * Works out how an emitter sounds to the listeners:
- * for each listener within range, the distance gives a volume (shaped by the emitter's volume push curve and the
- * listener volume), plus doppler pitch from the relative speed,
- * a pan and a surround pan from the emitter position in the listener's space,
- * and occlusion/filtering from the optional occlusion callback.
- * Results are combined over listeners (summed or the loudest, depending on the legacy flag).
- */
+// Not reconstructed (this game does not link them): UpdateRoomDistances, CheckRoomStatus, sndAddRoom, sndRemoveRoom,
+// sndUpdateRoom, AddListener2Room, RemoveListenerFromRoom, CalcDoorParameters, CheckDoorStatus, sndAddDoor,
+// sndRemoveDoor.
 static void CalcEmitter(struct SND_EMITTER* em, f32* vol, f32* doppler, f32* xPan, f32* yPan,
                         f32* zPan, f32* occl) {
-  SND_LISTENER* li; // r31
+  SND_LISTENER* li;
   f32 v1, filt, occ, minFilt, minOcc;
-  SND_FVECTOR d;    // r1+0x44
-  SND_FVECTOR v;    // r1+0x38
-  SND_FVECTOR p;    // r1+0x2C
-  f32 relspeed;     // r60
-  f32 distance;     // r61
-  f32 new_distance; // r59
-  f32 ft;           // r63
-  f32 vd;           // r62
-  SND_FVECTOR pan;  // r1+0x20
-  u32 n;            // r29
+  SND_FVECTOR d;
+  SND_FVECTOR v;
+  SND_FVECTOR p;
+  f32 relspeed;
+  f32 distance;
+  f32 new_distance;
+  f32 ft;
+  f32 vd;
+  SND_FVECTOR pan;
+  u32 n;
   ft = 1.f / 60.f;
   *vol = 0.f;
   *doppler = 1.f;
@@ -467,7 +74,7 @@ static void CalcEmitter(struct SND_EMITTER* em, f32* vol, f32* doppler, f32* xPa
       }
 
       if (s3dUseLegacyLogic) {
-  long i;
+
         *vol += v1;
       } else if (*vol < v1) {
         *vol = v1;
@@ -557,8 +164,8 @@ typedef struct START_LIST {
   f32 yPan;                // offset 0xC, size 0x4
   f32 zPan;                // offset 0x10, size 0x4
   f32 pitch;               // offset 0x14, size 0x4
-  f32 occl;
-  SND_EMITTER* em;         // offset 0x18, size 0x4
+  f32 occl;                // offset 0x18, size 0x4
+  SND_EMITTER* em;         // offset 0x1C, size 0x4
 } START_LIST;
 
 typedef struct RUN_LIST {
@@ -576,53 +183,63 @@ typedef struct START_GROUP {
   unsigned short numRunning; // offset 0xC, size 0x2
 } START_GROUP;
 
-/** Float constants for the 3D sound maths: 16383, 127, 64 and 8192. */
-static const f32 s3d_f16383[1] = {16383.0f};
-static const f32 s3d_f127[1] = {127.0f};
-static const f32 s3d_f64[1] = {64.0f};
-static const f32 s3d_f8192[1] = {8192.0f};
-
-/** Clamps a controller value to 0x7F. */
-static inline u8 clip127(u8 v) {
+static u8 clip127(u8 v) {
   if (v > 0x7f) {
     return 0x7f;
   }
   return v;
 }
 
-/** Clamps a float to 0x3FFF (the 14-bit controller maximum) and truncates it to u16. */
-static inline u16 clip3FFF(f32 v) {
-  if (v > s3d_f16383[0]) {
+static u16 clip3FFF(f32 v) {
+  if (v > 16383.f) {
     return 0x3fff;
   }
   return (u16)v;
 }
 
-/**
- * Applies the calculated 3D values to the emitter's voice through MIDI controllers:
- * volume (controller 7, with fade-in), pan (10), surround pan (131), doppler (132),
- * the low-pass filter cutoff and switch for occlusion (31 and 79), and any extra user parameters.
- */
-static inline void SetFXParameters(SND_EMITTER* const em, f32 vol, f32 xPan, f32 yPan, f32 zPan,
+// GetFXParameterKey, EmitterShutdown, AddEmitter and the eight sndAddEmitter* functions, MakeListenerMatrix,
+// sndAddListenerEx, sndAddListener, sndRemoveListener, sndSet3DEmitterOcclusionCallback, ClearStartList,
+// AddRunningEmitter, sndSetup3DStudios, sndGet3DParameters and s3dExit: names and sizes from the JP demo map
+// (UNUSED there: the game calls none of them, or every call is inlined), bodies from the AxioDL MusyX decomp
+// (2.0.1+ forms); each compiles to the map size. AddEmitter adds the map's UNUSED .sdata2 constant (1/127).
+
+/** Start key of an emitter: the value of its 0x8000 parameter, 0xFF if it has none. */
+static u8 GetFXParameterKey(SND_EMITTER* em) {
+  u8 i;
+  SND_PARAMETER* pPtr;
+
+  if (em->paraInfo == NULL) {
+    return 0xFF;
+  }
+  pPtr = em->paraInfo->paraArray;
+  for (i = 0; i < em->paraInfo->numPara; ++pPtr, ++i) {
+    if (pPtr->ctrl == 0x8000) {
+      return pPtr->paraData.value7;
+    }
+  }
+  return 0xFF;
+}
+
+static void SetFXParameters(SND_EMITTER* const em, f32 vol, f32 xPan, f32 yPan, f32 zPan,
                             f32 doppler, f32 occl) {
-  SND_VOICEID vid;     // r30
-  u8 i;                // r28
-  SND_PARAMETER* pPtr; // r31
+  SND_VOICEID vid;
+  u8 i;
+  SND_PARAMETER* pPtr;
 
   vid = em->vid;
   if ((em->flags & 0x100000) != 0) {
-    synthFXSetCtrl(vid, 7, clip127(s3d_f127[0] * (em->fade * vol)));
+    synthFXSetCtrl(vid, SND_MIDICTRL_VOLUME, clip127((em->fade * vol) * 127.f));
   } else {
-    synthFXSetCtrl(vid, 7, clip127(s3d_f127[0] * vol));
+    synthFXSetCtrl(vid, SND_MIDICTRL_VOLUME, clip127(vol * 127.f));
   }
 
-  synthFXSetCtrl(vid, 10, clip127(s3d_f64[0] * (1.f + xPan)));
-  synthFXSetCtrl(vid, 131, clip127(s3d_f64[0] * (1.f - zPan)));
-  synthFXSetCtrl14(vid, 132, clip3FFF(s3d_f8192[0] * doppler));
+  synthFXSetCtrl(vid, SND_MIDICTRL_PANNING, clip127((1.f + xPan) * 64.f));
+  synthFXSetCtrl(vid, SND_MIDICTRL_SPANNING, clip127((1.f - zPan) * 64.f));
+  synthFXSetCtrl14(vid, SND_MIDICTRL_DOPPLER, clip3FFF(doppler * 8192.f));
 
   if ((em->flags & 0x180) != 0) {
     if (occl != 0.f) {
-      synthFXSetCtrl14(vid, 0x1f, clip3FFF(s3d_f16383[0] * occl));
+      synthFXSetCtrl14(vid, 0x1f, clip3FFF(occl * 16383.f));
       synthFXSetCtrl(vid, 0x4f, 0x7f);
     } else {
       synthFXSetCtrl(vid, 0x4f, 0);
@@ -643,11 +260,7 @@ static inline void SetFXParameters(SND_EMITTER* const em, f32 vol, f32 xPan, f32
   }
 }
 
-/**
- * Unlinks an emitter from the emitter list, clears its state flags (keeping the low 16 bits)
- * and sends key-off to its voice if it has one.
- */
-static inline void EmitterShutdown(SND_EMITTER* em) {
+static void EmitterShutdown(SND_EMITTER* em) {
   if (em->next != NULL) {
     em->next->prev = em->prev;
   }
@@ -670,20 +283,16 @@ static RUN_LIST runList[128];
 
 
 
-/**
- * Public: updates an emitter's position and direction
- * and its maximum volume (the minimum volume is lowered to it if higher).
- */
 bool sndUpdateEmitter(SND_EMITTER* em, SND_FVECTOR* pos, SND_FVECTOR* dir, u8 maxVol,
                       SND_ROOM* room) {
   if (sndActive) {
     hwDisableIrq();
 
-    em->pos = *pos;
-    em->dir = *dir;
-    em->maxVol = maxVol / s3d_f127[0];
-    if (em->minVol > em->maxVol) {
-      em->minVol = em->maxVol;
+    *(SND_FVECTOR*)((u8*)em + 0x10) = *pos;
+    *(SND_FVECTOR*)((u8*)em + 0x1c) = *dir;
+    *(f32*)((u8*)em + 0x2c) = maxVol / 127.f;
+    if (*(f32*)((u8*)em + 0x30) > *(f32*)((u8*)em + 0x2c)) {
+      *(f32*)((u8*)em + 0x30) = *(f32*)((u8*)em + 0x2c);
     }
     hwEnableIrq();
     return TRUE;
@@ -692,32 +301,24 @@ bool sndUpdateEmitter(SND_EMITTER* em, SND_FVECTOR* pos, SND_FVECTOR* dir, u8 ma
   return FALSE;
 }
 
-/** Public: returns TRUE while the emitter is registered (flag 0x10000 set). */
 bool sndCheckEmitter(SND_EMITTER* em) {
   if (sndActive) {
-    return (em->flags & 0x10000) != 0;
+    return (*(u32*)((u8*)em + 0xc) & 0x10000) != 0;
   }
   return FALSE;
 }
 
-#ifdef SND3D_UNUSED /* dead-stripped from this game build */
-/**
- * Shared worker of the sndAddEmitter calls: fills in an emitter.
- * With no buffer it plays a one-shot 3D sound at once if it is audible;
- * with a buffer it links the emitter into the emitter list for s3dHandle to start and track.
- * Returns the voice ID or -1.
- */
-static inline SND_VOICEID AddEmitter(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
+static SND_VOICEID AddEmitter(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
                               f32 maxDis, f32 comp, u32 flags, u16 fxid, u32 groupid, u8 maxVol,
                               u8 minVol, SND_ROOM* room, SND_PARAMETER_INFO* para, u8 studio) {
   static SND_EMITTER tmp_em;
-  SND_EMITTER* em; // r31
-  f32 xPan;        // r1+0x3C
-  f32 yPan;        // r1+0x38
-  f32 zPan;        // r1+0x34
+  SND_EMITTER* em;
+  f32 xPan;
+  f32 yPan;
+  f32 zPan;
+  f32 cvol;
+  f32 pitch;
   f32 occl;
-  f32 cvol;        // r1+0x30
-  f32 pitch;       // r1+0x2C
 
   hwDisableIrq();
   em = em_buffer == NULL ? &tmp_em : em_buffer;
@@ -731,28 +332,17 @@ static inline SND_VOICEID AddEmitter(SND_EMITTER* em_buffer, SND_FVECTOR* pos, S
   em->minVol = minVol * (1.f / 127.f);
   em->volPush = comp;
   em->group = groupid;
-  em->room = room;
   em->studio = studio;
 
   if (em_buffer == NULL) {
-
-    if (em->room != NULL && em->room->studio == 0xFF) {
-      hwEnableIrq();
-      return -1;
-    }
-
     CalcEmitter(em, &cvol, &pitch, &xPan, &yPan, &zPan, &occl);
+
     if (cvol == 0.f) {
       hwEnableIrq();
       return -1;
     } else {
-#if MUSY_VERSION <= MUSY_VERSION_CHECK(2, 0, 1)
-      em->vid = synthFXStart(em->fxid, 127, 64, em->room != NULL ? em->room->studio : em->studio,
+      em->vid = synthFXStart(em->fxid, GetFXParameterKey(em), 127, 64, em->studio,
                              (em->flags & 0x10) != 0);
-#else
-      em->vid = synthFXStart(em->fxid, 5, 127, 64, em->room != NULL ? em->room->studio : em->studio,
-                             (em->flags & 0x10) != 0);
-#endif
       if (em->vid == -1) {
         hwEnableIrq();
         return -1;
@@ -779,37 +369,29 @@ static inline SND_VOICEID AddEmitter(SND_EMITTER* em_buffer, SND_FVECTOR* pos, S
   return -1;
 }
 
-/**
- * Public: adds an emitter in a room with a sound effect, distance, volume range and flags,
- * using the effect ID as its voice group (not compiled into this game build).
- */
-static inline SND_VOICEID sndAddEmitter(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir, f32 maxDis,
+SND_VOICEID sndAddEmitter(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir, f32 maxDis,
                           f32 comp, u32 flags, SND_FXID fxid, u8 maxVol, u8 minVol,
                           SND_ROOM* room) {
   if (sndActive) {
     return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, fxid | 0x80000000, maxVol,
                       minVol, room, NULL, 0);
   }
-
   return -1;
 }
 
-/** Like sndAddEmitter but with an explicit voice group ID (not compiled into this game build). */
-static inline SND_VOICEID sndAddEmitterEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir, f32 maxDis,
-                            f32 comp, u32 flags, SND_FXID fxid, unsigned short groupid, u8 maxVol,
-                            u8 minVol, SND_ROOM* room) {
+SND_VOICEID sndAddEmitterEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir, f32 maxDis,
+                            f32 comp, u32 flags, SND_FXID fxid, u16 groupid, u8 maxVol, u8 minVol,
+                            SND_ROOM* room) {
   if (sndActive) {
-    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol, room,
-                      NULL, 0);
+    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol,
+                      room, NULL, 0);
   }
-
   return -1;
 }
 
-/** Like sndAddEmitter with extra effect parameters (not compiled into this game build). */
-static inline SND_VOICEID sndAddEmitterPara(SND_EMITTER* em_buffer, struct SND_FVECTOR* pos, SND_FVECTOR* dir,
+SND_VOICEID sndAddEmitterPara(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
                               f32 maxDis, f32 comp, u32 flags, SND_FXID fxid, u8 maxVol, u8 minVol,
-                              SND_ROOM* room, struct SND_PARAMETER_INFO* para) {
+                              SND_ROOM* room, SND_PARAMETER_INFO* para) {
   if (sndActive) {
     return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, fxid | 0x80000000, maxVol,
                       minVol, room, para, 0);
@@ -817,20 +399,17 @@ static inline SND_VOICEID sndAddEmitterPara(SND_EMITTER* em_buffer, struct SND_F
   return -1;
 }
 
-/** Like sndAddEmitterPara with an explicit voice group ID (not compiled into this game build). */
-static inline SND_VOICEID sndAddEmitterParaEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
-                                f32 maxDis, f32 comp, u32 flags, SND_FXID fxid, SND_GROUPID groupid,
+SND_VOICEID sndAddEmitterParaEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
+                                f32 maxDis, f32 comp, u32 flags, SND_FXID fxid, u16 groupid,
                                 u8 maxVol, u8 minVol, SND_ROOM* room, SND_PARAMETER_INFO* para) {
   if (sndActive) {
-    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol, room,
-                      para, 0);
+    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol,
+                      room, para, 0);
   }
-
   return -1;
 }
 
-/** Like sndAddEmitter but plays on a given studio instead of a room (not compiled into this game build). */
-static inline SND_VOICEID sndAddEmitter2Studio(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
+SND_VOICEID sndAddEmitter2Studio(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
                                  f32 maxDis, f32 comp, u32 flags, SND_FXID fxid, u8 maxVol,
                                  u8 minVol, u8 studio) {
   if (sndActive) {
@@ -840,19 +419,17 @@ static inline SND_VOICEID sndAddEmitter2Studio(SND_EMITTER* em_buffer, SND_FVECT
   return -1;
 }
 
-/** Like sndAddEmitter2Studio with an explicit voice group ID (not compiled into this game build). */
-static inline SND_VOICEID sndAddEmitter2StudioEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
+SND_VOICEID sndAddEmitter2StudioEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
                                    f32 maxDis, f32 comp, u32 flags, SND_FXID fxid, u16 groupid,
                                    u8 maxVol, u8 minVol, u8 studio) {
   if (sndActive) {
-    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol, NULL,
-                      NULL, studio);
+    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol,
+                      NULL, NULL, studio);
   }
   return -1;
 }
 
-/** Like sndAddEmitter2Studio with extra effect parameters (not compiled into this game build). */
-static inline SND_VOICEID sndAddEmitter2StudioPara(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
+SND_VOICEID sndAddEmitter2StudioPara(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
                                      f32 maxDis, f32 comp, u32 flags, SND_FXID fxid, u8 maxVol,
                                      u8 minVol, u8 studio, SND_PARAMETER_INFO* para) {
   if (sndActive) {
@@ -862,19 +439,16 @@ static inline SND_VOICEID sndAddEmitter2StudioPara(SND_EMITTER* em_buffer, SND_F
   return -1;
 }
 
-/** Like sndAddEmitter2StudioPara with an explicit voice group ID (not compiled into this game build). */
-static inline SND_VOICEID sndAddEmitter2StudioParaEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
+SND_VOICEID sndAddEmitter2StudioParaEx(SND_EMITTER* em_buffer, SND_FVECTOR* pos, SND_FVECTOR* dir,
                                        f32 maxDis, f32 comp, u32 flags, SND_FXID fxid, u16 groupid,
                                        u8 maxVol, u8 minVol, u8 studio, SND_PARAMETER_INFO* para) {
   if (sndActive) {
-    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol, NULL,
-                      para, studio);
+    return AddEmitter(em_buffer, pos, dir, maxDis, comp, flags, fxid, groupid, maxVol, minVol,
+                      NULL, para, studio);
   }
   return -1;
 }
 
-#endif
-/** Public: shuts down a registered emitter and releases its voice; always TRUE when the sound system is on. */
 bool sndRemoveEmitter(SND_EMITTER* em) {
   if (sndActive) {
     hwDisableIrq();
@@ -889,12 +463,8 @@ bool sndRemoveEmitter(SND_EMITTER* em) {
   return FALSE;
 }
 
-/**
- * Public: returns the voice ID currently playing the emitter's sound,
- * or 0xFFFFFFFF if it is not registered or has no voice.
- */
 SND_VOICEID sndEmitterVoiceID(SND_EMITTER* em) {
-  SND_VOICEID ret; // r31
+  SND_VOICEID ret;
 
   ret = 0xffffffff;
   if (sndActive != FALSE) {
@@ -907,10 +477,9 @@ SND_VOICEID sndEmitterVoiceID(SND_EMITTER* em) {
   return ret;
 }
 
-/** Removes every emitter (used when the sound system is reset). */
 void s3dKillAllEmitter() {
-  struct SND_EMITTER* em;  // r31
-  struct SND_EMITTER* nem; // r30
+  struct SND_EMITTER* em;
+  struct SND_EMITTER* nem;
 
   em = s3dEmitterRoot;
   while (em != NULL) {
@@ -920,14 +489,10 @@ void s3dKillAllEmitter() {
   }
 }
 
-/**
- * Removes every emitter whose effect ID is in the fxTab list of num entries (called when a sound-effect group is
- * popped).
- */
 void s3dKillEmitterByFXID(FX_TAB* fxTab, unsigned long num) {
-  struct SND_EMITTER* em;  // r31
-  struct SND_EMITTER* nem; // r29
-  unsigned long i;         // r30
+  struct SND_EMITTER* em;
+  struct SND_EMITTER* nem;
+  unsigned long i;
 
   for (em = s3dEmitterRoot; em != NULL; em = nem) {
     nem = em->next;
@@ -940,13 +505,8 @@ void s3dKillEmitterByFXID(FX_TAB* fxTab, unsigned long num) {
   }
 }
 
-/**
- * Builds the listener's world-to-listener matrix:
- * right vector from heading x up, columns right, up and -heading, translation at the listener position,
- * then inverted into li->mat.
- */
-static inline void MakeListenerMatrix(SND_LISTENER* li) {
-  struct SND_FMATRIX mat; // r1+0xC
+static void MakeListenerMatrix(SND_LISTENER* li) {
+  struct SND_FMATRIX mat;
   salCrossProduct(&li->right, &li->heading, &li->up);
   mat.m[0][0] = li->right.x;
   mat.m[1][0] = li->right.y;
@@ -963,10 +523,6 @@ static inline void MakeListenerMatrix(SND_LISTENER* li) {
   salInvertMatrix(&li->mat, &mat);
 }
 
-/**
- * Public: updates a listener's position, velocity, heading and up vector,
- * rebuilds its matrix and sets its volume (0..127 to 0..1).
- */
 bool sndUpdateListener(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
                        SND_FVECTOR* up, u8 vol, SND_ROOM* room) {
   if (sndActive) {
@@ -977,7 +533,7 @@ bool sndUpdateListener(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND
     li->up = *up;
 
     MakeListenerMatrix(li);
-    li->vol = vol / s3d_f127[0];
+    li->vol = vol / 127.f;
     hwEnableIrq();
     return TRUE;
   }
@@ -985,15 +541,9 @@ bool sndUpdateListener(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND
   return FALSE;
 }
 
-#ifdef SND3D_UNUSED /* dead-stripped from this game build */
-/**
- * Adds a listener (the point sounds are heard from) with its surround distances, sound speed,
- * volume offset and flags to the listener list, and enters its room (not compiled into this game build).
- */
-static inline bool sndAddListenerEx(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
+bool sndAddListenerEx(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
                       SND_FVECTOR* up, f32 front_sur, f32 back_sur, f32 soundSpeed,
-                      f32 volPosOffset, u32 flags, u8 vol, SND_ROOM* room) {
-
+                      f32 volPosOffset, u32 flags, u8 vol, const SND_LISTENER_EXPARAMETER* exPara) {
   if (sndActive) {
     hwDisableIrq();
     if ((li->next = s3dListenerRoot) != NULL) {
@@ -1013,9 +563,10 @@ static inline bool sndAddListenerEx(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVEC
     MakeListenerMatrix(li);
     li->flags = flags;
     li->vol = vol / 127.f;
-    li->room = room;
-    if (room != NULL) {
-      AddListener2Room(room);
+    if (exPara != NULL) {
+      li->oneMeter = exPara->oneMeter;
+    } else {
+      li->oneMeter = 1.f;
     }
     hwEnableIrq();
     return TRUE;
@@ -1024,24 +575,16 @@ static inline bool sndAddListenerEx(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVEC
   return FALSE;
 }
 
-/** Like sndAddListenerEx with no volume position offset (not compiled into this game build). */
-static inline bool sndAddListener(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
+bool sndAddListener(SND_LISTENER* li, SND_FVECTOR* pos, SND_FVECTOR* dir, SND_FVECTOR* heading,
                     SND_FVECTOR* up, f32 front_sur, f32 back_sur, f32 soundSpeed, u32 flags, u8 vol,
-                    SND_ROOM* room) {
-  return sndAddListenerEx(li, pos, dir, heading, up, front_sur, back_sur, soundSpeed, 0.f, flags,
-                          vol, room);
+                    const SND_LISTENER_EXPARAMETER* exPara) {
+  return sndAddListenerEx(li, pos, dir, heading, up, front_sur, back_sur, soundSpeed, 0.f, flags, vol,
+                          exPara);
 }
 
-/** Unlinks a listener from the list, leaving its room if any (not compiled into this game build). */
-static inline bool sndRemoveListener(SND_LISTENER* li) {
+bool sndRemoveListener(SND_LISTENER* li) {
   if (sndActive) {
-
     hwDisableIrq();
-
-    if (li->room != NULL) {
-      RemoveListenerFromRoom(li->room);
-    }
-
     if (li->next != NULL) {
       li->next->prev = li->prev;
     }
@@ -1057,32 +600,32 @@ static inline bool sndRemoveListener(SND_LISTENER* li) {
 
   return FALSE;
 }
-#endif
+
+void sndSet3DEmitterOcclusionCallback(void (*callback)(struct SND_EMITTER*, SND_FVECTOR*, SND_FVECTOR*, void*, SND_FVECTOR*, SND_FVECTOR*, f32*, f32*)) {
+  s3dOcclusionCallback = callback;
+}
 
 
-static START_GROUP startGroup[64];  // size: 0x400
+
 static u8 startGroupNum;            // size: 0x1
-extern START_LIST startListNum[64]; // size: 0x700
+static START_LIST startListNum[64];
 static u8 startListNumnum;          // size: 0x1
-static RUN_LIST runList[128];
-static u8 runListNum;               // size: 0x1
-void (*s3dOcclusionCallback)(struct SND_EMITTER*, SND_FVECTOR*, SND_FVECTOR*, void*, SND_FVECTOR*, SND_FVECTOR*, f32*, f32*);
 
-/** Resets the per-update lists of voice groups that are starting and running. */
-static inline void ClearStartList() {
+static u8 runListNum;               // size: 0x1
+static void (*s3dOcclusionCallback)(struct SND_EMITTER*, SND_FVECTOR*, SND_FVECTOR*, void*, SND_FVECTOR*, SND_FVECTOR*, f32*, f32*) = NULL;
+
+static void ClearStartList() {
   startGroupNum = 0;
   startListNumnum = 0;
   runListNum = 0;
 }
 
-/**
- * Records an emitter that already has a voice in its group's running list, sorted by ascending volume,
- * so quieter ones can be replaced when a louder emitter needs a voice.
- */
-static inline void AddRunningEmitter(SND_EMITTER* em, f32 vol) {
-  long i;        // r30
-  RUN_LIST* rl;  // r29
-  RUN_LIST* lrl; // r28
+// BUG: no bound checks here (AddStartingEmitter has them): a 65th group overruns startGroup[64] and a
+// 129th running emitter overruns runList[128].
+static void AddRunningEmitter(SND_EMITTER* em, f32 vol) {
+  long i;
+  RUN_LIST* rl;
+  RUN_LIST* lrl;
 
   for (i = 0; i < startGroupNum; ++i) {
     if (em->group == startGroup[i].id) {
@@ -1119,14 +662,9 @@ static inline void AddRunningEmitter(SND_EMITTER* em, f32 vol) {
   runList[runListNum++].vol = vol;
 }
 
-/**
- * Queues an emitter that wants to start (with its calculated volume, pan,
- * pitch and occlusion) in its group's start list, loudest first.
- * Returns FALSE if the group table (64) or start table (64) is full.
- */
-bool AddStartingEmitter(SND_EMITTER* em, f32 vol, f32 xPan, f32 yPan, f32 zPan, f32 pitch, f32 occl) {
-  long i;         // r30
-  START_LIST* sl; // r29
+static bool AddStartingEmitter(SND_EMITTER* em, f32 vol, f32 xPan, f32 yPan, f32 zPan, f32 pitch, f32 occl) {
+  long i;
+  START_LIST* sl;
 
   for (i = 0; i < startGroupNum; ++i) {
     if (em->group == startGroup[i].id) {
@@ -1177,14 +715,8 @@ bool AddStartingEmitter(SND_EMITTER* em, f32 vol, f32 xPan, f32 yPan, f32 zPan, 
 }
 
 int synthCheckFXRealloc(unsigned short fid);
-/**
- * Starts the voices of the queued emitters per group:
- * if the group already has running voices, a candidate must be louder than the quietest one by more than 0.08
- * (0.15 or less for 20 consecutive updates) and then replaces it (the legacy mode starts only without killing).
- * Sets up fade-in and the 3D controller values on each new voice.
- */
-void StartContinousEmitters() {
-  f32 dv;          // r63
+static void StartContinousEmitters() {
+  f32 dv;
 
   if (s3dUseLegacyLogic) {
     long i;
@@ -1210,7 +742,7 @@ void StartContinousEmitters() {
       }
       em = sl->em;
       {
-        u8 key = s3dGetEmitterKey(em);
+        u8 key = GetFXParameterKey(em);
         if (
           (em->vid = synthFXStart(em->fxid, key, 127, 64, em->studio, (em->flags & 0x10) != 0))
           == -1) {
@@ -1260,10 +792,9 @@ void StartContinousEmitters() {
       }
       em = sl->em;
       {
-        u8 key = s3dGetEmitterKey(em);
+        u8 key = GetFXParameterKey(em);
       if ((em->vid = synthFXStart(em->fxid, key, 127, 64, em->studio, (em->flags & 0x10) != 0))
           == -1) {
-      set_flags2:
         if (!(em->flags & 0x2)) {
           em->flags |= 0x40000;
           em->flags &= ~0x20000;
@@ -1302,30 +833,22 @@ void StartContinousEmitters() {
   }
 }
 
-START_LIST startListNum[64];
-
-/**
- * Runs the 3D sound update every fourth call: for each emitter computes volume, doppler pitch,
- * pan and occlusion relative to the listeners, starts voices for emitters that have none,
- * silences emitters that are out of range, applies the values to the voices and fades new ones in;
- * finally starts the queued emitters.
- */
 void s3dHandle() {
-  SND_VOICEID vid;
-  SND_EMITTER* em;  // r31
-  SND_EMITTER* nem; // r30
-  f32 vol;          // r1+0x18
-  f32 xPan;         // r1+0x14
-  f32 yPan;         // r1+0x10
-  f32 zPan;         // r1+0xC
-  f32 pitch;        // r1+0x8
+
+  SND_EMITTER* em;
+  SND_EMITTER* nem;
+  f32 vol;
+  f32 xPan;
+  f32 yPan;
+  f32 zPan;
+  f32 pitch;
   f32 occl;
 
   if (s3dCallCnt != 0) {
     --s3dCallCnt;
     return;
   }
-  s3dCallCnt = 3;
+  s3dCallCnt = 3; // the rest of s3dHandle runs on every fourth call
   ClearStartList();
   em = s3dEmitterRoot;
   for (; em != NULL; em = nem) {
@@ -1334,29 +857,32 @@ void s3dHandle() {
       EmitterShutdown(em);
       continue;
     }
+
+    // BUG: only this call sets vol, xPan, yPan, zPan, pitch and occl; an emitter with neither bit
+    // (not continuous, no start pending) that still has a voice reads them unset further down.
     if ((em->flags & 0x20001) != 0) {
       CalcEmitter(em, &vol, &pitch, &xPan, &yPan, &zPan, &occl);
     }
 
     if (!(em->flags & 0x80000)) {
       if (em->flags & 0x20000) {
-        if (vol == 0.f && em->flags & 0x4) {
+        if (vol == 0.f && em->flags & SND_EMITTER_PAUSABLE) {
           em->flags |= 0x80000;
           em->flags &= ~0x20000;
           goto found_emitter;
-        } else if (vol == 0.f && em->flags & 0x40) {
+        } else if (vol == 0.f && em->flags & SND_EMITTER_NOSILENTSTART) {
           EmitterShutdown(em);
           continue;
         }
 
-        if (em->flags & 1) {
+        if (em->flags & SND_EMITTER_CONTINUOUS) {
           if (AddStartingEmitter(em, vol, xPan, yPan, zPan, pitch, occl)) {
             continue;
           }
         } else {
-          u8 key = s3dGetEmitterKey(em);
-          if ((em->vid = synthFXStart(em->fxid, key, 127, 64, em->studio, (em->flags & 0x10) != 0)) == -1) {
-            if (!(em->flags & 2)) {
+          u8 key = GetFXParameterKey(em);
+          if ((em->vid = synthFXStart(em->fxid, key, 127, 64, em->studio, (em->flags & SND_EMITTER_ITD) != 0)) == -1) {
+            if (!(em->flags & SND_EMITTER_RESTARTABLE)) {
               em->flags |= 0x40000;
               em->flags &= ~0x20000;
             } else {
@@ -1365,7 +891,7 @@ void s3dHandle() {
           }
         }
       } else if ((em->vid = sndFXCheck(em->vid)) == -1) {
-        if ((em->flags & 2)) {
+        if ((em->flags & SND_EMITTER_RESTARTABLE)) {
           em->flags |= 0x20000;
         } else {
           em->flags |= 0x40000;
@@ -1374,13 +900,13 @@ void s3dHandle() {
 
     found_emitter:
       if (em->vid != -1) {
-        if ((em->flags & 1) != 0) {
+        if ((em->flags & SND_EMITTER_CONTINUOUS) != 0) {
           AddRunningEmitter(em, vol);
         }
-        if ((vol == 0.f) && ((em->flags & 4) != 0)) {
+        if ((vol == 0.f) && ((em->flags & SND_EMITTER_PAUSABLE) != 0)) {
           synthSendKeyOff(em->vid);
           em->vid = 0xffffffff;
-          if ((em->flags & 2)) {
+          if ((em->flags & SND_EMITTER_RESTARTABLE)) {
             em->flags |= 0x80000;
           } else {
             em->flags |= 0x40000;
@@ -1403,27 +929,21 @@ void s3dHandle() {
   StartContinousEmitters();
 }
 
-#ifdef SND3D_UNUSED /* dead-stripped from this game build */
-/** Sets the range of studios (first, num) that the 3D rooms may use (not compiled into this game build). */
-static inline void sndSetup3DStudios(unsigned char first, unsigned char num) {
+void sndSetup3DStudios(u8 first, u8 num) {
   snd_base_studio = first;
   snd_max_studios = num;
 }
 
-/**
- * Calculates, without playing anything, the volume, pan,
- * surround pan and doppler values a 3D emitter at the given position would have,
- * as controller values (not compiled into this game build).
- */
-static inline void sndGet3DParameters(SND_3DINFO* info, SND_FVECTOR* pos, SND_FVECTOR* dir, f32 maxDis, f32 comp,
+void sndGet3DParameters(SND_3DINFO* info, SND_FVECTOR* pos, SND_FVECTOR* dir, f32 maxDis, f32 comp,
                         u8 maxVol, u8 minVol, SND_ROOM* room) {
-  f32 xPan;  // r1+0x34
-  f32 yPan;  // r1+0x30
-  f32 zPan;  // r1+0x2C
-  f32 occl;
-  f32 cvol;  // r1+0x28
-  f32 pitch; // r1+0x24
+  f32 xPan;
+  f32 yPan;
+  f32 zPan;
+  f32 cvol;
+  f32 pitch;
   static SND_EMITTER em;
+  f32 occl;
+
   hwDisableIrq();
 
   em.flags = 8;
@@ -1433,22 +953,15 @@ static inline void sndGet3DParameters(SND_3DINFO* info, SND_FVECTOR* pos, SND_FV
   em.maxVol = maxVol / 127.f;
   em.minVol = minVol / 127.f;
   em.volPush = comp;
-  em.room = room;
-
   CalcEmitter(&em, &cvol, &pitch, &xPan, &yPan, &zPan, &occl);
   info->vol = clip127(cvol * 127.f);
   info->pan = clip127((xPan + 1.f) * 64.f);
   info->span = clip127((1.f - zPan) * 64.f);
   info->doppler = clip3FFF(pitch * 8192.f);
-
+  info->lpfFactor = clip3FFF(pitch * 16383.f);
   hwEnableIrq();
 }
 
-#endif
-/**
- * Initializes the 3D sound module: no emitters or listeners, studios 1-3 for rooms,
- * flag bit 1 = limit by the effect's max voices, bit 2 = legacy start logic.
- */
 void s3dInit(u32 flags) {
   
   s3dEmitterRoot = 0;
@@ -1461,5 +974,4 @@ void s3dInit(u32 flags) {
   s3dUseLegacyLogic = ((flags & 4) != 0);
 }
 
-/** Empty. */
-static inline void s3dExit() {}
+void s3dExit() {}

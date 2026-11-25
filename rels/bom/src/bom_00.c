@@ -4,6 +4,7 @@
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
+#include "data_tables.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_mario.h"
@@ -11,14 +12,21 @@
 #include "evt/evt_msg.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
+#include "driver/seqdrv.h"
+#include "pmario_sound.h"
+#include "mario/mario.h"
 #include "party.h"
-#include "bom.h"
-#include "data_tables.h"
-#include "evt/evt_story.h"
 
+EvtWord evt_bom_snowfall[18];
 static TreeAccess tree_tbl[4];
+static EvtWord evt_tree[7];
+static EvtWord first_evt_dokan[36];
 static BeroEntry bero_entry_data[3];
+static EvtWord first_evt[108];
+static EvtWord first_evt2[101];
+EvtWord bom_00_init_evt[66];
 
 /** Starts the snowfall effect (snowfall_n64) shared by the Fahr Outpost field maps. */
 EVT_BEGIN(evt_bom_snowfall)
@@ -43,20 +51,20 @@ EVT_END()
 
 /**
  * Pipe-exit event used when entering from the Rogueport Sewers pipe:
- * on the very first arrival (GSWF_BOM_FAHR_REACHED not set) it hides Mario and the partner
+ * on the very first arrival (GSWF_BOM_FIRST_ARRIVAL_DONE not set) it hides Mario and the partner
  * until first_evt clears GF(0), then shows them again; leaves LW(0) = 0.
  */
 static EVT_BEGIN(first_evt_dokan)
-    IF_INT_EQUAL(GSWF(GSWF_BOM_FAHR_REACHED), 1)
+    IF_INT_EQUAL(GSWF_BOM_FIRST_ARRIVAL_DONE, 1)
         SET_VALUE(LW(0), 0)
         RETURN
     END_IF
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
     SET_VALUE(GF(0), 1)
     WAIT_WHILE(GF(0))
-    CALL(evt_mario_dispflag_onoff, 0, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 0)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 0)
     SET_VALUE(LW(0), 0)
     RETURN
 EVT_END()
@@ -71,7 +79,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)first_evt_dokan, // enterEvent
+        first_evt_dokan, // enterEvent
         6, // caseType
         NULL, // exitEvent
         "tik_07", // nextMapName
@@ -102,7 +110,7 @@ static BeroEntry bero_entry_data[] = {
 /**
  * First arrival at Fahr Outpost: letterboxed camera pan down over the snowfield,
  * Mario and the partner walk into the scene, the partner speaks stg7_bom_01,
- * and the story progress is set to STORY_STG7_00_START with GSWF_BOM_FAHR_REACHED raised.
+ * and the story progress is set to STG7_00_START with GSWF_BOM_FIRST_ARRIVAL_DONE raised.
  * It clears GF(0) once the pan is done.
  */
 static EVT_BEGIN(first_evt)
@@ -110,24 +118,24 @@ static EVT_BEGIN(first_evt)
     CALL(evt_party_stop, 0)
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_cam_letter_box_onoff, 1, 0)
-    CALL(evt_cam3d_evt_set, -176, 567, 533, -176, 471, -9, 0, 11)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_cam3d_evt_set, -176, 183, 533, -176, 87, -9, 6000, 11)
+    CALL(evt_cam3d_evt_set, -176, 567, 533, -176, 471, -9, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_cam3d_evt_set, -176, 183, 533, -176, 87, -9, 6000, EASING_SINE_IN_OUT)
     WAIT_MS(6000)
     SET_VALUE(GF(0), 0)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     CALL(evt_mario_mov_pos2, -155, 31, FLOAT(60.0f))
     CALL(evt_mario_set_dir, 270, 300, 0)
     CALL(evt_party_move_pos2, 0, -188, 31, FLOAT(60.0f))
     CALL(evt_party_set_dir, 0, 90, 300)
-    CALL(evt_cam3d_evt_set, -175, 90, 295, -175, 35, 0, 1000, 11)
+    CALL(evt_cam3d_evt_set, -175, 90, 295, -175, 35, 0, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_party_stop, 0)
     WAIT_MS(200)
     CALL(evt_msg_print_party, STRING("stg7_bom_01"))
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_00_START)
-    SET_VALUE(GSWF(GSWF_BOM_FAHR_REACHED), 1)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG7_00_START)
+    SET_VALUE(GSWF_BOM_FIRST_ARRIVAL_DONE, 1)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
     CALL(evt_snd_bgm_scope, 0, 0)
@@ -136,31 +144,31 @@ EVT_END()
 
 /**
  * Arrival cutscene for the first visit when Fahr Outpost is reached
- * before Chapter 7 proper (story step before STORY_STG6_71_01):
+ * before Chapter 7 proper (story step before STG6_71_01):
  * the camera pulls down from above, Mario and the partner walk in from the pipe
  * and the partner comments (stg7_bom_01_00). It does not advance the story.
  */
-EVT_BEGIN(first_evt2)
+static EVT_BEGIN(first_evt2)
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
-    CALL(evt_cam3d_evt_set, -176, 567, 533, -176, 471, -9, 0, 11)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_cam3d_evt_set, -176, 183, 533, -176, 87, -9, 6000, 11)
+    CALL(evt_cam3d_evt_set, -176, 567, 533, -176, 471, -9, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_cam3d_evt_set, -176, 183, 533, -176, 87, -9, 6000, EASING_SINE_IN_OUT)
     WAIT_MS(6000)
     SET_VALUE(GF(0), 0)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     CALL(evt_mario_mov_pos2, -155, 31, FLOAT(60.0f))
     CALL(evt_mario_set_dir, 270, 300, 0)
     CALL(evt_party_move_pos2, 0, -188, 31, FLOAT(60.0f))
     CALL(evt_party_set_dir, 0, 90, 300)
-    CALL(evt_cam3d_evt_set, -175, 90, 295, -175, 35, 0, 1000, 11)
+    CALL(evt_cam3d_evt_set, -175, 90, 295, -175, 35, 0, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_party_stop, 0)
     WAIT_MS(200)
     CALL(evt_msg_print_party, STRING("stg7_bom_01_00"))
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSWF(GSWF_BOM_FAHR_REACHED), 1)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSWF_BOM_FIRST_ARRIVAL_DONE, 1)
     CALL(evt_snd_bgm_scope, 0, 0)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
@@ -177,23 +185,23 @@ EVT_BEGIN(bom_00_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG7_BOM1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG7_BOM1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG7_BOM1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG7_BOM1"))
     CALL_CHILD(evt_bom_snowfall)
     CALL_CHILD(evt_tree)
-    CALL(evt_mobj_brick, STRING("mobj_badge_gat2"), 215, 65, -75, ITEM_DOUBLE_DIP_P, 12, 0, GSWF(GSWF_BOM00_DOUBLE_DIP_P_BLOCK_HIT))
-    CALL(evt_mobj_kururing_floor, STRING("kururin1"), -300, 5, 0, STRING("S_gra02_dai"), 125, GSWF(GSWF_BOM00_STAR_PIECE_PANEL))
-    IF_INT_EQUAL(GSWF(GSWF_BOM_FAHR_REACHED), 0)
-        SWITCH(GSW(GSW_STORY_PROGRESS))
-            CASE_LESS(STORY_STG6_71_01)
+    CALL(evt_mobj_brick, STRING("mobj_badge_gat2"), 215, 65, -75, ITEM_DOUBLE_DIP_P, MOBJ_BRICK_HIDDEN_BADGE, 0, GSWF_BOM_00_DOUBLE_DIP_P_HIDDEN_BLOCK)
+    CALL(evt_mobj_kururing_floor, STRING("kururin1"), -300, 5, 0, STRING("S_gra02_dai"), 125, GSWF_STARPIECE_91)
+    IF_INT_EQUAL(GSWF_BOM_FIRST_ARRIVAL_DONE, 0)
+        SWITCH(GSW_STORY_PROGRESS)
+            CASE_LESS(STG6_71_01)
             SPAWN_EVENT(first_evt2)
             CASE_DEFAULT
             SPAWN_EVENT(first_evt)
         END_SWITCH
     ELSE
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_71_01)
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG7_00_START)
-                SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_00_START)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_71_01)
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG7_00_START)
+                SET_VALUE(GSW_STORY_PROGRESS, STG7_00_START)
             END_IF
         END_IF
     END_IF

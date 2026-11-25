@@ -1,21 +1,42 @@
 // tou_12 (闘技場, Glitz Pit): the back room reached from the storage room tou_06.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_eff.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_party.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "tou.h"
-#include "evt/evt_story.h"
+#include "evt/evt_item.h"
+#include "driver/mobjdrv.h"
+#include "driver/npcdrv.h"
 #include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+
+static EvtWord w_door_open[12];
+static EvtWord w_door_close[12];
+static BeroEntry bero_data[2];
+static EvtWord evt_kinoshikowa[111];
+static EvtWord evt_block_broken[57];
+static EvtWord init_michel[22];
+static EvtWord init_michel_dummy[12];
+static EvtWord talk_michel[8];
+static EvtWord init_brots[35];
+static EvtWord init_brots_dummy[12];
+static EvtWord talk_brots[91];
+static EvtWord init_kinoshikowa[2];
+static EvtWord talk_kinoshikowa[2];
+static NpcSetupInfo npcEnt[6];
+EvtWord tou_12_init_evt[133];
 
 /**
  * Door animation callback for the west door (door_1), opening: LW(0) is the swing angle;
@@ -61,9 +82,9 @@ static BeroEntry bero_data[] = {
 };
 
 /**
- * Scene when Mario steps into the back room: Jolene (キノシコワ) stands by the half-open door,
- * notices him and runs out (a "!" balloon, then she leaves toward x=-250 and the door slams shut with a wood
- * sound); the partner remarks stg3_tou_307_13_00 and control returns.
+ * Scene started after the block is broken: Jolene (キノシコワ) stands by the half-open door.
+ * When Mario's X is less than -55, she notices him and runs out (a "!" balloon, then she leaves toward
+ * x=-250 and the door slams shut with a wood sound); the partner remarks stg3_tou_307_13_00 and control returns.
  */
 static EVT_BEGIN(evt_kinoshikowa)
     CALL(evt_npc_set_position, STRING("キノシコワ"), -200, 0, 10)
@@ -77,10 +98,10 @@ static EVT_BEGIN(evt_kinoshikowa)
     END_LOOP
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
-    CALL(evt_eff_fukidashi, 1, 0, STRING("キノシコワ"), 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, 0, STRING("キノシコワ"), 0, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
-        CALL(evt_npc_status_onoff, 1, STRING("キノシコワ"), 2)
+        CALL(evt_npc_status_onoff, 1, STRING("キノシコワ"), NPC_STATUS_FACE_MOVE_DIR)
         CALL(evt_npc_move_position, STRING("キノシコワ"), -250, 10, 0, FLOAT(80.0f), 1)
     END_INLINE_EVENT
     CALL(evt_mapobj_get_position, STRING("door_1"), LW(0), LW(1), LW(2))
@@ -103,14 +124,14 @@ EVT_END()
  * Run when the block is broken and the flattened fighters are revealed:
  * the partner walks to (95, 10) with the surprised jingle and remarks stg3_tou_307_10,
  * Brots' dummy (ブロッツダミー) says stg3_tou_307_11, evt_kinoshikowa runs
- * and the story advances to STORY_STG3_20_16_FLATTENED.
+ * and the story advances to STG3_20_16_FLATTENED.
  */
 static EVT_BEGIN(evt_block_broken)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
     CALL(evt_party_move_pos2, 0, 95, 10, FLOAT(80.0f))
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SURPRISED2"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SURPRISED2"))
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_party_set_dir, 0, 270, 200)
 #else
@@ -118,23 +139,23 @@ static EVT_BEGIN(evt_block_broken)
 #endif
     WAIT_MS(300)
     CALL(evt_msg_print_party, STRING("stg3_tou_307_10"))
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     WAIT_MS(300)
     CALL(evt_msg_print, 0, STRING("stg3_tou_307_11"), 0, STRING("ブロッツダミー"))
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
     SPAWN_EVENT(evt_kinoshikowa)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_20_16_FLATTENED)
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_20_16_FLATTENED)
     RETURN
 EVT_END()
 
 /**
- * NPC init for Michel (マイケル, a Koopa fighter): before STORY_STG3_32_BOSS_BATTLE he lies flattened at (175, 0,
- * -20) in the "NKT_Z_1" pose, rotated 80 degrees.
+ * NPC init for Michel (マイケル, a Koopa fighter): before STG3_32_BOSS_BATTLE he lies flattened at (175, 0,
+ * -20) in the "NKT_Z_1" pose, rotated -80 degrees about X.
  */
 static EVT_BEGIN(init_michel)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_32_BOSS_BATTLE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_32_BOSS_BATTLE)
         CALL(evt_npc_set_anim, STRING("マイケル"), STRING("NKT_Z_1"))
         CALL(evt_npc_set_position, STRING("マイケル"), 175, 0, -20)
         CALL(evt_npc_set_rotate, STRING("マイケル"), -80, 0, 0)
@@ -144,11 +165,11 @@ EVT_END()
 
 /**
  * NPC init for the Michel stand-in (マイケルダミー), a hidden NPC that carries Michel's talk script:
- * before STORY_STG3_32_BOSS_BATTLE it is placed at (175, 0, -20), where the flattened Michel lies,
+ * before STG3_32_BOSS_BATTLE it is placed at (175, 0, -20), where the flattened Michel lies,
  * so talking there reaches him.
  */
-EVT_BEGIN(init_michel_dummy)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_32_BOSS_BATTLE)
+static EVT_BEGIN(init_michel_dummy)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_32_BOSS_BATTLE)
         CALL(evt_npc_set_position, STRING("マイケルダミー"), 175, 0, -20)
     END_IF
     RETURN
@@ -161,16 +182,16 @@ static EVT_BEGIN(talk_michel)
 EVT_END()
 
 /**
- * NPC init for Brots (ブロッツ): before STORY_STG3_32_BOSS_BATTLE he lies flattened at (110, 3, -60), rotated,
- * in the "S_1" pose, or the "X_1" pose once Mario has talked to him (GSWF_TOU12_FLATTENED_FIGHTER_TALK).
+ * NPC init for Brots (ブロッツ): before STG3_32_BOSS_BATTLE he lies rotated at (110, 3, -60) in the "S_1" pose,
+ * or "X_1" once Mario has talked to him (GSWF_TOU_12_BANDY_ANDY_WARNING_HEARD).
  */
 static EVT_BEGIN(init_brots)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_32_BOSS_BATTLE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_32_BOSS_BATTLE)
         CALL(evt_npc_set_position, STRING("ブロッツ"), 110, 3, -60)
         CALL(evt_npc_set_rotate, STRING("ブロッツ"), -70, 0, -80)
-        CALL(evt_npc_flag_onoff, 0, STRING("ブロッツ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 0, STRING("ブロッツ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
         CALL(evt_npc_set_anim, STRING("ブロッツ"), STRING("S_1"))
-        IF_INT_EQUAL(GSWF(GSWF_TOU12_FLATTENED_FIGHTER_TALK), 1)
+        IF_INT_EQUAL(GSWF_TOU_12_BANDY_ANDY_WARNING_HEARD, 1)
             CALL(evt_npc_set_anim, STRING("ブロッツ"), STRING("X_1"))
         END_IF
     END_IF
@@ -179,23 +200,23 @@ EVT_END()
 
 /**
  * NPC init for the Brots stand-in (ブロッツダミー), a hidden NPC that carries Brots's talk script:
- * before STORY_STG3_32_BOSS_BATTLE it is placed at (125, 4, -60), next to where the flattened Brots lies,
+ * before STG3_32_BOSS_BATTLE it is placed at (125, 4, -60), next to where the flattened Brots lies,
  * so talking there reaches him.
  */
-EVT_BEGIN(init_brots_dummy)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_32_BOSS_BATTLE)
+static EVT_BEGIN(init_brots_dummy)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_32_BOSS_BATTLE)
         CALL(evt_npc_set_position, STRING("ブロッツダミー"), 125, 4, -60)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Talk script of the flattened Brots: the first time the partner is stopped and turns to him,
- * he speaks (stg3_tou_307_12), faints into the "X_1" pose and the partner comments (stg3_tou_307_13),
- * setting GSWF_TOU12_FLATTENED_FIGHTER_TALK; afterwards he only says stg3_tou_307_14.
+ * Talk script of Brots: the first time, the partner is stopped and turns to him, he speaks (stg3_tou_307_12),
+ * takes the "X_1" pose and the partner speaks (stg3_tou_307_13); sets GSWF_TOU_12_BANDY_ANDY_WARNING_HEARD.
+ * Afterwards he only says stg3_tou_307_14.
  */
 static EVT_BEGIN(talk_brots)
-    IF_INT_EQUAL(GSWF(GSWF_TOU12_FLATTENED_FIGHTER_TALK), 0)
+    IF_INT_EQUAL(GSWF_TOU_12_BANDY_ANDY_WARNING_HEARD, 0)
         CALL(evt_party_cont_onoff, 0, 0)
         CALL(evt_party_set_breed_pose, 0, 1)
         CALL(evt_npc_get_position, STRING("ブロッツ"), LW(0), LW(1), LW(2))
@@ -205,15 +226,15 @@ static EVT_BEGIN(talk_brots)
         ELSE
             CALL(evt_party_set_dir, 0, 90, 200)
         END_IF
-        CALL(evt_npc_flag_onoff, 1, STRING("ブロッツ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("ブロッツ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
         CALL(evt_msg_print, 0, STRING("stg3_tou_307_12"), 0, 0)
-        CALL(evt_npc_flag_onoff, 0, STRING("ブロッツ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 0, STRING("ブロッツ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
         CALL(evt_npc_set_anim, STRING("ブロッツ"), STRING("X_1"))
         CALL(evt_msg_print_party, STRING("stg3_tou_307_13"))
-        SET_VALUE(GSWF(GSWF_TOU12_FLATTENED_FIGHTER_TALK), 1)
+        SET_VALUE(GSWF_TOU_12_BANDY_ANDY_WARNING_HEARD, 1)
         CALL(evt_party_cont_onoff, 0, 1)
     ELSE
-        CALL(evt_npc_flag_onoff, 0, STRING("ブロッツ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 0, STRING("ブロッツ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
         CALL(evt_npc_set_anim, STRING("ブロッツ"), STRING("S_1"))
         CALL(evt_msg_print, 0, STRING("stg3_tou_307_14"), 0, 0)
         CALL(evt_npc_set_anim, STRING("ブロッツ"), STRING("X_1"))
@@ -231,14 +252,11 @@ static EVT_BEGIN(talk_kinoshikowa)
     RETURN
 EVT_END()
 
-/**
- * NPCs of this room: the flattened King K and Bandy Andy, the hidden stand-ins that carry their talk scripts,
- * and Jolene.
- */
+// Hidden dummy NPCs provide talk events for the separately posed injured NPCs.
 static NpcSetupInfo npcEnt[] = {
     {
-        "マイケル", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_NO_TURN_TO_MARIO | NPC_FLAG_INTANGIBLE, // flags
+        "マイケル", // name (King K, a fighter)
+        NPC_FLAG_NO_HIT | NPC_FLAG_NO_TALK_TURN | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_michel, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -247,8 +265,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ブロッツ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_NO_TURN_TO_MARIO | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE, // flags
+        "ブロッツ", // name (Bandy Andy, a fighter)
+        NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_TALK_TURN | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_brots, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -257,8 +275,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "マイケルダミー", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_NO_TURN_TO_MARIO | NPC_FLAG_HIDDEN, // flags
+        "マイケルダミー", // name (stand-in for the flattened King K)
+        NPC_FLAG_NO_DRAW | NPC_FLAG_NO_TALK_TURN | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_michel_dummy, // initEvent
         NULL, // regularEvent
@@ -269,8 +287,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ブロッツダミー", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_NO_TURN_TO_MARIO | NPC_FLAG_HIDDEN, // flags
+        "ブロッツダミー", // name (stand-in for the flattened Bandy Andy)
+        NPC_FLAG_NO_DRAW | NPC_FLAG_NO_TALK_TURN | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_brots_dummy, // initEvent
         NULL, // regularEvent
@@ -281,8 +299,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "キノシコワ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "キノシコワ", // name (Jolene)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_kinoshikowa, // initEvent
         NULL, // regularEvent
@@ -297,48 +315,48 @@ static NpcSetupInfo npcEnt[] = {
 
 /**
  * Map init for tou_12, the back room beside the storage room:
- * music by story stage, NPCs, a Star Piece, and the big block that Mario breaks open until the boss battle.
+ * music by story stage, NPCs, a Star Piece, and the big block created only before STG3_20_16_FLATTENED.
  */
 EVT_BEGIN(tou_12_init_evt)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_31_GRUBBAS_PLANS)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_31_GRUBBAS_PLANS)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
+        CALL(evt_snd_envoff, PSND_FADEOUT)
     ELSE
-        SWITCH(GSW(GSW_STORY_PROGRESS))
-            CASE_BETWEEN(STORY_STG3_00_WELCOME_TO_GLITZVILLE, STORY_STG3_12_MINI_YOSHI_EGG)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU2"))
+        SWITCH(GSW_STORY_PROGRESS)
+            CASE_BETWEEN(STG3_00_WELCOME_TO_GLITZVILLE, STG3_12_THE_MINI_YOSHI_EGG)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU2"))
 #if VERSION <= VERSION_DEMO_JP
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU2"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU2"))
 #else
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
 #endif
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-            CASE_GREATER_OR_EQUAL(STORY_STG3_33_PEACH_THE_SECRET_WEAPON)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU2"))
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
+            CASE_GREATER_OR_EQUAL(STG3_33_PEACH_THE_SECRET_WEAPON)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU2"))
 #if VERSION <= VERSION_DEMO_JP
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU2"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU2"))
 #else
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
 #endif
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
             CASE_DEFAULT
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
         END_SWITCH
     END_IF
     SET_VALUE(LW(0), PTR(bero_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL(evt_npc_setup, PTR(npcEnt))
-    CALL(evt_item_entry, STRING("item01"), ITEM_STAR_PIECE, 190, 0, 30, ITEM_ENTRY_FIXED, GSWF(GSWF_TOU12_STAR_PIECE), 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_20_16_FLATTENED)
-        CALL(evt_mobj_lv_blk, STRING("aa"), 125, 0, 0, PTR(evt_block_broken), GSWF(GSWF_TOU12_BIG_BLOCK_BROKEN), STRING("MOBJ_Lv1BigBigBlock"))
-        CALL(evt_mobj_flag_onoff, 0, STRING("aa"), MOBJ_FLAG_FALL)
+    CALL(evt_item_entry, STRING("item01"), ITEM_STAR_PIECE, 190, 0, 30, ITEM_TYPE_STILL, GSWF_STARPIECE_60, 0)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_20_16_FLATTENED)
+        CALL(evt_mobj_lv_blk, STRING("aa"), 125, 0, 0, PTR(evt_block_broken), GSWF_TOU_12_BIG_BIG_BLOCK_BROKEN, STRING("MOBJ_Lv1BigBigBlock"))
+        CALL(evt_mobj_flag_onoff, 0, STRING("aa"), MOBJ_FLAG_GRAVITY)
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_32_BOSS_BATTLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gor_hae"), MAPOBJ_FLAG_HIDE)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_32_BOSS_BATTLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gor_hae"), MAP_OBJ_FLAG_HIDDEN)
     ELSE
-        CALL(evt_map_playanim, STRING("anm_hae"), 1, 0)
+        CALL(evt_map_playanim, STRING("anm_hae"), MAP_ANIM_PLAY_LOOP, 0)
         BEGIN_INLINE_EVENT
             LOOP(0)
                 CALL(evt_sub_random, 1000, LW(0))

@@ -1,33 +1,21 @@
-// Small GX helpers: queen_uv (texture offsets extdrv scrolls), and in the demo the 2D textured-quad
-// helpers seq_demo draws with.
-#include "gxsub.h"
+// Small GX helpers: queen_uv (texture offsets extdrv scrolls) and the 2D textured-quad helpers the early demos'
+// seq_demo draws with. From JP on nothing calls the helpers, so the linker strips them and their data; the 32-byte
+// alignment of their white texel (filltex) still aligns this unit's .sdata, which is why queen_uv sits on a 32-byte
+// boundary in every later version.
+
 #include "version.h"
-#if VERSION <= VERSION_DEMO_JP
+#include "gxsub.h"
 #include "driver/camdrv.h"
-#endif
 
 //.sdata
-// Retail gxsub.o starts its .sdata on a 32-byte boundary. The demo copy gets that from the 32-byte
-// aligned 2D-helper data below, which retail no longer has, so in retail queen_uv carries the alignment.
-f32 queen_uv[4]
-#if VERSION >= VERSION_JP
-    ATTRIBUTE_ALIGN(32)
-#endif
-    = {0.0f, -0.0016000001f, 0.0f, -0.00080000004f};
-
-#if VERSION <= VERSION_DEMO_JP
-// The demo still has the 2D textured-quad helpers seq_demo draws with (cut from retail).
-
-//.sdata
-static s32 lastGX ATTRIBUTE_ALIGN(32) = 8; // last GX setup applied by gxsubMiscSetGX
-
-//.sbss
+f32 queen_uv[4] = {0.0f, -0.0016000001f, 0.0f, -0.00080000004f};
+static s32 lastGX = 8;
 static BOOL fillTexEdgeOn;
 static BOOL fillTexAlphaOff;
 static GXTexObj* pFillTexObj;
 
 /**
- * Demo only.
+ * Called only in the early demos (stripped from JP on).
  * Records mode as the last applied GX setup; returns TRUE when it differs from the previous one,
  * so the caller must set up GX again. -1 forces the next call to return TRUE.
  */
@@ -40,7 +28,7 @@ BOOL gxsubMiscSetGX(s32 mode) {
 }
 
 /**
- * Demo only.
+ * Called only in the early demos (stripped from JP on).
  * Draws a w x h quad at (x, y) in the current camera,
  * textured with the texture set by gxsubFillSetTexObj (or a plain white texel) and tinted by color;
  * height flips for the 2D camera.
@@ -48,7 +36,7 @@ BOOL gxsubMiscSetGX(s32 mode) {
  * the title logo's top half, which the demo's title screen draws at the logo's top position (seq_title.c).
  */
 void gxsubFillGX(s32 x, s32 y, s32 w, s32 h, GXColor* color) {
-    static u8 filltex[4] ATTRIBUTE_ALIGN(32) = {0xFF, 0xFF, 0x00, 0x00}; // 1x1 I4 texel used when no texture is set
+    static u8 filltex[2] ATTRIBUTE_ALIGN(32) = {0xFF, 0xFF}; // white I4 texture (4-bit texels) used when no texture is set
     Mtx mtx;
     GXTexObj obj;
     GXColor c;
@@ -109,8 +97,33 @@ void gxsubFillGX(s32 x, s32 y, s32 w, s32 h, GXColor* color) {
     GXTexCoord2f32(0.0f, 1.0f);
 }
 
-/** Demo only. Sets the texture gxsubFillGX draws with; NULL goes back to a plain fill. */
+/** Called only in the early demos (stripped from JP on). Sets the texture gxsubFillGX draws with; NULL goes back to a plain fill. */
 void gxsubFillSetTexObj(GXTexObj* obj) {
     pFillTexObj = obj;
 }
-#endif
+
+/** Sets fillTexAlphaOff. */
+// The four switches (gxsubFillTexAlphaOff, gxsubFillTexAlphaOn, gxsubFillTexEdgeOn, gxsubFillTexEdgeOff): original
+// names and sizes (0xc each) from the JP demo map (UNUSED there: nothing calls them); each stores the value its name
+// gives in the unit's flag of that name, which gxsubFillGX reads.
+void gxsubFillTexAlphaOff(void) {
+    fillTexAlphaOff = TRUE;
+}
+
+/** Clears fillTexAlphaOff. */
+// Original name and size from the JP demo map (see gxsubFillTexAlphaOff).
+void gxsubFillTexAlphaOn(void) {
+    fillTexAlphaOff = FALSE;
+}
+
+/** Sets fillTexEdgeOn. */
+// Original name and size from the JP demo map (see gxsubFillTexAlphaOff).
+void gxsubFillTexEdgeOn(void) {
+    fillTexEdgeOn = TRUE;
+}
+
+/** Clears fillTexEdgeOn. */
+// Original name and size from the JP demo map (see gxsubFillTexAlphaOff).
+void gxsubFillTexEdgeOff(void) {
+    fillTexEdgeOn = FALSE;
+}

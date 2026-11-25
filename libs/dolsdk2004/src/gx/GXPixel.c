@@ -4,13 +4,6 @@
 
 #include "__gx.h"
 
-/**
- * Programs the fog unit: the low 3 bits of type select the fog function
- * and bit 3 selects orthographic projection.
- * From startz/endz and the near/far planes it computes the hardware constants A,
- * B and C (a mantissa/exponent pair for B in the perspective case),
- * then writes the fog parameter registers 0xEE to 0xF1 and the fog colour.
- */
 void GXSetFog(GXFogType type, f32 startz, f32 endz, f32 nearz, f32 farz, GXColor color) {
     u32 fogclr;
     u32 fog0;
@@ -89,8 +82,8 @@ void GXSetFog(GXFogType type, f32 startz, f32 endz, f32 nearz, f32 farz, GXColor
         SET_REG_FIELD(201, fog2, 8, 24, 0xF0);
     }
 
-    a_hex = *(u32 *)&a;
-    c_hex = *(u32 *)&c;
+    a_hex = *(u32*)&a;
+    c_hex = *(u32*)&c;
 
     SET_REG_FIELD(209, fog0, 11, 0, (a_hex >> 12) & 0x7FF);
     SET_REG_FIELD(210, fog0, 8, 11, (a_hex >> 23) & 0xFF);
@@ -118,7 +111,6 @@ void GXSetFog(GXFogType type, f32 startz, f32 endz, f32 nearz, f32 farz, GXColor
     __GXData->bpSentNot = 0;
 }
 
-/** Writes only the fog colour register (BP 0xF2) with the RGB of color. */
 void GXSetFogColor(GXColor color) {
     u32 rgba;
     u32 fogclr = 0xF2000000;
@@ -129,12 +121,7 @@ void GXSetFogColor(GXColor color) {
     __GXData->bpSentNot = 0;
 }
 
-/**
- * Fills the 10 entries of a fog range-adjustment table from the projection matrix and the screen width:
- * each entry is sqrt(1 + (x / nearZ)^2) in 4.8 fixed point for an x position across the screen,
- * which makes fog depend on distance from the eye instead of Z.
- */
-void GXInitFogAdjTable(GXFogAdjTable *table, u16 width, const f32 projmtx[4][4]) {
+void GXInitFogAdjTable(GXFogAdjTable* table, u16 width, const f32 projmtx[4][4]) {
     f32 xi;
     f32 iw;
     f32 rangeVal;
@@ -164,11 +151,7 @@ void GXInitFogAdjTable(GXFogAdjTable *table, u16 width, const f32 projmtx[4][4])
     }
 }
 
-/**
- * When enabled, writes the 10 table entries (five BP registers from 0xE9) and, in both cases,
- * the register 0xE8 holding the screen centre column (plus 342) and the enable bit.
- */
-void GXSetFogRangeAdj(GXBool enable, u16 center, const GXFogAdjTable *table) {
+void GXSetFogRangeAdj(GXBool enable, u16 center, const GXFogAdjTable* table) {
     u32 i;
     u32 range_adj;
     u32 range_c;
@@ -193,10 +176,6 @@ void GXSetFogRangeAdj(GXBool enable, u16 center, const GXFogAdjTable *table) {
     __GXData->bpSentNot = 0;
 }
 
-/**
- * Writes the blend control register (cached in cmode0):
- * blend or subtract enable, logic-op enable, the logic op, and the source and destination factors.
- */
 void GXSetBlendMode(GXBlendMode type, GXBlendFactor src_factor, GXBlendFactor dst_factor, GXLogicOp op) {
     u32 reg;
     u32 blend_en;
@@ -225,7 +204,6 @@ void GXSetBlendMode(GXBlendMode type, GXBlendFactor src_factor, GXBlendFactor ds
     __GXData->bpSentNot = 0;
 }
 
-/** Sets the colour-write enable bit (bit 3) in the cached blend control register and writes it. */
 void GXSetColorUpdate(GXBool update_enable) {
     u32 reg;
     CHECK_GXBEGIN(419, "GXSetColorUpdate");
@@ -239,7 +217,6 @@ void GXSetColorUpdate(GXBool update_enable) {
     __GXData->bpSentNot = 0;
 }
 
-/** Sets the alpha-write enable bit (bit 4) in the cached blend control register and writes it. */
 void GXSetAlphaUpdate(GXBool update_enable) {
     u32 reg;
     CHECK_GXBEGIN(432, "GXSetAlphaUpdate");
@@ -253,7 +230,6 @@ void GXSetAlphaUpdate(GXBool update_enable) {
     __GXData->bpSentNot = 0;
 }
 
-/** Writes the Z mode register (cached in zmode): Z compare enable, the compare function and the Z update enable. */
 void GXSetZMode(GXBool compare_enable, GXCompare func, GXBool update_enable) {
     u32 reg;
     CHECK_GXBEGIN(459, "GXSetZMode");
@@ -269,10 +245,6 @@ void GXSetZMode(GXBool compare_enable, GXCompare func, GXBool update_enable) {
     __GXData->bpSentNot = 0;
 }
 
-/**
- * Sets bit 6 of the pixel-engine control register:
- * whether the Z compare happens before texturing (early) or after it.
- */
 void GXSetZCompLoc(GXBool before_tex) {
     CHECK_GXBEGIN(474, "GXSetZCompLoc");
     SET_REG_FIELD(475, __GXData->peCtrl, 1, 6, before_tex);
@@ -280,14 +252,6 @@ void GXSetZCompLoc(GXBool before_tex) {
     __GXData->bpSentNot = 0;
 }
 
-/**
- * Sets the EFB pixel format (through a table to the hardware code)
- * and the Z compression format in the pixel-engine control register;
- * when that changes it writes the register and flags the general mode (antialiasing bit set for
- * GX_PF_RGB565_Z16) dirty.
- * For pixel formats 4 to 6 (which share one hardware code) it also writes the sub-format into bits 9
- * and 10 of the destination-alpha register.
- */
 void GXSetPixelFmt(GXPixelFmt pix_fmt, GXZFmt16 z_fmt) {
     u32 oldPeCtrl;
     u8 aa;
@@ -301,12 +265,13 @@ void GXSetPixelFmt(GXPixelFmt pix_fmt, GXZFmt16 z_fmt) {
 
     if (oldPeCtrl != __GXData->peCtrl) {
         GX_WRITE_RAS_REG(__GXData->peCtrl);
-        if (pix_fmt == GX_PF_RGB565_Z16)
+        if (pix_fmt == GX_PF_RGB565_Z16) {
             aa = 1;
-        else
+        } else {
             aa = 0;
+        }
         SET_REG_FIELD(527, __GXData->genMode, 1, 9, aa);
-        __GXData->dirtyState |= 4;
+        __GXData->dirtyState |= GX_DIRTY_GEN_MODE;
     }
 
     if (p2f[pix_fmt] == 4) {
@@ -318,7 +283,6 @@ void GXSetPixelFmt(GXPixelFmt pix_fmt, GXZFmt16 z_fmt) {
     __GXData->bpSentNot = 0;
 }
 
-/** Sets the dither enable bit (bit 2) in the cached blend control register and writes it. */
 void GXSetDither(GXBool dither) {
     u32 reg;
     CHECK_GXBEGIN(556, "GXSetDither");
@@ -332,7 +296,6 @@ void GXSetDither(GXBool dither) {
     __GXData->bpSentNot = 0;
 }
 
-/** Writes the destination-alpha register (cached in cmode1): the constant alpha value and its enable bit. */
 void GXSetDstAlpha(GXBool enable, u8 alpha) {
     u32 reg;
     CHECK_GXBEGIN(581, "GXSetDstAlpha");
@@ -347,7 +310,6 @@ void GXSetDstAlpha(GXBool enable, u8 alpha) {
     __GXData->bpSentNot = 0;
 }
 
-/** Writes BP register 0x44 with the even-field and odd-field write enables. */
 void GXSetFieldMask(GXBool odd_mask, GXBool even_mask) {
     u32 reg;
 
@@ -360,10 +322,6 @@ void GXSetFieldMask(GXBool odd_mask, GXBool even_mask) {
     __GXData->bpSentNot = 0;
 }
 
-/**
- * Sets the half-aspect-ratio bit of the line/point size register
- * and writes BP register 0x68 with the field-rendering flag, bracketed by texture state flushes.
- */
 void GXSetFieldMode(GXBool field_mode, GXBool half_aspect_ratio) {
     u32 reg;
 

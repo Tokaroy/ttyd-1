@@ -1,5 +1,7 @@
 // Ultra Hammer effect: three stacked ring models (wakka: ring) with a scrolling texture that scroll in turn;
 // it ends after `counter` frames (0 or less: until removed).
+
+#include "version.h"
 #include "eff/eff_ultra_hammer.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
@@ -10,60 +12,40 @@
 #include <dolphin/os.h>
 #include <dolphin/vi.h>
 #include <string.h>
-#include "version.h"
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
 
-// Model data in the exporter's layout: indexed vertex arrays (positions, normals, colours, texture coordinates),
-// display lists of GX commands (each padded to 32 bytes with GX_NOP) and, per list table, the list sizes in
-// 32-byte units for GXCallDisplayList.
-#if VERSION <= VERSION_DEMO_JP
-s16 wakka_vertex_tbl[] ATTRIBUTE_ALIGN(32) = {
-    24347, 2284, -8524,
-    20710, 4131, -15417,
-    15047, 5596, -20888,
-    7910, 6538, -24400,
-    0, 6862, -25610,
-    -7910, 6538, -24400,
-    -15047, 5596, -20888,
-    -20710, 4131, -15417,
-    -24347, 2284, -8524,
-    -25600, 236, -883,
-    -24347, -1810, 6758,
-    -20710, -3657, 13651,
-    -15047, -5123, 19121,
-    -7910, -6064, 22634,
-    0, -6389, 23844,
-    7910, -6064, 22634,
-    15047, -5123, 19121,
-    20710, -3657, 13651,
-    24347, -1810, 6758,
-    25600, 236, -883,
-    12173, 1260, -4703,
-    10355, 2183, -8150,
-    7523, 2916, -10885,
-    3955, 3387, -12641,
-    0, 3549, -13246,
-    -3955, 3387, -12641,
-    -7523, 2916, -10885,
-    -10355, 2183, -8150,
-    -12173, 1260, -4703,
-    -12800, 236, -883,
-    -12173, -787, 2937,
-    -10355, -1710, 6384,
-    -7523, -2443, 9119,
-    -3955, -2914, 10875,
-    0, -3076, 11480,
-    3955, -2914, 10875,
-    7523, -2443, 9119,
-    10355, -1710, 6384,
-    12173, -787, 2937,
-    12800, 236, -883,
-    0, 3549, -13246,
-    0, 6862, -25610,
-};
-#else
-s16 wakka_vertex_tbl[] ATTRIBUTE_ALIGN(32) = {
+// Defined below (inline) and used only in this file.
+
+static u8 wakka_dl_0_0[32];
+static u8 wakka_dl_0_1[32];
+static u8 wakka_dl_0_2[32];
+static u8 wakka_dl_0_3[32];
+static u8 wakka_dl_0_4[32];
+static u8 wakka_dl_0_5[32];
+static u8 wakka_dl_0_6[32];
+static u8 wakka_dl_0_7[32];
+static u8 wakka_dl_0_8[32];
+static u8 wakka_dl_0_9[32];
+static u8 wakka_dl_0_10[32];
+static u8 wakka_dl_0_11[32];
+static u8 wakka_dl_0_12[32];
+static u8 wakka_dl_0_13[32];
+static u8 wakka_dl_0_14[32];
+static u8 wakka_dl_0_15[32];
+static u8 wakka_dl_0_16[32];
+static u8 wakka_dl_0_17[32];
+static u8 wakka_dl_0_18[32];
+static u8 wakka_dl_0_19[32];
+static void* wakka_dl_0_tbl[20];
+static u8 wakka_dl_0_size_tbl[20];
+static s16 wakka_vertex_tbl[126];
+static s8 wakka_normal_tbl[3];
+static u8 wakka_color0_tbl[8];
+static s16 wakka_texcoord0_tbl[84];
+
+#ifdef __MWERKS__
+
+#if VERSION >= VERSION_JP
+static s16 wakka_vertex_tbl[] ATTRIBUTE_ALIGN(32) = {
     24347, 0, -8825, // 0
     20710, 0, -15961, // 1
     15047, 0, -21625, // 2
@@ -107,61 +89,53 @@ s16 wakka_vertex_tbl[] ATTRIBUTE_ALIGN(32) = {
     0, 0, -13714, // 40
     0, 0, -26514, // 41
 };
-#endif
-
-#if VERSION <= VERSION_DEMO_JP
-s16 wakka_texcoord0_tbl[] ATTRIBUTE_ALIGN(32) = {
-    24576, 0,
-    25600, 0,
-    25600, 8192,
-    24576, 8192,
-    26624, 0,
-    26624, 8192,
-    27648, 0,
-    27648, 8192,
-    8192, 0,
-    9216, 0,
-    9216, 8192,
-    8192, 8192,
-    10240, 0,
-    10240, 8192,
-    11264, 0,
-    11264, 8192,
-    12288, 0,
-    12288, 8192,
-    13312, 0,
-    13312, 8192,
-    14336, 0,
-    14336, 8192,
-    15360, 0,
-    15360, 8192,
-    16384, 0,
-    16384, 8192,
-    17408, 0,
-    17408, 8192,
-    18432, 0,
-    18432, 8192,
-    19456, 0,
-    19456, 8192,
-    20480, 0,
-    20480, 8192,
-    21504, 0,
-    21504, 8192,
-    22528, 0,
-    22528, 8192,
-    23552, 0,
-    23552, 8192,
-    28672, 0,
-    28672, 8192,
-    0, 0,
-    0, 0,
-    0, 0,
-    0, 0,
-    0, 0,
-    0, 0,
-};
 #else
-s16 wakka_texcoord0_tbl[] ATTRIBUTE_ALIGN(32) = {
+static s16 wakka_vertex_tbl[] ATTRIBUTE_ALIGN(32) = {
+    24347, 2284, -8524,
+    20710, 4131, -15417,
+    15047, 5596, -20888,
+    7910, 6538, -24400,
+    0, 6862, -25610,
+    -7910, 6538, -24400,
+    -15047, 5596, -20888,
+    -20710, 4131, -15417,
+    -24347, 2284, -8524,
+    -25600, 236, -883,
+    -24347, -1810, 6758,
+    -20710, -3657, 13651,
+    -15047, -5123, 19121,
+    -7910, -6064, 22634,
+    0, -6389, 23844,
+    7910, -6064, 22634,
+    15047, -5123, 19121,
+    20710, -3657, 13651,
+    24347, -1810, 6758,
+    25600, 236, -883,
+    12173, 1260, -4703,
+    10355, 2183, -8150,
+    7523, 2916, -10885,
+    3955, 3387, -12641,
+    0, 3549, -13246,
+    -3955, 3387, -12641,
+    -7523, 2916, -10885,
+    -10355, 2183, -8150,
+    -12173, 1260, -4703,
+    -12800, 236, -883,
+    -12173, -787, 2937,
+    -10355, -1710, 6384,
+    -7523, -2443, 9119,
+    -3955, -2914, 10875,
+    0, -3076, 11480,
+    3955, -2914, 10875,
+    7523, -2443, 9119,
+    10355, -1710, 6384,
+    12173, -787, 2937,
+    12800, 236, -883,
+    0, 3549, -13246,
+    0, 6862, -25610,
+};
+#endif
+static s16 wakka_texcoord0_tbl[] ATTRIBUTE_ALIGN(32) = {
     24576, 0, // 0
     25600, 0, // 1
     25600, 8192, // 2
@@ -205,245 +179,14 @@ s16 wakka_texcoord0_tbl[] ATTRIBUTE_ALIGN(32) = {
     28672, 0, // 40
     28672, 8192, // 41
 };
-#endif
 
 #if VERSION <= VERSION_DEMO_JP
-s8 wakka_normal_tbl[] ATTRIBUTE_ALIGN(32) = {
+static s8 wakka_normal_tbl[] ATTRIBUTE_ALIGN(32) = {
     0, 61, 16,
 };
 #else
-s8 wakka_normal_tbl[] ATTRIBUTE_ALIGN(32) = {
-    0, 64, 0, // 0
-};
-#endif
-
-u8 wakka_color0_tbl[] ATTRIBUTE_ALIGN(32) = {
-    0xFF, 0xFF, 0xFF, 0x7F, // 0
-    0xFF, 0xFF, 0xFF, 0x00  // 1
-};
-
-u8 wakka_dl_0_0[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    1, 0, 0, 2, // 0
-    0, 0, 0, 3, // 1
-    21, 0, 0, 1, // 2
-    20, 0, 0, 0, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_1[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    2, 0, 0, 5, // 0
-    1, 0, 0, 2, // 1
-    22, 0, 0, 4, // 2
-    21, 0, 0, 1, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_2[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    3, 0, 0, 7, // 0
-    2, 0, 0, 5, // 1
-    23, 0, 0, 6, // 2
-    22, 0, 0, 4, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_3[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    39, 0, 0, 38, // 0
-    20, 0, 0, 0, // 1
-    19, 0, 0, 39, // 2
-    0, 0, 0, 3, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_4[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    38, 0, 0, 36, // 0
-    39, 0, 0, 38, // 1
-    18, 0, 0, 37, // 2
-    19, 0, 0, 39, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_5[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    37, 0, 0, 34, // 0
-    38, 0, 0, 36, // 1
-    17, 0, 0, 35, // 2
-    18, 0, 0, 37, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_6[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    36, 0, 0, 32, // 0
-    37, 0, 0, 34, // 1
-    16, 0, 0, 33, // 2
-    17, 0, 0, 35, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_7[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    35, 0, 0, 30, // 0
-    36, 0, 0, 32, // 1
-    15, 0, 0, 31, // 2
-    16, 0, 0, 33, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_8[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    34, 0, 0, 28, // 0
-    35, 0, 0, 30, // 1
-    14, 0, 0, 29, // 2
-    15, 0, 0, 31, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_9[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    33, 0, 0, 26, // 0
-    34, 0, 0, 28, // 1
-    13, 0, 0, 27, // 2
-    14, 0, 0, 29, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_10[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    32, 0, 0, 24, // 0
-    33, 0, 0, 26, // 1
-    12, 0, 0, 25, // 2
-    13, 0, 0, 27, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_11[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    31, 0, 0, 22, // 0
-    32, 0, 0, 24, // 1
-    11, 0, 0, 23, // 2
-    12, 0, 0, 25, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_12[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    30, 0, 0, 20, // 0
-    31, 0, 0, 22, // 1
-    10, 0, 0, 21, // 2
-    11, 0, 0, 23, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_13[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    29, 0, 0, 18, // 0
-    30, 0, 0, 20, // 1
-    9, 0, 0, 19, // 2
-    10, 0, 0, 21, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_14[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    28, 0, 0, 16, // 0
-    29, 0, 0, 18, // 1
-    8, 0, 0, 17, // 2
-    9, 0, 0, 19, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_15[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    27, 0, 0, 14, // 0
-    28, 0, 0, 16, // 1
-    7, 0, 0, 15, // 2
-    8, 0, 0, 17, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_16[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    26, 0, 0, 12, // 0
-    27, 0, 0, 14, // 1
-    6, 0, 0, 13, // 2
-    7, 0, 0, 15, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_17[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    25, 0, 0, 9, // 0
-    26, 0, 0, 12, // 1
-    5, 0, 0, 10, // 2
-    6, 0, 0, 13, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_18[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    24, 0, 0, 8, // 0
-    25, 0, 0, 9, // 1
-    4, 0, 0, 11, // 2
-    5, 0, 0, 10, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
-u8 wakka_dl_0_19[] ATTRIBUTE_ALIGN(32) = {
-    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
-    0, 4, //number of verts
-    41, 0, 1, 41, // 0
-    3, 0, 0, 7, // 1
-    40, 0, 1, 40, // 2
-    23, 0, 0, 6, // 3
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
-};
-
 /** The ring model's 20 display lists, drawn with wakka_dl_0_size_tbl. */
-void* wakka_dl_0_tbl[] = {
+static void* wakka_dl_0_tbl[] = {
     wakka_dl_0_0, // 0
     wakka_dl_0_1, // 1
     wakka_dl_0_2, // 2
@@ -466,8 +209,272 @@ void* wakka_dl_0_tbl[] = {
     wakka_dl_0_19, // 19
 };
 
+// Texture scroll offsets: -3.5 / 24 * i for i = 0..24
+static f32 scroll_tbl[] = {
+    0.0f, -0.14583334f, -0.29166669f, -0.43750003f, -0.58333337f,
+    -0.72916669f, -0.87500006f, -1.0208334f, -1.1666667f, -1.3125f,
+    -1.4583334f, -1.6041666f, -1.75f, -1.8958334f, -2.0416667f,
+    -2.1875f, -2.3333333f, -2.4791667f, -2.625f, -2.7708333f,
+    -2.9166667f, -3.0625f, -3.2083333f, -3.3541667f, -3.5f
+};
+
+static s8 wakka_normal_tbl[] ATTRIBUTE_ALIGN(32) = {
+    0, 64, 0, // 0
+};
+#endif
+
+static u8 wakka_color0_tbl[] ATTRIBUTE_ALIGN(32) = {
+    0xFF, 0xFF, 0xFF, 0x7F, // 0
+    0xFF, 0xFF, 0xFF, 0x00  // 1
+};
+
+static u8 wakka_dl_0_0[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    1, 0, 0, 2, // 0
+    0, 0, 0, 3, // 1
+    21, 0, 0, 1, // 2
+    20, 0, 0, 0, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_1[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    2, 0, 0, 5, // 0
+    1, 0, 0, 2, // 1
+    22, 0, 0, 4, // 2
+    21, 0, 0, 1, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_2[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    3, 0, 0, 7, // 0
+    2, 0, 0, 5, // 1
+    23, 0, 0, 6, // 2
+    22, 0, 0, 4, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_3[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    39, 0, 0, 38, // 0
+    20, 0, 0, 0, // 1
+    19, 0, 0, 39, // 2
+    0, 0, 0, 3, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_4[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    38, 0, 0, 36, // 0
+    39, 0, 0, 38, // 1
+    18, 0, 0, 37, // 2
+    19, 0, 0, 39, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_5[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    37, 0, 0, 34, // 0
+    38, 0, 0, 36, // 1
+    17, 0, 0, 35, // 2
+    18, 0, 0, 37, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_6[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    36, 0, 0, 32, // 0
+    37, 0, 0, 34, // 1
+    16, 0, 0, 33, // 2
+    17, 0, 0, 35, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_7[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    35, 0, 0, 30, // 0
+    36, 0, 0, 32, // 1
+    15, 0, 0, 31, // 2
+    16, 0, 0, 33, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_8[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    34, 0, 0, 28, // 0
+    35, 0, 0, 30, // 1
+    14, 0, 0, 29, // 2
+    15, 0, 0, 31, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_9[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    33, 0, 0, 26, // 0
+    34, 0, 0, 28, // 1
+    13, 0, 0, 27, // 2
+    14, 0, 0, 29, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_10[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    32, 0, 0, 24, // 0
+    33, 0, 0, 26, // 1
+    12, 0, 0, 25, // 2
+    13, 0, 0, 27, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_11[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    31, 0, 0, 22, // 0
+    32, 0, 0, 24, // 1
+    11, 0, 0, 23, // 2
+    12, 0, 0, 25, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_12[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    30, 0, 0, 20, // 0
+    31, 0, 0, 22, // 1
+    10, 0, 0, 21, // 2
+    11, 0, 0, 23, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_13[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    29, 0, 0, 18, // 0
+    30, 0, 0, 20, // 1
+    9, 0, 0, 19, // 2
+    10, 0, 0, 21, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_14[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    28, 0, 0, 16, // 0
+    29, 0, 0, 18, // 1
+    8, 0, 0, 17, // 2
+    9, 0, 0, 19, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_15[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    27, 0, 0, 14, // 0
+    28, 0, 0, 16, // 1
+    7, 0, 0, 15, // 2
+    8, 0, 0, 17, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_16[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    26, 0, 0, 12, // 0
+    27, 0, 0, 14, // 1
+    6, 0, 0, 13, // 2
+    7, 0, 0, 15, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_17[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    25, 0, 0, 9, // 0
+    26, 0, 0, 12, // 1
+    5, 0, 0, 10, // 2
+    6, 0, 0, 13, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_18[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    24, 0, 0, 8, // 0
+    25, 0, 0, 9, // 1
+    4, 0, 0, 11, // 2
+    5, 0, 0, 10, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+static u8 wakka_dl_0_19[] ATTRIBUTE_ALIGN(32) = {
+    (GX_DRAW_TRIANGLE_STRIP | GX_VTXFMT0), // command
+    0, 4, // number of verts
+    41, 0, 1, 41, // 0
+    3, 0, 0, 7, // 1
+    40, 0, 1, 40, // 2
+    23, 0, 0, 6, // 3
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+    GX_NOP, GX_NOP, GX_NOP, GX_NOP, GX_NOP,
+};
+
+/** The ring model's 20 display lists, drawn with wakka_dl_0_size_tbl. */
+#if VERSION <= VERSION_DEMO_JP
+static void* wakka_dl_0_tbl[] = {
+    wakka_dl_0_0, // 0
+    wakka_dl_0_1, // 1
+    wakka_dl_0_2, // 2
+    wakka_dl_0_3, // 3
+    wakka_dl_0_4, // 4
+    wakka_dl_0_5, // 5
+    wakka_dl_0_6, // 6
+    wakka_dl_0_7, // 7
+    wakka_dl_0_8, // 8
+    wakka_dl_0_9, // 9
+    wakka_dl_0_10, // 10
+    wakka_dl_0_11, // 11
+    wakka_dl_0_12, // 12
+    wakka_dl_0_13, // 13
+    wakka_dl_0_14, // 14
+    wakka_dl_0_15, // 15
+    wakka_dl_0_16, // 16
+    wakka_dl_0_17, // 17
+    wakka_dl_0_18, // 18
+    wakka_dl_0_19, // 19
+};
+#endif
 /** Display-list sizes (32-byte units) of the ring model's lists. */
-u8 wakka_dl_0_size_tbl[] = {
+static u8 wakka_dl_0_size_tbl[] = {
     1, // 0
     1, // 1
     1, // 2
@@ -490,8 +497,9 @@ u8 wakka_dl_0_size_tbl[] = {
     1, // 19
 };
 
+#endif
+
 #if VERSION <= VERSION_DEMO_JP
-// The demo grows the ring while it scrolls; retail keeps it at 3.5.
 static f32 scale_tbl[] = {
     1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
     1.2f, 1.4f, 1.6f, 1.8f, 2.0f,
@@ -501,23 +509,49 @@ static f32 scale_tbl[] = {
 };
 #endif
 
-// Texture scroll per frame: -3.5 * i / 24, as rounded by the original tool.
-f32 scroll_tbl[] = {
+// Texture scroll offsets: -3.5 / 24 * i for i = 0..24
+#if VERSION <= VERSION_DEMO_JP
+static f32 scroll_tbl[] = {
     0.0f, -0.14583334f, -0.29166669f, -0.43750003f, -0.58333337f,
     -0.72916669f, -0.87500006f, -1.0208334f, -1.1666667f, -1.3125f,
     -1.4583334f, -1.6041666f, -1.75f, -1.8958334f, -2.0416667f,
     -2.1875f, -2.3333333f, -2.4791667f, -2.625f, -2.7708333f,
     -2.9166667f, -3.0625f, -3.2083333f, -3.3541667f, -3.5f
 };
+#endif
+
+/** Sets up the ring model's vertex formats and arrays and calls its 20 display lists. */
+// Original name and size (0x140) from the JP demo map (UNUSED there: every call is inlined).
+static void wakka_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 10);
+    GXSetArray(GX_VA_POS, &wakka_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, &wakka_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, &wakka_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 13);
+    GXSetArray(GX_VA_TEX0, &wakka_texcoord0_tbl, 4);
+    for (i = 0; i < 20; i++) {
+        GXCallDisplayList(wakka_dl_0_tbl[i], wakka_dl_0_size_tbl[i] << 5);
+    }
+}
 
 static void effUltraHammerMain(EffectEntry* effect);
-static void effUltraHammerDisp(enum CameraId camId, void* param);
+static void effUltraHammerDisp(CameraId camId, void* param);
 
 /**
  * Spawns the effect at (x, y, z) for `counter` frames (0 or less: until removed).
- * `mode` mirrors the rings for a right-turning swing. Caller: Mario's Ultra Hammer swing (mot_hammer).
+ * A non-zero `mode` mirrors the rings in x; the caller, Mario's Ultra Hammer spin in mot_hammer,
+ * passes hammerDir != 0 and the spin's multiTimer as `counter`.
  */
-EffectEntry* effUltraHammerEntry(BOOL mode, s32 counter, f32 x, f32 y, f32 z, f32 scale) {
+EffectEntry* effUltraHammerEntry(f32 x, f32 y, f32 z, f32 scale, BOOL mode, s32 counter) {
     EffectEntry* effect;
     EffUltraHammerData* data;
     s32 i;
@@ -556,7 +590,8 @@ EffectEntry* effUltraHammerEntry(BOOL mode, s32 counter, f32 x, f32 y, f32 z, f3
 
 /**
  * Counts down and fades alpha in the last 16 frames;
- * each of the three rings waits for its start delay, then runs its 25-step scroll/scale table and repeats.
+ * each of the three rings waits for its start delay (0, 30, 15 frames), then runs the 25-step scroll table,
+ * waits 15 frames and repeats. The early demos also grow the scale through scale_tbl; JP and later hold it at 3.5.
  */
 static void effUltraHammerMain(EffectEntry* effect) {
     EffUltraHammerData* data;
@@ -564,7 +599,7 @@ static void effUltraHammerMain(EffectEntry* effect) {
     int i;
 
     data = effect->userdata;
-    position = initializeVec(&data->position);
+    position = (Vec){data->position.x, data->position.y, data->position.z};
     if (data->counter < 1000) {
         data->counter--;
     }
@@ -594,24 +629,11 @@ static void effUltraHammerMain(EffectEntry* effect) {
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, effUltraHammerDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effUltraHammerDisp, effect);
 }
 
-/**
- * unknown function, is used for many functions to "initialize"/copy some value into the local stack,
- * with an extra vec
- */
-inline Vec initializeVec(Vec* input) {
-    Vec temp = (Vec){0.0f, 0.0f, 0.0f};
-    temp.x = input->x;
-    temp.y = input->y;
-    temp.z = input->z;
-    return temp;
-}
-
-/** Draws the three ring models with the scrolling texture, mirrored in x if `mode` is non-zero. */
-static void effUltraHammerDisp(enum CameraId camId, void* param) {
-    u32 fmtLoop[2]; // FAKE: register-promoted array (vtx fmt + loop counter); separate scalars differ
+/** Draws each ring whose start delay has run out with the scrolling texture, mirrored in x if `mode` is non-zero. */
+static void effUltraHammerDisp(CameraId camId, void* param) {
     CameraEntry* cam;
     EffUltraHammerData* data;
     s32 i;
@@ -622,6 +644,7 @@ static void effUltraHammerDisp(enum CameraId camId, void* param) {
     Mtx scaleMtx;
     Mtx baseMtx;
     GXTexObj texObj;
+
     effect = param;
     data = effect->userdata;
     cam = camGetPtr(camId);
@@ -632,20 +655,20 @@ static void effUltraHammerDisp(enum CameraId camId, void* param) {
     PSMTXConcat(mtx, yawMtx, mtx);
     PSMTXConcat(mtx, scaleMtx, baseMtx);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, 0, GX_SRC_REG, GX_SRC_VTX, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTevStages(2);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
-    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC);
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_TEXA, GX_CA_ZERO);
     GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
-    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
-    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, (GXBool)1, GX_TEVPREV);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
     GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_APREV, GX_CA_A0, GX_CA_ZERO);
     GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 30, 0, 125);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
     effGetTexObj(EFF_TEX(145), &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetCullMode(GX_CULL_NONE);
@@ -662,27 +685,11 @@ static void effUltraHammerDisp(enum CameraId camId, void* param) {
             }
             PSMTXConcat(baseMtx, mtx, mtx);
             PSMTXConcat(cam->view, mtx, mtx);
-            GXLoadPosMtxImm(mtx, 0);
-            GXSetCurrentMtx(0);
+            GXLoadPosMtxImm(mtx, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             PSMTXTrans(mtx, data->offsetX, data->offsetY, 0.0f);
-            GXLoadTexMtxImm(mtx, 30, GX_MTX2x4);
-            GXClearVtxDesc();
-            GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
-            GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_TEX_ST, GX_RGBA4, 10);
-            GXSetArray(GX_VA_POS, &wakka_vertex_tbl, 6);
-            GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
-            fmtLoop[0] = GX_VTXFMT0;
-            GXSetVtxAttrFmt(fmtLoop[0], GX_VA_NRM, GX_TEX_S, GX_RGB8, 6);
-            GXSetArray(GX_VA_NRM, &wakka_normal_tbl, 3);
-            GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
-            GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_TEX_ST, GX_RGBA8, 0);
-            GXSetArray(GX_VA_CLR0, &wakka_color0_tbl, 4);
-            GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
-            GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_RGBA4, 13);
-            GXSetArray(GX_VA_TEX0, &wakka_texcoord0_tbl, 4);
-            for (fmtLoop[1] = 0; fmtLoop[1] < 20; fmtLoop[1]++) {
-                GXCallDisplayList(wakka_dl_0_tbl[fmtLoop[1]], wakka_dl_0_size_tbl[fmtLoop[1]] << 5);
-            }
+            GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
+            wakka_polygon_0();
         }
     }
 }

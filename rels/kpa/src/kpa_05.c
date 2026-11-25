@@ -1,41 +1,42 @@
 // kpa_05 (クッパ編, Bowser's interludes): the third side-scrolling stage, over lava; continues in kpa_06.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
 #include "kpa.h"
 #include "evt/evt_npc.h"
+#include "kpa_stage_data.h"
+#include "koopa.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
-#include "kpa_stage_data.h"
-#include "version.h"
-#include "evt/evt_story.h"
 
 static USER_FUNC(kpa_get_level);
 
 static EvtWord kpa_act_stg3_mobj[118];
-EvtWord kpa_act_stg3_item[79];
+static EvtWord kpa_act_stg3_item[79];
+static EvtWord kpa_fall[92];
 static EvtWord jumpstand_evt[60];
 static NpcSetupInfo npcEnt[1];
+EvtWord kpa_05_init_evt[44];
 
 /**
- * Blocks, hidden blocks, pipes and obstacle blocks of side-scrolling stage 3 over lava, listed from left to
- * right.
+ * Blocks, pipes and obstacle blocks of side-scrolling stage 3 over lava.
  */
 static EvtWord kpa_act_stg3_mobj[] = {
-    KPA_OBJ_FIREBAR_DODAI_0(-1062.5f, 100.0f, 3, FLOAT(1.0f)),
-    KPA_OBJ_FIREBAR_DODAI_0(-687.5f, 100.0f, 2, FLOAT(2.0f)),
-    KPA_OBJ_FIREBAR_DODAI_1(-512.5f, 225.0f, 3, FLOAT(1.0f)), KPA_OBJ_OJAMA_BLK(-325.0f, 200.0f),
+    KPA_OBJ_FIREBAR_DODAI_0(-1062.5f, 100.0f, 3, -229998976),
+    KPA_OBJ_FIREBAR_DODAI_0(-687.5f, 100.0f, 2, -229997952),
+    KPA_OBJ_FIREBAR_DODAI_1(-512.5f, 225.0f, 3, -229998976), KPA_OBJ_OJAMA_BLK(-325.0f, 200.0f),
     KPA_OBJ_BRICK_3(-225.0f, 25.0f), KPA_OBJ_BRICK_3(-175.0f, 25.0f), KPA_OBJ_BRICK_3(-125.0f, 25.0f),
     KPA_OBJ_BRICK_3(-75.0f, 25.0f), KPA_OBJ_BRICK_3(-25.0f, 25.0f), KPA_OBJ_BRICK_3(25.0f, 25.0f),
     KPA_OBJ_BRICK_3(75.0f, 25.0f), KPA_OBJ_BRICK_3(125.0f, 75.0f), KPA_OBJ_STONE_BLK(250.0f, 25.0f),
     KPA_OBJ_STONE_BLK(300.0f, 25.0f), KPA_OBJ_STONE_BLK(300.0f, 75.0f), KPA_OBJ_STONE_BLK(350.0f, 75.0f),
     KPA_OBJ_OJAMA_BLK(400.0f, 0.0f), KPA_OBJ_STONE_BLK(400.0f, 75.0f),
-    KPA_OBJ_FIREBAR_DODAI_1(387.5f, 125.0f, 6, FLOAT(0.5f)), KPA_OBJ_STONE_BLK(450.0f, 75.0f),
+    KPA_OBJ_FIREBAR_DODAI_1(387.5f, 125.0f, 6, -229999488), KPA_OBJ_STONE_BLK(450.0f, 75.0f),
     KPA_OBJ_STONE_BLK(500.0f, 25.0f), KPA_OBJ_STONE_BLK(500.0f, 75.0f), KPA_OBJ_STONE_BLK(550.0f, 25.0f),
     KPA_OBJ_BRICK_3(725.0f, 0.0f), KPA_OBJ_BRICK_3(775.0f, 0.0f), KPA_OBJ_OJAMA_BLK(700.0f, 175.0f),
     KPA_OBJ_BRICK_3(950.0f, 25.0f), KPA_OBJ_BRICK_3(1000.0f, 25.0f), KPA_OBJ_BRICK_3(1050.0f, 50.0f),
@@ -44,8 +45,8 @@ static EvtWord kpa_act_stg3_mobj[] = {
     KPA_OBJ_BRICK_3(1300.0f, 25.0f), KPA_OBJ_DOKAN_2(1475.0f, 200.0f), KPA_OBJ_END,
 };
 
-/** Coins Bowser can collect in side-scrolling stage 3, as x and z positions. */
-EvtWord kpa_act_stg3_item[] = {
+/** Coins Bowser can collect in side-scrolling stage 3, as x and y positions. */
+static EvtWord kpa_act_stg3_item[] = {
     KPA_ITEM(-175.0f, 175.0f), KPA_ITEM(-125.0f, 175.0f), KPA_ITEM(-25.0f, 175.0f), KPA_ITEM(25.0f, 175.0f),
     KPA_ITEM(250.0f, 0.0f), KPA_ITEM(300.0f, 0.0f), KPA_ITEM(350.0f, 0.0f), KPA_ITEM(350.0f, 25.0f),
     KPA_ITEM(350.0f, 50.0f), KPA_ITEM(400.0f, 50.0f), KPA_ITEM(450.0f, 50.0f), KPA_ITEM(450.0f, 25.0f),
@@ -101,14 +102,14 @@ EVT_END()
  * Script of the stage's red jump stand (KPA_OBJ_JUMPSTAND_RED), run when Bowser stands on it:
  * kills the stage clock (kpa_time, its event id in GW(15)), saves Bowser's power level,
  * loads kpa_06 after 500 ms, turns the camera off once he is above y = 400
- * and launches him up with evt_mario_jump_jumpstand 800 units above the platform (a lower launch speed in the US
- * demo and earlier).
+ * and launches him up with evt_mario_jump_jumpstand 800 units above the platform, using a shorter duration argument
+ * and a different jump mode in the early demos.
  */
 static EVT_BEGIN(jumpstand_evt)
     DELETE_EVENT(GW(15))
     BEGIN_INLINE_EVENT
         WAIT_MS(500)
-        CALL(evt_koopa_get_level, GSW(GSW_KPA_BOWSER_POWER))
+        CALL(evt_koopa_get_level, GSW_KPA_BOWSER_LEVEL)
         CALL(evt_bero_mapchange, STRING("kpa_06"), STRING("kpa_next_map"))
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
@@ -138,9 +139,9 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /**
- * Map init for kpa_05, side-scrolling stage 3 (over lava):
- * builds the blocks and coins from kpa_act_stg3_*, resets the camera road,
- * plays the lava animation and starts the HUD, intro and clock. It continues in kpa_06.
+ * Map init for kpa_05, side-scrolling stage 3: starts Bowser at (-1500, 150), resets the camera road, builds
+ * the stage's blocks and coins from kpa_act_stg3_mobj/item, plays the lava animation anm_magu and starts
+ * the pit watcher, the HUD, the intro and the clock. The red jump stand at the end leads to kpa_06.
  */
 EVT_BEGIN(kpa_05_init_evt)
     CALL(evt_npc_setup, PTR(npcEnt))
@@ -151,18 +152,16 @@ EVT_BEGIN(kpa_05_init_evt)
     CALL_CHILD(kpa_read_mobj)
     SET_VALUE(LW(0), PTR(kpa_act_stg3_item))
     CALL_CHILD(kpa_read_item)
-    CALL(evt_map_playanim, STRING("anm_magu"), 1, 0)
+    CALL(evt_map_playanim, STRING("anm_magu"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(kpa_fall)
-    CALL(kpa_status_init, 3, GSW(GSW_KPA_LIVES), GSW(GSW_KPA_TIME_LEFT))
-    SET_VALUE(LSW(1), 2)
+    CALL(kpa_status_init, 3, GSW_KPA_TRY_COUNT, GSW_KPA_TIME_LEFT)
+    SET_VALUE(LSW_KPA_FIELD_BGM, 2)
     SPAWN_EVENT(kpa_stage_start)
     SPAWN_EVENT_GET_ID(PTR(kpa_time), GW(15))
     RETURN
 EVT_END()
 
-s32 kpaGetLevel(void);
-
-/** Script helper: returns Bowser's current power level (kpaGetLevel) in args[0]. */
+/** Script helper: returns kpaGetLevel() in args[0]. */
 static USER_FUNC(kpa_get_level) {
     EvtWord* args = event->args;
     evtSetValue(event, args[0], kpaGetLevel());

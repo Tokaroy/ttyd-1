@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 3 (kemuri: smoke) at a point, oriented by an angle.
+
 #include "eff/n64/eff_kemuri3_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,46 +8,89 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffKemuri3N64Work {
     BOOL active;     // 0x0
-    s16 type;        // 0x4, never read or written
+    s16 field_0x4;   // 0x4
     s16 timer;       // 0x6
     u8 alpha;        // 0x8
-    u8 pad_9[3];     // 0x9
     Vec position;    // 0xC
     Vec scale;       // 0x18
     Vec rotation;    // 0x24
     Mtx mtx;         // 0x30
     f32 speed;       // 0x60
-    f32 accel;       // 0x64, horizontal accel terms are set but never applied
-    f32 accelStep;   // 0x68
+    f32 hSpeedScale; // 0x64
+    f32 rising;      // 0x68
     f32 accelStep2;  // 0x6C
-    f32 velY;        // 0x70
-    f32 accelY;      // 0x74
-    f32 accelStepY;  // 0x78
-    f32 accelStep2Y; // 0x7C
+    f32 vSpeed;      // 0x70, vertical: vSnap adds to vJerk, vJerk to vAccel, vAccel to vSpeed
+    f32 vAccel;      // 0x74
+    f32 vJerk;       // 0x78
+    f32 vSnap;       // 0x7C
     f32 sinAngle;    // 0x80
     f32 cosAngle;    // 0x84
 } EffKemuri3N64Work;
 
-static void effKemuri3Main(EffectEntry* effect);
-static void effKemuri3Disp(CameraId cameraId, EffectEntry* effect);
+/** Builds the puff's model matrix from its rotation (x, then y, around a z spin), position and scale. */
+// Original name and size (0xd8) from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_matrix(EffKemuri3N64Work* work) {
+    Mtx scale;
+    Mtx trans;
+    Mtx rotX;
+    Mtx rotY;
+    Mtx rotZ;
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_propagation off
+    PSMTXRotRad(rotX, 'x', 0.017453292f * work->rotation.x);
+    PSMTXRotRad(rotY, 'y', 0.017453292f * work->rotation.y);
+    PSMTXRotRad(rotZ, 'z', 0.017453292f * work->rotation.z);
+    PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
+    PSMTXScale(scale, work->scale.x, work->scale.y, work->scale.z);
+    PSMTXConcat(rotX, rotZ, rotZ);
+    PSMTXConcat(rotY, rotZ, rotZ);
+    PSMTXConcat(rotZ, scale, scale);
+    PSMTXConcat(trans, scale, work->mtx);
+}
+
+/** One frame of a puff: slows down, drifts along its direction, rises and tilts back (like eff_mugi's kemuri_mugi_jump). */
+// Original name and size (0xb8) from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_hana_jump(EffKemuri3N64Work* work) {
+    work->speed *= 0.85f;
+    work->position.x += work->speed * work->sinAngle;
+    work->position.z += work->speed * work->cosAngle;
+    work->vJerk += work->vSnap;
+    work->vAccel += work->vJerk;
+    work->vSpeed += work->vAccel;
+    work->position.y += work->vSpeed;
+    if (work->vSpeed < 0.0f) {
+        work->vJerk = 0.004f;
+    }
+    work->rotation.x -= 1.0f;
+    if (work->rotation.x < -100.0f) {
+        work->rotation.x = -100.0f;
+    }
+}
+
+static void effKemuri3Main(EffectEntry* effect);
+static void effKemuri3Disp(CameraId cameraId, void* param);
+
+/** sin and cos of an angle in degrees. */
+static inline f32 sind(f32 deg) {
+    return sin(6.2831855f * deg / 360.0f);
+}
+static inline f32 cosd(f32 deg) {
+    return cos(6.2831855f * deg / 360.0f);
+}
+
 /**
  * Spawns five flower-smoke puffs ("jump" in the effect table) at (x, y, z), 72 degrees apart around the angle;
  * 60 frames. Called via evt_eff64 "kemuri3_n64".
  */
 EffectEntry* effKemuri3N64Entry(f32 x, f32 y, f32 z, f32 angle) {
-    s32 ofs;
     EffectEntry* effect;
     EffKemuri3N64Work* work;
     s32 i;
-    f32 rad;
-    f32 t;
+    f32 deg;
 
     effect = effEntry();
     effect->type = "Kemuri3N64";
@@ -54,10 +98,10 @@ EffectEntry* effKemuri3N64Entry(f32 x, f32 y, f32 z, f32 angle) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffKemuri3N64Work) * 5);
     effect->userdata = work;
     effect->callback = effKemuri3Main;
-    for (i = 0, ofs = 0; i < 5; i++, ofs += 72, work++) {
+    for (i = 0; i < 5; i++, work++) {
         work->active = TRUE;
-        work->accel = 0.29999998f;
-        work->accelStep = 0.0f;
+        work->hSpeedScale = 0.29999998f;
+        work->rising = 0.0f;
         work->accelStep2 = 0.0f;
         work->position.x = x;
         work->position.y = y;
@@ -68,33 +112,25 @@ EffectEntry* effKemuri3N64Entry(f32 x, f32 y, f32 z, f32 angle) {
         work->alpha = 255;
         work->timer = 60;
         work->rotation.x = 0.0f;
-        work->rotation.y = angle + (f32)ofs;
+        work->rotation.y = angle + (f32)(i * 72);
         work->rotation.z = 0.0f;
-        work->velY = 1.75f;
-        work->accelY = -0.08f;
-        work->accelStepY = 0.0f;
-        work->accelStep2Y = 0.0f;
+        work->vSpeed = 1.75f;
+        work->vAccel = -0.08f;
+        work->vJerk = 0.0f;
+        work->vSnap = 0.0f;
         work->speed = -3.9f;
-        rad = reviseAngle(work->rotation.y);
-        t = 6.2831855f * rad;
-        rad = t / 360.0f;
-        work->sinAngle = sin(rad);
-        work->cosAngle = cos(rad);
+        deg = reviseAngle(work->rotation.y);
+        work->sinAngle = sind(deg);
+        work->cosAngle = cosd(deg);
     }
     return effect;
 }
 
-#pragma opt_propagation reset
 /** Moves each puff outward (slowing 15% per frame) in a rise-then-fall arc and tilts it; deletes when all expire. */
 static void effKemuri3Main(EffectEntry* effect) {
     EffKemuri3N64Work* work = effect->userdata;
     s32 i;
     BOOL alive;
-    Mtx rotZ;
-    Mtx rotY;
-    Mtx rotX;
-    Mtx trans;
-    Mtx scale;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
 
@@ -112,39 +148,19 @@ static void effKemuri3Main(EffectEntry* effect) {
             continue;
         }
         alive = TRUE;
-        work->speed *= 0.85f;
-        work->position.x += work->speed * work->sinAngle;
-        work->position.z += work->speed * work->cosAngle;
-        work->accelStepY += work->accelStep2Y;
-        work->accelY += work->accelStepY;
-        work->velY += work->accelY;
-        work->position.y += work->velY;
-        if (work->velY < 0.0f) {
-            work->accelStepY = 0.004f;
-        }
-        work->rotation.x -= 1.0f;
-        if (work->rotation.x < -100.0f) {
-            work->rotation.x = -100.0f;
-        }
-        PSMTXRotRad(rotX, 'x', 0.017453292f * work->rotation.x);
-        PSMTXRotRad(rotY, 'y', 0.017453292f * work->rotation.y);
-        PSMTXRotRad(rotZ, 'z', 0.017453292f * work->rotation.z);
-        PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
-        PSMTXScale(scale, work->scale.x, work->scale.y, work->scale.z);
-        PSMTXConcat(rotX, rotZ, rotZ);
-        PSMTXConcat(rotY, rotZ, rotZ);
-        PSMTXConcat(rotZ, scale, scale);
-        PSMTXConcat(trans, scale, work->mtx);
+        kemuri_hana_jump(work);
+        kemuri_matrix(work);
     }
     if (!alive) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKemuri3Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effKemuri3Disp, effect);
 }
 
 /** Draws each live puff as a 16x16 quad (effect texture 0xF) tinted brown-yellow with the puff alpha. */
-static void effKemuri3Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri3Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffKemuri3N64Work* work;
     s32 i;

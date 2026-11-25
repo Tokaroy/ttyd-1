@@ -1,10 +1,10 @@
 // envdrv.c: the environment driver (EnvironmentGlare and filter types): glare, blur and depth-of-field screen effects.
+
 #pragma once
 
 #include <dolphin/gx.h>
-#include "memory.h"
 #include <dolphin/mtx.h>
-#include "driver/mapdrv.h"
+#include "memory.h"
 
 typedef struct EnvironmentGlareTexCoord {
     f32 x; // 0x0, screen pixels, scaled by coordScale / fbWidth
@@ -18,14 +18,15 @@ typedef struct EnvironmentGlare {
     GXTevKColorSel kcolorSel0;         // 0xC
     GXTevKColorSel kcolorSel1;         // 0x10
     f32 coordScale;                    // 0x14
-    s32 count;                         // 0x18, number of coords that follors
+    s32 count;                         // 0x18, number of coords that follow
     EnvironmentGlareTexCoord coords[]; // 0x1C
 } EnvironmentGlare;
 
 // EnvironmentGlareFilter.flags
-#define ENV_GLARE_FLAG_DEPTH 0x1 // depth-dependent: zscale applies (envGlareFilterZ)
+#define ENV_GLARE_FILTER_Z (1 << 0) // envGlareFilterZ: zscale applies
+
 typedef struct EnvironmentGlareFilter {
-    u16 flags;  // 0x0
+    u16 flags;  // 0x0, ENV_GLARE_FILTER_Z
     u16 type;   // 0x2
     u16 y0;     // 0x4
     u16 y1;     // 0x6
@@ -34,54 +35,81 @@ typedef struct EnvironmentGlareFilter {
     f32 zscale; // 0xC
 } EnvironmentGlareFilter;
 
-// EnvironmentDof.flags
-#define ENV_DOF_PASS1 0x1 // pass 1 drawn (level1, radius1)
-#define ENV_DOF_PASS2 0x2 // pass 2 drawn (level2, radius2)
+#define ENV_DOF_PASS1 (1 << 0)
+#define ENV_DOF_PASS2 (1 << 1)
+
 typedef struct EnvironmentDof {
-    u16 flags;    // 0x0, ENV_DOF_*
+    u16 flags;    // 0x0, ENV_DOF_PASS1 / ENV_DOF_PASS2
     u8 level1;    // 0x2, pass 1 konst color
     u8 level2;    // 0x3, pass 2 konst color
     f32 radius1;  // 0x4, pass 1 sample offset (4 taps)
     f32 radius2;  // 0x8, pass 2 sample offset
 } EnvironmentDof; // two-pass depth-of-field style screen blur
 
-// EnvironmentWork.flags. Bits 0x1, 0x2, 0x10000000 and 0x80000000 have no setter in this tree.
-#define ENV_FLAG_CAPTURE_COLOR 0x1   // envCapture copies the frame colour to capture
-#define ENV_FLAG_CAPTURE_DEPTH 0x2   // envCapture copies the frame depth to capture2
-#define ENV_FLAG_BLUR_CAPTURE 0x4    // envCapture2 copies the frame to the blur texture
-#define ENV_FLAG_BLUR_READY 0x8      // the blur texture holds a frame: envDisp_Blur draws it
-#define ENV_FLAG_FF_LINES 0x10000000 // envDisp_FF draws its radial lines
-#define ENV_FLAG_GLARE 0x20000000    // the glare filter is on (envGlareFilter)
-#define ENV_FLAG_BLUR 0x40000000     // the motion blur is on (envBlurOn)
-#define ENV_FLAG_DOF 0x80000000      // the depth of field is drawn (envDisp_DepthOfField)
+// EnvironmentWork.flags
+typedef enum EnvironmentFlags {
+    ENV_FLAG_CAPTURE_COLOR_UNUSED = (1 << 0), // 0x1, envCapture copies the screen colour; only the stripped envFFOn
+                                              // sets it (and so the stripped envDoFOn, by the size of envDoFOff)
+    ENV_FLAG_CAPTURE_DEPTH_UNUSED = (1 << 1), // 0x2, envCapture copies the screen depth; nothing that is kept sets it
+    ENV_FLAG_BLUR_CAPTURE = (1 << 2),         // 0x4, envCapture2 copies the screen for the blur
+    ENV_FLAG_BLUR_CAPTURED = (1 << 3),        // 0x8, a blur frame was captured
+    ENV_FLAG_FF_UNUSED = (1 << 28),           // 0x10000000, envDisp_FF draws; only the stripped envFFOn sets it
+    ENV_FLAG_GLARE_FILTER = (1 << 29),        // 0x20000000, envGlareFilter with a type
+    ENV_FLAG_BLUR = (1 << 30),                // 0x40000000, envBlurOn
+} EnvironmentFlags;
+#define ENV_FLAG_DOF_UNUSED 0x80000000 // envDisp_DepthOfField draws; nothing sets it
+
+// EnvironmentWork.texMtxWork: matrices and parameters envTevLoadTexMtxImm reads while setting up texture matrices
+typedef struct EnvTexMtxWork {
+    MtxPtr view;  // 0x0
+    MtxPtr mtx;   // 0x4
+    MtxPtr model; // 0x8
+    f32 scale;    // 0xC
+    f32 rotY;     // 0x10, degrees
+    f32 rotX;     // 0x14, degrees: tilt (a -Z rotation) for type 0, light elevation (sin/cos with rotY as the
+                  // azimuth) for types 2 and 3
+} EnvTexMtxWork;
+
+// EnvBlurWork.flags. FADE_OUT: set by envBlurOn for type != 0: capture stops after the first frame and the blur alpha
+// fades from 255 to 0; otherwise it keeps capturing
+#define ENV_BLUR_FLAG_FADE_OUT 0x1
+
+// EnvironmentWork.blur (envBlurOn, envDisp_Blur)
+typedef struct EnvBlurWork {
+    u16 flags;   // 0x0, ENV_BLUR_FLAG_FADE_OUT
+    OSTime time; // 0x8
+    s32 msec;    // 0x10
+} EnvBlurWork;
+
 typedef struct EnvironmentWork {
-    s32 flags;                     // 0x0
+    s32 flags;                     // 0x0, EnvironmentFlags
     smartEntry* capture;           // 0x4
     smartEntry* capture2;          // 0x8
     GXTexObj captureObj;           // 0xC
     GXTexObj captureObj2;          // 0x2C
     void* envBlur;                 // 0x4C, see envBlurOn
     GXTexObj envBlurObj;           // 0x50
-    u8 texMtxWork[0x88 - 0x70];    // 0x70, EnvTexMtxWork view (view, mtx, model, scale, rotY, rotX)
+    EnvTexMtxWork texMtxWork;      // 0x70
     EnvironmentDof dof;            // 0x88
-    u8 pad_94[0x98 - 0x94];        // 0x94, never accessed
-    u16 blurWork;                  // 0x98, start of the EnvBlurWork view; bit 1 = blur on
-    u8 blurWorkRest[0xB0 - 0x9A];  // 0x9A, rest of the EnvBlurWork view
+    EnvBlurWork blur;              // 0x98
     EnvironmentGlareFilter filter; // 0xB0
-    u8 yamiView[0xF0 - 0xC0];      // 0xC0, Mtx set by envSetYamiView
+    Mtx yamiView;                  // 0xC0, set by envSetYamiView
 } EnvironmentWork;
 
 void envInit(void);
 void envReInit(void);
 void envTexSetup(void);
 void envMain(void);
+void envDoFOff(void);
 void envBlurOn(s32 type, s32 msec);
 void envBlurOff(void);
+void envFFOn(void);
+void envFFOff(void);
 struct MapTevCallbackInfo;
 void envSetWater(struct MapTevCallbackInfo* info);
+void envSetYami(struct MapTevCallbackInfo* info);
+void envAddTev(s32 type, struct MapTevCallbackInfo* info);
 
 void envGlareFilter(s32 type, s16 y0, s16 x0, s16 y1, s16 x1);
 void envGlareFilterZ(f32 zscale);
-void envAddTev(s32 type, MapTevCallbackInfo* info);
 void envSetYamiView(Mtx view);
-void envSetYami(MapTevCallbackInfo* info);

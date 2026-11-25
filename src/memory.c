@@ -1,4 +1,5 @@
 // Memory: the OS heaps, the map heap allocator (_mapAlloc/_mapFree) and the smart heap (smartAlloc) used for loaded files.
+
 #include "version.h"
 #include "memory.h"
 #include "system.h"
@@ -9,67 +10,40 @@
 // HEAP_MALLOC block is a series of these nodes
 typedef struct MapAllocEntry MapAllocEntry;
 struct MapAllocEntry {
-    MapAllocEntry* next;   // 0x0
-    u32 size;              // 0x4
-    u16 inuse;             // 0x8
-    u16 currId;            // 0xA
-    u8 pad_0C[0x20 - 0xC]; // 0xC, pads the header to 32 bytes
+    MapAllocEntry* next;  // 0x0
+    u32 size;             // 0x4
+    u16 inuse;            // 0x8
+    u16 currId;           // 0xA
+    u8 pad_C[0x20 - 0xC]; // 0xC
 };
 
 //.bss
-#if VERSION <= VERSION_DEMO_JP
-// demo: smartWork is defined after the heap arrays (they share its .bss), so it is laid out first
-extern SmartWork smartWork;
-#else
-SmartWork smartWork;
+#if VERSION > VERSION_DEMO_JP
+static SmartWork smartWork;
 #endif
 
 //.sdata
-// flag, size / 0x400 (>> 10)
-#if VERSION >= VERSION_US
-// US: no fixed battle heap (battle maps use a map sub-heap); the smart heap is index 4
-#define HEAP_COUNT 5
-#define SMART_HEAP 4
-/**
- * Sizes of the game's main heaps: per heap, 1 with a fixed size in KiB or 0 with a percentage of what is left;
- * memInit carves the OS arena into the heaps from this table, the smart heap last.
- */
-s32 size_table[HEAP_COUNT][2] = {
-    {1, 0x1C84},
-    {1, 0xD90},
-    {1, 0xE0},
-    {1, 0x80},
-    {0, 0x64}
-};
-#else
-#define HEAP_COUNT 6
-#define SMART_HEAP 5
-/**
- * Sizes of the game's main heaps: per heap, 1 with a fixed size in KiB or 0 with a percentage of what is left;
- * memInit carves the OS arena into the heaps from this table, the smart heap last.
- */
-s32 size_table[HEAP_COUNT][2] = {
+// {fixed, size}: a fixed heap (1) has its size in KiB, the others (0) get size percent of the arena left over
+static s32 size_table[HEAP_COUNT][2] = {
 #if VERSION <= VERSION_DEMO_JP
-    {1, 0x3784}, //0xDE1000
+    {1, 0x3784},
 #else
-    {1, 0x1C84}, //0x721000, 7300 KiB/7.13 MiB
+    {1, 0x1C84}, // 0x721000, 7300 KiB (7.13 MiB)
 #endif
-    {1, 0xD90}, //0x364000, 3472 KiB/3.39 MiB
-    {1, 0xE0}, //0x38000, 224 KiB
-    {1, 0x80}, //0x20000, 128 KiB
-    {1, 0x100}, //0x40000, 256 KiB
-    {0, 0x64}
+    {1, 0xD90},  // 0x364000, 3472 KiB (3.39 MiB)
+    {1, 0xE0},   // 0x38000, 224 KiB
+    {1, 0x80},   // 0x20000, 128 KiB
+#if VERSION < VERSION_US
+    {1, 0x100},  // 0x40000, 256 KiB: the battle heap
+#endif
+    {0, 0x64}    // the smart heap: 100 % of what is left
 };
-#endif
-static SmartWork* wp = &smartWork;
 
 //.sbss
 OSHeapHandle heapHandle[HEAP_COUNT];
 void* heapStart[HEAP_COUNT];
 void* heapEnd[HEAP_COUNT];
-#if VERSION <= VERSION_DEMO_JP
-SmartWork smartWork;
-#endif
+
 #if VERSION >= VERSION_US
 // uninitialized .sbss is laid out in reverse definition order
 u32 mapalloc_size;
@@ -77,47 +51,47 @@ u32 R_battlemapalloc_size;
 BOOL g_bFirstSmartAlloc;
 void* R_battlemapalloc_base_ptr;
 void* mapalloc_base_ptr;
+
+// US and later map heap: callers pass the heap base; battle maps get their own sub-heap
+#define MAPBASE_PARAM void *base_,
+#define MAPBASE ((MapAllocEntry*)base_)
 #else
+#if VERSION <= VERSION_DEMO_JP
+static SmartWork smartWork;
+#endif
 void* mapalloc_base_ptr;
 u32 mapalloc_size;
 BOOL g_bFirstSmartAlloc;
-#endif
-#if VERSION <= VERSION_JP
-static u16 count; // JP/demo: id stamped on each map heap allocation (MapAllocEntry.currId)
+static u16 count;
+#define MAPBASE_PARAM
+#define MAPBASE mapalloc_base_ptr
 #endif
 
+//.sdata
+static SmartWork* wp = &smartWork;
+
 #if VERSION <= VERSION_DEMO_JP
-// demo: the smart heap is a fixed 7 MiB block taken from the default heap
-#define SMART_ALLOC_HEAP HEAP_DEFAULT
+// early demos: the smart heap is a fixed 7 MiB block taken from the default heap
+#define SMART_HEAP_SIZE 0x700000
 #else
-#define SMART_ALLOC_HEAP SMART_HEAP
+#define SMART_HEAP_SIZE ((u8*)heapEnd[HEAP_SMART] - (u8*)heapStart[HEAP_SMART] - 32)
 #endif
 
 // local prototypes
 void smartGarbage(void);
-
-/** Size of the smart heap's block: the demo takes a fixed 7 MiB, later versions use their whole heap minus 32 bytes. */
-static inline u32 smartHeapSize(void) {
-#if VERSION <= VERSION_DEMO_JP
-    return 0x700000;
-#else
-    return (u8*)heapEnd[SMART_HEAP] - (u8*)heapStart[SMART_HEAP] - 32;
-#endif
-}
 
 /**
  * Carves the OS arena into the game's heaps from size_table:
  * fixed-size heaps (size in KiB) first, then the rest shared out by percentage (the last heap takes 100%).
  * Creates each OS heap and clears it, which also sets up the map heap allocator. Called once at boot.
  */
-void memInit(void) { // almost 1:1, stubborn regalloc at the end
-    MapAllocEntry* entry;
+void memInit(void) {
     void* arenaLo;
     void* arenaHi;
     u32 restSize;
     int i;
     int size;
-    u8* temp;
+    u8* cursor;
 
     arenaLo = OSGetArenaLo();
     arenaHi = OSGetArenaHi();
@@ -125,75 +99,34 @@ void memInit(void) { // almost 1:1, stubborn regalloc at the end
     OSSetArenaLo(arenaLo);
     arenaLo = (void*)OSRoundUp32B(arenaLo);
     arenaHi = (void*)OSRoundDown32B(arenaHi);
-    temp = arenaLo;
+    cursor = arenaLo;
 
     for (i = 0; i < HEAP_COUNT; i++) {
         if (size_table[i][0] == 1) {
-            heapStart[i] = temp;
+            heapStart[i] = cursor;
             size = size_table[i][1] << 10;
-            heapEnd[i] = temp + size;
-            temp += size;
+            heapEnd[i] = cursor + size;
+            cursor += size;
         }
     }
 
-    restSize = (u8*)arenaHi - temp;
+    restSize = (u8*)arenaHi - cursor;
     for (i = 0; i < HEAP_COUNT; i++) {
         if (size_table[i][0] == 0) {
             size = (size_table[i][1] * (u64)restSize) / 100Ull;
-            heapStart[i] = temp;
+            heapStart[i] = cursor;
             size -= (size & 0x1F);
-            heapEnd[i] = temp + size;
-            temp += size;
+            heapEnd[i] = cursor + size;
+            cursor += size;
         }
     }
     for (i = 0; i < HEAP_COUNT; i++) {
         heapHandle[i] = OSCreateHeap(heapStart[i], heapEnd[i]);
     }
-    OSSetArenaLo((void*)arenaHi);
+    OSSetArenaLo(arenaHi);
     for (i = 0; i < HEAP_COUNT; i++) {
         memClear(i);
     }
-}
-
-/**
- * Turns the whole HEAP_MALLOC heap into one free map heap block for _mapAlloc.
- * JP and the demo also reset the allocation id counter.
- */
-static inline void mapallocInit(void) {
-    // the declaration order differs per version (it sets which callee-saved register holds each)
-#if VERSION >= VERSION_US
-    u32 size;
-    MapAllocEntry* entry;
-#else
-    MapAllocEntry* entry;
-    u32 size;
-#endif
-    u32 total;
-
-    size = (u8*)heapEnd[HEAP_MALLOC] - (u8*)heapStart[HEAP_MALLOC] - sizeof(MapAllocEntry);
-#if VERSION >= VERSION_US
-    mapalloc_size = size;
-#endif
-    entry = OSAllocFromHeap(heapHandle[HEAP_MALLOC], size);
-    if (entry) {
-        memset(entry, 0, size);
-        DCFlushRange(entry, size);
-    }
-#if VERSION >= VERSION_US
-    // US re-reads the stored size and sets the base pointer before writing the first entry
-    total = mapalloc_size;
-    mapalloc_base_ptr = entry;
-#else
-    total = size;
-#endif
-    entry->next = NULL;
-    entry->size = total - sizeof(MapAllocEntry);
-    entry->inuse = 0;
-#if VERSION <= VERSION_JP
-    mapalloc_base_ptr = entry;
-    mapalloc_size = size;
-    count = 0;
-#endif
 }
 
 /**
@@ -204,7 +137,7 @@ void memClear(HEAP_TYPE heap) {
     OSDestroyHeap(heapHandle[heap]);
     OSCreateHeap(heapStart[heap], heapEnd[heap]);
     if (heap == HEAP_MALLOC) {
-        mapallocInit();
+        _mapAllocInit();
     }
 }
 
@@ -223,17 +156,80 @@ void* __memAlloc(HEAP_TYPE heap, u32 size) {
     return ptr;
 }
 
+/** __memAlloc under its debug name. */
+// __memAllocDBG and __memFreeDBG: original names and sizes (0x68, 0x30) from the JP demo map (UNUSED there: nothing
+// calls them); the map lists each right after the function whose size it has, so each has that function's body.
+// Parameters the bodies do not read (a debug build would pass more) are not known.
+void* __memAllocDBG(HEAP_TYPE heap, u32 size) {
+    void* ptr;
+
+    ptr = OSAllocFromHeap(heapHandle[heap], size);
+    if (ptr) {
+        memset(ptr, 0, size);
+        DCFlushRange(ptr, size);
+    }
+    return ptr;
+}
+
 /** Returns a block from __memAlloc to its heap. */
 void __memFree(HEAP_TYPE heap, void* ptr) {
     OSFreeToHeap(heapHandle[heap], ptr);
 }
 
+/** __memFree under its debug name. */
+// Original name and size from the JP demo map (see __memAllocDBG).
+void __memFreeDBG(HEAP_TYPE heap, void* ptr) {
+    OSFreeToHeap(heapHandle[heap], ptr);
+}
+
+/**
+ * Turns the whole HEAP_MALLOC heap into one free map heap block for _mapAlloc.
+ * JP and the early demos also reset the allocation id counter.
+ */
+// Original name and size (0xa0) from the JP demo map (UNUSED there: every call is inlined).
+void _mapAllocInit(void) {
+// the declaration order differs per version (it sets which callee-saved register holds each)
+#if VERSION >= VERSION_US
+    u32 size;
+    MapAllocEntry* entry;
+    u32 total;
+
+    size = (u8*)heapEnd[HEAP_MALLOC] - (u8*)heapStart[HEAP_MALLOC] - sizeof(MapAllocEntry);
+    mapalloc_size = size;
+#else
+    MapAllocEntry* entry;
+    u32 size;
+
+    size = (u8*)heapEnd[1] - (u8*)heapStart[1] - sizeof(MapAllocEntry);
+#endif
+    entry = OSAllocFromHeap(heapHandle[HEAP_MALLOC], size);
+    if (entry) {
+        memset(entry, 0, size);
+        DCFlushRange(entry, size);
+    }
+#if VERSION >= VERSION_US
+    total = mapalloc_size;
+    mapalloc_base_ptr = entry;
+    entry->next = NULL;
+    entry->size = total - sizeof(MapAllocEntry);
+    entry->inuse = 0;
+#else
+    entry->next = NULL;
+    entry->size = size - sizeof(MapAllocEntry);
+    entry->inuse = 0;
+    mapalloc_base_ptr = entry;
+    mapalloc_size = size;
+    count = 0;
+#endif
+}
+
 #if VERSION >= VERSION_US
 /**
- * US and PAL: carves a 0x64000-byte sub-heap out of the map heap for the battle's own map allocations (battle.c
+ * US and later: carves a 0x64000-byte sub-heap out of the map heap for the battle's own map allocations (battle.c
  * allocates from it). Called when a battle starts (seq_battle); replaces JP's fixed battle heap.
+ * Descriptive name (not in the symbol maps).
  */
-void N_battleMapAlloc(void) {
+void battleMapAlloc(void) {
     MapAllocEntry* entry;
     u32 size;
 
@@ -246,68 +242,65 @@ void N_battleMapAlloc(void) {
     entry->inuse = 0;
 }
 
-/** US and PAL: returns the battle map sub-heap to the map heap when the battle ends (seq_battle). */
-void N_battleMapFree(void) {
+/**
+ * US and later: returns the battle map sub-heap to the map heap when the battle ends (seq_battle).
+ * Descriptive name (not in the symbol maps).
+ */
+void battleMapFree(void) {
+    void(_mapFree)(void* base, void* alloc);
+
     (_mapFree)(mapalloc_base_ptr, R_battlemapalloc_base_ptr);
     R_battlemapalloc_base_ptr = NULL;
 }
 #endif
 
-// US: the caller passes the heap (the map heap or the battle map sub-heap); JP and the demo have one map heap.
-#if VERSION >= VERSION_US
-void*(_mapAlloc)(void* base, u32 size) {
-#else
-void*(_mapAlloc)(u32 size) {
-#endif
-    MapAllocEntry* nextptr;   // shorthand to make sure regalloc is correct
-    MapAllocEntry* entry;     // for our loop
-    MapAllocEntry* tailEntry; // make sure we don't lose when inserting, might need better name
-    MapAllocEntry* currEntry; // one we're allocating
-    void* usableData;         // memory caller can actually use
-    u32 usableSize;           // size minus the MapAllocEntry header
-    u32 maxSize;              // used to update latest tail
-    u32 fullSize;             // size including header
+void*(_mapAlloc)(MAPBASE_PARAM u32 size) {
+    MapAllocEntry* restEntry;
+    MapAllocEntry* entry;
+    MapAllocEntry* oldNext;   // next of the chosen block before the split
+    MapAllocEntry* bestEntry; // smallest free block that fits
+    void* usableData;         // returned to the caller (after the header)
+    u32 usableSize;           // request rounded up to 32 bytes, without the header
+    u32 bestSize;             // size of bestEntry, 0 while none fits
+    u32 fullSize;             // usableSize plus the header
 
     usableSize = OSRoundUp32B(size);
     if (!usableSize) {
         return NULL;
     }
-#if VERSION >= VERSION_US
-    entry = base;
-#else
-    entry = mapalloc_base_ptr;
-#endif
+    entry = MAPBASE;
     fullSize = usableSize + sizeof(MapAllocEntry);
-    maxSize = 0;
-    tailEntry = 0;
+    bestSize = 0;
+    oldNext = NULL;
     while (1) {
         if (!entry->inuse && entry->size >= fullSize) {
-            if (maxSize > entry->size || !maxSize) {
-                tailEntry = entry->next;
-                currEntry = entry;
-                maxSize = entry->size;
+            if (bestSize > entry->size || !bestSize) {
+                oldNext = entry->next;
+                bestEntry = entry;
+                bestSize = entry->size;
             }
         }
-        if (!entry->next)
+        if (!entry->next) {
             break;
+        }
         entry = entry->next;
     }
-    if (maxSize) {
-        usableData = (void*)(currEntry + 1);
+    if (bestSize) {
+        usableData = (void*)(bestEntry + 1);
 
-        currEntry->next = (void*)((u8*)currEntry + fullSize);
-        currEntry->size = usableSize;
-        currEntry->inuse = 1;
-#if VERSION <= VERSION_JP
-        currEntry->currId = count++;
+        bestEntry->next = (void*)((u8*)bestEntry + fullSize);
+        bestEntry->size = usableSize;
+        bestEntry->inuse = 1;
+#if VERSION < VERSION_US
+        bestEntry->currId = count++;
 #endif
 
-        nextptr = currEntry->next;
-        nextptr->next = tailEntry;
-        nextptr->size = maxSize - fullSize;
-        nextptr->inuse = 0;
-#if VERSION <= VERSION_JP
-        nextptr->currId = 0;
+        restEntry = bestEntry->next;
+        restEntry->next = oldNext;
+        restEntry->size = bestSize - fullSize;
+        restEntry->inuse = 0;
+#if VERSION < VERSION_US
+        restEntry->currId = 0;
 #endif
 
         memset(usableData, 0, usableSize);
@@ -318,102 +311,83 @@ void*(_mapAlloc)(u32 size) {
     }
 }
 
-// Like _mapAlloc but takes the block from the end of the last free block that fits, keeping long-lived data at the top
-// of the map heap. Zeroed and flushed; NULL when nothing fits.
-#if VERSION >= VERSION_US
-void*(_mapAllocTail)(void* base, u32 size) {
-#else
-void*(_mapAllocTail)(u32 size) {
-#endif
-    MapAllocEntry* nextptr;   // shorthand to make sure regalloc is correct
-    MapAllocEntry* entry;     // for our loop
-    MapAllocEntry* tailEntry; // make sure we don't lose when inserting, might need better name
-    MapAllocEntry* currEntry; // one we're allocating
-    // void* usableData; //memory caller can actually use
-    u32 maxSize;    // used to update latest tail
-    u32 fullSize;   // size including header
-    u32 usableSize; // size minus the MapAllocEntry header
+void*(_mapAllocTail)(MAPBASE_PARAM u32 size) {
+    MapAllocEntry* usedEntry;
+    MapAllocEntry* entry;
+    MapAllocEntry* tailEntry; // next of freeEntry before the split
+    void* result;
+    MapAllocEntry* freeEntry; // last free block that fits; the allocation is cut from its end
+    u32 freeSize;             // size of freeEntry, 0 while none fits
+    u32 fullSize;             // usableSize plus the header
+    u32 usableSize;           // request rounded up to 32 bytes, without the header
 
     usableSize = OSRoundUp32B(size);
     if (!usableSize) {
         return NULL;
     }
-#if VERSION >= VERSION_US
-    entry = base;
-#else
-    entry = mapalloc_base_ptr;
-#endif
+    entry = MAPBASE;
     fullSize = usableSize + sizeof(MapAllocEntry);
-    maxSize = 0;
-    tailEntry = 0;
+    freeSize = 0;
+    tailEntry = NULL;
     while (1) {
         if (!entry->inuse && entry->size >= fullSize) {
             tailEntry = entry->next;
-            currEntry = entry;
-            maxSize = entry->size;
+            freeEntry = entry;
+            freeSize = entry->size;
         }
-        if (!entry->next)
+        if (!entry->next) {
             break;
+        }
         entry = entry->next;
     }
-    if (maxSize) {
-        memset(currEntry, 0, fullSize);
-        DCFlushRange(currEntry, fullSize);
+    if (freeSize) {
+        memset(freeEntry, 0, fullSize);
+        DCFlushRange(freeEntry, fullSize);
 
-        currEntry->next = (MapAllocEntry*)(((u8*)currEntry + maxSize) - fullSize);
-        currEntry->size = maxSize - fullSize;
-        currEntry->inuse = 0;
-#if VERSION <= VERSION_JP
-        currEntry->currId = 0;
+        freeEntry->next = (MapAllocEntry*)(((u8*)freeEntry + freeSize) - fullSize);
+        freeEntry->size = freeSize - fullSize;
+        freeEntry->inuse = 0;
+#if VERSION < VERSION_US
+        freeEntry->currId = 0;
 #endif
 
-        nextptr = currEntry->next;
-        nextptr->next = tailEntry;
-        tailEntry = (void*)(nextptr + 1);
-        nextptr->size = usableSize;
-        nextptr->inuse = 1;
-#if VERSION <= VERSION_JP
-        nextptr->currId = count++;
+        usedEntry = freeEntry->next;
+        usedEntry->next = tailEntry;
+        result = (void*)(usedEntry + 1);
+        usedEntry->size = usableSize;
+        usedEntry->inuse = 1;
+#if VERSION < VERSION_US
+        usedEntry->currId = count++;
 #endif
 
-        memset(tailEntry, 0, usableSize);
-        DCFlushRange(tailEntry, usableSize);
-        return tailEntry;
+        memset(result, 0, usableSize);
+        DCFlushRange(result, usableSize);
+        return result;
     } else {
         return NULL;
     }
 }
 
-#if VERSION >= VERSION_US
-#pragma dont_inline on // US N_battleMapFree calls it
-#endif
-// Frees a map heap block and merges it with a free neighbour on either side. NULL and already-free blocks are ignored.
-#if VERSION >= VERSION_US
-void(_mapFree)(void* base, void* alloc) {
-#else
-void(_mapFree)(void* alloc) {
-#endif
+void(_mapFree)(MAPBASE_PARAM void* alloc) {
     MapAllocEntry* loopEntry;
     MapAllocEntry* nextEntry;
     u32 newSize;
     MapAllocEntry* entry;
 
-    if (!alloc)
+    if (!alloc) {
         return;
+    }
     entry = (MapAllocEntry*)alloc - 1;
-    if (!entry->inuse)
+    if (!entry->inuse) {
         return;
+    }
     nextEntry = entry->next;
     newSize = entry->size;
     if (nextEntry && !nextEntry->inuse) {
         newSize += nextEntry->size + sizeof(MapAllocEntry);
         nextEntry = nextEntry->next;
     }
-#if VERSION >= VERSION_US
-    loopEntry = base;
-#else
-    loopEntry = mapalloc_base_ptr;
-#endif
+    loopEntry = MAPBASE;
     while (1) {
         if (loopEntry->next == entry) {
             if (!loopEntry->inuse) {
@@ -422,20 +396,18 @@ void(_mapFree)(void* alloc) {
             }
             break;
         }
-        if (loopEntry > entry || !loopEntry->next)
+        if (loopEntry > entry || !loopEntry->next) {
             break;
+        }
         loopEntry = loopEntry->next;
     }
     entry->next = nextEntry;
     entry->size = newSize;
     entry->inuse = 0;
 }
-#if VERSION >= VERSION_US
-#pragma dont_inline reset
-#endif
 
 /**
- * Allocates the smart heap (the US and PAL releases use their whole smart heap, the demo a fixed 7 MiB)
+ * Allocates a fixed 7 MiB block from the default heap in the early demos, or the dedicated smart heap minus 32 bytes in JP and later,
  * and resets its 0x800 block descriptors: all free, nothing allocated.
  * The first smartAlloc after this also frees group 3.
  */
@@ -445,86 +417,84 @@ void smartInit(void) {
     void* ptr;
     int i;
 
-    size = smartHeapSize();
+    size = SMART_HEAP_SIZE;
     ptr = OSAllocFromHeap(heapHandle[SMART_ALLOC_HEAP], size);
     if (ptr) {
         memset(ptr, 0, size);
         DCFlushRange(ptr, size);
     }
     wp->ptr = ptr;
-    wp->allocHead = 0;
-    wp->allocTail = 0;
-    wp->bytesLeft = smartHeapSize();
-    memset(wp->ptr, 0, smartHeapSize());
+    wp->allocHead = NULL;
+    wp->allocTail = NULL;
+    wp->bytesLeft = SMART_HEAP_SIZE;
+    memset(wp->ptr, 0, SMART_HEAP_SIZE);
     memset(wp->work, 0, sizeof(wp->work));
     e = wp->work;
-    for (i = 0; i < 0x800; i++, e++) {
+    for (i = 0; i < (s32)(sizeof(wp->work) / sizeof(wp->work[0])); i++, e++) {
         e->next = e + 1;
         e->prev = e - 1;
     }
     wp->head = &wp->work[0];
     wp->head->prev = NULL;
-    wp->tail = &wp->work[0x7FF];
+    wp->tail = &wp->work[sizeof(wp->work) / sizeof(wp->work[0]) - 1];
     wp->tail->next = NULL;
     wp->waitsync = 0;
     g_bFirstSmartAlloc = FALSE;
 }
 
-#if VERSION >= VERSION_JP
 /**
- * JP and later: empties the smart heap again without reallocating it.
- * Used by the crash screen to get memory for the ROM font.
+ * Empties the smart heap again without reallocating it.
+ * Used by the crash screen (JP and later) to get memory for the ROM font; nothing calls it in the early demos
+ * (JP demo map: UNUSED, 0x150).
  */
-void L_smartReInit(void) {
+void smartReInit(void) {
     smartEntry* e;
     int i;
 
-    wp->allocHead = 0;
-    wp->allocTail = 0;
-    wp->bytesLeft = smartHeapSize();
-    memset(wp->ptr, 0, smartHeapSize());
+    wp->allocHead = NULL;
+    wp->allocTail = NULL;
+    wp->bytesLeft = SMART_HEAP_SIZE;
+    memset(wp->ptr, 0, SMART_HEAP_SIZE);
     memset(wp->work, 0, sizeof(wp->work));
     e = wp->work;
-    for (i = 0; i < 0x800; i++, e++) {
+    for (i = 0; i < (s32)(sizeof(wp->work) / sizeof(wp->work[0])); i++, e++) {
         e->next = e + 1;
         e->prev = e - 1;
     }
     wp->head = &wp->work[0];
     wp->head->prev = NULL;
-    wp->tail = &wp->work[0x7FF];
+    wp->tail = &wp->work[sizeof(wp->work) / sizeof(wp->work[0]) - 1];
     wp->tail->next = NULL;
-    g_bFirstSmartAlloc = 0;
+    g_bFirstSmartAlloc = FALSE;
 }
-#endif
 
-// FAKE: #pragma dont_inline on: keeps smartAutoFree out of line as in the target; without it smartAutoFree is inlined into smartAlloc (206 -> 228 instructions)
-#pragma dont_inline on
 /**
- * Frees every smart heap block of group type; freeing group 3 also frees the group 4 blocks.
+ * Frees the smart heap blocks of group type; group 4 blocks are demoted to group 3 instead of freed.
+ * A group 3 request also demotes the remaining group 4 blocks.
  * Called with group 1 on map changes (and by the demo movie), group 2 when a battle starts and ends.
  */
-void smartAutoFree(s32 group) {
+void smartAutoFree(s32 allocType) {
     smartEntry* entry;
     smartEntry* next;
-    u16 type = group;
 
     for (entry = wp->allocHead; entry; entry = next) {
         next = entry->next;
-        if (entry->type == type) {
+        if (entry->type == (u16)allocType) {
             smartFree(entry);
         }
     }
-    if (group == 3) {
+    if (allocType == 3) {
         for (entry = wp->allocHead; entry; entry = next) {
+            s32 entryType = entry->type;
+
             next = entry->next;
-            if ((s32)entry->type == 4) {
+            if (entryType == SMART_GROUP_TEMP_KEEP) {
                 smartFree(entry);
             }
         }
     }
 }
 
-#pragma dont_inline reset
 /**
  * Frees a smart heap block, giving its bytes to the block before it (or back to the start of the heap)
  * and returning the descriptor to the free list.
@@ -534,8 +504,8 @@ void smartAutoFree(s32 group) {
 void smartFree(smartEntry* entry) {
     u32 total;
 
-    if (entry->type == 4) {
-        entry->type = 3;
+    if (entry->type == SMART_GROUP_TEMP_KEEP) {
+        entry->type = SMART_GROUP_TEMP;
         return;
     }
     if (!entry->prev) {
@@ -584,14 +554,15 @@ void smartFree(smartEntry* entry) {
  * Blocks can move during compaction, so callers keep the entry, not the address.
  */
 smartEntry* smartAlloc(u32 size, u8 type) {
-    smartEntry* entry1;
-    smartEntry* entry2;
+    void smartAutoFree(s32 allocType);
+    smartEntry* prevEntry;
+    smartEntry* entry;
     int i;
     u32 sz = size;
 
     if (!g_bFirstSmartAlloc) {
         g_bFirstSmartAlloc = TRUE;
-        smartAutoFree(3);
+        smartAutoFree(SMART_GROUP_TEMP);
     }
 
     if (wp->waitsync) {
@@ -599,64 +570,64 @@ smartEntry* smartAlloc(u32 size, u8 type) {
         wp->waitsync = 0;
     }
 
-    entry2 = wp->head;
+    entry = wp->head;
 
-    if (!entry2->prev) {
-        wp->head = entry2->next;
+    if (!entry->prev) {
+        wp->head = entry->next;
         if (wp->head) {
             wp->head->prev = NULL;
         }
     } else {
-        entry2->prev->next = entry2->next;
+        entry->prev->next = entry->next;
     }
 
-    if (!entry2->next) {
-        wp->tail = entry2->prev;
+    if (!entry->next) {
+        wp->tail = entry->prev;
         if (wp->tail) {
             wp->tail->next = NULL;
         }
     } else {
-        entry2->next->prev = entry2->prev;
+        entry->next->prev = entry->prev;
     }
 
     if (sz & 31) {
         sz += 32 - (sz & 31);
     }
 
-    entry2->inUse = 1;
-    entry2->type = type;
-    entry2->size = sz;
-    entry2->file = 0;
+    entry->inUse = 1;
+    entry->type = type;
+    entry->size = sz;
+    entry->file = NULL;
     if (wp->bytesLeft >= sz) {
-        entry2->address = wp->ptr;
-        entry2->spaceAfter = wp->bytesLeft - sz;
-        entry2->next = wp->allocHead;
-        entry2->prev = NULL;
+        entry->address = wp->ptr;
+        entry->spaceAfter = wp->bytesLeft - sz;
+        entry->next = wp->allocHead;
+        entry->prev = NULL;
         wp->bytesLeft = 0;
         if (wp->allocHead) {
-            wp->allocHead->prev = entry2;
+            wp->allocHead->prev = entry;
         }
-        wp->allocHead = entry2;
-        if (!entry2->next) {
-            entry2->spaceAfter = smartHeapSize() + (u8*)wp->ptr - (u8*)entry2->address - entry2->size;
-            wp->allocTail = entry2;
+        wp->allocHead = entry;
+        if (!entry->next) {
+            entry->spaceAfter = SMART_HEAP_SIZE + (u8*)wp->ptr - (u8*)entry->address - entry->size;
+            wp->allocTail = entry;
         }
-        return entry2;
+        return entry;
     } else {
-        for (entry1 = wp->allocHead; entry1; entry1 = entry1->next) {
-            if (entry1->spaceAfter >= sz) {
-                entry2->address = (u8*)entry1->address + entry1->size;
-                entry2->spaceAfter = entry1->spaceAfter - sz;
-                entry2->next = entry1->next;
-                entry2->prev = entry1;
-                entry1->spaceAfter = 0;
-                if (entry1->next) {
-                    entry1->next->prev = entry2;
+        for (prevEntry = wp->allocHead; prevEntry; prevEntry = prevEntry->next) {
+            if (prevEntry->spaceAfter >= sz) {
+                entry->address = (u8*)prevEntry->address + prevEntry->size;
+                entry->spaceAfter = prevEntry->spaceAfter - sz;
+                entry->next = prevEntry->next;
+                entry->prev = prevEntry;
+                prevEntry->spaceAfter = 0;
+                if (prevEntry->next) {
+                    prevEntry->next->prev = entry;
                 } else {
-                    wp->allocTail = entry2;
+                    wp->allocTail = entry;
                 }
-                entry1->next = entry2;
-                return entry2;
+                prevEntry->next = entry;
+                return entry;
             }
         }
         for (i = 0; i < 3; i++) {
@@ -671,20 +642,23 @@ smartEntry* smartAlloc(u32 size, u8 type) {
                     break;
             }
             smartGarbage();
-            entry1 = wp->allocTail;
-            if (entry1->spaceAfter >= sz) {
-                entry2->address = (u8*)entry1->address + entry1->size;
-                entry2->spaceAfter = entry1->spaceAfter - sz;
-                entry2->next = entry1->next;
-                entry2->prev = entry1;
-                entry1->spaceAfter = 0;
-                if (entry1->next) {
-                    entry1->next->prev = entry2;
+
+            // BUG: no NULL check: when no block is left in use allocTail is NULL and is read through here (the
+            // bytesLeft path above is not retried).
+            prevEntry = wp->allocTail;
+            if (prevEntry->spaceAfter >= sz) {
+                entry->address = (u8*)prevEntry->address + prevEntry->size;
+                entry->spaceAfter = prevEntry->spaceAfter - sz;
+                entry->next = prevEntry->next;
+                entry->prev = prevEntry;
+                prevEntry->spaceAfter = 0;
+                if (prevEntry->next) {
+                    prevEntry->next->prev = entry;
                 } else {
-                    wp->allocTail = entry2;
+                    wp->allocTail = entry;
                 }
-                entry1->next = entry2;
-                return entry2;
+                prevEntry->next = entry;
+                return entry;
             }
         }
         return NULL;
@@ -692,14 +666,14 @@ smartEntry* smartAlloc(u32 size, u8 type) {
 }
 
 /**
- * Compacts the smart heap: slides every block down to close the gaps (moving loaded files through
- * fileGarbageMoveMem), leaving all free space after the last block.
- * A file still being read by the DVD thread is not moved. Waits for the GPU first, since textures may be in use.
+ * Compacts the smart heap by moving blocks toward its start and updating the free gaps.
+ * File-backed blocks move through fileGarbageMoveMem; other blocks use memmove.
+ * A block with file state 3 and a DVD entry is skipped unless called from dvdmgr_thread.
+ * Waits for the GPU first, since textures may be in use.
  */
 void smartGarbage(void) {
     u8* addr;
     u8* ptr;
-    u32 total;
     smartEntry* entry;
     smartEntry* prev;
 
@@ -707,7 +681,7 @@ void smartGarbage(void) {
     if (wp->allocHead) {
         wp->bytesLeft = 0;
     } else {
-        wp->bytesLeft = smartHeapSize();
+        wp->bytesLeft = SMART_HEAP_SIZE;
     }
     prev = NULL;
     ptr = wp->ptr;
@@ -715,7 +689,7 @@ void smartGarbage(void) {
         addr = entry->address;
         if (addr != ptr) {
             if (entry->file) {
-                if (entry->file->state == 3 && entry->file->entry && OSGetCurrentThread() != &dvdmgr_thread) {
+                if (entry->file->state == FILE_STATE_PRELOADED && entry->file->entry && OSGetCurrentThread() != &dvdmgr_thread) {
                     if (prev) {
                         prev->spaceAfter = addr - ptr;
                     } else {
@@ -736,9 +710,9 @@ void smartGarbage(void) {
     }
     entry = wp->allocTail;
     if (entry) {
-        entry->spaceAfter = smartHeapSize() + (u8*)wp->ptr - (u8*)entry->address - entry->size;
+        entry->spaceAfter = SMART_HEAP_SIZE + (u8*)wp->ptr - (u8*)entry->address - entry->size;
     }
-    DCFlushRange(wp->ptr, smartHeapSize());
+    DCFlushRange(wp->ptr, SMART_HEAP_SIZE);
 }
 
 /**
@@ -750,4 +724,11 @@ GXTexObj* smartTexObj(GXTexObj* obj, void** image_ptr) {
         GXInitTexObjData(obj, *image_ptr);
     }
     return obj;
+}
+
+/** The smart heap's work. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it); returns the unit's work
+// pointer, like animGetPtr.
+SmartWork* smartGetWorkPtr(void) {
+    return wp;
 }

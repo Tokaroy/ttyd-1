@@ -1,5 +1,6 @@
 // Paper Mario 64 effect: one glass shard that flies off in a random direction, falls and spins while its texture
 // shimmers; types 0-1 white, 2-3 green, odd types add a glint. Used when a Yux barrier shatters and for ice shards.
+
 #include "driver/effdrv.h"
 #include "eff/n64/eff_glass_n64.h"
 #include "eff/eff_n64.h"
@@ -18,7 +19,7 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
     {-8, 8, 0, 0, 1024, 0, 0, 0, 255},
 };
 
-/** 48x48 four-point flash the odd shard types add at the end of their glint cycle; its edges fade out. */
+/** Four-point flash (64 units across) the odd shard types add at the end of their glint cycle; its edges fade out. */
 static effN64Vtx size48x48_tex32x32_vtx[5] = {
     {-32, 0, 0, 0, 0, 255, 255, 255, 0},
     {0, -32, 0, 1024, 0, 255, 255, 255, 0},
@@ -27,13 +28,13 @@ static effN64Vtx size48x48_tex32x32_vtx[5] = {
     {0, 0, 0, 0, 0, 255, 255, 255, 200},
 };
 
-static void effGlassDisp(CameraId cameraId, EffectEntry* effect);
+static void effGlassDisp(CameraId cameraId, void* param);
 static void effGlassMain(EffectEntry* effect);
 
 /**
  * Spawns one tumbling glass shard at (x, y, z) with a random velocity and spin.
  * Types 0-1 are white and 2-3 are green; the type parity picks the texture column.
- * Used by effFreezeMain, barrier units in aji/las/moo, evt_eff.
+ * Used by effFreezeMain, the Yux units (aji, moo, mri, tst), Sir Grodus (las) and evt_eff64.
  */
 EffectEntry* effGlassN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -45,7 +46,7 @@ EffectEntry* effGlassN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 s
     work = __memAlloc(HEAP_EFFECT, sizeof(EffGlassN64Work));
     effect->userdata = work;
     effect->callback = effGlassMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -86,7 +87,7 @@ EffectEntry* effGlassN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 s
     work->vx = rand() % 11 - 5;
     work->vy = rand() % 11 - 5;
     work->vz = rand() % 11 - 5;
-    work->rotY = rand() % 41 - 20;
+    work->rotZSpeed = rand() % 41 - 20;
     work->gravity = -0.1f;
     return effect;
 }
@@ -101,8 +102,8 @@ static void effGlassMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -127,15 +128,16 @@ static void effGlassMain(EffectEntry* effect) {
     work->position.x += work->vx;
     work->position.y += work->vy;
     work->position.z += work->vz;
-    work->rotZ += work->rotY;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effGlassDisp, effect);
+    work->rotZ += work->rotZSpeed;
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effGlassDisp, effect);
 }
 
 /**
  * Draws the shard as a 16x16 sprite using texture 0x59, blending two glint rows;
  * at the end of the glint cycle the odd type adds a larger flash.
  */
-static void effGlassDisp(CameraId cameraId, EffectEntry* effect) {
+static void effGlassDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     s32 type;
     EffGlassN64Work* work;
     s32 alpha;
@@ -148,8 +150,8 @@ static void effGlassDisp(CameraId cameraId, EffectEntry* effect) {
     s32 texU;
     s32 texV;
     s32 alpha2;
-    s32 whole;
     f32 t4;
+
     cam = camGetPtr(cameraId);
     work = effect->userdata;
     alpha = work->alpha;
@@ -163,8 +165,8 @@ static void effGlassDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(cam->view, mtx, viewMtx);
     PSMTXRotRad(rotMtx, 'z', 0.017453292f * work->rotZ);
     PSMTXConcat(viewMtx, rotMtx, mtx);
-    GXLoadPosMtxImm(mtx, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(mtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetNumChans(0);
     GXSetNumTevStages(3);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -191,8 +193,9 @@ static void effGlassDisp(CameraId cameraId, EffectEntry* effect) {
     type = type % 2;
     texU = type * 32;
     t4 = 4.0f * work->texV;
-    whole = (s32)t4;
-    texV = whole * 32;
+    texV = (s32)t4 * 32;
+
+    // (s32)work->texV is 0 for texV in [0, 1), so this is 256 * t4; the u8 colour store keeps only its low byte, but the type 1 final quadrant multiplies the full value first.
     alpha2 = (s32)(256.0f * (t4 - (f32)((s32)work->texV * 4)));
     PSMTXScale(scaleMtx, 0.015625f, 0.0078125f, 0.0f);
     PSMTXTrans(mtx, texU, texV, 0.0f);
@@ -219,8 +222,8 @@ static void effGlassDisp(CameraId cameraId, EffectEntry* effect) {
         GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
         GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_RASA, GX_CA_ZERO);
         effSetVtxDescN64(size48x48_tex32x32_vtx);
-        GXLoadPosMtxImm(viewMtx, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(viewMtx, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 12);
         tri2(0, 1, 4, 0, 1, 2, 4, 0);
         tri2(0, 4, 3, 0, 4, 2, 3, 0);

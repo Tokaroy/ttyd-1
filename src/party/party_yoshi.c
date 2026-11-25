@@ -1,5 +1,8 @@
 // Yoshi: partner init, follow, the ride (Mario on Yoshi's back) and the flutter jump.
+
+#include "version.h"
 #include "dolphin/types.h"
+#include "eff/eff_magic1_n64.h"
 #include "driver/animdrv.h"
 #include "driver/effdrv.h"
 #include "eff/n64/eff_sweat_n64.h"
@@ -18,11 +21,10 @@
 #include "mot/mot_damage.h"
 #include "mot/mot_jump.h"
 #include "mario/mario_cam.h"
-#include "libc_decls.h"
+#include <dolphin/pad.h>
 #include "party/party_yoshi.h"
 #include "pmario_sound.h"
-#include "version.h"
-#include <dolphin/pad.h>
+#include "sfx_name_word.h"
 
 typedef struct YoshiWork {
     u8 pad0[0x4];        // 0x0
@@ -34,53 +36,55 @@ typedef struct YoshiWork {
 } YoshiWork;
 
 #if VERSION <= VERSION_DEMO_JP
-// Unused in the demo: four rows of x/z signs, kept in the data ahead of the jump table.
-static f32 yoshiSignTbl[16] = {
-    -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f,
-};
 static f32 marioJumpStandData[10] = {1.52f, -0.188f, 2.925f, -0.847f, -0.1f, -0.4f, 0.024f, -0.004f, 0.125f, 0.7f};
 #endif
-f32 ofs_PYS_S_2[52] = {
+
+static f32 ofs_PYS_S_2[52] = {
     0.0f, -0.011f, -0.042f, -0.087f, -0.142f, -0.202f, -0.262f, -0.317f, -0.362f, -0.393f, -0.404f, -0.404f, -0.404f,
     -0.404f, -0.404f, -0.387f, -0.341f, -0.276f, -0.202f, -0.128f, -0.063f, -0.017f, 0.0f, 0.0f, 0.0f, 0.0f,
     0.0f, -0.011f, -0.042f, -0.087f, -0.142f, -0.202f, -0.262f, -0.317f, -0.362f, -0.393f, -0.404f, -0.404f, -0.404f,
     -0.404f, -0.404f, -0.387f, -0.341f, -0.276f, -0.202f, -0.128f, -0.063f, -0.017f, 0.0f, 0.0f, 0.0f, 0.0f,
 };
+
 #if VERSION >= VERSION_JP
 static f32 marioJumpStandData[10] = {1.52f, -0.188f, 2.925f, -0.847f, -0.1f, -0.4f, 0.024f, -0.004f, 0.125f, 0.7f};
 #endif
-f32 ofs_PYS_R_2[10] = {0.0f, 0.0f, 0.366f, 0.555f, 0.38f, 0.0f, 0.0f, 0.366f, 0.555f, 0.38f};
-f32 ofs_PYS_F_1[10] = {0.0f, 0.0f, 0.433f, 0.557f, 0.512f, 0.0f, 0.0f, 0.433f, 0.557f, 0.512f};
 
-#define YW(party) ((YoshiWork*)(party)->useStruct)
-#define ADD_OFS(party)                               \
-    if ((party)->hitobjStandOn) {                    \
-        (party)->position.x += (party)->floorMove.x; \
-        (party)->position.y += (party)->floorMove.y; \
-        (party)->position.z += (party)->floorMove.z; \
-    }
-#define SYNC_MARIO(mario, party)                           \
-    (mario)->camTarget.x = (party)->position.x;            \
-    (mario)->camTarget.z = (party)->position.z;            \
-    (mario)->position.x = (party)->position.x;             \
-    (mario)->position.z = (party)->position.z;             \
-    (mario)->displayDirection = (party)->displayDirection; \
-    (mario)->displayDirectionTarget = (party)->displayDirectionTarget;
-void yoshi_damageToge(PartyEntry* party);
+static f32 ofs_PYS_R_2[10] = {0.0f, 0.0f, 0.366f, 0.555f, 0.38f, 0.0f, 0.0f, 0.366f, 0.555f, 0.38f};
+static f32 ofs_PYS_F_1[10] = {0.0f, 0.0f, 0.433f, 0.557f, 0.512f, 0.0f, 0.0f, 0.433f, 0.557f, 0.512f};
 
-f32 evt_yoshi_spd;
-s32 evt_yoshi_frm;
-f32 jumpheight;
+// Yoshi's work (PartyEntry.useStruct). A macro, not an inline function: as a function the object changes.
+#define YOSHI_WORK(party) ((YoshiWork*)(party)->useStruct)
+
+/** Mario rides Yoshi: he (and his camera target) follows Yoshi's x and z, and takes his display direction. */
+static inline void yoshiSyncMario(MarioWork* mario, PartyEntry* party) {
+    mario->camTarget.x = party->position.x;
+    mario->camTarget.z = party->position.z;
+    mario->position.x = party->position.x;
+    mario->position.z = party->position.z;
+    mario->displayDirection = party->displayDirection;
+    mario->displayDirectionTarget = party->displayDirectionTarget;
+}
+
+static f32 evt_yoshi_spd;
+static s32 evt_yoshi_frm;
+static f32 jumpheight;
 
 static void inertia(PartyEntry* party);
 static void searchGround(PartyEntry* party);
 static void searchGround2(PartyEntry* party);
 static void checkWall(PartyEntry* party, f32 spd, f32 dir);
-void L_getStick(PartyEntry* party, f32* angle, f32* speed);
+static void makeFallPara(PartyEntry* party);
+static void _setFallAcc(PartyEntry* party);
+static f32 _makeFallAcc(PartyEntry* party);
+static void _setJumpAcc(PartyEntry* party);
+static f32 _makeJumpAcc(PartyEntry* party);
+void getStick(PartyEntry* party, f32* angle, f32* speed);
+
 #if VERSION <= VERSION_DEMO_JP
-void L_yoshiFlyMove(PartyEntry* party, f32* angle);
+void yoshiFlyMove(PartyEntry* party, f32* angle);
 #else
-void L_yoshiFlyMove(PartyEntry* party);
+void yoshiFlyMove(PartyEntry* party);
 #endif
 
 /**
@@ -109,11 +113,32 @@ s32 evt_get_yoshi_frm(void) {
  * Records the hit object Yoshi stands on (NULL when airborne) and,
  * while Mario rides on the ground and is not jumping or falling,
  * makes it Mario's stand-on object too so moving floors carry both.
+ * Name from the JP demo map, which lists yoshi_hitobj_ride and sweatEntry (both stripped there) in this slot of
+ * the source; the body fits yoshi_hitobj_ride.
  */
-void L_sweatEntry(PartyEntry* party, void* hit) {
+void yoshi_hitobj_ride(PartyEntry* party, void* hit) {
     party->hitobjStandOn = hit;
-    if (yoshiGetStatus() == 1 && !(party->playerPtr->flags & (MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP))) {
+    if (yoshiGetStatus() == YOSHI_STATUS_RIDING && !(party->playerPtr->flags & (MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP))) {
         party->playerPtr->hitobjStandOn = hit;
+    }
+}
+
+/**
+ * Spawns the flutter jump's sweat-drop effect 18 above Yoshi (fan angle 70 or -70 by his facing) unless one is
+ * already out, and starts its 20-frame timer (sweatMain). Called from yoshi_use's flutter.
+ */
+// Original name and size (0x94) from the JP demo map (UNUSED there: its one call is inlined), between
+// yoshi_hitobj_ride and sweatMain. Body: yoshi_use's flutter code, which was written out there; the out-of-line
+// copy is 0x94 and yoshi_use stays the same with the locals in sweatMain's x, y, z order (the bytes allow
+// several orders).
+void sweatEntry(PartyEntry* party) {
+    f32 x = party->position.x;
+    f32 y = 18.0f + party->position.y;
+    f32 z = party->position.z;
+    if (YOSHI_WORK(party)->effect == NULL) {
+        YOSHI_WORK(party)->effect =
+            effSweatN64Entry(1, x, y, z, 1.0f, 70.0f * (party->displayDirectionTarget == 180.0f ? -1.0f : 1.0f), 0x16);
+        YOSHI_WORK(party)->timer = 20;
     }
 }
 
@@ -121,54 +146,67 @@ void L_sweatEntry(PartyEntry* party, void* hit) {
  * Keeps the sweat-drop effect spawned during the flutter jump above Yoshi (18 up) and deletes it
  * when its 20-frame timer runs out. Runs every frame from yoshi_use.
  */
-void L_sweatMain(PartyEntry* party) {
-    if (party->useStruct && ((YoshiWork*)party->useStruct)->effect) {
+void sweatMain(PartyEntry* party) {
+    if (party->useStruct && YOSHI_WORK(party)->effect) {
         f32 x = party->position.x;
         f32 y = party->position.y + 18.0f;
         f32 z = party->position.z;
-        ((EffSweatN64Work*)((YoshiWork*)party->useStruct)->effect->userdata)->position.x = x;
-        ((EffSweatN64Work*)((YoshiWork*)party->useStruct)->effect->userdata)->position.y = y;
-        ((EffSweatN64Work*)((YoshiWork*)party->useStruct)->effect->userdata)->position.z = z;
-        if (--((YoshiWork*)party->useStruct)->timer <= 0) {
-            effDelete(((YoshiWork*)party->useStruct)->effect);
-            ((YoshiWork*)party->useStruct)->effect = NULL;
+        ((EffSweatN64Work*)YOSHI_WORK(party)->effect->userdata)->position.x = x;
+        ((EffSweatN64Work*)YOSHI_WORK(party)->effect->userdata)->position.y = y;
+        ((EffSweatN64Work*)YOSHI_WORK(party)->effect->userdata)->position.z = z;
+        if (--YOSHI_WORK(party)->timer <= 0) {
+            effDelete(YOSHI_WORK(party)->effect);
+            YOSHI_WORK(party)->effect = NULL;
         }
+    }
+}
+
+/** Stops Yoshi's looping flutter sound (yoshiPsndSFXId) if it is playing. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void flyingSeOff(PartyEntry* party) {
+    if (party->yoshiPsndSFXId != -1) {
+        psndSFXOff(party->yoshiPsndSFXId);
+        party->yoshiPsndSFXId = -1;
     }
 }
 
 /**
  * Ride state from Yoshi's use motion: 0 not riding (or the partner is not Yoshi), 1 riding on the ground,
- * 2 flutter jump, 3 jump-stand bounce, 4 falling after it,
- * 5 anything else (mounting, getting off, step-up, water). The demo has only 0, 1, 2 and 3 for everything else.
+ * 2 flutter jump, 3 jump-stand bounce, 4 falling (after a flutter or a jump-stand bounce),
+ * 5 anything else (mounting, getting off, step-up, water). The early demos have only 0, 1, 2 and 3 for everything else.
  */
 s32 yoshiGetStatus(void) {
     PartyEntry* party = partyGetPtr(marioGetPartyId());
 #if VERSION <= VERSION_DEMO_JP
     s32 status = 3;
 #else
-    s32 status = 5;
+    s32 status = YOSHI_STATUS_OTHER;
 #endif
     u8 motion;
 
-    if (party == NULL || party->currentMemberId != PARTY_MEMBER_YOSHI || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
-        return 0;
+    if (party == NULL || party->currentMemberId != PARTY_YOSHI || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
+        return YOSHI_STATUS_INACTIVE;
     }
     motion = party->useMotionId;
+#if VERSION >= VERSION_JP
     if (motion >= 10 && motion <= 13) {
-        status = 1;
+        status = YOSHI_STATUS_RIDING;
     } else if (motion >= 20 && motion <= 22) {
-        status = 2;
-#if VERSION <= VERSION_DEMO_JP
+        status = YOSHI_STATUS_FLUTTER;
     } else if (motion >= 100 && motion <= 101) {
-        status = 3;
+        status = YOSHI_STATUS_OTHER;
+    } else if (motion >= 60 && motion <= 65) {
+        status = YOSHI_STATUS_STAND_JUMP;
+    } else if (motion >= 50 && motion <= 52) {
+        status = YOSHI_STATUS_FALL;
     }
 #else
+    if (motion >= 10 && motion <= 13) {
+        status = YOSHI_STATUS_RIDING;
+    } else if (motion >= 20 && motion <= 22) {
+        status = YOSHI_STATUS_FLUTTER;
     } else if (motion >= 100 && motion <= 101) {
-        status = 5;
-    } else if (motion >= 60 && motion <= 65) {
-        status = 3;
-    } else if (motion >= 50 && motion <= 52) {
-        status = 4;
+        status = YOSHI_STATUS_STAND_JUMP;
     }
 #endif
     return status;
@@ -182,16 +220,16 @@ void marioRideYoshi(void) {
     PartyEntry* party = partyGetPtr(marioGetPartyId());
     PartyEntry* extra;
 
-    party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
-    party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_MOVE_MODE;
-    party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_MOT;
+    party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
+    party->trigFlags &= ~PARTY_TRIG_CHG_MOVE_MODE;
+    party->trigFlags &= ~PARTY_TRIG_CHG_MOT;
     party->flags |= PARTY_FLAG_IS_BEING_USED;
-    party->runMode = 3;
+    party->runMode = PARTY_RUN_USE;
     party->useMotionId = 11;
     if (party->useStruct == NULL) {
         party->useStruct = __memAlloc(HEAP_DEFAULT, sizeof(YoshiWork));
         memset(party->useStruct, 0, sizeof(YoshiWork));
-        ((YoshiWork*)party->useStruct)->effect = NULL;
+        YOSHI_WORK(party)->effect = NULL;
     }
     extra = partyGetPtr(marioGetExtraPartyId());
     if (extra) {
@@ -204,13 +242,13 @@ void marioRideYoshi(void) {
  * Returns TRUE if it started; used by the cancel in evt_mario.c,
  * the ride script command in evt_party.c and party.c.
  */
-BOOL marioGetoffYoshi(void) {
+s32 marioGetoffYoshi(void) {
     PartyEntry* party = partyGetPtr(marioGetPartyId());
 
     if (!(party->flags & PARTY_FLAG_IS_BEING_USED)) {
         return 0;
     }
-    if (yoshiGetStatus() == 1) {
+    if (yoshiGetStatus() == YOSHI_STATUS_RIDING) {
         party->useMotionId = 100;
         return 1;
     }
@@ -218,21 +256,25 @@ BOOL marioGetoffYoshi(void) {
 }
 
 /** Clears Mario's and the extra partner's display offsets (the bob added while riding). */
-static inline void L_resetOfs(PartyEntry* party) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void reset_all_ofs(PartyEntry* party) {
     PartyEntry* extra;
 
-    MarioWork* mario = party->playerPtr;
+    MarioWork* player = party->playerPtr;
 
-    mario->dispOfs = (Vec){0.0f, 0.0f, 0.0f};
-    mario->dispOfs2 = (Vec){0.0f, 0.0f, 0.0f};
+    player->dispOfs = (Vec){0.0f, 0.0f, 0.0f};
+    player->dispOfs2 = (Vec){0.0f, 0.0f, 0.0f};
     extra = partyGetPtr(marioGetExtraPartyId());
     if (extra) {
         extra->dispOfs = (Vec){0.0f, 0.0f, 0.0f};
     }
 }
 
-/** Switches Yoshi's use motion unless he is still moving under Mario to mount (motion 5); FALSE if refused. */
-static inline u32 L_chgMotion(PartyEntry* party, u8 motion) {
+/**
+ * Switches Yoshi's use motion unless he is still moving under Mario to mount (motion 5); FALSE if refused.
+ * Descriptive name (inline helper; not in the symbol maps).
+ */
+static inline u32 chgMotion(PartyEntry* party, u8 motion) {
     if (party->useMotionId == 5) {
         return FALSE;
     }
@@ -241,30 +283,10 @@ static inline u32 L_chgMotion(PartyEntry* party, u8 motion) {
 }
 
 /**
- * Applies one frame of ride gravity: starts the fall curve the first time,
- * then integrates the jerk and acceleration into party->gravity, capped at -15 per frame.
- */
-static inline void L_fall(PartyEntry* party) {
-    if (!(party->flags & PARTY_FLAG_IS_FALLING)) {
-        party->flags |= PARTY_FLAG_IS_FALLING;
-        party->gravity = -0.4f;
-        party->work.common.accelY = -0.4f;
-        party->work.yoshi.gravityAccel = 0.0f;
-        party->accelY = 0.0f;
-    }
-    party->work.yoshi.gravityAccel += party->accelY;
-    party->work.common.accelY += party->work.yoshi.gravityAccel;
-    party->gravity += party->work.common.accelY;
-    if (party->gravity < -15.0f) {
-        party->gravity = -15.0f;
-    }
-}
-
-/**
  * Ends the ride at once (no dismount animation):
  * resets the offsets and Mario's pose, frees Yoshi's work area and returns him to follow mode.
- * Called on damage, map re-init and yoshi_exit.
- * In the retail versions a spike hit (MARIO_MOTION_DAMAGE_TOGE) instead puts Yoshi
+ * Called on damage, after a field battle (marioFBattlePost) and from yoshi_exit.
+ * In JP and later a spike hit (MARIO_MOTION_DAMAGE_TOGE) instead puts Yoshi
  * and the extra partner in run mode 0xd.
  */
 void marioYoshiForceCancel(void) {
@@ -272,10 +294,10 @@ void marioYoshiForceCancel(void) {
     PartyEntry* party = partyGetPtr(marioGetPartyId());
     PartyEntry* extra;
 
-    if (yoshiGetStatus() == 0) {
+    if (yoshiGetStatus() == YOSHI_STATUS_INACTIVE) {
         return;
     }
-    L_resetOfs(party);
+    reset_all_ofs(party);
     marioChgPose("M_S_1");
     if (party->flags & PARTY_FLAG_IS_BEING_USED) {
         party->flags &= ~PARTY_FLAG_IS_BEING_USED;
@@ -285,18 +307,18 @@ void marioYoshiForceCancel(void) {
         }
 #if VERSION >= VERSION_JP
         if (mario->currMotionId == MARIO_MOTION_DAMAGE_TOGE) {
-            partyChgRunMode(party, 0xd);
+            partyChgRunMode(party, PARTY_RUN_DAMAGE_RETURN);
             extra = partyGetPtr(marioGetExtraPartyId());
             if (extra) {
-                partyChgRunMode(extra, 0xd);
+                partyChgRunMode(extra, PARTY_RUN_DAMAGE_RETURN);
             }
             return;
         }
 #endif
     }
-    if (party->runMode != 8 && party->runMode != 0xd) {
-        partyChgRunMode(party, 2);
-        party->moveMode = 0;
+    if (party->runMode != PARTY_RUN_GOODBYE && party->runMode != PARTY_RUN_DAMAGE_RETURN) {
+        partyChgRunMode(party, PARTY_RUN_MOVE);
+        party->moveMode = PARTY_MOVE_MODE_STAY;
     }
 }
 
@@ -305,21 +327,21 @@ void marioYoshiForceCancel(void) {
  * otherwise plays the partner goodbye and moves to run mode 0xe when it ends.
  */
 void yoshi_bye(PartyEntry* party) {
-    if (party->trigFlags & PARTY_TRIG_FLAG_CHG_RUN_MODE) {
-        party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
+    if (party->trigFlags & PARTY_TRIG_CHG_RUN_MODE) {
+        party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
         partyGoodbyeInit(party);
     }
     if (party->flags & PARTY_FLAG_IS_BEING_USED) {
-        if (yoshiGetStatus() == 1) {
+        if (yoshiGetStatus() == YOSHI_STATUS_RIDING) {
             party->useMotionId = 100;
         }
         yoshi_use(party);
     } else if (partyGoodbyeMain(party)) {
-        partyChgRunMode(party, 0xe);
+        partyChgRunMode(party, PARTY_RUN_DELETE);
     }
 }
 
-/** Yoshi's exit handler (retail party_data only): cancels the ride and puts Mario back to standing. */
+/** Yoshi's exit handler (party_data, partner Yoshi's entry only): cancels the ride and puts Mario back to standing. */
 void yoshi_exit(PartyEntry* party) {
     party->playerPtr->flags &= ~MARIO_FLAG_CHG_MOT_DISABLED;
     marioYoshiForceCancel();
@@ -333,7 +355,7 @@ void yoshi_exit(PartyEntry* party) {
 void yoshi_jumpStand(void) {
     PartyEntry* party = partyGetPtr(marioGetPartyId());
 
-    if (party == NULL || party->currentMemberId != PARTY_MEMBER_YOSHI || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
+    if (party == NULL || party->currentMemberId != PARTY_YOSHI || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
         return;
     }
     if (!(party->useMotionId >= 60 && party->useMotionId <= 66)) {
@@ -346,30 +368,38 @@ void yoshi_jumpStand(void) {
  * plays the hurt motion (MARIO_MOTION_DAMAGE_TOGE) with the hurt poses and puts Yoshi
  * and the extra partner in run mode 0xd.
  */
-void yoshi_damageToge(PartyEntry* party) {
+// Original name and size (0x138) from the JP demo map (UNUSED there: every call is inlined).
+void damageToge(PartyEntry* party) {
     MarioWork* mario = marioGetPtr();
     PartyEntry* extra;
 
-    L_sweatEntry(party, NULL);
+    yoshi_hitobj_ride(party, NULL);
     marioChgMot(MARIO_MOTION_DAMAGE_TOGE);
     party->useMotionId = 10;
     partyChgPose(party, "PYS_S_2");
     marioChgPose("M_Y_2");
     mario->mot.yoshi.velX = 0.0f;
     mario->mot.yoshi.velZ = 0.0f;
-    partyChgRunMode(party, 0xd);
+    partyChgRunMode(party, PARTY_RUN_DAMAGE_RETURN);
     extra = partyGetPtr(marioGetExtraPartyId());
     if (extra) {
-        partyChgRunMode(extra, 0xd);
+        partyChgRunMode(extra, PARTY_RUN_DAMAGE_RETURN);
     }
 }
 
+/** Restarts the shared ride pose time (Mario's poseTime) that yoshiAnimeCtrl steps. */
+// Original name and size (0x10) from the JP demo map (UNUSED there: every call is inlined).
+static void yoshiAnimeInit(PartyEntry* party) {
+    MarioWork* mario = party->playerPtr;
+
+    mario->poseTime = 0;
+}
+
 /**
- * Shares one animation clock between Mario and Yoshi while riding:
- * advances Mario's poseTime over the loop length of Yoshi's pose (52 frames for PYS_S_2, 10 for PYS_R_2 and
- * PYS_F_1) and sets Yoshi's anim time.
+ * Steps Yoshi's PYS_S_2 (52-frame loop), PYS_R_2 and PYS_F_1 (10-frame loops) poses on Mario's poseTime, copying it to
+ * party->poseTime and to Yoshi's paper animation.
  */
-void yoshi_animTimeMain(PartyEntry* party) {
+void yoshiAnimeCtrl(PartyEntry* party) {
     MarioWork* mario = party->playerPtr;
 
     if (!strcmp(party->animName, "PYS_S_2")) {
@@ -393,27 +423,12 @@ void yoshi_animTimeMain(PartyEntry* party) {
     }
 }
 
-/** Yoshi's init handler (party_data): sets his member kind and size (26 tall; 28 wide in the demo, 20 later). */
-void yoshi_init(PartyEntry* party) {
-    party->memberKind = PARTY_MEMBER_YOSHI;
-    party->moveKind = 0;
-    party->height = 26.0f;
-#if VERSION <= VERSION_DEMO_JP
-    party->width = 28.0f;
-#else
-    party->width = 20.0f;
-#endif
-    party->yoshiPsndSFXId = -1;
-}
-
-#if VERSION >= VERSION_JP
-static void L_searchHead(PartyEntry* party);
-#endif
 /**
- * How far Mario sits above Yoshi this frame: twice the bob table entry for Yoshi's pose (PYS_S_2, PYS_R_2 or
+ * Mario's vertical ride bob this frame: twice the bob table entry for Yoshi's pose (PYS_S_2, PYS_R_2 or
  * PYS_F_1) at the shared pose time.
  */
-static inline f32 L_getOfs(PartyEntry* party) {
+// Original name and size (0xf8) from the JP demo map (UNUSED there: every call is inlined).
+f32 yoshiAnimeOfsy(PartyEntry* party) {
     MarioWork* mario = party->playerPtr;
     f32 ofs = 0.0f;
 
@@ -427,37 +442,116 @@ static inline f32 L_getOfs(PartyEntry* party) {
     return ofs;
 }
 
+/** Yoshi's init handler (party_data): sets his member kind and size (26 tall; 28 wide in the early demos, 20 in JP and later). */
+void yoshi_init(PartyEntry* party) {
+    party->memberKind = PARTY_YOSHI;
+    party->moveKind = 0;
+    party->height = 26.0f;
+#if VERSION <= VERSION_DEMO_JP
+    party->width = 28.0f;
+#else
+    party->width = 20.0f;
+#endif
+    party->yoshiPsndSFXId = -1;
+}
+
+// The five functions below: original names and sizes (0x34, 0x1c, 0x4c, 0x28, 0x38) from the JP demo map (UNUSED
+// there, in this order between yoshi_init and moveHosei: every call is inlined). The bodies are the blocks their
+// callers held written out, and each compiles to its map size. Inferred: the f32 returns of the two _make
+// functions (no caller reads them; they give the last 4 bytes, as marioMakeJumpPara and marioGetFallSpd return
+// the speed) and makeFallPara's body (a plain three-line step is 0x34 too; the block with the flags is what
+// yoshi_use holds twice). The map's makeJumpPara (0x34) and _setFallPara (0xc), before makeFallPara, stay out:
+// no caller block decides their bodies.
+
+/** Starts a fall: loads the fall curve and swaps the jumping flag for the falling flag. */
+static void makeFallPara(PartyEntry* party) {
+    _setFallAcc(party);
+    party->flags &= ~PARTY_FLAG_IS_JUMPING;
+    party->flags |= PARTY_FLAG_IS_FALLING;
+}
+
+/** Loads the start of the fall curve: speed and acceleration -0.4, no jerk or snap. */
+static void _setFallAcc(PartyEntry* party) {
+    party->gravity = -0.4f;
+    party->work.common.accelY = -0.4f;
+    party->work.yoshi.gravityAccel = 0.0f;
+    party->accelY = 0.0f;
+}
+
+/** Steps the fall curve one frame and returns the new vertical speed, capped at -15 per frame. */
+static f32 _makeFallAcc(PartyEntry* party) {
+    party->work.yoshi.gravityAccel += party->accelY;
+    party->work.common.accelY += party->work.yoshi.gravityAccel;
+    party->gravity += party->work.common.accelY;
+    if (party->gravity < -15.0f) {
+        party->gravity = -15.0f;
+    }
+    return party->gravity;
+}
+
+/** Loads the jump curve of Mario's standing jump (marioJumpStandData). */
+static void _setJumpAcc(PartyEntry* party) {
+    party->gravity = marioJumpStandData[0];
+    party->work.common.accelY = marioJumpStandData[1];
+    party->work.yoshi.gravityAccel = marioJumpStandData[2];
+    party->accelY = marioJumpStandData[3];
+}
+
+/** Steps the jump curve one frame (snap into jerk into acceleration into speed) and returns the new vertical speed. */
+static f32 _makeJumpAcc(PartyEntry* party) {
+    party->work.yoshi.gravityAccel += party->accelY;
+    party->work.common.accelY += party->work.yoshi.gravityAccel;
+    party->gravity += party->work.common.accelY;
+    return party->gravity;
+}
+
+/** Moves Yoshi with the floor he stands on (a moving platform): adds its movement to his position. */
+// Original name and size (0x40) from the JP demo map (UNUSED there: every call is inlined).
+static void moveHosei(PartyEntry* party) {
+    if (party->hitobjStandOn) {
+        party->position.x += party->floorMove.x;
+        party->position.y += party->floorMove.y;
+        party->position.z += party->floorMove.z;
+    }
+}
+
+// Descriptive name (inline helper; not in the symbol maps).
+static void searchHead(PartyEntry* party);
+
 /**
- * The demo version of this routine is older: no head search, the fly bob adds the speed straight to the height,
- * and the move speed is cut to 3/4 while bit 0x80 is set.
+ * Runs Yoshi's ride: mounting, ground movement, flutter and jump-stand motion, dismounting and water handling.
+ * The early demos omit the head search and add the fly bob speed directly to the height;
+ * JP and later accumulate a bob offset around a ground/base height. The early demos also scale ordinary ride movement
+ * to 3/4 while PARTY_FLAG_IN_SHALLOW_WATER is set.
  */
 void yoshi_use(PartyEntry* party) {
     MarioWork* mario = party->playerPtr;
     PartyEntry* extra;
     f32 dir;
     f32 spd;
-#if VERSION >= VERSION_JP
     HitEntry* hit;
     s32 attr;
-#endif
     f32 angle;
     f32 speed;
     f32 ox;
     f32 oz;
+    MarioWork* m;
+    f32 prev;
+    f32 s;
 
-#if VERSION <= VERSION_DEMO_JP
+#if VERSION >= VERSION_JP
     if (!mario->keyOffCount) {
         partyUpdateKeyData(party);
+    } else {
+        partyClearCont(party);
     }
 #else
     if (!mario->keyOffCount) {
         partyUpdateKeyData(party);
-    } else {
-        L_partyClearCont(party);
     }
 #endif
-    if (party->trigFlags & PARTY_TRIG_FLAG_CHG_RUN_MODE) {
-        party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
+    if (party->trigFlags & PARTY_TRIG_CHG_RUN_MODE) {
+        party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
 #if VERSION >= VERSION_JP
         party->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
         party->flags &= ~(PARTY_FLAG_DISABLE_FRONT_WALL_CHK | PARTY_FLAG_FORCE_FALL);
@@ -465,7 +559,7 @@ void yoshi_use(PartyEntry* party) {
 #endif
         party->useStruct = __memAlloc(HEAP_DEFAULT, sizeof(YoshiWork));
         memset(party->useStruct, 0, sizeof(YoshiWork));
-        YW(party)->effect = NULL;
+        YOSHI_WORK(party)->effect = NULL;
         if (party->flags & PARTY_FLAG_IS_EVT_USE) {
             evt_yoshi_spd = 1.0f;
         } else {
@@ -483,7 +577,7 @@ void yoshi_use(PartyEntry* party) {
         mario->mot.yoshi.bobSpeed = 0.0f;
         mario->mot.yoshi.velX = 0.0f;
         mario->mot.yoshi.velZ = 0.0f;
-        YW(party)->dir = 0;
+        YOSHI_WORK(party)->dir = 0;
     }
 
     switch (party->useMotionId) {
@@ -499,9 +593,9 @@ void yoshi_use(PartyEntry* party) {
                         party->useStruct = NULL;
                     }
                 }
-                if (party->runMode != 8 && party->runMode != 0xd) {
-                    partyChgRunMode(party, 2);
-                    party->moveMode = 0;
+                if (party->runMode != PARTY_RUN_GOODBYE && party->runMode != PARTY_RUN_DAMAGE_RETURN) {
+                    partyChgRunMode(party, PARTY_RUN_MOVE);
+                    party->moveMode = PARTY_MOVE_MODE_STAY;
                 }
                 return;
             }
@@ -528,7 +622,7 @@ void yoshi_use(PartyEntry* party) {
             party->position.z += (party->moveTarget.z - party->position.z) / party->moveFrames;
             if (--party->moveFrames != 0) {
                 searchGround(party);
-                ADD_OFS(party);
+                moveHosei(party);
                 return;
             }
             mario->trigFlags |= MARIO_TRIG_FLAG_DISABLE_JUMP_KEMURI;
@@ -540,36 +634,33 @@ void yoshi_use(PartyEntry* party) {
             party->displayDirection = mario->displayDirection;
             party->moveSpeed = 0.0f;
             party->useMotionId = 7;
-            ADD_OFS(party);
+            moveHosei(party);
             partyChkGnd(party);
             return;
         case 7:
             if (!(party->flags & PARTY_FLAG_IS_EVT_USE)) {
 #if VERSION <= VERSION_DEMO_JP
                 if (marioKeyOffChk() || mario->lastGroundPos.y - 5.0f > mario->position.y) {
-                    party->useMotionId = 101;
-                    break;
-                }
 #else
                 if (marioKeyOffChk()) {
                     party->useMotionId = 101;
                     break;
                 }
                 if (!(party->flags & PARTY_FLAG_IS_GROUNDED)) {
+#endif
                     party->useMotionId = 101;
                     break;
                 }
-#endif
             }
             if (mario->hitobjStandOn == NULL) {
-                ADD_OFS(party);
+                moveHosei(party);
                 partyChkGnd(party);
                 return;
             }
             party->useMotionId = 10;
             extra = partyGetPtr(marioGetExtraPartyId());
             if (extra) {
-                partyChgRunMode(extra, 0xc);
+                partyChgRunMode(extra, PARTY_RUN_RIDE_YOSHI);
             }
             partyChkGnd(party);
             break;
@@ -577,12 +668,13 @@ void yoshi_use(PartyEntry* party) {
 
     switch (party->useMotionId) {
         case 10:
-            psndSFXOn_3D((const char*)0x93F, &party->position);
 #if VERSION <= VERSION_DEMO_JP
+            psndSFXOn_3D((const char*)PSND_SFX_PARTY_YOSH_RIDE1, &party->position);
         case 11:
             partyChgPose(party, "PYS_H_1");
             marioChgMot(MARIO_MOTION_YOSHI);
 #else
+            psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_YOSH_RIDE1), &party->position);
             party->flags &= ~PARTY_FLAG_FORCE_FALL;
         case 11:
             marioChgMot(MARIO_MOTION_YOSHI);
@@ -602,7 +694,7 @@ void yoshi_use(PartyEntry* party) {
             mario->lastGroundPos = party->position;
             break;
         case 12:
-            party->playerPtr->poseTime = 0;
+            yoshiAnimeInit(party);
             party->useMotionId = 13;
         case 13:
             if (mario->flags & MARIO_FLAG_FORCED_MOVEMENT) {
@@ -622,10 +714,10 @@ void yoshi_use(PartyEntry* party) {
                 mario->hitobjHead = NULL;
                 dir = mario->directionView;
                 spd = mario->baseSpeed;
-                L_searchHead(party);
+                searchHead(party);
                 checkWall(party, spd, dir);
 #endif
-                SYNC_MARIO(mario, party);
+                yoshiSyncMario(mario, party);
                 party_ride_yoshi_force_move();
                 mario->lastGroundPos = party->position;
                 searchGround(party);
@@ -634,22 +726,18 @@ void yoshi_use(PartyEntry* party) {
                     mario->flags &= ~MARIO_FLAG_FORCED_MOVEMENT;
                 }
 #if VERSION >= VERSION_JP
-                YW(party)->count++;
-                if (YW(party)->count % 10 == 0) {
-                    psndSFXOn_3D((const char*)0x940, &party->position);
+                YOSHI_WORK(party)->count++;
+                if (YOSHI_WORK(party)->count % 10 == 0) {
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_YOSH_MOVE1), &party->position);
                 }
 #endif
                 break;
             }
-#if VERSION <= VERSION_DEMO_JP
-            if (party->runMode == 8) {
+            if (party->runMode == PARTY_RUN_GOODBYE) {
                 break;
             }
-#else
-            if (party->runMode == 8) {
-                break;
-            }
-            if (yoshiGetStatus() == 1) {
+#if VERSION >= VERSION_JP
+            if (yoshiGetStatus() == YOSHI_STATUS_RIDING) {
                 party->floorMoveX = mario->floorMove.x;
                 party->floorMoveY = mario->floorMove.y;
                 party->floorMoveZ = mario->floorMove.z;
@@ -670,7 +758,7 @@ void yoshi_use(PartyEntry* party) {
                 angle = mario->directionView;
                 speed = evt_yoshi_spd;
             } else {
-                L_getStick(party, &angle, &speed);
+                getStick(party, &angle, &speed);
             }
             if (speed > 0.0f) {
                 party->moveSpeed = speed;
@@ -678,9 +766,9 @@ void yoshi_use(PartyEntry* party) {
                 party->moveDir = angle;
                 marioChgPose("M_Y_2");
                 partyChgPose(party, "PYS_R_2");
-                YW(party)->count++;
-                if (YW(party)->count % 10 == 0) {
-                    psndSFXOn_3D((const char*)0x940, &party->position);
+                YOSHI_WORK(party)->count++;
+                if (YOSHI_WORK(party)->count % 10 == 0) {
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_YOSH_MOVE1), &party->position);
                 }
             } else {
                 if (strcmp(party->animName, "PYS_S_2")) {
@@ -688,7 +776,7 @@ void yoshi_use(PartyEntry* party) {
                 }
                 partyChgPose(party, "PYS_S_2");
                 party->moveSpeed = 0.0f;
-                YW(party)->count = 0;
+                YOSHI_WORK(party)->count = 0;
             }
             inertia(party);
             party->position.x = mario->position.x;
@@ -703,10 +791,10 @@ void yoshi_use(PartyEntry* party) {
             spd = party->moveSpeed * ((party->flags & PARTY_FLAG_IN_SHALLOW_WATER) ? 0.75f : 1.0f);
 #else
             spd = party->moveSpeed;
-            L_searchHead(party);
+            searchHead(party);
 #endif
             checkWall(party, spd, dir);
-            SYNC_MARIO(mario, party);
+            yoshiSyncMario(mario, party);
             if (party->buttonTrg & (PAD_BUTTON_B | PAD_BUTTON_X)) {
                 party->useMotionId = 100;
             }
@@ -717,27 +805,27 @@ void yoshi_use(PartyEntry* party) {
 
     switch (party->useMotionId) {
         case 100:
-            L_resetOfs(party);
+            reset_all_ofs(party);
             marioChgSmallJumpMotion();
             mario->baseSpeed = 0.0f;
             partyChgPose(party, "PYS_H_2");
             party->moveSpeed = 0.0f;
             party->useMotionId = 101;
-            ADD_OFS(party);
+            moveHosei(party);
             partyChkGnd(party);
             return;
         case 101:
             if (mario->hitobjStandOn == NULL) {
-                ADD_OFS(party);
+                moveHosei(party);
                 partyChkGnd(party);
                 return;
             }
             party->flags &= ~PARTY_FLAG_IS_BEING_USED;
-            if (party->runMode != 8) {
-                partyChgRunMode(party, 2);
-                party->moveMode = 0;
+            if (party->runMode != PARTY_RUN_GOODBYE) {
+                partyChgRunMode(party, PARTY_RUN_MOVE);
+                party->moveMode = PARTY_MOVE_MODE_STAY;
             }
-            ADD_OFS(party);
+            moveHosei(party);
             partyChkGnd(party);
 #if VERSION >= VERSION_US
             movePos(&party->position.x, &party->position.z, mario->hitobjFront ? -0.1f : 0.1f, toMovedir(mario->displayDirection));
@@ -771,16 +859,14 @@ void yoshi_use(PartyEntry* party) {
         case 20:
 #if VERSION <= VERSION_DEMO_JP
             if (mario->displayDirection >= 90.0f && mario->displayDirection <= 270.0f) {
-                YW(party)->dir = 1;
+                YOSHI_WORK(party)->dir = 1;
             } else {
-                YW(party)->dir = -1;
+                YOSHI_WORK(party)->dir = -1;
             }
+#elif VERSION >= VERSION_US
+            YOSHI_WORK(party)->dir = (party->displayDirectionTarget >= 90.0f && party->displayDirectionTarget <= 270.0f) ? 1 : -1;
 #else
-#if VERSION >= VERSION_US
-            YW(party)->dir = (party->displayDirectionTarget >= 90.0f && party->displayDirectionTarget <= 270.0f) ? 1 : -1;
-#else
-            YW(party)->dir = (mario->displayDirection >= 90.0f && mario->displayDirection <= 270.0f) ? 1 : -1;
-#endif
+        YOSHI_WORK(party)->dir = (mario->displayDirection >= 90.0f && mario->displayDirection <= 270.0f) ? 1 : -1;
 #endif
             mario->hitobjJumpFrom = mario->hitobjStandOn;
             mario->hitobjStandOn = NULL;
@@ -793,53 +879,47 @@ void yoshi_use(PartyEntry* party) {
             if (party->moveSpeed <= 0.0f) {
                 party->moveSpeed = 0.0f;
             }
-            YW(party)->angle = 1.0f;
-            mario->mot.yoshi.bobSpeed = sin(3.141592653589793f * YW(party)->angle / 180.0f);
+            YOSHI_WORK(party)->angle = 1.0f;
+            mario->mot.yoshi.bobSpeed = sin(3.141592653589793f * YOSHI_WORK(party)->angle / 180.0f);
             mario->mot.yoshi.bobOfs = 0.0f;
-#if VERSION >= VERSION_JP
+#if VERSION <= VERSION_DEMO_JP
+            party->yoshiPsndSFXId = psndSFXOn_3D((const char*)PSND_SFX_PARTY_YOSH_JUMP1, &party->position);
+#else
             mario->mot.yoshi.baseY = party->position.y;
+            party->yoshiPsndSFXId = psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_YOSH_JUMP1), &party->position);
 #endif
-            party->yoshiPsndSFXId = psndSFXOn_3D((const char*)0x941, &party->position);
-        case 21: {
-            f32 s = sin(3.141592653589793f * YW(party)->angle / 180.0f);
-            mario->mot.yoshi.bobSpeed = s * (YW(party)->angle <= 180.0f ? 0.5f : 0.37f);
-        }
+        case 21:
+            s = sin(3.141592653589793f * YOSHI_WORK(party)->angle / 180.0f);
+            mario->mot.yoshi.bobSpeed = s * (YOSHI_WORK(party)->angle <= 180.0f ? 0.5f : 0.37f);
 #if VERSION >= VERSION_JP
             mario->mot.yoshi.bobOfs += mario->mot.yoshi.bobSpeed;
 #endif
-            YW(party)->angle += 7.0f;
-            if (YW(party)->angle >= 360.0f) {
-                YW(party)->angle = 360.0f;
+            YOSHI_WORK(party)->angle += 7.0f;
+            if (YOSHI_WORK(party)->angle >= 360.0f) {
+                YOSHI_WORK(party)->angle = 360.0f;
                 party->useMotionId = 22;
             }
-        case 22: {
-            f32 y = 18.0f + party->position.y;
-            f32 x = party->position.x;
-            f32 z = party->position.z;
-            if (YW(party)->effect == NULL) {
-                YW(party)->effect = effSweatN64Entry(1, x, y, z, 1.0f, 70.0f * (party->displayDirectionTarget == 180.0f ? -1.0f : 1.0f), 0x16);
-                YW(party)->timer = 20;
-            }
-        }
+        case 22:
+            sweatEntry(party);
 #if VERSION <= VERSION_DEMO_JP
             party->position.y += mario->mot.yoshi.bobSpeed;
 #else
-            hit = _partySearchGround(party, 11.0f, 11.0f);
+            hit = partySearchGround(party, 11.0f, 11.0f);
             if (hit == NULL) {
                 party->position.y = mario->mot.yoshi.baseY + mario->mot.yoshi.bobOfs;
             } else {
                 attr = hitGetAttr(hit);
-                if (attr & HIT_ATTR_DEEP_WATER) {
+                if (attr & HIT_ATTR_WATER_HAZARD) {
                     if (party->position.y <= party->groundY) {
                         party->useMotionId = 70;
                     }
                 } else if (attr & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
                     if (party->position.y <= party->groundY) {
-                        yoshi_damageToge(party);
+                        damageToge(party);
                         return;
                     }
                 }
-                L_sweatEntry(party, NULL);
+                yoshi_hitobj_ride(party, NULL);
                 mario->mot.yoshi.baseY = party->groundY;
                 party->position.y = party->groundY + mario->mot.yoshi.bobOfs;
             }
@@ -849,18 +929,17 @@ void yoshi_use(PartyEntry* party) {
             if (party->flags & PARTY_FLAG_IS_EVT_USE) {
 #if VERSION <= VERSION_DEMO_JP
                 party->moveSpeed = evt_yoshi_spd;
+            } else {
+                getStick(party, &angle, &speed);
+                yoshiFlyMove(party, &angle);
 #else
                 f32 s = evt_yoshi_spd;
                 angle = mario->directionView;
                 speed = s;
                 party->moveSpeed = s;
-#endif
             } else {
-                L_getStick(party, &angle, &speed);
-#if VERSION <= VERSION_DEMO_JP
-                L_yoshiFlyMove(party, &angle);
-#else
-                L_yoshiFlyMove(party);
+                getStick(party, &angle, &speed);
+                yoshiFlyMove(party);
 #endif
             }
             party->hitobjFront = NULL;
@@ -870,7 +949,7 @@ void yoshi_use(PartyEntry* party) {
             checkWall(party, party->moveSpeed * ((party->flags & PARTY_FLAG_IN_SHALLOW_WATER) ? 0.75f : 1.0f), dir);
 #else
             spd = party->moveSpeed;
-            L_searchHead(party);
+            searchHead(party);
             checkWall(party, spd, dir);
 #endif
             if (party->hitobjStandOn == NULL && mario->airTimer >= 10) {
@@ -878,37 +957,29 @@ void yoshi_use(PartyEntry* party) {
                 if (party->hitobjStandOn) {
                     mario->hitobjJumpFrom = NULL;
 #if VERSION >= VERSION_JP
-                    if (party->yoshiPsndSFXId != -1) {
-                        psndSFXOff(party->yoshiPsndSFXId);
-                        party->yoshiPsndSFXId = -1;
-                    }
+                    flyingSeOff(party);
 #endif
                     party->useMotionId = 10;
                     partyChgPose(party, "PYS_S_2");
                     marioChgPose("M_Y_2");
                     mario->mot.yoshi.velX = 0.0f;
                     mario->mot.yoshi.velZ = 0.0f;
-#if VERSION <= VERSION_DEMO_JP
                     if (party->flags & PARTY_FLAG_IS_EVT_USE) {
                         evt_yoshi_spd = 0.0f;
                         evt_yoshi_frm = -1;
                         party->moveSpeed = 0.0f;
                         party->useMotionId = 52;
-                        break; // the demo only breaks out here in the evt mode
+#if VERSION <= VERSION_DEMO_JP
+                        break; // the early demos only break out here in the evt mode
                     }
 #else
-                    if (party->flags & PARTY_FLAG_IS_EVT_USE) {
-                        evt_yoshi_spd = 0.0f;
-                        evt_yoshi_frm = -1;
-                        party->moveSpeed = 0.0f;
-                        party->useMotionId = 52;
                     }
                     break;
 #endif
                 }
-                YW(party)->dir = 0;
+                YOSHI_WORK(party)->dir = 0;
             }
-            SYNC_MARIO(mario, party);
+            yoshiSyncMario(mario, party);
             mario->airTimer++;
             if (mario->airTimer > 14) {
                 if (party->flags & PARTY_FLAG_IS_EVT_USE) {
@@ -927,34 +998,23 @@ void yoshi_use(PartyEntry* party) {
             break;
     }
 
-    yoshi_animTimeMain(party);
+    yoshiAnimeCtrl(party);
 #if VERSION <= VERSION_DEMO_JP
-    if (yoshiGetStatus() == 1 || yoshiGetStatus() == 2) {
-        ox = 0.0f;
-        oz = 0.0f;
-        movePos(&ox, &oz, -6.0f, toMovedir(party->displayDirection));
-        mario->dispOfs.x = ox;
-        mario->dispOfs.z = oz;
-        mario->dispOfs2.y = 8.0f + L_getOfs(party);
-        extra = partyGetPtr(marioGetExtraPartyId());
-        if (extra) {
-            extra->dispOfs.y = L_getOfs(party);
-        }
-    }
+    if (yoshiGetStatus() == YOSHI_STATUS_RIDING || yoshiGetStatus() == YOSHI_STATUS_FLUTTER) {
 #else
-    if (party->useMotionId == 13 || yoshiGetStatus() == 3 || yoshiGetStatus() == 4 || yoshiGetStatus() == 2) {
+    if (party->useMotionId == 13 || yoshiGetStatus() == YOSHI_STATUS_STAND_JUMP || yoshiGetStatus() == YOSHI_STATUS_FALL || yoshiGetStatus() == YOSHI_STATUS_FLUTTER) {
+#endif
         ox = 0.0f;
         oz = 0.0f;
         movePos(&ox, &oz, -6.0f, toMovedir(party->displayDirection));
         mario->dispOfs.x = ox;
         mario->dispOfs.z = oz;
-        mario->dispOfs2.y = 8.0f + L_getOfs(party);
+        mario->dispOfs2.y = 8.0f + yoshiAnimeOfsy(party);
         extra = partyGetPtr(marioGetExtraPartyId());
         if (extra) {
-            extra->dispOfs.y = L_getOfs(party);
+            extra->dispOfs.y = yoshiAnimeOfsy(party);
         }
     }
-#endif
 
     switch (party->useMotionId) {
         case 60:
@@ -964,26 +1024,20 @@ void yoshi_use(PartyEntry* party) {
             mario->airTimer = 0;
             mario->jumpPeakAirTime = 0;
             party->hitobjJumpFrom = party->hitobjStandOn;
-            L_sweatEntry(party, NULL);
+            yoshi_hitobj_ride(party, NULL);
             mario->hitobjStandOn = NULL;
             mario->lastGroundPos = mario->position;
             jumpheight = 100.0f;
             mario->jumpDistance = 0.0f;
             party->useMotionId = 61;
             party->moveFrames = 0;
-            party->gravity = marioJumpStandData[0];
-            party->work.common.accelY = marioJumpStandData[1];
-            party->work.yoshi.gravityAccel = marioJumpStandData[2];
-            party->accelY = marioJumpStandData[3];
-        case 61: {
-            f32 prev = party->gravity;
-            party->work.yoshi.gravityAccel += party->accelY;
-            party->work.common.accelY += party->work.yoshi.gravityAccel;
-            party->gravity += party->work.common.accelY;
+            _setJumpAcc(party);
+        case 61:
+            prev = party->gravity;
+            _makeJumpAcc(party);
             if (prev >= party->gravity) {
                 party->useMotionId = 62;
             }
-        }
             party->position.y += party->gravity;
             mario->jumpDistance += party->gravity;
             break;
@@ -1001,27 +1055,15 @@ void yoshi_use(PartyEntry* party) {
             if (party->gravity <= 0.0f) {
                 party->useMotionId = 64;
                 marioSetPeakYpos();
-                party->gravity = -0.4f;
-                party->work.common.accelY = -0.4f;
-                party->work.yoshi.gravityAccel = 0.0f;
-                party->accelY = 0.0f;
-                party->flags &= ~PARTY_FLAG_IS_JUMPING;
-                party->flags |= PARTY_FLAG_IS_FALLING;
+                makeFallPara(party);
                 party->useMotionId = 64;
             }
             break;
         case 64:
-            party->work.yoshi.gravityAccel += party->accelY;
-            party->work.common.accelY += party->work.yoshi.gravityAccel;
-            party->gravity += party->work.common.accelY;
+            _makeJumpAcc(party);
             if (party->gravity <= 0.0f) {
                 marioSetPeakYpos();
-                party->gravity = -0.4f;
-                party->work.common.accelY = -0.4f;
-                party->work.yoshi.gravityAccel = 0.0f;
-                party->accelY = 0.0f;
-                party->flags &= ~PARTY_FLAG_IS_JUMPING;
-                party->flags |= PARTY_FLAG_IS_FALLING;
+                makeFallPara(party);
                 party->useMotionId = 65;
             }
             party->position.y += party->gravity;
@@ -1055,28 +1097,25 @@ void yoshi_use(PartyEntry* party) {
             if (party->flags & PARTY_FLAG_IS_EVT_USE) {
 #if VERSION <= VERSION_DEMO_JP
                 party->moveSpeed = evt_yoshi_spd;
+            } else {
+                getStick(party, &angle, &speed);
+                yoshiFlyMove(party, &angle);
 #else
                 f32 s = evt_yoshi_spd;
                 angle = mario->directionView;
                 speed = s;
                 party->moveSpeed = s;
-#endif
             } else {
-                L_getStick(party, &angle, &speed);
-#if VERSION <= VERSION_DEMO_JP
-                L_yoshiFlyMove(party, &angle);
-#else
-                L_yoshiFlyMove(party);
+                getStick(party, &angle, &speed);
+                yoshiFlyMove(party);
 #endif
             }
             if (!(party->buttonHold & PAD_BUTTON_A) || marioKeyOffChk()) {
                 if (party->useMotionId == 50) {
                     party->useMotionId = 51;
                 }
-                {
-                    MarioWork* m = marioGetPtr();
-                    m->mot.yoshi.bobSpeed += m->mot.yoshi.bobOfs;
-                }
+                m = marioGetPtr();
+                m->mot.yoshi.bobSpeed += m->mot.yoshi.bobOfs;
             }
             if (mario->mot.yoshi.bobSpeed <= -10.0f) {
                 mario->mot.yoshi.bobSpeed = -10.0f;
@@ -1091,7 +1130,7 @@ void yoshi_use(PartyEntry* party) {
             checkWall(party, party->moveSpeed * ((party->flags & PARTY_FLAG_IN_SHALLOW_WATER) ? 0.75f : 1.0f), dir);
 #else
             spd = party->moveSpeed;
-            L_searchHead(party);
+            searchHead(party);
             checkWall(party, spd, dir);
 #endif
             searchGround(party);
@@ -1102,7 +1141,7 @@ void yoshi_use(PartyEntry* party) {
                 marioChgPose("M_Y_2");
                 mario->mot.yoshi.velX = 0.0f;
                 mario->mot.yoshi.velZ = 0.0f;
-                YW(party)->dir = 0;
+                YOSHI_WORK(party)->dir = 0;
                 if (party->flags & PARTY_FLAG_IS_EVT_USE) {
                     evt_yoshi_spd = 0.0f;
                     evt_yoshi_frm = -1;
@@ -1118,7 +1157,7 @@ void yoshi_use(PartyEntry* party) {
             break;
     }
 
-    L_sweatMain(party);
+    sweatMain(party);
     if (party->useMotionId == 70) {
         if (marioChkDamageSink()) {
             party->position = party->playerPtr->position;
@@ -1137,15 +1176,15 @@ void yoshi_use(PartyEntry* party) {
         marioSetFallPara();
         marioChgMot(MARIO_MOTION_DAMAGE);
 #endif
-        partyChgRunMode(party, 0xd);
+        partyChgRunMode(party, PARTY_RUN_DAMAGE_RETURN);
         extra = partyGetPtr(marioGetExtraPartyId());
         if (extra) {
-            partyChgRunMode(extra, 0xd);
+            partyChgRunMode(extra, PARTY_RUN_DAMAGE_RETURN);
         }
         return;
     }
 #if VERSION <= VERSION_DEMO_JP
-    ADD_OFS(party);
+    moveHosei(party);
 #endif
     if (party->useMotionId >= 10 && party->useMotionId <= 13 && mario->currMotionId != MARIO_MOTION_YOSHI) {
         party->flags &= ~PARTY_FLAG_IS_BEING_USED;
@@ -1153,13 +1192,13 @@ void yoshi_use(PartyEntry* party) {
             __memFree(HEAP_DEFAULT, party->useStruct);
             party->useStruct = NULL;
         }
-        partyChgRunMode(party, 2);
-        party->moveMode = 0;
-        L_resetOfs(party);
+        partyChgRunMode(party, PARTY_RUN_MOVE);
+        party->moveMode = PARTY_MOVE_MODE_STAY;
+        reset_all_ofs(party);
         return;
     }
 #if VERSION >= VERSION_JP
-    ADD_OFS(party);
+    moveHosei(party);
 #endif
     mario->camTarget.x = party->position.x;
     mario->camTarget.z = party->position.z;
@@ -1170,72 +1209,63 @@ void yoshi_use(PartyEntry* party) {
 }
 
 #if VERSION <= VERSION_DEMO_JP
-/** The demo version works the fly angle in the caller's variable (passed by pointer). */
-void L_yoshiFlyMove(PartyEntry* party, f32* angle) {
-    MarioWork* mario = marioGetPtr();
-    f32 x;
-    f32 spd;
-    f32 max;
-    f32 one = 1.0f;
 
-    inertia(party);
-    *angle = -mario->mot.yoshi.velZ;
-    x = mario->mot.yoshi.velX;
-    spd = 0.1f * distABf(0.0f, 0.0f, x, *angle);
-    max = mario->baseDashSpeed * one;
-    if (spd >= max) {
-        spd = max;
-    }
-    *angle = angleABf(0.0f, 0.0f, x, *angle);
-    if (spd < 0.01f) {
-        spd = 0.0f;
-    }
-    party->moveSpeed = spd;
-    if (spd) {
-        party->targetDir = revise360(*angle + party->camDir);
-        party->moveDir = revise360(*angle + party->camDir);
-    }
-    mario->moveDist = spd;
-}
+/** The early demos' version works the fly angle in the caller's variable (passed by pointer). */
+void yoshiFlyMove(PartyEntry* party, f32* angle) {
 #else
-/**
- * Flutter-jump steering: runs inertia, then turns Mario's ride velocity into Yoshi's move speed (capped at
- * Mario's dash speed) and camera-relative direction.
- */
-void L_yoshiFlyMove(PartyEntry* party) {
+void yoshiFlyMove(PartyEntry* party) {
+#endif
     MarioWork* mario = marioGetPtr();
     f32 z;
     f32 x;
     f32 spd;
     f32 max;
+
+    // one (1.0f) multiplies the dash speed; the multiply is in the retail code
     f32 one = 1.0f;
 
     inertia(party);
+#if VERSION <= VERSION_DEMO_JP
+    *angle = -mario->mot.yoshi.velZ;
+#else
     z = -mario->mot.yoshi.velZ;
+#endif
     x = mario->mot.yoshi.velX;
+#if VERSION <= VERSION_DEMO_JP
+    spd = 0.1f * distABf(0.0f, 0.0f, x, *angle);
+#else
     spd = 0.1f * distABf(0.0f, 0.0f, x, z);
+#endif
     max = mario->baseDashSpeed * one;
     if (spd >= max) {
         spd = max;
     }
+#if VERSION <= VERSION_DEMO_JP
+    *angle = angleABf(0.0f, 0.0f, x, *angle);
+#else
     z = angleABf(0.0f, 0.0f, x, z);
+#endif
     if (spd < 0.01f) {
         spd = 0.0f;
     }
     party->moveSpeed = spd;
     if (spd) {
+#if VERSION <= VERSION_DEMO_JP
+        party->targetDir = revise360(*angle + party->camDir);
+        party->moveDir = revise360(*angle + party->camDir);
+#else
         party->targetDir = revise360(z + party->camDir);
         party->moveDir = revise360(z + party->camDir);
+#endif
     }
     mario->moveDist = spd;
 }
-#endif
 
 /**
  * Ride velocity from the stick X axis: accelerates velX,
  * stops on a reversal against the flutter direction and clamps to 16.
  * With the stick released it brakes (harder against a wall);
- * from the US release on it brakes only during the flutter and stops at once otherwise.
+ * in US and later it brakes only during the flutter and stops at once otherwise.
  */
 static void inertia(PartyEntry* party) {
     MarioWork* mario = party->playerPtr;
@@ -1245,18 +1275,18 @@ static void inertia(PartyEntry* party) {
     f32 k;
     f32 lim = 16.0f;
     f32 acc = 0.01f;
+
+    // zero is subtracted from vz twice; both subtractions are in the retail code
     f32 zero = 0.0f;
     s32 dir;
 
     if (!sx) {
 #if VERSION >= VERSION_US
-        if (yoshiGetStatus() != 2) {
+        if (yoshiGetStatus() != YOSHI_STATUS_FLUTTER) {
             vz = vx = 0.0f;
         } else {
             k = -0.07f;
             if (mario->hitobjWall) {
-                if (lim) {
-                }
                 k = -0.5f;
             }
             vx = vx * k + vx;
@@ -1271,8 +1301,6 @@ static void inertia(PartyEntry* party) {
 #else
         k = -0.07f;
         if (mario->hitobjWall) {
-            if (lim) {
-            }
             k = -0.5f;
         }
         vx = vx * k + vx;
@@ -1285,7 +1313,7 @@ static void inertia(PartyEntry* party) {
         }
 #endif
     } else if (vx * vx + vz * vz <= 256.0f) {
-        dir = ((YoshiWork*)party->useStruct)->dir;
+        dir = YOSHI_WORK(party)->dir;
         vx += sx * acc;
         if (dir > 0 && vx <= 0.0f) {
             vx = 0.0f;
@@ -1314,117 +1342,25 @@ static void inertia(PartyEntry* party) {
     mario->mot.yoshi.velZ = vz;
 }
 
-#if VERSION <= VERSION_DEMO_JP
-/** The demo searches 11 up into locals and has the older landing and step code. */
-static void searchGround(PartyEntry* party) {
-    HitEntry* hit;
-    MarioWork* mario;
-    s32 attr;
-    f32 range;
-    Vec ground; // the search fills only .y
-    Vec pos;
-    f32 depth;
-    f32 stepY;
-    f32 stepA;
-    f32 stepB;
-    f32 diff;
-    void* step;
-
-    mario = party->playerPtr;
-    hit = NULL;
-    if (!(party->flags & PARTY_FLAG_FORCE_FALL)) {
-        range = __fabsf(party->gravity);
-        if (range < 1.0f) {
-            range = 1.0f;
-        }
-        hit = _partySearchGround(party, &ground.y, &depth, 11.0f, range);
-    }
-    if (hit) {
-        attr = hitGetAttr(hit);
-        if (party->yoshiPsndSFXId != -1) {
-            psndSFXOff(party->yoshiPsndSFXId);
-            party->yoshiPsndSFXId = -1;
-        }
-        if (attr & HIT_ATTR_DEEP_WATER) {
-            pos = party->position;
-            marioSetSplash(0, &pos);
-            L_sweatEntry(party, NULL);
-            L_fall(party);
-            party->position.y += party->gravity;
-            set_damage_root_ypos(mario->position.y - 8.0f);
-            L_resetOfs(party);
-            party->flags |= PARTY_FLAG_FORCE_FALL;
-            if (party->gravity <= -6.0f) {
-                party->gravity = -6.0f;
-                party->work.common.accelY = 0.0f;
-                party->work.yoshi.gravityAccel = 0.0f;
-                party->accelY = 0.0f;
-            }
-            mario->jumpVelocityY = party->gravity;
-            mario->jumpAccelerationY = party->work.common.accelY;
-            mario->jumpJerkY = party->work.yoshi.gravityAccel;
-            mario->jumpSnapY = party->accelY;
-            marioChgMot(MARIO_MOTION_DAMAGE);
-            party->useMotionId = 70;
-            return;
-        }
-        if (attr & HIT_ATTR_SPIKES) {
-            yoshi_damageToge(party);
-            return;
-        }
-        if (hit && (hitGetAttr(hit) & HIT_ATTR_DAMAGE_RETURN)) {
-            mario->damageHit = hit;
-        }
-        if (!(party->flags & (PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING))) {
-            step = partyChkFrontStep(party, 11.0f, &stepY, &stepA, &stepB);
-            diff = stepY - party->position.y;
-            if (step && diff <= 11.0f && diff >= 5.0f && party->groundSlope <= 30.0f) {
-                party->stepY = stepY;
-                if (party->moveSpeed) {
-                    party->useMotionId = 40;
-                    return;
-                }
-            }
-        }
-    }
-    L_sweatEntry(party, hit);
-    if (hit == NULL) {
-        party->flags &= ~PARTY_FLAG_IS_GROUNDED;
-        L_fall(party);
-        party->position.y += party->gravity;
-    } else {
-        party->flags |= PARTY_FLAG_IS_GROUNDED;
-        if (party->flags & PARTY_FLAG_IS_FALLING) {
-            party->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
-            mario->flags &= ~(MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP);
-            party->velY = 0.0f;
-            party->position.y = ground.y;
-            if (party->yoshiPsndSFXId != -1) {
-                psndSFXOff(party->yoshiPsndSFXId);
-                party->yoshiPsndSFXId = -1;
-            }
-        } else {
-            party->position.y = ground.y;
-        }
-    }
-}
-#else
-/**
- * Ground check while riding: lands Yoshi or makes him fall, splashes and drops into water (attribute 0x200),
- * takes spike damage (0xC00), and starts the step-up (motion 40) onto ledges 5 to 11 high.
- */
+/** The early demos search 11 up into locals and have the older landing and step code. */
 static void searchGround(PartyEntry* party) {
     HitEntry* hit;
     MarioWork* mario;
     s32 attr;
     f32 groundY;
     f32 range;
+#if VERSION <= VERSION_DEMO_JP
+    Vec ground; // the search fills only .y
+#endif
     Vec pos;
+#if VERSION <= VERSION_DEMO_JP
+    f32 depth;
+#endif
     f32 stepY;
     f32 stepA;
     f32 stepB;
     f32 diff;
-    void* step;
+    HitEntry* step;
 
     mario = party->playerPtr;
     hit = NULL;
@@ -1433,26 +1369,33 @@ static void searchGround(PartyEntry* party) {
         if (range < 1.0f) {
             range = 1.0f;
         }
-        hit = _partySearchGround(party, range, range);
+#if VERSION <= VERSION_DEMO_JP
+        hit = _partySearchGround(party, &ground.y, &depth, 11.0f, range);
+#else
+        hit = partySearchGround(party, range, range);
         groundY = party->groundY;
+#endif
     }
     if (hit) {
         attr = hitGetAttr(hit);
-        if (party->yoshiPsndSFXId != -1) {
-            psndSFXOff(party->yoshiPsndSFXId);
-            party->yoshiPsndSFXId = -1;
-        }
-        if (attr & HIT_ATTR_DEEP_WATER) {
-            if (!L_chgMotion(party, 70)) {
+        flyingSeOff(party);
+        if (attr & HIT_ATTR_WATER_HAZARD) {
+#if VERSION >= VERSION_JP
+            if (!chgMotion(party, 70)) {
                 return;
             }
+#endif
             pos = party->position;
             marioSetSplash(0, &pos);
-            L_sweatEntry(party, NULL);
-            L_fall(party);
+            yoshi_hitobj_ride(party, NULL);
+            if (!(party->flags & PARTY_FLAG_IS_FALLING)) {
+                party->flags |= PARTY_FLAG_IS_FALLING;
+                _setFallAcc(party);
+            }
+            _makeFallAcc(party);
             party->position.y += party->gravity;
             set_damage_root_ypos(mario->position.y - 8.0f);
-            L_resetOfs(party);
+            reset_all_ofs(party);
             party->flags |= PARTY_FLAG_FORCE_FALL;
             if (party->gravity <= -6.0f) {
                 party->gravity = -6.0f;
@@ -1465,17 +1408,26 @@ static void searchGround(PartyEntry* party) {
             mario->jumpJerkY = party->work.yoshi.gravityAccel;
             mario->jumpSnapY = party->accelY;
             marioChgMot(MARIO_MOTION_DAMAGE);
+#if VERSION <= VERSION_DEMO_JP
+            party->useMotionId = 70;
+#endif
             return;
         }
+#if VERSION <= VERSION_DEMO_JP
+        if (attr & HIT_ATTR_SPIKES) {
+#else
         if (attr & (HIT_ATTR_DAMAGE_LIQUID | HIT_ATTR_SPIKES)) {
-            yoshi_damageToge(party);
-            partyChgRunMode(party, 0xd);
+#endif
+            damageToge(party);
+#if VERSION >= VERSION_JP
+            partyChgRunMode(party, PARTY_RUN_DAMAGE_RETURN);
             {
                 PartyEntry* extra = partyGetPtr(marioGetExtraPartyId());
                 if (extra) {
-                    partyChgRunMode(extra, 0xd);
+                    partyChgRunMode(extra, PARTY_RUN_DAMAGE_RETURN);
                 }
             }
+#endif
             return;
         }
         if (hit && (hitGetAttr(hit) & HIT_ATTR_DAMAGE_RETURN)) {
@@ -1487,17 +1439,26 @@ static void searchGround(PartyEntry* party) {
             if (step && diff <= 11.0f && diff >= 5.0f && party->groundSlope <= 30.0f) {
                 party->stepY = stepY;
                 if (party->moveSpeed) {
-                    if (L_chgMotion(party, 40)) {
+#if VERSION <= VERSION_DEMO_JP
+                    party->useMotionId = 40;
+                    return;
+#else
+                    if (chgMotion(party, 40)) {
                         return;
                     }
+#endif
                 }
             }
         }
     }
-    L_sweatEntry(party, hit);
+    yoshi_hitobj_ride(party, hit);
     if (hit == NULL) {
         party->flags &= ~PARTY_FLAG_IS_GROUNDED;
-        L_fall(party);
+        if (!(party->flags & PARTY_FLAG_IS_FALLING)) {
+            party->flags |= PARTY_FLAG_IS_FALLING;
+            _setFallAcc(party);
+        }
+        _makeFallAcc(party);
         party->position.y += party->gravity;
     } else {
         party->flags |= PARTY_FLAG_IS_GROUNDED;
@@ -1505,25 +1466,28 @@ static void searchGround(PartyEntry* party) {
             party->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
             mario->flags &= ~(MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP);
             party->velY = 0.0f;
+#if VERSION <= VERSION_DEMO_JP
+            party->position.y = ground.y;
+#else
             party->position.y = groundY;
-            if (party->yoshiPsndSFXId != -1) {
-                psndSFXOff(party->yoshiPsndSFXId);
-                party->yoshiPsndSFXId = -1;
-            }
+#endif
+            flyingSeOff(party);
         } else {
+#if VERSION <= VERSION_DEMO_JP
+            party->position.y = ground.y;
+#else
             party->position.y = groundY;
+#endif
         }
     }
 }
 
-#endif
-
-#if VERSION <= VERSION_DEMO_JP
-/** The demo searches into locals, always records the hit object, and stops the flutter sound on landing. */
+/** The early demos search into locals, always record the hit object and stop the flutter sound on landing. */
 static void searchGround2(PartyEntry* party) {
     HitEntry* hit = NULL;
     MarioWork* mario = party->playerPtr;
     s32 attr;
+#if VERSION <= VERSION_DEMO_JP
     Vec ground; // the search fills only .y
     Vec pos;
     f32 depth;
@@ -1531,92 +1495,48 @@ static void searchGround2(PartyEntry* party) {
     if (!(party->flags & PARTY_FLAG_FORCE_FALL)) {
         hit = _partySearchGround(party, &ground.y, &depth, 11.0f, 0.0f);
     }
-    L_sweatEntry(party, hit);
+    yoshi_hitobj_ride(party, hit);
     if (hit == NULL) {
         return;
     }
-    if (party->yoshiPsndSFXId != -1) {
-        psndSFXOff(party->yoshiPsndSFXId);
-        party->yoshiPsndSFXId = -1;
-    }
-    attr = hitGetAttr(hit);
-    if (attr & HIT_ATTR_DEEP_WATER) {
-        pos = party->position;
-        marioSetSplash(0, &pos);
-        L_sweatEntry(party, NULL);
-        party->gravity = -0.4f;
-        party->work.common.accelY = -0.4f;
-        party->work.yoshi.gravityAccel = 0.0f;
-        party->accelY = 0.0f;
-        party->work.yoshi.gravityAccel += party->accelY;
-        party->work.common.accelY += party->work.yoshi.gravityAccel;
-        party->gravity += party->work.common.accelY;
-        if (party->gravity < -15.0f) {
-            party->gravity = -15.0f;
-        }
-        party->position.y += party->gravity;
-        party->useMotionId = 70;
-        return;
-    }
-    if (attr & HIT_ATTR_SPIKES) {
-        yoshi_damageToge(party);
-    }
-    party->flags |= PARTY_FLAG_IS_GROUNDED;
-    party->velY = 0.0f;
-    party->position.y = ground.y;
-    party->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
-    mario->flags &= ~(MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP);
-}
+    flyingSeOff(party);
 #else
-/**
- * Ground check during the flutter jump: lands Yoshi on a floor within 11 below,
- * handles water (0x200, falls through as motion 70) and spikes (0x800); does nothing while airborne.
- */
-static void searchGround2(PartyEntry* party) {
-    HitEntry* hit = NULL;
-    MarioWork* mario = party->playerPtr;
-    s32 attr;
-
     if (!(party->flags & PARTY_FLAG_FORCE_FALL)) {
-        hit = _partySearchGround(party, 11.0f, 0.0f);
+        hit = partySearchGround(party, 11.0f, 0.0f);
     }
     if (hit == NULL) {
-        L_sweatEntry(party, hit);
+        yoshi_hitobj_ride(party, hit);
         return;
     }
+#endif
     attr = hitGetAttr(hit);
-    if (attr & HIT_ATTR_DEEP_WATER) {
+    if (attr & HIT_ATTR_WATER_HAZARD) {
         Vec pos = party->position;
         marioSetSplash(0, &pos);
-        L_sweatEntry(party, NULL);
-        party->gravity = -0.4f;
-        party->work.common.accelY = -0.4f;
-        party->work.yoshi.gravityAccel = 0.0f;
-        party->accelY = 0.0f;
-        party->work.yoshi.gravityAccel += party->accelY;
-        party->work.common.accelY += party->work.yoshi.gravityAccel;
-        party->gravity += party->work.common.accelY;
-        if (party->gravity < -15.0f) {
-            party->gravity = -15.0f;
-        }
+        yoshi_hitobj_ride(party, NULL);
+        _setFallAcc(party);
+        _makeFallAcc(party);
         party->position.y += party->gravity;
         party->useMotionId = 70;
         return;
     }
     if (attr & HIT_ATTR_SPIKES) {
-        yoshi_damageToge(party);
+        damageToge(party);
     }
     party->flags |= PARTY_FLAG_IS_GROUNDED;
     party->velY = 0.0f;
+#if VERSION <= VERSION_DEMO_JP
+    party->position.y = ground.y;
+#else
     party->position.y = party->groundY;
+#endif
     party->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
     mario->flags &= ~(MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP);
 }
-#endif
 
-#if VERSION >= VERSION_JP
 /** Looks for a ceiling above Yoshi (10 units over his height) and stores it in Mario's hitobjHead. */
-static void L_searchHead(PartyEntry* party) {
+#if VERSION >= VERSION_JP
+static void searchHead(PartyEntry* party) {
     MarioWork* mario = party->playerPtr;
     Vec pos = party->position;
     f32 height = partyGetHeight(party);
@@ -1654,35 +1574,33 @@ static void checkWall(PartyEntry* party, f32 spd, f32 dir) {
             }
         }
         if (hitGetAttr(hit) & HIT_ATTR_SPIKES) {
-            yoshi_damageToge(party);
+            damageToge(party);
         }
         attr = hitGetAttr(hit);
-        if ((attr & (HIT_ATTR_PASS_THROUGH | HIT_ATTR_PARTY_PASS)) && !(attr & (HIT_ATTR_ALWAYS_SOLID | HIT_ATTR_TUBE_PASS))) {
+        if ((attr & (HIT_ATTR_NPC_ONLY | HIT_ATTR_BERO)) && !(attr & (HIT_ATTR_SHIP_ONLY | HIT_ATTR_ROLL_THROUGH))) {
             movePos(&party->position.x, &party->position.z, spd, dir);
             return;
         }
         party->position = pos;
     } else if (!spd) {
-        f32 standDist;
 #if VERSION <= VERSION_DEMO_JP
-        standDist = 0.5f * party->width; // the demo looks half a width ahead while standing
-#else
-        standDist = spd;
+        f32 spd;
+        spd = 0.5f * party->width;
 #endif
         pos = party->position;
-        hit = partySearchWallFront(party, &pos, standDist, party->targetDir);
+        hit = partySearchWallFront(party, &pos, spd, party->targetDir);
         party->hitobjFront = hit;
         mario->hitobjFront = hit;
         if (hit == NULL) {
-            f32 d = toMovedir(party->displayDirection);
+            f32 ang = toMovedir(party->displayDirection);
             pos = party->position;
-            hit = partySearchWallFront(party, &pos, standDist, d);
+            hit = partySearchWallFront(party, &pos, spd, ang);
             party->hitobjFront = hit;
             mario->hitobjFront = hit;
         }
         if (party->buttonTrg & PAD_BUTTON_A) {
             pos = party->position;
-            hit = partySearchWallFront(party, &pos, standDist, party->targetDir);
+            hit = partySearchWallFront(party, &pos, spd, party->targetDir);
             if (hit == NULL) {
                 party->hitobjAction = hit;
                 mario->hitobjFrontA = hit;
@@ -1693,25 +1611,23 @@ static void checkWall(PartyEntry* party, f32 spd, f32 dir) {
         }
         hit = dou10_yoko_yari2(&work1);
         if (hit && (hitGetAttr(hit) & HIT_ATTR_SPIKES)) {
-            yoshi_damageToge(party);
+            damageToge(party);
         }
 #if VERSION <= VERSION_DEMO_JP
-        return; // the demo leaves the position alone while standing
+        return;
 #endif
     } else {
         hit = dou10_yoko_yari2(&work2);
         if (hit && (hitGetAttr(hit) & HIT_ATTR_SPIKES)) {
-            yoshi_damageToge(party);
+            damageToge(party);
         }
     }
-#if VERSION >= VERSION_US
+#if VERSION <= VERSION_DEMO_JP
+    marioChkWallAround(&pos, spd, dir, party->width, partyGetHeight(party));
+#elif VERSION >= VERSION_US
     partyChkWallAround(party, &pos, spd, dir, party->width, mario->wPlayerCollisionBox.y);
 #else
-#if VERSION <= VERSION_DEMO_JP
-    marioChkWallAround(&pos, spd, dir, party->width, partyGetHeight(party)); // no mode argument in the demo
-#else
     marioChkWallAround(&pos, 1, spd, dir, party->width, mario->wPlayerCollisionBox.y);
-#endif
 #endif
     party->position.x = pos.x;
     party->position.z = pos.z;
@@ -1722,7 +1638,7 @@ static void checkWall(PartyEntry* party, f32 spd, f32 dir) {
  * dash or walk speed by stick strength, times 1.5, cut to 3/4 in shallow water.
  * Zero speed while Mario's keys are off.
  */
-void L_getStick(PartyEntry* party, f32* angle, f32* speed) {
+void getStick(PartyEntry* party, f32* angle, f32* speed) {
     s32 x;
     s32 y;
     MarioWork* mario = party->playerPtr;
@@ -1744,24 +1660,14 @@ void L_getStick(PartyEntry* party, f32* angle, f32* speed) {
     if (!dist) {
         ang = party->moveDir;
     }
-#if VERSION <= VERSION_DEMO_JP
     ang = revise360(ang + party->camDir);
     *angle = ang;
     if (dist > 0.0f) {
-        if (x * x + y * y > 3025) {
+        if (x * x + y * y > STICK_DASH_MIN_SQ) {
             dist = 1.5f * (mario->baseDashSpeed * marioGetMoveRate(ang));
         } else {
             dist = 1.5f * (mario->baseWalkSpeed * marioGetMoveRate(ang));
         }
-#else
-    *angle = ang = revise360(ang + party->camDir);
-    if (dist > 0.0f) {
-        if (x * x + y * y > 3025) {
-            dist = 1.5f * (mario->baseDashSpeed * marioGetMoveRate(ang));
-        } else {
-            dist = 1.5f * (mario->baseWalkSpeed * marioGetMoveRate(ang));
-        }
-#endif
         if (hitGetAttr(mario->hitobjStandOn) & HIT_ATTR_SHALLOW_WATER) {
             mario->flags |= MARIO_FLAG_IN_SHALLOW_WATER;
             dist *= 0.75f;

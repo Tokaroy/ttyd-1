@@ -1,15 +1,9 @@
 /* "battle_pad" - Battle (Game)Pad Helper
- *
- * Function: helper functions for reading/writing controller inputs
+ * Helper functions for reading/writing controller inputs.
  */
 #include "battle/battle_pad.h"
 #include "battle/battle.h"
 #include "mario/mariost.h"
-
-// FAKE: inlining off for the whole file (FAKES.md); without it 6 functions change length, e.g. BattlePadInit 19 -> 40 instructions
-#pragma dont_inline on
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 
 /** Clears the battle input history of all four controllers; called from the battle's init in battle.c. */
 void BattlePadInit(void) {
@@ -31,7 +25,7 @@ void BattlePadManager(void) {
 
 /**
  * Zeroes one controller's battle input record: the current and previous pad state,
- * the 30-frame button histories and the hold-repeat timer.
+ * the 30-frame pressed, held and button histories (not the released one) and the hold-repeat timer.
  */
 void BtlPad_WorkInit(BattleWorkPad* pad) {
     int i;
@@ -51,7 +45,7 @@ void BtlPad_WorkInit(BattleWorkPad* pad) {
 
     for (i = 0; i < 30; i++) {
         pad->buttonsPressedHistory[i] = 0;
-        pad->buttonsRepeatHistory[i] = 0;
+        pad->buttonsHeldHistory[i] = 0;
         pad->buttonsHistory[i] = 0;
     }
 
@@ -60,23 +54,24 @@ void BtlPad_WorkInit(BattleWorkPad* pad) {
 }
 
 /**
- * Pushes one frame of controller chan into its 30-frame histories.
- * Stick and C-stick tilts of 30 or more are added as extra button bits (BTL_PAD_STICK_*, BTL_PAD_SUBSTICK_*)
- * with their own press, release and repeat edges; held tilts repeat after 16 frames, then every 8.
- * Action commands read these histories to judge timing.
+ * Pushes one frame of controller chan into the 30-frame histories (the released history is not shifted: only its
+ * entry 0 is written).
+ * Stick and C-stick tilts of 30 or more are added as extra button bits (BATTLE_PAD_STICK_*,
+ * BATTLE_PAD_SUBSTICK_*) with their own press, release and repeat edges; held tilts repeat after 16 frames,
+ * then every 8.
  */
 void BtlPad_WorkUpdate(BattleWorkPad* pad, s32 chan) {
-    int i, repeat;
+    int i;
 
     pad->padData[1] = pad->padData[0];
 
     for (i = 28; i >= 0; i--) {
         pad->buttonsPressedHistory[i + 1] = pad->buttonsPressedHistory[i];
-        pad->buttonsRepeatHistory[i + 1] = pad->buttonsRepeatHistory[i];
+        pad->buttonsHeldHistory[i + 1] = pad->buttonsHeldHistory[i];
         pad->buttonsHistory[i + 1] = pad->buttonsHistory[i];
     }
 
-    // after moving old data back, write new data
+    // after shifting the history back one frame, store this frame's input
     pad->padData[0].button = (u16)gp->button[chan];
     pad->padData[0].stickX = gp->stickX[chan];
     pad->padData[0].stickY = gp->stickY[chan];
@@ -87,59 +82,58 @@ void BtlPad_WorkUpdate(BattleWorkPad* pad, s32 chan) {
     pad->padData[0].analogA = 0;
     pad->padData[0].analogB = 0;
     pad->buttonsHistory[0] = pad->padData[0].button;
-    pad->buttonsRepeatHistory[0] = gp->buttonRepeat[chan];
+    pad->buttonsHeldHistory[0] = gp->buttonRepeat[chan];
     pad->buttonsPressedHistory[0] = gp->buttonNew[chan];
     pad->buttonsReleasedHistory[0] = gp->buttonUp[chan];
 
     if (pad->padData[0].stickY >= 30) {
-        pad->buttonsHistory[0] |= BTL_PAD_STICK_UP;
+        pad->buttonsHistory[0] |= BATTLE_PAD_STICK_UP;
     }
     if (pad->padData[0].stickY <= -30) {
-        pad->buttonsHistory[0] |= BTL_PAD_STICK_DOWN;
+        pad->buttonsHistory[0] |= BATTLE_PAD_STICK_DOWN;
     }
 
     if (pad->padData[0].stickX <= -30) {
-        pad->buttonsHistory[0] |= BTL_PAD_STICK_LEFT;
+        pad->buttonsHistory[0] |= BATTLE_PAD_STICK_LEFT;
     }
     if (pad->padData[0].stickX >= 30) {
-        pad->buttonsHistory[0] |= BTL_PAD_STICK_RIGHT;
+        pad->buttonsHistory[0] |= BATTLE_PAD_STICK_RIGHT;
     }
 
     if (pad->padData[0].substickY >= 30) {
-        pad->buttonsHistory[0] |= BTL_PAD_SUBSTICK_UP;
+        pad->buttonsHistory[0] |= BATTLE_PAD_SUBSTICK_UP;
     }
     if (pad->padData[0].substickY <= -30) {
-        pad->buttonsHistory[0] |= BTL_PAD_SUBSTICK_DOWN;
+        pad->buttonsHistory[0] |= BATTLE_PAD_SUBSTICK_DOWN;
     }
 
     if (pad->padData[0].substickX <= -30) {
-        pad->buttonsHistory[0] |= BTL_PAD_SUBSTICK_LEFT;
+        pad->buttonsHistory[0] |= BATTLE_PAD_SUBSTICK_LEFT;
     }
     if (pad->padData[0].substickX >= 30) {
-        pad->buttonsHistory[0] |= BTL_PAD_SUBSTICK_RIGHT;
+        pad->buttonsHistory[0] |= BATTLE_PAD_SUBSTICK_RIGHT;
     }
 
-    pad->buttonsPressedHistory[0] |= pad->buttonsHistory[0] & ~pad->buttonsHistory[1] & 0xFFFF0000;
+    pad->buttonsPressedHistory[0] |= pad->buttonsHistory[0] & ~pad->buttonsHistory[1] & BATTLE_PAD_STICK_BITS;
 
     if (!pad->buttonsHistory[0]) {
-        pad->buttonsRepeatHistory[0] = 0;
+        pad->buttonsHeldHistory[0] = 0;
         pad->holdRepeatState = 0;
         pad->holdRepeatFrameCounter = 0;
     } else if (pad->buttonsHistory[0] != pad->buttonsHistory[1]) {
-        pad->buttonsRepeatHistory[0] |= pad->buttonsHistory[0] & 0xFFFF0000;
-        pad->buttonsRepeatHistory[0] &= pad->buttonsPressedHistory[0] & 0xFFFF0000 | 0xFFFF;
+        pad->buttonsHeldHistory[0] |= pad->buttonsHistory[0] & BATTLE_PAD_STICK_BITS;
+        pad->buttonsHeldHistory[0] &= (pad->buttonsPressedHistory[0] & BATTLE_PAD_STICK_BITS) | 0xFFFF;
         pad->holdRepeatState = 1;
         pad->holdRepeatFrameCounter = 0;
     } else {
-        repeat = 8;
         pad->holdRepeatFrameCounter++;
-        if (pad->holdRepeatFrameCounter >= (pad->holdRepeatState == 1 ? 16 : repeat)) {
-            pad->buttonsRepeatHistory[0] |= pad->buttonsHistory[0] & 0xFFFF0000;
+        if (pad->holdRepeatFrameCounter >= (pad->holdRepeatState == 1 ? 16 : 8)) {
+            pad->buttonsHeldHistory[0] |= pad->buttonsHistory[0] & BATTLE_PAD_STICK_BITS;
             pad->holdRepeatState = 2;
             pad->holdRepeatFrameCounter = 0;
         }
     }
-    pad->buttonsReleasedHistory[0] |= pad->buttonsHistory[1] & (pad->buttonsHistory[1] ^ pad->buttonsHistory[0]) & 0xFFFF0000;
+    pad->buttonsReleasedHistory[0] |= pad->buttonsHistory[1] & (pad->buttonsHistory[1] ^ pad->buttonsHistory[0]) & BATTLE_PAD_STICK_BITS;
 }
 
 /** Buttons newly pressed this frame on controller 1, with the stick-direction bits. */
@@ -147,9 +141,22 @@ u32 BattlePadGetTrigger(void) {
     return _battleWorkPointer->padWork[0].buttonsPressedHistory[0];
 }
 
+// BattlePadGetRepeat, BattlePadGetUp and the four ...RecordNow / ...RecordRepeat functions below: original names and
+// sizes from the JP demo map (UNUSED there: nothing calls them). Each is its Trigger sibling reading the history
+// that the MultiCheckNow / MultiCheckUp / MultiCheckRepeat function of the same word reads.
+/** Buttons that fired their press-or-hold repeat this frame on controller 1, with the stick-direction bits. */
+u32 BattlePadGetRepeat(void) {
+    return _battleWorkPointer->padWork[0].buttonsHeldHistory[0];
+}
+
 /** Buttons held this frame on controller 1, with the stick-direction bits. */
 u32 BattlePadGetNow(void) {
     return _battleWorkPointer->padWork[0].buttonsHistory[0];
+}
+
+/** Buttons released this frame on controller 1, with the stick-direction bits. */
+u32 BattlePadGetUp(void) {
+    return _battleWorkPointer->padWork[0].buttonsReleasedHistory[0];
 }
 
 /** Nonzero if any button in mask was newly pressed this frame on controller 1. */
@@ -199,6 +206,17 @@ u32 BattlePadMultiCheckUp(s32 chan, s32 mask) {
     return history[0] & mask;
 }
 
+/** Nonzero if any button in mask was held on controller 1 frame frames ago (0 = this frame, up to 29). */
+BOOL BattlePadCheckRecordNow(s32 frame, s32 mask) {
+    return BattlePadMultiCheckRecordNow(0, frame, mask);
+}
+
+/** Nonzero if any button in mask was held on controller chan frame frames ago (0 = this frame, up to 29). */
+u32 BattlePadMultiCheckRecordNow(s32 chan, s32 frame, s32 mask) {
+    BattleWorkPad* pad = &_battleWorkPointer->padWork[chan];
+    return pad->buttonsHistory[frame] & mask;
+}
+
 /** Nonzero if any button in mask fired its press-or-hold repeat this frame on controller 1 (menu cursor movement). */
 s32 BattlePadCheckRepeat(s32 mask) {
     return BattlePadMultiCheckRepeat(0, mask);
@@ -206,6 +224,23 @@ s32 BattlePadCheckRepeat(s32 mask) {
 
 /** Nonzero if any button in mask fired its press-or-hold repeat this frame on controller chan. */
 u32 BattlePadMultiCheckRepeat(s32 chan, s32 mask) {
-    u32* history = _battleWorkPointer->padWork[chan].buttonsRepeatHistory;
+    u32* history = _battleWorkPointer->padWork[chan].buttonsHeldHistory;
     return history[0] & mask;
+}
+
+/**
+ * Nonzero if any button in mask fired its press-or-hold repeat on controller 1 frame frames ago (0 = this frame, up to
+ * 29).
+ */
+BOOL BattlePadCheckRecordRepeat(s32 frame, s32 mask) {
+    return BattlePadMultiCheckRecordRepeat(0, frame, mask);
+}
+
+/**
+ * Nonzero if any button in mask fired its press-or-hold repeat on controller chan frame frames ago (0 = this frame, up
+ * to 29).
+ */
+u32 BattlePadMultiCheckRecordRepeat(s32 chan, s32 frame, s32 mask) {
+    BattleWorkPad* pad = &_battleWorkPointer->padWork[chan];
+    return pad->buttonsHeldHistory[frame] & mask;
 }

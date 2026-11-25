@@ -1,13 +1,14 @@
 // Enemy item use: decides which healing, support or attack item an enemy unit should use.
-#pragma optimize_for_size on
-// FAKE: inlining off for the whole file (FAKES.md); without it 1 function changes length, e.g. BattleEnemyUseItemCheck 82 -> 426 instructions
-#pragma dont_inline on
+
 #include "battle/battle.h"
 #include "battle/battle_unit.h"
 #include "data/item_data.h"
 #include "system.h"
-
+#include "battle/battle_status_effect.h"
+#include "battle/battle_database_common.h"
 #include "battle/battle_detect.h"
+#include "mario/mario_pouch.h"
+#include "battle/battle_enemy_item.h"
 
 static void* _check_status_recover_item(BattleUnit* self);
 static void* _check_status_support_item(BattleUnit* self);
@@ -15,23 +16,6 @@ static void* _check_status_attack_item(BattleUnit* self);
 static void* _check_attack_item(BattleUnit* self);
 static void* _check_fp_recover_item(BattleUnit* self);
 static void* _check_hp_recover_item(BattleUnit* self);
-
-#define SETUP()                                   \
-    BattleWork* wp;                               \
-    s32 itemId;                                   \
-    BattleWorkWeaponTargets* targets;             \
-    BattleWeapon* weapon;                         \
-    s32 i;                                        \
-    BattleUnit* unit;                             \
-    itemId = self->heldItem;                      \
-    wp = _battleWorkPointer;                      \
-    targets = &wp->weaponTargets;                 \
-    weapon = itemDataTable[itemId].battle_params; \
-    BattleSamplingEnemy(targets, weapon, self->unitId, BtlUnit_GetEnemyBelong(self), weapon->targetClassFlags, weapon->targetPropertyFlags, (s32)(s8)wp->alliances[self->alliance].attackDirection);
-
-#define GETUNIT() unit = BattleGetUnitPtr(wp, targets->targets[targets->targetIndices[i]].unitIdx)
-#define RET() return itemDataTable[itemId].battle_params->attackEvtScript
-#define NOFLAG (self->attributeFlags & UNIT_ATTR_INACTIVE)
 
 /**
  * Decides whether an enemy should use its held item this turn;
@@ -46,44 +30,44 @@ void* BattleEnemyUseItemCheck(BattleUnit* self) {
     s32 itemId = self->heldItem;
     BattleWeapon* weapon;
     void* r;
-    if (itemId == 0) {
+    if (itemId == ITEM_NULL) {
         return NULL;
     }
     weapon = itemDataTable[itemId].battle_params;
     if (weapon == NULL) {
         return NULL;
     }
-    if ((self->tokenFlags & TOKEN_FLAG_CONFUSED_ACTION) && !(weapon->special & SPECIAL_USABLE_IF_CONFUSED)) {
+    if ((self->tokenFlags & kConfusedAction) && !(weapon->special & SPECIAL_CONFUSED_ACTION)) {
         return NULL;
     }
     switch (itemId) {
-        case 0x80:
-        case 0x81:
-        case 0x82:
-        case 0x83:
-        case 0x84:
-        case 0x85:
-        case 0x8B:
-        case 0x90:
+        case ITEM_THUNDER_BOLT:
+        case ITEM_THUNDER_RAGE:
+        case ITEM_SHOOTING_STAR:
+        case ITEM_ICE_STORM:
+        case ITEM_FIRE_FLOWER:
+        case ITEM_EARTH_QUAKE:
+        case ITEM_POW_BLOCK:
+        case ITEM_HP_DRAIN_ITEM:
             return _check_attack_item(self);
-        case 0x89:
-        case 0x8A:
-        case 0x8C:
-        case 0x8D:
-        case 0x92:
-        case 0x93:
+        case ITEM_RUIN_POWDER:
+        case ITEM_SLEEPY_SHEEP:
+        case ITEM_STOPWATCH:
+        case ITEM_DIZZY_DIAL:
+        case ITEM_MINI_MR_MINI:
+        case ITEM_MR_SOFTENER:
             return _check_status_attack_item(self);
-        case 0x86:
-        case 0x87:
-        case 0x88:
-        case 0x8E:
-        case 0x8F:
+        case ITEM_BOOS_SHEET:
+        case ITEM_VOLT_SHROOM:
+        case ITEM_REPEL_CAPE:
+        case ITEM_POWER_PUNCH:
+        case ITEM_COURAGE_SHELL:
             return _check_status_support_item(self);
-        case 0x99:
+        case ITEM_TASTY_TONIC:
             return _check_status_recover_item(self);
-        case 0x9D:
+        case ITEM_SLOW_SHROOM:
             return _check_hp_recover_item(self);
-        case 0x9E:
+        case ITEM_GRADUAL_SYRUP:
             return _check_fp_recover_item(self);
         default:
             if (itemDataTable[itemId].hp_restored != 0) {
@@ -107,12 +91,29 @@ void* BattleEnemyUseItemCheck(BattleUnit* self) {
  * Like all checks here, the inactive test reads the user's own attribute flags, not the target's.
  */
 static void* _check_hp_recover_item(BattleUnit* self) {
-    SETUP()
+    BattleWork* wp;
+    s32 itemId;
+    BattleWorkWeaponTargets* targets;
+    BattleWeapon* weapon;
+    s8 belong;
+    s32 dir;
+    s32 i;
+    BattleUnit* unit;
+
+    itemId = self->heldItem;
+    wp = _battleWorkPointer;
+    targets = &wp->weaponTargets;
+    weapon = itemDataTable[itemId].battle_params;
+
+    belong = BtlUnit_GetEnemyBelong(self);
+    dir = wp->alliances[self->alliance].attackDirection;
+    BattleSamplingEnemy(targets, weapon, self->unitId, belong, weapon->targetClassFlags,
+                        weapon->targetPropertyFlags, dir);
     for (i = 0; i < targets->numTargets; i++) {
-        GETUNIT();
-        if (!NOFLAG) {
+        unit = BattleGetUnitPtr(wp, targets->targets[targets->targetIndices[i]].unitIdx);
+        if (!(self->attributeFlags & kInactive)) {
             if (unit->currentHp < unit->maxHp) {
-                RET();
+                return itemDataTable[itemId].battle_params->attackEvtScript;
             }
         }
     }
@@ -121,14 +122,31 @@ static void* _check_hp_recover_item(BattleUnit* self) {
 
 /** Returns the item's script when any unit the item can target has less than full FP. */
 static void* _check_fp_recover_item(BattleUnit* self) {
-    SETUP()
+    BattleWork* wp;
+    s32 itemId;
+    BattleWorkWeaponTargets* targets;
+    BattleWeapon* weapon;
+    s8 belong;
+    s32 dir;
+    s32 i;
+    BattleUnit* unit;
+
+    itemId = self->heldItem;
+    wp = _battleWorkPointer;
+    targets = &wp->weaponTargets;
+    weapon = itemDataTable[itemId].battle_params;
+
+    belong = BtlUnit_GetEnemyBelong(self);
+    dir = wp->alliances[self->alliance].attackDirection;
+    BattleSamplingEnemy(targets, weapon, self->unitId, belong, weapon->targetClassFlags,
+                        weapon->targetPropertyFlags, dir);
     for (i = 0; i < targets->numTargets; i++) {
         s32 max;
-        GETUNIT();
-        if (!NOFLAG) {
+        unit = BattleGetUnitPtr(wp, targets->targets[targets->targetIndices[i]].unitIdx);
+        if (!(self->attributeFlags & kInactive)) {
             max = BtlUnit_GetMaxFp(unit);
             if (BtlUnit_GetFp(unit) < max) {
-                RET();
+                return itemDataTable[itemId].battle_params->attackEvtScript;
             }
         }
     }
@@ -140,22 +158,39 @@ static void* _check_fp_recover_item(BattleUnit* self) {
  * otherwise the chance to use the item is 20% per elapsed turn (turnCount * 20 out of 100).
  */
 static void* _check_attack_item(BattleUnit* self) {
-    SETUP()
+    BattleWork* wp;
+    s32 itemId;
+    BattleWorkWeaponTargets* targets;
+    BattleWeapon* weapon;
+    s8 belong;
+    s32 dir;
+    s32 i;
+    BattleUnit* unit;
+
+    itemId = self->heldItem;
+    wp = _battleWorkPointer;
+    targets = &wp->weaponTargets;
+    weapon = itemDataTable[itemId].battle_params;
+
+    belong = BtlUnit_GetEnemyBelong(self);
+    dir = wp->alliances[self->alliance].attackDirection;
+    BattleSamplingEnemy(targets, weapon, self->unitId, belong, weapon->targetClassFlags,
+                        weapon->targetPropertyFlags, dir);
     if (targets->numTargets <= 0) {
         return NULL;
     }
     if (itemId == ITEM_POW_BLOCK || itemId == ITEM_EARTH_QUAKE) {
         for (i = 0; i < targets->numTargets; i++) {
-            GETUNIT();
-            if (unit->currentKind == UNIT_KOOPS && !NOFLAG && !BtlUnit_CanActStatus(unit)) {
-                RET();
+            unit = BattleGetUnitPtr(wp, targets->targets[targets->targetIndices[i]].unitIdx);
+            if (unit->currentKind == UNIT_KOOPS && !(self->attributeFlags & kInactive) && !BtlUnit_CanActStatus(unit)) {
+                return itemDataTable[itemId].battle_params->attackEvtScript;
             }
         }
     }
     if (irand(100) >= wp->turnCount * 20) {
         return NULL;
     }
-    RET();
+    return itemDataTable[itemId].battle_params->attackEvtScript;
 }
 
 /**
@@ -164,38 +199,55 @@ static void* _check_attack_item(BattleUnit* self) {
  * and does not already have that status.
  */
 static void* _check_status_attack_item(BattleUnit* self) {
-    SETUP()
+    BattleWork* wp;
+    s32 itemId;
+    BattleWorkWeaponTargets* targets;
+    BattleWeapon* weapon;
+    s8 belong;
+    s32 dir;
+    s32 i;
+    BattleUnit* unit;
+
+    itemId = self->heldItem;
+    wp = _battleWorkPointer;
+    targets = &wp->weaponTargets;
+    weapon = itemDataTable[itemId].battle_params;
+
+    belong = BtlUnit_GetEnemyBelong(self);
+    dir = wp->alliances[self->alliance].attackDirection;
+    BattleSamplingEnemy(targets, weapon, self->unitId, belong, weapon->targetClassFlags,
+                        weapon->targetPropertyFlags, dir);
     if (targets->numTargets <= 0) {
         return NULL;
     }
     for (i = 0; i < targets->numTargets; i++) {
-        GETUNIT();
-        if (!NOFLAG) {
+        unit = BattleGetUnitPtr(wp, targets->targets[targets->targetIndices[i]].unitIdx);
+        if (!(self->attributeFlags & kInactive)) {
             switch (itemId) {
-                case 0x8A:
-                case 0x8C:
+                case ITEM_SLEEPY_SHEEP:
+                case ITEM_STOPWATCH:
                     if (BtlUnit_CanActStatus(unit)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x92:
+                case ITEM_MINI_MR_MINI:
                     if (BtlUnit_CanActStatus(unit) && !BtlUnit_CheckStatus(unit, STATUS_TINY)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x93:
+                case ITEM_MR_SOFTENER:
                     if (BtlUnit_CanActStatus(unit) && !BtlUnit_CheckStatus(unit, STATUS_DEFENSE_DOWN)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x89:
+                case ITEM_RUIN_POWDER:
                     if (BtlUnit_CanActStatus(unit) && !BtlUnit_CheckStatus(unit, STATUS_CONFUSE)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x8D:
+                case ITEM_DIZZY_DIAL:
                     if (BtlUnit_CanActStatus(unit) && !BtlUnit_CheckStatus(unit, STATUS_DIZZY)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
             }
@@ -210,37 +262,54 @@ static void* _check_status_attack_item(BattleUnit* self) {
  * able to act).
  */
 static void* _check_status_support_item(BattleUnit* self) {
-    SETUP()
+    BattleWork* wp;
+    s32 itemId;
+    BattleWorkWeaponTargets* targets;
+    BattleWeapon* weapon;
+    s8 belong;
+    s32 dir;
+    s32 i;
+    BattleUnit* unit;
+
+    itemId = self->heldItem;
+    wp = _battleWorkPointer;
+    targets = &wp->weaponTargets;
+    weapon = itemDataTable[itemId].battle_params;
+
+    belong = BtlUnit_GetEnemyBelong(self);
+    dir = wp->alliances[self->alliance].attackDirection;
+    BattleSamplingEnemy(targets, weapon, self->unitId, belong, weapon->targetClassFlags,
+                        weapon->targetPropertyFlags, dir);
     if (targets->numTargets <= 0) {
         return NULL;
     }
     for (i = 0; i < targets->numTargets; i++) {
-        GETUNIT();
-        if (!NOFLAG) {
+        unit = BattleGetUnitPtr(wp, targets->targets[targets->targetIndices[i]].unitIdx);
+        if (!(self->attributeFlags & kInactive)) {
             switch (itemId) {
-                case 0x8E:
+                case ITEM_POWER_PUNCH:
                     if (BtlUnit_CanActStatus(unit) && !BtlUnit_CheckStatus(unit, STATUS_HUGE)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x8F:
+                case ITEM_COURAGE_SHELL:
                     if (!BtlUnit_CheckStatus(unit, STATUS_DEFENSE_UP)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x86:
+                case ITEM_BOOS_SHEET:
                     if (!BtlUnit_CheckStatus(unit, STATUS_INVISIBLE)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x87:
+                case ITEM_VOLT_SHROOM:
                     if (!BtlUnit_CheckStatus(unit, STATUS_ELECTRIC)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
-                case 0x88:
+                case ITEM_REPEL_CAPE:
                     if (!BtlUnit_CheckStatus(unit, STATUS_DODGY)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
             }
@@ -254,15 +323,32 @@ static void* _check_status_support_item(BattleUnit* self) {
  * freeze, tiny, defense down or slow).
  */
 static void* _check_status_recover_item(BattleUnit* self) {
-    SETUP()
+    BattleWork* wp;
+    s32 itemId;
+    BattleWorkWeaponTargets* targets;
+    BattleWeapon* weapon;
+    s8 belong;
+    s32 dir;
+    s32 i;
+    BattleUnit* unit;
+
+    itemId = self->heldItem;
+    wp = _battleWorkPointer;
+    targets = &wp->weaponTargets;
+    weapon = itemDataTable[itemId].battle_params;
+
+    belong = BtlUnit_GetEnemyBelong(self);
+    dir = wp->alliances[self->alliance].attackDirection;
+    BattleSamplingEnemy(targets, weapon, self->unitId, belong, weapon->targetClassFlags,
+                        weapon->targetPropertyFlags, dir);
     if (targets->numTargets <= 0) {
         return NULL;
     }
     for (i = 0; i < targets->numTargets; i++) {
-        GETUNIT();
-        if (!NOFLAG) {
+        unit = BattleGetUnitPtr(wp, targets->targets[targets->targetIndices[i]].unitIdx);
+        if (!(self->attributeFlags & kInactive)) {
             switch (itemId) {
-                case 0x99:
+                case ITEM_TASTY_TONIC:
                     if (BtlUnit_CheckStatus(unit, STATUS_SLEEP) ||
                         BtlUnit_CheckStatus(unit, STATUS_STOP) ||
                         BtlUnit_CheckStatus(unit, STATUS_DIZZY) ||
@@ -274,7 +360,7 @@ static void* _check_status_recover_item(BattleUnit* self) {
                         BtlUnit_CheckStatus(unit, STATUS_TINY) ||
                         BtlUnit_CheckStatus(unit, STATUS_DEFENSE_DOWN) ||
                         BtlUnit_CheckStatus(unit, STATUS_SLOW)) {
-                        RET();
+                        return itemDataTable[itemId].battle_params->attackEvtScript;
                     }
                     break;
             }

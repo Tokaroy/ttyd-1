@@ -1,4 +1,5 @@
 // Small stars ("SmallStar", miss star) around a point; count, delay and index come from the caller.
+
 #include "eff/eff_miss_star.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
@@ -6,7 +7,6 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-
 static void effMissStarDisp(CameraId cameraId, EffectEntry* effect);
 static void effMissStarMain(EffectEntry* effect);
 
@@ -26,9 +26,9 @@ typedef struct EffMissStarWork {
 
 /**
  * Launch directions of the miss stars, fanning from straight up round the side to straight down;
- * the caller's index picks the first and each star takes the next one.
+ * the caller's index picks the first and each star takes the next one. Only entries 0-7 are read (index % 8).
  */
-Vec spd_tbl[15] = {
+static Vec spd_tbl[15] = {
     { 0.0f, 4.5f, 0.0f },  { 1.0f, 4.0f, 0.0f },  { 2.0f, 3.0f, 0.0f },
     { 3.0f, 2.0f, 0.0f },  { 3.5f, 1.0f, 0.0f },  { 4.0f, 0.0f, 0.0f },
     { 4.5f, 0.0f, 0.0f },  { 5.0f, 0.0f, 0.0f },  { 4.5f, 0.0f, 0.0f },
@@ -36,7 +36,7 @@ Vec spd_tbl[15] = {
     { 2.0f, -3.0f, 0.0f }, { 1.0f, -4.0f, 0.0f }, { 0.0f, -4.5f, 0.0f },
 };
 
-/** Size of each miss star in turn, between 0.8 and 1.1 so the burst looks uneven. */
+/** Size of each miss star in turn, between 0.8 and 1.1 (X only; entries 0-7 are read, i % 8). */
 static Vec scale_tbl[15] = {
     { 1.0f, 1.0f, 1.0f },    { 0.8f, 0.8f, 0.8f },    { 0.9f, 0.9f, 0.9f },
     { 1.1f, 1.1f, 1.1f },    { 1.0f, 1.0f, 1.0f },    { 0.8f, 0.8f, 0.8f },
@@ -46,8 +46,8 @@ static Vec scale_tbl[15] = {
 };
 
 /**
- * Spawns `count` small stars around (x, y, z) after `delay` frames;
- * battle_damage.c uses it when an attack misses (index selects the direction).
+ * Spawns `count` small stars around (x, y, z), drawn after `delay` frames (count 0 or less: one smaller star);
+ * battle_damage.c uses it when an attack misses (index selects the direction, a negative one mirrors it).
  */
 EffectEntry* effMissStarEntry(s32 count, s32 delay, f32 x, f32 y, f32 z, s32 index) {
     EffectEntry* effect;
@@ -70,6 +70,8 @@ EffectEntry* effMissStarEntry(s32 count, s32 delay, f32 x, f32 y, f32 z, s32 ind
         index = -index;
         sign = -1;
     }
+
+    // an endless loop with a break: the retail branch layout (a while loop is laid out differently)
     while (TRUE) {
         if (index <= 5) {
             break;
@@ -105,8 +107,8 @@ EffectEntry* effMissStarEntry(s32 count, s32 delay, f32 x, f32 y, f32 z, s32 ind
 }
 
 /**
- * Per frame: moves, spins and fades each star, turns it to face the camera and deletes the effect
- * when all are gone.
+ * Per frame: moves and spins each star (slowing it after 4 frames), turns it to face the camera and deletes
+ * the effect 10 frames after the first star's life runs out. alpha is never changed or drawn.
  */
 static void effMissStarMain(EffectEntry* effect) {
     EffMissStarWork* work = effect->userdata;
@@ -150,7 +152,21 @@ static void effMissStarMain(EffectEntry* effect) {
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position2), 1, (DispCallback)effMissStarDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position2), DISP_MODE_ALPHA_TEST, (DispCallback)effMissStarDisp, effect);
+}
+
+/** One textured quad: top-left corner (x, y), width w, height h, texture repeat (s, t). */
+// Original name and size (0x120) from the JP demo map (UNUSED there: every call is inlined).
+static void polygon(f32 x, f32 y, f32 w, f32 h, f32 s, f32 t) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(x, y, 0.0f);
+    GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(x + w, y, 0.0f);
+    GXTexCoord2f32(s, 0.0f);
+    GXPosition3f32(x + w, y - h, 0.0f);
+    GXTexCoord2f32(s, t);
+    GXPosition3f32(x, y - h, 0.0f);
+    GXTexCoord2f32(0.0f, t);
 }
 
 /** Draws each star as a camera-facing textured quad (effect texture 24). */
@@ -166,7 +182,7 @@ static void effMissStarDisp(CameraId cameraId, EffectEntry* effect) {
     effGetTexObj(24, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetNumChans(0);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumTevStages(1);
@@ -195,14 +211,6 @@ static void effMissStarDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXConcat(camGetPtr(CAMERA_3D)->view, mtx, mtx);
         GXLoadPosMtxImm(mtx, GX_PNMTX0);
         GXSetCurrentMtx(GX_PNMTX0);
-        GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-        GXPosition3f32(-16.0f, 16.0f, 0.0f);
-        GXTexCoord2f32(0.0f, 0.0f);
-        GXPosition3f32(16.0f, 16.0f, 0.0f);
-        GXTexCoord2f32(1.0f, 0.0f);
-        GXPosition3f32(16.0f, -16.0f, 0.0f);
-        GXTexCoord2f32(1.0f, 1.0f);
-        GXPosition3f32(-16.0f, -16.0f, 0.0f);
-        GXTexCoord2f32(0.0f, 1.0f);
+        polygon(-16.0f, 16.0f, 32.0f, 32.0f, 1.0f, 1.0f);
     }
 }

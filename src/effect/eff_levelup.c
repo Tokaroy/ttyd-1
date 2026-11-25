@@ -1,4 +1,7 @@
-// Level-up effect drawn in 2D at a point with a sound; types 0-4, type 0 also starts a screen-shake event.
+// Level-up banner drawn in 2D at a point; the type is stored but not read. The first piece's landings shake the
+// camera and play a sound.
+
+#include "version.h"
 #include "eff/eff_levelup.h"
 #include "driver/dispdrv.h"
 #include "evt/evt_cmd.h"
@@ -9,9 +12,8 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "sfx_name_word.h"
 #include "evt/evt_cam.h"
-#include "version.h"
-
 static void effLevelupDisp(CameraId cameraId, EffectEntry* effect);
 static void effLevelupMain(EffectEntry* effect);
 
@@ -27,34 +29,62 @@ typedef struct EffLevelupWork {
     f32 scaleY;  // 0x20
 } EffLevelupWork;
 
+/**
+ * Effect texture ids of the banner's three pieces (entries 0-2) and their shadows (3-5), one row per language
+ * (all rows are the same).
+ */
 #if VERSION >= VERSION_US
-/** Effect texture ids of the banner's six letter sprites, one row per language (all rows are the same). */
-static s32 texid_tbl[6][6] = {{118, 119, 120, 121, 122, 123}, {118, 119, 120, 121, 122, 123}, {118, 119, 120, 121, 122, 123}, {118, 119, 120, 121, 122, 123}, {118, 119, 120, 121, 122, 123}, {118, 119, 120, 121, 122, 123}};
-/**
- * Per-frame height of each banner letter as it drops in over 46 frames: it falls from 500 to the ground, then
- * bounces twice. The first letter touching down shakes the camera. Read by effLevelupMain.
- */
-u16 y_trans[] = {500, 500, 479, 458, 437, 416, 395, 375, 354, 333, 312, 291, 270, 250, 229, 208, 187, 166, 145, 125, 104, 83, 62, 41, 20, 0, 5, 10, 15, 20, 25, 20, 15, 10, 4, 0, 5, 10, 15, 20, 25, 20, 15, 10, 4, 0};
-#else
-/** Effect texture ids of the banner's six letter sprites, for Japanese and English (both rows are the same). */
-static s32 texid_tbl[2][6] = {{146, 147, 148, 149, 150, 151}, {146, 147, 148, 149, 150, 151}};
-/**
- * Per-frame height of each banner letter as it drops in over 46 frames: it falls from 500 to the ground, then
- * bounces twice. The first letter touching down shakes the camera. Read by effLevelupMain.
- */
-u16 y_trans[] = {500, 500, 479, 458, 437, 416, 395, 375, 354, 333, 312, 291, 270, 250, 229, 208, 187, 166, 145, 125, 104, 83, 62, 41, 20, 0, 5, 10, 15, 20, 25, 20, 15, 10, 4, 0, 5, 10, 15, 20, 25, 20, 15, 10, 4, 0};
+static s32 texid_tbl[6][6] = {
+    { 118, 119, 120, 121, 122, 123 },
+    { 118, 119, 120, 121, 122, 123 },
+    { 118, 119, 120, 121, 122, 123 },
+    { 118, 119, 120, 121, 122, 123 },
+    { 118, 119, 120, 121, 122, 123 },
+    { 118, 119, 120, 121, 122, 123 },
+};
 #endif
+
+#if VERSION <= VERSION_DEMO_JP
+static s32 texid_tbl[2][6] = {{146, 147, 148, 149, 150, 151}, {146, 147, 148, 149, 150, 151}};
+#endif
+
 /**
- * Per-frame vertical stretch in percent of the banner letters after the first two, once landed: they grow
+ * Per-frame height of each banner letter as it drops in over 46 frames: it falls from 500 to the ground, then
+ * bounces twice. The first letter touching down shakes the camera. Read by effLevelupMain.
+ */
+static u16 y_trans[] = {
+    500, 500, 479, 458, 437, 416, 395, 375, 354, 333, 312, 291, 270,
+    250, 229, 208, 187, 166, 145, 125, 104, 83, 62, 41, 20, 0,
+    5, 10, 15, 20, 25, 20, 15, 10, 4, 0,
+    5, 10, 15, 20, 25, 20, 15, 10, 4, 0,
+};
+
+/**
+ * Effect texture ids of the banner's three pieces (entries 0-2) and their shadows (3-5); row 0 for Japanese,
+ * row 1 for the other languages (both the same).
+ */
+#if VERSION == VERSION_JP
+static s32 texid_tbl[2][6] = {{146, 147, 148, 149, 150, 151}, {146, 147, 148, 149, 150, 151}};
+#endif
+
+/**
+ * Per-frame vertical stretch in percent of the third banner piece, once landed: it grows
  * from nothing up to 175%, squash to 50% and settle at 100%. Read by effLevelupMain.
  */
-u8 y_scale[] = {0, 13, 40, 69, 98, 126, 149, 166, 175, 165, 136, 100, 67, 50, 73, 117, 130, 113, 100};
+static u8 y_scale[] = {0, 13, 40, 69, 98, 126, 149, 166, 175, 165, 136, 100, 67, 50, 73, 117, 130, 113, 100};
 
 /** Shakes the camera slightly for 50 frames each time the first Level Up letter touches down (it bounces). */
 static EVT_BEGIN(evt_shake)
-    CALL(evt_cam_shake, 4, FLOAT(0.001953125f), FLOAT(0.001953125f), 50)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.001953125f), FLOAT(0.001953125f), 50)
     RETURN
 EVT_END()
+
+#if VERSION < VERSION_US
+/** TRUE when the game language is Japanese (versions before US). */
+static inline BOOL isJapanese(void) {
+    return !gp->language;
+}
+#endif
 
 /**
  * Spawns the level-up banner at (x, y, z), laid out from the current language's letter textures;
@@ -63,7 +93,6 @@ EVT_END()
 EffectEntry* effLevelupEntry(s32 type, f32 x, f32 y, f32 z, s32 limit) {
     EffectEntry* effect;
     EffLevelupWork* work;
-    EffLevelupWork* w;
     s32 i;
 #if VERSION >= VERSION_US
     GXTexObj texObj;
@@ -85,12 +114,12 @@ EffectEntry* effLevelupEntry(s32 type, f32 x, f32 y, f32 z, s32 limit) {
     work->z = z;
     work->timer = limit;
     work->state = 0;
-    w = work + 1;
-    for (i = 1; i < effect->count; i++, w++) {
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
 #if VERSION >= VERSION_US
         a = 0.0f;
         b = a;
-        s = (u32)gp->language == 3 ? 0.9f : 1.0f;
+        s = gp->language == LANGUAGE_FR ? 0.9f : 1.0f;
         for (j = 0; j < i - 1; j++) {
             effGetTexObj(texid_tbl[gp->language][j], &texObj);
             a += s * (f32)GXGetTexObjWidth(&texObj);
@@ -101,28 +130,28 @@ EffectEntry* effLevelupEntry(s32 type, f32 x, f32 y, f32 z, s32 limit) {
             effGetTexObj(texid_tbl[gp->language][j], &texObj);
             b += s * ((f32)GXGetTexObjWidth(&texObj) / 2.0f);
         }
-        w->x = a - b;
+        work->x = a - b;
 #else
+        // Letter x offsets per language (Japanese first), relative to entry 4.
         {
-            // Left edges of the letters and the centre (index 4): row 0 Japanese, row 1 other languages.
-            s32 letterX[2][5] = {{0, 64, 188, 260, 136}, {0, 88, 210, 256, 134}};
+            s32 arr[2][5] = {{0, 64, 188, 260, 136}, {0, 88, 210, 256, 134}};
 
-            w->x = letterX[(gp->language ? 0 : 1) == 0][i] - letterX[(gp->language ? 0 : 1) == 0][4];
+            work->x = arr[isJapanese() ? 0 : 1][i] - arr[isJapanese() ? 0 : 1][4];
         }
 #endif
-        w->y = y_trans[0];
-        w->z = 0.0f;
-        w->xOffset = 0.0f;
-        w->state = 0;
-        w->scaleX = 1.0f;
-        w->scaleY = i < 3 ? 1.0f : 0.0f;
+        work->y = y_trans[0];
+        work->z = 0.0f;
+        work->xOffset = 0.0f;
+        work->state = 0;
+        work->scaleX = 1.0f;
+        work->scaleY = i < 3 ? 1.0f : 0.0f;
     }
     return effect;
 }
 
 /**
- * Drops the letters in along y_trans (shaking the screen on landing), squashes them, holds,
- * slides them off sideways and deletes the effect.
+ * Drops the pieces in along y_trans (shaking the screen on landing), stretches the third one in, holds,
+ * slides the first off to the right and the others to the left, and deletes the effect.
  */
 static void effLevelupMain(EffectEntry* effect) {
     EffLevelupWork* work = effect->userdata;
@@ -130,7 +159,6 @@ static void effLevelupMain(EffectEntry* effect) {
     Vec position = {0.0f, 0.0f, 0.0f};
     s32 limit;
     s32 i;
-    EffLevelupWork* w;
     s32 done = 0;
 
     position.x = work->x;
@@ -143,11 +171,11 @@ static void effLevelupMain(EffectEntry* effect) {
         switch (work->state) {
             case 0:
                 work->timer++;
-                if ((u32)work->timer < 0x2e) {
+                if (work->timer < sizeof(y_trans) / sizeof(y_trans[0])) {
                     work->y = y_trans[work->timer];
                     if (i == 1 && work->y == 0.0f) {
                         evtEntry(evt_shake, 0, 0);
-                        psndSFXOn((const char*)0xa57);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_BTL_SYS_LEVELUP_FALL1));
                     }
                 } else {
                     work->state++;
@@ -156,7 +184,7 @@ static void effLevelupMain(EffectEntry* effect) {
                 break;
             case 1:
                 work->timer++;
-                if ((u32)work->timer < 0x13) {
+                if (work->timer < sizeof(y_scale) / sizeof(y_scale[0])) {
                     if (i > 2) {
                         work->scaleY = y_scale[work->timer] / 100.0f;
                     }
@@ -173,9 +201,9 @@ static void effLevelupMain(EffectEntry* effect) {
                 break;
             case 3:
                 if (i < 2) {
-                    work->xOffset = intplGetValue(1, 0.0f, 400.0f, work->timer, 30);
+                    work->xOffset = intplGetValue(EASING_QUADRATIC_IN, 0.0f, 400.0f, work->timer, 30);
                 } else {
-                    work->xOffset = intplGetValue(1, 0.0f, -400.0f, work->timer, 30);
+                    work->xOffset = intplGetValue(EASING_QUADRATIC_IN, 0.0f, -400.0f, work->timer, 30);
                 }
                 work->timer++;
                 if (work->timer > 30) {
@@ -191,14 +219,16 @@ static void effLevelupMain(EffectEntry* effect) {
     if (done >= effect->count - 1) {
         effDelete(effect);
     } else {
-        dispEntry(CAMERA_2D, dispCalcZ(&position2), 2, (DispCallback)effLevelupDisp, effect);
+        dispEntry(CAMERA_2D, dispCalcZ(&position2), DISP_MODE_XLU, (DispCallback)effLevelupDisp, effect);
     }
 }
 
 /** Draws the banner letters in 2D at their offsets and scales. */
 static void effLevelupDisp(CameraId cameraId, EffectEntry* effect) {
+#if VERSION < VERSION_US
     s32 ofs;
     s32 tofs;
+#endif
     s32 xofs;
     EffLevelupWork* w;
     EffLevelupWork* work = effect->userdata;
@@ -211,7 +241,7 @@ static void effLevelupDisp(CameraId cameraId, EffectEntry* effect) {
     GXColor color;
     f32 dx;
     f32 dy;
-    f32 halfScale = 0.5f;
+
 #if VERSION >= VERSION_US
     GXTexObj texObj2;
     f32 width;
@@ -244,30 +274,32 @@ static void effLevelupDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     for (j = 1, xofs = 4; j >= 0; j--, xofs -= 4) {
 #if VERSION >= VERSION_US
-        for (i = effect->count - 1, ofs = i * sizeof(EffLevelupWork), tofs = i * sizeof(s32); i >= 1; ofs -= sizeof(EffLevelupWork), tofs -= sizeof(s32), i--) {
-#else
-        for (i = effect->count - 1, ofs = i * sizeof(EffLevelupWork), tofs = i * sizeof(s32); i >= 1; i--, ofs -= sizeof(EffLevelupWork), tofs -= sizeof(s32)) {
-#endif
+        for (i = effect->count - 1; i >= 1; i--) {
             w = effect->userdata;
-            // FAKE: MWCC lvalue cast (not standard C). Every standard form (w = (EffLevelupWork*)((u8*)w + ofs), a u32
-            // sum, &((u8*)w)[ofs], *(u8**)&w += ofs) loads userdata into a scratch register instead of w's.
+            w += i;
+#else
+        // FAKE: JP and the early demos: work array and texid_tbl walked by byte offsets (ofs/tofs); indexing by i
+        // (as US) gives the same instructions with the i and work-offset decrements in the other order
+        for (i = effect->count - 1, ofs = i * sizeof(EffLevelupWork), tofs = i * sizeof(s32); i >= 1; i--, ofs -= sizeof(EffLevelupWork), tofs -= sizeof(s32)) {
+            w = effect->userdata;
             (u8*)w += ofs;
+#endif
             dx = xofs;
             dy = -j * 4;
             if (j != 0) {
 #if VERSION >= VERSION_US
-                effGetTexObj(*(s32*)((u8*)texid_tbl[gp->language] + tofs + 2 * sizeof(s32)), &texObj);
+                effGetTexObj(texid_tbl[gp->language][i + 2], &texObj);
 #else
-                effGetTexObj(*(s32*)((u8*)texid_tbl[gp->language != 0] + tofs + 2 * sizeof(s32)), &texObj);
+                effGetTexObj(*(s32*)((u8*)texid_tbl[isJapanese() ? 0 : 1] + tofs + 2 * sizeof(s32)), &texObj);
 #endif
                 GXLoadTexObj(&texObj, GX_TEXMAP0);
                 color = (GXColor){0, 0, 0, 0x80};
                 GXSetChanMatColor(GX_COLOR0A0, color);
             } else {
 #if VERSION >= VERSION_US
-                effGetTexObj(*(s32*)((u8*)texid_tbl[gp->language] + tofs - sizeof(s32)), &texObj);
+                effGetTexObj(texid_tbl[gp->language][i - 1], &texObj);
 #else
-                effGetTexObj(*(s32*)((u8*)texid_tbl[gp->language != 0] + tofs - sizeof(s32)), &texObj);
+                effGetTexObj(*(s32*)((u8*)texid_tbl[isJapanese() ? 0 : 1] + tofs - sizeof(s32)), &texObj);
 #endif
                 GXLoadTexObj(&texObj, GX_TEXMAP0);
                 color = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
@@ -280,25 +312,22 @@ static void effLevelupDisp(CameraId cameraId, EffectEntry* effect) {
             GXLoadPosMtxImm(m0, GX_PNMTX0);
             GXSetCurrentMtx(GX_PNMTX0);
 #if VERSION >= VERSION_US
-            effGetTexObj(*(s32*)((u8*)texid_tbl[gp->language] + tofs - sizeof(s32)), &texObj2);
+            effGetTexObj(texid_tbl[gp->language][i - 1], &texObj2);
             width = GXGetTexObjWidth(&texObj2);
             height = GXGetTexObjHeight(&texObj2);
-            if ((u32)gp->language == 3) {
+            if (gp->language == LANGUAGE_FR) {
                 width *= 0.9f;
                 height *= 0.9f;
             }
 #endif
             GXBegin(GX_QUADS, GX_VTXFMT0, 4);
             {
-#if VERSION >= VERSION_US
-                f32 half = width * halfScale;
-#else
+#if VERSION < VERSION_US
                 s32 arr[2][4] = {{0, 128, 120, 24}, {0, 176, 68, 24}};
-                f32 width = *(s32*)((u8*)arr[gp->language != 0] + tofs);
-
-                f32 half = width * halfScale;
+                f32 width = *(s32*)((u8*)arr[isJapanese() ? 0 : 1] + tofs);
 #endif
-                f32 negHalf = -width * halfScale;
+                f32 half = width / 2.0f;
+                f32 negHalf = -width / 2.0f;
                 GXPosition3f32(negHalf, height, 0.0f);
                 GXTexCoord2f32(0.0f, 0.0f);
                 GXPosition3f32(half, height, 0.0f);

@@ -1,5 +1,5 @@
 // dou_12 (洞窟, Pirate's Grotto): side passage between dou_02 and dou_03.
-// Has Bill Blaster (killer_cannon) enemies.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -7,12 +7,14 @@
 #include "driver/hitdrv.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
-#include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
-#include "dou.h"
+#include "party/party_motion.h"
+#include "evt/evt_npc.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[5];
 static HitDamageReturn hitDmgRetPoints[5];
+EvtWord dou_12_init_evt[47];
 
 /**
  * Exits (beros) of this room: w_bero_1 to dou_02, w_bero_2 to dou_02, e_bero_1 to dou_03 and e_bero_2 to
@@ -100,17 +102,17 @@ static HitDamageReturn hitDmgRetPoints[] = {
 /**
  * Init script of dou_12, the side passage between dou_02 and dou_03:
  * music and ambience, exits, waves, gazigazi hazards,
- * and links the two Bill Blasters (Killer cannon 1 and 2) so they fire in turn when they exist.
+ * and chains the two Bill Blasters (Killer cannon 1 and 2) as one NPC group (npcSetLink) when they exist.
  */
 EVT_BEGIN(dou_12_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_DOU1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_DOU3"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_DOU1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_DOU3"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_map_playanim, STRING("nami"), 1, 0)
-    CALL(evt_map_playanim, STRING("moku"), 1, 0)
+    CALL(evt_map_playanim, STRING("nami"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("moku"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
     CALL(evt_npc_check, STRING("キラー大砲１"), LW(0))

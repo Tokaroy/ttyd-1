@@ -1,8 +1,30 @@
 // mri (巨木の中, The Great Tree; mri is mori, "forest"): the REL prolog/epilog and area-wide code: the Puni and Jabbi
 // (toge) follower movement helpers, the tree's door events, the planter (ueki) animation, and the Puni save and
 // Puni-item events.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_window.h"
 #include "evt/evt_cmd.h"
+#include "driver/mapdrv.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_case.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_pouch.h"
+#include "rels/mri/include/mri.h"
+#include "mario/mario_pouch.h"
+#include "driver/casedrv.h"
+#include "driver/itemdrv.h"
 
 #include "data/mapdata.h"
 #include "manager/evtmgr_cmd.h"
@@ -12,43 +34,22 @@
 #include "dolphin/gx.h"
 #include "evt/evt_npc.h"
 #include "driver/npcdrv.h"
-#include "driver/itemdrv.h"
 #include "dolphin/mtx.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_window.h"
 #include "pmario_sound.h"
 #include "stdlib.h"
-#include "mri.h"
 #include "mri_puni.h"
-#include "manager/fontmgr.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "rel_module.h"
-#include "driver/casedrv.h"
-#include "driver/mapdrv.h"
 #include "driver/seqdrv.h"
-#include "driver/camdrv.h"
-
-void puniModeWinjump(PuniData* puni);
+#include "manager/fontmgr.h"
 
 static USER_FUNC(evt_mri_door_naname_func);
-static USER_FUNC(hakari_color);
-BOOL toge_searchParent(PuniData* self, s16 group);
-void togeModeParent(PuniData* puni);
-void togeMoveParent(PuniData* puni);
-void puniModeWinjump(PuniData* puni);
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _prolog(void);
+void _epilog(void);
+void _unresolved(void);
 
 /**
  * REL prolog: runs the static constructors, registers each Great Boggly Tree map's init script (mri_00 to
@@ -97,9 +98,48 @@ void _epilog(void) {
 void _unresolved(void) {
 }
 
-extern EvtWord _ueki_anime[];
-extern EvtWord mri_ueki_entry[];
+EvtWord evt_mri_door_open_pure[95];
+EvtWord evt_mri_door_open[14];
+EvtWord evt_mri_door_close_pure[104];
+EvtWord evt_mri_door_close[10];
+EvtWord evt_mri_door_naname_open_pure[52];
+EvtWord evt_mri_door_naname_open[10];
+EvtWord evt_mri_door_naname_close_pure[61];
+EvtWord evt_mri_door_naname_close[10];
+static EvtWord _ueki_anime[64];
+EvtWord mri_ueki_entry[32];
+EvtWord mri_puni_save[6];
 s32 mri_itemsel_table[2];
+EvtWord mri_punipuni_setup[16];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord mri_punipuni_itemselect[];
+#else
+EvtWord mri_punipuni_itemselect[40];
+#endif
+
+EvtWord mri_punipuni_itemset[36];
+EvtWord mri_punipuni_itemremove[29];
+EvtWord mri_hikari_color[66];
+
+#if VERSION >= VERSION_US
+EvtWord mri_countdown[176];
+#else
+EvtWord mri_countdown[174];
+#endif
+
+EvtWord mri_waterfall_effect[26];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord mri_guide_hagure_check[];
+extern EvtWord mri_guide_goryu[];
+#else
+EvtWord mri_guide_hagure_check[50];
+EvtWord mri_guide_goryu[63];
+#endif
+
+EvtWord mri_puni_walk_se[20];
+EvtWord mri_puni_jump_se[15];
 
 /**
  * Slides a tree door open: it sinks aside along x (LW(9) picks the direction), pauses,
@@ -115,7 +155,7 @@ EVT_BEGIN(evt_mri_door_open_pure)
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_ELEC2_1"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, 0, LW(2), 200)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, LW(2), 200)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, LW(10), LW(0), 0, 0)
@@ -129,7 +169,7 @@ EVT_BEGIN(evt_mri_door_open_pure)
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_ELEC2_2"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, 0, -60, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -60, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, LW(10), LW(2), 0, LW(0))
@@ -149,7 +189,7 @@ EVT_BEGIN(evt_mri_door_open)
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
         CALL(evt_bero_mario_go)
-        CALL(evt_bero_exec_onoff, 0, 268435456)
+        CALL(evt_bero_exec_onoff, 0, BERO_EXEC_MRI_DOOR_GO)
     END_INLINE_EVENT
     CALL_CHILD(evt_mri_door_open_pure)
     RETURN
@@ -171,7 +211,7 @@ EVT_BEGIN(evt_mri_door_close_pure)
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_ELEC2"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, -60, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -60, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, LW(10), LW(2), 0, LW(0))
@@ -185,7 +225,7 @@ EVT_BEGIN(evt_mri_door_close_pure)
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_ELEC2_1"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, LW(2), 0, 200)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(2), 0, 200)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, LW(10), LW(0), 0, 0)
@@ -199,7 +239,7 @@ EVT_END()
 
 /**
  * Door close used when Mario leaves through the door:
- * he starts walking after a short delay (shorter in the JP releases) while the door closes.
+ * he starts walking after a short delay (shorter in the June US demo, the JP demo and JP) while the door closes.
  */
 EVT_BEGIN(evt_mri_door_close)
     BEGIN_INLINE_EVENT
@@ -223,13 +263,13 @@ EVT_BEGIN(evt_mri_door_naname_open_pure)
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_ELEC2_1"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_mri_door_naname_func, LW(10), FLOAT(0.0f), FLOAT(0.0f), FLOAT(6.5f), FLOAT(-6.5f), 200, 11)
+    CALL(evt_mri_door_naname_func, LW(10), FLOAT(0.0f), FLOAT(0.0f), FLOAT(6.5f), FLOAT(-6.5f), 200, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_ELEC2_2"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_mri_door_naname_func, LW(10), FLOAT(6.5f), FLOAT(-6.5f), FLOAT(-34.5f), FLOAT(-46.5f), 500, 11)
+    CALL(evt_mri_door_naname_func, LW(10), FLOAT(6.5f), FLOAT(-6.5f), FLOAT(-34.5f), FLOAT(-46.5f), 500, EASING_SINE_IN_OUT)
     RETURN
 EVT_END()
 
@@ -254,18 +294,18 @@ EVT_BEGIN(evt_mri_door_naname_close_pure)
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_ELEC2"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_mri_door_naname_func, LW(10), FLOAT(-34.5f), FLOAT(-46.5f), FLOAT(6.5f), FLOAT(-6.5f), 500, 11)
+    CALL(evt_mri_door_naname_func, LW(10), FLOAT(-34.5f), FLOAT(-46.5f), FLOAT(6.5f), FLOAT(-6.5f), 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_mapobj_get_position, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_ELEC2_1"), LW(11), LW(12), LW(13), 0)
     END_INLINE_EVENT
-    CALL(evt_mri_door_naname_func, LW(10), FLOAT(6.5f), FLOAT(-6.5f), FLOAT(0.0f), FLOAT(0.0f), 200, 11)
+    CALL(evt_mri_door_naname_func, LW(10), FLOAT(6.5f), FLOAT(-6.5f), FLOAT(0.0f), FLOAT(0.0f), 200, EASING_SINE_IN_OUT)
     RETURN
 EVT_END()
 
 /**
- * Close for diagonal doors: Mario starts walking after a short delay (shorter in the JP releases)
+ * Close for diagonal doors: Mario starts walking after a short delay (shorter in the June US demo, the JP demo and JP)
  * while the door closes.
  */
 EVT_BEGIN(evt_mri_door_naname_close)
@@ -282,9 +322,8 @@ EVT_BEGIN(evt_mri_door_naname_close)
 EVT_END()
 
 /**
- * Moves a map object on the x/z plane over a time.
- * Arguments: object name, start x and z, end x and z, duration in milliseconds, interpolation mode.
- * Blocks until the time is over, then snaps to the end position.
+ * Script helper: moves map object args[0] in x and z from (args[1], args[2]) to (args[3], args[4]) over args[5] ms with
+ * interpolation mode args[6]; blocks until done.
  */
 static USER_FUNC(evt_mri_door_naname_func) {
     EvtWord* args = event->args;
@@ -293,7 +332,7 @@ static USER_FUNC(evt_mri_door_naname_func) {
     f32 z0 = evtGetFloat(event, args[2]);
     f32 x1 = evtGetFloat(event, args[3]);
     f32 z1 = evtGetFloat(event, args[4]);
-    s32 frames = evtGetValue(event, args[5]);
+    s32 durationMs = evtGetValue(event, args[5]);
     s32 mode = evtGetValue(event, args[6]);
     s32 elapsed;
 
@@ -301,12 +340,12 @@ static USER_FUNC(evt_mri_door_naname_func) {
         event->savedTime = gp->renderTime;
     }
     elapsed = OSTicksToMilliseconds((u32)gp->renderTime - (u32)event->savedTime);
-    if (elapsed < frames) {
+    if (elapsed < durationMs) {
         f32 x;
         f32 z;
         isFirstCall = elapsed;
-        x = intplGetValue(mode, x0, x1, isFirstCall, frames);
-        z = intplGetValue(mode, z0, z1, isFirstCall, frames);
+        x = intplGetValue(mode, x0, x1, isFirstCall, durationMs);
+        z = intplGetValue(mode, z0, z1, isFirstCall, durationMs);
         mapObjTranslate(name, x, 0.0f, z);
         return EVT_RETURN_BLOCK;
     }
@@ -319,7 +358,7 @@ static USER_FUNC(evt_mri_door_naname_func) {
  * rustles the map object in LW(2) left and right with a grass sound,
  * then spawns the follow-up script in LW(10) if there is one.
  */
-EVT_BEGIN(_ueki_anime)
+static EVT_BEGIN(_ueki_anime)
     CALL(evt_mapobj_get_position, LW(2), LW(4), LW(5), LW(6))
     CALL(evt_snd_sfxon_3d, STRING("SFX_GRASS_SHAKE1"), LW(4), LW(5), LW(6), 0)
     CALL(evt_mapobj_trans, 1, LW(2), 2, 0, 0)
@@ -339,8 +378,8 @@ EVT_END()
 
 /**
  * Registers the planter plants of a map.
- * It reads a table (address in LW(0)) of (map object name, unused, follow-up script) entries
- * and makes each plant run _ueki_anime when Mario hits it with the hammer or touches it from the front.
+ * It reads a table (address in LW(0)) of (hit object name, map object to shake, follow-up script) entries
+ * and makes each plant run _ueki_anime when Mario hits it with the hammer or presses A in front of it.
  */
 EVT_BEGIN(mri_ueki_entry)
     SET_INT_READ_ADDR(LW(0))
@@ -349,8 +388,8 @@ EVT_BEGIN(mri_ueki_entry)
         IF_INT_EQUAL(LW(1), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(1), 0, PTR(_ueki_anime), 0)
-        CALL(evt_run_case_evt, CASE_COND_HAMMER, 1, LW(1), 0, PTR(_ueki_anime), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(1), 0, PTR(_ueki_anime), 0)
+        CALL(evt_run_case_evt, CASE_HAMMER, 1, LW(1), 0, PTR(_ueki_anime), 0)
     END_LOOP
     RETURN
 EVT_END()
@@ -373,23 +412,27 @@ s32 mri_itemsel_table[] = {
  */
 EVT_BEGIN(mri_punipuni_setup)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_item_entry, LW(10), ITEM_PUNI_ORB, 0, -1000, 0, ITEM_ENTRY_FIXED, -1, 0)
+    CALL(evt_item_entry, LW(10), ITEM_PUNI_ORB, 0, -1000, 0, ITEM_TYPE_STILL, -1, 0)
 #else
-    CALL(evt_item_entry, LW(10), ITEM_PUNI_ORB, 0, -20000, 0, ITEM_ENTRY_FIXED, -1, 0)
+    CALL(evt_item_entry, LW(10), ITEM_PUNI_ORB, 0, -20000, 0, ITEM_TYPE_STILL, -1, 0)
 #endif
-    CALL(evt_item_flag_on, LW(10), ITEM_FLAG_NO_TOUCH)
+    // BUG (JP and later): only ITEM_FLAG_NO_TOUCH_GET is set, not ITEM_FLAG2_NO_PARTNER, so once the orb sits on a
+    // pedestal Koops's shell can collect it (itemNearDistCheck). The orb goes back into the pouch while the
+    // room's "orb placed" flag stays set; taking it off the pedestal then (mri_punipuni_itemremove) adds a
+    // second Puni Orb.
+    CALL(evt_item_flag_on, LW(10), ITEM_FLAG_NO_TOUCH_GET)
     RETURN
 EVT_END()
 
 /**
- * Item menu for placing the Puni Orb: if Mario has no Puni Orb it prints a message and LW(1) stays 0;
- * otherwise the player picks an item and LW(1) is set to 1 when something was chosen.
+ * Puni orb pedestals (mri_02, 05, 12, 13, 14, 17): without an ITEM_PUNI_ORB prints sys_no_item_to_put_on; otherwise
+ * opens the item selection (mri_itemsel_table). Returns LW(1) 1 when an item was chosen, else 0.
  */
 EVT_BEGIN(mri_punipuni_itemselect)
     SET_VALUE(LW(1), 0)
     CALL(evt_pouch_check_item, ITEM_PUNI_ORB, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("sys_no_item_to_put_on"), 0, 0)
         RETURN
     END_IF
@@ -406,22 +449,22 @@ EVT_BEGIN(mri_punipuni_itemselect)
 EVT_END()
 
 /**
- * Mario puts the Puni Orb on the switch: removes it from the inventory,
- * plays the set sound at the orb item (LW(10)) and shows the "orb placed" message.
+ * Puts a Puni orb on a pedestal (same maps): sets PUNI_TARGET_FLAG_ON and _MASS on target LW(11), removes one
+ * ITEM_PUNI_ORB from the pouch, plays SFX_STG2_PUNIDAMA_SET1 at item LW(10) and prints sys_stg2_punitama_on.
  */
 EVT_BEGIN(mri_punipuni_itemset)
     CALL(evt_target_flag_onoff, LW(11), 0, 3)
     CALL(evt_pouch_remove_item, ITEM_PUNI_ORB, LW(0))
     CALL(evt_item_get_position, LW(10), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_PUNIDAMA_SET1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("sys_stg2_punitama_on"), 0, 0)
     RETURN
 EVT_END()
 
 /**
- * Mario takes the Puni Orb back off the switch:
- * returns it to the inventory, hides the item again and shows the "orb removed" message.
+ * Takes the Puni orb off a pedestal (same maps): clears PUNI_TARGET_FLAG_ON on target LW(11), gives an ITEM_PUNI_ORB
+ * back, moves item LW(10) out of sight (y -1000; JP and later -20000) and prints sys_stg2_punitama_off.
  */
 EVT_BEGIN(mri_punipuni_itemremove)
     CALL(evt_target_flag_onoff, LW(11), 1, 1)
@@ -431,15 +474,14 @@ EVT_BEGIN(mri_punipuni_itemremove)
 #else
     CALL(evt_item_set_position, LW(10), 0, -20000, 0)
 #endif
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("sys_stg2_punitama_off"), 0, 0)
     RETURN
 EVT_END()
 
 /**
- * Sets the color of a map group: while the current value is at
- * or below the maximum it cycles through a rainbow with the frame counter, otherwise it resets to white.
- * Arguments: group name, current value, maximum.
+ * Script helper: when args[1] <= args[2], colours map group args[0] with a hue that cycles with the retrace count;
+ * otherwise sets it white.
  */
 static USER_FUNC(hakari_color) {
     EvtWord* args = event->args;
@@ -469,10 +511,10 @@ USER_FUNC(evt_mri_get16bitdata) {
  * Runs for the light on the Puni switch (map object name in LW(0), counter read from the pointer in LW(1),
  * threshold in LW(2)): every frame it plays the ride sound when the counter crosses the threshold
  * and colors the light with hakari_color (rainbow while the counter is within the threshold, white otherwise).
- * Spawned from mri_02 with GW(0), the number of Punies still missing on the switch.
+ * Spawned from mri_02, mri_13 and mri_14 with GW(0); in mri_02 that is the number of Punies still missing on the switch.
  */
 EVT_BEGIN(mri_hikari_color)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, LW(0), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, LW(0), MAP_OBJ_FLAG_DISPLAY_LIST)
     GET_INT_INDEXED(LW(1), LW(11))
     LOOP(0)
         GET_INT_INDEXED(LW(1), LW(10))
@@ -495,9 +537,8 @@ EVT_BEGIN(mri_hikari_color)
 EVT_END()
 
 /**
- * Makes an NPC shake back and forth (buruburu, trembling).
- * Arguments: NPC name, axis (0 x, 1 y, 2 z), amplitude, half-period in ms, duration in ms (0 means forever).
- * Restores the original position when the duration ends.
+ * Script helper: shakes NPC args[0] along axis args[1] (0 x, 1 y, 2 z) between -args[2] and +args[2], switching every
+ * args[3] ms. After args[4] ms (never when it is 0) it puts the NPC back where it started and returns.
  */
 USER_FUNC(mri_npc_buruburu) {
     EvtWord* args = event->args;
@@ -564,15 +605,15 @@ USER_FUNC(mri_npc_buruburu) {
  * mri_06 (about 4:10) and mri_01 (1:40) and waits for it to run out.
  * On timeout Mario is frozen, the tree shakes with dust and a quake,
  * the screen fades to white and the game over sequence plays.
- * Skipped once the Punies have praised Mario (story progress past STG2_26).
+ * Skipped once the Punies have praised Mario (story progress at or past STG2_26).
  */
 EVT_BEGIN(mri_countdown)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_26_PRAISE_FROM_THE_PUNI)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG2_26_PRAISE_FROM_THE_PUNI)
         RETURN
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_MRI_BOMB_COUNTDOWN_PENDING), 1)
+    IF_INT_EQUAL(GSWF_MRI_COUNTDOWN_START_PENDING, 1)
         CALL(evt_sub_countdown_start, 300000, 300000)
-        SET_VALUE(GSWF(GSWF_MRI_BOMB_COUNTDOWN_PENDING), 0)
+        SET_VALUE(GSWF_MRI_COUNTDOWN_START_PENDING, 0)
     END_IF
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("mri_13"))
@@ -605,9 +646,9 @@ EVT_BEGIN(mri_countdown)
         RESUME_TYPES_OTHER(4)
         RETURN
     END_IF
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_00_WELCOME_TO_GLITZVILLE)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 500)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 500)
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_00_WELCOME_TO_GLITZVILLE)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 500)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 500)
     CALL(evt_snd_sfxon, STRING("SFX_STG2_QUAKE1"), 0)
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0f), 500)
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 500)
@@ -631,7 +672,10 @@ EVT_BEGIN(mri_countdown)
     RETURN
 EVT_END()
 
-/** Spawns the waterfall water-splash effect over and over at the position LW(0) to LW(2) with size LW(3). */
+/**
+ * Endless waterfall splash at LW(0)-LW(2) (10 lower), size LW(3): a water_damage_n64 effect every 150 ms; spawned by
+ * mri_00 and mri_15 (twice each), mri_01, mri_08 and mri_11.
+ */
 EVT_BEGIN(mri_waterfall_effect)
     ADD(LW(1), -10)
     LOOP(0)
@@ -642,12 +686,15 @@ EVT_BEGIN(mri_waterfall_effect)
 EVT_END()
 
 /**
- * Checks the guide Puni (the one that follows Mario) for being stranded.
- * LW(1) = 0 fine, 1 lost in another area, 2 lost in the same area, 3 stuck in a trap (not in the earliest demo).
+ * Sets LW(1) to the guide Puni's (Puni 1) state: 1 when the LSW_MRI_PUNI_RECORDS entry says it is in another area, 2
+ * when its mode is 16 (lost in this area), 0 otherwise; JP and later also return 3 when it is caught in a trap (checked
+ * first, so the later tests win). Used by mri_guide_goryu and mri_03.
  */
 EVT_BEGIN(mri_guide_hagure_check)
-    CALL(evt_puni_get_lsw_index, LSW(0), 0, LW(0), LW(1), LW(2), LW(3))
-#if VERSION >= VERSION_JP
+#if VERSION <= VERSION_DEMO_JP
+    CALL(evt_puni_get_lsw_index, LSW_MRI_PUNI_RECORDS, 0, LW(0), LW(1), LW(2), LW(3))
+#else
+    CALL(evt_puni_get_lsw_index, LSW_MRI_PUNI_RECORDS, 0, LW(0), LW(1), LW(2), LW(3))
     CALL(evt_puni_get_trap_index, 1, LW(4))
 #endif
     SET_VALUE(LW(1), 0)
@@ -673,16 +720,19 @@ EVT_BEGIN(mri_guide_hagure_check)
 EVT_END()
 
 /**
- * Brings a stranded guide Puni back to Mario: if mri_guide_hagure_check reports it lost,
- * it resets its area and trap data and re-enters it beside Mario.
+ * Brings a lost guide Puni (Puni 1) back to Mario: when mri_guide_hagure_check reports it lost, clears its
+ * LSW_MRI_PUNI_RECORDS entry (JP and later also its trap index), re-creates it and places it at Mario's x - 10, z - 10
+ * (x + 10 when Mario's x is above 180). Run by mri_01, mri_03, mri_06 to mri_09, mri_11 and mri_17.
  */
 EVT_BEGIN(mri_guide_goryu)
     CALL_CHILD(mri_guide_hagure_check)
     IF_INT_EQUAL(LW(1), 0)
         RETURN
     END_IF
-    CALL(evt_puni_set_lsw_index, LSW(0), 0, 0, 0, 0, 0)
-#if VERSION >= VERSION_JP
+#if VERSION <= VERSION_DEMO_JP
+    CALL(evt_puni_set_lsw_index, LSW_MRI_PUNI_RECORDS, 0, 0, 0, 0, 0)
+#else
+    CALL(evt_puni_set_lsw_index, LSW_MRI_PUNI_RECORDS, 0, 0, 0, 0, 0)
     CALL(evt_puni_set_trap_index, 1, 0)
 #endif
     CALL(evt_puni_init_puni, 1, 30, 0, -1000, 0, 0)
@@ -699,7 +749,10 @@ EVT_BEGIN(mri_guide_goryu)
     RETURN
 EVT_END()
 
-/** Loop that plays the Puni footstep sound at an NPC's position (NPC name in LW(0)) every 5 frames. */
+/**
+ * Plays SFX_STG2_PUNI_MOVE2_1 at the NPC named in LW(0) every 5 frames until deleted; spawned by the Puni walk scenes
+ * (mri_00, mri_01, mri_03, mri_06 and mri_17).
+ */
 EVT_BEGIN(mri_puni_walk_se)
     LOOP(0)
         CALL(evt_npc_get_position, LW(0), LW(10), LW(11), LW(12))
@@ -709,7 +762,7 @@ EVT_BEGIN(mri_puni_walk_se)
     RETURN
 EVT_END()
 
-/** Plays the Puni jump sound at the position of the NPC named in LW(0). */
+/** Plays SFX_STG2_PUNI_JUMP1 once at the NPC named in LW(0). */
 EVT_BEGIN(mri_puni_jump_se)
     CALL(evt_npc_get_position, LW(0), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_PUNI_JUMP1"), LW(10), LW(11), LW(12), 0)
@@ -717,8 +770,8 @@ EVT_BEGIN(mri_puni_jump_se)
 EVT_END()
 
 /**
- * Finds a parent for a Jabbi in a line: scans Jabbi slots 110 to 209 for the active group member with the given
- * group that has no child yet and the lowest depth, and links self behind it. Returns FALSE if none was found.
+ * Among the active, chained Puni slots 110 to 209 of `group`, finds one other than self with no child1 and the lowest
+ * depth, and hangs self under it (parent, depth + 1, group). Returns FALSE when there is none.
  */
 BOOL toge_searchParent(PuniData* self, s16 group) {
     s32 i;
@@ -727,7 +780,7 @@ BOOL toge_searchParent(PuniData* self, s16 group) {
 
     for (i = 110; i <= 209; i++) {
         PuniData* p = &puniGetPunidat()[i];
-        if ((p->flags & PUNI_FLAG_ACTIVE) && (p->flags & PUNI_FLAG_IN_GROUP) && p->groupId == group && p->child1 == NULL && p != self &&
+        if ((p->flags & PUNI_FLAG_ACTIVE) && (p->flags & PUNI_FLAG_IN_CHAIN) && p->groupId == group && p->child1 == NULL && p != self &&
             (s16)order > p->depth) {
             parent = p;
             order = p->depth + 1;
@@ -811,7 +864,7 @@ void togeMakeRetsu(Vec* pos, s16 leader, s16 start, s16 end) {
     puni->moveFunc = NULL;
     puni->groupId = puni->index;
     puni->anim = 1;
-    puni->flags |= PUNI_FLAG_IN_GROUP;
+    puni->flags |= PUNI_FLAG_IN_CHAIN;
     for (i = start; i <= end; i++) {
         puni = &puniGetPunidat()[i];
         puni->modeFunc = togeModeParent;
@@ -820,7 +873,7 @@ void togeMakeRetsu(Vec* pos, s16 leader, s16 start, s16 end) {
         puni->pos.y = pos->y;
         puni->pos.z = pos->z;
         puni->anim = 1;
-        puni->flags |= PUNI_FLAG_IN_GROUP;
+        puni->flags |= PUNI_FLAG_IN_CHAIN;
         toge_searchParent(puni, leader);
     }
 }
@@ -858,13 +911,13 @@ USER_FUNC(evt_mri_toge_retsu_stop) {
     puni->modeFunc = NULL;
     puni->moveFunc = NULL;
     puni->anim = 0;
-    puni->flags &= ~PUNI_FLAG_IN_GROUP;
+    puni->flags &= ~PUNI_FLAG_IN_CHAIN;
     for (i = start; i <= end; i++) {
         puni = &puniGetPunidat()[i];
         puni->modeFunc = NULL;
         puni->moveFunc = NULL;
         puni->anim = 0;
-        puni->flags &= ~PUNI_FLAG_IN_GROUP;
+        puni->flags &= ~PUNI_FLAG_IN_CHAIN;
     }
     return EVT_RETURN_DONE;
 }
@@ -904,7 +957,7 @@ USER_FUNC(evt_mri_puni_win_init) {
             puni->rotOffsetY = 0.0f;
             puni->spin = 0.0f;
             puni->dispOfs.y = 0.0f;
-            puni->flags2 &= ~1;
+            puni->flags2 &= ~PUNI_FLAG2_HEALED;
         }
     }
     return EVT_RETURN_DONE;
@@ -940,8 +993,8 @@ USER_FUNC(evt_mri_puni_win_attack) {
             PuniDokuritsu(puni);
             puni->anim = 1;
             puni->modeStep = 0;
-            if (puni->flags & PUNI_FLAG_DEFEATED) {
-                puni->flags &= ~PUNI_FLAG_DEFEATED;
+            if (puni->flags & PUNI_FLAG_DEAD) {
+                puni->flags &= ~PUNI_FLAG_DEAD;
                 puni->mode = PUNI_MODE_FUNC;
                 puni->modeFunc = puniModeWinjump;
                 puni->moveFunc = puniMoveDecel;

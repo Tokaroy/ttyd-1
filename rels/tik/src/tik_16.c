@@ -1,4 +1,5 @@
 // tik_16 (埋没した都市, Rogueport Sewers): the room with the pipes to The Great Tree (mri_00) and Petalburg (nok_01).
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -9,13 +10,22 @@
 #include "evt/evt_map.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "tik.h"
-#include "evt/evt_story.h"
+#include "driver/mobjdrv.h"
 #include "driver/mapdrv.h"
+#include "system.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[7];
 static HitDamageReturn hitDmgRetPoints[9];
+static EvtWord evt_switch_00_init[26];
+static EvtWord evt_switch_00_after[11];
+static EvtWord evt_switch_00[56];
+static EvtWord evt_switch_01_init[26];
+static EvtWord evt_switch_01_after[11];
+static EvtWord evt_switch_01[56];
+EvtWord tik_16_init_evt[115];
 
 /**
  * Doors of this room: two west exits to tik_17, two east exits to tik_15, and the pipes to the Great Tree
@@ -123,7 +133,7 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
-/** Spots Mario is put back on after falling into one of this room's hazards (each object's own position). */
+/** Spots Mario is put back on after falling into this room's hazards; y -1000 uses the object's position, other entries use the listed coordinates. */
 static HitDamageReturn hitDmgRetPoints[] = {
     {"mod_1", {0.0f, -1000.0f, 0.0f}},
     {"mod_2", {-250.0f, 0.0f, 0.0f}},
@@ -137,23 +147,22 @@ static HitDamageReturn hitDmgRetPoints[] = {
 };
 
 /**
- * Map-init part for the Great Tree pipe.
- * Binds the pipe's hit to its model and, if GSWF_TIK16_PIPE_MRI_OPEN is set,
- * puts the pipe already risen (30 units up) and hides its cover.
+ * Map-init part for the Great Tree pipe: binds hit a_dokan_1 to S_dakan_1 and, with GSWF_TIK_16_MRI_PIPE_RAISED
+ * set, puts the pipe 30 units up and hides its cover (dokan_1_k).
  */
 static EVT_BEGIN(evt_switch_00_init)
     CALL(evt_hit_bind_mapobj, STRING("a_dokan_1"), STRING("S_dakan_1"))
-    IF_INT_EQUAL(GSWF(GSWF_TIK16_PIPE_MRI_OPEN), 1)
+    IF_INT_EQUAL(GSWF_TIK_16_MRI_PIPE_RAISED, 1)
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_1"), 0, 30, 0)
         CALL(evt_hit_bind_update, STRING("a_dokan_1"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
 
 /** Switches the Great Tree pipe's exit off if its switch has not been pressed yet. */
 static EVT_BEGIN(evt_switch_00_after)
-    IF_INT_EQUAL(GSWF(GSWF_TIK16_PIPE_MRI_OPEN), 0)
+    IF_INT_EQUAL(GSWF_TIK_16_MRI_PIPE_RAISED, 0)
         SET_VALUE(LW(0), STRING("dokan_1"))
         CALL_CHILD(bero_case_switch_off)
     END_IF
@@ -168,7 +177,7 @@ EVT_END()
 static EVT_BEGIN(evt_switch_00)
     CALL(evt_mapobj_get_position, STRING("S_dakan_1"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOKAN_APPEAR1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 30, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 30, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_1"), 0, LW(0), 0)
@@ -178,30 +187,29 @@ static EVT_BEGIN(evt_switch_00)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_1_k"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(0), STRING("dokan_1"))
     CALL_CHILD(bero_case_switch_on)
     RETURN
 EVT_END()
 
 /**
- * Map-init part for the Petalburg pipe.
- * Binds the pipe's hit to its model and, if GSWF_TIK16_PIPE_NOK_OPEN is set,
- * puts the pipe already risen and hides its cover.
+ * Map-init part for the Petalburg pipe: binds the pipe's hit to its model and, when
+ * GSWF_TIK_16_NOK_PIPE_RAISED is set, puts the pipe already risen and hides its cover.
  */
 static EVT_BEGIN(evt_switch_01_init)
     CALL(evt_hit_bind_mapobj, STRING("a_dokan_2"), STRING("S_dakan_2"))
-    IF_INT_EQUAL(GSWF(GSWF_TIK16_PIPE_NOK_OPEN), 1)
+    IF_INT_EQUAL(GSWF_TIK_16_NOK_PIPE_RAISED, 1)
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_2"), 0, 30, 0)
         CALL(evt_hit_bind_update, STRING("a_dokan_2"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
 
 /** Switches the Petalburg pipe's exit off if its switch has not been pressed yet. */
 static EVT_BEGIN(evt_switch_01_after)
-    IF_INT_EQUAL(GSWF(GSWF_TIK16_PIPE_NOK_OPEN), 0)
+    IF_INT_EQUAL(GSWF_TIK_16_NOK_PIPE_RAISED, 0)
         SET_VALUE(LW(0), STRING("dokan_2"))
         CALL_CHILD(bero_case_switch_off)
     END_IF
@@ -215,7 +223,7 @@ EVT_END()
 static EVT_BEGIN(evt_switch_01)
     CALL(evt_mapobj_get_position, STRING("S_dakan_2"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOKAN_APPEAR1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 30, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 30, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_mapobj_trans, 1, STRING("S_dakan_2"), 0, LW(0), 0)
@@ -225,20 +233,20 @@ static EVT_BEGIN(evt_switch_01)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dokan_2_k"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(0), STRING("dokan_2"))
     CALL_CHILD(bero_case_switch_on)
     RETURN
 EVT_END()
 
 /**
- * Map init script of tik_16, the room with the pipes to The Great Tree (mri_00) and Petalburg (nok_01).
- * Sets up the two tornado switches that open each pipe (GSWF_TIK16_PIPE_MRI_OPEN and GSWF_TIK16_PIPE_NOK_OPEN),
- * the large block, a moving floor and a Shine Sprite power block, plus fall recovery and the water animation.
+ * Map init script of tik_16: sets up the two pipes and their tornado switches (GSWF_TIK_16_MRI_PIPE_RAISED,
+ * GSWF_TIK_16_NOK_PIPE_RAISED), the exits, fall recovery, the Gazigazi hazard (evt_gazigazi_entry), the water
+ * animation, the large block, a moving floor and a Shine Sprite block.
  */
 EVT_BEGIN(tik_16_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK7"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK7"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL_CHILD(evt_switch_00_init)
     CALL_CHILD(evt_switch_01_init)
@@ -249,9 +257,9 @@ EVT_BEGIN(tik_16_init_evt)
     CALL_CHILD(evt_switch_01_after)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_map_playanim, STRING("anm_mizu"), 1, 0)
-    CALL(evt_mobj_lv_blk, STRING("block"), 0, 0, 0, 0, GSWF(GSWF_TIK16_BIG_BLOCK_BROKEN), STRING("MOBJ_Lv1BigBigBlock"))
-    IF_INT_EQUAL(GSWF(GSWF_TIK16_BIG_BLOCK_BROKEN), 0)
+    CALL(evt_map_playanim, STRING("anm_mizu"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_mobj_lv_blk, STRING("block"), 0, 0, 0, 0, GSWF_TIK_16_LV1_BIGBIG_BLOCK_BROKEN, STRING("MOBJ_Lv1BigBigBlock"))
+    IF_INT_EQUAL(GSWF_TIK_16_LV1_BIGBIG_BLOCK_BROKEN, 0)
         CALL(evt_mobj_flag_onoff, 1, STRING("block"), MOBJ_FLAG_NO_CULL)
     END_IF
     SET_VALUE(LW(0), STRING("dai_3"))
@@ -265,8 +273,8 @@ EVT_BEGIN(tik_16_init_evt)
     SET_VALUE(LW(11), 0)
     SET_VALUE(LW(12), 0)
     SPAWN_EVENT(moving_floor)
-    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch00"), -125, 0, 0, PTR(evt_switch_00), GSWF(GSWF_TIK16_PIPE_MRI_OPEN))
-    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch01"), 125, 0, 0, PTR(evt_switch_01), GSWF(GSWF_TIK16_PIPE_NOK_OPEN))
-    CALL(evt_mobj_powerupblk, STRING("pblk1"), 125, 160, -100, 0, GSWF(GSWF_TIK16_SHINE_SPRITE), 0)
+    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch00"), -125, 0, 0, PTR(evt_switch_00), GSWF_TIK_16_MRI_PIPE_RAISED)
+    CALL(evt_mobj_tornadoswitch_blue, 0, STRING("switch01"), 125, 0, 0, PTR(evt_switch_01), GSWF_TIK_16_NOK_PIPE_RAISED)
+    CALL(evt_mobj_powerupblk, STRING("pblk1"), 125, 160, -100, 0, GSWF_SHINE_09, 0)
     RETURN
 EVT_END()

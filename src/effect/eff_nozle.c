@@ -1,5 +1,6 @@
 // Nozzle effect (nozle): a nozzle model drawn from display-list data, placed and rotated by the caller for a set life.
-#include "eff/eff_nozle.h"
+
+#include "version.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -9,7 +10,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "eff/eff_kemu_test.h"
-#include "version.h"
+#include "eff/eff_nozle.h"
 
 typedef struct EffNozleWork {
     s32 type;     // 0x0
@@ -22,7 +23,7 @@ typedef struct EffNozleWork {
     f32 v1;       // 0x24
     f32 scale;    // 0x28
     s32 life;     // 0x2C
-    s32 timer;    // 0x30
+    u32 timer;    // 0x30 (u32: its only compare is unsigned)
     s32 alpha;    // 0x34
     s32 flag;     // 0x38
     f32 rotX;     // 0x3C
@@ -32,9 +33,6 @@ typedef struct EffNozleWork {
 static void effNozleMain(EffectEntry* effect);
 static void effNozleDisp(CameraId cameraId, EffectEntry* effect);
 
-// Model data in the exporter's layout: indexed vertex arrays (positions, normals, colours, texture coordinates),
-// display lists of GX commands (each padded to 32 bytes with GX_NOP) and, per list table, the list sizes in
-// 32-byte units for GXCallDisplayList.
 static s16 nozle_1_vertex_tbl[] __attribute__((aligned(32))) = {
     -796, 0, 0, 796, 0, 0,
     -1741, 2132, 0, 1741, 2132, 0,
@@ -71,9 +69,6 @@ static s16 nozle_1_vertex_tbl[] __attribute__((aligned(32))) = {
     1112, 2132, -640, 1592, 4266, -640,
     2087, 6399, -640, 2375, 8532, -640,
     2529, 10666, -640, 2908, 16679, -640,
-    0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0,
-    0, 0,
 };
 static s16 nozle_1_texcoord0_tbl[] __attribute__((aligned(32))) = {
     0, 13653, 4096, 13653, 4096, 16384, 0, 16384,
@@ -88,8 +83,7 @@ static s16 nozle_1_texcoord0_tbl[] __attribute__((aligned(32))) = {
     4096, -2730, 0, -5461, 4096, -5461, 0, -8192,
     4096, -8192, 12288, -2730, 8192, -2730, 12288, -5461,
     8192, -5461, 12288, -8192, 8192, -8192, 16384, -2730,
-    16384, -5461, 16384, -8192, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
+    16384, -5461, 16384, -8192,
 };
 static s16 nozle_1_texcoord1_tbl[] __attribute__((aligned(32))) = {
     0, 13653, 4096, 13653, 4096, 16384, 0, 16384,
@@ -104,51 +98,48 @@ static s16 nozle_1_texcoord1_tbl[] __attribute__((aligned(32))) = {
     4096, -2730, 0, -5461, 4096, -5461, 0, -8192,
     4096, -8192, 12288, -2730, 8192, -2730, 12288, -5461,
     8192, -5461, 12288, -8192, 8192, -8192, 16384, -2730,
-    16384, -5461, 16384, -8192, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
+    16384, -5461, 16384, -8192,
 };
+
 #if VERSION <= VERSION_DEMO_JP
-static s8 nozle_1_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64};
-#else
-static s8 nozle_1_normal_tbl[] __attribute__((aligned(32))) = {
-    0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-};
-#endif
 static GXColor nozle_1_color0_tbl[] __attribute__((aligned(32))) = {
     {255, 255, 255, 204}, {255, 255, 255, 51}, {255, 255, 255, 76}, {255, 255, 255, 102},
-    {255, 255, 255, 0}, {255, 255, 255, 127}, {0, 0, 0, 0}, {0, 0, 0, 0},
+    {255, 255, 255, 0}, {255, 255, 255, 127},
 };
+#endif
+
 static u32 nozle_1_dl_0_0[] __attribute__((aligned(32))) = {0x98000A0D, 0x00042222, 0x0B000221, 0x21220004, 0x1A1A2100, 0x03181814, 0x00041B1B, 0x13000519, 0x191B0004, 0x0D0D1A00, 0x030B0B0A, 0x00020A0A, 0x08000008, 0x08000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_1[] __attribute__((aligned(32))) = {0x98000A0B, 0x00022121, 0x09000020, 0x20210003, 0x18182000, 0x00161613, 0x00051919, 0x12000017, 0x171A0003, 0x0B0B1900, 0x00090908, 0x00000808, 0x06000006, 0x06000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_2[] __attribute__((aligned(32))) = {0x98000A09, 0x00002020, 0x0700001F, 0x1F200000, 0x16161F00, 0x00141412, 0x00001717, 0x11000015, 0x15190000, 0x09091800, 0x00070706, 0x00000606, 0x04000004, 0x04000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_3[] __attribute__((aligned(32))) = {0x98000A07, 0x00001F1F, 0x0500001E, 0x1E1F0000, 0x14141E00, 0x00121211, 0x00001515, 0x10000013, 0x13180000, 0x07071700, 0x00050504, 0x00000404, 0x02000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_4[] __attribute__((aligned(32))) = {0x98000A05, 0x00001E1E, 0x0300001C, 0x1C1E0000, 0x12121D00, 0x000F0F10, 0x00001313, 0x0F00000E, 0x0E170000, 0x05051600, 0x00010102, 0x00000000, 0x00000103, 0x03000000, 0x00000000, 0x00000000};
+
+#if VERSION <= VERSION_DEMO_JP
 static u32 nozle_1_dl_0_5[] __attribute__((aligned(32))) = {0x98000401, 0x00011D1D, 0x1C000110, 0x10030000, 0x1C1C1D00, 0x000F0F00, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_6[] __attribute__((aligned(32))) = {0x9800041C, 0x00011010, 0x0E000111, 0x111D0000, 0x0F0F0F00, 0x000E0E00, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_7[] __attribute__((aligned(32))) = {0x9800040E, 0x00011111, 0x15000102, 0x020F0000, 0x0E0E1600, 0x00010100, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_8[] __attribute__((aligned(32))) = {0x9800030C, 0x00040C0C, 0x1B00040D, 0x0D0A0002, 0x0A0A0000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_0_9[] __attribute__((aligned(32))) = {0x98000316, 0x00000101, 0x15000102, 0x02000001, 0x03030000, 0x00000000, 0x00000000, 0x00000000};
 static void* nozle_1_dl_0_tbl[] __attribute__((aligned(32))) = {nozle_1_dl_0_0, nozle_1_dl_0_1, nozle_1_dl_0_2, nozle_1_dl_0_3, nozle_1_dl_0_4, nozle_1_dl_0_5, nozle_1_dl_0_6, nozle_1_dl_0_7, nozle_1_dl_0_8, nozle_1_dl_0_9};
-/** Display-list sizes (32-byte units) for the first layer of nozzle model 1 (type 0). */
 static u8 nozle_1_dl_0_size_tbl[] = {0x02, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01};
+#endif
+
 static u32 nozle_1_dl_1_0[] __attribute__((aligned(32))) = {0x98000A30, 0x00043131, 0x2E000230, 0x30450004, 0x2D2D4400, 0x032B2B37, 0x00042E2E, 0x3600052C, 0x2C3E0004, 0x28283D00, 0x0326262D, 0x00022525, 0x2B000023, 0x23000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_1[] __attribute__((aligned(32))) = {0x98000A2E, 0x00023030, 0x2C00002F, 0x2F440003, 0x2B2B4300, 0x00292936, 0x00052C2C, 0x3500002A, 0x2A3D0003, 0x26263C00, 0x0024242B, 0x00002323, 0x2900000C, 0x0C000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_2[] __attribute__((aligned(32))) = {0x98000A2C, 0x00002F2F, 0x2A000022, 0x22430000, 0x29294200, 0x001A1A35, 0x00002A2A, 0x3400001B, 0x1B3C0000, 0x24243B00, 0x000D0D29, 0x00000C0C, 0x2700000A, 0x0A000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_3[] __attribute__((aligned(32))) = {0x98000A2A, 0x00002222, 0x28000021, 0x21420000, 0x1A1A4100, 0x00181834, 0x00001B1B, 0x33000019, 0x193B0000, 0x0D0D3A00, 0x000B0B27, 0x00000A0A, 0x25000008, 0x08000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_4[] __attribute__((aligned(32))) = {0x98000A28, 0x00002121, 0x26000020, 0x20410000, 0x18184000, 0x00161633, 0x00001919, 0x32000017, 0x173A0000, 0x0B0B3900, 0x00090925, 0x00000808, 0x23000106, 0x06000000, 0x00000000, 0x00000000};
+
+#if VERSION <= VERSION_DEMO_JP
 static u32 nozle_1_dl_1_5[] __attribute__((aligned(32))) = {0x98000424, 0x00011F1F, 0x3F000114, 0x14260000, 0x20204000, 0x00161600, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_6[] __attribute__((aligned(32))) = {0x9800043F, 0x00011414, 0x31000115, 0x15400000, 0x16163200, 0x00171700, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_7[] __attribute__((aligned(32))) = {0x98000431, 0x00011515, 0x38000107, 0x07320000, 0x17173900, 0x00090900, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_8[] __attribute__((aligned(32))) = {0x9800032F, 0x00042727, 0x3E000428, 0x282D0002, 0x25250000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_1_dl_1_9[] __attribute__((aligned(32))) = {0x98000339, 0x00000909, 0x38000107, 0x07230001, 0x06060000, 0x00000000, 0x00000000, 0x00000000};
 static void* nozle_1_dl_1_tbl[] __attribute__((aligned(32))) = {nozle_1_dl_1_0, nozle_1_dl_1_1, nozle_1_dl_1_2, nozle_1_dl_1_3, nozle_1_dl_1_4, nozle_1_dl_1_5, nozle_1_dl_1_6, nozle_1_dl_1_7, nozle_1_dl_1_8, nozle_1_dl_1_9};
-/** Display-list sizes for the second layer of nozzle model 1 (type 0), drawn over the first. */
 static u8 nozle_1_dl_1_size_tbl[] = {0x02, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01};
-static s8 nozle_3_normal_tbl[] __attribute__((aligned(32))) = {
-    0, 0, 64, 0,
-};
+#endif
+
 static s16 nozle_3_vertex_tbl[] __attribute__((aligned(32))) = {
     -1120, 0, 0, -495, 0, 0,
     0, 0, 0, 495, 0, 0,
@@ -203,7 +194,6 @@ static s16 nozle_3_vertex_tbl[] __attribute__((aligned(32))) = {
     -988, 16381, -640, 0, 16732, -640,
     988, 16381, -640, 1880, 15739, -640,
     2588, 14965, -640, 3043, 13959, -640,
-    0, 0,
 };
 static s16 nozle_3_texcoord0_tbl[] __attribute__((aligned(32))) = {
     0, 13653, 4096, 13653, 4096, 16384, 0, 16384,
@@ -228,8 +218,7 @@ static s16 nozle_3_texcoord0_tbl[] __attribute__((aligned(32))) = {
     4096, -11468, 0, -11468, 4096, -12288, 0, -12288,
     12288, -11468, 12288, -12288, 16384, -12288, 16384, -11468,
     12288, -10649, 16384, -10649, 12288, -9830, 16384, -9830,
-    12288, -9011, 16384, -9011, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
+    12288, -9011, 16384, -9011,
 };
 static s16 nozle_3_texcoord1_tbl[] __attribute__((aligned(32))) = {
     0, 13653, 4096, 13653, 4096, 16384, 0, 16384,
@@ -254,8 +243,7 @@ static s16 nozle_3_texcoord1_tbl[] __attribute__((aligned(32))) = {
     4096, -11468, 0, -11468, 4096, -12288, 0, -12288,
     12288, -11468, 12288, -12288, 16384, -12288, 16384, -11468,
     12288, -10649, 16384, -10649, 12288, -9830, 16384, -9830,
-    12288, -9011, 16384, -9011, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
+    12288, -9011, 16384, -9011,
 };
 static GXColor nozle_3_color0_tbl[] __attribute__((aligned(32))) = {
     {255, 203, 23, 204}, {255, 240, 182, 51}, {255, 177, 23, 204}, {255, 124, 33, 204},
@@ -265,7 +253,6 @@ static GXColor nozle_3_color0_tbl[] __attribute__((aligned(32))) = {
     {170, 61, 16, 0}, {183, 146, 16, 204}, {186, 176, 133, 51}, {178, 123, 16, 204},
     {178, 87, 23, 204}, {170, 61, 16, 204}, {126, 45, 12, 204}, {95, 34, 9, 102},
     {95, 34, 9, 76}, {95, 34, 9, 51}, {95, 34, 9, 25}, {95, 34, 9, 0},
-    {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0},
 };
 static u32 nozle_3_dl_0_0[] __attribute__((aligned(32))) = {0x98001100, 0x04000000, 0x01000900, 0x09000300, 0x00000100, 0x07000700, 0x09000000, 0x00000800, 0x08000800, 0x00000000, 0x06000600, 0x0E000000, 0x02000E00, 0x0E000D00, 0x00000200, 0x0D000D00, 0x13000000, 0x03001300, 0x13001200, 0x00000300, 0x12001200, 0x18000000, 0x04001800, 0x18001700, 0x00000400, 0x17001700, 0x1D000000, 0x05001D00, 0x1D001C00, 0x00000500, 0x1C001C00, 0x20000000, 0x06002200, 0x22001F00, 0x00000700, 0x21002100, 0x34000000, 0x07003500, 0x35001E00, 0x00000800, 0x20002000, 0x33000000, 0x09003300, 0x33000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_3_dl_0_1[] __attribute__((aligned(32))) = {0x98001100, 0x02000000, 0x01000500, 0x05000100, 0x00000100, 0x02000200, 0x07000000, 0x00000400, 0x04000600, 0x00000000, 0x01000100, 0x0C000000, 0x02000C00, 0x0C000B00, 0x00000200, 0x0B000B00, 0x11000000, 0x03001100, 0x11001000, 0x00000300, 0x10001000, 0x16000000, 0x04001600, 0x16001500, 0x00000400, 0x15001500, 0x1B000000, 0x05001B00, 0x1B001A00, 0x00000500, 0x1A001A00, 0x1E000000, 0x08002000, 0x20002B00, 0x00000700, 0x1F001F00, 0x2C000000, 0x07002300, 0x23002200, 0x00000600, 0x24002400, 0x23000000, 0x0A002600, 0x26000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
@@ -285,8 +272,11 @@ static u32 nozle_3_dl_0_14[] __attribute__((aligned(32))) = {0x98000400, 0x22000
 static u32 nozle_3_dl_0_15[] __attribute__((aligned(32))) = {0x98000400, 0x20000000, 0x06002200, 0x22003400, 0x00000700, 0x35003500, 0x2A000000, 0x06003600, 0x36003300, 0x00000900, 0x33003300, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_3_dl_0_16[] __attribute__((aligned(32))) = {0x98000300, 0x06000000, 0x00000100, 0x01000100, 0x00000100, 0x02000200, 0x00000000, 0x01000300, 0x03000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static void* nozle_3_dl_0_tbl[] __attribute__((aligned(32))) = {nozle_3_dl_0_0, nozle_3_dl_0_1, nozle_3_dl_0_2, nozle_3_dl_0_3, nozle_3_dl_0_4, nozle_3_dl_0_5, nozle_3_dl_0_6, nozle_3_dl_0_7, nozle_3_dl_0_8, nozle_3_dl_0_9, nozle_3_dl_0_10, nozle_3_dl_0_11, nozle_3_dl_0_12, nozle_3_dl_0_13, nozle_3_dl_0_14, nozle_3_dl_0_15, nozle_3_dl_0_16};
-/** Display-list sizes for list set 0 of nozzle model 3 (type 2), drawn after set 1. */
+
+#if VERSION <= VERSION_DEMO_JP
 static u8 nozle_3_dl_0_size_tbl[] = {0x06, 0x06, 0x05, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02};
+#endif
+
 static u32 nozle_3_dl_1_0[] __attribute__((aligned(32))) = {0x98001100, 0x39000000, 0x12001300, 0x13003800, 0x00001200, 0x12001200, 0x3E000000, 0x11001800, 0x18003D00, 0x00001100, 0x17001700, 0x43000000, 0x13001D00, 0x1D004200, 0x00001300, 0x1C001C00, 0x48000000, 0x14002200, 0x22004700, 0x00001400, 0x21002100, 0x4D000000, 0x15003B00, 0x3B004C00, 0x00001500, 0x3A003A00, 0x52000000, 0x16004000, 0x40005100, 0x00001600, 0x3F003F00, 0x55000000, 0x17004500, 0x45005400, 0x00001700, 0x44004400, 0x69000000, 0x17005800, 0x58005300, 0x00001700, 0x43004300, 0x68000000, 0x18005600, 0x56000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_3_dl_1_1[] __attribute__((aligned(32))) = {0x98001100, 0x37000000, 0x12001100, 0x11003600, 0x00001200, 0x10001000, 0x3C000000, 0x11001600, 0x16003B00, 0x00001100, 0x15001500, 0x41000000, 0x13001B00, 0x1B004000, 0x00001300, 0x1A001A00, 0x46000000, 0x14002000, 0x20004500, 0x00001400, 0x1F001F00, 0x4B000000, 0x15003900, 0x39004A00, 0x00001500, 0x38003800, 0x50000000, 0x16003E00, 0x3E004F00, 0x00001600, 0x3D003D00, 0x53000000, 0x17004300, 0x43006000, 0x00001700, 0x42004200, 0x61000000, 0x17004600, 0x46005700, 0x00001700, 0x47004700, 0x58000000, 0x18004900, 0x49000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_3_dl_1_2[] __attribute__((aligned(32))) = {0x98000E00, 0x38000000, 0x12001200, 0x12003700, 0x00001200, 0x11001100, 0x3D000000, 0x11001700, 0x17003C00, 0x00001100, 0x16001600, 0x42000000, 0x13001C00, 0x1C004100, 0x00001300, 0x1B001B00, 0x47000000, 0x14002100, 0x21004600, 0x00001400, 0x20002000, 0x4C000000, 0x15003A00, 0x3A004B00, 0x00001500, 0x39003900, 0x51000000, 0x16003F00, 0x3F005000, 0x00001600, 0x3E003E00, 0x54000000, 0x17004400, 0x44005300, 0x00001700, 0x43004300, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
@@ -305,8 +295,12 @@ static u32 nozle_3_dl_1_14[] __attribute__((aligned(32))) = {0x98000400, 0x57000
 static u32 nozle_3_dl_1_15[] __attribute__((aligned(32))) = {0x98000400, 0x55000000, 0x17004500, 0x45006900, 0x00001700, 0x58005800, 0x5F000000, 0x17005900, 0x59006800, 0x00001800, 0x56005600, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_3_dl_1_16[] __attribute__((aligned(32))) = {0x98000300, 0x3B000000, 0x11001500, 0x15003600, 0x00001200, 0x10001000, 0x35000000, 0x12000F00, 0x0F000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static void* nozle_3_dl_1_tbl[] __attribute__((aligned(32))) = {nozle_3_dl_1_0, nozle_3_dl_1_1, nozle_3_dl_1_2, nozle_3_dl_1_3, nozle_3_dl_1_4, nozle_3_dl_1_5, nozle_3_dl_1_6, nozle_3_dl_1_7, nozle_3_dl_1_8, nozle_3_dl_1_9, nozle_3_dl_1_10, nozle_3_dl_1_11, nozle_3_dl_1_12, nozle_3_dl_1_13, nozle_3_dl_1_14, nozle_3_dl_1_15, nozle_3_dl_1_16};
+
 /** Display-list sizes for list set 1 of nozzle model 3 (type 2), drawn first. */
+#if VERSION <= VERSION_DEMO_JP
 static u8 nozle_3_dl_1_size_tbl[] = {0x06, 0x06, 0x05, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02};
+#endif
+
 static s16 nozle_4_vertex_tbl[] __attribute__((aligned(32))) = {
     -23040, 0, 0, -17280, 0, 0,
     -11520, 0, 0, -5760, 0, 0,
@@ -321,9 +315,7 @@ static s16 nozle_4_vertex_tbl[] __attribute__((aligned(32))) = {
     -11520, 2560, 0, -5760, 2698, 0,
     0, 3056, 0, 5760, 3056, 0,
     11520, 2888, 0, 17280, 2560, 0,
-    23040, 2560, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0,
+    23040, 2560, 0,
 };
 static s16 nozle_4_texcoord0_tbl[] __attribute__((aligned(32))) = {
     4096, -22528, 4096, -16384, 0, -16384, 0, -22528,
@@ -332,8 +324,7 @@ static s16 nozle_4_texcoord0_tbl[] __attribute__((aligned(32))) = {
     4096, 14336, 0, 14336, 4096, 20480, 0, 20480,
     4096, 26624, 0, 26624, 8192, -22528, 8192, -16384,
     8192, -10240, 8192, -4096, 8192, 2048, 8192, 8192,
-    8192, 14336, 8192, 20480, 8192, 26624, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
+    8192, 14336, 8192, 20480, 8192, 26624,
 };
 static s16 nozle_4_texcoord1_tbl[] __attribute__((aligned(32))) = {
     4096, -12288, 4096, -8192, 0, -8192, 0, -12288,
@@ -342,21 +333,15 @@ static s16 nozle_4_texcoord1_tbl[] __attribute__((aligned(32))) = {
     4096, 12288, 0, 12288, 4096, 16384, 0, 16384,
     4096, 20480, 0, 20480, 8192, -12288, 8192, -8192,
     8192, -4096, 8192, 0, 8192, 4096, 8192, 8192,
-    8192, 12288, 8192, 16384, 8192, 20480, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
+    8192, 12288, 8192, 16384, 8192, 20480,
 };
+
 #if VERSION <= VERSION_DEMO_JP
-static s8 nozle_4_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64, 0};
-#else
-static s8 nozle_4_normal_tbl[] __attribute__((aligned(32))) = {
-    0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-};
-#endif
 static GXColor nozle_4_color0_tbl[] __attribute__((aligned(32))) = {
     {255, 255, 255, 127}, {255, 255, 255, 76}, {255, 255, 255, 0},
 };
+#endif
+
 static u32 nozle_4_dl_0_0[] __attribute__((aligned(32))) = {0x98000612, 0x00001212, 0x13000013, 0x13090000, 0x00000A00, 0x00010100, 0x00000303, 0x01000002, 0x02000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_4_dl_0_1[] __attribute__((aligned(32))) = {0x98000613, 0x00001313, 0x14000014, 0x140A0000, 0x01010B00, 0x00040401, 0x00000202, 0x02000005, 0x05000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_4_dl_0_2[] __attribute__((aligned(32))) = {0x98000614, 0x00001414, 0x15000015, 0x150B0000, 0x04040C00, 0x00060602, 0x00000505, 0x03000007, 0x07000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
@@ -365,28 +350,209 @@ static u32 nozle_4_dl_0_4[] __attribute__((aligned(32))) = {0x98000616, 0x000016
 static u32 nozle_4_dl_0_5[] __attribute__((aligned(32))) = {0x98000617, 0x00001717, 0x18000018, 0x180E0000, 0x0A0A0F00, 0x000C0C05, 0x00000B0B, 0x0600000D, 0x0D000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_4_dl_0_6[] __attribute__((aligned(32))) = {0x98000618, 0x00001818, 0x19000119, 0x190F0000, 0x0C0C1000, 0x010E0E06, 0x00000D0D, 0x0700010F, 0x0F000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
 static u32 nozle_4_dl_0_7[] __attribute__((aligned(32))) = {0x98000619, 0x00011919, 0x1A00021A, 0x1A100001, 0x0E0E1100, 0x02101007, 0x00010F0F, 0x08000211, 0x11000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+
+#if VERSION <= VERSION_DEMO_JP
+static s8 nozle_1_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64};
+#else
+static s8 nozle_1_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64};
+static GXColor nozle_1_color0_tbl[] __attribute__((aligned(32))) = {
+    {255, 255, 255, 204}, {255, 255, 255, 51}, {255, 255, 255, 76}, {255, 255, 255, 102},
+    {255, 255, 255, 0}, {255, 255, 255, 127}, {0, 0, 0, 0}, {0, 0, 0, 0},
+};
+static u32 nozle_1_dl_0_5[] __attribute__((aligned(32))) = {0x98000401, 0x00011D1D, 0x1C000110, 0x10030000, 0x1C1C1D00, 0x000F0F00, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_0_6[] __attribute__((aligned(32))) = {0x9800041C, 0x00011010, 0x0E000111, 0x111D0000, 0x0F0F0F00, 0x000E0E00, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_0_7[] __attribute__((aligned(32))) = {0x9800040E, 0x00011111, 0x15000102, 0x020F0000, 0x0E0E1600, 0x00010100, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_0_8[] __attribute__((aligned(32))) = {0x9800030C, 0x00040C0C, 0x1B00040D, 0x0D0A0002, 0x0A0A0000, 0x00000000, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_0_9[] __attribute__((aligned(32))) = {0x98000316, 0x00000101, 0x15000102, 0x02000001, 0x03030000, 0x00000000, 0x00000000, 0x00000000};
+static void* nozle_1_dl_0_tbl[] __attribute__((aligned(32))) = {nozle_1_dl_0_0, nozle_1_dl_0_1, nozle_1_dl_0_2, nozle_1_dl_0_3, nozle_1_dl_0_4, nozle_1_dl_0_5, nozle_1_dl_0_6, nozle_1_dl_0_7, nozle_1_dl_0_8, nozle_1_dl_0_9};
+
+/** Display-list sizes (32-byte units) for the first layer of nozzle model 1 (type 0). */
+static u8 nozle_1_dl_0_size_tbl[] = {0x02, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01};
+static u32 nozle_1_dl_1_5[] __attribute__((aligned(32))) = {0x98000424, 0x00011F1F, 0x3F000114, 0x14260000, 0x20204000, 0x00161600, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_1_6[] __attribute__((aligned(32))) = {0x9800043F, 0x00011414, 0x31000115, 0x15400000, 0x16163200, 0x00171700, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_1_7[] __attribute__((aligned(32))) = {0x98000431, 0x00011515, 0x38000107, 0x07320000, 0x17173900, 0x00090900, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_1_8[] __attribute__((aligned(32))) = {0x9800032F, 0x00042727, 0x3E000428, 0x282D0002, 0x25250000, 0x00000000, 0x00000000, 0x00000000};
+static u32 nozle_1_dl_1_9[] __attribute__((aligned(32))) = {0x98000339, 0x00000909, 0x38000107, 0x07230001, 0x06060000, 0x00000000, 0x00000000, 0x00000000};
+static void* nozle_1_dl_1_tbl[] __attribute__((aligned(32))) = {nozle_1_dl_1_0, nozle_1_dl_1_1, nozle_1_dl_1_2, nozle_1_dl_1_3, nozle_1_dl_1_4, nozle_1_dl_1_5, nozle_1_dl_1_6, nozle_1_dl_1_7, nozle_1_dl_1_8, nozle_1_dl_1_9};
+
+/** Display-list sizes for the second layer of nozzle model 1 (type 0), drawn over the first. */
+static u8 nozle_1_dl_1_size_tbl[] = {0x02, 0x02, 0x02, 0x02, 0x02, 0x01, 0x01, 0x01, 0x01, 0x01};
+#endif
+
+static s8 nozle_3_normal_tbl[] __attribute__((aligned(32))) = {
+    0, 0, 64,
+};
+
+/** Display-list sizes for list set 0 of nozzle model 3 (type 2), drawn after set 1. */
+#if VERSION >= VERSION_JP
+static u8 nozle_3_dl_0_size_tbl[] = {0x06, 0x06, 0x05, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02};
+
+/** Display-list sizes for list set 1 of nozzle model 3 (type 2), drawn first. */
+static u8 nozle_3_dl_1_size_tbl[] = {0x06, 0x06, 0x05, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02};
+static s8 nozle_4_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64};
+static GXColor nozle_4_color0_tbl[] __attribute__((aligned(32))) = {
+    {255, 255, 255, 127}, {255, 255, 255, 76}, {255, 255, 255, 0},
+};
+#else
+static s8 nozle_4_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64};
+#endif
+
 static void* nozle_4_dl_0_tbl[] = {nozle_4_dl_0_0, nozle_4_dl_0_1, nozle_4_dl_0_2, nozle_4_dl_0_3, nozle_4_dl_0_4, nozle_4_dl_0_5, nozle_4_dl_0_6, nozle_4_dl_0_7};
+
 /** Display-list sizes for nozzle model 4, drawn once for each spray piece of type 3. */
 static u8 nozle_4_dl_0_size_tbl[] = {0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02};
+
+/** Sets up nozzle model 1's vertex formats and arrays and calls its first set of ten display lists. */
+// Original name and size (0x174) from the JP demo map (UNUSED there: every call is inlined).
+static void nozle_1_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 7);
+    GXSetArray(GX_VA_POS, nozle_1_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, nozle_1_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, nozle_1_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, nozle_1_texcoord0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX1, nozle_1_texcoord1_tbl, 4);
+    for (i = 0; i < 10; i++) {
+        GXCallDisplayList(nozle_1_dl_0_tbl[i], nozle_1_dl_0_size_tbl[i] << 5);
+    }
+}
+
+/** Sets up nozzle model 1's vertex formats and arrays and calls its second set of ten display lists. */
+// Original name and size (0x174) from the JP demo map (UNUSED there: every call is inlined).
+static void nozle_1_polygon_1(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 7);
+    GXSetArray(GX_VA_POS, nozle_1_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, nozle_1_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, nozle_1_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, nozle_1_texcoord0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX1, nozle_1_texcoord1_tbl, 4);
+    for (i = 0; i < 10; i++) {
+        GXCallDisplayList(nozle_1_dl_1_tbl[i], nozle_1_dl_1_size_tbl[i] << 5);
+    }
+}
+
+/** Sets up nozzle model 3's vertex formats and arrays and calls display-list set 0 (17 lists). */
+// Original name and size (0x174) from the JP demo map (UNUSED there: every call is inlined).
+static void nozle_3_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 7);
+    GXSetArray(GX_VA_POS, nozle_3_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, nozle_3_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, nozle_3_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, nozle_3_texcoord0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX1, nozle_3_texcoord1_tbl, 4);
+    for (i = 0; i < 17; i++) {
+        GXCallDisplayList(nozle_3_dl_0_tbl[i], nozle_3_dl_0_size_tbl[i] << 5);
+    }
+}
+
+/** Sets up nozzle model 3's vertex formats and arrays and calls display-list set 1 (17 lists). */
+// Original name and size (0x174) from the JP demo map (UNUSED there: every call is inlined).
+static void nozle_3_polygon_1(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 7);
+    GXSetArray(GX_VA_POS, nozle_3_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, nozle_3_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, nozle_3_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, nozle_3_texcoord0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX16);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX1, nozle_3_texcoord1_tbl, 4);
+    for (i = 0; i < 17; i++) {
+        GXCallDisplayList(nozle_3_dl_1_tbl[i], nozle_3_dl_1_size_tbl[i] << 5);
+    }
+}
+
+/** Sets up nozzle model 4's vertex formats and arrays and calls its eight display lists. */
+// Original name and size (0x174) from the JP demo map (UNUSED there: every call is inlined).
+static void nozle_4_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 6);
+    GXSetArray(GX_VA_POS, nozle_4_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, nozle_4_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, nozle_4_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 13);
+    GXSetArray(GX_VA_TEX0, nozle_4_texcoord0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 13);
+    GXSetArray(GX_VA_TEX1, nozle_4_texcoord1_tbl, 4);
+    for (i = 0; i < 8; i++) {
+        GXCallDisplayList(nozle_4_dl_0_tbl[i], nozle_4_dl_0_size_tbl[i] << 5);
+    }
+}
+
 /**
  * Width and height percentages per frame as a type 0 or 2 nozzle grows in; read backwards from its
  * remaining life as it shrinks away at the end.
  */
-static u8 scale_dt[][2] = {{0, 0}, {11, 13}, {22, 27}, {34, 41}, {46, 55}, {57, 69}, {68, 82}, {79, 94}, {87, 105}, {94, 113}, {100, 120}, {102, 123}, {103, 124}, {101, 123}, {98, 120}, {95, 116}, {90, 111}, {86, 107}, {83, 103}, {81, 101}, {80, 100}, {0, 0}
 #if VERSION <= VERSION_DEMO_JP
-    // the demo keeps a fade-out half after the grow-in half
-    , {80, 100}, {79, 99}, {77, 97}, {75, 94}, {73, 91}, {70, 87}, {66, 83}, {62, 78}, {58, 73}, {54, 67}, {49, 61}, {44, 55}, {39, 49}, {34, 42}, {29, 36}, {24, 29}, {19, 23}, {14, 17}, {9, 11}, {5, 6}, {0, 0}, {0, 0}
+static u8 scale_dt[][2] = {{0, 0}, {11, 13}, {22, 27}, {34, 41}, {46, 55}, {57, 69}, {68, 82}, {79, 94}, {87, 105}, {94, 113}, {100, 120}, {102, 123}, {103, 124}, {101, 123}, {98, 120}, {95, 116}, {90, 111}, {86, 107}, {83, 103}, {81, 101}, {80, 100}};
+
+/** Early demos: a shrinking scale table (sx, sy in percent) that nothing reads. */
+static u8 scale_dt2[][2] = {{80, 100}, {79, 99}, {77, 97}, {75, 94}, {73, 91}, {70, 87}, {66, 83}, {62, 78}, {58, 73}, {54, 67}, {49, 61}, {44, 55}, {39, 49}, {34, 42}, {29, 36}, {24, 29}, {19, 23}, {14, 17}, {9, 11}, {5, 6}, {0, 0}};
+#else
+static u8 scale_dt[][2] = {{0, 0}, {11, 13}, {22, 27}, {34, 41}, {46, 55}, {57, 69}, {68, 82}, {79, 94}, {87, 105}, {94, 113}, {100, 120}, {102, 123}, {103, 124}, {101, 123}, {98, 120}, {95, 116}, {90, 111}, {86, 107}, {83, 103}, {81, 101}, {80, 100}};
 #endif
-};
 
 /**
- * Spawns a nozzle model (type picks the model) at (x, y, z) rotated by rx and ry for `life` frames;
+ * Spawns a nozzle model (type picks the model; type 1 spawns effKemuTestEntry type 3 smoke instead) at (x, y, z)
+ * rotated by rx and ry for `life` frames (0 or less: until soft-deleted);
  * battle_stage_object.c uses it for the stage nozzle objects.
  */
 EffectEntry* effNozleEntry(s32 type, f32 x, f32 y, f32 z, f32 rx, f32 ry, s32 life) {
     EffectEntry* effect;
     EffNozleWork* work;
-    EffNozleWork* p;
     s32 count;
     s32 i;
 
@@ -410,7 +576,7 @@ EffectEntry* effNozleEntry(s32 type, f32 x, f32 y, f32 z, f32 rx, f32 ry, s32 li
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffNozleWork));
     effect->userdata = work;
     effect->callback = effNozleMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -428,20 +594,24 @@ EffectEntry* effNozleEntry(s32 type, f32 x, f32 y, f32 z, f32 rx, f32 ry, s32 li
     work->alpha = 255;
     work->rotX = rx;
     work->rotY = ry;
-    for (i = 1, p = work + 1; i < effect->count; i++, p++) {
-        p->position.x = (i & 1 ? -1 : 1) * 400;
-        p->position.y = 0.0f;
-        p->position.z = 20.0f * i;
-        p->sx = (i & 1 ? 1 : -1);
-        p->sy = 1.0f;
-        p->u1 = p->v1 = p->u0 = p->v0 = 0.0f;
-        p->alpha = 255;
-        p->flag = 0;
+    for (i = 1, work++; i < effect->count; i++, work++) {
+        work->position.x = (i & 1 ? -1 : 1) * 400;
+        work->position.y = 0.0f;
+        work->position.z = 20.0f * i;
+        work->sx = (i & 1 ? 1 : -1);
+        work->sy = 1.0f;
+        work->u1 = work->v1 = work->u0 = work->v0 = 0.0f;
+        work->alpha = 255;
+        work->flag = 0;
     }
     return effect;
 }
 
-/** Per frame: counts the life down and deletes the effect at the end; chooses the draw layer (8 or 2) by type. */
+/**
+ * Per frame: grows/shrinks types 0 and 2 and scrolls their textures, moves the type 3 pieces, counts the life
+ * down and deletes the effect at the end; JP and later draw type 3 in layer 8 and the rest in layer 2
+ * (the early demos draw every type in layer 2).
+ */
 static void effNozleMain(EffectEntry* effect) {
     EffNozleWork* work = effect->userdata;
     EffNozleWork* p;
@@ -455,18 +625,19 @@ static void effNozleMain(EffectEntry* effect) {
     v.z = work->position.z;
     position = v;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 32;
     }
     switch (type) {
         case 0:
         case 2:
-            if (work->timer < 21U) {
+            if (work->timer < 21) {
                 work->sx = scale_dt[work->timer][0] / 100.0f;
                 work->sy = scale_dt[work->timer][1] / 100.0f;
             }
-            if (work->life < 21U) {
+
+            if (work->life < sizeof(scale_dt) / sizeof(scale_dt[0])) {
                 work->sx = scale_dt[work->life][0] / 100.0f;
                 work->sy = scale_dt[work->life][1] / 100.0f;
             }
@@ -500,55 +671,25 @@ static void effNozleMain(EffectEntry* effect) {
         work->alpha = work->life * 16;
     }
     work->timer++;
+#if VERSION >= VERSION_JP
     if (work->life < 0) {
         effDelete(effect);
-#if VERSION >= VERSION_JP
     } else if (type == 3) {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 8, (DispCallback)effNozleDisp, effect);
-#endif
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_CUSTOM_MID, (DispCallback)effNozleDisp, effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effNozleDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effNozleDisp, effect);
     }
+#else
+    if (work->life < 0) {
+        effDelete(effect);
+    } else {
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effNozleDisp, effect);
+    }
+#endif
 }
-
-#define SETUP(d, pf, tf, vtx, nrm, col, t0, t1) \
-    GXClearVtxDesc();                           \
-    GXSetVtxDesc(9, d);                         \
-    GXSetVtxAttrFmt(0, 9, 1, 3, pf);            \
-    GXSetArray(9, vtx, 6);                      \
-    GXSetVtxDesc(10, d);                        \
-    GXSetVtxAttrFmt(0, 10, 0, 1, 6);            \
-    GXSetArray(10, nrm, 3);                     \
-    GXSetVtxDesc(11, d);                        \
-    GXSetVtxAttrFmt(0, 11, 1, 5, 0);            \
-    GXSetArray(11, col, 4);                     \
-    GXSetVtxDesc(13, d);                        \
-    GXSetVtxAttrFmt(0, 13, 1, 3, tf);           \
-    GXSetArray(13, t0, 4);                      \
-    GXSetVtxDesc(14, d);                        \
-    GXSetVtxAttrFmt(0, 14, 1, 3, tf);           \
-    GXSetArray(14, t1, 4)
-
-#define CALLDL(n, tbl, sz_, S, D)                             \
-    {                                                         \
-        for (k = 0, S = sz_, D = tbl; k < n; k++, S++, D++) { \
-            GXCallDisplayList(*D, *S * 32);                   \
-        }                                                     \
-    }
 
 /** Draws the nozzle from its display lists with indexed vertex arrays (effect textures 60-62). */
 static void effNozleDisp(CameraId cameraId, EffectEntry* effect) {
-    void** dl5;
-    u8* sz5;
-    u8* sz3;
-    void** dl3;
-    u8* sz4;
-    void** dl4;
-    u8* sz2;
-    void** dl2;
-    void** dl;
-    u8* sz;
-    u32 k;
     EffNozleWork* w;
     s32 i;
     s32 alpha;
@@ -562,10 +703,10 @@ static void effNozleDisp(CameraId cameraId, EffectEntry* effect) {
     cam = camGetPtr(cameraId);
     alpha = work->alpha;
 #if VERSION >= VERSION_JP
-    GXSetBlendMode(1, 4, 5, 0);
-    GXSetZCompLoc(1);
-    GXSetAlphaCompare(7, 0, 0, 7, 0);
-    GXSetZMode(1, 3, 0);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
+    GXSetZCompLoc(GX_TRUE);
+    GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
+    GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
 #endif
     PSMTXTrans(a, work->position.x, work->position.y, work->position.z);
     PSMTXRotRad(b, 'y', 0.017453292f * work->rotY);
@@ -575,84 +716,71 @@ static void effNozleDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXScale(c, work->scale * work->sx, work->scale * work->sy, work->scale);
     PSMTXConcat(a, c, a);
     PSMTXConcat(cam->view, a, d);
-    GXLoadPosMtxImm(d, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(d, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetNumChans(1);
-    GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen2(0, 1, 4, 30, 0, 125);
-    GXSetTexCoordGen2(1, 1, 5, 33, 0, 125);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX1, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
     PSMTXTrans(a, work->u0, -work->v0, 0.0f);
-    GXLoadTexMtxImm(a, 30, 1);
+    GXLoadTexMtxImm(a, GX_TEXMTX0, GX_MTX2x4);
     PSMTXTrans(a, work->u1, -work->v1, 0.0f);
-    GXLoadTexMtxImm(a, 33, 1);
+    GXLoadTexMtxImm(a, GX_TEXMTX1, GX_MTX2x4);
     effGetTexObj(60, &texObj);
-    GXLoadTexObj(&texObj, 0);
+    GXLoadTexObj(&texObj, GX_TEXMAP0);
     switch (work->type) {
         case 0:
         case 3:
             effGetTexObj(61, &texObj);
-            GXLoadTexObj(&texObj, 1);
+            GXLoadTexObj(&texObj, GX_TEXMAP1);
             break;
         case 2:
             effGetTexObj(62, &texObj);
-            GXLoadTexObj(&texObj, 1);
+            GXLoadTexObj(&texObj, GX_TEXMAP1);
             break;
     }
     GXSetNumTevStages(3);
-    GXSetTevOrder(0, 0, 1, 255);
-    GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 15, 15, 15, 8);
-    GXSetTevAlphaIn(0, 7, 7, 7, 4);
-    GXSetTevOrder(1, 1, 0, 255);
-    GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(1, 15, 0, 9, 15);
-    GXSetTevAlphaIn(1, 7, 0, 4, 7);
-    GXSetTevOrder(2, 255, 255, 4);
-    GXSetTevColorOp(2, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(2, 15, 0, 10, 15);
-    GXSetTevAlphaIn(2, 7, 0, 5, 7);
-    GXSetCullMode(0);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP1, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_CPREV, GX_CC_TEXA, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_APREV, GX_CA_TEXA, GX_CA_ZERO);
+    GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_CPREV, GX_CC_RASC, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_APREV, GX_CA_RASA, GX_CA_ZERO);
+    GXSetCullMode(GX_CULL_NONE);
     switch (work->type) {
         case 0:
-            SETUP(2, 7, 14, nozle_1_vertex_tbl, nozle_1_normal_tbl, nozle_1_color0_tbl, nozle_1_texcoord0_tbl, nozle_1_texcoord1_tbl);
-            {
-                for (k = 0, sz = nozle_1_dl_0_size_tbl, dl = nozle_1_dl_0_tbl; k < 10; k++, sz++, dl++) {
-                    GXCallDisplayList(*dl, *sz * 32);
-                }
-            }
-            SETUP(2, 7, 14, nozle_1_vertex_tbl, nozle_1_normal_tbl, nozle_1_color0_tbl, nozle_1_texcoord0_tbl, nozle_1_texcoord1_tbl);
-            {
-                for (k = 0, sz2 = nozle_1_dl_1_size_tbl, dl2 = nozle_1_dl_1_tbl; k < 10; k++, sz2++, dl2++) {
-                    GXCallDisplayList(*dl2, *sz2 * 32);
-                }
-            }
+            nozle_1_polygon_0();
+            nozle_1_polygon_1();
             break;
         case 2:
-            SETUP(3, 7, 14, nozle_3_vertex_tbl, nozle_3_normal_tbl, nozle_3_color0_tbl, nozle_3_texcoord0_tbl, nozle_3_texcoord1_tbl);
-            CALLDL(17, nozle_3_dl_1_tbl, nozle_3_dl_1_size_tbl, sz5, dl5);
-            SETUP(3, 7, 14, nozle_3_vertex_tbl, nozle_3_normal_tbl, nozle_3_color0_tbl, nozle_3_texcoord0_tbl, nozle_3_texcoord1_tbl);
-            CALLDL(17, nozle_3_dl_0_tbl, nozle_3_dl_0_size_tbl, sz3, dl3);
+            nozle_3_polygon_1();
+            nozle_3_polygon_0();
             break;
         case 3:
-            GXSetTevAlphaIn(0, 7, 1, 4, 7);
-            GXSetTevColor(1, (GXColor){0, 0, 0, alpha});
+            GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
+            GXSetTevColor(GX_TEVREG0, (GXColor){0, 0, 0, alpha});
             w = effect->userdata;
             for (i = 1, w++; i < effect->count; i++, w++) {
                 PSMTXTrans(a, w->u0, -w->v0, 0.0f);
-                GXLoadTexMtxImm(a, 30, 1);
+                GXLoadTexMtxImm(a, GX_TEXMTX0, GX_MTX2x4);
                 PSMTXTrans(a, w->u1, -w->v1, 0.0f);
-                GXLoadTexMtxImm(a, 33, 1);
+                GXLoadTexMtxImm(a, GX_TEXMTX1, GX_MTX2x4);
                 PSMTXTrans(a, w->position.x, w->position.y, w->position.z);
                 PSMTXScale(c, w->sx, w->sy, 1.0f);
                 PSMTXConcat(a, c, c);
                 PSMTXConcat(d, c, c);
-                GXLoadPosMtxImm(c, 0);
-                SETUP(2, 6, 13, nozle_4_vertex_tbl, nozle_4_normal_tbl, nozle_4_color0_tbl, nozle_4_texcoord0_tbl, nozle_4_texcoord1_tbl);
-                CALLDL(8, nozle_4_dl_0_tbl, nozle_4_dl_0_size_tbl, sz4, dl4);
+                GXLoadPosMtxImm(c, GX_PNMTX0);
+                nozle_4_polygon_0();
             }
             break;
     }

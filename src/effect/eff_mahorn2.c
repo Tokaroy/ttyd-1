@@ -1,5 +1,7 @@
-/* Mahon = Wizzerd */
+// Wizzerd (mahorn) shot: rings at the start point, then a shot that travels to the destination, spawns a hit
+// effect there and bursts into eight fading pieces. Element 0 is the header.
 
+#include "version.h"
 #include "eff/eff_mahorn2.h"
 #include "eff/eff_hit.h"
 #include "driver/camdrv.h"
@@ -9,20 +11,15 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <string.h>
-
-#include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
 
 static void effMahorn2Main(EffectEntry* effect);
 static void effMahorn2Disp(CameraId cameraId, EffectEntry* effect);
 
-#define TWO_PI 6.283184f
-
 /**
- * Spawns the Wizzerd attack effect travelling from (posX, posY, posZ) toward the destination,
- * spread over `radius`; called by the Wizzerd battle units (jon and las: mahorn, super_mahorn).
+ * Starts the Wizzerd shot from (posX, posY, posZ) toward (dstX, dstY, dstZ).
+ * Called by the Wizzerd battle units (unit_mahorn, unit_mahorn_custom and unit_super_mahorn).
  */
 EffectEntry* effMahorn2Entry(BOOL unused, f32 posX, f32 posY, f32 posZ, f32 dstX, f32 dstY, f32 dstZ, f32 scale, f32 radius) {
     EffectEntry* effect;
@@ -99,7 +96,7 @@ EffectEntry* effMahorn2Entry(BOOL unused, f32 posX, f32 posY, f32 posZ, f32 dstX
         data->position.x = dstX - posX;
         data->position.y = dstY - posY;
         data->position.z = dstZ - posZ;
-        temp = TWO_PI * (f32)(i - 6);
+        temp = 6.283184f * (f32)(i - 6);
         data->target.x = 6.0f * (f32)sin(temp / (f32)(effect->count - 6));
         data->target.y = 6.0f * (f32)cos(temp / (f32)(effect->count - 6));
         data->target.z = 0.0f;
@@ -112,8 +109,8 @@ EffectEntry* effMahorn2Entry(BOOL unused, f32 posX, f32 posY, f32 posZ, f32 dstX
 }
 
 /**
- * Per frame: moves the effect elements along the path to the destination,
- * updates their scale and alpha and deletes the effect once every element has finished.
+ * Per frame: moves the shot (type 3 element) toward the destination by hitDistance per frame; on arrival spawns
+ * the hit effect, after which the burst pieces fly out and fade; deletes the effect once they have faded.
  */
 static void effMahorn2Main(EffectEntry* effect) {
     effMahorn2Data* data = effect->userdata;
@@ -146,7 +143,7 @@ static void effMahorn2Main(EffectEntry* effect) {
                 break;
             case 2:
                 if (data->intplStep < 90) {
-                    data->scale = intplGetValue(11, 0.0f, 3.0f, ++data->intplStep, 45);
+                    data->scale = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 3.0f, ++data->intplStep, 45);
                 }
                 break;
             case 3:
@@ -184,7 +181,7 @@ static void effMahorn2Main(EffectEntry* effect) {
                 break;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMahorn2Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effMahorn2Disp, effect);
 }
 
 /** Draws the travelling elements as textured quads (effect textures 0x8F and 0x90). */
@@ -285,13 +282,18 @@ static void effMahorn2Disp(CameraId cameraId, EffectEntry* effect) {
             GXTexCoord2f32(0.0f, v);
         } else {
 #if VERSION <= VERSION_DEMO_JP
-            // The demo counts the three segments with the outer loop counter i, so after a type 3 entry the
-            // outer loop goes on at i = 4; the later versions use their own counter.
+            // BUG: (early demos) reuses the outer counter i: after element 5 the outer loop goes on from i = 4, so
+            // data walks two elements past the 14 allocated.
             for (i = 0; i < 3; i++) {
+#else
+            s32 j;
+            for (j = 0; j < 3; j++) {
+#endif
                 GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                 {
                     f32 xs[3][2] = {{0.0f, 2.0f}, {2.0f, 12.0f}, {12.0f, 14.0f}};
                     f32 us[3][2] = {{0.0f, 0.5f}, {0.5f, 0.5f}, {0.5f, 1.0f}};
+#if VERSION <= VERSION_DEMO_JP
                     GXPosition3f32(xs[i][0], h / 2.0f, 0.0f);
                     GXTexCoord2f32(2.0f * us[i][0], 0.0f);
                     GXPosition3f32(xs[i][1], h / 2.0f, 0.0f);
@@ -300,16 +302,7 @@ static void effMahorn2Disp(CameraId cameraId, EffectEntry* effect) {
                     GXTexCoord2f32(2.0f * us[i][1], v);
                     GXPosition3f32(xs[i][0], -h / 2.0f, 0.0f);
                     GXTexCoord2f32(2.0f * us[i][0], v);
-                }
-            }
 #else
-            s32 j;
-
-            for (j = 0; j < 3; j++) {
-                GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-                {
-                    f32 xs[3][2] = {{0.0f, 2.0f}, {2.0f, 12.0f}, {12.0f, 14.0f}};
-                    f32 us[3][2] = {{0.0f, 0.5f}, {0.5f, 0.5f}, {0.5f, 1.0f}};
                     GXPosition3f32(xs[j][0], h / 2.0f, 0.0f);
                     GXTexCoord2f32(2.0f * us[j][0], 0.0f);
                     GXPosition3f32(xs[j][1], h / 2.0f, 0.0f);
@@ -318,9 +311,9 @@ static void effMahorn2Disp(CameraId cameraId, EffectEntry* effect) {
                     GXTexCoord2f32(2.0f * us[j][1], v);
                     GXPosition3f32(xs[j][0], -h / 2.0f, 0.0f);
                     GXTexCoord2f32(2.0f * us[j][0], v);
+#endif
                 }
             }
-#endif
         }
     }
 }

@@ -1,4 +1,6 @@
 // Name entry screen: the kana/latin character grid used to name a save file or Yoshi.
+
+#include "version.h"
 #include "nameent.h"
 #include "system.h"
 #include "driver/dispdrv.h"
@@ -10,22 +12,27 @@
 #include "manager/fontmgr.h"
 #include "win/win_main.h"
 #include "mario/mariost.h"
-#include "libc_decls.h"
-#include "version.h"
 #include "pmario_sound.h"
 #include <dolphin/pad.h>
 #include <demo/DEMOPad.h>
-#include <dolphin/gx.h>
+#include "sfx_name_word.h"
+#include "eff/eff_magic1_n64.h"
+#include "dolphin/gx.h"
+#include <string.h>
 
 static void nameBG(void);
 static void nameKirinukiGX(f32 x, f32 y, f32 w, f32 h);
 void nameWinGX(f32 x, f32 y, f32 w, f32 h, TEXPalette* tpl, s32 type);
-#include <string.h>
 
 static s32 nameMain(void);
 static void nameEntDisp(CameraId cameraId, void* param);
 
 //.data
+#if VERSION >= VERSION_US
+#define NAME_LANG_PICK(jp, en) (gp->language == LANGUAGE_JP ? (jp) : (en))
+#else
+#define NAME_LANG_PICK(jp, en) (jp)
+#endif
 
 #define NAMEENT_COLS 14 // characters per row of hiragana_tbl, katakana_tbl and latin_tbl
 
@@ -34,57 +41,57 @@ static void nameEntDisp(CameraId cameraId, void* param);
  * NULL marks an empty cell and a full-width space a blank key; cell 9 is patched at run time between the "n" kana
  * and a blank, depending on the name type.
  */
-const char* hiragana_tbl[] = {
-    "\x82\xA0", "\x82\xA2", "\x82\xA4", "\x82\xA6", "\x82\xA8", "\x82\xED",
-    "\x81\x40", "\x82\xF0", "\x81\x40", "\x82\xF1", "\x82\x4F", "\x82\x50",
-    "\x82\x51", "\x82\x52", "\x82\xA9", "\x82\xAB", "\x82\xAD", "\x82\xAF",
-    "\x82\xB1", "\x82\xAA", "\x82\xAC", "\x82\xAE", "\x82\xB0", "\x82\xB2",
-    "\x82\x53", "\x82\x54", "\x82\x55", "\x82\x56", "\x82\xB3", "\x82\xB5",
-    "\x82\xB7", "\x82\xB9", "\x82\xBB", "\x82\xB4", "\x82\xB6", "\x82\xB8",
-    "\x82\xBA", "\x82\xBC", "\x82\x57", "\x82\x58", "\x81\x49", "\x81\x48",
-    "\x82\xBD", "\x82\xBF", "\x82\xC2", "\x82\xC4", "\x82\xC6", "\x82\xBE",
-    "\x82\xC0", "\x82\xC3", "\x82\xC5", "\x82\xC7", "\x81\x40", "\x94\xB5",
-    "\x81\x99", "\x81\xF4", "\x82\xC8", "\x82\xC9", "\x82\xCA", "\x82\xCB",
-    "\x82\xCC", "\x82\xCE", "\x82\xD1", "\x82\xD4", "\x82\xD7", "\x82\xDA",
-    NULL,       NULL,       NULL,       NULL,       "\x82\xCD", "\x82\xD0",
-    "\x82\xD3", "\x82\xD6", "\x82\xD9", "\x82\xCF", "\x82\xD2", "\x82\xD5",
-    "\x82\xD8", "\x82\xDB", NULL,       NULL,       NULL,       NULL,
-    "\x82\xDC", "\x82\xDD", "\x82\xDE", "\x82\xDF", "\x82\xE0", "\x82\x9F",
-    "\x82\xA1", "\x82\xA3", "\x82\xA5", "\x82\xA7", NULL,       NULL,
-    NULL,       NULL,       "\x82\xE2", "\x81\x40", "\x82\xE4", "\x81\x40",
-    "\x82\xE6", "\x82\xE1", "\x82\xE3", "\x82\xE5", "\x82\xC1", "\x89\x4C",
-    NULL,       NULL,       NULL,       NULL,       "\x82\xE7", "\x82\xE8",
-    "\x82\xE9", "\x82\xEA", "\x82\xEB", "\x81\x7C", "\x81\x60", "\x81\x45",
-    "\x81\x44", "\x81\x40", NULL,       NULL,       NULL,       NULL
+static const char* hiragana_tbl[] = {
+    "あ", "い", "う", "え", "お", "わ",
+    "　", "を", "　", "ん", "０", "１",
+    "２", "３", "か", "き", "く", "け",
+    "こ", "が", "ぎ", "ぐ", "げ", "ご",
+    "４", "５", "６", "７", "さ", "し",
+    "す", "せ", "そ", "ざ", "じ", "ず",
+    "ぜ", "ぞ", "８", "９", "！", "？",
+    "た", "ち", "つ", "て", "と", "だ",
+    "ぢ", "づ", "で", "ど", "　", "鳩",
+    "☆", "♪", "な", "に", "ぬ", "ね",
+    "の", "ば", "び", "ぶ", "べ", "ぼ",
+    NULL,       NULL,       NULL,       NULL,       "は", "ひ",
+    "ふ", "へ", "ほ", "ぱ", "ぴ", "ぷ",
+    "ぺ", "ぽ", NULL,       NULL,       NULL,       NULL,
+    "ま", "み", "む", "め", "も", "ぁ",
+    "ぃ", "ぅ", "ぇ", "ぉ", NULL,       NULL,
+    NULL,       NULL,       "や", "　", "ゆ", "　",
+    "よ", "ゃ", "ゅ", "ょ", "っ", "鵜",
+    NULL,       NULL,       NULL,       NULL,       "ら", "り",
+    "る", "れ", "ろ", "－", "～", "・",
+    "．", "　", NULL,       NULL,       NULL,       NULL
 };
 
 /** Katakana grid of the name-entry screen: the same layout as hiragana_tbl, cell for cell. */
-const char* katakana_tbl[] = {
-    "\x83\x41", "\x83\x43", "\x83\x45", "\x83\x47", "\x83\x49", "\x83\x8F",
-    "\x81\x40", "\x83\x92", "\x81\x40", "\x83\x93", "\x82\x4F", "\x82\x50",
-    "\x82\x51", "\x82\x52", "\x83\x4A", "\x83\x4C", "\x83\x4E", "\x83\x50",
-    "\x83\x52", "\x83\x4B", "\x83\x4D", "\x83\x4F", "\x83\x51", "\x83\x53",
-    "\x82\x53", "\x82\x54", "\x82\x55", "\x82\x56", "\x83\x54", "\x83\x56",
-    "\x83\x58", "\x83\x5A", "\x83\x5C", "\x83\x55", "\x83\x57", "\x83\x59",
-    "\x83\x5B", "\x83\x5D", "\x82\x57", "\x82\x58", "\x81\x49", "\x81\x48",
-    "\x83\x5E", "\x83\x60", "\x83\x63", "\x83\x65", "\x83\x67", "\x83\x5F",
-    "\x83\x61", "\x83\x64", "\x83\x66", "\x83\x68", "\x81\x40", "\x94\xB5",
-    "\x81\x99", "\x81\xF4", "\x83\x69", "\x83\x6A", "\x83\x6B", "\x83\x6C",
-    "\x83\x6D", "\x83\x6F", "\x83\x72", "\x83\x75", "\x83\x78", "\x83\x7B",
-    NULL,       NULL,       NULL,       NULL,       "\x83\x6E", "\x83\x71",
-    "\x83\x74", "\x83\x77", "\x83\x7A", "\x83\x70", "\x83\x73", "\x83\x76",
-    "\x83\x79", "\x83\x7C", NULL,       NULL,       NULL,       NULL,
-    "\x83\x7D", "\x83\x7E", "\x83\x80", "\x83\x81", "\x83\x82", "\x83\x40",
-    "\x83\x42", "\x83\x44", "\x83\x46", "\x83\x48", NULL,       NULL,
-    NULL,       NULL,       "\x83\x84", "\x81\x40", "\x83\x86", "\x81\x40",
-    "\x83\x88", "\x83\x83", "\x83\x85", "\x83\x87", "\x83\x62", "\x83\x94",
-    NULL,       NULL,       NULL,       NULL,       "\x83\x89", "\x83\x8A",
-    "\x83\x8B", "\x83\x8C", "\x83\x8D", "\x81\x7C", "\x81\x60", "\x81\x45",
-    "\x81\x44", "\x81\x40", NULL,       NULL,       NULL,       NULL
+static const char* katakana_tbl[] = {
+    "ア", "イ", "ウ", "エ", "オ", "ワ",
+    "　", "ヲ", "　", "ン", "０", "１",
+    "２", "３", "カ", "キ", "ク", "ケ",
+    "コ", "ガ", "ギ", "グ", "ゲ", "ゴ",
+    "４", "５", "６", "７", "サ", "シ",
+    "ス", "セ", "ソ", "ザ", "ジ", "ズ",
+    "ゼ", "ゾ", "８", "９", "！", "？",
+    "タ", "チ", "ツ", "テ", "ト", "ダ",
+    "ヂ", "ヅ", "デ", "ド", "　", "鳩",
+    "☆", "♪", "ナ", "ニ", "ヌ", "ネ",
+    "ノ", "バ", "ビ", "ブ", "ベ", "ボ",
+    NULL,       NULL,       NULL,       NULL,       "ハ", "ヒ",
+    "フ", "ヘ", "ホ", "パ", "ピ", "プ",
+    "ペ", "ポ", NULL,       NULL,       NULL,       NULL,
+    "マ", "ミ", "ム", "メ", "モ", "ァ",
+    "ィ", "ゥ", "ェ", "ォ", NULL,       NULL,
+    NULL,       NULL,       "ヤ", "　", "ユ", "　",
+    "ヨ", "ャ", "ュ", "ョ", "ッ", "ヴ",
+    NULL,       NULL,       NULL,       NULL,       "ラ", "リ",
+    "ル", "レ", "ロ", "－", "～", "・",
+    "．", "　", NULL,       NULL,       NULL,       NULL
 };
 
 //.bss
-static NameEntryWork work __attribute__((aligned(8)));
+static NameEntryWork work;
 
 //.sdata
 static NameEntryWork* wp = &work;
@@ -107,37 +114,32 @@ void nameEntReInit(void) {
 }
 
 #if VERSION >= VERSION_US
-/**
- * Letter grid of the name-entry screen in the US and PAL releases: capitals, small letters and accented forms,
- * digits and punctuation, NAMEENT_COLS characters per row. Cell 47 is patched at run time between a space and "p",
- * depending on the name type.
- */
 const char* latin_tbl[] = {
     "A", "B", "C", "D", "E", "a",
     "b", "c", "d", "e", "\xFC", "\xFA",
     "\xF9", "\xFB", "F", "G", "H", "I",
     "J", "f", "g", "h", "i", "j",
-    "\xDF", "-", "/", "&", "K", "L",
+    "ﾟ", "-", "/", "&", "K", "L",
     "M", "N", "O", "k", "l", "m",
-    "n", "o", "\xA1", "!", "\xBF", "?",
+    "n", "o", "｡", "!", "ｿ", "?",
     "P", "Q", "R", "S", "T", "p",
     "q", "r", "s", "t", ".", ",",
     "0", "1", "U", "V", "W", "X",
     "Y", "u", "v", "w", "x", "y",
-    "2", "3", "4", "5", "Z", "\xC4",
-    "\xC1", "\xC0", "\xC7", "z", "\xE4", "\xE1",
+    "2", "3", "4", "5", "Z", "ﾄ",
+    "ﾁ", "ﾀ", "ﾇ", "z", "\xE4", "\xE1",
     "\xE0", "\xE2", "6", "7", "8", "9",
-    "\xC9", "\xC8", "\xCD", "\xCC", "\xD1", "\xE7",
+    "ﾉ", "ﾈ", "ﾍ", "ﾌ", "ﾑ", "\xE7",
     "\xEB", "\xE9", "\xE8", "\xEA", NULL, NULL,
-    NULL, NULL, "\xD6", "\xD3", "\xD2", "\x8C",
-    "\xDC", "\xEF", "\xED", "\xEC", "\xEE", "\xF1",
-    NULL, NULL, NULL, NULL, "\xDA", "\xD9",
-    "\xD0", "\xDE", " ", "\xF6", "\xF3", "\xF2",
+    NULL, NULL, "ﾖ", "ﾓ", "ﾒ", "\x8C",
+    "ﾜ", "\xEF", "\xED", "\xEC", "\xEE", "\xF1",
+    NULL, NULL, NULL, NULL, "ﾚ", "ﾙ",
+    "ﾐ", "ﾞ", " ", "\xF6", "\xF3", "\xF2",
     "\xF4", "\x9C", NULL, NULL, NULL, NULL
 };
 #endif
 
-// The demo still loads the name entry textures from the old window folder.
+// The early demos still load the name entry textures from the old window folder.
 #if VERSION <= VERSION_DEMO_JP
 #define NAME_TPL_JP "%s/window/jp/name.tpl"
 #else
@@ -145,15 +147,15 @@ const char* latin_tbl[] = {
 #endif
 
 /**
- * Starts loading the name entry textures (w/<language>/name.tpl; the JP builds always use jp,
- * the demo reads window/jp) and returns TRUE once they are loaded. Callers poll it before nameEntOn.
+ * Starts loading the name entry textures (w/<language>/name.tpl; versions before US always use jp,
+ * and the early demos read window/jp) and returns TRUE once they are loaded. Callers poll it before nameEntOn.
  */
 BOOL nameEntPrepare(void) {
 #if VERSION >= VERSION_US
     const char* lang[6] = {"jp", "us", "ge", "fr", "sp", "it"};
-    return fileAsyncf(4, NULL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]) != NULL;
+    return fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]) != NULL;
 #else
-    return fileAsyncf(4, NULL, NAME_TPL_JP, getMarioStDvdRoot()) != NULL;
+    return fileAsyncf(FILE_TYPE_TPL, NULL, NAME_TPL_JP, getMarioStDvdRoot()) != NULL;
 #endif
 }
 
@@ -163,7 +165,7 @@ BOOL nameEntPrepare(void) {
  * 0 the save file name (seq_load), 1 Yoshi's name (tou_10, blank gives his default name),
  * 2 and 3 guessing Doopliss's name (gra_00) before and after the Letter P is recovered,
  * 4 the password in the X-Naut Fortress (aji_01).
- * Starts with hiragana (latin outside Japanese in the US and PAL releases),
+ * Starts with hiragana (latin outside Japanese in US and later),
  * an empty 8-character name and the cursor at the top left.
  * Type 2 blanks the grid cell the name needs (hiragana and katakana n, latin p), so it cannot be typed yet.
  */
@@ -175,7 +177,7 @@ void nameEntOn(s32 type) {
     wp->loadState = 1;
     wp->state = 0;
 #if VERSION >= VERSION_US
-    if ((u32)gp->language == 0) {
+    if (gp->language == LANGUAGE_JP) {
         wp->charTable = hiragana_tbl;
     } else {
         wp->charTable = latin_tbl;
@@ -193,27 +195,27 @@ void nameEntOn(s32 type) {
     strcpy(wp->name, "");
     for (i = 0; i < 8; i++) {
 #if VERSION >= VERSION_US
-        strcat(wp->name, (u32)gp->language == 0 ? "\x81\x40" : " ");
+        strcat(wp->name, gp->language == LANGUAGE_JP ? "　" : " ");
 #else
-        strcat(wp->name, "\x81\x40");
+        strcat(wp->name, "　");
 #endif
     }
     wp->maskAlpha = 0.0f;
 #if VERSION >= VERSION_US
-    if ((u32)gp->language == 0) {
+    if (gp->language == LANGUAGE_JP) {
         switch (type) {
-            case 2:
-                hiragana_tbl[9] = "\x81\x40";
-                katakana_tbl[9] = "\x81\x40";
+            case NAMEENT_DOOPLISS:
+                hiragana_tbl[9] = "　";
+                katakana_tbl[9] = "　";
                 break;
             default:
-                hiragana_tbl[9] = "\x82\xF1";
-                katakana_tbl[9] = "\x83\x93";
+                hiragana_tbl[9] = "ん";
+                katakana_tbl[9] = "ン";
                 break;
         }
     } else {
         switch (type) {
-            case 2:
+            case NAMEENT_DOOPLISS:
                 latin_tbl[47] = " ";
                 break;
             default:
@@ -223,13 +225,13 @@ void nameEntOn(s32 type) {
     }
 #else
     switch (type) {
-        case 2:
-            hiragana_tbl[9] = "\x81\x40";
-            katakana_tbl[9] = "\x81\x40";
+        case NAMEENT_DOOPLISS:
+            hiragana_tbl[9] = "　";
+            katakana_tbl[9] = "　";
             break;
         default:
-            hiragana_tbl[9] = "\x82\xF1";
-            katakana_tbl[9] = "\x83\x93";
+            hiragana_tbl[9] = "ん";
+            katakana_tbl[9] = "ン";
             break;
     }
 #endif
@@ -243,7 +245,7 @@ void nameEntOff(void) {
 /** Lets the screen take input (NAMEENT_FLAG_INPUT_ON) and returns TRUE while the player has not yet confirmed or cancelled. */
 BOOL nameEntWait(void) {
     wp->flags |= NAMEENT_FLAG_INPUT_ON;
-    return wp->state != 0x65;
+    return wp->state != 101;
 }
 
 /** TRUE when the player backed out with B on an empty file name (type 0 only). */
@@ -259,13 +261,13 @@ BOOL nameEntIsCancel(void) {
 const char* nameEntGetName(void) {
     s32 j;
 
-    if (wp->state != 0x65) {
+    if (wp->state != 101) {
         return NULL;
     }
 #if VERSION >= VERSION_US
-    if ((u32)gp->language == 0) {
+    if (gp->language == LANGUAGE_JP) {
         for (j = 7; j >= 1; j--) {
-            if (strncmp(&wp->name[j * 2], "\x81\x40", 2)) {
+            if (strncmp(&wp->name[j * 2], "　", 2)) {
                 break;
             }
             wp->name[j * 2] = 0;
@@ -281,7 +283,7 @@ const char* nameEntGetName(void) {
     }
 #else
     for (j = 7; j >= 1; j--) {
-        if (strncmp(&wp->name[j * 2], "\x81\x40", 2)) {
+        if (strncmp(&wp->name[j * 2], "　", 2)) {
             break;
         }
         wp->name[j * 2] = 0;
@@ -292,23 +294,28 @@ const char* nameEntGetName(void) {
 }
 
 /** Loads the language's name.tpl into tplFile once the async read has finished; FALSE while it is still loading. */
-static inline BOOL nameEntLoad(void) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+BOOL fileOpen(void) {
 #if VERSION >= VERSION_US
     const char* lang[6] = {"jp", "us", "ge", "fr", "sp", "it"};
-#endif
-#if VERSION >= VERSION_US
-    if (fileAsyncf(4, NULL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]) != NULL) {
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]) != NULL) {
+        wp->tplFile = fileAllocf(FILE_TYPE_TPL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]);
 #else
-    if (fileAsyncf(4, NULL, NAME_TPL_JP, getMarioStDvdRoot()) != NULL) {
-#endif
-#if VERSION >= VERSION_US
-        wp->tplFile = fileAllocf(4, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]);
-#else
-        wp->tplFile = fileAllocf(4, NAME_TPL_JP, getMarioStDvdRoot());
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, NAME_TPL_JP, getMarioStDvdRoot()) != NULL) {
+        wp->tplFile = fileAllocf(FILE_TYPE_TPL, NAME_TPL_JP, getMarioStDvdRoot());
 #endif
         return TRUE;
     }
     return FALSE;
+}
+
+/** Frees name.tpl (tplFile) if it is loaded. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void fileClose(void) {
+    if (wp->tplFile) {
+        fileFree(wp->tplFile);
+    }
+    wp->tplFile = NULL;
 }
 
 /**
@@ -320,86 +327,190 @@ void nameEntMain(void) {
         case 0:
             break;
         case 1:
-            if (nameEntLoad()) {
+            if (fileOpen()) {
                 wp->loadState++;
             }
         case 2:
             nameMain();
             break;
         case 3:
-            if (wp->tplFile) {
-                fileFree(wp->tplFile);
-            }
-            wp->tplFile = NULL;
+            fileClose();
             wp->loadState = 0;
             break;
     }
     if (wp->loadState > 1) {
-        dispEntry(CAMERA_3D, 0.0f, 7, nameEntDisp, NULL);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_CUSTOM_LAST, nameEntDisp, NULL);
     }
 }
 
-#if VERSION <= VERSION_DEMO_JP
-/** The demo has no cursor travel check, no all-blank name check and no default partner name. */
+/** The early demos have no cursor travel check, no all-blank name check and no default partner name. */
 static s32 nameMain(void) {
-    s32 off;
+#if VERSION <= VERSION_DEMO_JP
+    s32 col;
     s32 idx;
+#else
+    s32 len;
+    s32 j;
+    s32 col;
+    s32 idx;
+#if VERSION >= VERSION_US
+    s32 cmdRow; // first row of the command column
+#endif
+    f32 dist;
 
+    dist = distABf(wp->x2, wp->y2, wp->x1, wp->y1);
+#endif
     switch (wp->state) {
         case 0:
             if ((wp->flags & NAMEENT_FLAG_INPUT_ON) && gp->debugFlag == 0) {
                 if (keyGetButtonTrg(0) & PAD_BUTTON_A) {
-                    off = wp->cursorX;
-                    if (off >= 10 && wp->cursorY >= 4) {
+                    col = wp->cursorX;
+#if VERSION >= VERSION_US
+                    if (col >= 10 && wp->cursorY >= (cmdRow = gp->language == LANGUAGE_JP ? 4 : 6)) {
+#else
+                    if (col >= 10 && wp->cursorY >= 4) {
+#endif
                         switch (wp->cursorY) {
                             case 4:
                                 wp->charTable = hiragana_tbl;
-                                psndSFXOn((const char*)0x2000C);
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_FONT_CHANGE1 | PSND_SFX_BYPASS_MUTE));
                                 break;
                             case 5:
                                 wp->charTable = katakana_tbl;
-                                psndSFXOn((const char*)0x2000C);
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_FONT_CHANGE1 | PSND_SFX_BYPASS_MUTE));
                                 break;
                             case 6:
                                 if (wp->nameLen > 0) {
                                     wp->nameLen--;
-                                    psndSFXOn((const char*)0x2000B);
+                                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_MOJI_DELETE1 | PSND_SFX_BYPASS_MUTE));
                                 }
                                 break;
+#if VERSION <= VERSION_DEMO_JP
                             case 7:
                                 wp->confirmSel = 1;
                                 wp->state = 100;
-                                psndSFXOn((const char*)0x20012);
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+#else
+                            case 7: {
+                                s32 n;
+                                s32 k;
+#if VERSION >= VERSION_US
+                                if (gp->language == LANGUAGE_JP) {
+                                    n = strlen(wp->name) / 2;
+                                    for (k = 0; k < n; k++) {
+                                        if (strncmp(&wp->name[k * 2], "　", 2)) {
+                                            break;
+                                        }
+                                    }
+                                    if (k < n || wp->type != NAMEENT_FILE) {
+                                        wp->confirmSel = 1;
+                                        wp->state = 100;
+                                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+                                        if (wp->type == NAMEENT_YOSHI && k >= n) {
+                                            strcpy(wp->name, msgSearch("name_party3"));
+                                            wp->nameLen = strlen(wp->name) / 2;
+#if VERSION >= VERSION_DEMO_EU
+                                            if (wp->nameLen >= 8) {
+                                                wp->nameLen = 7;
+                                            }
+#endif
+                                        }
+                                    } else {
+                                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_NOT_CHOICE1 | PSND_SFX_BYPASS_MUTE));
+                                    }
+                                } else {
+                                    s32 m;
+
+                                    n = strlen(wp->name);
+                                    for (m = 0; m < n; m++) {
+                                        if (strncmp(&wp->name[m], " ", 1)) {
+                                            break;
+                                        }
+                                    }
+                                    if (m < n || wp->type != NAMEENT_FILE) {
+                                        wp->confirmSel = 1;
+                                        wp->state = 100;
+                                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+                                        if (wp->type == NAMEENT_YOSHI && m >= n) {
+                                            strcpy(wp->name, msgSearch("name_party3"));
+                                            wp->nameLen = strlen(wp->name);
+#if VERSION >= VERSION_DEMO_EU
+                                            if (wp->nameLen >= 8) {
+                                                wp->nameLen = 7;
+                                            }
+#endif
+                                        }
+                                    } else {
+                                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_NOT_CHOICE1 | PSND_SFX_BYPASS_MUTE));
+                                    }
+                                }
+#else
+                                n = strlen(wp->name) / 2;
+                                for (k = 0; k < n; k++) {
+                                    if (strncmp(&wp->name[k * 2], "　", 2)) {
+                                        break;
+                                    }
+                                }
+                                if (k < n || wp->type != NAMEENT_FILE) {
+                                    wp->confirmSel = 1;
+                                    wp->state = 100;
+                                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+                                    if (wp->type == NAMEENT_YOSHI && k >= n) {
+                                        strcpy(wp->name, msgSearch("name_party3"));
+                                        wp->nameLen = strlen(wp->name) / 2;
+                                    }
+                                } else {
+                                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_NOT_CHOICE1 | PSND_SFX_BYPASS_MUTE));
+                                }
+#endif
+                            }
+#endif
                                 break;
                         }
                     } else if (wp->nameLen < 8) {
-                        ((u16*)wp->name)[wp->nameLen] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + off];
+#if VERSION <= VERSION_DEMO_JP
+                        ((u16*)wp->name)[wp->nameLen] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + col];
                         wp->nameLen++;
                         if (wp->nameLen >= 8) {
+#else
+#if VERSION >= VERSION_US
+                        if (gp->language == LANGUAGE_JP) {
+                            ((u16*)wp->name)[wp->nameLen] = *(u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + col];
+                        } else {
+                            wp->name[wp->nameLen] = *wp->charTable[wp->cursorY * NAMEENT_COLS + col];
+                        }
+#else
+                        ((u16*)wp->name)[wp->nameLen] = *(u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + col];
+#endif
+                        wp->nameLen++;
+                        if (wp->nameLen >= 8) {
+                            wp->nameLen = 7;
+#endif
                             wp->cursorX = 10;
                             wp->cursorY = 7;
                         }
-                        psndSFXOn((const char*)0xA);
+#if VERSION <= VERSION_DEMO_JP
+                        psndSFXOn((const char*)PSND_SFX_FILE_MOJI_SET1);
                     } else if (wp->nameLen == 8) {
-                        ((u16*)wp->name)[wp->nameLen - 1] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + off];
+                        ((u16*)wp->name)[wp->nameLen - 1] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + col];
                         wp->cursorX = 10;
                         wp->cursorY = 7;
-                        psndSFXOn((const char*)0xA);
+                        psndSFXOn((const char*)PSND_SFX_FILE_MOJI_SET1);
                     }
                 } else if (keyGetButtonTrg(0) & PAD_BUTTON_START) {
                     wp->cursorX = 10;
                     wp->cursorY = 7;
                     wp->confirmSel = 1;
                     wp->state = 100;
-                    psndSFXOn((const char*)0x12);
+                    psndSFXOn((const char*)PSND_SFX_CURSOR_OK1);
                 } else if (keyGetButtonTrg(0) & PAD_BUTTON_B) {
                     if (wp->nameLen > 0) {
                         wp->nameLen--;
-                        ((u16*)wp->name)[wp->nameLen] = *(u16*)"\x81\x40";
-                        psndSFXOn((const char*)0xB);
-                    } else if (wp->nameLen == 0 && wp->type == 0) {
-                        psndSFXOn((const char*)0x13);
-                        wp->state = 0x65;
+                        ((u16*)wp->name)[wp->nameLen] = *(u16*)"　";
+                        psndSFXOn((const char*)PSND_SFX_FILE_MOJI_DELETE1);
+                    } else if (wp->nameLen == 0 && wp->type == NAMEENT_FILE) {
+                        psndSFXOn((const char*)PSND_SFX_CURSOR_CANCEL1);
+                        wp->state = 101;
                         wp->flags |= NAMEENT_FLAG_CANCELLED;
                     }
                 } else if (keyGetDirRep(0) & DEMO_STICK_LEFT) {
@@ -414,7 +525,7 @@ static s32 nameMain(void) {
                     } else if (wp->cursorX < 0) {
                         wp->cursorX = 13;
                     }
-                    psndSFXOn((const char*)5);
+                    psndSFXOn((const char*)PSND_SFX_CURSOR_MOVE1);
                 } else if (keyGetDirRep(0) & DEMO_STICK_RIGHT) {
                     wp->cursorX++;
                     if (wp->cursorY > 3) {
@@ -427,13 +538,13 @@ static s32 nameMain(void) {
                     } else if (wp->cursorX >= NAMEENT_COLS) {
                         wp->cursorX = 0;
                     }
-                    psndSFXOn((const char*)5);
+                    psndSFXOn((const char*)PSND_SFX_CURSOR_MOVE1);
                 } else if (keyGetDirRep(0) & DEMO_STICK_UP) {
                     wp->cursorY--;
                     if (wp->cursorY < 0) {
                         wp->cursorY = wp->cursorX > 9 ? 7 : 8;
                     }
-                    psndSFXOn((const char*)5);
+                    psndSFXOn((const char*)PSND_SFX_CURSOR_MOVE1);
                 } else if (keyGetDirRep(0) & DEMO_STICK_DOWN) {
                     wp->cursorY++;
                     if (wp->cursorX > 9) {
@@ -446,225 +557,38 @@ static s32 nameMain(void) {
                     } else if (wp->cursorY >= 9) {
                         wp->cursorY = 0;
                     }
-                    psndSFXOn((const char*)5);
-                }
-            }
-            idx = wp->cursorX;
-            if (idx > 9 && wp->cursorY > 3) {
-                wp->x2 = 100.0f;
-                wp->y2 = (f32)(-20 - (wp->cursorY - 4) * 34);
-                wp->x2 -= 6.0f;
-                wp->y2 += 6.0f;
-            } else {
-                wp->x2 = (f32)(idx * 24 - 190 + (idx / 5) * 30);
-                wp->y2 = (f32)(112 - wp->cursorY * 28);
-                wp->x2 -= 16.0f;
-                wp->y2 -= 12.0f;
-            }
-            wp->maskAlpha -= 0.05f;
-            if (wp->maskAlpha <= 0.0f) {
-                wp->maskAlpha = 0.0f;
-            }
-            break;
-        case 100:
-            if (keyGetButtonTrg(0) & PAD_BUTTON_A) {
-                if (wp->confirmSel == 0) {
-                    wp->state++;
-                    psndSFXOn((const char*)0x12);
-                } else {
-                    wp->state = 0;
-                    psndSFXOn((const char*)0x13);
-                }
-            } else if (keyGetButtonTrg(0) & PAD_BUTTON_B) {
-                wp->state = 0;
-                psndSFXOn((const char*)0x13);
-            } else if (keyGetDirRep(0) & (DEMO_STICK_UP | DEMO_STICK_DOWN)) {
-                wp->confirmSel = 1 - wp->confirmSel;
-                psndSFXOn((const char*)5);
-            }
-            wp->x2 = -60.0f;
-            wp->y2 = -30.0f - 40.0f * (f32)wp->confirmSel;
-            wp->maskAlpha += 0.05f;
-            if (wp->maskAlpha >= 1.0f) {
-                wp->maskAlpha = 1.0f;
-            }
-            break;
-    }
-    wp->x1 += (wp->x2 - wp->x1) / FPS_EASE(4.0f);
-    wp->y1 += (wp->y2 - wp->y1) / FPS_EASE(4.0f);
-    wp->x1 += __fabs(2.0f * (f32)sin(gp->retraceCount / 8.0f));
-    idx = wp->nameLen >= 8 ? wp->nameLen - 1 : wp->nameLen;
-    wp->caretTargetX = idx * 32 - 106;
-    wp->caretTargetY = 135.0f;
-    wp->caretX += (wp->caretTargetX - wp->caretX) / FPS_EASE(4.0f);
-    wp->caretY += (wp->caretTargetY - wp->caretY) / FPS_EASE(4.0f);
-    wp->caretY += __fabs(2.0f * (f32)sin(gp->retraceCount / 8.0f));
-    return 0;
-}
+                    psndSFXOn((const char*)PSND_SFX_CURSOR_MOVE1);
 #else
-/**
- * Input and animation for the name entry screen (JP and later).
- * The stick moves the cursor over the 14 x 9 character grid and the side buttons (hiragana, katakana, back, end;
- * the latin grid has only back and end), A types a character or presses a button, B deletes, Start jumps to end.
- * End asks to confirm (state 100): an all-blank name is refused for file names,
- * and for Yoshi becomes his default name. Confirming sets state 0x65.
- * Also eases the cursor and the caret and fades the background mask.
- */
-static s32 nameMain(void) {
-    s32 len;
-    s32 j;
-    s32 off;
-    s32 o2;
-    s32 idx;
-    f32 dist;
-
-    dist = distABf(wp->x2, wp->y2, wp->x1, wp->y1);
-    switch (wp->state) {
-        case 0:
-            if ((wp->flags & NAMEENT_FLAG_INPUT_ON) && gp->debugFlag == 0) {
-                if (keyGetButtonTrg(0) & PAD_BUTTON_A) {
-                    off = wp->cursorX;
-#if VERSION >= VERSION_US
-                    if (off >= 10 && wp->cursorY >= (s32)((u32)gp->language == 0 ? 4 : 6)) {
-#else
-                    if (off >= 10 && wp->cursorY >= 4) {
-#endif
-                        switch (wp->cursorY) {
-                            case 4:
-                                wp->charTable = hiragana_tbl;
-                                psndSFXOn((const char*)0x2000C);
-                                break;
-                            case 5:
-                                wp->charTable = katakana_tbl;
-                                psndSFXOn((const char*)0x2000C);
-                                break;
-                            case 6:
-                                if (wp->nameLen > 0) {
-                                    wp->nameLen--;
-                                    psndSFXOn((const char*)0x2000B);
-                                }
-                                break;
-                            case 7: {
-                                s32 n;
-                                s32 k;
-                                s32 o;
-#if VERSION >= VERSION_US
-                                if ((u32)gp->language == 0) {
-                                    n = strlen(wp->name) / 2;
-                                    for (k = 0, o = 0; k < n; o += 2, k++) {
-                                        if (strncmp(&wp->name[o], "\x81\x40", 2)) {
-                                            break;
-                                        }
-                                    }
-                                    if (k < n || wp->type != 0) {
-                                        wp->confirmSel = 1;
-                                        wp->state = 100;
-                                        psndSFXOn((const char*)0x20012);
-                                        if (wp->type == 1 && k >= n) {
-                                            strcpy(wp->name, msgSearch("name_party3"));
-                                            wp->nameLen = strlen(wp->name) / 2;
-#if VERSION >= VERSION_DEMO_EU
-                                            if (wp->nameLen >= 8) {
-                                                wp->nameLen = 7;
-                                            }
-#endif
-                                        }
-                                    } else {
-                                        psndSFXOn((const char*)0x20014);
-                                    }
-                                } else {
-                                    s32 m;
-
-                                    n = strlen(wp->name);
-                                    for (m = 0; m < n; m++) {
-                                        if (strncmp(&wp->name[m], " ", 1)) {
-                                            break;
-                                        }
-                                    }
-                                    if (m < n || wp->type != 0) {
-                                        wp->confirmSel = 1;
-                                        wp->state = 100;
-                                        psndSFXOn((const char*)0x20012);
-                                        if (wp->type == 1 && m >= n) {
-                                            strcpy(wp->name, msgSearch("name_party3"));
-                                            wp->nameLen = strlen(wp->name);
-#if VERSION >= VERSION_DEMO_EU
-                                            if (wp->nameLen >= 8) {
-                                                wp->nameLen = 7;
-                                            }
-#endif
-                                        }
-                                    } else {
-                                        psndSFXOn((const char*)0x20014);
-                                    }
-                                }
-#else
-                                n = strlen(wp->name) / 2;
-                                for (k = 0, o = 0; k < n; o += 2, k++) {
-                                    if (strncmp(&wp->name[o], "\x81\x40", 2)) {
-                                        break;
-                                    }
-                                }
-                                if (k < n || wp->type != 0) {
-                                    wp->confirmSel = 1;
-                                    wp->state = 100;
-                                    psndSFXOn((const char*)0x20012);
-                                    if (wp->type == 1 && k >= n) {
-                                        strcpy(wp->name, msgSearch("name_party3"));
-                                        wp->nameLen = strlen(wp->name) / 2;
-                                    }
-                                } else {
-                                    psndSFXOn((const char*)0x20014);
-                                }
-#endif
-                            } break;
-                        }
-                    } else if (wp->nameLen < 8) {
-#if VERSION >= VERSION_US
-                        if ((u32)gp->language == 0) {
-                            ((u16*)wp->name)[wp->nameLen] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + off];
-                        } else {
-                            wp->name[wp->nameLen] = *wp->charTable[wp->cursorY * NAMEENT_COLS + off];
-                        }
-#else
-                        ((u16*)wp->name)[wp->nameLen] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + off];
-#endif
-                        wp->nameLen++;
-                        if (wp->nameLen >= 8) {
-                            wp->nameLen = 7;
-                            wp->cursorX = 10;
-                            wp->cursorY = 7;
-                        }
-                        psndSFXOn((const char*)0xA);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_MOJI_SET1));
                     } else if (wp->nameLen == 8) {
                         wp->nameLen = 7;
 #if VERSION >= VERSION_US
-                        if ((u32)gp->language == 0) {
-                            ((u16*)wp->name)[wp->nameLen] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + wp->cursorX];
+                        if (gp->language == LANGUAGE_JP) {
+                            ((u16*)wp->name)[wp->nameLen] = *(u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + wp->cursorX];
                         } else {
                             wp->name[wp->nameLen] = *wp->charTable[wp->cursorY * NAMEENT_COLS + wp->cursorX];
                         }
 #else
-                        ((u16*)wp->name)[wp->nameLen] = *(const u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + wp->cursorX];
+                        ((u16*)wp->name)[wp->nameLen] = *(u16*)wp->charTable[wp->cursorY * NAMEENT_COLS + wp->cursorX];
 #endif
                         wp->cursorX = 10;
                         wp->cursorY = 7;
-                        psndSFXOn((const char*)0xA);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_MOJI_SET1));
                     }
                 } else if (keyGetButtonTrg(0) & PAD_BUTTON_START) {
 #if VERSION >= VERSION_US
-                    if ((u32)gp->language == 0) {
+                    if (gp->language == LANGUAGE_JP) {
                         len = strlen(wp->name) / 2;
-                        for (j = 0, off = 0; j < len; off += 2, j++) {
-                            if (strncmp(&wp->name[off], "\x81\x40", 2)) {
+                        for (j = 0; j < len; j++) {
+                            if (strncmp(&wp->name[j * 2], "　", 2)) {
                                 break;
                             }
                         }
-                        if (j < len || wp->type != 0) {
+                        if (j < len || wp->type != NAMEENT_FILE) {
                             wp->confirmSel = 1;
                             wp->state = 100;
-                            psndSFXOn((const char*)0x12);
-                            if (wp->type == 1 && j >= len) {
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+                            if (wp->type == NAMEENT_YOSHI && j >= len) {
                                 strcpy(wp->name, msgSearch("name_party3"));
                                 wp->nameLen = strlen(wp->name) / 2;
 #if VERSION >= VERSION_DEMO_EU
@@ -674,7 +598,7 @@ static s32 nameMain(void) {
 #endif
                             }
                         } else {
-                            psndSFXOn((const char*)0x20014);
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_NOT_CHOICE1 | PSND_SFX_BYPASS_MUTE));
                         }
                     } else {
                         s32 m;
@@ -685,11 +609,11 @@ static s32 nameMain(void) {
                                 break;
                             }
                         }
-                        if (m < len || wp->type != 0) {
+                        if (m < len || wp->type != NAMEENT_FILE) {
                             wp->confirmSel = 1;
                             wp->state = 100;
-                            psndSFXOn((const char*)0x12);
-                            if (wp->type == 1 && m >= len) {
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+                            if (wp->type == NAMEENT_YOSHI && m >= len) {
                                 strcpy(wp->name, msgSearch("name_party3"));
                                 wp->nameLen = strlen(wp->name);
 #if VERSION >= VERSION_DEMO_EU
@@ -699,79 +623,73 @@ static s32 nameMain(void) {
 #endif
                             }
                         } else {
-                            psndSFXOn((const char*)0x20014);
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_NOT_CHOICE1 | PSND_SFX_BYPASS_MUTE));
                         }
                     }
 #else
                     len = strlen(wp->name) / 2;
-                    for (j = 0, off = 0; j < len; off += 2, j++) {
-                        if (strncmp(&wp->name[off], "\x81\x40", 2)) {
+                    for (j = 0; j < len; j++) {
+                        if (strncmp(&wp->name[j * 2], "　", 2)) {
                             break;
                         }
                     }
-                    if (j < len || wp->type != 0) {
+                    if (j < len || wp->type != NAMEENT_FILE) {
                         wp->confirmSel = 1;
                         wp->state = 100;
-                        psndSFXOn((const char*)0x12);
-                        if (wp->type == 1 && j >= len) {
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+                        if (wp->type == NAMEENT_YOSHI && j >= len) {
                             strcpy(wp->name, msgSearch("name_party3"));
                             wp->nameLen = strlen(wp->name) / 2;
                         }
                     } else {
-                        psndSFXOn((const char*)0x20014);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_NOT_CHOICE1 | PSND_SFX_BYPASS_MUTE));
                     }
 #endif
                 } else if (keyGetButtonTrg(0) & PAD_BUTTON_B) {
 #if VERSION >= VERSION_US
-                    if ((u32)gp->language == 0) {
-                        if (wp->nameLen == 0 && wp->type == 0 && !strncmp(wp->name, "\x81\x40", 2)) {
-                            psndSFXOn((const char*)0x13);
-                            wp->state = 0x65;
+                    if (gp->language == LANGUAGE_JP) {
+                        if (wp->nameLen == 0 && wp->type == NAMEENT_FILE && !strncmp(wp->name, "　", 2)) {
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+                            wp->state = 101;
                             wp->flags |= NAMEENT_FLAG_CANCELLED;
                         } else {
-                            ((u16*)wp->name)[wp->nameLen] = *(u16*)"\x81\x40";
+                            ((u16*)wp->name)[wp->nameLen] = *(u16*)"　";
                             wp->nameLen--;
                             if (wp->nameLen < 0) {
                                 wp->nameLen = 0;
                             }
-                            psndSFXOn((const char*)0xB);
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_MOJI_DELETE1));
                         }
-                    } else {
-                        if (wp->nameLen == 0 && wp->type == 0 && !strncmp(wp->name, " ", 1)) {
-                            psndSFXOn((const char*)0x13);
-                            wp->state = 0x65;
-                            wp->flags |= NAMEENT_FLAG_CANCELLED;
-                        } else {
-                            wp->name[wp->nameLen] = *" ";
-                            wp->nameLen--;
-                            if (wp->nameLen < 0) {
-                                wp->nameLen = 0;
-                            }
-                            psndSFXOn((const char*)0xB);
-                        }
-                    }
-#else
-                    if (wp->nameLen == 0 && wp->type == 0 && !strncmp(wp->name, "\x81\x40", 2)) {
-                        psndSFXOn((const char*)0x13);
-                        wp->state = 0x65;
+                    } else if (wp->nameLen == 0 && wp->type == NAMEENT_FILE && !strncmp(wp->name, " ", 1)) {
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+                        wp->state = 101;
                         wp->flags |= NAMEENT_FLAG_CANCELLED;
                     } else {
-                        ((u16*)wp->name)[wp->nameLen] = *(u16*)"\x81\x40";
+                        wp->name[wp->nameLen] = *" ";
                         wp->nameLen--;
                         if (wp->nameLen < 0) {
                             wp->nameLen = 0;
                         }
-                        psndSFXOn((const char*)0xB);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_MOJI_DELETE1));
+                    }
+#else
+                    if (wp->nameLen == 0 && wp->type == NAMEENT_FILE && !strncmp(wp->name, "　", 2)) {
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+                        wp->state = 101;
+                        wp->flags |= NAMEENT_FLAG_CANCELLED;
+                    } else {
+                        ((u16*)wp->name)[wp->nameLen] = *(u16*)"　";
+                        wp->nameLen--;
+                        if (wp->nameLen < 0) {
+                            wp->nameLen = 0;
+                        }
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_FILE_MOJI_DELETE1));
                     }
 #endif
                 } else if (keyGetDirRep(0) & DEMO_STICK_LEFT) {
                     if (dist < 10.0f) {
                         wp->cursorX--;
-#if VERSION >= VERSION_US
-                        if (wp->cursorY > ((u32)gp->language == 0 ? 3 : 5)) {
-#else
-                        if (wp->cursorY > 3) {
-#endif
+                        if (wp->cursorY > NAME_LANG_PICK(3, 5)) {
                             if (wp->cursorX < 0) {
                                 wp->cursorX = 10;
                                 if (wp->cursorY > 7) {
@@ -781,16 +699,12 @@ static s32 nameMain(void) {
                         } else if (wp->cursorX < 0) {
                             wp->cursorX = 13;
                         }
-                        psndSFXOn((const char*)5);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
                     }
                 } else if (keyGetDirRep(0) & DEMO_STICK_RIGHT) {
                     if (dist < 10.0f) {
                         wp->cursorX++;
-#if VERSION >= VERSION_US
-                        if (wp->cursorY > ((u32)gp->language == 0 ? 3 : 5)) {
-#else
-                        if (wp->cursorY > 3) {
-#endif
+                        if (wp->cursorY > NAME_LANG_PICK(3, 5)) {
                             if (wp->cursorX >= 10 && wp->cursorY > 7) {
                                 wp->cursorY = 7;
                             }
@@ -800,7 +714,7 @@ static s32 nameMain(void) {
                         } else if (wp->cursorX >= NAMEENT_COLS) {
                             wp->cursorX = 0;
                         }
-                        psndSFXOn((const char*)5);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
                     }
                 } else if (keyGetDirRep(0) & DEMO_STICK_UP) {
                     if (dist < 10.0f) {
@@ -813,17 +727,13 @@ static s32 nameMain(void) {
                                 wp->cursorY = 8;
                             }
                         }
-                        psndSFXOn((const char*)5);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
                     }
                 } else if (keyGetDirRep(0) & DEMO_STICK_DOWN) {
                     if (dist < 10.0f) {
                         wp->cursorY++;
                         if (wp->cursorX > 9) {
-#if VERSION >= VERSION_US
-                            if (wp->cursorY >= ((u32)gp->language == 0 ? 4 : 6)) {
-#else
-                            if (wp->cursorY >= 4) {
-#endif
+                            if (wp->cursorY >= NAME_LANG_PICK(4, 6)) {
                                 wp->cursorX = 10;
                             }
                             if (wp->cursorY >= 8) {
@@ -832,13 +742,14 @@ static s32 nameMain(void) {
                         } else if (wp->cursorY >= 9) {
                             wp->cursorY = 0;
                         }
-                        psndSFXOn((const char*)5);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
                     }
+#endif
                 }
             }
             idx = wp->cursorX;
 #if VERSION >= VERSION_US
-            if (idx > 9 && wp->cursorY > ((u32)gp->language == 0 ? 3 : 5)) {
+            if (idx > 9 && wp->cursorY > (gp->language == LANGUAGE_JP ? 3 : 5)) {
 #else
             if (idx > 9 && wp->cursorY > 3) {
 #endif
@@ -861,17 +772,31 @@ static s32 nameMain(void) {
             if (keyGetButtonTrg(0) & PAD_BUTTON_A) {
                 if (wp->confirmSel == 0) {
                     wp->state++;
-                    psndSFXOn((const char*)0x12);
+#if VERSION <= VERSION_DEMO_JP
+                    psndSFXOn((const char*)PSND_SFX_CURSOR_OK1);
                 } else {
                     wp->state = 0;
-                    psndSFXOn((const char*)0x13);
+                    psndSFXOn((const char*)PSND_SFX_CURSOR_CANCEL1);
+#else
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+                } else {
+                    wp->state = 0;
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+#endif
                 }
             } else if (keyGetButtonTrg(0) & PAD_BUTTON_B) {
                 wp->state = 0;
-                psndSFXOn((const char*)0x13);
+#if VERSION <= VERSION_DEMO_JP
+                psndSFXOn((const char*)PSND_SFX_CURSOR_CANCEL1);
             } else if (keyGetDirRep(0) & (DEMO_STICK_UP | DEMO_STICK_DOWN)) {
                 wp->confirmSel = 1 - wp->confirmSel;
-                psndSFXOn((const char*)5);
+                psndSFXOn((const char*)PSND_SFX_CURSOR_MOVE1);
+#else
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+            } else if (keyGetDirRep(0) & (DEMO_STICK_UP | DEMO_STICK_DOWN)) {
+                wp->confirmSel = 1 - wp->confirmSel;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
+#endif
             }
             wp->x2 = -60.0f;
             wp->y2 = -30.0f - 40.0f * (f32)wp->confirmSel;
@@ -893,8 +818,6 @@ static s32 nameMain(void) {
     return 0;
 }
 
-#endif
-
 /**
  * Draws the name entry screen in 2D: background, the name boxes with the 8 typed characters, the character grid,
  * the side buttons, the caret, the prompt window for this type and, while confirming,
@@ -903,24 +826,23 @@ static s32 nameMain(void) {
 static void nameEntDisp(CameraId cameraId, void* param) {
     GXColor white2;
     GXColor white;
-    GXColor unused = {0xFF, 0xFF, 0xFF, 0xFF};
+    GXColor whiteInit = {0xFF, 0xFF, 0xFF, 0xFF};
     const char* str;
-    s32 k;
     s32 n;
     s32 j;
     s32 i;
     CameraEntry saved;
-    f32 proj[7];
-    f32 vp[6];
+    f32 proj[GX_PROJECTION_SZ];
+    f32 vp[GX_VIEWPORT_SZ];
     char buf[16];
     CameraEntry* cam;
     const char* ok;
     const char* yes;
     const char* no;
-    u16 width;
     f32 w;
 
-    white = unused;
+    // Opaque white is copied through whiteInit, white and white2 (three stack copies in the retail code).
+    white = whiteInit;
     white2 = white;
     saved = *camGetCurPtr();
     GXGetProjectionv(proj);
@@ -950,7 +872,7 @@ static void nameEntDisp(CameraId cameraId, void* param) {
         }
     }
 #if VERSION >= VERSION_US
-    for (j = (u32)gp->language == 0 ? 0 : 2; j < 4; j++) {
+    for (j = gp->language == LANGUAGE_JP ? 0 : 2; j < 4; j++) {
 #else
     for (j = 0; j < 4; j++) {
 #endif
@@ -971,7 +893,7 @@ static void nameEntDisp(CameraId cameraId, void* param) {
     for (n = 0; n < 8; n++) {
         memset(buf, 0, sizeof(buf));
 #if VERSION >= VERSION_US
-        if ((u32)gp->language == 0) {
+        if (gp->language == LANGUAGE_JP) {
             strncpy(buf, &wp->name[n * 2], 2);
         } else {
             strncpy(buf, &wp->name[n], 1);
@@ -985,7 +907,7 @@ static void nameEntDisp(CameraId cameraId, void* param) {
     }
     str = msg_tbl[wp->type];
     w = FontGetMessageWidth(msgSearch(str));
-    windowDispGX_Waku_col(0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF}, -250.0f, -160.0f, 500.0f, 40.0f, 20.0f);
+    windowDispGX_Waku_col(-250.0f, -160.0f, 500.0f, 40.0f, 20.0f, 0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     FontDrawStart();
     FontDrawString((240.0f - w) / 2.0f + -120.0f, -168.0f, msgSearch(str));
     nameMaskGX(wp->maskAlpha);
@@ -993,7 +915,7 @@ static void nameEntDisp(CameraId cameraId, void* param) {
         ok = msgSearch("msg_nameent_ok");
         yes = msgSearch("msg_nameent_yes");
         no = msgSearch("msg_nameent_no");
-        if (wp->type == 4) {
+        if (wp->type == NAMEENT_PASSWORD) {
             ok = msgSearch("msg_nameent_ok_01");
         }
         nameWinGX(-180.0f, 130.0f, 360.0f, 100.0f, *wp->tplFile->data, 1);
@@ -1003,6 +925,8 @@ static void nameEntDisp(CameraId cameraId, void* param) {
         FontDrawEdge();
         FontDrawString(-(f32)FontGetMessageWidth(ok) / 2.0f, 110.0f, ok);
         FontDrawString(-(f32)FontGetMessageWidth(wp->name) / 2.0f, 70.0f, wp->name);
+
+        // Both choices are placed with the width of the no string.
         FontDrawString(-(f32)FontGetMessageWidth(no) / 2.0f, -20.0f, yes);
         FontDrawString(-(f32)FontGetMessageWidth(no) / 2.0f, -60.0f, no);
         FontDrawEdgeOff();
@@ -1015,103 +939,13 @@ static void nameEntDisp(CameraId cameraId, void* param) {
     GXSetViewport(vp[0], vp[1], vp[2], vp[3], vp[4], vp[5]);
 }
 
-/**
- * Draws the screen background from name.tpl: a 32-pixel strip on each side (textures 0x22 and 0x23)
- * and the 544-pixel middle (0x21), all 480 high.
- */
-static void nameBG(void) {
-    Mtx m1, m2, m3;
-    GXTexObj obj1, obj2, obj3;
-    f32 sy;
-    double h1, w1, h2, w2, h3, w3;
-
-    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
-    GXSetZCompLoc(GX_FALSE);
-    GXSetAlphaCompare(GX_GEQUAL, 0x80, GX_AOP_OR, GX_NEVER, 0);
-    GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
-    GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
-    GXSetNumChans(0);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
-    GXSetNumTevStages(1);
-    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-    GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
-    GXSetCullMode(GX_CULL_NONE);
-    GXClearVtxDesc();
-    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
-    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
-    GXSetCurrentMtx(GX_PNMTX0);
-
-    TEXGetGXTexObjFromPalette(*wp->tplFile->data, &obj1, 0x22);
-    GXInitTexObjLOD(&obj1, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    GXLoadTexObj(&obj1, GX_TEXMAP0);
-    GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
-    h1 = __fabs(480.0);
-    w1 = __fabs(32.0);
-    sy = (f32)h1 / GXGetTexObjHeight(&obj1);
-    PSMTXScale(m1, (f32)w1 / GXGetTexObjWidth(&obj1), sy, 1.0f);
-    GXLoadTexMtxImm(m1, GX_TEXMTX0, GX_MTX2x4);
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-    GXPosition3f32(-304.0f, 240.0f, 0.0f);
-    GXTexCoord2f32(0.0f, 0.0f);
-    GXPosition3f32(-304.0f, -240.0f, 0.0f);
-    GXTexCoord2f32(0.0f, 1.0f);
-    GXPosition3f32(-272.0f, -240.0f, 0.0f);
-    GXTexCoord2f32(1.0f, 1.0f);
-    GXPosition3f32(-272.0f, 240.0f, 0.0f);
-    GXTexCoord2f32(1.0f, 0.0f);
-
-    TEXGetGXTexObjFromPalette(*wp->tplFile->data, &obj2, 0x21);
-    GXInitTexObjLOD(&obj2, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    GXLoadTexObj(&obj2, GX_TEXMAP0);
-    GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
-    h2 = __fabs(480.0);
-    w2 = __fabs(544.0);
-    sy = (f32)h2 / GXGetTexObjHeight(&obj2);
-    PSMTXScale(m2, (f32)w2 / GXGetTexObjWidth(&obj2), sy, 1.0f);
-    GXLoadTexMtxImm(m2, GX_TEXMTX0, GX_MTX2x4);
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-    GXPosition3f32(-272.0f, 240.0f, 0.0f);
-    GXTexCoord2f32(0.0f, 0.0f);
-    GXPosition3f32(-272.0f, -240.0f, 0.0f);
-    GXTexCoord2f32(0.0f, 1.0f);
-    GXPosition3f32(272.0f, -240.0f, 0.0f);
-    GXTexCoord2f32(1.0f, 1.0f);
-    GXPosition3f32(272.0f, 240.0f, 0.0f);
-    GXTexCoord2f32(1.0f, 0.0f);
-
-    TEXGetGXTexObjFromPalette(*wp->tplFile->data, &obj3, 0x23);
-    GXInitTexObjLOD(&obj3, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    GXLoadTexObj(&obj3, GX_TEXMAP0);
-    GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
-    h3 = __fabs(480.0);
-    w3 = __fabs(32.0);
-    sy = (f32)h3 / GXGetTexObjHeight(&obj3);
-    PSMTXScale(m3, (f32)w3 / GXGetTexObjWidth(&obj3), sy, 1.0f);
-    GXLoadTexMtxImm(m3, GX_TEXMTX0, GX_MTX2x4);
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-    GXPosition3f32(272.0f, 240.0f, 0.0f);
-    GXTexCoord2f32(0.0f, 0.0f);
-    GXPosition3f32(272.0f, -240.0f, 0.0f);
-    GXTexCoord2f32(0.0f, 1.0f);
-    GXPosition3f32(304.0f, -240.0f, 0.0f);
-    GXTexCoord2f32(1.0f, 1.0f);
-    GXPosition3f32(304.0f, 240.0f, 0.0f);
-    GXTexCoord2f32(1.0f, 0.0f);
-}
-
 /** Draws one textured quad from name.tpl texture id at (x, y), w x h, with the texture scaled to fit. */
-static inline void nameTexQuad(s32 id, f32 x, f32 y, f32 w, f32 h) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void chip(s32 id, f32 x, f32 y, f32 w, f32 h) {
     GXTexObj obj;
     Mtx i;
     double aw;
     double ah;
-    f32 sy;
 
     TEXGetGXTexObjFromPalette(*wp->tplFile->data, &obj, id);
     GXInitTexObjLOD(&obj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
@@ -1134,8 +968,37 @@ static inline void nameTexQuad(s32 id, f32 x, f32 y, f32 w, f32 h) {
 }
 
 /**
- * Draws the panel the character grid sits on (kirinuki, a cut-out) from nine name.tpl pieces:
- * 8-pixel corners and edges around the middle.
+ * Draws the screen background from name.tpl: a 32-pixel strip on each side (textures 0x22 and 0x23)
+ * and the 544-pixel middle (0x21), all 480 high.
+ */
+static void nameBG(void) {
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
+    GXSetZCompLoc(GX_FALSE);
+    GXSetAlphaCompare(GX_GEQUAL, 0x80, GX_AOP_OR, GX_NEVER, 0);
+    GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
+    GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+    GXSetNumChans(0);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    GXSetNumTevStages(1);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
+    GXSetCullMode(GX_CULL_NONE);
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+    GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+    GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+
+    chip(0x22, -304.0f, 240.0f, 32.0f, 480.0f);
+    chip(0x21, -272.0f, 240.0f, 544.0f, 480.0f);
+    chip(0x23, 272.0f, 240.0f, 32.0f, 480.0f);
+}
+
+/**
+ * Draws the panel the character grid sits on (kirinuki, a cut-out) from eight name.tpl quads:
+ * 8-pixel corners, the top and left edges, and the middle texture (which also fills the right and bottom edges).
  */
 static void nameKirinukiGX(f32 x, f32 y, f32 w, f32 h) {
     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
@@ -1154,22 +1017,21 @@ static void nameKirinukiGX(f32 x, f32 y, f32 w, f32 h) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, 0);
-    GXSetCurrentMtx(0);
-    nameTexQuad(0x2F, x, y, 8, 8);
-    nameTexQuad(0x2D, x + 8, y, w - 8 - 8, 8);
-    nameTexQuad(0x31, x + w - 8, y, 8, 8);
-    nameTexQuad(0x2E, x, y - 8, 8, h - 8 - 8);
-    nameTexQuad(0x2C, x + 8, y - 8, w - 8, h - 8 - 8);
-    nameTexQuad(0x30, x, y - (h - 8), 8, 8);
-    nameTexQuad(0x2C, x + 8, y - (h - 8), w - 8 - 8, 8);
-    nameTexQuad(0x32, x + w - 8, y - (h - 8), 8, 8);
+    GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    chip(0x2F, x, y, 8, 8);
+    chip(0x2D, x + 8, y, w - 8 - 8, 8);
+    chip(0x31, x + w - 8, y, 8, 8);
+    chip(0x2E, x, y - 8, 8, h - 8 - 8);
+    chip(0x2C, x + 8, y - 8, w - 8, h - 8 - 8);
+    chip(0x30, x, y - (h - 8), 8, 8);
+    chip(0x2C, x + 8, y - (h - 8), w - 8 - 8, 8);
+    chip(0x32, x + w - 8, y - (h - 8), 8, 8);
 }
 
 /**
- * Draws the full-screen mask behind the confirm window: fade.tpl image 1 (the spot-fade texture of the
- * FADE_*_SPOT fades) in black at half opacity, scaled about its centre by 1000 t^5
- * (t is maskAlpha, 0 to 1, raised while confirming), so the spot closes in and the screen behind darkens.
+ * Draws a full-screen mask: image 1 of the fade texture (fadeGetTpl) in black at half opacity, its texture
+ * coordinates scaled about the centre by 1000 t^5.
  */
 void nameMaskGX(f32 t) {
     Mtx a, b, c;
@@ -1220,7 +1082,8 @@ void nameMaskGX(f32 t) {
 }
 
 /** Draws one window piece: texture a scaled to w x h modulated by textures b and c. */
-static inline void nameWinQuad(TEXPalette* tpl, s32 a, s32 b, s32 c, f32 x, f32 y, f32 w, f32 h) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void chip2(TEXPalette* tpl, s32 a, s32 b, s32 c, f32 x, f32 y, f32 w, f32 h) {
     GXTexObj obj;
     Mtx i;
     double aw2;
@@ -1244,12 +1107,12 @@ static inline void nameWinQuad(TEXPalette* tpl, s32 a, s32 b, s32 c, f32 x, f32 
     GXInitTexObjLOD(&obj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
     GXLoadTexObj(&obj, GX_TEXMAP2);
     GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
-    {
-        ah2 = __fabs(h);
-        aw2 = __fabs(w);
-        PSMTXScale(i, (f32)aw2 / GXGetTexObjWidth(&obj), (f32)ah2 / GXGetTexObjHeight(&obj), 1.0f);
-        GXLoadTexMtxImm(i, GX_TEXMTX1, GX_MTX2x4);
-    }
+
+    // |w| and |h| again for the TEXMTX1 scale (the retail code recomputes |h|).
+    ah2 = __fabs(h);
+    aw2 = __fabs(w);
+    PSMTXScale(i, (f32)aw2 / GXGetTexObjWidth(&obj), (f32)ah2 / GXGetTexObjHeight(&obj), 1.0f);
+    GXLoadTexMtxImm(i, GX_TEXMTX1, GX_MTX2x4);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(x, y, 0.0f);
     GXTexCoord2f32(0.0f, 0.0f);
@@ -1292,7 +1155,7 @@ void nameWinGX(f32 x, f32 y, f32 w, f32 h, TEXPalette* tpl, s32 type) {
     GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_CPREV, GX_CC_TEXC, GX_CC_TEXA, GX_CC_ZERO);
     GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_APREV, GX_CA_KONST, GX_CA_TEXA, GX_CA_ZERO);
-    GXSetTevKAlphaSel(GX_TEVSTAGE2, 0);
+    GXSetTevKAlphaSel(GX_TEVSTAGE2, GX_TEV_KASEL_1);
     GXSetTevSwapMode(GX_TEVSTAGE2, GX_TEV_SWAP0, GX_TEV_SWAP0);
     GXSetCullMode(GX_CULL_NONE);
     GXClearVtxDesc();
@@ -1300,10 +1163,10 @@ void nameWinGX(f32 x, f32 y, f32 w, f32 h, TEXPalette* tpl, s32 type) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, 0);
-    GXSetCurrentMtx(0);
-    nameWinQuad(tpl, type + 4, type + 5, type, x, y, w - 16, h - 16);
-    nameWinQuad(tpl, type + 4, type + 7, type + 2, x + w - 16, y, 16, h - 16);
-    nameWinQuad(tpl, type + 4, type + 6, type + 1, x, y - h + 16, w - 16, 16);
-    nameWinQuad(tpl, type + 4, type + 8, type + 3, x + w - 16, y - h + 16, 16, 16);
+    GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    chip2(tpl, type + 4, type + 5, type, x, y, w - 16, h - 16);
+    chip2(tpl, type + 4, type + 7, type + 2, x + w - 16, y, 16, h - 16);
+    chip2(tpl, type + 4, type + 6, type + 1, x, y - h + 16, w - 16, 16);
+    chip2(tpl, type + 4, type + 8, type + 3, x + w - 16, y - h + 16, 16, 16);
 }

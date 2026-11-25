@@ -1,6 +1,8 @@
 // mapdrv.c: the map driver: map.dat structures (joints, materials, display lists) and map object drawing and animation.
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <dolphin/os.h>
@@ -25,20 +27,21 @@ typedef struct MapVtxArray {
 typedef struct MapVcdTable {
     MapVtxArray* positions;    // 0x0
     MapVtxArray* normals;      // 0x4
-    u8 pad_08[0xC - 0x8];      // 0x8
+    s32 colorCount;            // 0x8, number of colour arrays in colors (1 in retail maps, 0 when none); never read
     MapVtxArray* colors[2];    // 0xC
     s32 texCount;              // 0x14
     MapVtxArray* texCoords[8]; // 0x18
     u8 pad_38[0x44 - 0x38];    // 0x38
-    s32 posFrac;               // 0x44, fraction bits of the packed s16 positions (GX vtx fmt / GQR5 in hitdrv)
-    s32 texFrac[8];            // 0x48, fraction bits of the packed s16 tex coords
+    // ver1.00 map files end the table here (0x44): no fraction words, their vertices are not packed
+    s32 posFrac;    // 0x44, fraction bits of the packed s16 positions (GX vtx fmt / GQR5 in hitdrv)
+    s32 texFrac[8]; // 0x48, fraction bits of the packed s16 tex coords
 } MapVcdTable;
 
 typedef struct MapVtxRec {
     s16 pos;    // 0x0
     s16 nrm;    // 0x2
     s16 clr;    // 0x4
-    s16 clr1;   // 0x6, second color index (never read)
+    s16 clr1;   // 0x6
     s16 tex[8]; // 0x8
 } MapVtxRec;
 
@@ -63,7 +66,7 @@ typedef struct MapFileMesh {
 typedef struct MapTexInfo {
     char* name; // 0x0
     u8 format;  // 0x4
-    u8 pad_05[3];
+    u8 pad5[3];
     u16 width;  // 0x8
     u16 height; // 0xA
     void* data; // 0xC
@@ -86,7 +89,7 @@ typedef struct MapTexXform {
 
 typedef struct MapMatSampler {
     MapTexInfo* tex; // 0x0
-    u8 pad_04[4];    // 0x4
+    u8 pad4[4];      // 0x4
     u8 wrapS;        // 0x8
     u8 wrapT;        // 0x9
     u8 blendMode;    // 0xA, as MapMaterial.blendMode
@@ -96,7 +99,7 @@ typedef struct MapMaterial {
     char* name;                 // 0x0
     GXColor color;              // 0x4
     u8 lightMode;               // 0x8
-    u8 pad_09;                  // 0x9
+    u8 pad9;                    // 0x9
     u8 blendMode;               // 0xA, 0 opaque, 1 alpha-tested, 2 translucent (_mapEnt picks MapObject.blendMode)
     u8 samplerCount;            // 0xB
     MapMatSampler* samplers[8]; // 0xC
@@ -110,20 +113,30 @@ typedef struct MapFileJointPart {
     MapFileMesh* mesh;     // 0x4
 } MapFileJointPart;
 
-// MapJointDrawMode.modeFlags (from map.dat), copied into MapObject.flags by mapEntry
-#define MAP_DRAWMODE_NO_DEPTH 0x1    // MAPOBJ_FLAG_NO_DEPTH
-#define MAP_DRAWMODE_GROUP 0x2       // MAPOBJ_FLAG_GROUP, blend mode from blendType
-#define MAP_DRAWMODE_CHAR_SHADOW 0x4 // MAPOBJ_FLAG_CHAR_SHADOW
-#define MAP_DRAWMODE_NEAR_LIGHTS 0x8 // lit by the nearest map lights as well as lightMask; no prebuilt display list
-#define MAP_DRAWMODE_DEPTH_BIAS 0x10 // MAPOBJ_FLAG_DEPTH_BIAS (groups)
+// MapJointDrawMode.modeFlags (map file data, read by _mapEnt and the draw passes)
+typedef enum MapDrawModeFlags {
+    DRAW_MODE_BACKGROUND = (1 << 0),   // 0x1, -> MAP_OBJ_FLAG_BACKGROUND
+    DRAW_MODE_GROUP = (1 << 1),        // 0x2, -> MAP_OBJ_FLAG_GROUP
+    DRAW_MODE_CHAR_SHADOW = (1 << 2),  // 0x4, -> MAP_OBJ_FLAG_CHAR_SHADOW
+    DRAW_MODE_MAP_LIGHTS = (1 << 3),   // 0x8, lit by map lights (lightMask, or the nearest); never display-list baked
+    DRAW_MODE_DEPTH_OFFSET = (1 << 4), // 0x10, with GROUP: -> MAP_OBJ_FLAG_DEPTH_OFFSET
+} MapDrawModeFlags;
+
+// MapJointDrawMode.cullMode: index into mapdrv's table of GX cull modes.
+typedef enum MapCullMode {
+    MAP_CULL_FRONT = 0,
+    MAP_CULL_BACK = 1,
+    MAP_CULL_ALL = 2,
+    MAP_CULL_NONE = 3,
+} MapCullMode;
+
 typedef struct MapJointDrawMode {
     u8 blendType;          // 0x0, 0..3, selects MapObject.blendMode
-    u8 cullMode;           // 0x1
-    u8 modeFlags;          // 0x2, MAP_DRAWMODE_*
-    u8 pad_03;             // 0x3, never accessed
-    u32 lightMask;         // 0x4, bit i = map light i applies
+    u8 cullMode;           // 0x1, MapCullMode
+    u8 modeFlags;          // 0x2, MapDrawModeFlags
+    u32 lightMask;         // 0x4, bit i = map light i applies (with DRAW_MODE_MAP_LIGHTS)
     s32 hitAttributes;     // 0x8, copied to HitEntry.attributes
-    u8 pad_0C[0x10 - 0xC]; // 0xC, never accessed
+    u8 pad_0C[0x14 - 0xC]; // 0xC, never accessed (the retail map files space the records 0x14 apart)
 } MapJointDrawMode;
 
 typedef struct MapFileJoint {
@@ -141,101 +154,120 @@ typedef struct MapFileJoint {
     u8 pad_54[0x58 - 0x54];      // 0x54, never accessed
     MapJointDrawMode* drawMode;  // 0x58
     s32 partCount;               // 0x5C
-    MapFileJointPart parts[];    // 0x60+
+    MapFileJointPart parts[1];   // 0x60, partCount entries; a joint with none still takes this one (0x68 in the files)
 } MapFileJoint;
 
-typedef struct MapFileHeader {
-    s32 fileSize;     // 0x0
-    s32 dataSize;     // 0x4
-    s32 relCount;     // 0x8, entries in the relocation table
-    s32 chunkCount;   // 0xC, entries in the chunk (public root) table
-    s32 externCount;  // 0x10, number of 8-byte extern (reference) entries after the chunk table
-    u8 reserved[0xC]; // 0x14
-} MapFileHeader;
+/*
+ * map.dat is a sysdolphin (HAL) archive: the JP demo map lists HSD_ArchiveParse and HSD_ArchiveGetPublicAddress
+ * in mapdrv.o. The HSD_Archive* type, field and flag names are sysdolphin's, as NWPlayer123 passed them on
+ * (2026-11-17); the layout matches the loader below byte for byte.
+ */
+typedef struct HSD_ArchiveHeader {
+    u32 file_size; // 0x0
+    u32 data_size; // 0x4
+    u32 nb_reloc;  // 0x8
+    u32 nb_public; // 0xC
+    u32 nb_extern; // 0x10, 0 in every retail map
+    u8 version[4]; // 0x14
+    u32 pad[2];    // 0x18
+} HSD_ArchiveHeader;
 
-// entry in the chunk table
-typedef struct MapFileChunk {
+// entry in the relocation table: offset into data of a pointer to rebase
+typedef struct HSD_ArchiveRelocationInfo {
+    u32 offset; // 0x0
+} HSD_ArchiveRelocationInfo;
+
+// entry in the public (exported chunk) table
+typedef struct HSD_ArchivePublicInfo {
     u32 offset; // 0x0, relative offset into data
-    u32 string; // 0x4, relative offset into strings
-} MapFileChunk;
+    u32 symbol; // 0x4, relative offset into symbols
+} HSD_ArchivePublicInfo;
+
+// entry in the extern table (no retail map has one)
+typedef struct HSD_ArchiveExternInfo {
+    u32 offset; // 0x0
+    u32 symbol; // 0x4
+} HSD_ArchiveExternInfo;
+
+typedef enum HSD_ArchiveFlag {
+    HSD_ARCHIVE_DONT_FREE = 1,
+} HSD_ArchiveFlag;
 
 typedef struct MapFileInfo {
-    const char* version; // 0x0
-    MapFileJoint* joint; // 0x4
-    const char* mapName; // 0x8
-    const char* hitName; // 0xC
+    const char* version;    // 0x0
+    MapFileJoint* joint;    // 0x4
+    const char* mapName;    // 0x8
+    const char* hitName;    // 0xC
+    const char* exportDate; // 0x10, ver1.02 only: when the map was exported ("yy/mm/dd hh:mm:ss"); never read
 } MapFileInfo;
 
-typedef struct MapHeader {
-    MapFileHeader file;     // 0x0
-    void* data;             // 0x20
-    u32* rel;               // 0x24, relocation table: offsets into data of the pointers to rebase
-    MapFileChunk* chunks;   // 0x28
-    MapFileChunk* externs;  // 0x2C, extern table (externCount entries); located but never read
-    const char* strings;    // 0x30
-    u8 pad_34[0x3C - 0x34]; // 0x34, never accessed
-    s32 loadFlags;          // 0x3C, bit 1 set by mapLoadHeader_ before the header copy
-    void* rawFile;          // 0x40, the map.dat buffer the header was read from (SPM MapFileContext.rawFile)
-} MapHeader;
+typedef struct HSD_Archive {
+    HSD_ArchiveHeader header;              // 0x0
+    u8* data;                              // 0x20
+    HSD_ArchiveRelocationInfo* reloc_info; // 0x24
+    HSD_ArchivePublicInfo* public_info;    // 0x28
+    HSD_ArchiveExternInfo* extern_info;    // 0x2C
+    char* symbols;                         // 0x30
+    struct HSD_Archive* next;              // 0x34, never accessed in TTYD
+    char* name;                            // 0x38, never accessed in TTYD
+    HSD_ArchiveFlag flags;                 // 0x3C, HSD_ArchiveParse sets HSD_ARCHIVE_DONT_FREE before the header copy
+    void* top_ptr;                         // 0x40, the map.dat buffer the archive was read from
+} HSD_Archive;
 
-// MapObject.flags (mapObjFlagOn/Off, mapGrpFlagOn/Off and evt_mapobj_flag_onoff). Bits not listed have no
-// script use and their meaning is not established from the readers.
-#define MAPOBJ_FLAG_HIDE 0x1                     // not drawn on its own camera (an offscreen copy is still drawn)
-#define MAPOBJ_FLAG_BBOX_CULL 0x2                // skipped when its bounding box is outside the view
-#define MAPOBJ_FLAG_CHAR_SHADOW 0x4              // receives Mario's projected shadow
-#define MAPOBJ_FLAG_NO_DEPTH 0x8                 // no depth test or write: blend modes 3-5 instead of 0-2 (draw mode MAP_DRAWMODE_NO_DEPTH)
-#define MAPOBJ_FLAG_GROUP 0x10                   // a group node (drawn with mapDispMapGrp)
-#define MAPOBJ_FLAG_IN_GROUP 0x20                // drawn as part of a parent group, not on its own
-#define MAPOBJ_FLAG_COLOR_ALPHA 0x40             // MapObject.color alpha applies (translucent below 0xFF, skipped at 0)
-#define MAPOBJ_FLAG_OFFSCREEN 0x80               // also drawn into its offscreen buffer (offscreenId)
-#define MAPOBJ_FLAG_DISPLAY_LIST 0x100           // draw from the prebuilt display lists (only sticks when one exists)
-#define MAPOBJ_FLAG_MTX_DIRTY 0x200              // world matrix is recalculated on the next mapReCalcMatrix
-#define MAPOBJ_FLAG_PROJ_TEXTURE 0x400           // adds the projected texture stage (projTexObj)
-#define MAPOBJ_FLAG_NO_BLEND 0x800               // ignores the map's blend colour (MapEntry flag 2) and colour (flag 8)
-#define MAPOBJ_FLAG_NO_BLEND2 0x1000             // ignores the map's second blend colour (MapEntry flag 4)
-#define MAPOBJ_FLAG_ANIM_MTX 0x2000              // uses animMtx instead of localMtx
-#define MAPOBJ_FLAG_DISABLE 0x4000               // not drawn at all (no bounding box, no offscreen copy)
-#define MAPOBJ_FLAG_DEPTH_BIAS 0x8000            // group part drawn with its depth pulled 0.01 per joint index toward the camera (MAP_DRAWMODE_DEPTH_BIAS)
-#define MAPOBJ_FLAG_DEPTH_SHADOW 0x10000         // receives the depth shadow, subtracted (mapSetMaterialTev; ANIM_MATERIAL_FLAG_DEPTH_SHADOW)
-#define MAPOBJ_FLAG_PROJ_SHADOW 0x20000          // receives the projected shadow (shadowGetProjShadowTexObj)
-#define MAPOBJ_FLAG_DEPTH_SHADOW_ADD 0x40000     // as DEPTH_SHADOW, but the shadow colour is added instead of subtracted
-#define MAPOBJ_FLAG_NO_FOG 0x80000               // drawn without the map fog
-#define MAPOBJ_FLAG_HIGHLIGHT_OBJ_COLOR 0x100000 // the highlight stage uses the object colour, not the pulsing yellow
-#define MAPOBJ_FLAG_TRANSFORM_MTX 0x200000       // transformMtx (mapObjRotate/Trans/Scale) applies
-#define MAPOBJ_FLAG_KURURING_PASS 0x400000       // drawn again, unculled, by test_kururing_mapdisp
-#define MAPOBJ_FLAG_CHARGE_SHINE 0x800000        // adds the scrolling shine texture stage (ANIM_MATERIAL_FLAG_CHARGE_SHINE)
-#define MAPOBJ_FLAG_TEV_CALLBACK_MASK 0xF000000  // index into MapEntry.tevCallbacks, see MAPOBJ_TEV_CALLBACK
-#define MAPOBJ_FLAG_NO_COLOR_STAGE 0x10000000    // skips the TEV stage that multiplies in the object and blend colour
-#define MAPOBJ_FLAG_BBOX 0x20000000              // its screen bounding box is measured (mapDispMapObj_bbox)
-#define MAPOBJ_FLAG_HIGHLIGHT 0x80000000         // mapSetMaterialTev adds a pulsing yellow colour stage (ANIM_MATERIAL_FLAG_HIGHLIGHT)
-
-// MapObject.flags value that selects MapEntry.tevCallbacks[n] (1-15) for the object's extra TEV stages
-#define MAPOBJ_TEV_CALLBACK(n) ((n) << 24)
-
-// evt_mapobj_flag_onoff and the other evt_mapobj_* commands: first argument
-#define MAPOBJ_SINGLE 0 // only the named map object
-#define MAPOBJ_GROUP 1  // the named object and all its children
+// MapObject.flags, named from mapdrv (draw passes, _mapEnt, the mapObj* setters) and envdrv. Bits 24-27 are not
+// flags but the index of the TEV callback (MAP_OBJ_TEV_CALLBACK). 0x80000000 (only set on animation poses, which
+// share the material flag layout) is MAP_OBJ_FLAG_PULSE below the enum; 0x40000000 is not named.
+typedef enum MapObjFlags {
+    MAP_OBJ_FLAG_HIDDEN = (1 << 0),          // 0x1, not drawn by its own camera (offscreen pass still draws it)
+    MAP_OBJ_FLAG_CLIP = (1 << 1),            // 0x2, view frustum cull (small bounding boxes, _mapEnt)
+    MAP_OBJ_FLAG_CHAR_SHADOW = (1 << 2),     // 0x4, receives character shadows (draw mode flag)
+    MAP_OBJ_FLAG_BACKGROUND = (1 << 3),      // 0x8, drawn first; draw modes 3/4 without Z test/write
+    MAP_OBJ_FLAG_GROUP = (1 << 4),           // 0x10, group node (draw mode flag)
+    MAP_OBJ_FLAG_GROUP_MEMBER = (1 << 5),    // 0x20, belongs to a group
+    MAP_OBJ_FLAG_COLOR = (1 << 6),           // 0x40, mapObjSetColor
+    MAP_OBJ_FLAG_OFFSCREEN = (1 << 7),       // 0x80, mapObjSetOffScreen
+    MAP_OBJ_FLAG_DISPLAY_LIST = (1 << 8),    // 0x100, material baked into a display list
+    MAP_OBJ_FLAG_MTX_DIRTY = (1 << 9),       // 0x200, matrix recalculated on the next update
+    MAP_OBJ_FLAG_PROJ_TEX = (1 << 10),       // 0x400, projected texture
+    MAP_OBJ_FLAG_NO_MAP_BLEND = (1 << 11),   // 0x800, ignores mapSetBlend
+    MAP_OBJ_FLAG_NO_MAP_BLEND2 = (1 << 12),  // 0x1000, ignores mapSetBlend2
+    MAP_OBJ_FLAG_ANIM_MTX = (1 << 13),       // 0x2000, joint animation matrix
+    MAP_OBJ_FLAG_DISABLED = (1 << 14),       // 0x4000, skipped by every draw pass
+    MAP_OBJ_FLAG_DEPTH_OFFSET = (1 << 15),   // 0x8000, projection depth bias by its place among its siblings
+    MAP_OBJ_FLAG_DEPTH_SHADOW = (1 << 16),   // 0x10000, receives the depth shadow (mapSetMaterialTev)
+    MAP_OBJ_FLAG_PROJ_SHADOW = (1 << 17),    // 0x20000, receives the projected shadow
+    MAP_OBJ_FLAG_DEPTH_SHADOW_2 = (1 << 18), // 0x40000, depth shadow, second TEV setup
+    MAP_OBJ_FLAG_NO_FOG = (1 << 19),         // 0x80000
+    MAP_OBJ_FLAG_FLUSH = (1 << 20),          // 0x100000, mapObjFlushOn
+    MAP_OBJ_FLAG_TRANSFORM = (1 << 21),      // 0x200000, mapObjRotate/Translate/Scale applied
+    MAP_OBJ_FLAG_KURURING = (1 << 22),       // 0x400000, drawn by test_kururing_mapdisp
+    MAP_OBJ_FLAG_WAVE_TEX = (1 << 23),       // 0x800000, scrolling wave texture stage
+    MAP_OBJ_FLAG_NO_COLOR_STAGE = (1 << 28), // 0x10000000, no final colour-multiply TEV stage
+    MAP_OBJ_FLAG_SCREEN_RECT = (1 << 29),    // 0x20000000, mapDispMapObj_bbox screen rectangle
+} MapObjFlags;
+#define MAP_OBJ_FLAG_PULSE 0x80000000 // pulsing yellow highlight stage (with FLUSH: the object colour)
+#define MAP_OBJ_TEV_CALLBACK_MASK 0x0F000000
+#define MAP_OBJ_TEV_CALLBACK(n) ((n) << 24)
 
 typedef struct MapObject {
-    u32 flags;                // 0x0, MAPOBJ_FLAG_*
-    u8 blendMode;             // 0x4
+    u32 flags;                // 0x0, MapObjFlags
+    u8 blendMode;             // 0x4, DISP_MODE_*, from the joint's draw mode or materials
     u8 cameraId;              // 0x5, dispEntry camera (4 by default; set by evt_lect_* / tik_00)
-    u8 pad_06[0x8 - 0x6];     // 0x6, never accessed
-    MapFileJoint* joints;     // 0x8
-    GXColor color;            // 0xC
-    Vec center;               // 0x10
-    Mtx modelWorldMtx;        // 0x1C
-    Mtx localMtx;             // 0x4C
+    MapFileJoint* joints;     // 0x8, map file joint it was built from; NULL = free slot
+    GXColor color;            // 0xC, tint (mapObjSetColor, MAP_OBJ_FLAG_COLOR); alpha 0 hides it
+    Vec center;               // 0x10, joint bounding box centre (its translation without parts)
+    Mtx modelWorldMtx;        // 0x1C, parent's world matrix times localMtx
+    Mtx localMtx;             // 0x4C, the joint's translation, rotation and scale
     Mtx animMtx;              // 0x7C, mapCalcAnimMatrix output, concatenated into modelWorldMtx
     Mtx transformMtx;         // 0xAC, mapObjRotate/mapObjTrans/mapObjScale matrix (identity at load)
-    s16 offscreenId;          // 0xDC
-    s16 groupIndex;           // 0xDE
-    struct MapObject* parent; // 0xE0
-    struct MapObject* child;  // 0xE4
-    struct MapObject* next;   // 0xE8
+    s16 offscreenId;          // 0xDC, offscreen buffer it also draws into; -1 = none
+    s16 groupIndex;           // 0xDE, MapWork entry it belongs to (its lights and textures)
+    struct MapObject* parent; // 0xE0, object of the parent joint
+    struct MapObject* child;  // 0xE4, first child object
+    struct MapObject* next;   // 0xE8, next object with the same parent
     u16 screenRect[4];        // 0xEC, projected bounds (0x3FF when off screen)
     void* displayList[8];     // 0xF4, prebuilt display lists (makeDisplayList)
-    u32 displayListSize[8];   // 0x114, their sizes; flag 0x100 (use display list) only sticks when [0] is nonzero
+    u32 displayListSize[8];   // 0x114, their sizes; MAP_OBJ_FLAG_DISPLAY_LIST only sticks when [0] is nonzero
 } MapObject;
 
 typedef struct MapError {
@@ -243,45 +275,11 @@ typedef struct MapError {
     s32 type;      // 0x20, mapErrorEntry type (0 for missing objects)
 } MapError;
 
-// "animation_table" entry in map.dat (SPM MapFileAnimData)
-typedef struct MapAnimHeader {
-    const char* name;                    // 0x0
-    u8 pad_04[0x8 - 0x4];                // 0x4
-    f32 length;                          // 0x8
-    struct MapAnimList* jointAnims;      // 0xC, also read by hitMain as the joint list (count + joints)
-    struct MapAnimList* materialAnims;   // 0x10
-    struct MapAnimList* alphaAnims;      // 0x14
-    struct MapAnimList* lightAnims;      // 0x18
-    struct MapAnimList* lightColorAnims; // 0x1C
-} MapAnimHeader;
-
-// MapEntryAnimData.flags (mapPlayAnimationLv, mapMain)
-#define MAP_ANIM_FLAG_PLAYING 0x1        // started by mapPlayAnimationLv
-#define MAP_ANIM_FLAG_ENDED 0x2          // reached its end (not looping); mapMain stops advancing it
-#define MAP_ANIM_FLAG_LOOP 0x4           // mode 1: wraps around at the end
-#define MAP_ANIM_FLAG_PAUSED 0x10        // mapPauseAnimation: time stands still
-#define MAP_ANIM_FLAG_RESUME 0x20        // mapReStartAnimation: mapMain clears this and PAUSED, resuming at the stopped frame
-#define MAP_ANIM_FLAG_LV0 0x100          // level 1: timed on gp->systemLv0Time
-#define MAP_ANIM_FLAG_LV1 0x200          // level 2: gp->systemLv1Time
-#define MAP_ANIM_FLAG_LV2 0x400          // level 3: gp->systemLv2Time
-#define MAP_ANIM_FLAG_LV3 0x800          // level 4: gp->systemLv3Time
-#define MAP_ANIM_FLAG_HIT_APPLIED 0x1000 // hitMain moved the collision objects to this ended animation's last frame
-typedef struct MapEntryAnimData {
-    u16 flags;              // 0x0
-    u8 pad_02[0x8 - 0x2];   // 0x2
-    OSTime startTime;       // 0x8
-    f32 time;               // 0x10
-    f32 rate;               // 0x14
-    MapAnimHeader* anim;    // 0x18
-    u8 pad_1C[0x20 - 0x1C]; // 0x1C
-} MapEntryAnimData;
-
-// Joint animation keys of a map animation (the jointAnims lists of MapEntryAnimData.anim; mapCalcAnimMatrix).
 typedef struct MapAnimKeyCh {
     f32 value;  // 0x0
     f32 tanIn;  // 0x4
     f32 tanOut; // 0x8
-    f32 extra;  // 0xC, map file value, never read
+    f32 unkC;   // 0xC
     s32 step;   // 0x10
 } MapAnimKeyCh;
 
@@ -290,13 +288,75 @@ typedef struct MapAnimKey {
     MapAnimKeyCh ch[21]; // 0x4
 } MapAnimKey;
 
+// One animated joint of an "animation_table" entry; mapMain and hitMain look up the map object and the
+// collision object of this name.
 typedef struct MapAnimJoint {
-    u8 nameRef[0x4 - 0x0];    // 0x0, probably the joint name, not read
-    f32 base[9];              // 0x4
-    u8 baseRest[0x58 - 0x28]; // 0x28, base values of channels 9..20, not read
-    s32 keyCount;             // 0x58
-    MapAnimKey keys[];        // 0x5C
+    const char* name;       // 0x0
+    f32 base[9];            // 0x4
+    u8 pad_28[0x58 - 0x28]; // 0x28
+    s32 keyCount;           // 0x58
+    MapAnimKey keys[];      // 0x5C
 } MapAnimJoint;
+
+// "animation_table" entry in map.dat (SPM MapFileAnimData)
+typedef struct MapAnimJointList {
+    s32 count;
+    MapAnimJoint* items[1];
+} MapAnimJointList;
+
+typedef struct MapAnimMatDataList {
+    s32 count;
+    struct MapAnimMatData* items[1];
+} MapAnimMatDataList;
+
+typedef struct MapAnimAlphaDataList {
+    s32 count;
+    struct MapAnimAlphaData* items[1];
+} MapAnimAlphaDataList;
+
+typedef struct MapAnimLightDataList {
+    s32 count;
+    struct MapAnimLightData* items[1];
+} MapAnimLightDataList;
+
+typedef struct MapAnimLightData2List {
+    s32 count;
+    struct MapAnimLightData2* items[1];
+} MapAnimLightData2List;
+
+typedef struct MapAnimHeader {
+    const char* name;                       // 0x0
+    u8 pad_04[0x8 - 0x4];                   // 0x4
+    f32 length;                             // 0x8
+    MapAnimJointList* jointAnims;           // 0xC, also read by hitMain as the joint list (count + joints)
+    MapAnimMatDataList* materialAnims;      // 0x10
+    MapAnimAlphaDataList* alphaAnims;       // 0x14
+    MapAnimLightDataList* lightAnims;       // 0x18
+    MapAnimLightData2List* lightColorAnims; // 0x1C
+    u8 pad_20[0x28 - 0x20];                 // 0x20, never accessed (the map files' animation headers are 0x28)
+} MapAnimHeader;
+
+// MapEntryAnimData.flags (map animations)
+typedef enum MapAnimFlags {
+    MAP_ANIM_FLAG_ACTIVE = (1 << 0),       // 0x1
+    MAP_ANIM_FLAG_END = (1 << 1),          // 0x2
+    MAP_ANIM_FLAG_LOOP = (1 << 2),         // 0x4
+    MAP_ANIM_FLAG_PAUSE = (1 << 4),        // 0x10
+    MAP_ANIM_FLAG_RESTART = (1 << 5),      // 0x20
+    MAP_ANIM_FLAG_LV0_TIME = (1 << 8),     // 0x100, which clock it runs on
+    MAP_ANIM_FLAG_LV1_TIME = (1 << 9),     // 0x200
+    MAP_ANIM_FLAG_LV2_TIME = (1 << 10),    // 0x400
+    MAP_ANIM_FLAG_LV3_TIME = (1 << 11),    // 0x800
+    MAP_ANIM_FLAG_HIT_UPDATED = (1 << 12), // 0x1000, hitMain
+} MapAnimFlags;
+
+typedef struct MapEntryAnimData {
+    u16 flags;           // 0x0, MapAnimFlags
+    OSTime startTime;    // 0x8
+    f32 time;            // 0x10
+    f32 rate;            // 0x14
+    MapAnimHeader* anim; // 0x18
+} MapEntryAnimData;
 
 // "light_table" chunk
 typedef struct MapFileLight {
@@ -304,14 +364,16 @@ typedef struct MapFileLight {
     const char* type; // 0x4
     Vec position;     // 0x8
     Vec rotation;     // 0x14
-    u8 pad_20[0x2C - 0x20];
+    u8 pad20[0x2C - 0x20];
     GXColor color;  // 0x2C
     f32 spotAngle;  // 0x30
     f32 attenAngle; // 0x34
     s32 attenType;  // 0x38
-    s32 lflags;     // 0x3C
+    s32 lflags;     // 0x3C, read only when magic is MAP_LIGHT_LFLAGS_MAGIC
     s32 magic;      // 0x40
 } MapFileLight;
+
+#define MAP_LIGHT_LFLAGS_MAGIC 0x12D60D8 // 19751128: the light record carries lflags
 
 typedef struct MapFileLightTable {
     s32 count;              // 0x0
@@ -345,75 +407,78 @@ typedef struct MapMaterialNameTable {
 } MapMaterialNameTable;
 
 // MapEntry.flags
-#define MAPENT_FLAG_FOG 0x1         // map fog on (fog_table enable, mapFogOn/Off)
-#define MAPENT_FLAG_BLEND 0x2       // blend colour on (mapSetBlend); objects with MAPOBJ_FLAG_NO_BLEND ignore it
-#define MAPENT_FLAG_BLEND2 0x4      // second blend colour on (mapSetBlend2); MAPOBJ_FLAG_NO_BLEND2 opts out
-#define MAPENT_FLAG_COLOR 0x8       // map colour stage on; MAPOBJ_FLAG_NO_BLEND opts out
-#define MAPENT_FLAG_VER_1_02 0x8000 // map.dat is "ver1.02": prebuilt display lists are made for it
+typedef enum MapEntryFlags {
+    MAP_ENTRY_FOG = (1 << 0),       // 0x1, mapFogOn; set from the map's fog table
+    MAP_ENTRY_BLEND = (1 << 1),     // 0x2, mapSetBlend
+    MAP_ENTRY_BLEND2 = (1 << 2),    // 0x4, mapSetBlend2
+    MAP_ENTRY_COLOR = (1 << 3),     // 0x8, multiply by entries[0].color; effMajinaiMain sets/clears it
+    MAP_ENTRY_VER_1_02 = (1 << 15), // 0x8000, map file version "ver1.02"
+} MapEntryFlags;
+
+typedef struct MapTevCallbackInfo MapTevCallbackInfo;
+typedef void (*MapTevCallback)(MapTevCallbackInfo* info);
+
 typedef struct MapEntry {
-    union {
-        s32 count;                     // 0x0, entries[0]: number of active entries
-        struct ARAMEntry* prevTplAram; // 0x0, entries[1] / MapWork.lastTplAram: the previous entry's tpl ARAM copy (MAPENT_TPLARAM)
-    };
-    u16 flags;                               // 0x4
-    char name[16];                           // 0x6
-    GXColor blend;                           // 0x16
-    GXColor blend2;                          // 0x1A
-    GXColor color;                           // 0x1E
-    u8 pad_22[0x24 - 0x22];                  // 0x22, never accessed
-    s32 fogEnable;                           // 0x24, fog_table word 0
-    s32 fogType;                             // 0x28
-    f32 fogStart;                            // 0x2C
-    f32 fogEnd;                              // 0x30
-    GXColor fogColor;                        // 0x34
-    MapHeader header;                        // 0x38
-    void* dat;                               // 0x7C, ./map/%s/map.dat
-    u32 datSize;                             // 0x80
-    void* tpl;                               // 0x84, ./map/%s/texture.tpl
-    u32 tplSize;                             // 0x88
-    void* arcData;                           // 0x8C, LZ77-decoded map archive from <root>/b/<map> (mapLoad); dat/tpl may point into it; copied to ARAM as arcAram
-    u32 arcSize;                             // 0x90
-    MapTexTable* textureTable;               // 0x94, "texture_table" chunk
-    MapFileLightTable* lightTable;           // 0x98, "light_table" chunk
-    MapFileFog* fogTable;                    // 0x9C, "fog_table" chunk
-    MapMaterialNameTable* materialNameTable; // 0xA0, "material_name_table" chunk
-    MapVcdTable* vcdTable;                   // 0xA4, "vcd_table" chunk
-    MapObject* rootMapObj;                   // 0xA8
-    struct HitEntry* rootHitObj;             // 0xAC
-    Vec bbox[8];                             // 0xB0
-    void* tevCallbacks[16];                  // 0x110
-    s32 numJoints;                           // 0x150, one MapObject per joint
-    MapObject* objects;                      // 0x154, numJoints entries
-    s32 hitNumJoints;                        // 0x158
-    struct HitEntry* hitEntries;             // 0x15C
-    s32 numAnims;                            // 0x160
-    MapEntryAnimData* animData;              // 0x164
-    u32 dispListSize;                        // 0x168, total display-list bytes (makeDisplayList)
-    void* dispListBuf;                       // 0x16C, _mapAllocTail(dispListSize); freed in bmapLoad
-    struct ARAMEntry* datAram;               // 0x170, ARAM copy of dat (bmapLoad / bmapUnLoad)
-    struct ARAMEntry* arcAram;               // 0x174, ARAM copy of arcData
-    // the tpl ARAM copy has no slot of its own: it lives in the first word after the entry (MAPENT_TPLARAM)
+    u16 flags;                               // 0x0, MapEntryFlags
+    char name[16];                           // 0x2, name of the loaded map (its file folder)
+    GXColor blend;                           // 0x12, colour multiplied into map objects with MAP_ENTRY_BLEND (mapSetBlend)
+    GXColor blend2;                          // 0x16, second multiply colour, MAP_ENTRY_BLEND2 (mapSetBlend2)
+    GXColor color;                           // 0x1A, multiply colour while MAP_ENTRY_COLOR is set
+    s32 fogEnable;                           // 0x20, fog_table word 0
+    s32 fogType;                             // 0x24, index into fog_type[] for GXSetFog (fog_table type; 0 without a table)
+    f32 fogStart;                            // 0x28, GXSetFog start (fog_table)
+    f32 fogEnd;                              // 0x2C, GXSetFog end (fog_table)
+    GXColor fogColor;                        // 0x30, GXSetFog colour (fog_table)
+    HSD_Archive header;                      // 0x34
+    void* dat;                               // 0x78, ./map/%s/map.dat
+    u32 datSize;                             // 0x7C
+    void* tpl;                               // 0x80, ./map/%s/texture.tpl
+    u32 tplSize;                             // 0x84
+    void* arcData;                           // 0x88, buffer kept in ARAM (arcAram) when dat is an archive
+    u32 arcSize;                             // 0x8C
+    MapTexTable* textureTable;               // 0x90, "texture_table" chunk
+    MapFileLightTable* lightTable;           // 0x94, "light_table" chunk
+    MapFileFog* fogTable;                    // 0x98, "fog_table" chunk
+    MapMaterialNameTable* materialNameTable; // 0x9C, "material_name_table" chunk
+    MapVcdTable* vcdTable;                   // 0xA0, "vcd_table" chunk
+    MapObject* rootMapObj;                   // 0xA4, root of the map object tree (mapEntry)
+    struct HitEntry* rootHitObj;             // 0xA8, root of the collision tree (hitEntry)
+    Vec bbox[8];                             // 0xAC, the eight corners of the map's bounding box (camEvalNearFar)
+    MapTevCallback tevCallbacks[16];         // 0x10C, mapSetTevCallback; an object picks one by its flags
+    s32 numJoints;                           // 0x14C, number of map objects in objects
+    MapObject* objects;                      // 0x150
+    s32 hitNumJoints;                        // 0x154, number of collision objects in hitEntries
+    struct HitEntry* hitEntries;             // 0x158
+    s32 numAnims;                            // 0x15C, number of entries in animData
+    MapEntryAnimData* animData;              // 0x160
+    u32 dispListSize;                        // 0x164, total display-list bytes (makeDisplayList)
+    void* dispListBuf;                       // 0x168, _mapAllocTail(dispListSize); freed in bmapLoad
+    struct ARAMEntry* datAram;               // 0x16C, ARAM copy of dat (bmapLoad / bmapUnLoad)
+    struct ARAMEntry* arcAram;               // 0x170, ARAM copy of arcData
+    struct ARAMEntry* tplAram;               // 0x174, ARAM copy of tpl
 } MapEntry;
 
 typedef struct MapWork {
-    MapEntry entries[2];           // 0x0
-    struct ARAMEntry* lastTplAram; // 0x2F0, entries[1]'s tpl ARAM copy (MAPENT_TPLARAM(&entries[1]))
+    s32 count;           // 0x0, number of loaded entries
+    MapEntry entries[2]; // 0x4
 } MapWork;
-
-// tpl ARAM copy of a map entry: stored in the word after it (the next entry's count slot, or lastTplAram)
-#define MAPENT_TPLARAM(entry) ((entry) + 1)->prevTplAram
 
 void mapErrorEntry(s32 type, const char* name);
 const char* getMapDataDvdRoot(void);
-void N_mapDispOff(void);
-void N_mapDispOn(void);
+void mapDispOff(void);
+void mapDispOn(void);
 MapWork* mapGetWork(void);
+void mapSetActiveGroup(s32 group);
 s32 mapGetActiveGroup(void);
 s32 mapGetJoints(MapFileJoint* joint);
 void mapInit(void);
+void mapReInit(void);
+void useDisplayList(BOOL group);
+void freeDisplayList(BOOL group);
+void mapGetTime(MapEntryAnimData* anim, OSTime* time);
 MapEntryAnimData* mapSearchAnmObj(const char* animName);
-void mapCheckAnimation(const char* animName, BOOL* valid, f32* msLeft);
-// more animation functions?
+void mapCheckAnimation(const char* animName, BOOL* valid, f32* remainingMs);
+void _mapUnLoad(MapWork* wp, BOOL group);
 void mapUnLoad(void);
 BOOL mapPreLoad(const char* map);
 void mapLoad(const char* map);
@@ -425,21 +490,28 @@ void mapSetMaterialLight(s32 flags, Vec position);
 void mapSetMaterialLastStageBlend(s32 flags, GXColor color1, GXColor color2);
 void mapSetMaterialFog(void);
 typedef struct MapTevCallbackInfo {
-    u8 mapObj[0x4];   // 0x0, MapObject* being drawn (stored raw)
-    MtxPtr mtx;       // 0x4
-    u8 drawMode[0x4]; // 0x8, s32 draw mode (stored raw)
-    s32 tevStage;     // 0xC, next free TEV stage
-    s32 texCoord;     // 0x10
-    s32 texMap;       // 0x14
-    s32 indStage;     // 0x18, next free indirect TEV stage
+    MapObject* mapObj; // 0x0, map object being drawn
+    MtxPtr mtx;        // 0x4
+    s32 drawMode;      // 0x8
+    s32 tevStage;      // 0xC, next free TEV stage
+    s32 texMap;        // 0x10, next free texture map
+    s32 texCoord;      // 0x14, next free texture coordinate
+    s32 indStage;      // 0x18, next free indirect TEV stage
 } MapTevCallbackInfo;
 
-typedef void (*MapTevCallback)(MapTevCallbackInfo* info);
 void mapSetTevCallback(s32 index, MapTevCallback callback);
-void mapSetMaterialTev(s32 texCount, s32 drawMode, s32 flags, Mtx mtx);
+void mapSetMaterialTev(int texCount, s32 drawMode, s32 flags, Mtx mtx);
 
 MapObject* mapGetMapObj(const char* name);
+MapFileJoint* mapSearchDmdJoint(MapFileJoint* joint, const char* name);
+MapMaterial* mapSearchDmdMaterial(const char* name);
+void mapSetPolygonGeometry(MapFileMesh* mesh);
+void Locate(HSD_Archive* archive);
+void* HSD_ArchiveGetPublicAddress(HSD_Archive* archive, const char* name);
+s32 HSD_ArchiveParse(HSD_Archive* archive, u8* data, u32 datSize);
 
+void mapSetBlend(GXColor color);
+void mapSetBlend2(GXColor color);
 void mapGetBlend(GXColor* color);
 void mapGetBlend2(GXColor* color);
 BOOL mapTestXLU(u32 flags, GXColor* color, GXColor* matColor);
@@ -447,52 +519,69 @@ BOOL mapTestXLU(u32 flags, GXColor* color, GXColor* matColor);
 extern BOOL __mapdrv_make_dl; // mapdrv.c
 void mapGrpFlagOn(const char* name, u32 flags);
 
-extern const GXCullMode culling[4];
-extern s32 fog_type[5];
-
 void mapGrpFlagOff(const char* name, u32 flags);
-
-void mapGrpSetColor(const char* name, GXColor color);
 void bmapUnLoad(void);
-void mapResetPaperAmbColor(void);
-void mapPlayAnimationLv(const char* name, s32 mode, s32 level);
-void mapPauseAnimation(const char* name);
-void mapReStartAnimation(const char* name);
-void mapPauseAnimationAll(const char* name);
-void mapReStartAnimationAll(const char* name);
-void mapSetPlayRate(const char* name, f32 rate);
-BOOL bmapPreLoad(const char* map, const char* map2);
-void bmapLoad(const char* map, const char* map2);
-void mapCalcAnimMatrix(Mtx out, Mtx in, MapEntryAnimData* anim, MapAnimJoint* joint);
-void mapObjFlagOn(const char* name, u32 flags);
-void mapObjFlagOff(const char* name, u32 flags);
-void mapObjClearOffScreen(const char* name);
-void mapGrpClearOffScreen(const char* name);
-void mapObjRotate(const char* name, f32 x, f32 y, f32 z);
-void mapObjTranslate(const char* name, f32 x, f32 y, f32 z);
-void mapObjScale(const char* name, f32 x, f32 y, f32 z);
-void mapObjGetPos(const char* name, Vec* pos);
-void mapSetFog(s32 type, f32 start, f32 end, GXColor color);
-void mapGetFog(s32* type, f32* start, f32* end, GXColor* color);
-void mapFogOn(void);
-void mapFogOff(void);
 void mapBlendOff(void);
 void mapBlendOff2(void);
-void mapSetProjMtx(Mtx mtx);
-void mapObjFlushOn(const char* name);
-void mapObjFlushOff(const char* name);
-void mapGrpFlushOn(const char* name);
+void mapFogOff(void);
+void mapFogOn(void);
+void mapGrpClearOffScreen(const char* name);
 void mapGrpFlushOff(const char* name);
-void mapObjSetFlushColor(const char* name, u8 r, u8 g, u8 b, u8 a);
+void mapGrpFlushOn(const char* name);
 void mapGrpSetFlushColor(const char* name, u8 r, u8 g, u8 b, u8 a);
-void mapObjGetFlushColor(const char* name, u8* r, u8* g, u8* b, u8* a);
-void mapSetPaperAmbColor(GXColor* color);
-void mapSetProjTexObj(GXTexObj* obj, void* imgRef);
-void test_kururing_mapdisp(CameraId cam);
-void mapGrpSetOffScreen(const char* name, const char* offscreen);
-void mapObjSetColor(const char* name, GXColor* color);
-void mapObjSetOffScreen(const char* name, const char* offscreen);
-void mapSetBlend(GXColor color);
-void mapSetBlend2(GXColor color);
+void mapObjClearOffScreen(const char* name);
+
+// cubic spline through n points: ts gets the parameters, tbl the second derivatives (spline_maketable)
+void spline_maketable(s32 n, Vec* pts, f32* ts, Vec* tbl);
 void spline_getvalue(Vec* out, f32 t, s32 n, Vec* pts, f32* ts, Vec* tbl);
-void spline_maketable(s32 n, Vec* pts, f32* t, Vec* out);
+void mapObjFlagOff(const char* name, u32 flags);
+void mapObjFlagOn(const char* name, u32 flags);
+void mapObjFlushOff(const char* name);
+void mapObjFlushOn(const char* name);
+void mapObjGetFlushColor(const char* name, u8* r, u8* g, u8* b, u8* a);
+void mapClipOff(void);
+void mapClipOn(void);
+void mapObjRotate(const char* name, f32 x, f32 y, f32 z);
+void mapObjScale(const char* name, f32 x, f32 y, f32 z);
+void mapObjSetFlushColor(const char* name, u8 r, u8 g, u8 b, u8 a);
+void mapObjTranslate(const char* name, f32 x, f32 y, f32 z);
+void mapEntryAnimation(BOOL group);
+void mapPauseAnimation(const char* name);
+void mapDeleteAnimation(const char* name);
+void mapPauseAnimationAll(const char* name);
+
+// mapPlayAnimationLv / evt_map_playanim mode
+typedef enum MapAnimPlayMode {
+    MAP_ANIM_PLAY_ONCE = 0,
+    MAP_ANIM_PLAY_LOOP = 1,   // MAP_ANIM_FLAG_LOOP
+    MAP_ANIM_PLAY_AT_END = 2, // started one animation length in the past: shows the final pose
+} MapAnimPlayMode;
+void mapPlayAnimationLv(const char* name, s32 mode, s32 level);
+void mapReStartAnimation(const char* name);
+void mapReStartAnimationAll(const char* name);
+void mapSetPaperAmbColor(GXColor* color);
+void mapResetPaperAmbColor(void);
+void mapSetPaperCraftAmbColor(GXColor* color);
+void mapSetPlayRate(const char* name, f32 rate);
+void bmapLoad(const char* map, const char* map2);
+#if VERSION <= VERSION_DEMO_JP
+BOOL bmapPreLoad(const char* map, const char* map2);
+#endif
+void mapObjGetPos(const char* name, Vec* pos);
+void mapObjSetColor(const char* name, GXColor color);
+void mapGrpSetColor(const char* name, GXColor color);
+void mapSetFog(s32 type, f32 start, f32 end, GXColor color);
+void mapGetFog(s32* type, f32* start, f32* end, GXColor* color);
+void mapSetProjMtx(Mtx mtx);
+Mtx* mapGetProjMtx(void);
+void mapSetProjTexObj(GXTexObj* obj, void* imgRef);
+GXTexObj* mapGetProjTexObj(void);
+void mapObjSetOffScreen(const char* name, const char* offscreen);
+void mapGrpSetOffScreen(const char* name, const char* offscreen);
+void test_kururing_mapdisp(CameraId cam);
+
+void mapCalcAnimMatrix(Mtx out, Mtx in, MapEntryAnimData* anim, MapAnimJoint* joint);
+
+// Names from LLCOOLT's tree.
+#define MAPOBJ_SINGLE 0
+#define MAPOBJ_GROUP 1

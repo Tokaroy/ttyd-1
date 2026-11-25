@@ -4,6 +4,11 @@
 
 #include "musyx/adsr.h"
 
+// Names follow AxioDL's MusyX decompilation (invented there, not original names).
+// synthFlags
+#define SYNTH_FLAG_MONO 1
+#define SYNTH_FLAG_SURROUND 2
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -103,6 +108,21 @@ typedef struct SYNTHMasterFader {
   u8 seqMode;         // offset 0x2C, size 0x1
   u8 type;            // offset 0x2D, size 0x1
 } SYNTHMasterFader;
+
+// SYNTHMasterFader.type: which sndVolume group selector reaches the fader (synthVolume).
+typedef enum {
+  SYNTH_FADER_MUSIC = 0,      // SND_MUSIC_VOLGROUPS; sequence groups (seqVolDef)
+  SYNTH_FADER_FX = 1,         // SND_FX_VOLGROUPS
+  SYNTH_FADER_USER_MUSIC = 2, // SND_USERMUSIC_VOLGROUPS
+  SYNTH_FADER_USER_FX = 3,    // SND_USERFX_VOLGROUPS; FX groups named by sndFXStart callers
+  SYNTH_FADER_NONE = 4,       // slot not in use (synthInit default)
+} SYNTH_FADER_TYPE;
+
+// synthMasterFader[] slots with a fixed use.
+#define SYNTH_VGROUP_MUSIC_MASTER 21 // sndMasterVolume music; scales every non-FX voice
+#define SYNTH_VGROUP_FX_MASTER 22    // sndMasterVolume FX; scales every FX voice
+#define SYNTH_VGROUP_SEQ_BASE 23     // 8 sequence groups 23..30 (defVGroup = seqId + 23)
+#define SYNTH_VGROUP_FX 31           // default group of an FX entry
 
 typedef struct CTRL_SOURCE {
   u8 midiCtrl;
@@ -263,6 +283,159 @@ typedef struct SYNTH_VOICE {
   s32 mesgQueue[4];    // offset 0x3F0, size 0x10
   u16 curOutputVolume; // offset 0x400, size 0x2
 } SYNTH_VOICE;
+
+// SYNTH_VOICE.cFlags bits (u64), named from what the synth code does with each bit.
+#define SYNTH_CFLAG_START_BREAK 0x1   // macStart: hw voice still active; macHandleActive breaks it
+#define SYNTH_CFLAG_START_PENDING 0x2 // macStart sets; macHandleActive clears after the setup
+#define SYNTH_CFLAG_WAIT_KEY_OFF 0x4  // mcmdWait: a key-off resumes the macro
+#define SYNTH_CFLAG_KEY_OFF 0x8       // macSetExternalKeyoff: key-off received
+#define SYNTH_CFLAG_KEY_ON 0x10       // EventHandler started the hw voice; hw key-off clears it
+#define SYNTH_CFLAG_START_SAMPLE 0x20 // mcmdStartSample sets; EventHandler calls hwStart
+#define SYNTH_CFLAG_SELECT_FILTER_SWITCH 0x40 // mcmdFilterSwitchSelect: first source set
+#define SYNTH_CFLAG_KEY_OFF_PENDING 0x80      // mcmdKeyOff sets; EventHandler sends hwKeyOff
+#define SYNTH_CFLAG_ADSR_SET 0x100            // macro set the ADSR: mcmdStartSample keeps it
+#define SYNTH_CFLAG_PORTAMENTO 0x400          // portamento on (macro or portamento controller)
+#define SYNTH_CFLAG_SELECT_FILTER_PARAM 0x800 // mcmdFilterParameterSelect: first source set
+#define SYNTH_CFLAG_PORTAMENTO_CTRL_SEEN 0x1000 // controller read; synthInitPortamento skips glide
+#define SYNTH_CFLAG_VIBRATO 0x2000              // mcmdVibrato with a period
+#define SYNTH_CFLAG_VIBRATO_MOD_WHEEL 0x4000    // vibrato depth scaled by the modulation input
+#define SYNTH_CFLAG_VOL_ENVELOPE 0x8000         // DoEnvelopeCalculation: volume envelope running
+#define SYNTH_CFLAG_PITCH_BEND_AFTER_KEY_OFF 0x10000 // pitch bend still read after the key-off
+#define SYNTH_CFLAG_LEGATO 0x20000          // do_voice_portamento: voice reused for a new key
+#define SYNTH_CFLAG_WAIT_SAMPLE_END 0x40000 // mcmdWait: the sample end resumes the macro
+// mcmd*Select: the first control source replaces the input's sources, later ones combine.
+#define SYNTH_CFLAG_SELECT_VOLUME 0x80000
+#define SYNTH_CFLAG_SELECT_PANNING 0x100000
+#define SYNTH_CFLAG_SELECT_PITCH_BEND 0x200000
+#define SYNTH_CFLAG_SELECT_MODULATION 0x400000
+#define SYNTH_CFLAG_SELECT_REVERB 0x800000
+#define SYNTH_CFLAG_SELECT_PORTAMENTO 0x1000000
+#define SYNTH_CFLAG_SELECT_PEDAL 0x2000000
+#define SYNTH_CFLAG_SELECT_SURROUND_PANNING 0x4000000
+#define SYNTH_CFLAG_SELECT_DOPPLER 0x8000000
+#define SYNTH_CFLAG_SELECT_TREMOLO 0x10000000
+#define SYNTH_CFLAG_SELECT_PRE_AUXA 0x20000000
+#define SYNTH_CFLAG_SELECT_PRE_AUXB 0x40000000
+#define SYNTH_CFLAG_SELECT_POST_AUXB 0x80000000
+#define SYNTH_CFLAG_SELECT_AUXA_0 0x100000000ULL // mcmdAuxAFXSelect, one bit per effect input
+#define SYNTH_CFLAG_SELECT_AUXA_1 0x200000000ULL
+#define SYNTH_CFLAG_SELECT_AUXA_2 0x400000000ULL
+#define SYNTH_CFLAG_SELECT_AUXA_3 0x800000000ULL
+#define SYNTH_CFLAG_SELECT_AUXB_0 0x1000000000ULL // mcmdAuxBFXSelect, one bit per effect input
+#define SYNTH_CFLAG_SELECT_AUXB_1 0x2000000000ULL
+#define SYNTH_CFLAG_SELECT_AUXB_2 0x4000000000ULL
+#define SYNTH_CFLAG_SELECT_AUXB_3 0x8000000000ULL
+#define SYNTH_CFLAG_PEDAL_HELD 0x10000000000ULL      // macSetPedalState: sustain pedal down
+#define SYNTH_CFLAG_PITCH_ADSR 0x20000000000ULL      // mcmdSetPitchADSR: pitch envelope running
+#define SYNTH_CFLAG_KEY_OFF_HELD 0x40000000000ULL    // key-off held back until the pedal is up
+#define SYNTH_CFLAG_SRC_SET 0x80000000000ULL         // mcmdSRCModeSelect: StartSample keeps it
+#define SYNTH_CFLAG_VOLUME_CHANGED 0x100000000000ULL // volume update for the next zero-offset job
+#define SYNTH_CFLAG_PAN_CHANGED 0x200000000000ULL    // panning update for the next zero-offset job
+
+// SYNTH_VOICE.midiDirtyFlags bits: input changed since its inpGet* call last read it.
+#define SYNTH_DIRTY_VOLUME 0x1
+#define SYNTH_DIRTY_PANNING 0x2
+#define SYNTH_DIRTY_SURROUND_PANNING 0x4
+#define SYNTH_DIRTY_PITCH_BEND 0x8
+#define SYNTH_DIRTY_DOPPLER 0x10
+#define SYNTH_DIRTY_MODULATION 0x20
+#define SYNTH_DIRTY_PEDAL 0x40
+#define SYNTH_DIRTY_PORTAMENTO 0x80 // set by mcmdPortamentoSelect; no inpGet* reads it
+#define SYNTH_DIRTY_PRE_AUXA 0x100
+#define SYNTH_DIRTY_REVERB 0x200
+#define SYNTH_DIRTY_PRE_AUXB 0x400
+#define SYNTH_DIRTY_POST_AUXB 0x800
+#define SYNTH_DIRTY_TREMOLO 0x1000
+#define SYNTH_DIRTY_FILTER_SWITCH 0x2000 // MusyX 2.0.1 and later
+#define SYNTH_DIRTY_FILTER_PARAM 0x4000  // MusyX 2.0.1 and later
+#define SYNTH_DIRTY_ALL 0x7fff           // every input (MusyX 2.0.1 and later)
+#define SYNTH_DIRTY_ALL_NO_FILTER 0x1fff // every input before the filter inputs (before 2.0.1)
+
+// Synth macro opcodes (low 7 bits of the first command word); named after the mcmd handler each selects.
+enum {
+  MACRO_OP_END_OF_MACRO = 0x00, // mcmdEndOfMacro
+  MACRO_OP_STOP = 0x01, // mcmdStop
+  MACRO_OP_IF_KEY = 0x02, // mcmdIfKey
+  MACRO_OP_IF_VELOCITY = 0x03, // mcmdIfVelocity
+  MACRO_OP_WAIT = 0x04, // mcmdWait
+  MACRO_OP_LOOP = 0x05, // mcmdLoop
+  MACRO_OP_GOTO = 0x06, // mcmdGoto
+  MACRO_OP_WAIT_MS = 0x07, // mcmdWaitMs
+  MACRO_OP_PLAY_MACRO = 0x08, // mcmdPlayMacro
+  MACRO_OP_SEND_KEY_OFF = 0x09, // mcmdSendKeyOff
+  MACRO_OP_IF_MODULATION = 0x0A, // mcmdIfModulation
+  MACRO_OP_SET_PIANO_PANNING = 0x0B, // mcmdSetPianoPanning
+  MACRO_OP_SET_ADSR = 0x0C, // mcmdSetADSR
+  MACRO_OP_SCALE_VOLUME = 0x0D, // mcmdScaleVolume
+  MACRO_OP_SET_PANNING = 0x0E, // mcmdSetPanning
+  MACRO_OP_ENVELOPE = 0x0F, // mcmdEnvelope
+  MACRO_OP_START_SAMPLE = 0x10, // mcmdStartSample
+  MACRO_OP_STOP_SAMPLE = 0x11, // mcmdStopSample
+  MACRO_OP_KEY_OFF = 0x12, // mcmdKeyOff
+  MACRO_OP_IF_RANDOM = 0x13, // mcmdIfRandom
+  MACRO_OP_FADE_IN = 0x14, // mcmdFadeIn
+  MACRO_OP_SET_SURROUND_PANNING = 0x15, // mcmdSetSurroundPanning
+  MACRO_OP_SET_ADSR_FROM_CTRL = 0x16, // mcmdSetADSRFromCtrl
+  MACRO_OP_RANDOM_KEY = 0x17, // mcmdRandomKey
+  MACRO_OP_ADD_KEY = 0x18, // mcmdAddKey
+  MACRO_OP_SET_KEY = 0x19, // mcmdSetKey
+  MACRO_OP_LAST_KEY = 0x1A, // mcmdLastKey
+  MACRO_OP_PORTAMENTO = 0x1B, // mcmdPortamento
+  MACRO_OP_VIBRATO = 0x1C, // mcmdVibrato
+  MACRO_OP_PITCH_SWEEP_1 = 0x1D, // mcmdPitchSweep: pitch sweep slot 0
+  MACRO_OP_PITCH_SWEEP_2 = 0x1E, // mcmdPitchSweep: pitch sweep slot 1
+  MACRO_OP_SET_PITCH = 0x1F, // mcmdSetPitch
+  MACRO_OP_SET_PITCH_ADSR = 0x20, // mcmdSetPitchADSR
+  MACRO_OP_SCALE_VOLUME_DLS = 0x21, // mcmdScaleVolumeDLS
+  MACRO_OP_SET_MOD2_VIBRATO = 0x22, // mcmdSetMod2Vibrato
+  MACRO_OP_SETUP_TREMOLO = 0x23, // mcmdSetupTremolo
+  MACRO_OP_RETURN = 0x24, // mcmdReturn
+  MACRO_OP_GOSUB = 0x25, // mcmdGosub
+  MACRO_OP_TRAP_EVENT = 0x28, // mcmdTrapEvent
+  MACRO_OP_UNTRAP_EVENT = 0x29, // mcmdUntrapEvent
+  MACRO_OP_SEND_MESSAGE = 0x2A, // mcmdSendMessage
+  MACRO_OP_GET_MESSAGE = 0x2B, // mcmdGetMessage
+  MACRO_OP_GET_VID = 0x2C, // mcmdGetVID
+  MACRO_OP_ADD_AGE_COUNTER = 0x30, // mcmdAddAgeCounter
+  MACRO_OP_SET_AGE_COUNTER = 0x31, // mcmdSetAgeCounter
+  MACRO_OP_SEND_FLAG = 0x32, // mcmdSendFlag
+  MACRO_OP_SET_PITCH_WHEEL_RANGE = 0x33, // mcmdSetPitchWheelRange
+  MACRO_OP_SCALE_REVERB = 0x34, // mcmdScaleReverb
+  MACRO_OP_SET_PITCHBEND_AFTER_KEY_OFF = 0x35, // mcmdSetPitchbendAfterKeyOff
+  MACRO_OP_SET_PRIORITY = 0x36, // mcmdSetPriority
+  MACRO_OP_ADD_PRIORITY = 0x37, // mcmdAddPriority
+  MACRO_OP_SET_AGE_COUNTER_SPEED = 0x38, // mcmdSetAgeCounterSpeed
+  MACRO_OP_SET_AGE_COUNTER_BY_VOLUME = 0x39, // mcmdSetAgeCounterByVolume
+  MACRO_OP_VOLUME_SELECT = 0x40, // mcmdVolumeSelect
+  MACRO_OP_PANNING_SELECT = 0x41, // mcmdPanningSelect
+  MACRO_OP_PITCH_WHEEL_SELECT = 0x42, // mcmdPitchWheelSelect
+  MACRO_OP_MOD_WHEEL_SELECT = 0x43, // mcmdModWheelSelect
+  MACRO_OP_PEDAL_SELECT = 0x44, // mcmdPedalSelect
+  MACRO_OP_PORTAMENTO_SELECT = 0x45, // mcmdPortamentoSelect
+  MACRO_OP_REVERB_SELECT = 0x46, // mcmdReverbSelect
+  MACRO_OP_SURROUND_PANNING_SELECT = 0x47, // mcmdSurroundPanningSelect
+  MACRO_OP_DOPPLER_SELECT = 0x48, // mcmdDopplerSelect
+  MACRO_OP_TREMOLO_SELECT = 0x49, // mcmdTremoloSelect
+  MACRO_OP_PRE_AUX_A_SELECT = 0x4A, // mcmdPreAuxASelect
+  MACRO_OP_PRE_AUX_B_SELECT = 0x4B, // mcmdPreAuxBSelect
+  MACRO_OP_POST_AUX_B_SELECT = 0x4C, // mcmdPostAuxBSelect
+  MACRO_OP_AUX_AFX_SELECT = 0x4D, // mcmdAuxAFXSelect
+  MACRO_OP_AUX_BFX_SELECT = 0x4E, // mcmdAuxBFXSelect
+  MACRO_OP_SETUP_LFO = 0x50, // mcmdSetupLFO
+  MACRO_OP_MODE_SELECT = 0x58, // mcmdModeSelect
+  MACRO_OP_SET_KEY_GROUP = 0x59, // mcmdSetKeyGroup
+  MACRO_OP_SRC_MODE_SELECT = 0x5A, // mcmdSRCModeSelect
+  MACRO_OP_FILTER_SWITCH_SELECT = 0x5E, // mcmdFilterSwitchSelect
+  MACRO_OP_FILTER_PARAMETER_SELECT = 0x5F, // mcmdFilterParameterSelect
+  MACRO_OP_VAR_ADD = 0x60, // mcmdVarCalculation: case 0 adds
+  MACRO_OP_VAR_SUB = 0x61, // mcmdVarCalculation: case 1 subtracts
+  MACRO_OP_VAR_MUL = 0x62, // mcmdVarCalculation: case 2 multiplies
+  MACRO_OP_VAR_DIV = 0x63, // mcmdVarCalculation: case 3 divides (0 for a zero divisor)
+  MACRO_OP_VAR_ADD_ALT = 0x64, // mcmdVarCalculation: op 4 shares the add case
+  MACRO_OP_SET_VAR_IMMEDIATE = 0x65, // mcmdSetVarImmediate
+  MACRO_OP_IF_VAR_EQUAL = 0x70, // mcmdIfVarCompare: cmp 0: a == b
+  MACRO_OP_IF_VAR_LESS = 0x71, // mcmdIfVarCompare: cmp 1: a < b
+};
 
 typedef struct synthITDInfo {
   // total size: 0x2

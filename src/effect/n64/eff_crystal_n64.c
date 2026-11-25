@@ -1,4 +1,6 @@
-// Paper Mario 64 effect: crystal shine that scales in over its lifetime; types 0-9 pick the variant.
+// Paper Mario 64 effect: crystal shine; types 0-6 pick a colour variant (types 3-6 keep growing),
+// any other type shrinks toward scale 0.1 over its lifetime.
+
 #include "eff/n64/eff_crystal_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,13 +9,13 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 
 static void effCrystalMain(EffectEntry* effect);
-static void effCrystalDisp(CameraId cameraId, EffectEntry* effect);
+static void effCrystalDisp(CameraId cameraId, void* param);
 
 /**
- * Spawns a crystal glint at (x, y, z).
+ * Spawns a crystal glint at (x, y, z) for `lifetime` frames (0 or less, or 100 and more: until soft deleted).
  * Types 0-6 pick one of seven colour/animation variants;
  * any other type shrinks from scale toward 0.1 over lifetime.
  * sac_suki.c spawns type 6 with life 60; event scripts via evt_eff.
@@ -28,10 +30,10 @@ EffectEntry* effCrystalN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32
     work = __memAlloc(HEAP_EFFECT, sizeof(EffCrystalN64Work));
     effect->userdata = work;
     effect->callback = effCrystalMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
-    work->camera = 4;
+    work->camera = CAMERA_3D;
     if (lifetime <= 0) {
         work->lifetime = 100;
     } else {
@@ -67,6 +69,8 @@ EffectEntry* effCrystalN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32
             break;
         default:
             work->variant = 10;
+
+            // BUG: Uses the raw lifetime even when work->lifetime was defaulted above.
             work->scaleVel = -(scale - 0.1f) / (f32)lifetime;
             break;
     }
@@ -92,8 +96,8 @@ static void effCrystalMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 30;
     }
     if (work->lifetime < 100) {
@@ -205,11 +209,11 @@ static void effCrystalMain(EffectEntry* effect) {
             work->scale += work->scaleVel;
             break;
     }
-    dispEntry(work->camera, dispCalcZ(&position), 2, (DispCallback)effCrystalDisp, effect);
+    dispEntry(work->camera, dispCalcZ(&position), DISP_MODE_XLU, effCrystalDisp, effect);
 }
 
 /** Outer 108x108 glint quad of the crystal shine, spun slowly with texture 0x6D (types below 3). */
-effN64Vtx size108x108_tex32x32_vtx[] = {
+static effN64Vtx size108x108_tex32x32_vtx[] = {
     {-54, -54, 1, 0, 0, 0, 0, 0, 255},
     {54, -54, 1, 1024, 0, 0, 0, 0, 255},
     {54, 54, 1, 1024, 1024, 0, 0, 0, 255},
@@ -217,15 +221,19 @@ effN64Vtx size108x108_tex32x32_vtx[] = {
 };
 
 /** Inner 100x100 glint quad: spun fast against the outer one for types below 3, drawn alone for the rest. */
-effN64Vtx size100x100_tex32x32_vtx[] = {
+static effN64Vtx size100x100_tex32x32_vtx[] = {
     {-50, -50, -1, 0, 0, 0, 0, 0, 255},
     {50, -50, -1, 1024, 0, 0, 0, 0, 255},
     {50, 50, -1, 1024, 1024, 0, 0, 0, 255},
     {-50, 50, -1, 0, 1024, 0, 0, 0, 255},
 };
 
-/** Draws a camera-facing glint of 108x108 or 100x100 units; types below 3 use textures 0x6D and 0x6E. */
-static void effCrystalDisp(CameraId cameraId, EffectEntry* effect) {
+/**
+ * Draws a camera-facing glint: types below 3 draw both quads with texture 0x6D, spun against each other;
+ * other types draw the 100x100 quad alone with texture 0x6E.
+ */
+static void effCrystalDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffCrystalN64Work* work;
     GXTexObj texObj;
@@ -267,14 +275,14 @@ static void effCrystalDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'z', 0.017453292f * (f32)frame);
         PSMTXConcat(tmp, rot, rot);
         GXLoadPosMtxImm(rot, GX_PNMTX0);
-        GXSetCurrentMtx(0);
+        GXSetCurrentMtx(GX_PNMTX0);
         effSetVtxDescN64(size108x108_tex32x32_vtx);
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);
         PSMTXRotRad(rot, 'z', 0.017453292f * (f32)(-frame * 8));
         PSMTXConcat(tmp, rot, rot);
         GXLoadPosMtxImm(rot, GX_PNMTX0);
-        GXSetCurrentMtx(0);
+        GXSetCurrentMtx(GX_PNMTX0);
         effSetVtxDescN64(size100x100_tex32x32_vtx);
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);
@@ -293,7 +301,7 @@ static void effCrystalDisp(CameraId cameraId, EffectEntry* effect) {
         effGetTexObjN64(0x6E, &texObj);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
         GXLoadPosMtxImm(tmp, GX_PNMTX0);
-        GXSetCurrentMtx(0);
+        GXSetCurrentMtx(GX_PNMTX0);
         effSetVtxDescN64(size100x100_tex32x32_vtx);
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);

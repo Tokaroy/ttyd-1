@@ -1,11 +1,8 @@
 // las_00 (ラストダンジョン, Palace of Shadow): the gate outside the palace, reached from the Thousand-Year Door (tik_05).
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "stdio.h"
-#include "evt/evt_bero.h"
-#include "manager/evtmgr_cmd.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_hit.h"
@@ -14,15 +11,38 @@
 #include "evt/evt_msg.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_telop.h"
-#include "las.h"
-#include "evt/evt_story.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
+
+#include "stdio.h"
+#include "evt/evt_bero.h"
+#include "manager/evtmgr_cmd.h"
+#include "driver/seqdrv.h"
 
 static USER_FUNC(make_name);
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
 static BeroEntry bero_entry_data[3];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord first_evt[182];
+#else
+static EvtWord first_evt[184];
+#endif
+
+static EvtWord shan_init[46];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_00_init_evt[];
+#else
+EvtWord las_00_init_evt[32];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -119,7 +139,7 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Event script: the opening cutscene of the Palace of Shadow,
- * run on the first entry (story progress is set to STORY_STG8_00_START).
+ * run on the first entry (story progress is set to STG8_00_START).
  * Mario and the partner are placed inside the west door, the camera pans over the hall while they walk in,
  * the partner comments (stg8_las_01), Mario nods, and control returns with the area banner (telop 17).
  */
@@ -132,15 +152,15 @@ static EVT_BEGIN(first_evt)
     END_IF
     CALL(evt_mario_set_pos, -420, 10, 0)
     CALL(evt_party_set_pos, 0, -470, 10, 0)
-    CALL(evt_cam3d_evt_set, -385, 1441, 763, -37, 642, 100, 0, 11)
+    CALL(evt_cam3d_evt_set, -385, 1441, 763, -37, 642, 100, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_cam3d_evt_set, 577, 35, 520, -155, 135, 99, 7000, 0)
+        CALL(evt_cam3d_evt_set, 577, 35, 520, -155, 135, 99, 7000, EASING_LINEAR)
         WAIT_MS(7000)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(evt_mario_normalize)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_hitobj_onoff, STRING("w_bero"), 1, 0)
@@ -156,7 +176,7 @@ static EVT_BEGIN(first_evt)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -18, 20, 205, -453, 80, -131, 2400, 11)
+    CALL(evt_cam3d_evt_set, -18, 20, 205, -453, 80, -131, 2400, EASING_SINE_IN_OUT)
     WAIT_MS(2400)
     CALL(evt_party_stop, 0)
     CALL(evt_party_set_dir, 0, 270, 300)
@@ -169,18 +189,28 @@ static EVT_BEGIN(first_evt)
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_NOD1_4"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
     WAIT_MS(500)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_00_START)
+    SET_VALUE(GSW_STORY_PROGRESS, STG8_00_START)
     CALL_CHILD(bero_case_entry)
-    CALL(evt_cam3d_evt_off, 1000, 11)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_snd_bgm_scope, 0, 0)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_telop_entry, 17)
     RETURN
 EVT_END()
+
+/** Script helper: builds the torch map-object name "S_shan_rou_0<args[0]>" and returns it in args[1]. */
+static USER_FUNC(make_name) {
+    EvtWord* args = event->args;
+    static char name[16];
+
+    sprintf(name, "S_shan_rou_0%d", evtGetValue(event, args[0]));
+    evtSetValue(event, args[1], (EvtWord)name);
+    return EVT_RETURN_DONE;
+}
 
 /**
  * Map-init helper: hides the 12 numbered candle map objects (names from make_name)
@@ -190,7 +220,7 @@ static EVT_BEGIN(shan_init)
     SET_VALUE(LW(0), 1)
     LOOP(12)
         CALL(make_name, LW(0), LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mapobj_get_position, LW(1), LW(2), LW(3), LW(4))
         SUBTRACT_FLOAT(LW(3), FLOAT(9.0f))
 #if VERSION <= VERSION_DEMO_JP
@@ -204,34 +234,23 @@ static EVT_BEGIN(shan_init)
 EVT_END()
 
 /**
- * Map init script for las_00: starts the Palace of Shadow music and ambience,
- * sets up the doors west to tik_05 and east to las_01, lights the 12 wall torches (S_shan_rou_01..12),
- * and on first arrival (story before STORY_STG8_00_START) plays the opening cutscene.
+ * Map init of las_00 (relSetEvtAddr in las.c): BGM_STG8_LST1 and ENV_STG8_LAS1 (JP and later reverb mode 2); the normal
+ * arrival from STG8_00_START, before it spawns first_evt instead; lights the candles (shan_init).
  */
 EVT_BEGIN(las_00_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_00_START)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG8_00_START)
         CALL_CHILD(evt_bero_info_run)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_00_START)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_00_START)
         SPAWN_EVENT(first_evt)
     END_IF
     CALL_CHILD(shan_init)
     RETURN
 EVT_END()
-
-/** Script helper: builds the torch map-object name "S_shan_rou_0<args[0]>" and returns it in args[1]. */
-static USER_FUNC(make_name) {
-    EvtWord* args = event->args;
-    static char name[16];
-
-    sprintf(name, "S_shan_rou_0%d", evtGetValue(event, args[0]));
-    evtSetValue(event, args[1], (EvtWord)name);
-    return EVT_RETURN_DONE;
-}

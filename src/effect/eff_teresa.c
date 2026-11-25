@@ -1,5 +1,6 @@
 // Boo (teresa) vanish: type 0 shrinks and spins a sprite, then puffs into smoke with sounds;
 // type 1 is a growing, fading sprite.
+
 #include "eff/eff_teresa.h"
 #include "eff/eff_kemu_test.h"
 #include "driver/dispdrv.h"
@@ -7,26 +8,26 @@
 #include "pmario_sound.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-
+#include "sfx_name_word.h"
 static void effTeresaDisp(CameraId cameraId, EffectEntry* effect);
 static void effTeresaMain(EffectEntry* effect);
 
 typedef struct EffTeresaWork {
-    s32 type;                    // 0x0
-    Vec position;                // 0x4
-    u8 reserved_10[0x28 - 0x10]; // 0x10, never read or written
-    f32 alpha;                   // 0x28
-    s32 counter;                 // 0x2C, only cleared at entry
-    s32 state;                   // 0x30, only cleared at entry
-    f32 scale;                   // 0x34
-    f32 rotZ;                    // 0x38
-    BOOL vanished;               // 0x3C
+    s32 type;                   // 0x0
+    Vec position;               // 0x4
+    u8 field_0x10[0x28 - 0x10]; // 0x10
+    f32 alpha;                  // 0x28
+    s32 counter;                // 0x2C
+    s32 state;                  // 0x30
+    f32 scale;                  // 0x34
+    f32 rotZ;                   // 0x38
+    BOOL vanished;              // 0x3C
 } EffTeresaWork;
 
 /**
  * Spawns a Boo sprite at (x, y, z).
  * Type 0 starts at scale 30 and plays a sound on creation (the Creepy Steeple caller);
- * type 1 starts small and black (the Shadow Queen shockwave in the effect table).
+ * type 1 starts small and black (twice in the Shadow Queen charge-up, eff_queen2).
  */
 EffectEntry* effTeresaEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
@@ -53,7 +54,7 @@ EffectEntry* effTeresaEntry(s32 type, f32 x, f32 y, f32 z) {
         position.x = work->position.x;
         position.y = work->position.y;
         position.z = work->position.z;
-        psndSFXOn_3D((char*)0x5D5, &position);
+        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_STG4_TELESA_LIGHT1), &position);
     }
     return effect;
 }
@@ -86,7 +87,7 @@ static void effTeresaMain(EffectEntry* effect) {
                     sfxPosition.x = work->position.x;
                     sfxPosition.y = work->position.y;
                     sfxPosition.z = work->position.z;
-                    psndSFXOn_3D((char*)0x5D6, &sfxPosition);
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_STG4_TELESA_A_APPEAR1), &sfxPosition);
                 }
             }
             work->rotZ += 10.0f;
@@ -108,7 +109,7 @@ static void effTeresaMain(EffectEntry* effect) {
             return;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effTeresaDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effTeresaDisp, effect);
 }
 
 /** Draws the Boo texture as a camera-facing quad: white for type 0, black for type 1. */

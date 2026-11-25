@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: fire flower, 30 fireballs shot out one after another; type 1 mirrors the direction.
-#include "eff/n64/eff_fireflower_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,6 +9,7 @@
 #include <dolphin/mtx.h>
 #include <stdlib.h>
 #include "eff/n64/eff_rothammer_success_n64.h"
+#include "eff/n64/eff_fireflower_n64.h"
 
 typedef struct EffFireFlowerN64Work {
     s32 type;     // 0x0
@@ -32,14 +33,15 @@ typedef struct EffFireFlowerN64Work {
     s32 flip;     // 0x50
 } EffFireFlowerN64Work;
 
-/** Fire Flower size (in percent) as it grows in over 15 frames, overshooting slightly before settling. */
+#if VERSION <= VERSION_DEMO_JP
 static s8 scale_data[] = "27<AFKPUZ_dgigd";
+#endif
 
 /**
  * Small red 4x4 spark quad, drawn only for a spark of type 0;
  * every spark is spawned with type 1, so it goes unused.
  */
-effN64Vtx size4x4_tex4x4_vtx[] = {
+static effN64Vtx size4x4_tex4x4_vtx[] = {
     {-2, -2, 0, 0, 0, 255, 0, 0, 255},
     {2, -2, 0, 512, 0, 255, 0, 0, 255},
     {2, 2, 0, 512, 512, 255, 0, 0, 255},
@@ -54,7 +56,7 @@ static effN64Vtx size16x16_tex16x16_vtx[] = {
     {-8, 8, 0, 0, 512, 255, 255, 255, 255},
 };
 
-/** The Fire Flower itself: 32x32 quads, one vertex set per bloom stage. */
+/** The Fire Flower itself: one 32x32 quad; the bloom stage picks the texture rows drawn on it. */
 static effN64Vtx size32x32_tex32x32_vtx[] = {
     {-16, 0, 2, 0, 0, 255, 255, 255, 255},
     {16, 0, 2, 1024, 0, 255, 255, 255, 255},
@@ -62,17 +64,21 @@ static effN64Vtx size32x32_tex32x32_vtx[] = {
     {-16, 32, 2, 0, 1024, 255, 255, 255, 255},
 };
 
+/** Fire Flower size (in percent) as it grows in over 15 frames, overshooting slightly before settling. */
+#if VERSION >= VERSION_JP
+static s8 scale_data[] = "27<AFKPUZ_dgigd";
+#endif
+
 static void effFireFlowerMain(EffectEntry* effect);
-static void effFireFlowerDisp(CameraId cameraId, EffectEntry* effect);
+static void effFireFlowerDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns the Fire Flower effect at (x, y, z): a flower that unfolds and shoots 30 sparks to the side,
- * holding for lifetime frames. type 1 mirrors it (flip). Spawned from event scripts through evt_eff.
+ * holding for lifetime frames. type 1 mirrors it (flip). Spawned from event scripts through evt_eff64.
  */
 EffectEntry* effFireFlowerN64Entry(s32 type, f32 x, f32 y, f32 z, s32 lifetime) {
     EffectEntry* effect;
     EffFireFlowerN64Work* work;
-    EffFireFlowerN64Work* p;
     s32 i;
 
     effect = effEntry();
@@ -102,25 +108,24 @@ EffectEntry* effFireFlowerN64Entry(s32 type, f32 x, f32 y, f32 z, s32 lifetime) 
     work->alpha2 = 0;
     work->rotX = 0.0f;
     work->offsetY = -10.0f;
-    p = work + 1;
-    for (i = 1; i < 31;) {
-        p->type = 1;
-        p->position.x = 0.0f;
-        p->position.y = 0.0f;
-        p->position.z = 0.0f;
-        p->velX = 8.0f;
-        p->velY = 0.0f;
-        p->velZ = (f32)(rand() % 20 - 8);
-        p->accelY = 0.05f * (f32)(rand() % 10 - 5);
-        p->rotY = (f32)(rand() % 80 + 5);
-        p->alpha = 255;
-        p->delay = i++ - 1;
-        p->timer = 10;
-        p->velX /= 1.5f;
-        p->velY /= 1.5f;
-        p->velZ /= 1.5f;
-        p->delay <<= 1;
-        p++;
+    work++;
+    for (i = 1; i < 31; i++, work++) {
+        work->type = 1;
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->velX = 8.0f;
+        work->velY = 0.0f;
+        work->velZ = (f32)(rand() % 20 - 8);
+        work->accelY = 0.05f * (f32)(rand() % 10 - 5);
+        work->rotY = (f32)(rand() % 80 + 5);
+        work->alpha = 255;
+        work->delay = i - 1;
+        work->timer = 10;
+        work->velX /= 1.5f;
+        work->velY /= 1.5f;
+        work->velZ /= 1.5f;
+        work->delay <<= 1;
     }
     return effect;
 }
@@ -217,9 +222,9 @@ static void effFireFlowerMain(EffectEntry* effect) {
             }
             break;
     }
-    timer = work->state;
+    state = work->state;
     work++;
-    if (timer >= 4 && timer <= 6) {
+    if (state >= 4 && state <= 6) {
         for (i = 1; i < effect->count; i++, work++) {
             if (work->delay > 0) {
                 work->delay--;
@@ -231,7 +236,7 @@ static void effFireFlowerMain(EffectEntry* effect) {
             work->position.x += work->velX;
             work->position.y += work->velY;
             work->position.z += work->velZ;
-            if (timer == 4 && work->position.x > 200.0f) {
+            if (state == 4 && work->position.x > 200.0f) {
                 work->position.x = 0.0f;
                 work->position.y = 0.0f;
                 work->velY = 0.0f;
@@ -239,14 +244,15 @@ static void effFireFlowerMain(EffectEntry* effect) {
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effFireFlowerDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effFireFlowerDisp, effect);
 }
 
 /**
- * Draws the flower with texture 0x36 and the spark sprites with 0x37;
- * work->stage picks the vertex set for the flower's bloom stage.
+ * Draws the spark sprites with texture 0x36 (states 4-6 only) and the flower with 0x37;
+ * work->stage picks the two texture rows blended for the flower's bloom stage.
  */
-static void effFireFlowerDisp(CameraId cameraId, EffectEntry* effect) {
+static void effFireFlowerDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffFireFlowerN64Work* work;
     s32 i;

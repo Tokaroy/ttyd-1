@@ -1,9 +1,20 @@
 // Battle math and movement helpers: trig in degrees, position movement and unit transition ids.
-#pragma optimize_for_size on
+
 #include "battle/battle_sub.h"
 #include "battle/battle_unit.h"
 #include "battle/battle.h"
 #include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
+#include "system.h"
+
+/** Sine and cosine of an angle in degrees at once (into *s and *c). */
+// Original name and size (0x6c) from the JP demo map (UNUSED there: nothing calls it; listed before sinfd). sinfd's
+// and cosfd's bodies together (calling them is 0x4c, system's sincosf 0x30). The parameter order is sincosf's; the
+// bytes do not fix it (the float goes in f1 wherever it stands).
+void sincosfd(f32* s, f32* c, f32 deg) {
+    *s = sin((6.2831855f * deg) / 360.0f);
+    *c = cos((6.2831855f * deg) / 360.0f);
+}
 
 /** Sine of an angle in degrees, used throughout battle code for motion and bobbing. */
 f32 sinfd(f32 deg) {
@@ -34,8 +45,7 @@ f32 atan2f_safety(f32 y, f32 x) {
     return atan2(y, x);
 }
 
-// Steps a battle position *x/*z by speed along a heading in degrees (0 = toward -z, 90 = toward +x). Called each frame
-// by the unit and part move commands in battle_event_cmd.c.
+/** Moves (x, z) by speed in direction angle (degrees: 0 is -z, 90 is +x). */
 void btlMovePos(f32 speed, f32 angle, f32* x, f32* z) {
     f32 s;
     f32 c;
@@ -56,40 +66,40 @@ void btlMovePos(f32 speed, f32 angle, f32* x, f32* z) {
  * Interpolates from start to end at frame cur of steps.
  * Modes: 0 linear; 1-3 ease-in (square, cube, 4th power); 4-6 ease-out (same powers);
  * 7, 8 and 10 overshoot and wobble around end as they settle; 11 cosine ease-in-out; 12 sine ease-out;
- * 13 cosine ease-in. Other modes return 0. battle_event_cmd.c calls it through a cast with reordered arguments.
+ * 13 cosine ease-in. Other modes return 0. Battle event and stage callers share the declaration in battle_sub.h.
  */
-f32 intpl_sub(s32 mode, s32 cur, s32 steps, f32 start, f32 end) {
+f32 intpl_sub(s32 mode, f32 start, f32 end, s32 cur, s32 steps) {
     f32 diff;
     s32 rest;
     f32 c;
 
     switch (mode) {
-        case 0:
+        case EASING_LINEAR:
             return start + (cur * (end - start)) / steps;
-        case 1:
+        case EASING_QUADRATIC_IN:
             return start + ((end - start) * (cur * cur)) / (steps * steps);
-        case 2:
+        case EASING_CUBIC_IN:
             return start + ((end - start) * (cur * (cur * cur))) / (steps * (steps * steps));
-        case 3:
+        case EASING_QUARTIC_IN:
             return start + ((end - start) * (cur * (cur * (cur * cur)))) / (steps * (steps * (steps * steps)));
-        case 7:
+        case EASING_WAVE_SHRINKING:
             c = cos(4.0f * (3.141592f * ((f32)cur / (f32)steps)));
             diff = end - start;
             return end - ((f32)(steps - cur) * ((f32)(steps - cur) * (diff * c))) / ((f32)steps * (f32)steps);
-        case 8:
+        case EASING_WAVE_SHRINKING_FASTER:
             c = cos(4.0f * (3.141592f * ((f32)(cur * cur) / (f32)steps)) / 15.0f);
             diff = end - start;
             return end - ((f32)(steps - cur) * ((f32)(steps - cur) * (diff * c))) / ((f32)steps * (f32)steps);
-        case 4:
+        case EASING_QUADRATIC_OUT:
             diff = end - start;
             return (start + diff) - (diff * ((steps - cur) * (steps - cur))) / (steps * steps);
-        case 5:
+        case EASING_CUBIC_OUT:
             diff = end - start;
             return (start + diff) - (diff * ((steps - cur) * ((steps - cur) * (steps - cur)))) / (steps * (steps * steps));
-        case 6:
+        case EASING_QUARTIC_OUT:
             diff = end - start;
             return (start + diff) - (diff * ((steps - cur) * ((steps - cur) * ((steps - cur) * (steps - cur))))) / (steps * (steps * (steps * steps)));
-        case 10:
+        case EASING_BOUNCE_SHRINKING:
             c = cos(4.0f * (3.141592f * ((f32)(cur * cur) / (f32)steps)) / 40.0f);
             rest = steps - cur;
             c = ((f32)rest * ((f32)rest * c)) / ((f32)steps * (f32)steps);
@@ -97,15 +107,15 @@ f32 intpl_sub(s32 mode, s32 cur, s32 steps, f32 start, f32 end) {
                 c = -c;
             }
             return end - c * (end - start);
-        case 11:
+        case EASING_SINE_IN_OUT:
             c = cos(3.141592f * (f32)cur / (f32)steps);
             diff = end - start;
             return start + diff * (1.0f - c) / 2.0f;
-        case 12:
+        case EASING_SINE_OUT:
             c = sin(1.570796f * (f32)cur / (f32)steps);
             diff = end - start;
             return start + diff * c;
-        case 13:
+        case EASING_SINE_IN:
             c = cos(1.570796f * (f32)cur / (f32)steps);
             diff = end - start;
             return start + diff * (1.0f - c);
@@ -133,9 +143,9 @@ s32 BtlCompForwardLv(s32 dir, f32 x) {
 }
 
 /**
- * Resolves a script unit id: the pseudo ids BTL_UNIT_SELF (the running event's unit), MARIO,
- * PARTNER (BTL_UNIT_NONE if no partner is out), SYSTEM and LECTURE (the tutorial unit) become real unit ids;
- * real ids pass through unchanged.
+ * Turns a script unit id into a battle unit id: UNIT_ID_SELF is the event's own unit, UNIT_ID_MARIO, UNIT_ID_PARTNER
+ * and UNIT_ID_SYSTEM those units (UNIT_ID_NONE when there is no partner), UNIT_ID_LECTURE the tutorial lecture unit;
+ * other ids come back as given.
  */
 s32 BattleTransID(EventEntry* evt, s32 type) {
     BattleWork* work = _battleWorkPointer;
@@ -143,23 +153,23 @@ s32 BattleTransID(EventEntry* evt, s32 type) {
 
     if (type < 0) {
         switch (type) {
-            case BTL_UNIT_SELF:
+            case UNIT_ID_SELF:
                 return evt->unitId;
-            case BTL_UNIT_MARIO:
+            case UNIT_ID_MARIO:
                 unit = BattleGetMarioPtr(work);
                 return unit->unitId;
-            case BTL_UNIT_PARTNER:
+            case UNIT_ID_PARTNER:
                 unit = BattleGetPartyPtr(work);
                 if (unit) {
                     return unit->unitId;
                 }
-                return BTL_UNIT_NONE;
-            case BTL_UNIT_NONE:
-                return BTL_UNIT_NONE;
-            case BTL_UNIT_SYSTEM:
+                return UNIT_ID_NONE;
+            case UNIT_ID_NONE:
+                return UNIT_ID_NONE;
+            case UNIT_ID_SYSTEM:
                 unit = BattleGetSystemPtr(work);
                 return unit->unitId;
-            case BTL_UNIT_LECTURE:
+            case UNIT_ID_LECTURE:
                 return work->lectureUnitId;
         }
     }
@@ -169,21 +179,17 @@ s32 BattleTransID(EventEntry* evt, s32 type) {
 /**
  * Sets every unit's moveColorLv target to 0xFF;
  * battle_disp.c then ramps each unit's displayed colour level back to it.
- * Called when a turn's actions are reset (battle_event_cmd.c) and at the end of battle (battle_seq_end.c).
+ * Called by the event command btlevtcmd_reset_move_color_lv_all (battle_event_cmd.c) and at the end of battle (battle_seq_end.c).
  */
 void btlsubResetMoveColorLvAll(BattleWork* work) {
-    BattleWork* w = work;
+    BattleWork* const w = work;
     BattleUnit* unit;
     int i;
-    BattleWork* w2;
-    int c;
 
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
-        w2 = w;
-        unit = BattleGetUnitPtr(w2, i);
-        c = 0xFF;
+        unit = BattleGetUnitPtr(w, i);
         if (unit) {
-            unit->moveColorLv = c;
+            unit->moveColorLv = MOVE_COLOR_LV_FULL;
         }
     }
 }

@@ -1,9 +1,24 @@
 // Hooktail Castle (gon) lecture script: the paper genie (peramajin) teaches the slit move (squeezing through narrow gaps), run when the Paper Curse is found in gon_06.
+
+#include "version.h"
 #include "icon_ids.h"
+#include "evt/evt_window.h"
 #include "eff/eff_fukidashi.h"
 #include "eff/eff_itemget.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "pmario_sound.h"
+#include "statuswindow.h"
+#include "driver/hitdrv.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_lecture.h"
+#include "mot/mot_slit.h"
+#include "mot/mot_roll.h"
+#include "driver/npcdrv.h"
 
 #include "mario/mario.h"
 #include "manager/evtmgr_cmd.h"
@@ -18,43 +33,15 @@
 #include "dolphin/mtx.h"
 #include "driver/mobjdrv.h"
 #include "driver/fadedrv.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_lecture.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_window.h"
-#include "mot/mot_slit.h"
-#include "pmario_sound.h"
-#include "statuswindow.h"
-#include "gon.h"
 #include "system.h"
-#include "evt/evt_lect.h"
-#include "driver/hitdrv.h"
-#include "version.h"
 #include <dolphin/pad.h>
-#include "mot/mot_roll.h"
+#include "evt/evt_lect.h"
 
 static OSTime wwstart;
 static s32 x_flag_data[2];
 static void lecture_button_disp(CameraId camera, void* param);
 static LectButton lbtn[2];
-/**
- * Shifts the 3D camera's current position and look-at target by ofs (the camera's preset values are saved,
- * the shifted ones become its new stored target, with an instant move).
- * Used to hop the camera 2016 units up and back while the item-get effect is repositioned.
- */
-static inline void effitemget_cam_move(CameraEntry* camera, Vec ofs) {
-    camera->presetPos = camera->cameraPos;
-    camera->presetAt = camera->cameraAt;
-    PSVECAdd(&camera->cameraPos, &ofs, &camera->storedPos);
-    PSVECAdd(&camera->cameraAt, &ofs, &camera->storedAt);
-    camera->startTimeA = gp->renderTime;
-    camera->durationA = 0;
-    camera->stateA = 3;
-    camera->curveA = 11;
-}
+
 static Vec daiv;
 
 static USER_FUNC(evtflash);
@@ -82,16 +69,25 @@ static USER_FUNC(effitemgetchange_cam_ptr);
 static USER_FUNC(effitemget_open);
 static USER_FUNC(effitemget_open_ptr);
 static USER_FUNC(effitemget_busaiku);
-static USER_FUNC(lect_mobj_hit_nasi);
+USER_FUNC(lect_mobj_hit_nasi);
 static USER_FUNC(dai_moveti_set);
 static USER_FUNC(dai_moveti_get);
 static USER_FUNC(lect_push_r_check);
 static USER_FUNC(evt_nomal_cange);
 static USER_FUNC(bgm_start_wait);
 
+EvtWord slit_majin_lecture_init[26];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord slit_majin_lecture[];
+#else
+EvtWord slit_majin_lecture[390];
+#endif
+
 /**
- * Linear blend used by lect_mario_ido_sum: returns (total - elapsed) / total of end plus elapsed / total of
- * start, so the value moves from start toward end as elapsed grows.
+ * Linear interpolation for the lecture walking helpers:
+ * returns (total - elapsed) / total * end + elapsed / total * start,
+ * so at elapsed 0 it is end and at elapsed == total it is start.
  */
 static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
     f32 rem = total - elapsed;
@@ -100,9 +96,9 @@ static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
 }
 
 /**
- * Script helper: moves Mario in a straight line over args[0] milliseconds from
- * where he stands to the point in LW(3), LW(4), LW(5), saving his starting point in LW(0) to LW(2).
- * Blocks until the time is up.
+ * Script helper: slides Mario in a straight line over args[0] milliseconds. The first call saves his position
+ * in LW(0) to LW(2); each call then places him on the line from LW(3), LW(4), LW(5) (at the start) to that
+ * saved position (at the end). Blocks until the time is up.
  */
 static USER_FUNC(lect_mario_ido_sum) {
     EvtWord* args = event->args;
@@ -116,7 +112,7 @@ static USER_FUNC(lect_mario_ido_sum) {
         evtSetFloat(event, LW(1), mario->position.y);
         evtSetFloat(event, LW(2), mario->position.z);
     }
-    elapsed = OSTicksToMilliseconds((u64)(s32)((u32)event->lifetime - (u32)wwstart));
+    elapsed = OSTicksToMilliseconds((u64)OSDiffTick(event->lifetime, wwstart));
     if (elapsed > frames) {
         elapsed = frames;
     }
@@ -185,7 +181,7 @@ static USER_FUNC(x_flag_wait) {
 
 /**
  * 2D draw callback that draws the two lecture button icons (when not hidden) at their positions with their
- * current alpha; icons 075 to 07D (the stick direction icons) are drawn 15 units higher.
+ * current alpha; the stick direction icons (ICON_STICK_DOWN_LEFT to ICON_STICK_UP_RIGHT) get a -15 y offset.
  */
 static void lecture_button_disp(CameraId camera, void* param) {
     s32 i;
@@ -199,15 +195,15 @@ static void lecture_button_disp(CameraId camera, void* param) {
             Vec pos;
 
             switch (btn->iconId) {
-                case ICON_075:
-                case ICON_076:
-                case ICON_077:
-                case ICON_078:
-                case ICON_079:
-                case ICON_07A:
-                case ICON_07B:
-                case ICON_07C:
-                case ICON_07D:
+                case ICON_STICK_DOWN_LEFT:
+                case ICON_STICK_DOWN:
+                case ICON_STICK_DOWN_RIGHT:
+                case ICON_STICK_LEFT:
+                case ICON_STICK_NEUTRAL:
+                case ICON_STICK_RIGHT:
+                case ICON_STICK_UP_LEFT:
+                case ICON_STICK_UP:
+                case ICON_STICK_UP_RIGHT:
                     ofs = -15.0f;
                     break;
                 default:
@@ -216,7 +212,7 @@ static void lecture_button_disp(CameraId camera, void* param) {
             }
             pos = disp->pos;
             pos.y += ofs;
-            iconDispGxAlpha(&pos, ICON_FLAG_NO_MAP_BLEND | ICON_FLAG_2D, btn->iconId, btn->alpha, 1.0f);
+            iconDispGxAlpha(&pos, ICON_FLAG_2D | ICON_FLAG_NO_MAP_BLEND, 1.0f, btn->iconId, btn->alpha);
         }
     }
 }
@@ -247,7 +243,7 @@ static USER_FUNC(lecture_button_rtn) {
         btn = &lbtn[i];
         switch (btn->seq) {
             case 0:
-                btn->iconId = ICON_068;
+                btn->iconId = ICON_BUTTON_X;
                 btn->seq = 1;
                 break;
             case 2:
@@ -273,7 +269,7 @@ static USER_FUNC(lecture_button_rtn) {
     if (done >= 2) {
         return EVT_RETURN_DONE;
     }
-    dispEntry(CAMERA_2D, 0.0f, 1, lecture_button_disp, NULL);
+    dispEntry(CAMERA_2D, 0.0f, DISP_MODE_ALPHA_TEST, lecture_button_disp, NULL);
     return EVT_RETURN_BLOCK;
 }
 
@@ -405,9 +401,7 @@ static USER_FUNC(effitemgetchange_cam) {
     const char* name = (const char*)evtGetValue(event, args[0]);
     s32 camId = evtGetValue(event, args[1]);
 
-    ItemGetWork* work = effNameToPtr(name)->userdata;
-
-    work->camera = camId;
+    ((ItemGetWork*)effNameToPtr(name)->userdata)->camera = camId;
     return EVT_RETURN_DONE;
 }
 
@@ -415,35 +409,31 @@ static USER_FUNC(effitemgetchange_cam) {
 static USER_FUNC(effitemgetchange_cam_ptr) {
     EvtWord* args = event->args;
     EffectEntry* eff = (EffectEntry*)evtGetValue(event, args[0]);
-    s32 camId = evtGetValue(event, args[1]);
-    ItemGetWork* work = eff->userdata;
 
-    work->camera = camId;
+    ((ItemGetWork*)eff->userdata)->camera = evtGetValue(event, args[1]);
     return EVT_RETURN_DONE;
 }
 
 /** Script helper: starts the named item-get effect (args[0]) by moving it to its opening state. */
 static USER_FUNC(effitemget_open) {
     EffectEntry* eff = effNameToPtr((const char*)evtGetValue(event, event->args[0]));
-    ItemGetWork* work = eff->userdata;
 
-    work->state = 1;
+    ((ItemGetWork*)eff->userdata)->state = 1;
     return EVT_RETURN_DONE;
 }
 
 /** Script helper: same as effitemget_open but takes the effect entry pointer in args[0]. */
 static USER_FUNC(effitemget_open_ptr) {
     EffectEntry* eff = (EffectEntry*)evtGetValue(event, event->args[0]);
-    ItemGetWork* work = eff->userdata;
 
-    work->state = 1;
+    ((ItemGetWork*)eff->userdata)->state = 1;
     return EVT_RETURN_DONE;
 }
 
 /**
  * Script helper: args[0] nonzero moves the 3D camera 2016 units up,
- * zero moves it back down (effitemget_cam_move). Nothing in this file calls it; the lecture copies in eki, gor,
- * hei and mri lift the camera and Mario 2016 units, capture the screen into an image for the paper-seal
+ * zero moves it back down. Nothing in this file calls it; the lecture copies that call it (eki, gor,
+ * hei, mri, muj, tou, usu, win) lift the camera and Mario (or the partner) 2016 units, capture the screen into an image for the paper-seal
  * transition one frame later, and move both back.
  */
 static USER_FUNC(effitemget_busaiku) {
@@ -456,16 +446,23 @@ static USER_FUNC(effitemget_busaiku) {
     } else {
         ofs = (Vec){0.0f, -2016.0f, 0.0f};
     }
-    effitemget_cam_move(camera, ofs);
+    camera->presetPos = camera->cameraPos;
+    camera->presetAt = camera->cameraAt;
+    PSVECAdd(&camera->cameraPos, &ofs, &camera->storedPos);
+    PSVECAdd(&camera->cameraAt, &ofs, &camera->storedAt);
+    camera->startTimeA = gp->renderTime;
+    camera->durationA = 0;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = EASING_SINE_IN_OUT;
     return EVT_RETURN_DONE;
 }
 
 /**
- * Script helper: turns on hit-group flag 1 for the hit objects of the map object named by args[0] ("me" means
- * the object running the script), which the hit checks skip, so the object loses its collision (nasi = none).
+ * Script helper: switches off the collision of the map object named args[0] ("me" for the running one): each
+ * of its (up to two) named hit objects gets HIT_FLAG_OFF through hitGrpFlagOn (nasi = none).
  * Nothing in this file calls it.
  */
-static USER_FUNC(lect_mobj_hit_nasi) {
+USER_FUNC(lect_mobj_hit_nasi) {
     const char* name = (const char*)evtGetValue(event, event->args[0]);
     MapObjectEntry* mobj;
     s32 i;
@@ -476,9 +473,8 @@ static USER_FUNC(lect_mobj_hit_nasi) {
         mobj = event->thisMapObj;
     }
     for (i = 0; i < 2; i++) {
-        // hitObj[i].name is an array, so the NULL test is always true; the original code has it and MWCC still emits the compare.
         if (mobj->hitObj[i].name != NULL && strcmp(mobj->hitObj[i].name, "") != 0) {
-            hitGrpFlagOn(mobj->hitObj[i].name, 1);
+            hitGrpFlagOn(mobj->hitObj[i].name, HIT_FLAG_OFF);
         }
     }
     return EVT_RETURN_DONE;
@@ -486,8 +482,7 @@ static USER_FUNC(lect_mobj_hit_nasi) {
 
 /**
  * Script helper: stores the vector (args[0], args[1], args[2]) in daiv,
- * a lecture-private position that the lecture later reads back with dai_moveti_get (used to remember where Mario
- * stood).
+ * a lecture-private position that dai_moveti_get reads back. Nothing in this file calls either helper.
  */
 static USER_FUNC(dai_moveti_set) {
     EvtWord* args = event->args;
@@ -525,7 +520,7 @@ static USER_FUNC(lect_slit_check) {
 }
 
 /**
- * Script helper: flashes the screen white twice:
+ * Script helper: flashes the screen white once:
  * fades out to white over 40 frames, holds 60 ms, fades back in over 40 frames and holds 60 ms.
  * Used for the genie's light effect.
  */
@@ -623,9 +618,17 @@ static USER_FUNC(bgm_start_wait) {
  * system level 0, a fixed lecture camera shot, Mario facing right.
  */
 EVT_BEGIN(slit_majin_lecture_init)
+    // BUG: gon_06's evt_majin2 stopped the field NPCs (evt_npc_stop_for_event) before this. marioStSystemLevel(0)
+    // restarts every event (evtStartAll), their regular events included, while the NPCs stay NPC_STATUS_STOPPED
+    // until evt_npc_start_for_event after the lecture. npcMain applies no movement to a stopped NPC, but a move
+    // call its event is in keeps adding to moveOffset each frame (evt_npc_jump_position when the NPC was stopped
+    // in the air, evt_npc_homing_target in a chase; evt_npc_move_position too in the early demos), and timed moves
+    // do not run out because moveTicks stands still. On the first frame after evt_npc_start_for_event, npcMoveXZ moves
+    // the NPC by the whole sum in one step, stopped only by the first wall on the way, so an enemy can land far
+    // outside its territory; the longer the lecture, the farther.
     CALL(lect_set_systemlevel, 0)
     CALL(lect_test_systemlevel)
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, 0)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, EASING_LINEAR)
     WAIT_MS(1000)
     CALL(evt_mario_set_dir, 90, 300, 0)
     WAIT_FRAMES(1)
@@ -633,11 +636,11 @@ EVT_BEGIN(slit_majin_lecture_init)
 EVT_END()
 
 /**
- * The paper mode lecture, run after the genie (ペラ魔人, peramajin) gives Mario the curse in gon_06.
- * The genie explains (stg1_gon_12_12 to 12_14) with a flash of light, then the lesson lets Mario try the move:
- * the button icon blinks to show which button to hold (the R trigger, ICON_080/081)
- * while Mario's sideways form is checked; if he manages to hold paper mode for 180 frames the lesson ends,
- * otherwise the genie asks (stg1_gon_12_15_yn) whether to repeat it, and finally says goodbye (stg1_gon_12_17).
+ * The Paper Mode lecture of the genie (ペラ魔人), run by gon_06 after he appears. He explains (stg1_gon_12_12 to
+ * 12_14) with flashes of light, then Mario practises: the R button icon blinks (ICON_TRIGGER_R and
+ * ICON_TRIGGER_R_PRESSED) while lect_slit_check watches for the paper form. Holding it for 180 frames passes;
+ * turning back sooner gets stg1_gon_12_15_1 and another try. After a pass he asks whether Mario understands
+ * (stg1_gon_12_15_yn): No gets stg1_gon_12_16 and the lesson repeats, Yes gets the farewell (stg1_gon_12_17).
  */
 EVT_BEGIN(slit_majin_lecture)
     // Set up the lesson: the button prompt icon appears beside Mario and the genie floats in front of the
@@ -647,23 +650,25 @@ EVT_BEGIN(slit_majin_lecture)
     END_SIBLING_EVENT
     WAIT_FRAMES(1)
     CALL(lecture_button_set_pos, 0, FLOAT(-200.0f), FLOAT(-25.0f), FLOAT(0.0f))
-    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_camid, STRING("ペラ魔人"), 7)
     WAIT_FRAMES(1)
     BEGIN_SIBLING_EVENT
         LOOP(0)
-            CALL(evt_cam_get_at, 4, LW(0), LW(1), LW(2))
+            CALL(evt_cam_get_at, CAMERA_3D, LW(0), LW(1), LW(2))
             SUBTRACT(LW(1), 25)
             CALL(evt_npc_set_position, STRING("ペラ魔人"), LW(0), LW(1), LW(2))
             WAIT_FRAMES(1)
         END_LOOP
     END_SIBLING_EVENT
+
     // The genie laughs at Mario for falling for the trap and explains the castle's curse.
     CALL(evt_npc_set_anim, STRING("ペラ魔人"), STRING("P_1"))
     WAIT_MS(200)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg1_gon_12_12"), 0, STRING("ペラ魔人"))
+
     // Mario is dazzled by flashes of light.
     CALL(evt_mario_set_pose, STRING("M_N_H"))
     LOOP(4)
@@ -672,7 +677,8 @@ EVT_BEGIN(slit_majin_lecture)
         CALL(evtflash)
     END_LOOP
     CALL(evt_mario_set_pose, STRING("M_S_1"))
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
+
     // The genie announces the paper curse and tells Mario to hold the R button.
     CALL(evt_msg_print, 0, STRING("stg1_gon_12_13"), 0, STRING("ペラ魔人"))
 #if VERSION <= VERSION_DEMO_JP
@@ -681,23 +687,24 @@ EVT_BEGIN(slit_majin_lecture)
 #else
     CALL(evt_msg_print_add, 0, STRING("stg1_gon_12_14"))
 #endif
+
     // Practice loop: the prompt icon blinks while Mario tries to turn sideways.
     LOOP(0)
         LOOP(0)
             CALL(lecture_button_flag_on_off, 0, 2, 1)
-            CALL(lecture_button_set_icon_id, 0, ICON_080)
+            CALL(lecture_button_set_icon_id, 0, ICON_TRIGGER_R)
             CALL(lecture_button_set_seq, 0, 2)
             CALL(lecture_button_seq_wait, 0, 1)
             CALL(x_flag_set, 0, 1)
             BEGIN_INLINE_EVENT
                 LOOP(0)
-                    CALL(lecture_button_set_icon_id, 0, ICON_081)
+                    CALL(lecture_button_set_icon_id, 0, ICON_TRIGGER_R_PRESSED)
                     WAIT_MS(300)
                     CALL(x_flag_get, 0, LW(0))
                     IF_INT_EQUAL(LW(0), 2)
                         BREAK_LOOP
                     END_IF
-                    CALL(lecture_button_set_icon_id, 0, ICON_080)
+                    CALL(lecture_button_set_icon_id, 0, ICON_TRIGGER_R)
                     WAIT_MS(300)
                     CALL(x_flag_get, 0, LW(0))
                     IF_INT_EQUAL(LW(0), 2)
@@ -714,6 +721,7 @@ EVT_BEGIN(slit_majin_lecture)
             CALL(evt_mario_set_enable_key, 32)
             CALL(evt_mario_key_onoff, 1)
             CALL(evt_mario_key_onoff, 1)
+
             // Mario is moved only by the check; the lesson is passed once he stays paper-thin for 180 frames.
             LOOP(0)
                 CALL(lect_status_off)
@@ -743,6 +751,7 @@ EVT_BEGIN(slit_majin_lecture)
 #if VERSION >= VERSION_JP
             CALL(evt_msg_continue)
 #endif
+
             // Control is returned to normal and the prompt is dismissed.
             CALL(evt_mario_key_onoff, 0)
             CALL(evt_mario_key_onoff, 0)
@@ -768,6 +777,7 @@ EVT_BEGIN(slit_majin_lecture)
             CALL(evt_mario_set_pose, STRING("M_S_1"))
             CALL(lecture_button_seq_wait, 0, 1)
             WAIT_MS(300)
+
             // If Mario failed to hold paper mode, the genie scolds him and he tries again.
             IF_INT_EQUAL(LW(11), 1)
                 BREAK_LOOP
@@ -775,25 +785,28 @@ EVT_BEGIN(slit_majin_lecture)
 #if VERSION <= VERSION_DEMO_JP
                 CALL(evt_msg_continue)
 #endif
-                CALL(evt_msg_toge, 1, 0, 0, 0)
+                CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
                 CALL(evt_msg_print, 0, STRING("stg1_gon_12_15_1"), 0, STRING("ペラ魔人"))
             END_IF
         END_LOOP
 #if VERSION <= VERSION_DEMO_JP
         CALL(evt_msg_print_add, 0, STRING("stg1_gon_12_15"))
 #else
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg1_gon_12_15"), 0, STRING("ペラ魔人"))
+
 #endif
+
         // The genie asks whether Mario understands the curse.
         CALL(evt_msg_select, 0, STRING("stg1_gon_12_15_yn"))
 #if VERSION <= VERSION_DEMO_JP
         CALL(evt_msg_continue)
 #endif
+
         // No: the genie scolds him and the lesson repeats.
         IF_INT_EQUAL(LW(0), 0)
 #if VERSION <= VERSION_DEMO_JP
-            CALL(evt_msg_toge, 1, 0, 0, 0)
+            CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
             CALL(evt_msg_print, 0, STRING("stg1_gon_12_16"), 0, STRING("ペラ魔人"))
 #else
             CALL(evt_msg_print_add, 0, STRING("stg1_gon_12_16"))
@@ -807,7 +820,9 @@ EVT_BEGIN(slit_majin_lecture)
     CALL(evt_msg_print, 0, STRING("stg1_gon_12_17"), 0, STRING("ペラ魔人"))
 #else
     CALL(evt_msg_print_add, 0, STRING("stg1_gon_12_17"))
+
 #endif
+
     // The genie says farewell and disappears.
     CALL(evt_npc_set_anim, STRING("ペラ魔人"), STRING("P_2"))
     WAIT_MS(200)

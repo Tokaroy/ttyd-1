@@ -1,4 +1,5 @@
 // The Great Tree (mri): punidrv, the Puni billboard renderer's types and entry points.
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -6,16 +7,26 @@
 #include <dolphin/mtx.h>
 #include "driver/camdrv.h"
 
+// Puni (pikmin-like followers in Pit of 100 Trials / Great Tree) billboard driver.
 // Structurally a copy of the DOL extdrv.
 
 typedef struct PunidrvTexInfo {
-    const char* group; // 0x0
-    const char* anim;  // 0x4
-    f32 frame;         // 0x8
+    char* group; // 0x0, filled by strcpy into _mapAlloc buffers (mri_puni _make_texbuf)
+    char* anim;  // 0x4
+    f32 frame;   // 0x8
 } PunidrvTexInfo;
 
+// PunidrvPose.flags. Bits 2 and 4 are read but never set (the shadow readers treat them like extdrv's
+// EXT_POSE_FLAG_NO_SHADOW and EXT_POSE_FLAG_SHADOW_POS).
+enum {
+    PUNIDRV_POSE_FLAG_DISP = 1,                   // set at init (mri_puni); the pose is sorted and drawn
+    PUNIDRV_POSE_FLAG_SMOOTH_TURN = 1 << 1,       // set at init; the pose turns toward its camera-facing angle by 10% a frame
+    PUNIDRV_POSE_FLAG_NO_SHADOW_UNUSED = 1 << 2,  // the shadow is not drawn
+    PUNIDRV_POSE_FLAG_SHADOW_POS_UNUSED = 1 << 4, // the shadow is drawn at the fixed shadowY
+};
+
 typedef struct PunidrvPose {
-    u32 flags;    // 0x0
+    u32 flags;    // 0x0, PUNIDRV_POSE_FLAG_*
     f32 dir;      // 0x4
     f32 rotZ;     // 0x8
     f32 offsetY;  // 0xC
@@ -29,9 +40,9 @@ typedef struct PunidrvPose {
 } PunidrvPose;
 
 typedef struct PunidrvTex {
-    void* image;        // 0x0
-    GXTexObj obj;       // 0x4
-    GXTexRegion region; // 0x24
+    struct smartEntry* image; // 0x0, smart heap block of the texture image
+    GXTexObj obj;             // 0x4
+    GXTexRegion region;       // 0x24
 } PunidrvTex;
 
 typedef struct PunidrvSort {

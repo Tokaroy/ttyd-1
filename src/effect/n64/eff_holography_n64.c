@@ -1,5 +1,6 @@
 // Paper Mario 64 effect: holography, a ten-segment ribbon with two textures that unfurls through a 55-step vertex
 // animation, each segment fainter toward the tail; fades in over 16 frames and out over the last 16.
+
 #include "eff/n64/eff_holography_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,6 +8,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "driver/effdrv.h"
 
 typedef struct EffHolographyN64Work {
     s32 type;     // 0x0
@@ -21,12 +23,13 @@ typedef struct EffHolographyN64Work {
 } EffHolographyN64Work;
 
 /** Flicker of the Fright Mask hologram: alpha over a 16-frame cycle, dipping to invisible and back. */
-u8 xlu_data[16] = {255, 255, 220, 190, 160, 120, 80, 40, 0, 0, 40, 80, 120, 160, 190, 220};
+static u8 xlu_data[16] = {255, 255, 220, 190, 160, 120, 80, 40, 0, 0, 40, 80, 120, 160, 190, 220};
+
 /**
  * The hologram ribbon's 55 unfurl poses, 22 vertices (ten segments) each;
  * drawn from the last pose back to the first.
  */
-effN64Vtx ach_01_v[55][22] = {
+static effN64Vtx ach_01_v[55][22] = {
     {
         {-639, 1280, 0, 0, 0, 0, 0, 120, 255},
         {-639, 1152, 0, 0, 102, 0, 0, 120, 255},
@@ -1350,13 +1353,13 @@ effN64Vtx ach_01_v[55][22] = {
 };
 
 static void effHolographyMain(EffectEntry* effect);
-static void effHolographyDisp(CameraId cameraId, EffectEntry* effect);
+static void effHolographyDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns the holography effect at (x, y, z), scaled by 0.1 * scale,
  * for lifetime frames (0 = until soft-deleted).
- * The Fright Mask item script (ItemEvent_Attiike_Shisshi) spawns it twice through evt_eff64 as its scary
- * hologram; the effect table labels it ホログラフ (holograph).
+ * The Fright Mask item script (ItemEvent_Attiike_Shisshi) spawns it once through evt_eff64 (one call per
+ * version branch) as its scary hologram; the effect table labels it ホログラフ (holograph).
  */
 EffectEntry* effHolographyN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -1368,7 +1371,7 @@ EffectEntry* effHolographyN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffHolographyN64Work));
     effect->userdata = work;
     effect->callback = effHolographyMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -1398,8 +1401,8 @@ static void effHolographyMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -1419,7 +1422,7 @@ static void effHolographyMain(EffectEntry* effect) {
     if (timer < 16) {
         work->alpha = timer * 16;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effHolographyDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effHolographyDisp, effect);
 }
 
 /**
@@ -1427,7 +1430,8 @@ static void effHolographyMain(EffectEntry* effect) {
  * The vertex set is ach_01_v[54 - frame], so the ribbon unfurls over 55 frames;
  * each segment is fainter than the previous one.
  */
-static void effHolographyDisp(CameraId cameraId, EffectEntry* effect) {
+static void effHolographyDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffHolographyN64Work* work;
     s32 frame;

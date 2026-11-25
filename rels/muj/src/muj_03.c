@@ -1,5 +1,7 @@
 // muj_03 (無人島, Keelhaul Key): the jungle path where the nervous sailor runs off
 // (nigeru_suifu01), with the bespectacled sailor and hidden blocks.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -9,31 +11,39 @@
 #include "evt/evt_npc.h"
 #include "evt/evt_party.h"
 #include "evt/evt_sub.h"
+#include "data_tables.h"
 #include "evt/evt_eff.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_item.h"
 #include "evt/evt_mobj.h"
-#include "evt/evt_snd.h"
+#include "driver/npcdrv.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 #include "muj.h"
-#include "data_tables.h"
-#include "version.h"
-#include "evt/evt_story.h"
 
-extern EvtWord muj_03_event_01[];
+static EvtWord muj_03_event_01[22];
 static BeroEntry bero_entry_data[3];
-extern EvtWord nigeru_suifu01[];
+static EvtWord nigeru_suifu01[271];
+static EvtWord evt_kusa_5[20];
+static EvtWord evt_kusa_7[20];
 static TreeAccess tree_tbl[5];
 static KusaAccess kusa_tbl[9];
+EvtWord muj_03_init_evt[112];
 
 /**
- * Trigger event (case event) of the jungle path:
- * the first time Mario passes after STORY_STG5_13_BOBBERY_AND_THE_BRIDGE it starts nigeru_suifu01
- * and sets GSWF_MUJ03_RUNAWAY_SAILOR_SEEN.
+ * Enter event of e_bero (Mario arriving from muj_04):
+ * the first time he enters there from STG5_13_BOBBERY_THE_BRIDGE on it starts nigeru_suifu01,
+ * sets GSWF_MUJ_03_FLEEING_SAILORS_SEEN and returns 1 in LW(0) (0 otherwise).
  */
-EVT_BEGIN(muj_03_event_01)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_13_BOBBERY_AND_THE_BRIDGE)
-        IF_INT_EQUAL(GSWF(GSWF_MUJ03_RUNAWAY_SAILOR_SEEN), 0)
+static EVT_BEGIN(muj_03_event_01)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG5_13_BOBBERY_THE_BRIDGE)
+        IF_INT_EQUAL(GSWF_MUJ_03_FLEEING_SAILORS_SEEN, 0)
             SPAWN_EVENT(nigeru_suifu01)
-            SET_VALUE(GSWF(GSWF_MUJ03_RUNAWAY_SAILOR_SEEN), 1)
+
+            // Mark the scene seen when it is spawned, before the sailors finish fleeing.
+            SET_VALUE(GSWF_MUJ_03_FLEEING_SAILORS_SEEN, 1)
             SET_VALUE(LW(0), 1)
             RETURN
         END_IF
@@ -67,7 +77,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)muj_03_event_01, // enterEvent
+        muj_03_event_01, // enterEvent
         -1, // caseType
         NULL, // exitEvent
         "muj_04", // nextMapName
@@ -84,13 +94,13 @@ static BeroEntry bero_entry_data[] = {
  * and run away from him; they move with no wall collision
  * and with special footstep sounds for the glasses sailor.
  */
-EVT_BEGIN(nigeru_suifu01)
+static EVT_BEGIN(nigeru_suifu01)
     CALL(evt_npc_set_position, STRING("オドオド水夫"), 570, 150, -50)
     CALL(evt_npc_set_ry, STRING("オドオド水夫"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INSTANT_TURN | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_INSTANT_TURN | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_position, STRING("めがね水夫"), 530, 150, -50)
     CALL(evt_npc_set_ry, STRING("めがね水夫"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INSTANT_TURN | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_INSTANT_TURN | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_sound_data_set, STRING("めがね水夫"), STRING("SFX_STG5_KANBU_GLASSES_MOVE1L"), STRING("SFX_STG5_KANBU_GLASSES_MOVE1R"), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
@@ -127,12 +137,12 @@ EVT_BEGIN(nigeru_suifu01)
     CALL(evt_npc_jump_position_nohit, STRING("めがね水夫"), 465, 180, -50, 500, 50)
     CALL(evt_npc_set_ry, STRING("めがね水夫"), 90)
     WAIT_MS(200)
-    CALL(evt_cam3d_evt_set, 465, 288, 263, 465, 240, -8, 500, 11)
+    CALL(evt_cam3d_evt_set, 465, 288, 263, 465, 240, -8, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_npc_set_ry, STRING("めがね水夫"), 270)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg5_muj_90_24"), 0, STRING("めがね水夫"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
@@ -161,7 +171,7 @@ EVT_END()
 static EVT_BEGIN(evt_kusa_5)
     CALL(evt_item_delete_check, STRING("item_kusa_5"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_kusa_5"), ITEM_MINI_MR_MINI, -250, 10, 95, ITEM_ENTRY_LAUNCH, GSWF(GSWF_MUJ03_BUSH_MINI_MR_MINI_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_kusa_5"), ITEM_MINI_MR_MINI, -250, 10, 95, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_MUJ_03_MINI_MR_MINI_BUSH, 0)
     END_IF
     RETURN
 EVT_END()
@@ -173,7 +183,7 @@ EVT_END()
 static EVT_BEGIN(evt_kusa_7)
     CALL(evt_item_delete_check, STRING("item_kusa_7"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_kusa_7"), ITEM_COIN, 175, 210, -50, ITEM_ENTRY_LAUNCH, GSWF(GSWF_MUJ03_BUSH_COIN_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_kusa_7"), ITEM_COIN, 175, 210, -50, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_MUJ_03_COIN_BUSH, 0)
     END_IF
     RETURN
 EVT_END()
@@ -205,25 +215,26 @@ static KusaAccess kusa_tbl[] = {
 
 /**
  * Map init for muj_03 (the jungle path): starts the jungle music and ambience, registers the exits,
- * the coin and badge blocks (Thunder Rage), a hidden brick, a Shine Sprite block and the NPCs.
+ * the coin and Thunder Rage ? blocks, two hidden blocks (ten coins, Jammin' Jelly), a plain brick,
+ * a Shine Sprite block, a Star Piece, the trees and the bushes.
  */
 EVT_BEGIN(muj_03_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_MUJ1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_MUJ5"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_MUJ1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_MUJ5"))
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_mobj_badgeblk, STRING("mobj01"), -50, 9, 0, ITEM_COIN, 0, GSWF(GSWF_MUJ03_COIN_BLOCK_HIT), 0)
-    CALL(evt_mobj_brick, STRING("mobj02"), -50, 94, 0, 0, 13, 0, GSWF(GSWF_MUJ03_HIDDEN_COIN_BLOCK_EMPTIED))
+    CALL(evt_mobj_badgeblk, STRING("mobj01"), -50, 9, 0, ITEM_COIN, 0, GSWF_MUJ_03_COIN_BLOCK, 0)
+    CALL(evt_mobj_brick, STRING("mobj02"), -50, 94, 0, ITEM_NULL, MOBJ_BRICK_HIDDEN_TEN_COIN, 0, GSWF_MUJ_03_HIDDEN_TEN_COIN_BLOCK)
 #if VERSION >= VERSION_US
-    CALL(evt_mobj_brick, STRING("bblk00"), -470, 155, -50, 0, 0, 0, LSWF(3))
+    CALL(evt_mobj_brick, STRING("bblk00"), -470, 155, -50, ITEM_NULL, MOBJ_BRICK_PLAIN, 0, LSWF_MUJ_03_BRICK_BBLK00)
 #else
-    CALL(evt_mobj_brick, STRING("bblk00"), -470, 155, -50, 0, 0, 0, GSWF(GSWF_MUJ03_BRICK_BROKEN))
+    CALL(evt_mobj_brick, STRING("bblk00"), -470, 155, -50, ITEM_NULL, MOBJ_BRICK_PLAIN, 0, GSWF_MUJ_03_BRICK)
 #endif
-    CALL(evt_mobj_powerupblk, STRING("pblk01"), -470, 240, -50, 0, GSWF(GSWF_MUJ03_SHINE_SPRITE), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj03"), -50, 270, -100, ITEM_THUNDER_RAGE, 0, GSWF(GSWF_MUJ03_THUNDER_RAGE_BLOCK_HIT), 0)
-    CALL(evt_mobj_brick, STRING("mobj_hidden2"), -50, 209, 0, ITEM_JAMMIN_JELLY, 11, 0, GSWF(GSWF_MUJ03_HIDDEN_JAMMIN_JELLY_BLOCK_HIT))
-    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, 275, 10, 100, ITEM_ENTRY_FIXED, GSWF(GSWF_MUJ03_STAR_PIECE), 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk01"), -470, 240, -50, 0, GSWF_SHINE_27, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj03"), -50, 270, -100, ITEM_THUNDER_RAGE, 0, GSWF_MUJ_03_THUNDER_RAGE_BLOCK, 0)
+    CALL(evt_mobj_brick, STRING("mobj_hidden2"), -50, 209, 0, ITEM_JAMMIN_JELLY, MOBJ_BRICK_HIDDEN_ITEM, 0, GSWF_MUJ_03_JAMMIN_JELLY_HIDDEN_BLOCK)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, 275, 10, 100, ITEM_TYPE_STILL, GSWF_STARPIECE_75, 0)
     CALL(evt_eff64, STRING("sunlight"), STRING("sunlight_n64"), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     SET_VALUE(LW(0), PTR(tree_tbl))
     CALL_CHILD(evt_sub_tree_access_entry)

@@ -1,24 +1,23 @@
-// DVD manager: queues file reads by priority and runs them on its own thread, so callers can load
-// from the disc without handling DVD errors themselves.
+/* "dvdmgr" - DVD File Manager
+ * Easy file handling for loading data from the disc, instead of having to call DVD functions directly and handle errors.
+ */
+#include "version.h"
 #include "manager/dvdmgr.h"
+
+#define DVD_PRIORITY_CHUNK_BYTES 0x40000
 #include "memory.h"
 #include "system.h"
 #include <dolphin/os.h>
 #include <string.h>
-#include "version.h"
 
 //.bss
 OSThread dvdmgr_thread;
 static u8 stack[0x4000];
 
 //.sbss
-DVDEntry* dvdq;
+static DVDEntry* dvdq;
 static DVDMgrCallback _callback;
-BOOL dvdmgr_thread_on;
-
-// local prototypes
-static void* proc_main(void* param);
-static s32 compare(const void* a, const void* b);
+static BOOL dvdmgr_thread_on;
 
 /** Body of the DVD manager thread: services the read queue once and yields, forever. */
 static void* proc_main(void* param) {
@@ -36,8 +35,7 @@ void DVDMgrInit(void) {
     dvdq = __memAlloc(HEAP_DEFAULT, sizeof(DVDEntry) * DVDEntryCount);
     memset(dvdq, 0, sizeof(DVDEntry) * DVDEntryCount);
     if (!OSCreateThread(&dvdmgr_thread, proc_main, NULL, stack + sizeof(stack), sizeof(stack), 16, OS_THREAD_ATTR_DETACH)) {
-        while (1)
-            ;
+        while (1) {}
     }
     dvdmgr_thread_on = TRUE;
     OSResumeThread(&dvdmgr_thread);
@@ -53,24 +51,24 @@ void DVDMgrDelete(void) {
 
 /**
  * qqsort comparator over queue indices: lower priority values are served first.
- * The demo compares the indices themselves, so it serves requests in queue order.
+ * The early demos compare the indices themselves, so it serves requests in queue order.
  */
 static s32 compare(const void* a, const void* b) {
-    u8 priorityA, priorityB;
-
+    u8 value1, value2;
 #if VERSION <= VERSION_DEMO_JP
-    // the demo sorts by queue index, not priority
-    priorityA = *(u8*)a; // (a const cast here changes the demo code)
-    priorityB = *(u8*)b;
+    value1 = *(u8*)a; // (a const cast here changes the demo code)
+    value2 = *(u8*)b;
 #else
-    priorityA = (u8)dvdq[*(const u8*)a].priority;
-    priorityB = (u8)dvdq[*(const u8*)b].priority;
+    value1 = (u8)dvdq[*(u8*)a].priority;
+    value2 = (u8)dvdq[*(u8*)b].priority;
 #endif
-    if (priorityA > priorityB) {
+    if (value1 > value2) {
         return 1;
-    } else {
-        return -(priorityA < priorityB);
     }
+    if (value1 < value2) {
+        return -1;
+    }
+    return 0;
 }
 
 /**
@@ -80,10 +78,10 @@ static s32 compare(const void* a, const void* b) {
  * Only one chunk is read per pass.
  */
 void DVDMgrMain(void) {
-    u8 array[0x100];
+    u8 array[DVDEntryCount];
     u8* table;
     DVDEntry* entry;
-    BOOL valid;
+    BOOL didRead;
     s32 result;
     s32 count;
     s32 size;
@@ -103,13 +101,13 @@ void DVDMgrMain(void) {
     qqsort(array, count, sizeof(u8), compare);
 
     for (table = array, i = 0; i < count; table++, i++) {
-        valid = FALSE;
+        didRead = FALSE;
         entry = &dvdq[*table];
-        if (!(entry->status & DVDMGR_UNK_ERROR2) && entry->status & DVDMGR_READING) {
+        if (!(entry->status & DVDMGR_READ_FAILED) && entry->status & DVDMGR_READING) {
             size = entry->bytesLeft;
             if (entry->priority) {
-                if (size > 0x40000) {
-                    size = 0x40000;
+                if (size > DVD_PRIORITY_CHUNK_BYTES) {
+                    size = DVD_PRIORITY_CHUNK_BYTES;
                 }
             }
 
@@ -121,8 +119,8 @@ void DVDMgrMain(void) {
                     entry->callback(result, &entry->info);
                 }
             } else if (result < 0) {
-                entry->status |= DVDMGR_UNK_ERROR1;
-                entry->status |= DVDMGR_UNK_ERROR2;
+                entry->status |= DVDMGR_READ_ERROR;
+                entry->status |= DVDMGR_READ_FAILED;
             } else {
                 entry->bytesLeft -= size;
                 entry->position += size;
@@ -134,7 +132,7 @@ void DVDMgrMain(void) {
                         entry->callback(result, &entry->info);
                     }
                 }
-                valid = TRUE;
+                didRead = TRUE;
             }
         }
 
@@ -146,7 +144,7 @@ void DVDMgrMain(void) {
             memset(entry, 0, sizeof(DVDEntry));
         }
 
-        if (valid) {
+        if (didRead) {
             break;
         }
     }
@@ -188,7 +186,7 @@ DVDEntry* DVDMgrOpen(const char* path, u8 priority, u16 unknown) {
     if (!DVDOpen(entry->name, &entry->info)) {
 #if VERSION <= VERSION_DEMO_JP
         entry->status |= DVDMGR_OPEN_FAILED;
-        entry->status |= DVDMGR_UNK_ERROR2;
+        entry->status |= DVDMGR_READ_FAILED;
         entry->status &= ~DVDMGR_INUSE;
 #endif
         memset(entry, 0, sizeof(DVDEntry));
@@ -201,17 +199,13 @@ DVDEntry* DVDMgrOpen(const char* path, u8 priority, u16 unknown) {
  * Reads size bytes at offset into address through the DVD thread, yielding until it is done.
  * Returns the file's length, not the byte count read. return is s32 even though it cannot be negative
  */
+// Waits until the read has finished; returns the file length (not the number of bytes read).
 s32 DVDMgrRead(DVDEntry* entry, void* address, u32 size, s32 offset) {
-    entry->address = address;
-    entry->bytesLeft = size;
-    entry->offset = offset;
-    entry->status |= DVDMGR_READING;
-    entry->status &= ~DVDMGR_FINISHED;
-    entry->callback = NULL;
-    entry->position = 0;
+    DVDMgrReadAsync(entry, address, size, offset, NULL);
     while (TRUE) {
-        if (entry->status & DVDMGR_FINISHED)
+        if (entry->status & DVDMGR_FINISHED) {
             break;
+        }
         OSYieldThread();
     }
     return entry->info.length;

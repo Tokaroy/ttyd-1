@@ -9,7 +9,7 @@ DSError TRKInitializeDispatcher(void);
 void InitializeProgramEndTrap(void);
 DSError TRKInitializeSerialHandler(void);
 DSError TRKInitializeTarget(void);
-DSError TRKInitializeIntDrivenUART(unsigned int param_0, unsigned int param_1, unsigned int param_2, void* param_3);
+DSError TRKInitializeIntDrivenUART(unsigned int param_0, unsigned int param_1, unsigned int param_2, void* inputPendingPtrRef);
 void TRKTargetSetInputPendingPtr(void* ptr);
 DSError TRKTerminateSerialHandler(void);
 void TRK_board_display(char* str);
@@ -18,36 +18,8 @@ extern void* gTRKInputPendingPtr;
 
 BOOL gTRKBigEndian;
 
-/**
- * Checks the target's byte order with a test word and sets gTRKBigEndian;
- * returns nonzero only if the order is neither big nor little endian.
- */
-static inline BOOL TRKInitializeEndian(void) {
-    unsigned char bendian[4];
-    BOOL result = 0;
+BOOL TRKInitializeEndian(void);
 
-    gTRKBigEndian = 1;
-
-    bendian[0] = 0x12;
-    bendian[1] = 0x34;
-    bendian[2] = 0x56;
-    bendian[3] = 0x78;
-
-    if (*(unsigned long*)bendian == 0x12345678)
-        gTRKBigEndian = 1;
-    else if (*(unsigned long*)bendian == 0x78563412)
-        gTRKBigEndian = 0;
-    else
-        result = 1;
-
-    return result;
-}
-
-/**
- * Brings up the stub in order: endianness, print channel, event queue, message buffers, dispatcher,
- * the program-end trap, serial handler, target, then the interrupt-driven link (passing it gTRKInputPendingPtr).
- * Returns the first error.
- */
 DSError TRKInitializeNub(void) {
     DSError result;
     DSError resultTemp;
@@ -77,6 +49,7 @@ DSError TRKInitializeNub(void) {
         result = TRKInitializeTarget();
 
     if (result == 0) {
+        // TRKInitializeIntDrivenUART ignores the first three arguments
         resultTemp = TRKInitializeIntDrivenUART(0xE100, 1, 0, &gTRKInputPendingPtr);
         TRKTargetSetInputPendingPtr(gTRKInputPendingPtr);
         if (resultTemp != 0)
@@ -86,13 +59,34 @@ DSError TRKInitializeNub(void) {
     return result;
 }
 
-/** Shuts the nub down by terminating the serial handler; returns 0. */
 DSError TRKTerminateNub(void) {
     TRKTerminateSerialHandler();
     return 0;
 }
 
-/** Prints the startup banner "MetroTRK for GAMECUBE v2.6". */
 void TRKNubWelcome(void) {
     TRK_board_display("MetroTRK for GAMECUBE v2.6");
+}
+
+BOOL TRKInitializeEndian(void) {
+    unsigned char bendian[4];
+    BOOL result = 0;
+
+    // set first and again below (both stores are in the game code)
+    gTRKBigEndian = 1;
+
+    // read the four bytes back as one word to tell the byte order
+    bendian[0] = 0x12;
+    bendian[1] = 0x34;
+    bendian[2] = 0x56;
+    bendian[3] = 0x78;
+
+    if (*(unsigned long*)bendian == 0x12345678)
+        gTRKBigEndian = 1;
+    else if (*(unsigned long*)bendian == 0x78563412)
+        gTRKBigEndian = 0;
+    else
+        result = 1;
+
+    return result;
 }

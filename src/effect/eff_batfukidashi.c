@@ -1,4 +1,5 @@
 // Coin speech bubble (CoinFukidashi, fukidashi: speech balloon) showing a number; bobs up and down and fades in and out.
+
 #include "eff/eff_batfukidashi.h"
 #include "driver/dispdrv.h"
 #include "manager/fontmgr.h"
@@ -6,6 +7,9 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdio.h>
+#include "driver/effdrv.h"
+static void effCoinFukidashiDisp(CameraId cameraId, EffectEntry* effect);
+static void effCoinFukidashiMain(EffectEntry* effect);
 
 typedef struct EffCoinFukidashiWork {
     s32 type;     // 0x0
@@ -28,9 +32,9 @@ static u8 offset_tbl[] = {
 
 /**
  * Spawns the coin price bubble at (x, y, z) showing `number`; duration <= 0 keeps it until soft-deleted.
- * Spawned by coin blocks (evt_mobj.c).
+ * Spawned by the coin-charging recovery block (mobj_recovery_blk, evt_mobj.c) as its price bubble.
  */
-EffectEntry* effCoinFukidashiEntry(s32 type, s32 number, s32 duration, f32 x, f32 y, f32 z) {
+EffectEntry* effCoinFukidashiEntry(f32 x, f32 y, f32 z, s32 type, s32 number, s32 duration) {
     EffectEntry* effect;
     EffCoinFukidashiWork* work;
 
@@ -40,7 +44,7 @@ EffectEntry* effCoinFukidashiEntry(s32 type, s32 number, s32 duration, f32 x, f3
     work = __memAlloc(HEAP_EFFECT, sizeof(EffCoinFukidashiWork) * effect->count);
     effect->userdata = work;
     effect->callback = effCoinFukidashiMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -69,8 +73,8 @@ static void effCoinFukidashiMain(EffectEntry* effect) {
     position = (Vec){work->position.x, work->position.y, work->position.z};
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -93,7 +97,7 @@ static void effCoinFukidashiMain(EffectEntry* effect) {
     if (work->frame >= 61) {
         work->frame = 0;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effCoinFukidashiDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effCoinFukidashiDisp, effect);
 }
 
 /** Draws the camera-facing bubble sprite (texture 0x25) and then the number printed inside it. */

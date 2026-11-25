@@ -1,22 +1,33 @@
 // jin_03 (ダイム寺院, Creepy Steeple): staircase room joining jin_00, jin_01 and jin_02,
 // with a spinning (kururin) floor tile.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
+#include "jin.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_snd.h"
-#include "jin.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
 
-extern EvtWord w3_close[];
-extern EvtWord w3_open[];
+static EvtWord n_close[12];
+static EvtWord n_open[12];
+static EvtWord s_close[12];
+static EvtWord s_open[12];
+static EvtWord w1_close[12];
+static EvtWord w1_open[12];
+static EvtWord w2_close[12];
+static EvtWord w2_open[12];
+static EvtWord w3_close[12];
+static EvtWord w3_open[12];
 static BeroEntry bero_entry_data[6];
-extern EvtWord jin_03_kaidan_temae_kesu[];
-extern EvtWord jin_03_kaidan_naka_kesu[];
-extern EvtWord jin_03_kaidan_oku_kesu[];
+static EvtWord jin_03_kaidan_temae_kesu[13];
+static EvtWord jin_03_kaidan_naka_kesu[13];
+static EvtWord jin_03_kaidan_oku_kesu[13];
+EvtWord jin_03_init_evt[55];
 
 /**
  * Door animation callback: closes door01 as Mario arrives through n_bero (from jin_01);
@@ -99,14 +110,14 @@ static EVT_BEGIN(w2_open)
 EVT_END()
 
 /** Door animation callback for the door00C door's closing: rotates it by 0.444 times the value in LW(0). */
-EVT_BEGIN(w3_close)
+static EVT_BEGIN(w3_close)
     MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
     CALL(evt_mapobj_rotate, 0, STRING("door00C"), 0, LW(0), 0)
     RETURN
 EVT_END()
 
 /** Door animation callback for the door00C door's opening: rotates it by -0.444 times the value in LW(0). */
-EVT_BEGIN(w3_open)
+static EVT_BEGIN(w3_open)
     MULTIPLY_FLOAT(LW(0), FLOAT(-0.44433594f))
     CALL(evt_mapobj_rotate, 0, STRING("door00C"), 0, LW(0), 0)
     RETURN
@@ -211,45 +222,46 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /** Hides the first staircase section (kaidan01) and its collision. */
-EVT_BEGIN(jin_03_kaidan_temae_kesu)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kaidan01"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(jin_03_kaidan_temae_kesu)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kaidan01"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_kaidan01"), 1, 0)
     RETURN
 EVT_END()
 
 /** Hides the middle staircase section (kaidan02) and its collision. */
-EVT_BEGIN(jin_03_kaidan_naka_kesu)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kaidan02"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(jin_03_kaidan_naka_kesu)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kaidan02"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_kaidan02"), 1, 0)
     RETURN
 EVT_END()
 
 /** Hides the last staircase section (kaidan03) and its collision. */
-EVT_BEGIN(jin_03_kaidan_oku_kesu)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kaidan03"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(jin_03_kaidan_oku_kesu)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kaidan03"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_kaidan03"), 1, 0)
     RETURN
 EVT_END()
 
 /**
  * Creepy Steeple jin_03 map init: starts the steeple music and reverb, the shadow-Mario tint and the exits,
- * hides two of the three staircase sections according to the stair stage LSW(1) (set by the switches in jin_01
+ * hides two of the three staircase sections according to the stair stage LSW_JIN_STAIRCASE_POS (set by the switches in jin_01
  * and jin_02) and adds the spinning floor tile that hides a Star Piece.
  */
+// Position 0 keeps the middle stairs, 1 keeps the front stairs, and other values keep the rear stairs.
 EVT_BEGIN(jin_03_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_JIN1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_JIN1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_JIN1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_JIN1"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_usu_kagemario_party_kill)
-    IF_INT_EQUAL(LSW(1), 0)
+    IF_INT_EQUAL(LSW_JIN_STAIRCASE_POS, 0)
         SPAWN_EVENT(jin_03_kaidan_temae_kesu)
         SPAWN_EVENT(jin_03_kaidan_oku_kesu)
     ELSE
-        IF_INT_EQUAL(LSW(1), 1)
+        IF_INT_EQUAL(LSW_JIN_STAIRCASE_POS, 1)
             SPAWN_EVENT(jin_03_kaidan_naka_kesu)
             SPAWN_EVENT(jin_03_kaidan_oku_kesu)
         ELSE
@@ -257,6 +269,6 @@ EVT_BEGIN(jin_03_init_evt)
             SPAWN_EVENT(jin_03_kaidan_naka_kesu)
         END_IF
     END_IF
-    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 125, 0, 0, STRING("S_yuka"), 125, GSWF(GSWF_JIN03_STAR_PIECE_PANEL))
+    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 125, 0, 0, STRING("S_yuka"), 125, GSWF_STARPIECE_67)
     RETURN
 EVT_END()

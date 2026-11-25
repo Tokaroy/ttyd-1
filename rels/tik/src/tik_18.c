@@ -1,23 +1,26 @@
 // tik_18 (埋没した都市, Rogueport Sewers): the passage between tik_06, tik_07 and tik_17, with a cloud event
 // (tik_18_cloud_evt); a Magikoopa, a Koopatrol and Spanias.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_damage.h"
 #include "driver/hitdrv.h"
-#include "evt/evt_cloud.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
-#include "tik.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_mobj.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[5];
-extern EvtWord tik_18_cloud_evt[];
+static EvtWord tik_18_cloud_evt[5];
 static HitDamageReturn hitDmgRetPoints[13];
+EvtWord tik_18_init_evt[96];
 
 /** Doors of this room: the pipes to tik_06 and tik_07 and two east exits to tik_17. */
 static BeroEntry bero_entry_data[] = {
@@ -90,9 +93,12 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
-/** Runs when the wind blows the cloud off the window; sets GSWF_TIK18_CLOUD_BLOWN. */
-EVT_BEGIN(tik_18_cloud_evt)
-    SET_VALUE(GSWF(GSWF_TIK18_CLOUD_BLOWN), 1)
+/**
+ * Blow-away event of s_win_1 (evt_cloud_ent: Flurrie blows it away): sets GSWF_TIK_18_WALL_BLOWN_AWAY, after
+ * which the map init hides it and turns its hit object a_win_1 off.
+ */
+static EVT_BEGIN(tik_18_cloud_evt)
+    SET_VALUE(GSWF_TIK_18_WALL_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
@@ -116,27 +122,27 @@ static HitDamageReturn hitDmgRetPoints[] = {
 /**
  * Map init script of tik_18, the passage between tik_06, tik_07 and tik_17.
  * Sets up the cloud covering a window (hidden once blown away),
- * removes the enemy NPCs that do not belong to the story step (before or after STORY_STG5_43_X_NAUTS_RETREAT),
- * and places two badge blocks (Slow Shroom, Gradual Syrup).
+ * removes the enemy NPCs that do not belong to the story step (before or after STG5_43_X_NAUTS_RETREAT),
+ * and places two item blocks (Slow Shroom, Gradual Syrup).
  */
 EVT_BEGIN(tik_18_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK7"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK7"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_map_playanim, STRING("anm_mizu"), 1, 0)
-    IF_INT_EQUAL(GSWF(GSWF_TIK18_CLOUD_BLOWN), 0)
+    CALL(evt_map_playanim, STRING("anm_mizu"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_EQUAL(GSWF_TIK_18_WALL_BLOWN_AWAY, 0)
         CALL(evt_cloud_init)
         CALL(evt_cloud_ent, 0, STRING("s_win_1"), STRING("a_win_1"), PTR(tik_18_cloud_evt))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("s_win_1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("s_win_1"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_win_1"), 1, 0)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG5_43_X_NAUTS_RETREAT)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG5_43_X_NAUTS_RETREAT)
         CALL(evt_npc_check_delete, STRING("カメック"))
         CALL(evt_npc_check_delete, STRING("トゲノコ"))
     ELSE
@@ -145,11 +151,11 @@ EVT_BEGIN(tik_18_init_evt)
     END_IF
     CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change_01"), STRING("ue"))
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 110, 0, -30, ITEM_SLOW_SHROOM, 0, GSWF(GSWF_TIK18_SLOW_SHROOM_BLOCK_HIT), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_02"), 310, 0, -30, ITEM_GRADUAL_SYRUP, 0, GSWF(GSWF_TIK18_GRADUAL_SYRUP_BLOCK_HIT), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 110, 0, -30, ITEM_SLOW_SHROOM, 0, GSWF_TIK_18_SLOW_SHROOM_BLOCK, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_02"), 310, 0, -30, ITEM_GRADUAL_SYRUP, 0, GSWF_TIK_18_GRADUAL_SYRUP_BLOCK, 0)
 #else
-    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 110, 0, -38, ITEM_SLOW_SHROOM, 0, GSWF(GSWF_TIK18_SLOW_SHROOM_BLOCK_HIT), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_02"), 310, 0, -38, ITEM_GRADUAL_SYRUP, 0, GSWF(GSWF_TIK18_GRADUAL_SYRUP_BLOCK_HIT), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 110, 0, -38, ITEM_SLOW_SHROOM, 0, GSWF_TIK_18_SLOW_SHROOM_BLOCK, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_02"), 310, 0, -38, ITEM_GRADUAL_SYRUP, 0, GSWF_TIK_18_GRADUAL_SYRUP_BLOCK, 0)
 #endif
     RETURN
 EVT_END()

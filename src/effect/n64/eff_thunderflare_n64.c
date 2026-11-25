@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: thunder flare: a glowing flare sprite with a color pair, used by the thunder effect.
+
 #include "eff/n64/eff_thunderflare_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,13 +8,28 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
+typedef struct EffThunderflareN64Elem {
+    s32 reserved_0; // 0x0, only set to 0
+    s32 type;       // 0x4
+    Vec position;   // 0x8
+    s32 alpha;      // 0x14
+    s32 lifetime;   // 0x18
+    s32 frame;      // 0x1C
+    f32 rotA;       // 0x20
+    f32 rotB;       // 0x24
+    f32 scale;      // 0x28
+    f32 dist;       // 0x2C
+    s32 color[6];   // 0x30
+} EffThunderflareN64Elem;
+
 /**
- * 16x16 quad drawn for each spark, white at the top shading to red at the bottom,
- * followed by an unused larger copy turned 45 degrees.
+ * 16x16 quad drawn for the even sparks, followed by a 24x24 copy with its texture turned 45 degrees for the
+ * odd sparks. The vertex colours (white top, red bottom) are not used: the draw has no colour channel.
  */
-static effN64Vtx size16x16_tex32x32_vtx[] = {
+static effN64Vtx size16x16_tex32x32_vtx[] ATTRIBUTE_ALIGN(8) = {
     {-8, -8, 0, 0, 0, 250, 250, 250, 255},
     {8, -8, 0, 1024, 0, 250, 250, 250, 255},
     {8, 8, 0, 1024, 1024, 250, 0, 0, 255},
@@ -25,13 +41,12 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
 };
 
 static void effThunderflareMain(EffectEntry* effect);
-static void effThunderflareDisp(CameraId cameraId, EffectEntry* effect);
+static void effThunderflareDisp(CameraId cameraId, void* payload);
 
-/** Spawns a glowing flare at (x, y, z). Used by the Kamec units (tik, tou2, las) and event scripts. */
+/** Spawns a glowing flare at (x, y, z). Used by the Kamec units (tik, tou2, las, tst), the thunder effect and event scripts. */
 EffectEntry* effThunderflareN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffThunderflareN64Elem* work;
-    EffThunderflareN64Elem* e;
     s32 i;
 
     effect = effEntry();
@@ -70,18 +85,18 @@ EffectEntry* effThunderflareN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z
             work->color[5] = 10;
             break;
     }
-    e = work + 1;
-    for (i = 1; i < 31; i++, e++) {
-        e->rotA = (i - 1) * 3240 / 30;
-        e->rotB = 0.0f;
-        e->dist = (i - 1) * 100 / 30;
-        e->flags = 0;
+    work++;
+    for (i = 1; i < 31; i++, work++) {
+        work->rotA = (i - 1) * 3240 / 30;
+        work->rotB = 0.0f;
+        work->dist = (i - 1) * 100 / 30;
+        work->reserved_0 = 0;
     }
     return effect;
 }
 
 /**
- * The glow fades in over 20 frames and flickers (half alpha on odd frames);
+ * The first work's alpha fades in over 20 frames and halves on odd frames, but the draw never reads it;
  * the lifetime counts down only from below
  * 100. Each spark spirals in toward the centre on a sphere, its distance shrinking 2-8 units per frame while it grows
  * brighter and smaller, and vanishes on reaching the centre. Deletes when the lifetime runs out.
@@ -145,14 +160,15 @@ static void effThunderflareMain(EffectEntry* effect) {
         work->rotA += odd ? 5 : 2;
         work->rotB += odd ? 2 : 5;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effThunderflareDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effThunderflareDisp, effect);
 }
 
 /**
- * Draws each remaining spark as a camera-facing 16x16 quad of texture 0x55,
+ * Draws each remaining spark as a camera-facing quad of texture 0x55 (16x16 even, 24x24 odd sparks),
  * its colour mixed between the work's colour pair by the texture, with the spark's own alpha.
  */
-static void effThunderflareDisp(CameraId cameraId, EffectEntry* effect) {
+static void effThunderflareDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffThunderflareN64Elem* work;
     s32 cr, cg, cb;

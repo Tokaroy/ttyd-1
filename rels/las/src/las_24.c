@@ -1,33 +1,57 @@
 // las_24 (ラストダンジョン, Palace of Shadow): the room with the cloud blocks and the breaking floor.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_cloud.h"
+#include "las.h"
 #include "evt/evt_hit.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_party.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "las.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "evt/evt_item.h"
+#include "mario/mariost.h"
+#include "manager/evtmgr_cmd.h"
+#include "driver/mobjdrv.h"
 #include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #if VERSION >= VERSION_US
-// Declaration of the script helper that stretches a duration for the game's frame rate (defined at the end of this
-// file; US and later).
 USER_FUNC(las_24_adjust_for_framerate);
 #endif
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
 static BeroEntry bero_entry_data[4];
 static const char* haguruma_hontai[15];
 static const char* haguruma_hontai2[6];
 static const char* haguruma_kage[12];
 static const char* haguruma_kage2[5];
+static EvtWord haguruma_evt[194];
+static EvtWord cloud_blk_evt[10];
+static EvtWord break_floor_evt[5];
+static EvtWord jump_evt[68];
+
+#if VERSION >= VERSION_US
+static EvtWord dai_evt[17];
+#else
+static EvtWord dai_evt[13];
+#endif
+
+static EvtWord box_evt[33];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_24_init_evt[];
+#else
+EvtWord las_24_init_evt[190];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -168,9 +192,9 @@ static const char* haguruma_kage2[] = {
 };
 
 /**
- * Event script: runs while the room is loaded and spins the gears of the turntable room (see las_22):
- * the same two counter-rotating gear sets plus the sine-driven gear pairs S_hgm_21..23,
- * with different gear counts.
+ * Turns the gears every frame, as in las_22: haguruma_hontai and haguruma_kage (15 and 12 objects) by +1 degree
+ * from 20, haguruma_hontai2 and haguruma_kage2 (6 and 5) by -1 degree, and the pairs S_hgm_21a/b, 22a/b and 23a/b
+ * rock on a sine (41, 22 and 110 degrees).
  */
 static EVT_BEGIN(haguruma_evt)
     SET_FLOAT_VALUE(LW(0), FLOAT(20.0f))
@@ -238,26 +262,27 @@ EVT_END()
 
 /**
  * Event script: runs when the cloud over the big stone block has been blown away by Flurrie.
- * Sets GSWF_LAS24_BLOCK_UNCOVERED and makes the block solid.
+ * Sets GSWF_LAS_24_HAKO_BLOWN_AWAY and allows the block to react to hits.
  */
-EVT_BEGIN(cloud_blk_evt)
-    SET_VALUE(GSWF(GSWF_LAS24_BLOCK_UNCOVERED), 1)
-    CALL(evt_mobj_flag_onoff, 0, STRING("blk"), MOBJ_FLAG_NO_HIT)
+static EVT_BEGIN(cloud_blk_evt)
+    SET_VALUE(GSWF_LAS_24_HAKO_BLOWN_AWAY, 1)
+    CALL(evt_mobj_flag_onoff, 0, STRING("blk"), MOBJ_FLAG_HIT_EVERY_FRAME)
     RETURN
 EVT_END()
 
-/** Event script: runs when the breaking floor gives way; sets the story to STORY_STG8_12_LARGE_STONE_BLOCK. */
-EVT_BEGIN(break_floor_evt)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_12_LARGE_STONE_BLOCK)
+/** Event script: runs when the breaking floor gives way; sets the story to STG8_12_LARGE_STONE_BLOCK. */
+static EVT_BEGIN(break_floor_evt)
+    SET_VALUE(GSW_STORY_PROGRESS, STG8_12_LARGE_STONE_BLOCK)
     RETURN
 EVT_END()
 
 /**
- * Event script: the red jump stand.
- * Mario jumps from the stand at (-500, -200) to the ledge at (-450, -200);
- * if a partner is present it first jumps to the ledge when it stands on the stand ("MOBJ_jump").
+ * Event script: the red jump stand at (-500, -200).
+ * evt_mario_jump_jumpstand launches Mario up to (-545, 100), or, if he dropped onto the stand from higher up,
+ * hops him off to (-450, -200); a partner that is not at height -200 and lands on the stand ("MOBJ_jump")
+ * within 90 frames jumps to (-455, -200).
  */
-EVT_BEGIN(jump_evt)
+static EVT_BEGIN(jump_evt)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_party, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
@@ -284,8 +309,8 @@ EVT_BEGIN(jump_evt)
 EVT_END()
 
 /**
- * Event script: starts the moving platform S_move_dai (hit object A_move_dai) via move_dai.
- * The movement time is 7200, scaled for the frame rate in the US and later versions.
+ * Switch script of the moving platform (S_move_dai, A_move_dai): runs move_dai with a time of 7200 (US and later scaled
+ * by las_24_adjust_for_framerate). las_20 and las_22 have their own dai_evt.
  */
 static EVT_BEGIN(dai_evt)
     SET_VALUE(LW(0), STRING("S_move_dai"))
@@ -299,81 +324,78 @@ static EVT_BEGIN(dai_evt)
 EVT_END()
 
 /**
- * Event script: the key chest of las_24 opens and Mario receives Palace Key 0x30;
- * the story progress is set to STORY_STG8_13_KEY.
+ * After-open script of the Palace Key chest ("box"): gives the key and sets STG8_13_KEY. las_11 to las_18 and las_26
+ * have their own box_evt.
  */
 static EVT_BEGIN(box_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mobj_get_position, STRING("box"), LW(0), LW(1), LW(2))
-    CALL(evt_item_entry, STRING("key"), ITEM_PALACE_KEY_0x30, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+    CALL(evt_item_entry, STRING("key"), ITEM_PALACE_KEY_0x30, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
     CALL(evt_mobj_wait_animation_end, STRING("box"))
     CALL(evt_item_get_item, STRING("key"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_13_KEY)
+    SET_VALUE(GSW_STORY_PROGRESS, STG8_13_KEY)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
 /**
- * Map init script for las_24, the cloud and breaking floor room:
- * music, the door set, the gear animation, the cloud over the big stone block (until
- * STORY_STG8_12_LARGE_STONE_BLOCK), the big stone block, the breaking floor, a red jump stand,
- * a moving platform with its red floating switch, a coin block,
- * a hidden brick with Point Swap and the key chest with Palace Key 0x30.
+ * Map init of las_24 (relSetEvtAddr in las.c): BGM_STG8_LST3 and ENV_STG8_LAS7 (JP and later reverb mode 2), the
+ * entrances, the gears (haguruma_evt) and chain animation, the crate with a cloud case (S_hako, cloud_blk_evt, until
+ * GSWF_LAS_24_HAKO_BLOWN_AWAY or STG8_12), the big block (GSWF_LAS_24_BIG_BLOCK_BROKEN), the breaking floor, the red
+ * jump stand, the moving platform with its float switch (dai_evt), the coin and hidden Point Swap blocks and the Palace
+ * Key chest (box_evt, GSWF_LAS_24_PALACE_KEY_CHEST).
  */
 EVT_BEGIN(las_24_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST3"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS7"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST3"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS7"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_05a"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_19a"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_24a"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_05a"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_19a"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_hgm_24a"), MAP_OBJ_FLAG_CLIP)
     SPAWN_EVENT(haguruma_evt)
-    CALL(evt_map_playanim, STRING("kusari"), 1, 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_12_LARGE_STONE_BLOCK)
-        IF_INT_EQUAL(GSWF(GSWF_LAS24_BLOCK_UNCOVERED), 0)
+    CALL(evt_map_playanim, STRING("kusari"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_12_LARGE_STONE_BLOCK)
+        IF_INT_EQUAL(GSWF_LAS_24_HAKO_BLOWN_AWAY, 0)
             CALL(evt_cloud_init)
             CALL(evt_cloud_ent, 0, STRING("S_hako"), STRING("A_hako"), PTR(cloud_blk_evt))
         ELSE
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hako"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hako"), MAP_OBJ_FLAG_HIDDEN)
             CALL(evt_hitobj_onoff, STRING("A_hako"), 1, 0)
         END_IF
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hako"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hako"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_hako"), 1, 0)
     END_IF
-    CALL(evt_mobj_lv_blk, STRING("blk"), -495, 100, 0, 0, GSWF(GSWF_LAS24_BIG_BLOCK_BROKEN), STRING("MOBJ_Lv2BigBigBlock"))
-    IF_INT_EQUAL(GSWF(GSWF_LAS24_BIG_BLOCK_BROKEN), 0)
-        CALL(evt_mobj_flag_onoff, 0, STRING("blk"), MOBJ_FLAG_FALL)
-        IF_INT_EQUAL(GSWF(GSWF_LAS24_BLOCK_UNCOVERED), 0)
-            CALL(evt_mobj_flag_onoff, 1, STRING("blk"), MOBJ_FLAG_NO_HIT)
+    CALL(evt_mobj_lv_blk, STRING("blk"), -495, 100, 0, 0, GSWF_LAS_24_BIG_BLOCK_BROKEN, STRING("MOBJ_Lv2BigBigBlock"))
+    IF_INT_EQUAL(GSWF_LAS_24_BIG_BLOCK_BROKEN, 0)
+        CALL(evt_mobj_flag_onoff, 0, STRING("blk"), MOBJ_FLAG_GRAVITY)
+        IF_INT_EQUAL(GSWF_LAS_24_HAKO_BLOWN_AWAY, 0)
+            CALL(evt_mobj_flag_onoff, 1, STRING("blk"), MOBJ_FLAG_HIT_EVERY_FRAME)
             CALL(evt_mobj_set_scale, STRING("blk"), FLOAT(0.9980469f), FLOAT(0.9980469f), FLOAT(0.9980469f))
         END_IF
     END_IF
-    CALL(evt_mobj_breaking_floor, STRING("brkflr"), -500, 100, 0, 0, PTR(break_floor_evt), GSWF(GSWF_LAS24_FLOOR_BROKEN))
+    CALL(evt_mobj_breaking_floor, STRING("brkflr"), -500, 100, 0, 0, PTR(break_floor_evt), GSWF_LAS_24_FLOOR_BROKEN)
     CALL(evt_mobj_jumpstand_red, 0, STRING("jump"), -500, -200, 0, PTR(jump_evt), 0)
     CALL(evt_hit_bind_mapobj, STRING("A_move_dai"), STRING("S_move_dai"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_move_dai"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_move_dai"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_move_dai"), 0, 0)
     CALL(evt_mobj_floatswitch_red, 0, STRING("dai_switch"), -150, -440, 75, PTR(dai_evt), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_hatena_gat"), -625, -200, -100, ITEM_COIN, 0, GSWF(GSWF_LAS24_COIN_BLOCK_HIT), 0)
-    CALL(evt_mobj_brick, STRING("mobj_kakusi"), -625, -115, -100, ITEM_POINT_SWAP, 11, 0, GSWF(GSWF_LAS24_POINT_SWAP_HIDDEN_BLOCK_HIT))
-    CALL(evt_mobj_itembox, STRING("box"), -255, -380, 75, 0, 0, PTR(box_evt), GSWF(GSWF_LAS24_KEY_CHEST_OPENED))
+    CALL(evt_mobj_badgeblk, STRING("mobj_hatena_gat"), -625, -200, -100, ITEM_COIN, 0, GSWF_LAS_24_COIN_BLOCK, 0)
+    CALL(evt_mobj_brick, STRING("mobj_kakusi"), -625, -115, -100, ITEM_POINT_SWAP, MOBJ_BRICK_HIDDEN_ITEM, 0, GSWF_LAS_24_POINT_SWAP_HIDDEN_BLOCK)
+    CALL(evt_mobj_itembox, STRING("box"), -255, -380, 75, MOBJ_ITEMBOX_NORMAL, 0, PTR(box_evt), GSWF_LAS_24_PALACE_KEY_CHEST)
     RETURN
 EVT_END()
 
-#if VERSION >= VERSION_US
-#include "mario/mariost.h"
-#include "manager/evtmgr_cmd.h"
-
 /**
- * Script helper: reads a duration in args[0] and returns it in args[1],
- * multiplied by 1.2 when the frame rate is not 60 so the platform ride lasts as long on PAL timing.
+ * Script helper (US and later): returns in args[1] the value args[0], multiplied by 1.2 when the game does not run at
+ * 60 fps.
  */
+#if VERSION >= VERSION_US
 USER_FUNC(las_24_adjust_for_framerate) {
     EvtWord* args = event->args;
     s32 value = evtGetValue(event, args[0]);

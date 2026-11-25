@@ -1,7 +1,26 @@
 // yuu_02 (遊技場, Pianta Parlor): minigame 3, Tube Mode (roll, rolling course); entered from gor_03.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_yuuranking.h"
 #include "evt/evt_cmd.h"
+#include "party.h"
+#include "cam_shift.h"
+#include "mario/mario_motion.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "mot/mot_roll.h"
+#include "evt/evt_yuugijou.h"
+#include "rels/yuu/include/yuu.h"
+#include "driver/mapdrv.h"
 
 #include "manager/evtmgr_cmd.h"
 #include "driver/camdrv.h"
@@ -18,28 +37,18 @@
 #include "icon_ids.h"
 #include "evt/evt_map.h"
 #include "evt/evt_movefloor.h"
-#include "cam_shift.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_yuugijou.h"
-#include "evt/evt_yuuranking.h"
-#include "mario/mario_motion.h"
-#include "mot/mot_roll.h"
-#include "party.h"
 #include "yuu.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
+#include "driver/seqdrv.h"
+#include <dolphin/pad.h>
+
+// RollWork.flags
+enum {
+    ROLL_FLAG_OPENING = 1,          // set at init; the opening cutscene is still pending
+    ROLL_FLAG_FALL_RETURN = 1 << 1, // Mario fell off: yuu_02_jumpret is putting him back at the checkpoint
+};
 
 typedef struct RollWork {
-    u32 flags;
+    u32 flags; // ROLL_FLAG_*
     s32 phase;
     s32 coins;
     s32 result;
@@ -50,36 +59,80 @@ typedef struct RollWork {
     EventEntry* viewEvent;
 } RollWork;
 
-typedef struct MonteZoneTable {
+// yuu_02's spawn table: x/z ranges, and a type word that ends the table (0).
+typedef struct MonteTableXZ {
     f32 x0;
     f32 x1;
     f32 z0;
     f32 z1;
     s32 num;
     s32 type;
-} MonteZoneTable;
+} MonteTableXZ;
 static void* yuunpc_wp;
 static Monte* monte_p; /* monte_p */
 #if VERSION >= VERSION_JP
 static Monte* icon_monte_p;
 #endif
 
+static void monte_disp(CameraId camera, void* param);
+static BOOL get_monte_check(Vec* a, Vec* b);
+
 static USER_FUNC(fall_rtn);
 static USER_FUNC(re_fall_rtn);
-#if VERSION >= VERSION_JP
 USER_FUNC(yuu_02_icon_monte_entry);
 USER_FUNC(yuu_02_cam_shift_reset);
-#endif
+static USER_FUNC(yuu_roll_reset);
+static USER_FUNC(yuuminigame3_opening_chk);
+static USER_FUNC(yuuminigame3_opening_on_off);
+static USER_FUNC(yuuminigame3_roll_fix_off);
+static USER_FUNC(yuuminigame3_roll_fix_on);
+static USER_FUNC(yuuminigame3_set_phase);
 BOOL yuuminigame3_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp, RollWork* data);
+USER_FUNC(yuu_02_icon_monte_onoff);
 
-Vec fukkipoint[15];
+static Vec fukkipoint[15];
+
+#if VERSION >= VERSION_JP
+EvtWord yuu_02_icon_monte_entry_evt[4];
+#endif
+
+static MonteTableXZ montetable[11];
+static EvtWord minigame_view_monte[4];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord yuu_02_jumpret[];
+#else
+EvtWord yuu_02_jumpret[164];
+#endif
+
+EvtWord yuu_02_kaijo_init[12];
+EvtWord yuu_02_kaijo_init2[12];
+static EvtWord minigame03_main[33];
+static EvtWord minigame03_start_cam[40];
+static EvtWord minigame03_start_cam_cancel[17];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord minigame03_start[];
+extern EvtWord minigame03_end[];
+#else
+EvtWord minigame03_start[193];
+EvtWord minigame03_end[217];
+#endif
+
+static EvtWord s_en1_turn[30];
+
+#if VERSION >= VERSION_US
+EvtWord yuu_02_init_evt[262];
+#else
+EvtWord yuu_02_init_evt[28];
+#endif
 
 /**
  * Checkpoints along the Tube Mode course, in order from the start around the loop to the goal.
  * yuuminigame3_gamerule tracks which one Mario has passed and drops him back onto the last one
  * after he falls off the course.
  */
-Vec fukkipoint[] = {
+static Vec fukkipoint[] = {
     {300.0f, 0.0f, 300.0f},
     {750.0f, 0.0f, 300.0f},
     {1150.0f, 0.0f, 300.0f},
@@ -101,11 +154,11 @@ Vec fukkipoint[] = {
     {250.0f, 0.0f, 300.0f},
 };
 
-#if VERSION >= VERSION_JP
 /**
  * Event wrapper that runs yuu_02_icon_monte_entry as a blocking view event,
  * so the checkpoint arrow icon is drawn for the whole minigame.
  */
+#if VERSION >= VERSION_JP
 EVT_BEGIN(yuu_02_icon_monte_entry_evt)
     CALL(yuu_02_icon_monte_entry)
     RETURN
@@ -114,9 +167,10 @@ EVT_END()
 
 /**
  * Where fall_rtn places the Tube Mode coins: ten areas of the course (x range, z range, coin count)
- * with the coins set on the floor below; coins of type 2 start hidden. A zero type ends the table.
+ * with the coins set on the floor below; each type 2 row selects which accumulated candidates remain visible.
+ * A zero type ends the table.
  */
-static MonteZoneTable montetable[] = {
+static MonteTableXZ montetable[] = {
     {1500.0f, 990.0f, -200.0f, -300.0f, 1, 1},
     {1500.0f, 990.0f, -300.0f, -400.0f, 1, 2},
     {300.0f, 900.0f, -250.0f, -275.0f, 1, 1},
@@ -136,23 +190,33 @@ static EVT_BEGIN(minigame_view_monte)
     RETURN
 EVT_END()
 
+/** Script helper (JP and later): resets the camera shift (camShiftReset). */
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_00001210, JP yuu .text+0x1144. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
-/** Resets the camera shift offset (camShiftReset) so the camera returns to its normal framing after the minigame. */
 USER_FUNC(yuu_02_cam_shift_reset) {
     camShiftReset();
     return EVT_RETURN_DONE;
 }
+#endif
 
+// Descriptive name (not in the symbol maps); placeholder fn_31_112C, JP yuu .text+0x112C. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 /** Shows the one-entry arrow icon array (icon_monte_p[idx]). */
 void yuu_02_icon_monte_on(s32 idx) {
     icon_monte_p[idx].hidden = 0;
 }
+#endif
 
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_000011e0, JP yuu .text+0x1114. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 /** Hides the arrow icon array entry idx. */
 void yuu_02_icon_monte_off(s32 idx) {
     icon_monte_p[idx].hidden = 1;
 }
+#endif
 
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_00001160, JP yuu .text+0x1094. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 /**
  * args[0] = on/off, args[1] = icon index.
  * Shows or hides that entry of the arrow icon array if it has been created.
@@ -171,13 +235,13 @@ USER_FUNC(yuu_02_icon_monte_onoff) {
     }
     return EVT_RETURN_DONE;
 }
+#endif
 
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_00001054, JP yuu .text+0xF88. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 /**
- * 2D draw callback for the arrow icon (ICON_163):
- * flips it to face the direction of travel depending on which side (z sign) of the course Mario is on,
- * and nudges it 5 units for 9 of every 32 frames.
- * The course tick shows it when Mario crosses a checkpoint backwards
- * and hides it when he passes the next one forwards, so it marks that he is rolling the wrong way.
+ * 2D draw callback of the arrow icons (ICON_ARROW): draws each shown entry at its position, mirrored by the side
+ * of the course Mario is on (sign of his z) and moved 5 units back along x for 9 of every 32 frames.
  */
 void yuu_02_icon_monte_disp(CameraId camera, void* param) {
     Monte* monte = param;
@@ -194,16 +258,19 @@ void yuu_02_icon_monte_disp(CameraId camera, void* param) {
                 dir = -1.0f;
             }
             if (monte[i].hidden == 0) {
-                pos = monte[i].icon.position;
+                pos = monte[i].sub.pos;
                 if ((gp->retraceCount & 0x1F) < 9) {
                     pos.x -= 5.0f * dir;
                 }
-                iconDispGx(&pos, 0, ICON_163, -2.0f * dir);
+                iconDispGx(&pos, 0, -2.0f * dir, ICON_ARROW);
             }
         }
     }
 }
+#endif
 
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_00000f1c, JP yuu .text+0xE50. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 /**
  * View event that creates the single hidden arrow icon on its first call,
  * registers yuu_02_icon_monte_disp as a 2D draw callback and then blocks forever.
@@ -214,7 +281,7 @@ USER_FUNC(yuu_02_icon_monte_entry) {
     MarioWork* mario = marioGetPtr();
     s32 total;
     s32 i;
-    IconEntry* sub;
+    MonteSub* sub;
 
     if (isFirstCall) {
         if (icon_monte_p != NULL) {
@@ -229,8 +296,8 @@ USER_FUNC(yuu_02_icon_monte_entry) {
         icon_monte_p->num = total;
         icon_monte_p->wp = wp;
         for (i = 0; i < icon_monte_p->num; i++) {
-            sub = &icon_monte_p[i].icon;
-            sub->position = (Vec){0.0f, 0.0f, 0.0f};
+            sub = &icon_monte_p[i].sub;
+            sub->pos = (Vec){0.0f, 0.0f, 0.0f};
             sub->scale = 1.0f;
             icon_monte_p[i].hidden = 1;
         }
@@ -238,7 +305,7 @@ USER_FUNC(yuu_02_icon_monte_entry) {
     for (i = 0; i < icon_monte_p->num; i++) {
     }
     if (!exists) {
-        dispEntry(CAMERA_2D, 0.0f, 0, yuu_02_icon_monte_disp, icon_monte_p);
+        dispEntry(CAMERA_2D, 0.0f, DISP_MODE_OPAQUE, yuu_02_icon_monte_disp, icon_monte_p);
     }
     return EVT_RETURN_BLOCK;
 }
@@ -260,7 +327,7 @@ static void monte_disp(CameraId camera, void* param) {
     if (monte != NULL) {
         for (i = 0; i < monte->num; i++) {
             if (monte[i].hidden == 0) {
-                iconDispGx(&monte[i].icon.position, 0, ICON_13F, 1.0f);
+                iconDispGx(&monte[i].sub.pos, 0, 1.0f, ICON_ITEM_PIANTA_TOKEN);
             }
         }
     }
@@ -269,7 +336,8 @@ static void monte_disp(CameraId camera, void* param) {
 /**
  * Frame-by-frame coin spawner and collector for Tube Mode.
  * On first call it scatters coins on the course according to montetable (checking by a downward floor probe that
- * each coin sits over solid ground; type 2 zones keep only some of their candidates visible),
+ * candidates lie over solid ground, with a fallback position of (0, 0, 0) after 500 failed attempts;
+ * type 2 zones keep only some of their candidates visible),
  * then each frame it checks Mario against every coin, counting and hiding collected ones with a 3D sound.
  * Blocks forever as a view event.
  */
@@ -277,7 +345,6 @@ static USER_FUNC(fall_rtn) {
     MiniGameWork* wp = (MiniGameWork*)event->lwData[0];
     BOOL exists = FALSE;
     RollWork* data = wp->data;
-    const char* sfx;
     s32 total;
     s32 i;
     s32 t;
@@ -286,7 +353,7 @@ static USER_FUNC(fall_rtn) {
     s32 n;
     s32 r;
     s32 retry;
-    IconEntry* sub;
+    MonteSub* sub;
     f32 lo;
     f32 hi;
     Vec v;
@@ -314,12 +381,12 @@ static USER_FUNC(fall_rtn) {
         k = 0;
         n = 0;
         for (i = 0; i < monte_p->num; i++) {
-            sub = &monte_p[i].icon;
-            sub->position.y = 210.0f;
+            sub = &monte_p[i].sub;
+            sub->pos.y = 210.0f;
             retry = 0;
             while (TRUE) {
                 if (++retry > 500) {
-                    sub->position = (Vec){0.0f, 0.0f, 0.0f};
+                    sub->pos = (Vec){0.0f, 0.0f, 0.0f};
                     break;
                 }
                 if (montetable[t].x0 < montetable[t].x1) {
@@ -329,7 +396,7 @@ static USER_FUNC(fall_rtn) {
                     lo = montetable[t].x1;
                     hi = montetable[t].x0;
                 }
-                sub->position.x = lo + irand(100.0f * (hi - lo)) / 100.0f;
+                sub->pos.x = lo + irand(100.0f * (hi - lo)) / 100.0f;
                 if (montetable[t].z0 < montetable[t].z1) {
                     lo = montetable[t].z0;
                     hi = montetable[t].z1;
@@ -338,11 +405,11 @@ static USER_FUNC(fall_rtn) {
                     hi = montetable[t].z0;
                 }
                 hi -= lo;
-                sub->position.z = lo + irand(100.0f * hi) / 100.0f;
-                a = sub->position;
+                sub->pos.z = lo + irand(100.0f * hi) / 100.0f;
+                a = sub->pos;
                 a.y = 0.0f;
                 for (j = 0; j < k; j++) {
-                    b = (sub - (j + 1))->position;
+                    b = (sub - (j + 1))->pos;
                     b.y = 0.0f;
                     PSVECSubtract(&a, &b, &v);
                     if (PSVECMag(&v) < 20.0f) {
@@ -353,7 +420,7 @@ static USER_FUNC(fall_rtn) {
                     continue;
                 }
                 qp = &query;
-                query.targetPos = sub->position;
+                query.targetPos = sub->pos;
                 query.targetDistance = 220.0f;
                 query.targetDir = (Vec){0.0f, -1.0f, 0.0f};
                 if (hitCheckVecFilter(qp, NULL) == NULL) {
@@ -375,9 +442,9 @@ static USER_FUNC(fall_rtn) {
                 if (hitCheckVecFilter(qp, NULL) != NULL && query.hitPos.y > hit.y + 1.0f) {
                     continue;
                 }
-                sub->position.y = hit.y;
+                sub->pos.y = hit.y;
 #else
-                sub->position.y = query.hitPos.y;
+                sub->pos.y = query.hitPos.y;
 #endif
                 break;
             }
@@ -403,14 +470,15 @@ static USER_FUNC(fall_rtn) {
             sub->scale = 1.0f;
         }
     }
-    sfx = (0, "SFX_EVT_GAME_MONTE_COUNT1"); // FAKE: comma expression (same value) puts the string address in its own saved register; the plain literal does not
     for (i = 0; i < monte_p->num; i++) {
         m = &monte_p[i];
         switch (m->state) {
             case 0:
-                if (get_monte_check(&m->icon.position, &marioGetPtr()->position) == TRUE) {
+                if (get_monte_check(&m->sub.pos, &marioGetPtr()->position) == TRUE) {
                     data->monteCount++;
-                    psndSFXOn_3D(sfx, &marioGetPtr()->position);
+
+                    // sound name passed as an integer word, as in the original (only loops show it; see sfx_name_word.h)
+                    psndSFXOn_3D(SFX_NAME_WORD("SFX_EVT_GAME_MONTE_COUNT1"), &marioGetPtr()->position);
                     m->hidden = 1;
                     m->state = 1;
                 }
@@ -420,7 +488,7 @@ static USER_FUNC(fall_rtn) {
         }
     }
     if (!exists) {
-        dispEntry(CAMERA_3D, 0.0f, 1, monte_disp, monte_p);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, monte_disp, monte_p);
     }
     return EVT_RETURN_BLOCK;
 }
@@ -454,7 +522,7 @@ static USER_FUNC(yuuminigame3_set_phase) {
     return EVT_RETURN_DONE;
 }
 
-/** Script call that locks Mario's rolling speed/direction for the course (marioRollFixOn). */
+/** Script call that prevents Mario from unrolling during the course (marioRollFixOn). */
 static USER_FUNC(yuuminigame3_roll_fix_on) {
     marioRollFixOn();
     return EVT_RETURN_DONE;
@@ -467,29 +535,29 @@ static USER_FUNC(yuuminigame3_roll_fix_off) {
 
 /**
  * args[0] = minigame work pointer, args[1] = on/off.
- * Sets or clears the "opening cutscene pending" bit (flags bit 0).
+ * Sets or clears ROLL_FLAG_OPENING (the opening cutscene is pending).
  */
 static USER_FUNC(yuuminigame3_opening_on_off) {
     EvtWord* args = event->args;
     RollWork* data = ((MiniGameWork*)evtGetValue(event, args[0]))->data;
 
     if (evtGetValue(event, args[1])) {
-        data->flags |= 1;
+        data->flags |= ROLL_FLAG_OPENING;
     } else {
-        data->flags &= ~1;
+        data->flags &= ~ROLL_FLAG_OPENING;
     }
     return EVT_RETURN_DONE;
 }
 
 /**
  * args[0] = minigame work pointer, args[1] = output.
- * Writes 1 if the opening cutscene is still pending (flags bit 0), else 0.
+ * Writes 1 if the opening cutscene is still pending (ROLL_FLAG_OPENING), else 0.
  */
 static USER_FUNC(yuuminigame3_opening_chk) {
     EvtWord* args = event->args;
     MiniGameWork* wp = (MiniGameWork*)evtGetValue(event, args[0]);
 
-    if (((RollWork*)wp->data)->flags & 1) {
+    if (((RollWork*)wp->data)->flags & ROLL_FLAG_OPENING) {
         evtSetValue(event, args[1], 1);
     } else {
         evtSetValue(event, args[1], 0);
@@ -506,18 +574,18 @@ void yuuminigame_init_3roll(EventEntry* event, BOOL isFirstCall) {
 #if VERSION >= VERSION_JP
     EventEntry* e;
 
-    e = evtEntryType(yuu_02_icon_monte_entry_evt, 0, 0, 0xEF);
+    e = evtEntryType(yuu_02_icon_monte_entry_evt, 0, 0, EVENT_TYPE_DEFAULT);
     e->lwData[0] = event->lwData[0];
 #endif
     data->viewEvent = evtEntryType(minigame_view_monte, 0, 0, 0);
     data->viewEvent->lwData[0] = event->lwData[0];
-    data->flags |= 1;
+    data->flags |= ROLL_FLAG_OPENING;
     marioChgRollMotion();
 }
 
 /**
  * Per-frame state machine for Tube Mode: phase 1 starts minigame03_start, phases 2 and 3 run the rules check,
- * phase 4 launches minigame03_end with the coin counter, a result value and the coin count.
+ * phase 4 launches minigame03_end with the remaining time, a result value and the coin count.
  */
 void yuuminigame_main_3roll(EventEntry* event, BOOL isFirstCall) {
     MiniGameWork* wp = (MiniGameWork*)event->lwData[0];
@@ -546,17 +614,17 @@ void yuuminigame_main_3roll(EventEntry* event, BOOL isFirstCall) {
         case 4:
             wp->subEvent = evtEntry(minigame03_end, 0, 0);
             wp->subEvent->lwData[0] = data->coins;
-#if VERSION <= VERSION_DEMO_JP
-            if (data->result == 0) {
-                data->result += 2;
-            } else if (data->result < 0) {
-                data->result = 1;
-            }
-#else
+#if VERSION >= VERSION_JP
             if (data->result + 5 <= 0) {
                 data->result = 1;
             } else {
                 data->result += 261;
+            }
+#else
+            if (data->result == 0) {
+                data->result += 2;
+            } else if (data->result < 0) {
+                data->result = 1;
             }
 #endif
             wp->subEvent->lwData[1] = data->result;
@@ -566,7 +634,7 @@ void yuuminigame_main_3roll(EventEntry* event, BOOL isFirstCall) {
     }
 }
 
-/** Draw callback for minigame 3: draws the collected-coin counter (monteCountDisp). */
+/** Draw callback for minigame 3: draws the Pianta token-balance counter (monteCountDisp). */
 void yuuminigame_disp_3roll(CameraId camera, void* param) {
     monteCountDisp();
 }
@@ -585,13 +653,13 @@ static USER_FUNC(yuu_roll_reset) {
  * Per-frame rules of Tube Mode: when Mario falls off the course (y <= -50) it starts yuu_02_jumpret to put him
  * back at the last checkpoint (fukkipoint) and counts a penalty;
  * otherwise it tracks the checkpoint index as he rolls along the course (JP and later also allow going
- * backwards). Returns TRUE when the counter runs out or the last checkpoint is reached.
+ * backwards). Outside the fall-recovery event, returns TRUE when the counter runs out or checkpoint index 13 is reached.
  */
 BOOL yuuminigame3_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp, RollWork* data) {
     MarioWork* mario = marioGetPtr();
 
-    if (!(data->flags & 2) && mario->position.y <= -50.0f) {
-        data->flags |= 2;
+    if (!(data->flags & ROLL_FLAG_FALL_RETURN) && mario->position.y <= -50.0f) {
+        data->flags |= ROLL_FLAG_FALL_RETURN;
         data->jumpEvent = evtEntry(yuu_02_jumpret, 0, 0);
 #if VERSION <= VERSION_DEMO_JP
         data->jumpEvent->lwData[0] = (s32)fukkipoint[data->index].x;
@@ -603,9 +671,8 @@ BOOL yuuminigame3_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp
         data->jumpEvent->lwData[3] = (s32)fukkipoint[data->index].y;
         data->result--;
     }
-    if (!(data->flags & 2)) {
+    if (!(data->flags & ROLL_FLAG_FALL_RETURN)) {
 #if VERSION <= VERSION_DEMO_JP
-        // the demo only counts checkpoints forward and has no checkpoint icon
         if (mario->position.z * fukkipoint[data->index + 1].z >= 0.0f && mario->position.y >= fukkipoint[data->index + 1].y - 1.0f) {
             if ((data->pos.x < fukkipoint[data->index + 1].x && mario->position.x >= fukkipoint[data->index + 1].x) ||
                 (data->pos.x > fukkipoint[data->index + 1].x && mario->position.x <= fukkipoint[data->index + 1].x)) {
@@ -638,7 +705,7 @@ BOOL yuuminigame3_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp
             data->index = 0;
             marioKeyOff();
             partyKeyOff();
-            yuucounter_flag_on(2);
+            yuucounter_flag_on(YUUCOUNTER_FLAG_FREEZE);
 #if VERSION >= VERSION_JP
             icon_monte_p->hidden = 1;
 #endif
@@ -649,7 +716,7 @@ BOOL yuuminigame3_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp
         data->pos = mario->position;
 #endif
         if (!evtCheckID(data->jumpEvent->eventId)) {
-            data->flags &= ~2;
+            data->flags &= ~ROLL_FLAG_FALL_RETURN;
         }
     }
     return FALSE;
@@ -669,12 +736,12 @@ EVT_BEGIN(yuu_02_jumpret)
 #endif
     CALL(evt_cam_get_pos, CAMERA_3D, LW(7), LW(8), LW(9))
     CALL(evt_cam_get_at, CAMERA_3D, LW(10), LW(11), LW(12))
-    CALL(evt_cam3d_evt_set, LW(7), LW(8), LW(9), LW(10), LW(11), LW(12), 0, 0)
+    CALL(evt_cam3d_evt_set, LW(7), LW(8), LW(9), LW(10), LW(11), LW(12), 0, EASING_LINEAR)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(4), LW(5), LW(6))
         IF_INT_LESS_OR_EQUAL(LW(5), -400)
             CALL(evt_mario_cont_onoff, 0)
-            CALL(evt_mario_dispflag_onoff, 1, 1)
+            CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
@@ -684,20 +751,20 @@ EVT_BEGIN(yuu_02_jumpret)
     CALL(evt_mario_cam_y_on)
 #if VERSION >= VERSION_JP
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_off, 1000, 0)
+    CALL(evt_cam3d_evt_off, 1000, EASING_LINEAR)
 #endif
     WAIT_MS(1000)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_cam3d_evt_off, 3000, 0)
+    CALL(evt_cam3d_evt_off, 3000, EASING_LINEAR)
     WAIT_MS(3000)
 #endif
     CALL(evt_cam_get_pos, CAMERA_3D, LW(7), LW(8), LW(9))
     CALL(evt_cam_get_at, CAMERA_3D, LW(10), LW(11), LW(12))
-    CALL(evt_cam3d_evt_set, LW(7), LW(8), LW(9), LW(10), LW(11), LW(12), 0, 0)
+    CALL(evt_cam3d_evt_set, LW(7), LW(8), LW(9), LW(10), LW(11), LW(12), 0, EASING_LINEAR)
     CALL(evt_mario_cam_y_off)
     CALL(evt_mario_set_pos, LW(0), LW(1), LW(2))
     CALL(evt_mario_cont_onoff, 1)
-    CALL(evt_mario_dispflag_onoff, 0, 1)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(3), LW(4), LW(5))
         CALL(evt_mario_set_pos, LW(0), LW(4), LW(2))
@@ -708,7 +775,7 @@ EVT_BEGIN(yuu_02_jumpret)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_cam3d_evt_off, 500, 0)
+    CALL(evt_cam3d_evt_off, 500, EASING_LINEAR)
     CALL(evt_mario_key_onoff, 1)
 #if VERSION >= VERSION_JP
     CALL(evt_cam_letter_box_onoff, 0, 0)
@@ -726,7 +793,7 @@ EVT_END()
 
 /**
  * Puts Mario back on the start spot after the opening camera
- * or between rounds (x 200 on US and later, 300 in the US demo, z 300).
+ * or between rounds (x 200 in retail, 300 in both demos, z 300).
  */
 EVT_BEGIN(yuu_02_kaijo_init2)
 #if VERSION <= VERSION_DEMO_JP
@@ -742,7 +809,7 @@ EVT_END()
  * Set-up for minigame 3 (Tube Mode): freezes Mario's controls, allocates the minigame work area,
  * dismisses the partners, starts the crowd sound and sets phase 1.
  */
-EVT_BEGIN(minigame03_main)
+static EVT_BEGIN(minigame03_main)
     CALL(evt_mario_key_onoff, 0)
     CALL_CHILD(yuu_02_kaijo_init)
     CALL(evt_yuuminigame_alloc, LW(0), 2)
@@ -759,14 +826,14 @@ EVT_END()
  * Opening cutscene of Tube Mode: pans the 3D camera across the course,
  * then shows the "menu_title_minigame3" title card.
  */
-EVT_BEGIN(minigame03_start_cam)
-    CALL(evt_cam3d_evt_set, FLOAT(-1600.0f), FLOAT(573.0f), FLOAT(1333.0f), FLOAT(-1600.0f), FLOAT(12.0f), FLOAT(-89.0f), 0, 11)
+static EVT_BEGIN(minigame03_start_cam)
+    CALL(evt_cam3d_evt_set, FLOAT(-1600.0f), FLOAT(573.0f), FLOAT(1333.0f), FLOAT(-1600.0f), FLOAT(12.0f), FLOAT(-89.0f), 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_cam3d_evt_set, FLOAT(1600.0f), FLOAT(573.0f), FLOAT(1333.0f), FLOAT(1600.0f), FLOAT(12.0f), FLOAT(-89.0f), 5000, 0)
+    CALL(evt_cam3d_evt_set, FLOAT(1600.0f), FLOAT(573.0f), FLOAT(1333.0f), FLOAT(1600.0f), FLOAT(12.0f), FLOAT(-89.0f), 5000, EASING_LINEAR)
 #else
-    CALL(evt_cam3d_evt_set, FLOAT(1600.0f), FLOAT(573.0f), FLOAT(1333.0f), FLOAT(1600.0f), FLOAT(12.0f), FLOAT(-89.0f), 8000, 0)
+    CALL(evt_cam3d_evt_set, FLOAT(1600.0f), FLOAT(573.0f), FLOAT(1333.0f), FLOAT(1600.0f), FLOAT(12.0f), FLOAT(-89.0f), 8000, EASING_LINEAR)
 #endif
     WAIT_MS(1000)
     CALL(evt_yuutitle_alloc, 0, 0, STRING("menu_title_minigame3"))
@@ -784,10 +851,10 @@ EVT_END()
  * Cleans up when the player skips the opening camera:
  * frees the title card, turns off the event camera and puts Mario at the start spot.
  */
-EVT_BEGIN(minigame03_start_cam_cancel)
-    CALL(evt_seq_wait, 2)
+static EVT_BEGIN(minigame03_start_cam_cancel)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(evt_yuutitle_free)
-    CALL(evt_cam3d_evt_off, 0, 11)
+    CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_mario_wait_move_end)
     CALL_CHILD(yuu_02_kaijo_init2)
@@ -797,7 +864,7 @@ EVT_END()
 /**
  * Phase 1 of Tube Mode: starts the two moving platforms (ugo1, ugo2), plays the opening camera (skippable),
  * starts the minigame music, shows the countdown effect,
- * locks the rolling controls and starts the 70-second coin counter.
+ * prevents Mario from unrolling and starts the 180-second countdown timer.
  */
 EVT_BEGIN(minigame03_start)
     CALL(yuu_atai_init)
@@ -839,13 +906,13 @@ EVT_BEGIN(minigame03_start)
         LOOP(0)
             IS_EVENT_RUNNING(LW(8), LW(9))
             IF_INT_EQUAL(LW(9), 0)
-                CALL(evt_seq_wait, 2)
+                CALL(evt_seq_wait, SEQ_GAME)
                 BREAK_LOOP
             ELSE
                 CALL(evt_key_get_buttontrg, 0, LW(9))
-                IF_BITS_SET(LW(9), 768)
+                IF_BITS_SET(LW(9), PAD_BUTTON_A | PAD_BUTTON_B)
                     DELETE_EVENT(LW(8))
-                    CALL(evt_seq_wait, 2)
+                    CALL(evt_seq_wait, SEQ_GAME)
                     CALL_CHILD(minigame03_start_cam_cancel)
                     BREAK_LOOP
                 END_IF
@@ -854,34 +921,35 @@ EVT_BEGIN(minigame03_start)
         END_LOOP
         CALL(yuuminigame3_opening_on_off, LW(0), 0)
         CALL_CHILD(yuu_02_kaijo_init2)
-        CALL(evt_cam3d_evt_off, 0, 11)
+        CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
         WAIT_FRAMES(1)
     END_IF
 #if VERSION >= VERSION_JP
     CALL(evt_mario_mov_pos2, 305, 300, 120)
 #endif
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_MINIGAME1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_MINIGAME1"))
     CALL(eff_call_minigame, 0, 0, 0, 500)
     WAIT_MS(3000)
     CALL(yuuminigame3_roll_fix_on)
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mario_key_onoff, 1)
-#else
+#if VERSION >= VERSION_JP
     CALL(evt_cam_letter_box_onoff, 0, 0)
     CALL(evt_cam_letter_box_disable, 1)
-#endif
     CALL(evt_yuucounter_alloc, 0, 70, 1, 180)
-#if VERSION >= VERSION_JP
+#endif
     CALL(evt_mario_key_onoff, 1)
+#if VERSION <= VERSION_DEMO_JP
+    CALL(evt_yuucounter_alloc, 0, 70, 1, 180)
 #endif
     RETURN
 EVT_END()
 
 /**
- * Ends a Tube Mode round: keeps Mario from falling while the effect plays, removes the moving platforms,
- * shows the success or failure effect, the score and monte rewards, and pays out the collected coins as medals.
- * Then asks whether to play again: quitting (or having fewer than 10 medals) sets GSWF_YUU_MINIGAME_QUIT
- * and returns Mario to gor_03; playing again charges 10 medals and resets the course.
+ * Ends a Tube Mode round: while it runs, an inline event jumps Mario back up if he falls below y -50; removes the
+ * moving floors, plays the failure effect (LW(0) negative) or the success effect, shows the score and ranking
+ * screens and adds the Piantas won.
+ * Then asks whether to play again: with fewer than 10 Piantas, or on Quit, it sets
+ * GSWF_GOR_RETURNING_FROM_MINIGAME and sends Mario back through pipe A_dokan_02 of gor_03;
+ * continuing pays 10 Piantas and resets the course.
  */
 EVT_BEGIN(minigame03_end)
 #if VERSION >= VERSION_JP
@@ -936,11 +1004,11 @@ EVT_BEGIN(minigame03_end)
         CALL(evt_msg_select, 0, STRING("sysyuu_02_00"))
     END_IF
     IF_INT_NOT_EQUAL(LW(0), 0)
-        SET_VALUE(GSWF(GSWF_YUU_MINIGAME_QUIT), 1)
+        SET_VALUE(GSWF_GOR_RETURNING_FROM_MINIGAME, 1)
         CALL(evt_mario_set_prev_party_pos, 0, 0, -1000, 0)
         CALL(evt_mario_set_prev_party_pos, 1, 0, -1000, 0)
         CALL(evt_bero_mapchange, STRING("gor_03"), STRING("A_dokan_02"))
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
         RETURN
     END_IF
     MULTIPLY(LW(1), -1)
@@ -948,13 +1016,15 @@ EVT_BEGIN(minigame03_end)
     CALL(yuugijou_montemedal_wait)
     WAIT_MS(200)
     CALL(yuugijou_montemedal_disp_onoff, 0)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     CALL(evt_snd_sfxoff, GW(10))
     CALL(evt_fade_out, 1000)
     CALL(re_fall_rtn)
     SET_VALUE(GF(0), 0)
+#if VERSION <= VERSION_DEMO_JP
     CALL_CHILD(yuu_02_kaijo_init2)
-#if VERSION >= VERSION_JP
+#else
+    CALL_CHILD(yuu_02_kaijo_init2)
     CALL(yuu_02_cam_shift_reset)
 #endif
     WAIT_MS(500)
@@ -964,7 +1034,7 @@ EVT_BEGIN(minigame03_end)
 EVT_END()
 
 /** Spins the map object "S_en1" (a rotating part of the Tube Mode set) around Y forever at 0.75 degrees per frame. */
-EVT_BEGIN(s_en1_turn)
+static EVT_BEGIN(s_en1_turn)
     SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(1), FLOAT(0.75f))
     LOOP(0)
@@ -978,86 +1048,67 @@ EVT_BEGIN(s_en1_turn)
     RETURN
 EVT_END()
 
-#if VERSION >= VERSION_US
-USER_FUNC(evt_mapobj_flag_onoff);
 /**
  * Map init for yuu_02 (Tube Mode room): starts the animations and the S_en1 rotation,
  * the minigame set-up and the NPC script, and (US and later) hides all
  * but the current game-language sign graphics.
  */
 EVT_BEGIN(yuu_02_init_evt)
-    CALL(evt_map_playanim, STRING("den1"), 1, 0)
-    CALL(evt_map_playanim, STRING("den2"), 1, 0)
-    CALL(evt_map_playanim, STRING("kumo"), 1, 0)
-    CALL(evt_map_playanim, STRING("wakka"), 1, 0)
+    CALL(evt_map_playanim, STRING("den1"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("den2"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kumo"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("wakka"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(s_en1_turn)
     SPAWN_EVENT(minigame03_main)
     CALL_CHILD(evt_yuunpc_minigame3)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("J_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_den_mont"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_den_mont"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_den_mont"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_den_mont"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_den_mont"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_den_mont"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("J_kan"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_kan"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_kan"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_kan"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_kan"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_kan"), MAPOBJ_FLAG_DISABLE)
+#if VERSION < VERSION_US
+    RETURN
+#else
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("J_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_den_mont"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_den_mont"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_den_mont"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_den_mont"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_den_mont"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_den_mont"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("J_kan"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_kan"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_kan"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_kan"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_kan"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_kan"), MAP_OBJ_FLAG_DISABLED)
     CALL(evt_sub_get_language, LW(0))
     SWITCH(LW(0))
         CASE_EQUAL(0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("J_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_den_mont"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("J_kan"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("J_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_den_mont"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("J_kan"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_den_mont"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_kan"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_den_mont"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_kan"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(2)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_den_mont"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_kan"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_den_mont"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_kan"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(3)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_den_mont"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_kan"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_den_mont"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_kan"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(4)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_den_mont"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_kan"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_den_mont"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_kan"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(5)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_den_mont"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_kan"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_den_mont"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_kan"), MAP_OBJ_FLAG_DISABLED)
     END_SWITCH
     RETURN
-EVT_END()
-#else
-/**
- * Map init for yuu_02 (Tube Mode room): starts the animations and the S_en1 rotation,
- * the minigame set-up and the NPC script, and (US and later) hides all
- * but the current game-language sign graphics.
- */
-EVT_BEGIN(yuu_02_init_evt)
-    CALL(evt_map_playanim, STRING("den1"), 1, 0)
-    CALL(evt_map_playanim, STRING("den2"), 1, 0)
-    CALL(evt_map_playanim, STRING("kumo"), 1, 0)
-    CALL(evt_map_playanim, STRING("wakka"), 1, 0)
-    SPAWN_EVENT(s_en1_turn)
-    SPAWN_EVENT(minigame03_main)
-    CALL_CHILD(evt_yuunpc_minigame3)
-    RETURN
-#if VERSION <= VERSION_DEMO_JP
-EVT_END()
-#else
-EVT_END_PAD()
 #endif
-#endif
+EVT_END()

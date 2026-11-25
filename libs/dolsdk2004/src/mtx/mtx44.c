@@ -1,13 +1,8 @@
 #include <dolphin.h>
 #include <dolphin/mtx.h>
 
-/** Constants 0, 1, 0.5 and 3 for the paired-single 4x4 matrix routines. */
 static f32 mtxUnit[] = {0.0f, 1.0f, 0.5f, 3.0f};
 
-/**
- * Builds a 4x4 perspective projection from the top, bottom, left,
- * right edges at the near plane plus near and far distances, in the form GXSetProjection takes.
- */
 void C_MTXFrustum(Mtx44 m, f32 t, f32 b, f32 l, f32 r, f32 n, f32 f) {
     f32 tmp;
 
@@ -36,10 +31,6 @@ void C_MTXFrustum(Mtx44 m, f32 t, f32 b, f32 l, f32 r, f32 n, f32 f) {
     m[3][3] = 0;
 }
 
-/**
- * Builds a symmetric 4x4 perspective projection from a vertical field of view in degrees,
- * aspect ratio and near/far distances; the camera looks down -Z.
- */
 void C_MTXPerspective(Mtx44 m, f32 fovY, f32 aspect, f32 n, f32 f) {
     f32 angle;
     f32 cot;
@@ -71,7 +62,6 @@ void C_MTXPerspective(Mtx44 m, f32 fovY, f32 aspect, f32 n, f32 f) {
     m[3][3] = 0;
 }
 
-/** Builds a 4x4 orthographic projection matrix, used for 2D screens and HUD drawing. */
 void C_MTXOrtho(Mtx44 m, f32 t, f32 b, f32 l, f32 r, f32 n, f32 f) {
     f32 tmp;
 
@@ -100,7 +90,6 @@ void C_MTXOrtho(Mtx44 m, f32 t, f32 b, f32 l, f32 r, f32 n, f32 f) {
     m[3][3] = 1;
 }
 
-/** Sets a 4x4 matrix to the identity (C reference version). */
 void C_MTX44Identity(Mtx44 m) {
     ASSERTMSGLINE(324, m != 0, "MTX44Identity():  NULL Mtx44 'm' ");
 
@@ -122,7 +111,6 @@ void C_MTX44Identity(Mtx44 m) {
     m[3][3] = 1.0f;
 }
 
-/** Sets a 4x4 matrix to the identity (paired-singles version). */
 void PSMTX44Identity(register Mtx44 m) {
     register f32 c1 = 1.0f;
     register f32 c0 = 0.0f;
@@ -141,7 +129,6 @@ void PSMTX44Identity(register Mtx44 m) {
     }
 }
 
-/** Copies a 4x4 matrix (C reference version). */
 void C_MTX44Copy(const Mtx44 src, Mtx44 dst) {
     ASSERTMSGLINE(382, src != 0, "MTX44Copy():  NULL Mtx44Ptr 'src' ");
     ASSERTMSGLINE(383, dst != 0, "MTX44Copy():  NULL Mtx44Ptr 'dst' ");
@@ -166,7 +153,6 @@ void C_MTX44Copy(const Mtx44 src, Mtx44 dst) {
     }
 }
 
-/** Copies a 4x4 matrix (paired-singles version). */
 asm void PSMTX44Copy(const register Mtx44 src, register Mtx44 dst) {
     nofralloc
     psq_l f1, 0x0(src), 0, 0
@@ -188,7 +174,6 @@ asm void PSMTX44Copy(const register Mtx44 src, register Mtx44 dst) {
     blr
 }
 
-/** Multiplies two 4x4 matrices (C reference version). */
 void C_MTX44Concat(const Mtx44 a, const Mtx44 b, Mtx44 ab) {
     Mtx44 mTmp;
     Mtx44Ptr m;
@@ -228,7 +213,6 @@ void C_MTX44Concat(const Mtx44 a, const Mtx44 b, Mtx44 ab) {
     }
 }
 
-/** Multiplies two 4x4 matrices (paired-singles version). */
 asm void PSMTX44Concat(const register Mtx44 a, const register Mtx44 b, register Mtx44 ab) {
     nofralloc
     psq_l f0, 0x0(a), 0, 0
@@ -298,7 +282,6 @@ asm void PSMTX44Concat(const register Mtx44 a, const register Mtx44 b, register 
     blr
 }
 
-/** Transposes a 4x4 matrix (C reference version). */
 void C_MTX44Transpose(const Mtx44 src, Mtx44 xPose) {
     Mtx44 mTmp;
     Mtx44Ptr m;
@@ -334,7 +317,6 @@ void C_MTX44Transpose(const Mtx44 src, Mtx44 xPose) {
     }
 }
 
-/** Transposes a 4x4 matrix (paired-singles version). */
 asm void PSMTX44Transpose(const register Mtx44 src, register Mtx44 xPose) {
     nofralloc
     psq_l f0, 0x0(src), 0, 0
@@ -364,18 +346,14 @@ asm void PSMTX44Transpose(const register Mtx44 src, register Mtx44 xPose) {
     blr
 }
 
-#define SWAP(a, b) \
-    {              \
-        f32 tmp;   \
-        tmp = a;   \
-        a = b;     \
-        b = tmp;   \
-    }
+static inline void SwapF32(f32* a, f32* b) {
+    f32 tmp;
 
-/**
- * Inverts a 4x4 matrix by Gauss-Jordan elimination with partial pivoting;
- * returns 0 if a pivot column is all zero (singular), 1 otherwise.
- */
+    tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
 u32 C_MTX44Inverse(const Mtx44 src, Mtx44 inv) {
     Mtx44 gjm;
     s32 i;
@@ -410,8 +388,8 @@ u32 C_MTX44Inverse(const Mtx44 src, Mtx44 inv) {
 
         if (swp != i) {
             for (k = 0; k < 4; k++) {
-                SWAP(gjm[i][k], gjm[swp][k]);
-                SWAP(inv[i][k], inv[swp][k]);
+                SwapF32(&gjm[i][k], &gjm[swp][k]);
+                SwapF32(&inv[i][k], &inv[swp][k]);
             }
         }
 
@@ -435,7 +413,6 @@ u32 C_MTX44Inverse(const Mtx44 src, Mtx44 inv) {
     return 1;
 }
 
-/** Builds a 4x4 translation matrix (C reference version). */
 void C_MTX44Trans(Mtx44 m, f32 xT, f32 yT, f32 zT) {
     ASSERTMSGLINE(835, m, "MTX44Trans():  NULL Mtx44Ptr 'm' ");
 
@@ -460,7 +437,6 @@ void C_MTX44Trans(Mtx44 m, f32 xT, f32 yT, f32 zT) {
     m[3][3] = 1.0f;
 }
 
-/** Builds a 4x4 translation matrix (paired-singles version). */
 void PSMTX44Trans(register Mtx44 m, register f32 xT, register f32 yT, register f32 zT) {
     register f32 c_zero = 0.0f;
     register f32 c_one = 1.0f;
@@ -482,10 +458,9 @@ void PSMTX44Trans(register Mtx44 m, register f32 xT, register f32 yT, register f
     }
 }
 
-/** Applies a translation to an existing 4x4 matrix (C reference version). */
 void C_MTX44TransApply(const Mtx44 src, Mtx44 dst, f32 xT, f32 yT, f32 zT) {
     ASSERTMSGLINE(899, src, "MTX44TransApply(): NULL Mtx44Ptr 'src' ");
-    ASSERTMSGLINE(900, dst, "MTX44TransApply(): NULL Mtx44Ptr 'src' "); //! wrong assert string
+    ASSERTMSGLINE(900, dst, "MTX44TransApply(): NULL Mtx44Ptr 'src' "); // the text names src, the test is on dst
 
     if (src != dst) {
         dst[0][0] = src[0][0];
@@ -512,7 +487,6 @@ void C_MTX44TransApply(const Mtx44 src, Mtx44 dst, f32 xT, f32 yT, f32 zT) {
     dst[2][3] = (src[2][3] + zT);
 }
 
-/** Applies a translation to an existing 4x4 matrix (paired-singles version). */
 asm void PSMTX44TransApply(const register Mtx44 src, register Mtx44 dst, register f32 xT, register f32 yT, register f32 zT) {
     nofralloc
     psq_l f4, 0x0(src), 0, 0
@@ -540,7 +514,6 @@ asm void PSMTX44TransApply(const register Mtx44 src, register Mtx44 dst, registe
     blr
 }
 
-/** Builds a 4x4 scale matrix (C reference version). */
 void C_MTX44Scale(Mtx44 m, f32 xS, f32 yS, f32 zS) {
     ASSERTMSGLINE(976, m, "MTX44Scale():  NULL Mtx44Ptr 'm' ");
     m[0][0] = xS;
@@ -564,7 +537,6 @@ void C_MTX44Scale(Mtx44 m, f32 xS, f32 yS, f32 zS) {
     m[3][3] = 1.0f;
 }
 
-/** Builds a 4x4 scale matrix (paired-singles version). */
 void PSMTX44Scale(register Mtx44 m, register f32 xS, register f32 yS, register f32 zS) {
     register f32 c_zero = 0.0f;
     register f32 c_one = 1.0f;
@@ -583,7 +555,6 @@ void PSMTX44Scale(register Mtx44 m, register f32 xS, register f32 yS, register f
     }
 }
 
-/** Scales an existing 4x4 matrix by x, y, z (C reference version). */
 void C_MTX44ScaleApply(const Mtx44 src, Mtx44 dst, f32 xS, f32 yS, f32 zS) {
     ASSERTMSGLINE(1036, src, "MTX44ScaleApply(): NULL Mtx44Ptr 'src' ");
     ASSERTMSGLINE(1037, dst, "MTX44ScaleApply(): NULL Mtx44Ptr 'dst' ");
@@ -609,7 +580,6 @@ void C_MTX44ScaleApply(const Mtx44 src, Mtx44 dst, f32 xS, f32 yS, f32 zS) {
     dst[3][3] = src[3][3];
 }
 
-/** Scales an existing 4x4 matrix by x, y, z (paired-singles version). */
 asm void PSMTX44ScaleApply(const register Mtx44 src, register Mtx44 dst, register f32 xS, register f32 yS, register f32 zS) {
     nofralloc
     psq_l f4, 0x0(src), 0, 0
@@ -640,7 +610,6 @@ asm void PSMTX44ScaleApply(const register Mtx44 src, register Mtx44 dst, registe
     blr
 }
 
-/** Builds a 4x4 rotation about the 'x', 'y' or 'z' axis from an angle in radians. */
 void C_MTX44RotRad(Mtx44 m, char axis, f32 rad) {
     f32 sinA;
     f32 cosA;
@@ -651,7 +620,6 @@ void C_MTX44RotRad(Mtx44 m, char axis, f32 rad) {
     C_MTX44RotTrig(m, axis, sinA, cosA);
 }
 
-/** Builds a 4x4 single-axis rotation from radians (paired-singles version). */
 void PSMTX44RotRad(Mtx44 m, char axis, f32 rad) {
     f32 sinA;
     f32 cosA;
@@ -661,7 +629,6 @@ void PSMTX44RotRad(Mtx44 m, char axis, f32 rad) {
     PSMTX44RotTrig(m, axis, sinA, cosA);
 }
 
-/** Builds a 4x4 single-axis rotation from a precomputed sine and cosine. */
 void C_MTX44RotTrig(Mtx44 m, char axis, f32 sinA, f32 cosA) {
     ASSERTMSGLINE(1163, m, "MTX44RotTrig():  NULL Mtx44Ptr 'm' ");
 
@@ -727,7 +694,6 @@ void C_MTX44RotTrig(Mtx44 m, char axis, f32 sinA, f32 cosA) {
     }
 }
 
-/** Builds a 4x4 single-axis rotation from a precomputed sine and cosine (paired-singles version). */
 void PSMTX44RotTrig(register Mtx44 m, register char axis, register f32 sinA, register f32 cosA) {
     register f32 ftmp0;
     register f32 ftmp1;
@@ -743,13 +709,13 @@ void PSMTX44RotTrig(register Mtx44 m, register char axis, register f32 sinA, reg
         ori axis, axis, 0x20
         frsp cosA, cosA
         cmplwi axis, 'x'
-        beq L_00001AB4
+        beq skip
         cmplwi axis, 'y'
-        beq L_00001AE8
+        beq skip2
         cmplwi axis, 'z'
-        beq L_00001B20
-        b L_00001B54
-    L_00001AB4:
+        beq skip3
+        b done
+    skip:
         psq_st c_one, 0x0(m), 1, 0
         psq_st c_zero, 0x4(m), 0, 0
         ps_neg ftmp0, sinA
@@ -762,8 +728,8 @@ void PSMTX44RotTrig(register Mtx44 m, register char axis, register f32 sinA, reg
         psq_st ftmp1, 0x24(m), 0, 0
         psq_st ftmp0, 0x14(m), 0, 0
         psq_st c_one, 0x3c(m), 1, 0
-        b L_00001B54
-    L_00001AE8:
+        b done
+    skip2:
         ps_merge00 ftmp1, cosA, c_zero
         psq_st c_zero, 0x30(m), 0, 0
         ps_neg ftmp0, sinA
@@ -777,8 +743,8 @@ void PSMTX44RotTrig(register Mtx44 m, register char axis, register f32 sinA, reg
         psq_st ftmp4, 0x20(m), 0, 0
         psq_st ftmp1, 0x28(m), 0, 0
         psq_st ftmp3, 0x38(m), 0, 0
-        b L_00001B54
-    L_00001B20:
+        b done
+    skip3:
         psq_st c_zero, 0x8(m), 0, 0
         ps_neg ftmp0, sinA
         psq_st c_zero, 0x18(m), 0, 0
@@ -792,11 +758,10 @@ void PSMTX44RotTrig(register Mtx44 m, register char axis, register f32 sinA, reg
         psq_st ftmp2, 0x28(m), 0, 0
         psq_st ftmp3, 0x38(m), 0, 0
         psq_st ftmp4, 0x0(m), 0, 0
-    L_00001B54:    
+    done:    
     }
 }
 
-/** Builds a 4x4 rotation about an arbitrary axis from radians (C reference version). */
 void C_MTX44RotAxisRad(Mtx44 m, const Vec* axis, f32 rad) {
     Vec vN;
     f32 s;
@@ -847,7 +812,6 @@ void C_MTX44RotAxisRad(Mtx44 m, const Vec* axis, f32 rad) {
     m[3][3] = 1.0f;
 }
 
-/** Shared worker for PSMTX44RotAxisRad: builds the 4x4 axis-angle matrix from a unit axis, sine and cosine. */
 static void __PSMTX44RotAxisRadInternal(register Mtx44 m, const register Vec* axis, register f32 sT, register f32 cT) {
     register f32 tT;
     register f32 fc0;
@@ -913,7 +877,6 @@ static void __PSMTX44RotAxisRadInternal(register Mtx44 m, const register Vec* ax
     }
 }
 
-/** Builds a 4x4 rotation about an arbitrary axis from radians; the axis is normalized first. */
 void PSMTX44RotAxisRad(Mtx44 m, const Vec* axis, f32 rad) {
     f32 sinT, cosT;
 

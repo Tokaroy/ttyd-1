@@ -1,4 +1,5 @@
 // Table of all action commands: action-command ids and their handlers.
+
 #include "battle/ac/ac_table.h"
 
 #define AC_ENTRY(id, name) \

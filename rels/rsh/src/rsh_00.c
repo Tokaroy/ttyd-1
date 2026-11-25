@@ -1,10 +1,29 @@
 // rsh_00 (列車, Excess Express): the driver's cab: driver NPC, controls and schedule board, a Smorg (moamoa) window
 // scene; door to rsh_01.
 
-// defer_codegen: the original emits this unit's functions in deferred order (checked by removing it).
-#pragma defer_codegen on
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_ext.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_item.h"
+#include "driver/npcdrv.h"
+#include "mario/mario_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "string.h"
 #include "dolphin/os.h"
@@ -20,69 +39,76 @@
 #include "evt/evt_npc.h"
 #include "data_tables.h"
 #include "driver/extdrv.h"
-#include "map/moamoa.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_ext.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
-#include "libc_decls.h"
+#include "moamoa.h"
 
-typedef struct MoamoaScene {
-    u16 flags;
+// The cab-window Smorg sprites: smaller records than the field swarm's Moamoa/MoamoaWork in moamoa.h.
+// MoamoaSprite.flags
+enum {
+    MOAMOA_SPRITE_FLAG_SIDEWAYS = 1,            // the pose is turned to face sideways (done once); the pop-up then rises straight
+    MOAMOA_SPRITE_FLAG_MODEL_B_UNUSED = 1 << 1, // moamoa_pose_change always uses the c_n_moa_b model; read, never set
+};
+
+typedef struct MoamoaSprite {
+    u16 flags; // MOAMOA_SPRITE_FLAG_*
     s16 state;
     s16 timer;
     Vec pos;
     f32 angle;
     s16 pose;
     u64 startTime;
-} MoamoaScene;
-typedef struct MoamoaSceneWork {
-    s32 flags;
+} MoamoaSprite;
+typedef struct MoamoaSpriteWork {
+    s32 field_0x0;
     s32 count;
-    MoamoaScene* moa;
+    MoamoaSprite* moa;
     s32 numDefs;
     MoamoaPoseDef defs[32];
-} MoamoaSceneWork;
-
-static MoamoaSceneWork* wp;
+} MoamoaSpriteWork;
+static MoamoaSpriteWork* wp;
 static f32 randf(f32 min, f32 max);
 static void moamoa_pose_init(void);
-static void moamoa_pose_change(MoamoaScene* moa, const char* model, const char* anim);
+static void moamoa_pose_change(MoamoaSprite* moa, const char* model, const char* anim);
 static void moamoa_pose_main(void);
 static void ext_disp(CameraId camera, void* param);
 
-static void moamoa_dispent(void);
-static void moamoa_main(void);
-static void moamoa_init(void);
+static USER_FUNC(evt_moamoa_set_one);
+static USER_FUNC(evt_moamoa_set_seq_all);
 
-MoamoaData moamoa_data[81];
+static ExtTexInfo moamoa_data[81];
+static EvtWord evt_moamoa[324];
+EvtWord evt_rsh_moamoa_on_window[46];
 static BeroEntry bero_data_a[2];
 static BeroEntry bero_data_b[2];
 static BeroEntry bero_data_c[2];
-extern EvtWord evt_handle[];
-extern EvtWord regu_unten[];
+static EvtWord evt_handle[107];
+static EvtWord regu_unten[210];
+static EvtWord init_unten[17];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord talk_unten[235];
+#else
+static EvtWord talk_unten[236];
+#endif
+
 static NpcSetupInfo npc_data[2];
 static const char* access_tbl[5];
-extern EvtWord rsh_00_init_evt[];
+static EvtWord evt_access[14];
+static EvtWord evt_access_entry[23];
+static EvtWord rsh_00_init_evt[194];
+EvtWord rsh_00_a_init_evt[51];
+EvtWord rsh_00_b_init_evt[11];
 static const char* window_tbl[5];
-extern EvtWord rsh_00_init_evt_nidome[];
+EvtWord rsh_00_c_init_evt[16];
+static EvtWord rsh_00_init_evt_nidome[164];
+EvtWord rsh_00_a_init_evt_nidome[11];
+EvtWord rsh_00_b_init_evt_nidome[11];
+EvtWord rsh_00_c_init_evt_nidome[16];
 
 /**
- * Figure table of the Smorg (moamoa) effect at the cab window: model c_n_moa_a with one animation offset per
+ * Figure table of the Smorg (moamoa) effect at the cab window: models c_n_moa_a and c_n_moa_b with one animation offset per
  * entry.
  */
-MoamoaData moamoa_data[] = {
+static ExtTexInfo moamoa_data[] = {
     {"c_n_moa_a", "S_1", 0.0f},
     {"c_n_moa_a", "S_1", 1.0f},
     {"c_n_moa_a", "S_1", 2.0f},
@@ -166,15 +192,14 @@ MoamoaData moamoa_data[] = {
     {0},
 };
 
-// FAKE: dont_inline: MWCC would inline this function into its callers; the original calls it (checked by removing it).
-#pragma dont_inline on
 /**
  * Builds the work area's animation table (wp->defs) from moamoa_data:
  * consecutive rows with the same model and animation name become one MoamoaPoseDef (first texture frame,
- * frame count, speed, looping unless the animation name starts with J). Kept out of line to match the original.
+ * frame count, last sampled frame, looping unless the animation name starts with J).
  */
+// Build one definition for each contiguous model/animation group in the texture table.
 static void moamoa_pose_init(void) {
-    MoamoaData* data = moamoa_data;
+    ExtTexInfo* data = moamoa_data;
     s32 i = 0;
     s32 start;
     char model[32];
@@ -184,8 +209,8 @@ static void moamoa_pose_init(void) {
     strcpy(anim, "");
     wp->numDefs = -1;
     do {
-        if (strcmp(data->model, model)) {
-            strcpy(model, data->model);
+        if (strcmp(data->group, model)) {
+            strcpy(model, data->group);
             strcpy(anim, "");
         }
         if (strcmp(data->anim, anim)) {
@@ -197,17 +222,16 @@ static void moamoa_pose_init(void) {
         strcpy(wp->defs[wp->numDefs].anim, anim);
         wp->defs[wp->numDefs].start = start;
         wp->defs[wp->numDefs].count = i - start + 1;
-        wp->defs[wp->numDefs].speed = data->speed;
+        wp->defs[wp->numDefs].frames = data->frame;
         wp->defs[wp->numDefs].loop = 1;
         if (!strncmp(anim, "J", 1)) {
             wp->defs[wp->numDefs].loop = 0;
         }
         i++;
-    } while ((++data)->model != NULL);
+    } while ((++data)->group != NULL);
     wp->numDefs++;
 }
 
-#pragma dont_inline reset
 /**
  * Per-frame update of every Smorg (moamoa) sprite:
  * converts the time since the pose started into a texture frame index (looping or clamped at the end)
@@ -218,7 +242,7 @@ static void moamoa_pose_main(void) {
     u64 now;
     s32 i;
     ExtdrvPose* pose;
-    MoamoaScene* moa;
+    MoamoaSprite* moa;
     MoamoaPoseDef* def;
 
     pose = extGetPosePtr();
@@ -226,7 +250,7 @@ static void moamoa_pose_main(void) {
     for (i = 0; i < wp->count; i++, moa++, pose++) {
         now = gp->renderTime;
         def = &wp->defs[moa->pose];
-        t = 60.0f * OSTicksToMilliseconds(now - moa->startTime) / 1000.0f / def->speed;
+        t = 60.0f * OSTicksToMilliseconds(now - moa->startTime) / 1000.0f / def->frames;
 
         if (t >= 1.0f) {
             if (def->loop) {
@@ -241,14 +265,14 @@ static void moamoa_pose_main(void) {
 }
 
 /**
- * Switches one Smorg sprite to the named model/animation pair from the table (the b model is forced when flag 2
- * is set) and restarts its animation clock; does nothing if it is already playing it.
+ * Switches one Smorg sprite to the named model/animation pair from the table (the b model is forced by
+ * MOAMOA_SPRITE_FLAG_MODEL_B_UNUSED) and restarts its animation clock; does nothing if it is already playing it.
  */
-static void moamoa_pose_change(MoamoaScene* moa, const char* model, const char* anim) {
+static void moamoa_pose_change(MoamoaSprite* moa, const char* model, const char* anim) {
     MoamoaPoseDef* def = wp->defs;
     s32 i;
 
-    if (moa->flags & 2) {
+    if (moa->flags & MOAMOA_SPRITE_FLAG_MODEL_B_UNUSED) {
         model = "c_n_moa_b";
     }
     for (i = 0; i < wp->numDefs; i++, def++) {
@@ -276,22 +300,23 @@ static f32 randf(f32 min, f32 max) {
  * with a yaw for the sprites that will climb in from the side.
  */
 static void moamoa_init(void) {
+    void moamoa_pose_init(void);
     s32 i;
     ExtdrvPose* pose;
-    MoamoaScene* moa;
+    MoamoaSprite* moa;
     f32 x, y, z;
 
-    wp = _mapAlloc(sizeof(MoamoaSceneWork));
-    memset(wp, 0, sizeof(MoamoaSceneWork));
+    wp = _mapAlloc(sizeof(MoamoaSpriteWork));
+    memset(wp, 0, sizeof(MoamoaSpriteWork));
     wp->count = extGetPoseNum();
-    wp->moa = _mapAlloc(wp->count * sizeof(MoamoaScene));
-    memset(wp->moa, 0, wp->count * sizeof(MoamoaScene));
+    wp->moa = _mapAlloc(wp->count * sizeof(MoamoaSprite));
+    memset(wp->moa, 0, wp->count * sizeof(MoamoaSprite));
     moamoa_pose_init();
     pose = extGetPosePtr();
     moa = wp->moa;
     for (i = 0; i < wp->count; i++, pose++, moa++) {
         PSMTXIdentity(*pose->mtx);
-        pose->flags |= 5;
+        pose->flags |= (EXT_POSE_FLAG_VISIBLE | EXT_POSE_FLAG_NO_SHADOW);
         moa->flags = 0;
         moa->state = 0;
         moamoa_pose_change(moa, "c_n_moa_a", "S_1");
@@ -304,18 +329,14 @@ static void moamoa_init(void) {
             if (x < 185.0f) {
                 z = randf(-160.0f, -165.0f);
             } else if (x < 257.0f) {
+                z = 0.8f * (x - 185.0f) + -160.0f;
 #if VERSION >= VERSION_US
-                z = 0.8f * (x - 185.0f) + -160.0f;
                 z += 50.0f;
-#else
-                z = 0.8f * (x - 185.0f) + -160.0f;
 #endif
             } else {
+                z = randf(-90.0f, -20.0f);
 #if VERSION >= VERSION_US
-                z = randf(-90.0f, -20.0f);
                 z += 50.0f;
-#else
-                z = randf(-90.0f, -20.0f);
 #endif
             }
             {
@@ -334,12 +355,12 @@ static void moamoa_init(void) {
                     Mtx m;
                     PSMTXRotRad(m, 'y', -0.7853982f);
                     PSMTXConcat(*pose->mtx, m, *pose->mtx);
-                    moa->flags |= 1;
+                    moa->flags |= MOAMOA_SPRITE_FLAG_SIDEWAYS;
                 } else {
                     Mtx m;
                     PSMTXRotRad(m, 'y', 1.5707964f);
                     PSMTXConcat(*pose->mtx, m, *pose->mtx);
-                    moa->flags |= 1;
+                    moa->flags |= MOAMOA_SPRITE_FLAG_SIDEWAYS;
                 }
             }
         } else {
@@ -387,10 +408,11 @@ static void ext_disp(CameraId camera, void* param) {
  * 3 pop up from below the window along a random angle over 20 frames, 4 stay at its spot), clamps z to 45,
  * then advances the animations.
  */
+// States: 0 hidden, 1 start delay, 2 wait, 3 emerge, 4 hold the final position.
 static void moamoa_main(void) {
     s32 i;
     ExtdrvPose* pose;
-    MoamoaScene* moa;
+    MoamoaSprite* moa;
     f32 r;
 
     pose = extGetPosePtr();
@@ -412,13 +434,13 @@ static void moamoa_main(void) {
                 break;
             case 3:
                 if (moa->timer < 20) {
-                    if (!(moa->flags & 1)) {
-                        r = intplGetValue(2, 50.0f, 0.0f, ++moa->timer, 20);
+                    if (!(moa->flags & MOAMOA_SPRITE_FLAG_SIDEWAYS)) {
+                        r = intplGetValue(EASING_CUBIC_IN, 50.0f, 0.0f, ++moa->timer, 20);
                         (*pose->mtx)[0][3] = moa->pos.x + r * (f32)sin(moa->angle);
                         (*pose->mtx)[1][3] = moa->pos.y - r * (f32)cos(moa->angle);
                         (*pose->mtx)[2][3] = moa->pos.z;
                     } else {
-                        r = intplGetValue(2, 50.0f, 0.0f, ++moa->timer, 20);
+                        r = intplGetValue(EASING_CUBIC_IN, 50.0f, 0.0f, ++moa->timer, 20);
                         (*pose->mtx)[0][3] = moa->pos.x;
                         (*pose->mtx)[1][3] = moa->pos.y - r * (f32)cos(moa->angle);
                         (*pose->mtx)[2][3] = moa->pos.z;
@@ -442,16 +464,17 @@ static void moamoa_main(void) {
 
 /** Registers ext_disp with the display list on the 3D camera each frame. */
 static void moamoa_dispent(void) {
-    dispEntry(CAMERA_3D, 0.0f, 1, ext_disp, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, ext_disp, NULL);
 }
 
 /**
  * Script helper: places Smorg sprite number args[0] at (args[1], args[2], args[3])
  * and puts it straight into the pop-up state (3); the first time it also turns the sprite to face sideways.
  */
+// Set one emergence target without resetting its timer or animation pose.
 static USER_FUNC(evt_moamoa_set_one) {
     EvtWord* args = event->args;
-    MoamoaScene* moa;
+    MoamoaSprite* moa;
     s32 idx = evtGetValue(event, args[0]);
     f32 x = evtGetFloat(event, args[1]);
     f32 y = evtGetFloat(event, args[2]);
@@ -461,10 +484,10 @@ static USER_FUNC(evt_moamoa_set_one) {
     moa = wp->moa;
     moa[idx].state = 3;
     moa[idx].pos = (Vec){x, y, z};
-    if (!(moa[idx].flags & 1)) {
+    if (!(moa[idx].flags & MOAMOA_SPRITE_FLAG_SIDEWAYS)) {
         PSMTXRotRad(m, 'y', 1.5707964f);
         PSMTXConcat(*pose[idx].mtx, m, *pose[idx].mtx);
-        moa[idx].flags |= 1;
+        moa[idx].flags |= MOAMOA_SPRITE_FLAG_SIDEWAYS;
     }
     return EVT_RETURN_DONE;
 }
@@ -476,7 +499,7 @@ static USER_FUNC(evt_moamoa_set_one) {
 static USER_FUNC(evt_moamoa_set_seq_all) {
     s32 seq = evtGetValue(event, event->args[0]);
     s32 i;
-    MoamoaScene* moa;
+    MoamoaSprite* moa;
 
     extGetPosePtr();
     moa = wp->moa;
@@ -487,17 +510,17 @@ static USER_FUNC(evt_moamoa_set_seq_all) {
 }
 
 /**
- * Cutscene in the driver's cab on day 3 (the story is before STORY_STG6_46_ENGINEER):
+ * Cutscene in the driver's cab on day 3 (the story is before STG6_46_ENGINEER):
  * the music fades, Mario and the partner walk up to the driver, who speaks (stg6_rsh_231, 232);
- * Smorgs (moamoa) pop up at the window with the danger music, the story advances to STORY_STG6_46_ENGINEER,
+ * Smorgs (moamoa) pop up at the window with the danger music, the story advances to STG6_46_ENGINEER,
  * the camera shakes, Mario is startled, the driver panics (stg6_rsh_233),
  * the partner reacts (stg6_rsh_234_x) and the driver ends with stg6_rsh_235_00.
  */
 static EVT_BEGIN(evt_moamoa)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 120)
-    CALL(evt_cam3d_evt_set, -70, 113, 373, 126, 38, -13, 500, 11)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 120)
+    CALL(evt_cam3d_evt_set, -70, 113, 373, 126, 38, -13, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    CALL(evt_npc_flag_onoff, 1, STRING("運転手"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("運転手"), NPC_FLAG_NO_HIT)
     BEGIN_INLINE_EVENT
         CALL(evt_party_move_pos2, 0, 85, -110, FLOAT(80.0f))
         CALL(evt_party_set_dir, 0, 90, 200)
@@ -506,7 +529,7 @@ static EVT_BEGIN(evt_moamoa)
     CALL(evt_mario_set_dir, 90, 200, 0)
     CALL(evt_set_dir_to_target, STRING("運転手"), STRING("mario"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_231"), 0, STRING("me"))
-    CALL(evt_npc_flag_onoff, 0, STRING("運転手"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("運転手"), NPC_FLAG_NO_HIT)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_MOAMOA_VOICE1"), 265, 25, -145, 0)
     CALL(evt_moamoa_set_one, 0, 265, 25, -145)
     CALL(evt_moamoa_set_one, 1, 265, 35, -230)
@@ -514,10 +537,10 @@ static EVT_BEGIN(evt_moamoa)
     CALL(evt_npc_reverse_ry, STRING("me"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_232"), 0, STRING("me"))
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SURPRISED1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SURPRISED1"))
         WAIT_MS(2000)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_snd_sfxon, STRING("SFX_STG6_MOAMOA_VOICE2"), LW(10))
@@ -526,18 +549,18 @@ static EVT_BEGIN(evt_moamoa)
     END_INLINE_EVENT
     CALL(evt_moamoa_set_seq_all, 1)
     WAIT_MS(500)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_46_ENGINEER)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_46_ENGINEER)
     LOOP(3)
-        CALL(evt_cam3d_evt_set, -2, 86, 230, 126, 38, -13, 350, 11)
+        CALL(evt_cam3d_evt_set, -2, 86, 230, 126, 38, -13, 350, EASING_SINE_IN_OUT)
         WAIT_MS(350)
-        CALL(evt_cam3d_evt_set, -70, 113, 373, 126, 38, -13, 350, 11)
+        CALL(evt_cam3d_evt_set, -70, 113, 373, 126, 38, -13, 350, EASING_SINE_IN_OUT)
         WAIT_MS(350)
     END_LOOP
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_eff_fukidashi, 0, STRING("a"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(evt_eff_fukidashi, 3, STRING("b"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING("a"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING("b"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_anim, STRING("me"), STRING("B_1"))
     CALL(evt_mario_set_pose, STRING("M_I_N"))
     WAIT_MS(1000)
@@ -545,7 +568,7 @@ static EVT_BEGIN(evt_moamoa)
     CALL(evt_npc_set_anim, STRING("me"), STRING("T_2"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_233"), 0, STRING("me"))
     CALL(evt_npc_set_anim, STRING("me"), STRING("B_2"))
-    CALL(evt_cam3d_evt_set, -2, 86, 230, 126, 38, -13, 500, 11)
+    CALL(evt_cam3d_evt_set, -2, 86, 230, 126, 38, -13, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_party_stop, 0)
     WAIT_MS(300)
@@ -570,24 +593,24 @@ static EVT_BEGIN(evt_moamoa)
     CALL(evt_snd_sfxon, STRING("SFX_STG6_MOAMOA_VOICE2"), LW(10))
     CALL(evt_snd_sfx_vol, LW(10), 88)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_235_00"), 0, STRING("me"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     RETURN
 EVT_END()
 
 /**
- * Called when the cab map loads while the engineer scene is under way (STORY_STG6_46_ENGINEER to
- * STORY_STG6_47_ESCAPING_THE_SMORGS): plays the Smorg voice,
+ * Called by the init scripts of the passenger cars (rsh_01 to rsh_04) while the engineer scene is under way (STG6_46_ENGINEER to
+ * STG6_47_ESCAPING_THE_SMORGS): plays the Smorg voice,
  * registers the two Smorg NPC models and the sprite effect, and shows all Smorgs at their window spots.
  */
 EVT_BEGIN(evt_rsh_moamoa_on_window)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_46_ENGINEER, STORY_STG6_47_ESCAPING_THE_SMORGS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_46_ENGINEER, STG6_47_ESCAPING_THE_SMORGS)
         CALL(evt_snd_sfxon, STRING("SFX_STG6_MOAMOA_VOICE2"), LW(10))
         CALL(evt_snd_sfx_vol, LW(10), 88)
-        CALL(evt_npc_entry, STRING("moa_a"), STRING("c_n_moa_a"))
+        CALL(evt_npc_entry, STRING("moa_a"), STRING("c_n_moa_a")) // hidden Smorg model A for the window swarm sprites
         CALL(evt_npc_set_position, STRING("moa_a"), 0, -1000, 0)
-        CALL(evt_npc_entry, STRING("moa_b"), STRING("c_n_moa_b"))
+        CALL(evt_npc_entry, STRING("moa_b"), STRING("c_n_moa_b")) // hidden Smorg model B for the window swarm sprites
         CALL(evt_npc_set_position, STRING("moa_b"), 0, -1000, 0)
         CALL(evt_ext_entry, 1000, PTR(moamoa_data), PTR(moamoa_init), PTR(moamoa_main), PTR(moamoa_dispent))
         CALL(evt_moamoa_set_seq_all, 4)
@@ -669,10 +692,10 @@ static BeroEntry bero_data_c[] = {
  * spins handoru_1 and handoru_2 in opposite directions and slides handoru_3 back and forth,
  * driving the shaking controls during the Smorg attack.
  */
-EVT_BEGIN(evt_handle)
+static EVT_BEGIN(evt_handle)
     LOOP(0)
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_46_ENGINEER)
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_49_POSHLEY_HEIGHTS)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_46_ENGINEER)
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG6_49_POSHLEY_HEIGHTS)
                 BREAK_LOOP
             END_IF
         END_IF
@@ -692,7 +715,7 @@ EVT_BEGIN(evt_handle)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         LOOP(0)
-            CALL(evt_sub_intpl_msec_init, 11, 0, -40, 300)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -40, 300)
             LABEL(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_trans, 1, STRING("handoru_3"), LW(0), 0, 0)
@@ -700,7 +723,7 @@ EVT_BEGIN(evt_handle)
             IF_INT_EQUAL(LW(1), 1)
                 GOTO(0)
             END_IF
-            CALL(evt_sub_intpl_msec_init, 11, -40, 0, 300)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -40, 0, 300)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_trans, 1, STRING("handoru_3"), LW(0), 0, 0)
@@ -714,11 +737,13 @@ EVT_BEGIN(evt_handle)
 EVT_END()
 
 /**
- * Regular (idle) event of the driver NPC: every one to two seconds it picks one of three handles at random
- * and eases it to a new random angle or position, so the driver seems to steer.
+ * Regular (idle) event of the driver NPC: it picks one of three handles at random
+ * and eases it to a new random angle or position, so the driver seems to steer,
+ * then waits one to three seconds before repeating.
  * It does nothing during the stages where the train is stopped or the driver is busy.
  */
-EVT_BEGIN(regu_unten)
+// Randomly animate one control per iteration; the three empty day-3 tests do not gate those actions.
+static EVT_BEGIN(regu_unten)
     SET_VALUE(LW(2), 0)
     SET_VALUE(LW(3), 0)
     SET_VALUE(LW(4), 0)
@@ -726,39 +751,41 @@ EVT_BEGIN(regu_unten)
     SET_VALUE(LW(6), 0)
     SET_VALUE(LW(7), 0)
     LOOP(0)
+
         // The driver stays still during the stages when the train is stopped or he is busy.
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_27_RIVERSIDE_STATION)
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_43_CONDUCTOR_APPEARS)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_27_RIVERSIDE_STATION)
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG6_43_CONDUCTOR_APPEARS)
                 RETURN
             END_IF
         END_IF
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_46_ENGINEER)
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_54_WELCOME_BACK)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_46_ENGINEER)
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG6_54_WELCOME_BACK)
                 RETURN
             END_IF
         END_IF
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_57_A_MAIL_FROM_PEACH)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 1)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_57_A_MAIL_FROM_PEACH)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 1)
                 RETURN
             END_IF
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_ROGUEPORT, 1)
                 RETURN
             END_IF
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_POSHLEY), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_POSHLEY, 1)
                 RETURN
             END_IF
         END_IF
         CALL(evt_sub_random, 300, LW(10))
         SWITCH(LW(10))
             CASE_LESS(100)
-            // Otherwise he pulls the three handles to random settings so he seems to steer.
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_45_DAY_3_STARTS)
+
+            // Otherwise he moves a handle to a random setting so he seems to steer.
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG6_45_DAY_3_STARTS)
             END_IF
             SET_VALUE(LW(2), LW(3))
             CALL(evt_sub_random, 135, LW(10))
             SUBTRACT(LW(10), 45)
             SET_VALUE(LW(3), LW(10))
-            CALL(evt_sub_intpl_msec_init, 11, LW(2), LW(3), 1000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(2), LW(3), 1000)
             LABEL(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_rotate, 1, STRING("handoru_1"), 0, LW(0), 0)
@@ -767,13 +794,13 @@ EVT_BEGIN(regu_unten)
                 GOTO(0)
             END_IF
             CASE_LESS(200)
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_45_DAY_3_STARTS)
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG6_45_DAY_3_STARTS)
             END_IF
             SET_VALUE(LW(4), LW(5))
             CALL(evt_sub_random, 40, LW(10))
             MULTIPLY(LW(10), -1)
             SET_VALUE(LW(5), LW(10))
-            CALL(evt_sub_intpl_msec_init, 11, LW(4), LW(5), 500)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(4), LW(5), 500)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_trans, 1, STRING("handoru_3"), LW(0), 0, 0)
@@ -782,13 +809,13 @@ EVT_BEGIN(regu_unten)
                 GOTO(1)
             END_IF
             CASE_DEFAULT
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_45_DAY_3_STARTS)
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG6_45_DAY_3_STARTS)
             END_IF
             SET_VALUE(LW(6), LW(7))
             CALL(evt_sub_random, 135, LW(10))
             SUBTRACT(LW(10), 90)
             SET_VALUE(LW(7), LW(10))
-            CALL(evt_sub_intpl_msec_init, 11, LW(6), LW(7), 1000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(6), LW(7), 1000)
             LABEL(2)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_mapobj_rotate, 1, STRING("handoru_2"), 0, LW(0), 0)
@@ -806,13 +833,13 @@ EVT_BEGIN(regu_unten)
 EVT_END()
 
 /**
- * Init event of the driver: during the Smorg stages (STORY_STG6_46_ENGINEER to
- * STORY_STG6_47_ESCAPING_THE_SMORGS) turns on his move and talk animations and puts him in the B_2 panic pose.
+ * Init event of the driver: during the Smorg stages (STG6_46_ENGINEER to
+ * STG6_47_ESCAPING_THE_SMORGS) turns off his automatic movement and talk-pose animations and puts him in the B_2 panic pose.
  */
 static EVT_BEGIN(init_unten)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_46_ENGINEER, STORY_STG6_47_ESCAPING_THE_SMORGS)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_46_ENGINEER, STG6_47_ESCAPING_THE_SMORGS)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
         CALL(evt_npc_set_anim, STRING("me"), STRING("B_2"))
     END_SWITCH
     RETURN
@@ -821,28 +848,31 @@ EVT_END()
 /**
  * Talk script of the driver (unten).
  * Picks his line by story stage: the greeting that alternates,
- * the autograph request (at STORY_STG6_10 to 11 he signs and gives Mario the Autograph with the item-get
- * fanfare, STORY_STG6_11_OBTAIN_AUTOGRAPH), hints for each later stage,
- * the Smorg scene (evt_moamoa) before STORY_STG6_46_ENGINEER, and after the story a line for where the train is.
+ * the autograph request (at STG6_10_THE_CONDUCTOR_ZIP_TOAD he signs and gives Mario the Autograph with the item-get
+ * fanfare and the story moves to STG6_11_OBTAIN_AUTOGRAPH), comments for each later stage,
+ * the Smorg scene (evt_moamoa) before STG6_46_ENGINEER, and after the story a line for where the train is.
  */
 static EVT_BEGIN(talk_unten)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_06_PENNINGTONS_ASSISTANT)
-        IF_INT_EQUAL(LSWF(1), 0)
-            // His greeting alternates and early lines mention Pennington's assistant.
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_06_PENNINGTONS_ASSISTANT)
+        IF_INT_EQUAL(LSWF_RSH_00_ENGINEER_TALK_TOGGLE, 0)
+
+            // His greeting alternates with his response to the threat.
             CALL(evt_msg_print, 0, STRING("stg6_rsh_00"), 0, 0)
-            SET_VALUE(LSWF(1), 1)
+            SET_VALUE(LSWF_RSH_00_ENGINEER_TALK_TOGGLE, 1)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg6_rsh_01"), 0, 0)
-            SET_VALUE(LSWF(1), 0)
+            SET_VALUE(LSWF_RSH_00_ENGINEER_TALK_TOGGLE, 0)
         END_IF
-        // He asks for the conductor and signs an autograph for Mario.
-        CASE_LESS(STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD)
+
+        // His earlier line celebrates sunset train rides; at the autograph stage he signs for Mario.
+        CASE_LESS(STG6_10_THE_CONDUCTOR_ZIP_TOAD)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_01_01"), 0, 0)
-        CASE_LESS(STORY_STG6_11_OBTAIN_AUTOGRAPH)
-#if VERSION <= VERSION_DEMO_JP
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_ANIM)
+        CASE_LESS(STG6_11_OBTAIN_AUTOGRAPH)
+
         // He signs the autograph and gives it to Mario.
+#if VERSION <= VERSION_DEMO_JP
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_108"), 0, 0)
 #else
         CALL(evt_msg_print, 0, STRING("stg6_rsh_108"), 0, STRING("me"))
@@ -855,63 +885,65 @@ static EVT_BEGIN(talk_unten)
         WAIT_MS(2000)
         CALL(evt_npc_set_anim, STRING("me"), STRING("A_3"))
         WAIT_MS(500)
-        CALL(evt_item_entry, STRING("sign"), ITEM_AUTOGRAPH, 0, 0, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+        CALL(evt_item_entry, STRING("sign"), ITEM_AUTOGRAPH, 0, 0, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
         CALL(evt_item_get_item, STRING("sign"))
         CALL(evt_item_get_item_end_wait, STRING("sign"))
         CALL(evt_npc_set_anim, STRING("me"), STRING("T_1"))
 #if VERSION <= VERSION_DEMO_JP
         CALL(evt_msg_print, 0, STRING("stg6_rsh_110"), 0, 0)
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_11_OBTAIN_AUTOGRAPH)
+        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE)
 #else
         CALL(evt_msg_print, 0, STRING("stg6_rsh_110"), 0, STRING("me"))
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_11_OBTAIN_AUTOGRAPH)
 #endif
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_11_OBTAIN_AUTOGRAPH)
-#if VERSION <= VERSION_DEMO_JP
-        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_ANIM)
-#endif
-        CASE_LESS(STORY_STG6_12_GIVE_AUTOGRAPH)
+        CASE_LESS(STG6_12_GIVE_AUTOGRAPH)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_01_01"), 0, 0)
-        // Hints for each later stage of the train mystery.
-        CASE_LESS(STORY_STG6_19_GIVE_BLANKET)
+
+        // Comments for each later stage of the train journey.
+        CASE_LESS(STG6_19_GIVE_BLANKET)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_01_02"), 0, 0)
-        CASE_LESS(STORY_STG6_21_DAY_2)
+        CASE_LESS(STG6_21_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_147_01"), 0, 0)
-        CASE_LESS(STORY_STG6_27_RIVERSIDE_STATION)
-        IF_INT_EQUAL(LSWF(2), 0)
+        CASE_LESS(STG6_27_RIVERSIDE_STATION)
+        IF_INT_EQUAL(LSWF_RSH_00_ENGINEER_DAY2_TALKED, 0)
             CALL(evt_msg_print, 0, STRING("stg6_rsh_152"), 0, 0)
-            SET_VALUE(LSWF(2), 1)
+            SET_VALUE(LSWF_RSH_00_ENGINEER_DAY2_TALKED, 1)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg6_rsh_153"), 0, 0)
         END_IF
-        CASE_LESS(STORY_STG6_43_CONDUCTOR_APPEARS)
+        CASE_LESS(STG6_43_CONDUCTOR_APPEARS)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_209"), 0, 0)
-        CASE_LESS(STORY_STG6_44_END_OF_DAY_2)
+        CASE_LESS(STG6_44_END_OF_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_217"), 0, 0)
+
         // The Smorg scene (evt_moamoa) before the engineer stage.
-        CASE_LESS(STORY_STG6_46_ENGINEER)
+        CASE_LESS(STG6_46_ENGINEER)
         CALL_CHILD(evt_moamoa)
-        CASE_LESS(STORY_STG6_48_SMORG_MIASMA)
+        CASE_LESS(STG6_48_SMORG_MIASMA)
         CALL(evt_npc_set_anim, STRING("me"), STRING("T_2"))
         CALL(evt_msg_print, 0, STRING("stg6_rsh_235"), 0, 0)
         CALL(evt_npc_set_anim, STRING("me"), STRING("B_2"))
-        CASE_LESS(STORY_STG6_57_A_MAIL_FROM_PEACH)
+        CASE_LESS(STG6_57_A_MAIL_FROM_PEACH)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_253"), 0, 0)
         CASE_DEFAULT
+
         // After the story he comments on where the train is.
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_POSHLEY), 1)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_POSHLEY, 1)
             CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08_1"), 0, 0)
             RETURN
         END_IF
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
             CALL(evt_msg_print, 0, STRING("stg6_rsh_c_07"), 0, 0)
         ELSE
-#if VERSION <= VERSION_DEMO_JP
-            CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08"), 0, 0)
-#else
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+#if VERSION >= VERSION_JP
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08"), 0, 0)
             ELSE
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08_1"), 0, 0)
             END_IF
+#else
+            CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08"), 0, 0)
 #endif
         END_IF
     END_SWITCH
@@ -921,8 +953,8 @@ EVT_END()
 /** NPCs of the driver's cab: the driver. */
 static NpcSetupInfo npc_data[] = {
     {
-        "運転手", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "運転手", // name (the engineer of the Excess Express)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_unten, // initEvent
         regu_unten, // regularEvent
@@ -957,7 +989,7 @@ EVT_END()
 
 /**
  * Registers the cab's signboard triggers from access_tbl (hit name, message):
- * each row runs evt_access when Mario faces it.
+ * each row runs evt_access when Mario presses A while facing it.
  */
 static EVT_BEGIN(evt_access_entry)
     SET_INT_READ_ADDR(PTR(&access_tbl))
@@ -966,7 +998,7 @@ static EVT_BEGIN(evt_access_entry)
         IF_INT_EQUAL(LW(0), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(0), 0, PTR(evt_access), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(0), 0, PTR(evt_access), 0)
     END_LOOP
     RETURN
 EVT_END()
@@ -977,17 +1009,17 @@ EVT_END()
  * the signboards, the handle animation, the save block and the Star Piece spinning-floor panel,
  * and starts the music and ambience for the current story stage.
  */
-EVT_BEGIN(rsh_00_init_evt)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_48_01_ARRIVING_AT_POSHLEY)
+static EVT_BEGIN(rsh_00_init_evt)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
+        CASE_GREATER_OR_EQUAL(STG6_49_00_TRAIN_ARRIVAL)
         CASE_DEFAULT
-        CALL(evt_map_playanim, STRING("yure"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_sora"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_yama"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_iwayama"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_saboten"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_hosi"), 1, 0)
+        CALL(evt_map_playanim, STRING("yure"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_sora"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_yama"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_iwayama"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_saboten"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_hosi"), MAP_ANIM_PLAY_LOOP, 0)
     END_SWITCH
     CALL(evt_npc_setup, PTR(npc_data))
     CALL_CHILD(evt_access_entry)
@@ -995,44 +1027,44 @@ EVT_BEGIN(rsh_00_init_evt)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -210, 60, -145, 0, 0)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_NOT_EQUAL(LW(0), STRING("rsh_00_c"))
-        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_zentai"), 125, GSWF(GSWF_RSH00_STAR_PIECE_PANEL))
+        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_zentai"), 125, GSWF_STARPIECE_81)
     ELSE
-        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_yuka1"), 125, GSWF(GSWF_RSH00_STAR_PIECE_PANEL))
+        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_yuka1"), 125, GSWF_STARPIECE_81)
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_02_A_CASE_OF_LOST_STEW, STORY_STG6_04_GRILLING_HEFF_T)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_POWAN1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
-        CASE_BETWEEN(STORY_STG6_22_DOCUMENT, STORY_STG6_26_ZIP_TOAD_CAUGHT)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_POWAN1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_HOM1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-        CASE_BETWEEN(STORY_STG6_44_END_OF_DAY_2, STORY_STG6_45_DAY_3_STARTS)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
-        CASE_BETWEEN(STORY_STG6_46_ENGINEER, STORY_STG6_47_ESCAPING_THE_SMORGS)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
-        CASE_BETWEEN(STORY_STG6_49_POSHLEY_HEIGHTS, STORY_STG6_55_04_BOWSER_RAWK_HAWK)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_02_A_CASE_OF_LOST_STEW, STG6_04_GRILLING_HEFF_T)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_POWAN1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
+        CASE_BETWEEN(STG6_22_DOCUMENT, STG6_26_ZIP_TOAD_CAUGHT)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_POWAN1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_HOM1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
+        CASE_BETWEEN(STG6_44_END_OF_DAY_2, STG6_45_DAY_3_STARTS)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
+        CASE_BETWEEN(STG6_46_ENGINEER, STG6_47_ESCAPING_THE_SMORGS)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
+        CASE_BETWEEN(STG6_49_POSHLEY_HEIGHTS, STG6_55_04_BOWSER_RAWK_HAWK)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         CASE_DEFAULT
         CALL(evt_sub_get_mapname, LW(0))
         IF_STR_EQUAL(LW(0), STRING("rsh_00_a"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH1"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH1"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
         END_IF
         IF_STR_EQUAL(LW(0), STRING("rsh_00_b"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH3"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH3"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
         END_IF
         IF_STR_EQUAL(LW(0), STRING("rsh_00_c"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH2"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH2"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
         END_IF
     END_SWITCH
     RETURN
@@ -1040,21 +1072,21 @@ EVT_END()
 
 /**
  * Init script of rsh_00_a (first visit): sets up the door to rsh_01_a, runs the shared init,
- * and from day 3 on sets up the Smorg effect (shown at once from the engineer stage on).
+ * and from STG6_45_DAY_3_STARTS through STG6_47_ESCAPING_THE_SMORGS sets up the Smorg effect (shown at once from the engineer stage on).
  */
 EVT_BEGIN(rsh_00_a_init_evt)
     SET_VALUE(LW(0), PTR(bero_data_a))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(rsh_00_init_evt)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_45_DAY_3_STARTS, STORY_STG6_47_ESCAPING_THE_SMORGS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_45_DAY_3_STARTS, STG6_47_ESCAPING_THE_SMORGS)
         CALL(evt_npc_entry, STRING("moa_a"), STRING("c_n_moa_a"))
         CALL(evt_npc_set_position, STRING("moa_a"), 0, -1000, 0)
         CALL(evt_npc_entry, STRING("moa_b"), STRING("c_n_moa_b"))
         CALL(evt_npc_set_position, STRING("moa_b"), 0, -1000, 0)
         CALL(evt_ext_entry, 1000, PTR(moamoa_data), PTR(moamoa_init), PTR(moamoa_main), PTR(moamoa_dispent))
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_46_ENGINEER)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_46_ENGINEER)
             CALL(evt_moamoa_set_seq_all, 4)
         END_IF
     END_SWITCH
@@ -1094,26 +1126,27 @@ EVT_BEGIN(rsh_00_c_init_evt)
 EVT_END()
 
 /**
- * Shared map init for the cab on the second visit (after the story has reached WELCOME_BACK):
- * plays the scenery animation for the outbound or return trip unless the train is standing at a station,
- * and restores the driver, save block, Star Piece panel and signboards,
- * then picks the music for the station the train has reached (Poshley Heights, Rogueport, or the train theme).
+ * Shared second-visit init of rsh_00: unless the train stands at Riverside, Poshley Heights or Rogueport the
+ * shaking and scenery animations play (the rt_* set toward Rogueport); then the NPCs, the save block, the flipping
+ * floor panel (Star Piece GSWF_STARPIECE_81) and evt_access_entry. Music: BGM_STG6_PIK1 at Poshley Heights,
+ * BGM_STG0_GOR1 at Rogueport, otherwise the train themes of rsh_00_a and rsh_00_c (rsh_00_b keeps what plays). The
+ * early demos test Rogueport separately after the Poshley Heights test.
  */
-EVT_BEGIN(rsh_00_init_evt_nidome)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
-                CALL(evt_map_playanim, STRING("yure"), 1, 0)
-                IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
-                    CALL(evt_map_playanim, STRING("hai_sora"), 1, 0)
-                    CALL(evt_map_playanim, STRING("hai_yama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("hai_iwayama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("hai_saboten"), 1, 0)
+static EVT_BEGIN(rsh_00_init_evt_nidome)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
+                CALL(evt_map_playanim, STRING("yure"), MAP_ANIM_PLAY_LOOP, 0)
+                IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
+                    CALL(evt_map_playanim, STRING("hai_sora"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("hai_yama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("hai_iwayama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("hai_saboten"), MAP_ANIM_PLAY_LOOP, 0)
                 ELSE
-                    CALL(evt_map_playanim, STRING("rt_hai_sora"), 1, 0)
-                    CALL(evt_map_playanim, STRING("rt_hai_yama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("rt_hai_iwayama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("rt_hai_saboten"), 1, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_sora"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_yama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_iwayama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_saboten"), MAP_ANIM_PLAY_LOOP, 0)
                 END_IF
             END_IF
         END_IF
@@ -1122,59 +1155,49 @@ EVT_BEGIN(rsh_00_init_evt_nidome)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -210, 60, -145, 0, 0)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_NOT_EQUAL(LW(0), STRING("rsh_00_c"))
-        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_zentai"), 125, GSWF(GSWF_RSH00_STAR_PIECE_PANEL))
+        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_zentai"), 125, GSWF_STARPIECE_81)
     ELSE
-        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_yuka1"), 125, GSWF(GSWF_RSH00_STAR_PIECE_PANEL))
+        CALL(evt_mobj_kururing_floor, STRING("kururin1"), -132, 0, -95, STRING("s_yuka1"), 125, GSWF_STARPIECE_81)
     END_IF
     CALL_CHILD(evt_access_entry)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_POSHLEY), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-        // The demo checks the Rogueport arrival in its own IF after the Poshley one and restarts the ambient sound;
-        // the releases test it in the ELSE and stop the ambient sound.
+    IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_POSHLEY, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
 #if VERSION <= VERSION_DEMO_JP
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_ROGUEPORT), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR5"))
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-    ELSE
-        CALL(evt_sub_get_mapname, LW(0))
-        IF_STR_EQUAL(LW(0), STRING("rsh_00_a"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH1"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
-        END_IF
-        IF_STR_EQUAL(LW(0), STRING("rsh_00_b"))
-        END_IF
-        IF_STR_EQUAL(LW(0), STRING("rsh_00_c"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH2"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
-        END_IF
-    END_IF
-    RETURN
+    IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_ROGUEPORT, 1)
 #else
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_ROGUEPORT), 1)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
-            CALL(evt_snd_envoff, PSND_FADE_OUT)
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+        IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_ROGUEPORT, 1)
+#endif
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
+#if VERSION <= VERSION_DEMO_JP
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR5"))
+#else
+            CALL(evt_snd_envoff, PSND_FADEOUT)
+#endif
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         ELSE
             CALL(evt_sub_get_mapname, LW(0))
             IF_STR_EQUAL(LW(0), STRING("rsh_00_a"))
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH1"))
-                CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH1"))
+                CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
             END_IF
+
+            // Revisit variant B retains the current moving-train audio.
             IF_STR_EQUAL(LW(0), STRING("rsh_00_b"))
             END_IF
             IF_STR_EQUAL(LW(0), STRING("rsh_00_c"))
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH2"))
-                CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_4"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH2"))
+                CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_4"))
             END_IF
         END_IF
+#if VERSION >= VERSION_JP
     END_IF
-    RETURN
 #endif
+    RETURN
 EVT_END()
 
 /** Init script of rsh_00_a on the second visit: door to rsh_01_a plus rsh_00_init_evt_nidome. */

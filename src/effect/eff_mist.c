@@ -1,5 +1,5 @@
-// Mist effect rising around a point for a given life; types 0-6.
-#include "eff/eff_mist.h"
+// Mist effect drifting around a point for a given life; types 0-6.
+
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -9,6 +9,7 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffMistWork {
@@ -22,21 +23,19 @@ typedef struct EffMistWork {
     s32 life;     // 0x3C
     f32 yaw;      // 0x40
     u8 r, g, b;   // 0x44
-    u8 pad;
 } EffMistWork;
 
 static void effMistMain(EffectEntry* effect);
-static void effMistDisp(CameraId cameraId, EffectEntry* effect);
+static void effMistDisp(CameraId cameraId, void* param);
 
 /**
- * Spawns the rising mist at (x, y, z) for `life` frames; type 0-6 selects the colour and motion.
- * Called from evt_eff ("mist") and from the Fahr Outpost (bom) code, which uses type 4 around Mario,
- * partners and NPCs.
+ * Spawns the mist at (x, y, z) for `life` frames (0 or less: until soft-deleted); type 0-6 selects the colour
+ * and motion (type 4: a single puff). Called from evt_eff ("mist"), eff_toiki, las_29 and the Fahr Outpost (bom)
+ * code, which uses type 4 around Mario, partners and NPCs.
  */
 EffectEntry* effMistEntry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 yaw) {
     EffectEntry* effect;
     EffMistWork* work;
-    EffMistWork* p;
     s32 i;
     s32 count;
     f32 t;
@@ -48,7 +47,7 @@ EffectEntry* effMistEntry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 yaw) {
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffMistWork));
     effect->userdata = work;
     effect->callback = effMistMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -61,66 +60,66 @@ EffectEntry* effMistEntry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 yaw) {
     work->timer = 0;
     work->alpha = 255.0f;
     work->yaw = yaw - camGetPtr(CAMERA_3D)->viewYaw;
-    for (i = 1, p = work + 1; i < effect->count; i++, p++) {
-        p->position.x = irand(50) - 25;
-        p->position.y = irand(50) - 25;
-        p->position.z = 0.0f;
-        p->scale.x = p->scale.y = p->scale.z = 0.8f + irand(12) / 10.0f;
-        p->velocity.x = (irand(10) - 5) / 20.0f;
-        p->velocity.y = (irand(10) - 5) / 20.0f;
-        p->velocity.z = 0.0f;
-        p->alpha = 0.0f;
-        p->life = irand(30) + 30;
-        p->timer = 0;
-        p->yaw = yaw - camGetPtr(CAMERA_3D)->viewYaw;
+    for (i = 1, work++; i < effect->count; i++, work++) {
+        work->position.x = irand(50) - 25;
+        work->position.y = irand(50) - 25;
+        work->position.z = 0.0f;
+        work->scale.x = work->scale.y = work->scale.z = 0.8f + irand(12) / 10.0f;
+        work->velocity.x = (irand(10) - 5) / 20.0f;
+        work->velocity.y = (irand(10) - 5) / 20.0f;
+        work->velocity.z = 0.0f;
+        work->alpha = 0.0f;
+        work->life = irand(30) + 30;
+        work->timer = 0;
+        work->yaw = yaw - camGetPtr(CAMERA_3D)->viewYaw;
         switch (type) {
             case 0:
-                p->r = 255;
-                p->g = 255;
-                p->b = 255;
+                work->r = 255;
+                work->g = 255;
+                work->b = 255;
                 break;
             case 1:
-                p->r = 11;
-                p->g = 9;
-                p->b = 96;
+                work->r = 11;
+                work->g = 9;
+                work->b = 96;
                 break;
             case 2:
-                p->r = 225;
-                p->g = 153;
-                p->b = 175;
+                work->r = 225;
+                work->g = 153;
+                work->b = 175;
                 break;
             case 3:
-                p->r = 73;
-                p->g = 101;
-                p->b = 0;
+                work->r = 73;
+                work->g = 101;
+                work->b = 0;
                 break;
             case 4:
-                p->position.x = 0.0f;
-                p->position.y = 0.0f;
-                p->position.z = 1.0f;
-                t = sin(6.2831855f * p->yaw / 360.0f);
-                p->velocity.x = 1.1f * t;
-                p->velocity.y = -2.0f;
-                t = cos(6.2831855f * p->yaw / 360.0f);
-                p->velocity.z = 1.1f * -t;
-                p->accel.x = 0.95f;
-                p->accel.y = -0.04f;
-                p->accel.z = 0.94f;
-                p->r = 255;
-                p->g = 255;
-                p->b = 255;
-                p->scale.z = p->scale.y = p->scale.x = 0.3f;
-                p->alpha = 200.0f;
+                work->position.x = 0.0f;
+                work->position.y = 0.0f;
+                work->position.z = 1.0f;
+                t = sin(6.2831855f * work->yaw / 360.0f);
+                work->velocity.x = 1.1f * t;
+                work->velocity.y = -2.0f;
+                t = cos(6.2831855f * work->yaw / 360.0f);
+                work->velocity.z = 1.1f * -t;
+                work->accel.x = 0.95f;
+                work->accel.y = -0.04f;
+                work->accel.z = 0.94f;
+                work->r = 255;
+                work->g = 255;
+                work->b = 255;
+                work->scale.z = work->scale.y = work->scale.x = 0.3f;
+                work->alpha = 200.0f;
                 break;
             case 5:
-                p->r = 70;
-                p->g = 0;
-                p->b = 50;
+                work->r = 70;
+                work->g = 0;
+                work->b = 50;
                 break;
             case 6:
-                p->r = 0;
-                p->g = 0;
-                p->b = 0;
+                work->r = 0;
+                work->g = 0;
+                work->b = 0;
                 break;
         }
     }
@@ -128,8 +127,9 @@ EffectEntry* effMistEntry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 yaw) {
 }
 
 /**
- * Per frame: moves each puff by its velocity and acceleration,
- * fades it with age and deletes the effect at the end of its life.
+ * Per frame: moves each puff by its velocity (type 4 also by its acceleration, growing and fading out; the other
+ * types fade in and out over and over), fades everything over the last 32 frames and deletes the effect at the
+ * end of its life.
  */
 static void effMistMain(EffectEntry* effect) {
     EffMistWork* work = effect->userdata;
@@ -143,8 +143,8 @@ static void effMistMain(EffectEntry* effect) {
     v.z = work->position.z;
     position = v;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 32;
     }
     if (work->life < 1000) {
@@ -198,11 +198,12 @@ static void effMistMain(EffectEntry* effect) {
                 work->position.z += work->velocity.z;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMistDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effMistDisp, effect);
 }
 
 /** Draws each puff as a camera-facing textured quad (effect texture 0x44) tinted by its r, g, b. */
-static void effMistDisp(CameraId cameraId, EffectEntry* effect) {
+static void effMistDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffMistWork* work = effect->userdata;
     Mtx trans;
     Mtx rot;
@@ -217,7 +218,7 @@ static void effMistDisp(CameraId cameraId, EffectEntry* effect) {
 
     cam = camGetPtr(cameraId);
     alpha = work->alpha;
-    if (work->type == 4 && (mapGetWork()->entries[0].flags & 2)) {
+    if (work->type == 4 && (mapGetWork()->entries[0].flags & MAP_ENTRY_BLEND)) {
         return;
     }
     effGetTexObj(0x44, &texObj);

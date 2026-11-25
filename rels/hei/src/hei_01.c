@@ -1,8 +1,35 @@
 // hei_01 (平原, Petal Meadows): field linking hei_13 and Petalburg (nok_00).
 // Koops (nokotarou) is met here and joins as a partner; a blue switch lowers the bridge; Fire Flower block, Star Piece.
-#include "battle/battle_unit.h"
-#include "evt/evt_cmd.h"
 
+#include "version.h"
+#include "battle/battle_unit.h"
+#include "evt/evt_pouch.h"
+#include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_case.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_img.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_offscreen.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_item.h"
+#include "driver/npcdrv.h"
+#include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "mario/mario.h"
+
+#include "dolphin/pad.h"
 #include "party.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_damage.h"
@@ -12,53 +39,65 @@
 #include "driver/hitdrv.h"
 #include "data_tables.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_offscreen.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "evt/evt_pouch.h"
-#include "driver/mapdrv.h"
-#include "driver/casedrv.h"
 
 static USER_FUNC(set_dir);
 
-extern EvtWord bero_out_event[];
+static EvtWord bero_out_event[5];
 static BeroEntry bero_entry_data[5];
+static EvtWord evt_kusa_2[20];
+static EvtWord evt_kusa_4[20];
+static EvtWord evt_kusa_7[20];
 static KusaAccess kusa_data[7];
-extern EvtWord kusa_dokan[];
+static EvtWord kusa_dokan[59];
 static const char* name_tbl[25];
-extern EvtWord bridge_evt_02[];
-extern EvtWord bridge_evt[];
-extern EvtWord nokotaro_get[];
-extern EvtWord nokotaro_kanyu[];
-extern EvtWord nokotaro_nakama[];
-extern EvtWord nokotarou_reg[];
-extern EvtWord nokotarou_talk_2[];
-extern EvtWord nokorin_pose[];
-extern EvtWord evt_nokorin[];
+static EvtWord bridge_evt_02[192];
+static EvtWord bridge_evt[30];
+
+#if VERSION >= VERSION_US
+static EvtWord nokotaro_get[73];
+#else
+static EvtWord nokotaro_get[55];
+#endif
+
+static EvtWord nokotaro_kanyu[40];
+static EvtWord nokotaro_nakama[276];
+static EvtWord nokotarou_init[7];
+static EvtWord nokotarou_reg[2];
+static EvtWord nokotarou_talk_2[34];
+static EvtWord nokotarou_talk[4];
+static EvtWord nokorin_pose[57];
+static EvtWord evt_nokorin[869];
 static NpcSetupInfo npcEnt[3];
 static HitDamageReturn hitDmgRetPoints[3];
-extern EvtWord christine_hei_01[];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord peach_mail[250];
+#else
+static EvtWord peach_mail[287];
+#endif
+
+static EvtWord christine_hei_01[46];
+
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+EvtWord hei_01_init_evt[148];
+#else
+EvtWord hei_01_init_evt[138];
+#endif
+#else
+EvtWord hei_01_init_evt[148];
+#endif
 
 /** Exit event for the map's exits: just returns 0 in LW(0) so the exit proceeds. */
-EVT_BEGIN(bero_out_event)
+static EVT_BEGIN(bero_out_event)
     SET_VALUE(LW(0), 0)
     RETURN
 EVT_END()
 
-/** Doors of this room: the west exit (w_bero) to hei_13 and the east exit (e_bero) to nok_00 (Petalburg). */
+/**
+ * Doors of this room: the west exit (w_bero) to hei_13, the east exit (e_bero) to nok_00 (Petalburg)
+ * and the pipe pair dokan_h and dokan inside this room (kusa_dokan enables it).
+ */
 static BeroEntry bero_entry_data[] = {
     {
         "w_bero", // hitName
@@ -85,7 +124,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)bero_out_event, // exitEvent
+        bero_out_event, // exitEvent
         "nok_00", // nextMapName
         "w_bero", // nextBeroName
         1, // enterAnimeType
@@ -128,37 +167,37 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Reward script for bush a_kusa_2: if not yet taken,
- * a Coin pops out of the bush when Mario hits it (GSWF_HEI01_BUSH_COIN_A_TAKEN).
+ * Hit script for item_kusa_2: when that item is not out, scatters a coin, collected only once
+ * (GSWF_HEI_01_COIN_BUSH_2).
  */
 static EVT_BEGIN(evt_kusa_2)
     CALL(evt_item_delete_check, STRING("item_kusa_2"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_kusa_2"), ITEM_COIN, -200, 0, 120, ITEM_ENTRY_LAUNCH, GSWF(GSWF_HEI01_BUSH_COIN_A_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_kusa_2"), ITEM_COIN, -200, 0, 120, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_HEI_01_COIN_BUSH_2, 0)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Reward script for bush a_kusa_4: if not yet taken,
- * a Mystery pops out of the bush when Mario hits it (GSWF_HEI01_BUSH_MYSTERY_TAKEN).
+ * Script of the grass patch a_kusa_4 (kusa_data): when item_kusa_4 is not out, scatters it, a Mystery, collected once
+ * (GSWF_HEI_01_MYSTERY_BUSH).
  */
 static EVT_BEGIN(evt_kusa_4)
     CALL(evt_item_delete_check, STRING("item_kusa_4"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_kusa_4"), ITEM_MYSTERY, 190, 0, -70, ITEM_ENTRY_LAUNCH, GSWF(GSWF_HEI01_BUSH_MYSTERY_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_kusa_4"), ITEM_MYSTERY, 190, 0, -70, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_HEI_01_MYSTERY_BUSH, 0)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Reward script for bush a_kusa_7: if not yet taken,
- * a Coin pops out of the bush when Mario hits it (GSWF_HEI01_BUSH_COIN_B_TAKEN).
+ * Script of the grass patch a_kusa_7 (kusa_data): when item_kusa_7 is not out, scatters it, a coin, collected once
+ * (GSWF_HEI_01_COIN_BUSH).
  */
 static EVT_BEGIN(evt_kusa_7)
     CALL(evt_item_delete_check, STRING("item_kusa_7"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_kusa_7"), ITEM_COIN, -285, 0, 85, ITEM_ENTRY_LAUNCH, GSWF(GSWF_HEI01_BUSH_COIN_B_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_kusa_7"), ITEM_COIN, -285, 0, 85, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_HEI_01_COIN_BUSH, 0)
     END_IF
     RETURN
 EVT_END()
@@ -176,9 +215,9 @@ static KusaAccess kusa_data[] = {
 
 /**
  * Case script for the grass patch a_kusa_1: Mario hits it, the grass shakes and a pipe rises out of it;
- * sets GSWF_HEI01_BUSH_PIPE_REVEALED and enables the "dokan" exit.
+ * sets GSWF_HEI_01_BUSH_PIPE_REVEALED and enables the "dokan" exit.
  */
-EVT_BEGIN(kusa_dokan)
+static EVT_BEGIN(kusa_dokan)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mapobj_get_position, STRING("anm_kusa_1"), LW(5), LW(6), LW(7))
     CALL(evt_snd_sfxon_3d, STRING("SFX_GRASS_SHAKE1"), LW(5), LW(6), LW(7), 0)
@@ -186,10 +225,10 @@ EVT_BEGIN(kusa_dokan)
         WAIT_MS(600)
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOKAN_APPEAR1"), LW(5), LW(6), LW(7), 0)
     END_INLINE_EVENT
-    CALL(evt_map_playanim, STRING("anm_kusa_1"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_kusa_1"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_kusa_1"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    SET_VALUE(GSWF(GSWF_HEI01_BUSH_PIPE_REVEALED), 1)
+    SET_VALUE(GSWF_HEI_01_BUSH_PIPE_REVEALED, 1)
     CALL(evt_hitobj_onoff, STRING("a_kusa_1"), 0, 0)
     SET_VALUE(LW(0), STRING("dokan"))
     CALL_CHILD(bero_case_switch_on)
@@ -235,9 +274,10 @@ static const char* name_tbl[] = {
  * a captured image of the bridge pieces is flipped plate by plate through the offscreen texture
  * until the bridge is across the gap.
  */
-EVT_BEGIN(bridge_evt_02)
+// GW0 advances through the 25 bridge pieces; each flip captures the previous and next scene.
+static EVT_BEGIN(bridge_evt_02)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_cam3d_evt_set, -15, 150, 500, -15, 45, 85, 500, 11)
+    CALL(evt_cam3d_evt_set, -15, 150, 500, -15, 45, 85, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_paper_entry, STRING("OFF_hei_01c"))
     CALL(evt_offscreen_entry, STRING("offscreen"))
@@ -268,7 +308,7 @@ EVT_BEGIN(bridge_evt_02)
         END_SWITCH
         CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
         CALL(evt_img_wait_animend, STRING("capture_img"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(11), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(11), MAP_OBJ_FLAG_HIDDEN)
         IF_INT_GREATER_OR_EQUAL(GW(0), 25)
             CALL(evt_img_free_capture, STRING("capture_img"), 0)
             CALL(evt_img_free_capture, STRING("capture_img"), 1)
@@ -280,14 +320,14 @@ EVT_BEGIN(bridge_evt_02)
     CALL(evt_img_release, STRING("capture_img"))
     CALL(evt_mapobj_clear_offscreen, 1, STRING("S"))
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(2000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_mario_key_onoff, 1)
     RETURN
@@ -297,8 +337,8 @@ EVT_END()
  * Blue switch (bg_switch) script: after the switch is pressed, flips the bridge across (bridge_evt_02),
  * enables its collision and sets the story to "The Flip Bridge".
  */
-EVT_BEGIN(bridge_evt)
-    CALL(evt_npc_change_fbat_mode, 7)
+static EVT_BEGIN(bridge_evt)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_EVENT)
     CALL(evt_npc_stop_for_event)
     BEGIN_INLINE_EVENT
         CALL(evt_mobj_wait_animation_end, STRING("bg_switch"))
@@ -306,8 +346,8 @@ EVT_BEGIN(bridge_evt)
     END_INLINE_EVENT
     CALL_CHILD(bridge_evt_02)
     CALL(evt_hitobj_onoff, STRING("a_hasi"), 1, 1)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_01_THE_FLIP_BRIDGE)
-    CALL(evt_npc_change_fbat_mode, 1)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_01_THE_FLIP_BRIDGE)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     CALL(evt_npc_start_for_event)
     RETURN
 EVT_END()
@@ -316,12 +356,12 @@ EVT_END()
  * Koops joins: Koops speaks his line, the camera frames him,
  * Mario and Koops are introduced through the partner lecture and the story progress becomes "Koops Joins".
  */
-EVT_BEGIN(nokotaro_get)
-    CALL(evt_npc_flag_onoff, 0, STRING("ノコタロウ"), NPC_FLAG_TALK_ANIM)
+static EVT_BEGIN(nokotaro_get)
+    CALL(evt_npc_flag_onoff, 0, STRING("ノコタロウ"), NPC_FLAG_TALK_POSE)
     CALL(evt_npc_set_anim, STRING("ノコタロウ"), STRING("PNK_Y_2"))
     CALL(evt_msg_print_add, 0, STRING("stg1_hei_07"))
     CALL(evt_npc_set_anim, STRING("ノコタロウ"), STRING("PNK_S_1"))
-    CALL(evt_npc_flag_onoff, 1, STRING("ノコタロウ"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("ノコタロウ"), NPC_FLAG_TALK_POSE)
     WAIT_MS(500)
 #if VERSION >= VERSION_US
     BEGIN_INLINE_EVENT
@@ -330,32 +370,32 @@ EVT_BEGIN(nokotaro_get)
         CALL(evt_party_move_behind_mario, 0)
     END_INLINE_EVENT
 #endif
-    CALL(evt_cam3d_evt_set, 400, 85, 255, 400, 40, -10, 800, 11)
+    CALL(evt_cam3d_evt_set, 400, 85, 255, 400, 40, -10, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     SET_VALUE(LW(8), STRING("ノコタロウ"))
-    SET_VALUE(LW(9), 2)
+    SET_VALUE(LW(9), PARTY_KOOPS)
     CALL_CHILD(all_party_lecture)
 #if VERSION >= VERSION_US
     CALL(evt_party_set_dir, 0, 90, 200)
 #endif
     CALL(evt_msg_print, 0, STRING("stg1_hei_09"), 0, STRING("party"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_07_KOOPS_JOINS)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_07_KOOPS_JOINS)
     RETURN
 EVT_END()
 
 /**
- * Koops asks Mario to join: a yes/no question; yes calls nokotaro_get,
- * no leads to a second yes/no prompt and then to the same join.
+ * Koops asks Mario to join: a two-way question; the first answer calls nokotaro_get,
+ * the second leads to another prompt whose first answer ends with stg1_hei_11 and whose second calls nokotaro_get.
  */
-EVT_BEGIN(nokotaro_kanyu)
+static EVT_BEGIN(nokotaro_kanyu)
     CALL(evt_msg_select, 0, STRING("stg1_hei_12_yesno1"))
-    CALL(evt_msg_print_add, 1, STRING("<scrl_auto><once_stop>"))
+    CALL(evt_msg_print_add, MSG_PRINT_DIRECT_TEXT, STRING("<scrl_auto><once_stop>"))
     IF_INT_EQUAL(LW(0), 0)
         CALL_CHILD(nokotaro_get)
     ELSE
         CALL(evt_msg_print_add, 0, STRING("stg1_hei_10"))
         CALL(evt_msg_select, 0, STRING("stg1_hei_12_yesno2"))
-        CALL(evt_msg_print_add, 1, STRING("<scrl_auto><once_stop>"))
+        CALL(evt_msg_print_add, MSG_PRINT_DIRECT_TEXT, STRING("<scrl_auto><once_stop>"))
         IF_INT_EQUAL(LW(0), 0)
             CALL(evt_msg_print_add, 0, STRING("stg1_hei_11"))
         ELSE
@@ -370,17 +410,17 @@ EVT_END()
  * the Fuzzy-gold story step is on, and Koops has not asked yet, he waits at the right edge,
  * walks up to Mario when he comes close and asks to join.
  */
-EVT_BEGIN(nokotaro_nakama)
-    IF_INT_EQUAL(GSWF(GSWF_HEI_SUN_STONE_TAKEN), 0)
+static EVT_BEGIN(nokotaro_nakama)
+    IF_INT_EQUAL(GSWF_HEI_SUN_STONE_TAKEN, 0)
         RETURN
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_HEI_MOON_STONE_TAKEN), 0)
+    IF_INT_EQUAL(GSWF_HEI_MOON_STONE_TAKEN, 0)
         RETURN
     END_IF
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_06_01_GOLD_FUZZY)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG1_06_01_GOLD_FUZZY)
         RETURN
     END_IF
-    IF_INT_NOT_EQUAL(GSWF(GSWF_HEI01_KOOPS_ASKED_TO_JOIN), 0)
+    IF_INT_NOT_EQUAL(GSWF_HEI_01_KOOPS_JOIN_REQUEST_SEEN, 0)
         CALL(evt_npc_set_position, STRING("ノコタロウ"), 400, 0, 0)
         CALL(evt_npc_set_ry, STRING("ノコタロウ"), 90)
         RETURN
@@ -393,16 +433,16 @@ EVT_BEGIN(nokotaro_nakama)
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 3000)
-    CALL(evt_npc_change_fbat_mode, 7)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 3000)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_EVENT)
     CALL(evt_npc_stop_for_event)
     CALL(evt_npc_set_position, STRING("ノコタロウ"), 300, 0, 0)
     CALL(evt_npc_set_ry, STRING("ノコタロウ"), 90)
     CALL(evt_msg_print, 0, STRING("stg1_hei_03"), 0, STRING("ノコタロウ"))
-    CALL(evt_cam3d_evt_set, 300, 134, 524, 300, 38, -17, 1000, 11)
+    CALL(evt_cam3d_evt_set, 300, 134, 524, 300, 38, -17, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1500)
     CALL(evt_msg_print, 0, STRING("stg1_hei_04"), 0, STRING("ノコタロウ"))
-    CALL(evt_cam3d_evt_set, 425, 85, 253, 425, 38, -12, 1500, 11)
+    CALL(evt_cam3d_evt_set, 425, 85, 253, 425, 38, -12, 1500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         WAIT_MS(500)
         CALL(evt_npc_move_position, STRING("ノコタロウ"), 400, 0, 0, FLOAT(130.0f), 0)
@@ -413,7 +453,7 @@ EVT_BEGIN(nokotaro_nakama)
     END_INLINE_EVENT
     WAIT_MS(2000)
     CALL(evt_msg_print, 0, STRING("stg1_hei_05"), 0, STRING("ノコタロウ"))
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_N_H"))
@@ -421,7 +461,7 @@ EVT_BEGIN(nokotaro_nakama)
     CALL(evt_mario_jump_pos, LW(0), 0, LW(2), 200, 1, -1000)
     WAIT_MS(700)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
-    CALL(evt_mario_dispflag_onoff, 0, 2)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_msg_print, 0, STRING("stg1_hei_05_1"), 0, STRING("ノコタロウ"))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_THINK1"), LW(0), LW(1), LW(2), 0)
@@ -441,40 +481,40 @@ EVT_BEGIN(nokotaro_nakama)
     CALL(evt_msg_print, 0, STRING("stg1_hei_06_1"), 0, STRING("ノコタロウ"))
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL_CHILD(nokotaro_kanyu)
-    CALL(evt_cam3d_evt_off, 1000, 11)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     CALL(evt_npc_start_for_event)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG1_HEI1"), 2000)
-    SET_VALUE(GSWF(GSWF_HEI01_KOOPS_ASKED_TO_JOIN), 1)
+    CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG1_HEI1"), 2000)
+    SET_VALUE(GSWF_HEI_01_KOOPS_JOIN_REQUEST_SEEN, 1)
     RETURN
 EVT_END()
 
 /** Init event of Koops (ノコタロウ): turns on his move and talk animations. */
 static EVT_BEGIN(nokotarou_init)
-    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     RETURN
 EVT_END()
 
 /** Empty regular-event script for Koops; the NPC does nothing between conversations. */
-EVT_BEGIN(nokotarou_reg)
+static EVT_BEGIN(nokotarou_reg)
     RETURN
 EVT_END()
 
 /**
- * Talk script for Koops while he waits here: runs the join prompts (nokotaro_kanyu) with Mario frozen,
- * then lets him go if he already joined.
+ * Talk script for Koops while he waits here: runs the join prompts (nokotaro_kanyu) with Mario frozen;
+ * afterwards field battles resume if he joined, otherwise the partner starts following Mario again.
  */
-EVT_BEGIN(nokotarou_talk_2)
+static EVT_BEGIN(nokotarou_talk_2)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
     CALL(evt_npc_stop_for_event)
     CALL(evt_msg_print, 0, STRING("stg1_hei_12"), 0, STRING("ノコタロウ"))
     CALL_CHILD(nokotaro_kanyu)
     CALL(evt_npc_start_for_event)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_07_KOOPS_JOINS)
-        CALL(evt_npc_change_fbat_mode, 1)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG1_07_KOOPS_JOINS)
+        CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     ELSE
         CALL(evt_party_run, 0)
     END_IF
@@ -489,13 +529,13 @@ static EVT_BEGIN(nokotarou_talk)
 EVT_END()
 
 /**
- * Spin script for Nokorin (the rolling shell enemy NPC):
- * plays its rolling sound, stops the walk animation and rotates it 30 degrees per frame.
+ * Spin script for Koopie Koo (ノコリン): plays her rolling sound, stops the walk animation and leaves an event
+ * rotating her 30 degrees per frame; a second later she takes pose A_1 and the sound stops.
  */
-EVT_BEGIN(nokorin_pose)
+static EVT_BEGIN(nokorin_pose)
     CALL(evt_npc_get_position, STRING("ノコリン"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_NOKORIN_MOVE1"), LW(0), LW(1), LW(2), LW(3))
-    CALL(evt_npc_flag_onoff, 0, STRING("ノコリン"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("ノコリン"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_pera_onoff, STRING("ノコリン"), 0)
     BEGIN_INLINE_EVENT
         SET_VALUE(LW(0), 0)
@@ -515,22 +555,24 @@ EVT_BEGIN(nokorin_pose)
 EVT_END()
 
 /**
- * Koopie Koo (ノコリン) scene once Koops has joined (STORY_STG1_07_KOOPS_JOINS): she comes over and tries to talk
+ * Koopie Koo (ノコリン) scene once Koops has joined (STG1_07_KOOPS_JOINS): she comes over and tries to talk
  * Koops out of fighting Hooktail (stg1_hei_12_01 to 06); when he insists she rams Mario and Koops twice in her
  * shell, knocking them down ("FINE! IGNORE ME!", stg1_hei_12_07 and 08), and Koops promises to come back
- * stronger (stg1_hei_12_09). Skipped once GSWF_HEI01_KOOPIE_KOO_FAREWELL is set.
+ * stronger (stg1_hei_12_09). Skipped once GSWF_HEI_01_KOOPIE_KOO_FAREWELL_SEEN is set.
  */
-EVT_BEGIN(evt_nokorin)
+static EVT_BEGIN(evt_nokorin)
     // Skipped once Koopie Koo has said her farewell.
-    IF_INT_EQUAL(GSWF(GSWF_HEI01_KOOPIE_KOO_FAREWELL), 1)
+    IF_INT_EQUAL(GSWF_HEI_01_KOOPIE_KOO_FAREWELL_SEEN, 1)
         RETURN
     END_IF
+
     // Waits until Koops has joined the party.
     LABEL(0)
     WAIT_FRAMES(1)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_07_KOOPS_JOINS)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_07_KOOPS_JOINS)
         GOTO(0)
     END_IF
+
     // Mario freezes and walks forward; Koopie Koo calls out from the east and Mario spots her.
     CALL(evt_mario_key_onoff, 0)
     WAIT_MS(800)
@@ -543,25 +585,26 @@ EVT_BEGIN(evt_nokorin)
     ADD(LW(0), -20)
     CALL(evt_party_move_pos2, 0, LW(0), LW(2), FLOAT(40.0f))
     CALL(evt_npc_set_position, STRING("ノコリン"), 700, 0, 0)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg1_hei_12_01"), 0, STRING("ノコリン"))
     CALL(evt_party_set_dir_npc, 0, STRING("ノコリン"))
     WAIT_MS(500)
-    CALL(evt_eff_fukidashi, 3, STRING("a"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING("a"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(500)
     CALL(evt_mario_set_dir_npc, STRING("ノコリン"))
     WAIT_MS(500)
     CALL(evt_mario_set_pose, STRING("M_I_N"))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_eff_fukidashi, 0, STRING("b"), 0, 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING("b"), 0, 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1200)
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
         CALL(evt_mario_set_pose, STRING("M_S_1"))
     END_INLINE_EVENT
+
     // The camera pans to her as she rolls in, and Mario and his partner take their places.
-    CALL(evt_cam3d_evt_set, 550, 89, 279, 550, 38, -8, 1000, 11)
+    CALL(evt_cam3d_evt_set, 550, 89, 279, 550, 38, -8, 1000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("ノコリン"), 550, 0, 0, FLOAT(80.0f), 1)
     WAIT_MS(2000)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -573,25 +616,27 @@ EVT_BEGIN(evt_nokorin)
         CALL(evt_mario_set_pos, 400, 0, 0)
         CALL(evt_party_set_pos, 0, 370, 0, 0)
     END_IF
-    CALL(evt_cam3d_evt_set, 400, 89, 279, 400, 38, -8, 0, 11)
+    CALL(evt_cam3d_evt_set, 400, 89, 279, 400, 38, -8, 0, EASING_SINE_IN_OUT)
     WAIT_MS(200)
+
     // She and the party talk about Koops fighting Hooktail, with the camera cutting between them.
     CALL(evt_msg_print, 0, STRING("stg1_hei_12_02"), 0, STRING("party"))
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, 460, 126, 485, 460, 40, -8, 0, 11)
+    CALL(evt_cam3d_evt_set, 460, 126, 485, 460, 40, -8, 0, EASING_SINE_IN_OUT)
     WAIT_MS(200)
     CALL(evt_msg_print, 0, STRING("stg1_hei_12_03"), 0, STRING("ノコリン"))
     WAIT_MS(1200)
     CALL(evt_msg_print, 0, STRING("stg1_hei_12_04"), 0, STRING("party"))
-    CALL(evt_cam3d_evt_set, 550, 89, 279, 550, 38, -8, 0, 11)
+    CALL(evt_cam3d_evt_set, 550, 89, 279, 550, 38, -8, 0, EASING_SINE_IN_OUT)
     WAIT_MS(200)
     CALL(evt_msg_print, 0, STRING("stg1_hei_12_05"), 0, STRING("ノコリン"))
-    CALL(evt_cam3d_evt_set, 380, 89, 279, 380, 38, -8, 0, 11)
+    CALL(evt_cam3d_evt_set, 380, 89, 279, 380, 38, -8, 0, EASING_SINE_IN_OUT)
     WAIT_MS(200)
     CALL(evt_msg_print, 0, STRING("stg1_hei_12_06"), 0, STRING("party"))
-    CALL(evt_cam3d_evt_set, 460, 126, 485, 460, 40, -8, 500, 11)
+    CALL(evt_cam3d_evt_set, 460, 126, 485, 460, 40, -8, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    // She rolls through them toward the west, knocking Mario and his partner down; Koops cries out.
+
+    // These three flags join the Mario spin, partner spin, and dialogue events after the first pass.
     SET_VALUE(GF(10), 0)
     SET_VALUE(GF(11), 0)
     SET_VALUE(GF(12), 0)
@@ -607,7 +652,7 @@ EVT_BEGIN(evt_nokorin)
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2_3"), LW(0), LW(1), LW(2), 0)
         CALL(evt_snd_sfxon_3d, STRING("SFX_MARIO_DAMAGE1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_mario_set_pose, STRING("M_D_1"))
-        CALL(evt_sub_intpl_msec_init, 5, 0, 3600, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 3600, 2000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mario_set_dispdir, LW(0))
@@ -629,7 +674,7 @@ EVT_BEGIN(evt_nokorin)
         CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_PARTY_DAMAGE1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_party_set_pose, 0, STRING("PNK_D_1"))
-        CALL(evt_sub_intpl_msec_init, 5, 0, 3600, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 3600, 2000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_party_set_dispdir, 0, LW(0))
@@ -641,10 +686,11 @@ EVT_BEGIN(evt_nokorin)
         SET_VALUE(GF(11), 1)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg1_hei_12_07"), 0, 0)
         SET_VALUE(GF(12), 1)
     END_INLINE_EVENT
+
     // She spins her shell while the camera follows her.
     CALL_CHILD(nokorin_pose)
     BEGIN_INLINE_EVENT
@@ -660,7 +706,7 @@ EVT_BEGIN(evt_nokorin)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, 385, 126, 485, 385, 40, -8, 500, 11)
+    CALL(evt_cam3d_evt_set, 385, 126, 485, 385, 40, -8, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("ノコリン"), 200, 0, 0, FLOAT(450.0f), 1)
     LOOP(0)
         IF_INT_EQUAL(GF(10), 1)
@@ -673,6 +719,7 @@ EVT_BEGIN(evt_nokorin)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(1000)
+
     // She rolls back through them toward the east, knocking them down again, and rolls off screen.
     SET_VALUE(GF(10), 0)
     SET_VALUE(GF(11), 0)
@@ -689,7 +736,7 @@ EVT_BEGIN(evt_nokorin)
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED1_2"), LW(0), LW(1), LW(2), 0)
         CALL(evt_snd_sfxon_3d, STRING("SFX_MARIO_DAMAGE1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_mario_set_pose, STRING("M_D_1"))
-        CALL(evt_sub_intpl_msec_init, 5, 0, -3780, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, -3780, 2000)
         LABEL(3)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mario_set_dispdir, LW(0))
@@ -711,7 +758,7 @@ EVT_BEGIN(evt_nokorin)
         CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_PARTY_DAMAGE1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_party_set_pose, 0, STRING("PNK_D_1"))
-        CALL(evt_sub_intpl_msec_init, 5, 0, -3780, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, -3780, 2000)
         LABEL(4)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_party_set_dispdir, 0, LW(0))
@@ -723,7 +770,7 @@ EVT_BEGIN(evt_nokorin)
         SET_VALUE(GF(11), 1)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg1_hei_12_08"), 0, 0)
         SET_VALUE(GF(12), 1)
     END_INLINE_EVENT
@@ -753,6 +800,7 @@ EVT_BEGIN(evt_nokorin)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(1000)
+
     // The partners comment; Koops promises to come back stronger and Mario nods.
     CALL(evt_msg_print, 0, STRING("stg1_hei_12_09"), 0, STRING("party"))
     CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
@@ -770,10 +818,11 @@ EVT_BEGIN(evt_nokorin)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
     WAIT_MS(500)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // The farewell is marked as done and control returns.
-    SET_VALUE(GSWF(GSWF_HEI01_KOOPIE_KOO_FAREWELL), 1)
+    SET_VALUE(GSWF_HEI_01_KOOPIE_KOO_FAREWELL_SEEN, 1)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
     RETURN
@@ -785,7 +834,7 @@ EVT_END()
  */
 static NpcSetupInfo npcEnt[] = {
     {
-        "ノコタロウ", // name
+        "ノコタロウ", // name (Koops)
         0, 0, // flags..reactionFlags
         nokotarou_init, // initEvent
         nokotarou_reg, // regularEvent
@@ -800,8 +849,8 @@ static NpcSetupInfo npcEnt[] = {
         -1, // battleInfoId
     },
     {
-        "ノコリン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE, // flags
+        "ノコリン", // name (Koopie Koo)
+        NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // reactionFlags..returnEvent
         NULL, 0, // blowEvent..territoryType
         {0}, // territoryBase
@@ -812,8 +861,8 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /**
- * Guess: damage-return spots for the map objects mod_00 and mod_01, registered with
- * evt_hit_damage_return_set; both sit far below the field.
+ * Damage-return table for the hit groups mod_00 and mod_01 (evt_hit_damage_return_set):
+ * y -1000 means Mario is put back at the group's own position.
  */
 static HitDamageReturn hitDmgRetPoints[] = {
     {"mod_00", {0.0f, -1000.0f, 0.0f}},
@@ -822,13 +871,14 @@ static HitDamageReturn hitDmgRetPoints[] = {
 };
 
 /**
- * Cutscene spawned by the map init at STORY_STG1_20_KOOPS_LEAVES:
- * once Mario walks west of x = 200 the mail jingle plays and the screen vibrates,
+ * Cutscene spawned by the map init at STG1_20_KOOPS_LEAVES:
+ * once Mario walks west of x = 200 the mail jingle plays and the controller rumbles,
  * the partner comes to him and comments (stg1_gon_44);
  * after he presses A the mail is read (stg1_gon_44_01 to 47) and control returns.
  */
 static EVT_BEGIN(peach_mail)
     LABEL(0)
+
     // Waits until Mario walks west of x=200.
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     IF_INT_GREATER(LW(0), 200)
@@ -848,12 +898,11 @@ static EVT_BEGIN(peach_mail)
         CALL(evt_party_set_dir, 0, 270, 0)
     END_IF
 #endif
-    // The mail jingle plays and the screen vibrates as a letter arrives; Mario's partner comes over.
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION1"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION1"))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_2"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_eff_fukidashi, 0, STRING("eff0"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING("eff0"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     SET_VALUE(GF(0), 0)
@@ -873,26 +922,28 @@ static EVT_BEGIN(peach_mail)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(300)
+
     // The partner comments; Mario waits for A to open the mail.
     CALL(evt_msg_print_party, STRING("stg1_gon_44"))
     CALL(evt_mario_balloon_bikkuri)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_INT_EQUAL(LW(0), 256)
+        IF_INT_EQUAL(LW(0), PAD_BUTTON_A)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAND_UP1_4"), LW(0), LW(1), LW(2), 0)
     DELETE_EVENT(LW(10))
     WAIT_FRAMES(1)
+
     // The camera zooms in as Mario holds the letter and reads it, with the partner joining in.
     CALL(evt_sub_rumble_onoff, 1, 0)
-    CALL(evt_cam3d_evt_set_rel, 0, 48, 267, 20, 38, 5, 1000, 11)
+    CALL(evt_cam3d_evt_set_rel, 0, 48, 267, 20, 38, 5, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_mario_set_pose, STRING("M_N_9"))
     WAIT_MS(500)
@@ -915,26 +966,26 @@ static EVT_BEGIN(peach_mail)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    // The story advances to "A Mail from Peach" and the letter is added to Mario's mailbox.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_21_A_MAIL_FROM_PEACH)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_21_A_MAIL_FROM_PEACH)
     CALL(evt_pouch_receive_mail, 0)
     CALL(evt_pouch_open_mail, 0)
     RETURN
 EVT_END()
 
 /**
- * Opening talk when Mario first enters the field from Petalburg:
- * Goombella gives her tip (stg1_hei_02_02), and GSWF_HEI01_GOOMBELLA_TIP_GIVEN stops it repeating.
+ * Partner tip on entering hei_01 before STG1_01_THE_FLIP_BRIDGE (spawned by the map init while
+ * GSWF_HEI_01_GOOMBELLA_TATTLE_TIP_SEEN is 0): stops the partner and NPCs, Mario turns, the partner says
+ * stg1_hei_02_02, Mario nods and the flag is set. Of the early demos only the JP demo spawns it.
  */
-EVT_BEGIN(christine_hei_01)
+static EVT_BEGIN(christine_hei_01)
     CALL(evt_mario_key_onoff, 0)
 #if VERSION >= VERSION_JP
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
 #endif
     CALL(evt_party_stop, 0)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
 #endif
     CALL(evt_npc_stop_for_event)
     CALL(evt_mario_normalize)
@@ -945,7 +996,7 @@ EVT_BEGIN(christine_hei_01)
     CALL(evt_msg_print, 0, STRING("stg1_hei_02_02"), 0, STRING("party"))
     CALL(evt_mario_set_pose, STRING("M_N_2"))
     WAIT_MS(500)
-    SET_VALUE(GSWF(GSWF_HEI01_GOOMBELLA_TIP_GIVEN), 1)
+    SET_VALUE(GSWF_HEI_01_GOOMBELLA_TATTLE_TIP_SEEN, 1)
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_npc_start_for_event)
@@ -964,23 +1015,23 @@ EVT_BEGIN(hei_01_init_evt)
     SET_VALUE(LW(0), STRING("dokan"))
     CALL_CHILD(bero_case_switch_off)
     CALL(evt_npc_setup, PTR(npcEnt))
-    CALL(evt_npc_change_fbat_mode, 1)
-    CALL(evt_mobj_badgeblk, STRING("mobj_hatenablk"), 315, 60, -75, ITEM_FIRE_FLOWER, 0, GSWF(GSWF_HEI01_FIRE_FLOWER_BLOCK_HIT), 0)
-    CALL(evt_item_entry, STRING("item_01"), ITEM_STAR_PIECE, 450, 40, -447, ITEM_ENTRY_FIXED, GSWF(GSWF_HEI01_STAR_PIECE), 0)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
+    CALL(evt_mobj_badgeblk, STRING("mobj_hatenablk"), 315, 60, -75, ITEM_FIRE_FLOWER, 0, GSWF_HEI_01_FIRE_FLOWER_BLOCK, 0)
+    CALL(evt_item_entry, STRING("item_01"), ITEM_STAR_PIECE, 450, 40, -447, ITEM_TYPE_STILL, GSWF_STARPIECE_32, 0)
     CALL(evt_item_set_scale, STRING("item_01"), FLOAT(0.5996094f))
     SET_VALUE(LW(0), PTR(kusa_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    IF_INT_EQUAL(GSWF(GSWF_HEI01_BUSH_PIPE_REVEALED), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_kusa_1"), 0, PTR(kusa_dokan), 0)
+    IF_INT_EQUAL(GSWF_HEI_01_BUSH_PIPE_REVEALED, 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_kusa_1"), 0, PTR(kusa_dokan), 0)
     ELSE
         CALL(evt_hitobj_onoff, STRING("a_kusa_1"), 0, 0)
-        CALL(evt_map_playanim, STRING("anm_kusa_1"), 2, 0)
+        CALL(evt_map_playanim, STRING("anm_kusa_1"), MAP_ANIM_PLAY_AT_END, 0)
         SET_VALUE(LW(0), STRING("dokan"))
         CALL_CHILD(bero_case_switch_on)
     END_IF
-    CALL(evt_map_playanim, STRING("anm_mizu"), 1, 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_01_THE_FLIP_BRIDGE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hasi"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_map_playanim, STRING("anm_mizu"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_01_THE_FLIP_BRIDGE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hasi"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_hasi"), 1, 0)
         SET_VALUE(GW(0), 0)
         CALL(evt_mobj_switch_blue, 2, STRING("bg_switch"), -8, 40, -450, PTR(bridge_evt), 0)
@@ -989,15 +1040,23 @@ EVT_BEGIN(hei_01_init_evt)
     SPAWN_EVENT(evt_nokorin)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_20_KOOPS_LEAVES)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG1_20_KOOPS_LEAVES)
         SPAWN_EVENT(peach_mail)
     END_IF
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI2"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("USIROKUSA"), MAPOBJ_FLAG_BBOX_CULL)
-#if VERSION != VERSION_DEMO_US_1
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_01_THE_FLIP_BRIDGE)
-        IF_INT_EQUAL(GSWF(GSWF_HEI01_GOOMBELLA_TIP_GIVEN), 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI2"))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("USIROKUSA"), MAP_OBJ_FLAG_CLIP)
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_01_THE_FLIP_BRIDGE)
+        IF_INT_EQUAL(GSWF_HEI_01_GOOMBELLA_TATTLE_TIP_SEEN, 0)
+            SPAWN_EVENT(christine_hei_01)
+        END_IF
+    END_IF
+#endif
+#else
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_01_THE_FLIP_BRIDGE)
+        IF_INT_EQUAL(GSWF_HEI_01_GOOMBELLA_TATTLE_TIP_SEEN, 0)
             SPAWN_EVENT(christine_hei_01)
         END_IF
     END_IF
@@ -1006,8 +1065,8 @@ EVT_BEGIN(hei_01_init_evt)
 EVT_END()
 
 /**
- * Script helper: turns Mario's partner to face the direction given by args[0] (270 or 90 degrees depending on
- * whether it is past 180).
+ * Script helper: sets the display direction of partner slot 0 to 0 when args[0] is past 180, otherwise to 180.
+ * No script in this file calls it.
  */
 static USER_FUNC(set_dir) {
     s32 dir = evtGetValue(event, event->args[0]);

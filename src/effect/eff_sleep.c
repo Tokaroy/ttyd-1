@@ -1,5 +1,6 @@
 // Sleep: three sleep marks fade in one after another along a line from a point; the sleep status in battle.
 // The second argument is the lifetime in frames (0 or less: until removed).
+
 #include "eff/eff_sleep.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,16 +9,10 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-
-/** Single-precision sine for this file, routed through the double sin() (as in mapdrv.c). */
-static inline f32 sinf(f32 x) {
-    return sin(x);
-}
-
+#include "driver/effdrv.h"
 static void effSleepMain(EffectEntry* effect);
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
 
 // local prototypes
 static void effSleepDisp(CameraId camId, void* param);
@@ -29,9 +24,7 @@ static void effSleepDisp(CameraId camId, void* param);
  */
 EffectEntry* effSleepEntry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale, f32 rotation) {
     EffectEntry* effect;
-    s32 smth;
     effSleepData* data;
-    s32 alpha;
     f32 radians;
     int i;
     f32 r;
@@ -42,7 +35,7 @@ EffectEntry* effSleepEntry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scal
     data = __memAlloc(HEAP_EFFECT, effect->count * sizeof(effSleepData));
     effect->userdata = data;
     effect->callback = effSleepMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     data->type = type;
     data->position.x = x;
     data->position.y = y;
@@ -57,13 +50,13 @@ EffectEntry* effSleepEntry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scal
     data->age = 0;
 
     radians = (6.2831855f * rotation) / 360.0f;
-    for (data++, i = 1, smth = 16; i < effect->count; i++, smth += 16, data++) {
+    for (data++, i = 1; i < effect->count; i++, data++) {
         data->position.x = (r = 16.0f * (f32)i) * (f32)cos(radians);
         data->position.y = r * (f32)sin(radians);
         data->position.z = 0.0f;
         data->scale = (0.2f * (f32)i) + 1.0f;
         data->alpha = 0;
-        data->delay = smth;
+        data->delay = i * 16;
     }
     return effect;
 }
@@ -75,8 +68,8 @@ static void effSleepMain(EffectEntry* effect) {
     Vec position;
 
     position = (Vec){data->position.x, data->position.y, data->position.z};
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         data->lifetime = 16;
     }
     if (data->lifetime < 1000) {
@@ -103,7 +96,12 @@ static void effSleepMain(EffectEntry* effect) {
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, effSleepDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effSleepDisp, effect);
+}
+
+/** sin(t / 64) for t = 2 pi times a frame count: a wave with a 64-frame period. */
+static inline f32 sleepSin(f32 t) {
+    return sin(t / 64.0f);
 }
 
 /**
@@ -112,15 +110,22 @@ static void effSleepMain(EffectEntry* effect) {
  */
 static void effSleepDisp(CameraId camId, void* param) {
     EffectEntry* effect = param;
+    f32 tau;
+    f32 x0;
+    Mtx mtx;
+    Mtx scale;
+    Mtx rot;
+    Mtx res;
+    GXTexObj texObj;
+    f32 w;
     CameraEntry* cam;
-    s32 base;
     effSleepData* data;
-    s32 i;
+    int i;
     s32 j;
     s32 alpha;
-    Mtx mtx, scale, rot, res;
-    GXTexObj texObj;
-    f32 w, s0, s1;
+    f32 xh;
+    f32 s0, s1;
+    f32 height;
 
     data = effect->userdata;
     cam = camGetPtr(camId);
@@ -150,8 +155,10 @@ static void effSleepDisp(CameraId camId, void* param) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
 
     w = 8.0f;
-    data++;
-    for (i = 1, base = 50; i < effect->count; base += 50, i++, data++) {
+    height = 1.0f;
+    x0 = -w;
+
+    for (i = 1, data++; i < effect->count; i++, data++) {
         if (data->delay == 0) {
             GXSetChanMatColor(GX_COLOR0A0, (GXColor){0xFF, 0xFF, 0xFF, data->alpha * alpha / 255});
             PSMTXTrans(mtx, data->position.x, data->position.y, data->position.z);
@@ -160,22 +167,21 @@ static void effSleepDisp(CameraId camId, void* param) {
             PSMTXConcat(res, mtx, mtx);
             GXLoadPosMtxImm(mtx, GX_PNMTX0);
             GXSetCurrentMtx(GX_PNMTX0);
+            tau = 6.2831855f;
             for (j = 0; j < 8; j++) {
-                s0 = 0.5f * sinf(6.2831855f * (gp->retraceCount + base + j * 10) / 64);
-                s1 = 0.5f * sinf(6.2831855f * (gp->retraceCount + base + (j + 1) * 10) / 64);
+                s0 = 0.5f * sleepSin(tau * (f32)(gp->retraceCount + i * 50 + j * 10));
+                s1 = 0.5f * sleepSin(tau * (f32)(gp->retraceCount + i * 50 + (j + 1) * 10));
+                xh = x0 / 2.0f;
                 GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-                GXPosition3f32(-w / 2 + s1, w / 8 * (j + 1), 0.0f);
-                GXTexCoord2f32(0.0f, 0.125f * (7 - j));
-                GXPosition3f32(w / 2 + s1, w / 8 * (j + 1), 0.0f);
-                GXTexCoord2f32(1.0f, 0.125f * (7 - j));
-                GXPosition3f32(w / 2 + s0, w / 8 * j, 0.0f);
-                GXTexCoord2f32(1.0f, 0.125f * (8 - j));
-                GXPosition3f32(-w / 2 + s0, w / 8 * j, 0.0f);
-                GXTexCoord2f32(0.0f, 0.125f * (8 - j));
-                GXEnd();
+                GXPosition3f32(xh + s1, height * (j + 1), 0.0f);
+                GXTexCoord2f32(0.0f, 0.125f * (f32)(7 - j));
+                GXPosition3f32(4.0f + s1, height * (j + 1), 0.0f);
+                GXTexCoord2f32(1.0f, 0.125f * (f32)(7 - j));
+                GXPosition3f32(4.0f + s0, height * j, 0.0f);
+                GXTexCoord2f32(1.0f, 0.125f * (f32)(8 - j));
+                GXPosition3f32(xh + s0, height * j, 0.0f);
+                GXTexCoord2f32(0.0f, 0.125f * (f32)(8 - j));
             }
         }
     }
 }
-
-// target pad words (G5: section sizes must match or later DOL addresses shift)

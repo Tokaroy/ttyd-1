@@ -3,17 +3,33 @@
 
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "data/mapdata.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_case.h"
 #include "evt/evt_map.h"
 #include "evt/evt_npc.h"
+#include "evt/evt_case.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "win.h"
-#include "rel_module.h"
+#include "evt/evt_bero.h"
+#include "system.h"
 #include "driver/casedrv.h"
+
+#include "data/mapdata.h"
+#include "win.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
+
+EvtWord evt_win_door_open_pure[84];
+EvtWord evt_win_door_open[16];
+EvtWord evt_win_door_close_pure[66];
+EvtWord evt_win_door_close[41];
+static EvtWord _tree_anime[106];
+EvtWord win_tree_entry[25];
+EvtWord win_puni_walk_se[20];
 
 /**
  * Boggly Woods double-door swing without the walk-through:
@@ -31,9 +47,9 @@ EVT_BEGIN(evt_win_door_open_pure)
         END_IF
     END_INLINE_EVENT
     IF_INT_EQUAL(LW(0), 0)
-        CALL(evt_sub_intpl_msec_init, 11, 0, -70, LW(1))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -70, LW(1))
     ELSE
-        CALL(evt_sub_intpl_msec_init, 11, -70, 0, LW(1))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -70, 0, LW(1))
     END_IF
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
@@ -75,9 +91,9 @@ EVT_BEGIN(evt_win_door_close_pure)
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_WOOD2"), LW(10), LW(11), LW(12), 0)
     END_INLINE_EVENT
     IF_INT_EQUAL(LW(0), 0)
-        CALL(evt_sub_intpl_msec_init, 11, 70, 0, LW(1))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 70, 0, LW(1))
     ELSE
-        CALL(evt_sub_intpl_msec_init, 11, 0, 70, LW(1))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 70, LW(1))
     END_IF
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
@@ -118,7 +134,7 @@ EVT_END()
  * Hammer reaction of a Boggly Woods tree: plays the hit-tree and falling-leaves sounds at the tree
  * and shakes its trunk (LW(2)) and leaves (LW(3)) back and forth.
  */
-EVT_BEGIN(_tree_anime)
+static EVT_BEGIN(_tree_anime)
     CALL(evt_mapobj_get_position, LW(2), LW(4), LW(5), LW(6))
     CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1"), LW(4), LW(5), LW(6), 0)
     CALL(evt_snd_sfxon_3d, STRING("SFX_HIT_TREE1_LEAVES1"), LW(4), LW(5), LW(6), 0)
@@ -155,7 +171,7 @@ EVT_BEGIN(win_tree_entry)
         IF_INT_EQUAL(LW(1), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_run_case_evt, CASE_COND_HAMMER, 1, LW(1), 0, PTR(_tree_anime), 0)
+        CALL(evt_run_case_evt, CASE_HAMMER, 1, LW(1), 0, PTR(_tree_anime), 0)
     END_LOOP
     RETURN
 EVT_END()
@@ -202,6 +218,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Handler called when an unresolved import in win.rel is hit; does nothing. */
 void _unresolved(void) {
 }

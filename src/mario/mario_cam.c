@@ -1,4 +1,6 @@
 // The field camera that follows Mario: target, zoom and shift per motion (walk, jump, slit, plane, cloud ride).
+
+#include "version.h"
 #include "mario/mario_cam.h"
 #include "driver/camdrv.h"
 #include "evt/evt_cam.h"
@@ -9,7 +11,6 @@
 #include "party.h"
 #include "party/party_cloud.h"
 #include "system.h"
-#include "version.h"
 
 /**
  * Clears the camera shift targets and zoom offsets so the camera recentres on Mario;
@@ -77,7 +78,7 @@ f32 marioGetCamFollowRate(void) {
 /**
  * Copies the 3D camera's yaw into mario->targetYaw,
  * the screen-to-world angle offset used by toMovedir and the stick.
- * The demos round it to 0.01 degree, JP and later to 0.001 degree with proper rounding.
+ * The early demos pass yaw plus 0.05 degree to revise360 without rounding first; JP and later round it to 0.001 degree.
  */
 void marioPreCamera(void) {
 #if VERSION <= VERSION_DEMO_JP
@@ -94,31 +95,37 @@ void marioPreCamera(void) {
 }
 
 /**
+ * While the stick is held, flags whether the camera did not move along x since the last frame
+ * (MARIO_DISP_FLAG_CAM_STILL_UNUSED), then remembers its x position.
+ */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void marioCamStopChk(void) {
+    CameraEntry* camera = camGetPtr(CAMERA_3D);
+    MarioWork* mario = marioGetPtr();
+    if (mario->controlStickSensitivity) {
+        if (camera->cameraPos.x == mario->prevCamPosX) {
+            mario->dispFlags |= MARIO_DISP_FLAG_CAM_STILL_UNUSED;
+        } else {
+            mario->dispFlags &= ~MARIO_DISP_FLAG_CAM_STILL_UNUSED;
+        }
+    }
+    mario->prevCamPosX = camera->cameraPos.x;
+}
+
+/**
  * Per-frame camera update from Mario's main loop (also Bowser's and Peach's):
  * moves the follow target (except in a pipe), runs the level zoom and the zoom-off request,
  * then clears the camera collision flag for the next frame.
  */
 void marioCamMain(void) {
     MarioWork* mario = marioGetPtr();
-    CameraEntry* camera;
-    MarioWork* mario2;
 
     if (mario->currMotionId != MARIO_MOTION_DOKAN) {
         marioUpdateCam();
     }
     marioCamZoomUpLevelMain();
     marioCamZoomOff();
-
-    camera = camGetPtr(CAMERA_3D);
-    mario2 = marioGetPtr();
-    if (mario2->controlStickSensitivity) {
-        if (camera->cameraPos.x == mario2->prevCamPosX) {
-            mario2->dispFlags |= MARIO_DISP_FLAG_CAM_X_STILL;
-        } else {
-            mario2->dispFlags &= ~MARIO_DISP_FLAG_CAM_X_STILL;
-        }
-    }
-    mario2->prevCamPosX = camera->cameraPos.x;
+    marioCamStopChk();
     mario->dispFlags &= ~MARIO_DISP_FLAG_CAM_COLLISION;
 }
 
@@ -132,6 +139,7 @@ void marioUpdateCamCollision(Vec collision) {
     mario->dispFlags |= MARIO_DISP_FLAG_CAM_COLLISION;
 }
 
+// A macro, not an inline function: as a function the load order in marioUpdateCam changes.
 #define UPDATE_CAM_SHIFT(cur, target, rate) \
     {                                       \
         f32 c_ = cur;                       \
@@ -159,27 +167,27 @@ void marioUpdateCamCollision(Vec collision) {
  */
 void marioUpdateCam(void) {
     MarioWork* mario = marioGetPtr();
-    f32 sin;
-    f32 cos;
+    f32 sinYaw;
+    f32 cosYaw;
 
     UPDATE_CAM_SHIFT(mario->camShiftX, mario->camShiftTargetX, mario->camShiftRate.x);
     UPDATE_CAM_SHIFT(mario->camShiftY, mario->camShiftTargetY, mario->camShiftRate.y);
     UPDATE_CAM_SHIFT(mario->camShiftZ, mario->camShiftTargetZ, mario->camShiftRate.z);
 
-    if (!(mario->dispFlags & MARIO_DISP_FLAG_NO_CAM_UPDATE)) {
-        camGetPtr(CAMERA_3D); // result unused: the original calls it twice
-        sincosf(&sin, &cos, camGetPtr(CAMERA_3D)->viewYaw - 90.0f);
+    if (!(mario->dispFlags & MARIO_DISP_FLAG_NO_UPDATE_CAM_POS)) {
+        camGetPtr(CAMERA_3D);
+        sincosf(&sinYaw, &cosYaw, camGetPtr(CAMERA_3D)->viewYaw - 90.0f);
         if (!(mario->dispFlags & MARIO_DISP_FLAG_CAM_FOLLOW_Y_OFF)) {
-            mario->camTarget.x = mario->position.x + sin * mario->camShiftX;
-            mario->camTarget.z = mario->position.z + cos * mario->camShiftX;
+            mario->camTarget.x = mario->position.x + sinYaw * mario->camShiftX;
+            mario->camTarget.z = mario->position.z + cosYaw * mario->camShiftX;
             mario->camTarget.y = mario->camShiftY + (mario->position.y + mario->dispOfs.y);
             if (mario->currMotionId == MARIO_MOTION_SHIP) {
                 mario->camTarget.y += 10.0f;
             }
             mario->camZoomWeight = mario->camShiftZ;
         } else {
-            mario->camTarget.x = mario->position.x + sin * mario->camShiftX + sin * mario->camShiftZ;
-            mario->camTarget.z = mario->position.z + cos * mario->camShiftX + cos * mario->camShiftZ;
+            mario->camTarget.x = mario->position.x + sinYaw * mario->camShiftX + sinYaw * mario->camShiftZ;
+            mario->camTarget.z = mario->position.z + cosYaw * mario->camShiftX + cosYaw * mario->camShiftZ;
             mario->camZoomWeight = mario->camShiftZ;
         }
     }
@@ -187,23 +195,23 @@ void marioUpdateCam(void) {
 
 /** Lets marioUpdateCam move the camera target with Mario again. */
 void marioUpdateCamPos(void) {
-    marioGetPtr()->dispFlags &= ~MARIO_DISP_FLAG_NO_CAM_UPDATE;
+    marioGetPtr()->dispFlags &= ~MARIO_DISP_FLAG_NO_UPDATE_CAM_POS;
 }
 
 /** Freezes the camera target where it is (marioUpdateCam skips it); used by scripts and the damage motion. */
 void marioNoUpdateCamPos(void) {
-    marioGetPtr()->dispFlags |= MARIO_DISP_FLAG_NO_CAM_UPDATE;
+    marioGetPtr()->dispFlags |= MARIO_DISP_FLAG_NO_UPDATE_CAM_POS;
 }
 
 /** Lets the 3D camera follow Mario's height again (clears the follow-y-off flags on the camera and Mario). */
 void camFollowYOn(void) {
-    camGetPtr(CAMERA_3D)->flags &= ~CAM_FLAG_FOLLOW_Y_OFF;
+    camGetPtr(CAMERA_3D)->flags &= ~CAMERA_FLAG_NO_Y_FOLLOW;
     marioGetPtr()->dispFlags &= ~MARIO_DISP_FLAG_CAM_FOLLOW_Y_OFF;
 }
 
 /** Stops the 3D camera following Mario's height, e.g. during a jump or pipe, so it does not bob up and down. */
 void camFollowYOff(void) {
-    camGetPtr(CAMERA_3D)->flags |= CAM_FLAG_FOLLOW_Y_OFF;
+    camGetPtr(CAMERA_3D)->flags |= CAMERA_FLAG_NO_Y_FOLLOW;
     marioGetPtr()->dispFlags |= MARIO_DISP_FLAG_CAM_FOLLOW_Y_OFF;
 }
 
@@ -214,8 +222,8 @@ void camFollowYOff(void) {
 void marioCamZoomOffReq(void) {
     MarioWork* mario = marioGetPtr();
 
-    if (mario->dispFlags & MARIO_DISP_FLAG_CAM_ZOOMED && !(mario->dispFlags & MARIO_DISP_FLAG_CAM_ZOOM_OFF_REQ)) {
-        mario->dispFlags |= MARIO_DISP_FLAG_CAM_ZOOM_OFF_REQ;
+    if (mario->dispFlags & MARIO_DISP_FLAG_ZOOM && !(mario->dispFlags & MARIO_DISP_FLAG_ZOOM_OFF_REQ)) {
+        mario->dispFlags |= MARIO_DISP_FLAG_ZOOM_OFF_REQ;
         mario->zoomOffTime = 220;
         mario->zoomOffDelay = 32;
     }
@@ -228,8 +236,8 @@ void marioCamZoomOffReq(void) {
 void marioCamZoomOffReq2(s32 value) {
     MarioWork* mario = marioGetPtr();
 
-    if (mario->dispFlags & MARIO_DISP_FLAG_CAM_ZOOMED) {
-        mario->dispFlags |= MARIO_DISP_FLAG_CAM_ZOOM_OFF_REQ;
+    if (mario->dispFlags & MARIO_DISP_FLAG_ZOOM) {
+        mario->dispFlags |= MARIO_DISP_FLAG_ZOOM_OFF_REQ;
         mario->zoomOffTime = value / 10;
         mario->zoomOffDelay = 32;
     }
@@ -246,12 +254,12 @@ BOOL marioCamZoomOff(void) {
     s32 args[10];
     s32 durationMs;
 
-    if (!(mario->dispFlags & MARIO_DISP_FLAG_CAM_ZOOMED)) {
-        mario->dispFlags &= ~MARIO_DISP_FLAG_CAM_ZOOM_OFF_REQ;
+    if (!(mario->dispFlags & MARIO_DISP_FLAG_ZOOM)) {
+        mario->dispFlags &= ~MARIO_DISP_FLAG_ZOOM_OFF_REQ;
         return FALSE;
     }
 
-    if (!(mario->dispFlags & MARIO_DISP_FLAG_CAM_ZOOM_OFF_REQ)) {
+    if (!(mario->dispFlags & MARIO_DISP_FLAG_ZOOM_OFF_REQ)) {
         return FALSE;
     }
 
@@ -261,11 +269,11 @@ BOOL marioCamZoomOff(void) {
 
     mario->zoomOffDelay = 0;
     mario->zoomLevel = 0;
-    mario->dispFlags &= ~(MARIO_DISP_FLAG_CAM_ZOOMED | MARIO_DISP_FLAG_CAM_ZOOM_OFF_REQ);
+    mario->dispFlags &= ~(MARIO_DISP_FLAG_ZOOM | MARIO_DISP_FLAG_ZOOM_OFF_REQ);
     durationMs = mario->zoomOffTime * 10;
     mario->zoomOffTimer = ((durationMs * 60) / 1000);
     args[0] = durationMs;
-    args[1] = 11;
+    args[1] = EASING_SINE_IN_OUT;
     event.args = args;
     evt_cam3d_evt_off(&event, TRUE);
     return TRUE;
@@ -299,25 +307,25 @@ BOOL marioCamZoomUp(void) {
         return FALSE;
     }
 
-    if (!party || party->currentMemberId != PARTY_MEMBER_FLURRIE || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
+    if (!party || party->currentMemberId != PARTY_FLURRIE || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
         if (camGetPtr(CAMERA_3D)->stateA) {
             return FALSE;
         }
 
-        if (mario->dispFlags & MARIO_DISP_FLAG_CAM_ZOOMED) {
+        if (mario->dispFlags & MARIO_DISP_FLAG_ZOOM) {
             return TRUE;
         }
     } else {
-        camGetPtr(CAMERA_3D); // result unused: the original calls it twice
-        if (camGetPtr(CAMERA_3D)->stateA && mario->dispFlags & MARIO_DISP_FLAG_CAM_ZOOMED) {
+        camGetPtr(CAMERA_3D);
+        if (camGetPtr(CAMERA_3D)->stateA && mario->dispFlags & MARIO_DISP_FLAG_ZOOM) {
             return TRUE;
         }
     }
 
-    mario->dispFlags |= MARIO_DISP_FLAG_CAM_ZOOMED;
+    mario->dispFlags |= MARIO_DISP_FLAG_ZOOM;
     mario->zoomOffTimer = 0;
 
-    zoomDistance = (mario->characterId == 2) ? 750.0f : 450.0f;
+    zoomDistance = (mario->characterId == CHARACTER_BOWSER) ? 750.0f : 450.0f;
 
     xOffset = (f32)(mario->screenX - 303) / 5.0f;
     yOffset = 0.0f;
@@ -326,7 +334,7 @@ BOOL marioCamZoomUp(void) {
         yOffset = (320.0f - (f32)mario->screenY) / 3.5f;
     }
 
-    if (party && party->currentMemberId == PARTY_MEMBER_FLURRIE && party->flags & PARTY_FLAG_IS_BEING_USED) {
+    if (party && party->currentMemberId == PARTY_FLURRIE && party->flags & PARTY_FLAG_IS_BEING_USED) {
         angleAdjust = toMovedir(mario->displayDirection) >= 180.0f ? -70.0f : 70.0f;
         tempX = mario->screenX;
         zoomDistance = 550.0f;
@@ -349,14 +357,14 @@ BOOL marioCamZoomUp(void) {
     PSVECScale(&cameraDir, &cameraDir, zoomDistance);
     PSVECAdd(&targetPos, &cameraDir, &targetPos);
 
-    args[0] = (s16)(s32)targetPos.x;
-    args[1] = (s16)(s32)targetPos.y;
-    args[2] = (s16)(s32)targetPos.z;
-    args[3] = (s16)(s32)cloudPos.x;
-    args[4] = (s16)(s32)cloudPos.y;
-    args[5] = (s16)(s32)cloudPos.z;
+    args[0] = (s16)targetPos.x;
+    args[1] = (s16)targetPos.y;
+    args[2] = (s16)targetPos.z;
+    args[3] = (s16)cloudPos.x;
+    args[4] = (s16)cloudPos.y;
+    args[5] = (s16)cloudPos.z;
     args[6] = 1500;
-    args[7] = 3;
+    args[7] = EASING_QUARTIC_IN;
 
     event.args = args;
     evt_cam3d_evt_set(&event, TRUE);
@@ -364,12 +372,9 @@ BOOL marioCamZoomUp(void) {
 }
 
 /**
- * Runs each frame and acts only once MARIO_TRIG_FLAG_CAM_ZOOM_UP_LEVEL is set:
- * zooms the 3D camera in over 1.5 s towards a point offset from Mario's screen position,
- * at a distance picked by mario->zoomLevel
- * (1..3: 520/475/440, else 450), like marioCamZoomUp.
- * Nothing in the tree sets the flag or a nonzero zoomLevel, so it never acts.
- * The "level" in the name is this zoom step (zoomLevel); nothing ties it to Mario's level-up.
+ * Consumes MARIO_TRIG_FLAG_ZOOM_UP_LEVEL_UNUSED: outside background mode, sets MARIO_DISP_FLAG_ZOOM and moves the 3D
+ * camera in towards Mario's screen spot (distance by zoomLevel: 520, 475, 440, else 450) over 1500 ms with
+ * EASING_QUARTIC_IN. Returns TRUE when it started the move.
  */
 BOOL marioCamZoomUpLevelMain(void) {
     MarioWork* mario;
@@ -385,16 +390,16 @@ BOOL marioCamZoomUpLevelMain(void) {
     CameraEntry* camera;
 
     mario = marioGetPtr();
-    if (!(mario->trigFlags & MARIO_TRIG_FLAG_CAM_ZOOM_UP_LEVEL)) {
+    if (!(mario->trigFlags & MARIO_TRIG_FLAG_ZOOM_UP_LEVEL_UNUSED)) {
         return FALSE;
     }
-    mario->trigFlags &= ~MARIO_TRIG_FLAG_CAM_ZOOM_UP_LEVEL;
+    mario->trigFlags &= ~MARIO_TRIG_FLAG_ZOOM_UP_LEVEL_UNUSED;
 
     if (marioBgmodeChk() == 1) {
         return FALSE;
     }
 
-    mario->dispFlags |= MARIO_DISP_FLAG_CAM_ZOOMED;
+    mario->dispFlags |= MARIO_DISP_FLAG_ZOOM;
     mario->zoomOffTimer = 0;
 
     if (mario->zoomLevel == 1) {
@@ -428,14 +433,14 @@ BOOL marioCamZoomUpLevelMain(void) {
     PSVECScale(&cameraDir, &cameraDir, zoomDistance);
     PSVECAdd(&targetPos, &cameraDir, &targetPos);
 
-    args[0] = (s16)(s32)targetPos.x;
-    args[1] = (s16)(s32)targetPos.y;
-    args[2] = (s16)(s32)targetPos.z;
-    args[3] = (s16)(s32)cloudPos.x;
-    args[4] = (s16)(s32)cloudPos.y;
-    args[5] = (s16)(s32)cloudPos.z;
+    args[0] = (s16)targetPos.x;
+    args[1] = (s16)targetPos.y;
+    args[2] = (s16)targetPos.z;
+    args[3] = (s16)cloudPos.x;
+    args[4] = (s16)cloudPos.y;
+    args[5] = (s16)cloudPos.z;
     args[6] = 1500;
-    args[7] = 3;
+    args[7] = EASING_QUARTIC_IN;
 
     event.args = args;
     evt_cam3d_evt_set(&event, TRUE);

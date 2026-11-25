@@ -1,7 +1,10 @@
 // The Great Tree (mri): punidrv, the billboard renderer for the Puni crowd (a copy of the DOL extdrv): sorts the
 // poses by depth and draws each puni as a textured quad with its shadow.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "driver/mapdrv.h"
+#include "libc_decls.h"
 
 #include "driver/punidrv.h"
 #include "memory.h"
@@ -10,19 +13,17 @@
 #include "win/win_main.h"
 #include "system.h"
 #include "driver/animdrv.h"
-#include "libc_decls.h"
 
 static void puniMakeTexture(CameraId camId, void* param);
 
 static f32 camGetRy(void);
 static s32 compare(const void* a, const void* b);
 
-static s32 compare(const void* a, const void* b);
-static f32 camGetRy(void);
+void puniEntry(s32 poseNum, PunidrvTexInfo* texInfo, void (*initFunc)(void), void (*mainFunc)(void), void (*mainFunc2)(void));
 
 static f32 sintbl[450];
 static u8 shadow_dl[32];
-static f32 shadow_vtx[56];
+static f32 shadow_vtx[51];
 static PunidrvWork* work;
 
 /**
@@ -112,11 +113,16 @@ static f32 sintbl[450] = {
     0.999391f, 0.999848f,
 };
 
+/**
+ * Starts the Puni driver: counts the texture groups in texInfo (up to the NULL group), allocates the work arrays for
+ * poseNum poses and for the texture groups on the EXT heap, keeps mainFunc and mainFunc2, queues puniMakeTexture on
+ * the off-screen camera and runs initFunc if there is one.
+ */
 void puniEntry(s32 poseNum, PunidrvTexInfo* texInfo, void (*initFunc)(void), void (*mainFunc)(void),
                void (*mainFunc2)(void)) {
     static f32 Normals[] = {0.0f, 0.0f, 1.0f, 0.0f, 0.0f, -1.0f};
     static GXColor Colors[] = {{0xFF, 0xFF, 0xFF, 0xFF}};
-    static f32 UVs[] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f};
+    static f32 UVs[] = {0.0f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f};
     PunidrvWork* wp = work;
     PunidrvTexInfo* info;
     s32 texNum;
@@ -138,8 +144,8 @@ void puniEntry(s32 poseNum, PunidrvTexInfo* texInfo, void (*initFunc)(void), voi
     wp->colors = Colors;
     wp->uvs = UVs;
     wp->sort = __memAlloc(HEAP_EXT, poseNum * sizeof(PunidrvSort));
-    wp->dl = __memAlloc(HEAP_EXT, texNum * 0x80);
-    DCInvalidateRange(wp->dl, texNum * 0x80);
+    wp->dl = __memAlloc(HEAP_EXT, texNum * sizeof(*wp->dl));
+    DCInvalidateRange(wp->dl, texNum * sizeof(*wp->dl));
     wp->dlSize = __memAlloc(HEAP_EXT, texNum * sizeof(u32));
     memset(wp->poses, 0, wp->poseNum * sizeof(PunidrvPose));
     for (i = 0; i < poseNum; i++) {
@@ -148,7 +154,7 @@ void puniEntry(s32 poseNum, PunidrvTexInfo* texInfo, void (*initFunc)(void), voi
         wp->poses[i].scale = 1.0f;
     }
     PSMTXIdentity(wp->shadowMtx);
-    dispEntry(CAMERA_OFFSCREEN, 0.0f, 1, puniMakeTexture, texInfo);
+    dispEntry(CAMERA_OFFSCREEN, 0.0f, DISP_MODE_ALPHA_TEST, puniMakeTexture, texInfo);
     if (initFunc != NULL) {
         initFunc();
     }
@@ -186,7 +192,7 @@ static void puniMakeTexture(CameraId camId, void* param) {
         wp->vtx[n++] = x0 * scale;
         wp->vtx[n++] = -y1 * scale;
         wp->vtx[n++] = 0.0f;
-        GXBeginDisplayList(wp->dl[i], 0x80);
+        GXBeginDisplayList(wp->dl[i], sizeof(*wp->dl));
         v = i * 4;
         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
         GXPosition1x16(v++);
@@ -254,6 +260,7 @@ void puniMain(void) {
     s32 i;
     PunidrvPose* pose;
     PunidrvSort* sort;
+    CameraEntry* cam;
     f32 ry, angle, diff, c, s;
     u32 flags;
 
@@ -266,12 +273,12 @@ void puniMain(void) {
     pose = wp->poses;
     sort = wp->sort;
     ry = camGetRy();
-    camGetPtr(CAMERA_3D);
-    camGetPtr(CAMERA_3D);
+    cam = camGetPtr(CAMERA_3D);
+    cam = camGetPtr(CAMERA_3D);
     for (i = wp->poseNum - 1; i >= 0; i--, pose++, sort++) {
         flags = pose->flags;
         sort->index = i;
-        if (flags & 1) {
+        if (flags & PUNIDRV_POSE_FLAG_DISP) {
             sort->z = pose->texId;
         }
         angle = 90.0f + (ry - pose->dir);
@@ -292,7 +299,7 @@ void puniMain(void) {
         while ((diff = pose->targetRy - pose->ry) < -180.0f) {
             pose->ry -= 360.0f;
         }
-        if (flags & 2) {
+        if (flags & PUNIDRV_POSE_FLAG_SMOOTH_TURN) {
             pose->ry = pose->ry + diff * 0.1f;
         } else {
             pose->ry = pose->targetRy;
@@ -351,16 +358,16 @@ void puniPoseDraw(s32 index) {
     PunidrvTex* tex;
     Mtx mtx;
 
-    if (pose->flags & 1) {
+    if (pose->flags & PUNIDRV_POSE_FLAG_DISP) {
         texId = pose->texId;
         if (wp->curTex != texId) {
             tex = &wp->texs[texId];
-            GXLoadTexObjPreLoaded(smartTexObj(&tex->obj, tex->image), &tex->region, GX_TEXMAP0);
+            GXLoadTexObjPreLoaded(smartTexObj(&tex->obj, &tex->image->address), &tex->region, GX_TEXMAP0);
             wp->curTex = texId;
         }
         PSMTXConcat(camGetCurPtr()->view, *pose->mtx, mtx);
-        GXLoadPosMtxImm(mtx, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(mtx, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXCallDisplayList(wp->dl[pose->texId], wp->dlSize[pose->texId]);
     }
 }
@@ -383,11 +390,11 @@ void puniDraw(void) {
 
     for (i = wp->poseNum - 1, sort = wp->sort; i >= 0; i--, sort++) {
         pose = &wp->poses[sort->index];
-        if (pose->flags & 1) {
+        if (pose->flags & PUNIDRV_POSE_FLAG_DISP) {
             texId = pose->texId;
             if (texId != wp->curTex) {
                 tex = &wp->texs[texId];
-                GXLoadTexObjPreLoaded(smartTexObj(&tex->obj, tex->image), &tex->region, GX_TEXMAP0);
+                GXLoadTexObjPreLoaded(smartTexObj(&tex->obj, &tex->image->address), &tex->region, GX_TEXMAP0);
                 wp->curTex = texId;
             }
             PSMTXTrans(trans, 0.0f, pose->offsetY, 0.0f);
@@ -397,8 +404,8 @@ void puniDraw(void) {
             PSMTXConcat(mtx, rot, mtx);
             PSMTXConcat(mtx, scale, mtx);
             PSMTXConcat(camGetCurPtr()->view, mtx, mtx);
-            GXLoadPosMtxImm(mtx, 0);
-            GXSetCurrentMtx(0);
+            GXLoadPosMtxImm(mtx, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             GXCallDisplayList(wp->dl[texId], wp->dlSize[texId]);
         }
     }
@@ -452,7 +459,7 @@ void puniLoadTexture(void) {
             offset = 0x80000;
         }
         GXInitTexPreLoadRegion(&tex->region, offset, size, 0, 0);
-        GXPreLoadEntireTexture(smartTexObj(&tex->obj, tex->image), &tex->region);
+        GXPreLoadEntireTexture(smartTexObj(&tex->obj, &tex->image->address), &tex->region);
         offset += size;
     }
     wp->usedTmem = offset;
@@ -473,7 +480,7 @@ static u8 shadow_dl[32] ATTRIBUTE_ALIGN(32) = {
     0xA0, 0x00, 0x12, 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x01,
 };
 
-static f32 shadow_vtx[56] ATTRIBUTE_ALIGN(32) = {
+static f32 shadow_vtx[51] ATTRIBUTE_ALIGN(32) = {
     0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.707107f, 0.0f,
     0.707107f, 1.0f, 0.0f, 0.0f, 0.707107f, 0.0f, -0.707106f, 1e-06f,
     0.0f, -1.0f, -0.707106f, 0.0f, -0.707107f, -1.0f, 0.0f, -1e-06f,
@@ -483,7 +490,7 @@ static f32 shadow_vtx[56] ATTRIBUTE_ALIGN(32) = {
     -0.707108f, 0.0f, 0.707105f,
 };
 
-GXColor shadow_col[8] ATTRIBUTE_ALIGN(32) = {
+static GXColor shadow_col[1] ATTRIBUTE_ALIGN(32) = {
     {0x00, 0x00, 0x00, 0x80},
 };
 
@@ -494,7 +501,8 @@ GXColor shadow_col[8] ATTRIBUTE_ALIGN(32) = {
  */
 void puniLoadTev(void) {
     GXColor blend;
-    // unused in the game too, but their initialisers are part of the original .rodata
+
+    // Never read; unused in the original too: its stack slot and initializer template are in the retail code.
     GXColor unused0 = {0xFF, 0xFF, 0xFF, 0xFF};
     GXColor unused1 = {0xFF, 0xFF, 0xFF, 0xFF};
     GXColor fogColor = {0xFF, 0xFF, 0xFF, 0xFF};
@@ -592,15 +600,15 @@ void puniDrawShadow(void) {
     sort = &wp->sort[wp->poseNum - 1];
     for (i = wp->poseNum - 1; i >= 0; i--, sort--) {
         pose = &wp->poses[sort->index];
-        if (!(pose->flags & 4)) {
+        if (!(pose->flags & PUNIDRV_POSE_FLAG_NO_SHADOW_UNUSED)) {
             PSMTXConcat(camGetCurPtr()->view, *pose->mtx, mtx);
             PSMTXConcat(mtx, wp->shadowMtx, mtx);
-            if (pose->flags & 0x10) {
+            if (pose->flags & PUNIDRV_POSE_FLAG_SHADOW_POS_UNUSED) {
                 PSMTXTransApply(mtx, mtx, 0.0f, -(*pose->mtx)[1][3] + pose->shadowY, 0.0f);
             }
-            GXLoadPosMtxImm(mtx, 0);
-            GXSetCurrentMtx(0);
-            GXCallDisplayList(shadow_dl, 0x20);
+            GXLoadPosMtxImm(mtx, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
+            GXCallDisplayList(shadow_dl, sizeof(shadow_dl));
         }
     }
 }

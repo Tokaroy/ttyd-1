@@ -1,13 +1,14 @@
-// npcdrv.c: the field NPC system (NpcEntry, NpcWork, npcEntry/npcMain) and the NPC_FLAG_* bits.
 #pragma once
 
+#include "version.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <dolphin/os.h>
 #include "battle/battle_unit.h"
 #include "mario/mario_pouch.h"
 #include "evt/evt_word.h"
-#include "version.h"
+
+struct HitEntry;
 
 #define NPC_FIELD_MAX_COUNT 36
 #define NPC_BATTLE_MAX_COUNT 16
@@ -52,6 +53,24 @@ typedef struct NpcBattleSelect {
     struct BattleStageData* stageData; // 0x8
 } NpcBattleSelect;
 
+// NpcSetupBattleInfo.battleFlags / NpcBattleInfo.battleFlags
+typedef enum NpcBattleFlags {
+    NPC_BATTLE_NO_COIN_DROP = (1 << 0),             // 0x1
+    NPC_BATTLE_NO_HEART_DROP = (1 << 1),            // 0x2
+    NPC_BATTLE_NO_FLOWER_DROP = (1 << 2),           // 0x4
+    NPC_BATTLE_NO_ITEM_DROP = (1 << 3),             // 0x8
+    NPC_BATTLE_NO_ESCAPE = (1 << 4),                // 0x10, Run Away disabled; the stage walls close
+    NPC_BATTLE_MERLEE_SAFE_CURSE_UNUSED = (1 << 5), // 0x20, Merlee never rolls curse type 4; nothing sets it
+    NPC_BATTLE_NO_GAME_OVER = (1 << 6),             // 0x40, losing leaves Mario at 1 HP instead
+    NPC_BATTLE_EXTRA_COINS = (1 << 8),              // 0x100, coin multiplier + 1
+    NPC_BATTLE_NO_PARTY_ENTRY = (1 << 20),          // 0x100000, Mario and the partner skip their entry events
+    NPC_BATTLE_NO_JUMP = (1 << 24),                 // 0x1000000, Jump command disabled
+    NPC_BATTLE_NO_HAMMER = (1 << 25),               // 0x2000000, Hammer command disabled
+    NPC_BATTLE_NO_PARTY_CHANGE = (1 << 26),         // 0x4000000, partner change disabled
+    NPC_BATTLE_NO_BUMP_ATTACK = (1 << 28),          // 0x10000000, Bump Attack cannot win the battle at once
+    NPC_BATTLE_STORY = (1 << 29),                   // 0x20000000, story fight: Mario's other end-of-battle voices
+} NpcBattleFlags;
+
 typedef struct NpcSetupBattleInfo {
     const char* name;           // 0x0
     const char* mapName;        // 0x4, never read; map the battle is set on
@@ -59,7 +78,7 @@ typedef struct NpcSetupBattleInfo {
     s32 swFlag;                 // 0xC
     NpcBattleSelect* altSelect; // 0x10, used when swFlag is set
     NpcBattleSelect* select;    // 0x14
-    s32 battleFlags;            // 0x18, NPC_BATTLE_* flags, -> NpcBattleInfo.battleFlags
+    u32 battleFlags;            // 0x18, NpcBattleFlags, -> NpcBattleInfo.battleFlags
     s32 randomMode;             // 0x1C, -> NpcBattleInfo.randomMode; 0 rolls randomValues from randomRanges
     s8 randomRanges[16][2];     // 0x20, {min, max} per NpcBattleInfo.randomValues byte
     const char* bgmName;        // 0x40, -> NpcBattleInfo.bgmName, played by seq_battle
@@ -71,26 +90,9 @@ typedef struct NpcBattleRandom {
     s8 values[16]; // 0x4, rolled from NpcSetupBattleInfo.randomRanges (read as s8 weights)
 } NpcBattleRandom;
 
-// NpcSetupBattleInfo.battleFlags / NpcBattleInfo.battleFlags (copied by npcSetupBattleInfo; maps also set them on
-// the NPC before the battle). The comment names the reader.
-#define NPC_BATTLE_NO_COINS 0x1                  // evt_npc_get_drop_coin returns 0
-#define NPC_BATTLE_NO_HEARTS 0x2                 // evt_npc_get_drop_heart returns 0
-#define NPC_BATTLE_NO_FLOWERS 0x4                // evt_npc_get_drop_flower returns 0
-#define NPC_BATTLE_NO_ITEM 0x8                   // evt_npc_get_drop_item returns 0
-#define NPC_BATTLE_NO_ESCAPE 0x10                // battle_seq_command: Run Away disabled; battle_seq: stage walls close
-#define NPC_BATTLE_MERLEE_NO_CURSE_4 0x20        // BattleMajinaiCheck rolls curse types 1-3 only (45/45/10, not 30/30/20/20)
-#define NPC_BATTLE_LOSS_OK 0x40                  // battle_seq_end: losing does not end the game; Mario keeps at least 1 HP
-#define NPC_BATTLE_FIRST_STRIKE_BONUS 0x100      // npcdrv: a first-strike win adds 1 to the multiplier
-#define NPC_BATTLE_NO_PLAYER_ENTRY 0x100000      // battle_seq: Mario's and the partners' entry events are not run
-#define NPC_BATTLE_NO_JUMP 0x1000000             // battle_seq_command: Jump disabled
-#define NPC_BATTLE_NO_HAMMER 0x2000000           // battle_seq_command: Hammer disabled
-#define NPC_BATTLE_NO_PARTY_CHANGE 0x4000000     // battle_seq_command: Change Partner disabled
-#define NPC_BATTLE_NO_BUMP_ATTACK 0x10000000     // npcdrv: the Bump Attack badge cannot win the encounter outright
-#define NPC_BATTLE_MARIO_PAUSE3_VOICE 0x20000000 // battle_seq_end: victory voice SFX_VOICE_MARIO_PAUSE3, not PAUSE1
-
 typedef struct NpcBattleInfo {
     struct BattleStageData* stageData; // 0x0
-    s32 battleFlags;                   // 0x4, NPC_BATTLE_* flags
+    u32 battleFlags;                   // 0x4, NpcBattleFlags
     ItemType fixedItem;                // 0x8
     ItemType itemDropped;              // 0xC
     s32 heartsDropped;                 // 0x10
@@ -109,7 +111,6 @@ typedef struct NpcBattleInfo {
         };
     };
     u8 battleRule[3]; // 0xC4
-    u8 pad_C7;        // 0xC7, never accessed
 } NpcBattleInfo;
 
 typedef struct NpcTribeInfo {
@@ -136,234 +137,244 @@ typedef struct NpcTribeInfo {
     const char* landSfx;          // 0x50
 } NpcTribeInfo;
 
-// NpcEntry.flags bits (the 0x40000600 family in NPC setup data), named from their uses in
-// npcdrv.c. 0x1000 and 0x80000000 are not tested there.
-enum NpcFlags {
-    NPC_FLAG_USED = 0x1,                    // slot is allocated (npcEntry)
-    NPC_FLAG_ACTIVE = 0x2,                  // init event finished: updated, drawn and hit-checked
-    NPC_FLAG_RECORD_DEFEAT = 0x4,           // _npcDead records the defeat in FieldBattleData.deadInfo
-    NPC_FLAG_ENEMY = 0x8,                   // only the encounter hit check (kind 0x1000) sees it; never talkable
-    NPC_FLAG_LAND_ON_FLOOR = 0x10,          // npcMoveG: downward motion stops on the floor (raycast, snaps to hitY); without it y moves freely
-    NPC_FLAG_INTANGIBLE = 0x20,             // skipped by the Mario hit checks, blow checks and side collision
-    NPC_FLAG_ALWAYS_VISIBLE = 0x40,         // drawn even when the position is outside the camera frustum
-    NPC_FLAG_HIDDEN = 0x80,                 // model, shadow and blur are not drawn (offscreen pass still is)
-    NPC_FLAG_BLUR = 0x100,                  // npcBlurOn: keeps a position history and draws the motion blur
-    NPC_FLAG_TALK_ANIM = 0x200,             // npcSetTalkPose/npcSetStayPose play the NPC's talk and stay animations
-    NPC_FLAG_MOVE_ANIM = 0x400,             // stay/walk/run animation chosen from the movement speed every frame
-    NPC_FLAG_NO_DISPLAY = 0x800,            // no projection, colour update or display entries at all
-    NPC_FLAG_SKIP_HIT_ATTR4 = 0x2000,       // side collision ignores hit surfaces with attribute 0x4
-    NPC_FLAG_NO_MARIO_SIDE_HIT = 0x4000,    // npcCheckHitMarioSide is skipped
-    NPC_FLAG_INSTANT_TURN = 0x8000,         // the paper pose turns at once (animation pose flag 0x100)
-    NPC_FLAG_WALL_BOUNCE = 0x10000,         // a side hit reflects the movement angle off the wall
-    NPC_FLAG_JUMPING = 0x20000,             // jump clock runs; npcMoveG follows the jump arc
-    NPC_FLAG_NO_SHADOW = 0x40000,           // no shadowEntry
-    NPC_FLAG_SHADOW_NO_COLLISION = 0x80000, // shadow is not projected onto the map (shadowSetCollision off)
-    NPC_FLAG_NO_AUTO_UPDATE = 0x100000,     // movement clock only advances when the update bit is set from outside
-    NPC_FLAG_NO_FIND_EVENTS = 0x200000,     // find/lost/return interrupt events are not raised
-    NPC_FLAG_RESUME_ON_LEAVE = 0x400000,    // Mario leaving talk range restarts the regular event (no move interrupt)
-    NPC_FLAG_LUIGI = 0x800000,              // "c_luigi" model: pose flipped by npcLuigiPoseFlip
-    NPC_FLAG_NO_TURN_TO_MARIO = 0x1000000,  // keeps its direction when Mario comes to talk
-    NPC_FLAG_NO_BILLBOARD = 0x2000000,      // mtx_setup does not turn the model toward the camera
-    NPC_FLAG_VIVIAN_TYPE = 0x4000000,       // shadow-type model (animPoseGetVivianType): drawn by animPoseVivianMain
-    NPC_FLAG_KOOPA_MODE = 0x8000000,        // Bowser side-scrolling stage NPC: X-only movement, own encounter check
-    NPC_FLAG_HAS_BATTLE_INFO = 0x10000000,  // npcSetupBattleInfo ran; frozen while another NPC's battle starts
-    NPC_FLAG_NO_FIELD_ATTACK = 0x20000000,  // cannot be hit by field attacks or blown away
-    NPC_FLAG_NO_WALL_HIT = 0x40000000,      // moves without side (wall) collision
-};
+// NpcEntry.flags (also NpcSetupInfo.flags and NpcAiInfo.flags, copied in), named from npcMain, the npcdrv
+// helpers and the original AI type names in npc_data.c. 0x1000 is not named.
+typedef enum NpcFlags {
+    NPC_FLAG_IN_USE = (1 << 0),                // 0x1, slot in use (npcEntry; npcDelete clears it)
+    NPC_FLAG_READY = (1 << 1),                 // 0x2, initialised: updated, drawn, talkable, hittable
+    NPC_FLAG_RECORD_DEFEAT = (1 << 2),         // 0x4, _npcDead records it in the map's dead mask (no respawn)
+    NPC_FLAG_ENEMY = (1 << 3),                 // 0x8, field enemy: not talkable, enemy side of fbatHitCheck
+    NPC_FLAG_FLOOR_COLLISION = (1 << 4),       // 0x10, npcMoveG lands it on the floor
+    NPC_FLAG_NO_HIT = (1 << 5),                // 0x20, intangible: no push, no field hit check, not blown
+    NPC_FLAG_NO_CULL = (1 << 6),               // 0x40, drawn without the view volume check
+    NPC_FLAG_NO_DRAW = (1 << 7),               // 0x80, model, shadow and blur not drawn
+    NPC_FLAG_BLUR = (1 << 8),                  // 0x100, motion blur (npcBlurOn)
+    NPC_FLAG_TALK_POSE = (1 << 9),             // 0x200, uses its talk/stay animations in conversations
+    NPC_FLAG_AUTO_MOVE_ANIM = (1 << 10),       // 0x400, stay/walk/run animation picked from its speed
+    NPC_FLAG_HIDE = (1 << 11),                 // 0x800, whole display skipped (npc_hide_onoff)
+    NPC_FLAG_NO_PUSH_MARIO_UNUSED = (1 << 14), // 0x4000, does not push Mario out of its body (no code sets it)
+    NPC_FLAG_INSTANT_TURN = (1 << 15),         // 0x8000, paper turn snaps (ANIM_POSE_FLAG_INSTANT_TURN)
+    NPC_FLAG_WALL_BOUNCE = (1 << 16),          // 0x10000, move direction mirrored at walls
+    NPC_FLAG_GRAVITY = (1 << 17),              // 0x20000, falls
+    NPC_FLAG_NO_SHADOW = (1 << 18),            // 0x40000
+    NPC_FLAG_SHADOW_NO_FLOOR = (1 << 19),      // 0x80000, shadow not projected to the floor
+    NPC_FLAG_UPDATE_BY_EVENT = (1 << 20),      // 0x100000, movement step only when an evt_npc move function asks
+    NPC_FLAG_NO_FIND = (1 << 21),              // 0x200000, no find/lost/return interrupts
+    NPC_FLAG_RESUME_AFTER_TALK = (1 << 22),    // 0x400000, resumes its stopped event after the talk-range pause
+    NPC_FLAG_LUIGI_POSE_FLIP = (1 << 23),      // 0x800000, set by npcEntry for c_luigi
+    NPC_FLAG_NO_TALK_TURN = (1 << 24),         // 0x1000000, does not turn to face Mario
+    NPC_FLAG_NO_VIEW_CORRECTION = (1 << 25),   // 0x2000000, no camera-angle turn in mtx_setup
+    NPC_FLAG_VIVIAN_TYPE = (1 << 26),          // 0x4000000, animPoseGetVivianType draw path
+    NPC_FLAG_2D = (1 << 27),                   // 0x8000000, Bowser side-scrolling NPC
+    NPC_FLAG_STOP_FOR_EVENT = (1 << 28),       // 0x10000000, frozen by npcStopForEvent (set with battle info)
+    NPC_FLAG_NO_PLAYER_ATTACK = (1 << 29),     // 0x20000000, Mario cannot hit it; its own attack still lands
+    NPC_FLAG_NO_WALL_COLLISION = (1 << 30),    // 0x40000000
+    NPC_FLAG_NO_TALK_BALLOON = (1 << 31),      // 0x80000000, Mario's talk balloon not shown
+    NPC_FLAG_PASS_NPC_ONLY_WALLS = (1 << 13),  // 0x2000, wall probes skip HIT_ATTR_NPC_ONLY surfaces
+} NpcFlags;
 
-// NpcEntry.jumpFlags bits, the NPC status set by evt_npc_status_onoff and read by
-// evt_npc_status_check; named from their uses in npcdrv.c and evt_npc.c.
-enum NpcStatusFlags {
-    NPC_STATUS_AIRBORNE = 0x1,            // npcMoveG: off the floor this frame (NPC_FLAG_LAND_ON_FLOOR); evt_npc moves stop re-aiming, evt_npc_jump waits
-    NPC_STATUS_FACE_MOVE_DIR = 0x2,       // the evt_npc moves turn the body toward the travel direction (npcTuningRy)
-    NPC_STATUS_DEAD = 0x4,                // _npcDead; the Bowser stage hit checks skip it
-    NPC_STATUS_CLOCK_RUNNING = 0x10,      // the movement clock advances this frame (set each frame without NPC_FLAG_NO_AUTO_UPDATE, and by the evt_npc moves)
-    NPC_STATUS_NO_FIND_EVENT = 0x1000,    // npcCheckInterrupt raises no find/lost/return event, then clears it (evt_npc moves set it)
-    NPC_STATUS_FROZEN = 0x10000,          // npcStopForOneEvent: the movement clock and move offset stop
-    NPC_STATUS_IN_LAVA = 0x100000,        // in kpa_03's lava this frame: slowed, fall speed capped
-    NPC_STATUS_WAS_IN_LAVA = 0x200000,    // in the lava last frame: no splash sound
-    NPC_STATUS_DIM_COLOR = 0x400000,      // the colour is halved before it is applied (npcDimColor)
-    NPC_STATUS_LAVA_NO_SLOW = 0x10000000, // the lava does not slow the movement
-    NPC_STATUS_MARIO_NEAR = 0x20000000,   // Mario is in talk range: the regular event is stopped and the NPC faces him
-};
+// NpcEntry.statusFlags (evt_npc_status_onoff / evt_npc_status_check, npcMain, npcMoveG)
+typedef enum NpcStatusFlags {
+    NPC_STATUS_AIRBORNE = (1 << 0),       // 0x1, npcMoveG: in the air (cleared on landing)
+    NPC_STATUS_FACE_MOVE_DIR = (1 << 1),  // 0x2, faces its move direction (scripts)
+    NPC_STATUS_DEAD = (1 << 2),           // 0x4, _npcDead; every hit check skips it
+    NPC_STATUS_UPDATE = (1 << 4),         // 0x10, run the movement step this frame (evt_npc move functions)
+    NPC_STATUS_NO_FIND_ONCE = (1 << 12),  // 0x1000, no find/lost/return interrupt for one frame
+    NPC_STATUS_STOPPED = (1 << 16),       // 0x10000, npcStopForOneEvent .. npcStartForOneEvent
+    NPC_STATUS_IN_WATER = (1 << 20),      // 0x100000
+    NPC_STATUS_WAS_IN_WATER = (1 << 21),  // 0x200000
+    NPC_STATUS_DARKEN = (1 << 22),        // 0x400000, colour halved (2D deaths by fire or magma)
+    NPC_STATUS_NO_WATER_DRAG = (1 << 28), // 0x10000000
+    NPC_STATUS_TALK_PAUSE = (1 << 29),    // 0x20000000, stopped for the talk-range pause
+} NpcStatusFlags;
 
-// NpcEntry.interruptFlags bits: why the regular event is replaced, read by npcCheckInterrupt to pick the event to run.
-enum NpcInterruptFlags {
-    NPC_INTERRUPT_FIND = 0x1,        // Mario found: findEvent
-    NPC_INTERRUPT_LOST = 0x2,        // Mario lost: lostEvent
-    NPC_INTERRUPT_RETURN = 0x4,      // back in its territory: returnEvent
-    NPC_INTERRUPT_BLOW = 0x8,        // blown away (npcCheckBlow): blowEvent
-    NPC_INTERRUPT_DEAD = 0x10,       // defeated (_npcDead): deadEvent
-    NPC_INTERRUPT_NO_FIND = 0x100,   // JP and later: set as a field battle ends (battle_seq_end), find interrupts are ignored
-    NPC_INTERRUPT_KEEP_MASK = 0xF00, // JP and later: bits that npcCheckInterrupt keeps
-    NPC_INTERRUPT_MOVE = 0x10000000, // restart the move event (evt_npc_return_interrupt, after a battle or the hit cooldown)
-};
+// NpcEntry.interruptFlags: requests to replace the regular event, handled by npcCheckInterrupt
+typedef enum NpcInterruptFlags {
+    NPC_INTERRUPT_FIND = (1 << 0),    // 0x1, Mario found
+    NPC_INTERRUPT_LOST = (1 << 1),    // 0x2, Mario lost
+    NPC_INTERRUPT_RETURN = (1 << 2),  // 0x4, outside the territory: go back
+    NPC_INTERRUPT_BLOW = (1 << 3),    // 0x8, npcCheckBlow
+    NPC_INTERRUPT_DEAD = (1 << 4),    // 0x10, _npcDead
+    NPC_INTERRUPT_NO_FIND = (1 << 8), // 0x100, no find event; set at the end of a field battle
+    NPC_INTERRUPT_KEPT = 0xF00,       // bits kept when the requests are handled
+    NPC_INTERRUPT_MOVE = (1 << 28),   // 0x10000000, restart the regular (move) event
+} NpcInterruptFlags;
 
-// NpcEntry.hazardFlags bits: the Bowser stage hazards (npcKoopaModeEncountCheck, npcKoopaModeMobjBoundDeadCheck)
-// that do not kill the NPC; npcGroupDead gets the matching bit as its reason.
-enum NpcHazardFlags {
-    NPC_HAZARD_NO_STOMP = 0x1, // stomped by Bowser (kpaEnemyHitChk 1); also set every frame the NPC is in kpa_03's lava
-    NPC_HAZARD_NO_FIRE = 0x2,  // Bowser's fire (kpaEnemyHitChk 2)
-    NPC_HAZARD_NO_STAR = 0x4,  // touching Bowser while he is invincible (kpaEnemyHitChk 3)
-    NPC_HAZARD_NO_BUMP = 0x8,  // a block bumped from below (npcKoopaModeMobjBoundDeadCheck)
-    NPC_HAZARD_NO_LAVA = 0x10, // standing on the "a_magu" lava
-};
+// How a Bowser-stage (2D) NPC was beaten: npcGroupDead's reason, kept in koopaEncounterType
+// (evt_npc_get_kpencount_type, npcCalcScore). NpcEntry.hazardFlags holds the same bits as immunities.
+typedef enum NpcKoopaEncount {
+    KPA_ENCOUNT_NONE = 0,             // defeated otherwise (field battle, script)
+    KPA_ENCOUNT_STOMP = (1 << 0),     // 0x1, jumped on by Bowser; NPCs in water are immune
+    KPA_ENCOUNT_FIRE = (1 << 1),      // 0x2, Bowser's fire (combo score)
+    KPA_ENCOUNT_STAR = (1 << 2),      // 0x4, touched while Bowser is invincible
+    KPA_ENCOUNT_MOBJ = (1 << 3),      // 0x8, standing on a map object that bounced (npcKoopaModeMobjBoundDeadCheck)
+    KPA_ENCOUNT_MAGMA = (1 << 4),     // 0x10, fell into magma ("a_magu"): no score
+    KPA_ENCOUNT_GOAL_POLE = (1 << 5), // 0x20, cleared when Bowser hits the goal pole
+} NpcKoopaEncount;
 
 typedef struct NpcEntry {
-    s32 flags;                      // 0x0
-    u32 reactionFlags;              // 0x4
-    char description[32];           // 0x8
-    NpcTribeInfo* tribe;            // 0x28
-    char currentAnim[32];           // 0x2C
-    char stayAnim[32];              // 0x4C
-    char talkAnim[32];              // 0x6C
-    Vec position;                   // 0x8C, verified
-    Vec prevPosition;               // 0x98
-    Vec positionHistory[5];         // 0xA4
+    s32 flags;                      // 0x0, NpcFlags
+    u32 reactionFlags;              // 0x4, NPC_REACTION_* (soft touch/hammer reactions; setup file)
+    char description[32];           // 0x8, NPC name, the key of npcNameToPtr
+    NpcTribeInfo* tribe;            // 0x28, tribe data: anims, size, sounds
+    char currentAnim[32];           // 0x2C, entry anim (tribe initialAnim), or evt_npc_set_anim's in a move event
+    char stayAnim[32];              // 0x4C, anim set back after talking (tribe stayAnim; evt_npc_set_autotalkpose)
+    char talkAnim[32];              // 0x6C, anim while talking (tribe talkAnim; evt_npc_set_autotalkpose)
+    Vec position;                   // 0x8C
+    Vec prevPosition;               // 0x98, position of the last npcMain frame
+    Vec positionHistory[5];         // 0xA4, last 5 positions for NPC_FLAG_BLUR, every 2nd frame
     Vec scale;                      // 0xE0
     Vec rotation;                   // 0xEC
     Vec rotationOffset;             // 0xF8
-    s32 poseId;                     // 0x104
+    s32 poseId;                     // 0x104, animPose of the NPC
     s32 moveAnimState;              // 0x108, 1 stay, 2 walk, 3 run anim currently set by npcMain
     const char* checkPose;          // 0x10C, anim name, "M_I_2" by default (tik_02 geso_set_checkpose sets "M_S_1")
-    s32 offscreenId;                // 0x110
-    GXColor color;                  // 0x114
-    s32 initEvtId;                  // 0x118
-    s32 regularEvtId;               // 0x11C
-    EvtWord* initEvent;             // 0x120, verified
-    EvtWord* moveEvent;             // 0x124, verified
+    s32 offscreenId;                // 0x110, offscreen buffer drawn into, -1 = none
+    GXColor color;                  // 0x114, material colour, white = none (npcSetColor)
+    s32 initEvtId;                  // 0x118, id of the running initEvent, 0 = none
+    s32 regularEvtId;               // 0x11C, id of the running regular event (move, find, lost, return, blow or dead)
+    EvtWord* initEvent;             // 0x120
+    EvtWord* moveEvent;             // 0x124
     EvtWord* talkEvt;               // 0x128
-    EvtWord* deadEvent;             // 0x12C, verified
-    EvtWord* findEvent;             // 0x130, verified
-    EvtWord* lostEvent;             // 0x134, verified
-    EvtWord* returnEvent;           // 0x138, verified
-    EvtWord* blowEvent;             // 0x13C, verified
-    u32 interruptFlags;             // 0x140, NPC_INTERRUPT_*: why the regular event was interrupted
-    f32 direction;                  // 0x144, angle we're facing at, verified
+    EvtWord* deadEvent;             // 0x12C
+    EvtWord* findEvent;             // 0x130
+    EvtWord* lostEvent;             // 0x134
+    EvtWord* returnEvent;           // 0x138
+    EvtWord* blowEvent;             // 0x13C
+    u32 interruptFlags;             // 0x140, NpcInterruptFlags
+    f32 direction;                  // 0x144, angle we're facing at
     f32 savedDirection;             // 0x148, saved during field battle
-    f32 width;                      // 0x14C
-    f32 height;                     // 0x150
-    f32 shadowScale;                // 0x154
-    Vec jumpStartPos;               // 0x158
-    Vec jumpTargetPos;              // 0x164
+    f32 width;                      // 0x14C, horizontal size (shadow, touch range); npcEntry takes animPoseGetHeight
+    f32 height;                     // 0x150, vertical size (touch checks); npcEntry takes animPoseGetRadius
+    f32 shadowScale;                // 0x154, shadow size factor (1.0 default)
+    Vec jumpStartPos;               // 0x158, start of the current evt move or jump
+    Vec jumpTargetPos;              // 0x164, target of the current evt move or jump
     u8 pad_170[0x178 - 0x170];      // 0x170
     OSTime jumpTicks;               // 0x178, OSTime accumulated while jumping/falling, 0 on landing
     f32 jumpElapsed;                // 0x180, jumpTicks in seconds
-    u8 pad_184[0x188 - 0x184];      // 0x184
     OSTime moveTicks;               // 0x188, OSTime accumulated since the current evt move started
     OSTime dtTicks;                 // 0x190, frame delta (capped to 16 ms after a >500 ms gap)
     OSTime lastUpdateTicks;         // 0x198, gp->renderTime of the last update
     f32 moveElapsed;                // 0x1A0, moveTicks in seconds (compared with moveTime)
-    f32 moveDt;                     // 0x1A4
+    f32 moveDt;                     // 0x1A4, frame delta in seconds (dtTicks)
     f32 lastUpdateTime;             // 0x1A8, lastUpdateTicks in seconds
-    f32 moveDir;                    // 0x1AC
-    f32 moveSpeed;                  // 0x1B0
-    Vec moveOffset;                 // 0x1B4
-    f32 moveTime;                   // 0x1C0
-    f32 jumpVelY;                   // 0x1C4
-    f32 jumpYScale;                 // 0x1C8
-    f32 jumpGravity;                // 0x1CC
-    f32 maxFallSpeed;               // 0x1D0, fall speed limit, 100 in kpa_03 lava
-    u32 jumpFlags;                  // 0x1D4
-    s16 footstepToggle;             // 0x1D8
-    f32 footstepAccum;              // 0x1DC
-    const char* footstepSfxA;       // 0x1E0
-    const char* footstepSfxB;       // 0x1E4
-    u16 footstepStride;             // 0x1E8
-    const char* jumpSfx;            // 0x1EC
-    const char* landSfx;            // 0x1F0
+    f32 moveDir;                    // 0x1AC, direction of the current evt move (degrees)
+    f32 moveSpeed;                  // 0x1B0, speed of the current evt move (units per second)
+    Vec moveOffset;                 // 0x1B4, movement requested this frame; npcMoveXZ / npcMoveG apply and clear it
+    f32 moveTime;                   // 0x1C0, evt move duration; 0 = move by speed
+    f32 jumpVelY;                   // 0x1C4, jump arc start velocity
+    f32 jumpYScale;                 // 0x1C8, jump arc height factor
+    f32 jumpGravity;                // 0x1CC, jump gravity factor (times 980 units/s^2)
+    f32 maxFallSpeed;               // 0x1D0, fall speed limit, 100 in kpa_03 water
+    u32 statusFlags;                // 0x1D4, NpcStatusFlags (evt_npc_status_onoff)
+    s16 footstepToggle;             // 0x1D8, alternates footstepSfxA / footstepSfxB
+    f32 footstepAccum;              // 0x1DC, ms walked since the last footstep
+    const char* footstepSfxA;       // 0x1E0, first footstep sound (tribe)
+    const char* footstepSfxB;       // 0x1E4, second footstep sound (tribe)
+    u16 footstepStride;             // 0x1E8, footstep spacing; a step every stride / moveSpeed ms
+    const char* jumpSfx;            // 0x1EC, jump sound (tribe)
+    const char* landSfx;            // 0x1F0, landing sound (tribe)
     s32 cameraId;                   // 0x1F4, CameraId
-    NpcTerritoryType territoryType; // 0x1F8
-    Vec territoryBase;              // 0x1FC, verified
-    Vec territoryLoiter;            // 0x208, verified
-    Vec territoryHoming;            // 0x214, verified
-    f32 searchRange;                // 0x220, verified
-    f32 searchAngle;                // 0x224, verified
-    f32 homingRange;                // 0x228, verified
-    f32 homingAngle;                // 0x22C, verified
+    NpcTerritoryType territoryType; // 0x1F8, none, circle or square (setup file)
+    Vec territoryBase;              // 0x1FC, territory centre
+    Vec territoryLoiter;            // 0x208, wander extent (square x/z; .y height limit)
+    Vec territoryHoming;            // 0x214, chase extent (circle radius in .x; square x/z)
+    f32 searchRange;                // 0x220, distance at which the NPC finds Mario (<search_range>)
+    f32 searchAngle;                // 0x224, view cone for finding Mario (<search_angle>)
+    f32 homingRange;                // 0x228, chase distance (<homing_range>)
+    f32 homingAngle;                // 0x22C, chase angle (<homing_angle>)
     NpcBattleInfo battleInfo;       // 0x230
     s32 attackMode;                 // 0x2F8, evt_npc_set_attack_mode
     struct HitEntry* wallHit;       // 0x2FC, npcHitCheckSide result
     struct HitEntry* groundHit;     // 0x300, hit object found by the fall/landing checks
-    void* unitWork[4];              // 0x304
+    void* unitWork[4];              // 0x304, script work slots (evt_npc_get_unitwork / evt_npc_set_unitwork)
     u8 setupIndex;                  // 0x314, slot in the setup list (dead-mask bit)
-    u8 btlCoinDropCount;            // 0x315
-    u8 baseCoinCount;               // 0x316
-    s8 balloonType;                 // 0x317
+    u8 btlCoinDropCount;            // 0x315, coins dropped after the battle
+    u8 baseCoinCount;               // 0x316, unit kind's baseCoin
+    s8 balloonType;                 // 0x317, talk balloon type (1 default; mario_balloon reads it)
     u32 fbatHitKind;                // 0x318, kind from fbatHitCheck when this NPC triggered the battle
-    u16 koopaEncounterType;         // 0x31C
-    u16 hazardFlags;                // 0x31E, NPC_KOOPA_DEATH_*: Bowser-stage deaths it is immune to
-    u16 fbatHitCooldown;            // 0x320
-    u8 pad_322[2];                  // 0x322
-    struct NpcEntry* prev;          // 0x324
-    struct NpcEntry* next;          // 0x328
-    struct NpcEntry* master;        // 0x32C
-    struct NpcEntry* slaves[4];     // 0x330
+    u16 koopaEncounterType;         // 0x31C, NpcKoopaEncount
+    u16 hazardFlags;                // 0x31E, NpcKoopaEncount bits the NPC is immune to
+    u16 hitCooldown;                // 0x320, no-touch frames, blinking (90 after a won battle when it stole items)
+    struct NpcEntry* prev;          // 0x324, previous NPC of the group (npcSetLink)
+    struct NpcEntry* next;          // 0x328, next NPC of the group
+    struct NpcEntry* master;        // 0x32C, NPC this one is a slave of (npcSetSlave)
+    struct NpcEntry* slaves[4];     // 0x330, slaves deleted, killed and given battle info with this NPC
 } NpcEntry;
 
 typedef struct NpcFieldEntry {
-    char modelName[64];      // 0x0
-    char animName[64];       // 0x40
-    u32 flags;               // 0x80
-    f32 savedPeraRotY;       // 0x84, AnimationPose state saved across a pose reload
-    f32 savedRotationY;      // 0x88
-    f32 savedScaleZFlip;     // 0x8C
-    f32 savedPeraTargetRotY; // 0x90
+    char modelName[64]; // 0x0
+    char animName[64];  // 0x40
+    u32 flags;          // 0x80
+    f32 peraRotY;       // 0x84, AnimPose fields saved by npcReleaseFiledNpc
+    f32 rotationY;      // 0x88
+    f32 scaleZFlip;     // 0x8C
+    f32 peraTargetRotY; // 0x90
 } NpcFieldEntry;
 
-// NpcWork.flags bits.
-enum NpcWorkFlags {
-    NPC_WORK_RELEASE_FIELD = 0x2, // evt_npc_release_filednpc: the next battle start frees the field NPCs' poses (npcReleaseFiledNpc)
-};
+// NpcWork.flags
+typedef enum NpcWorkFlags {
+    NPC_WORK_ALWAYS_ENCOUNT = (1 << 0), // 0x1, talk and field-battle contact also while Mario cannot move
+                                        // (gor_01 chusan1_alwaysencont)
+    NPC_WORK_FIELD_RELEASED = (1 << 1), // 0x2, field NPC models released (evt_npc_release_filednpc)
+} NpcWorkFlags;
 
 typedef struct NpcWork {
     s32 count;            // 0x0, currently allocated
     s32 total;            // 0x4, maximum allowed
-    s32 flags;            // 0x8
+    s32 flags;            // 0x8, NpcWorkFlags
     NpcEntry* entries;    // 0xC
     NpcEntry* talkTarget; // 0x10, NPC that A would talk to this frame
 } NpcWork;
 
-// NpcWork.flags
-#define NPC_WORK_FLAG_CTRL_OFF_OK 0x1   // talk targets and field hits are checked even with Mario's keys or control off (gor_01)
-#define NPC_WORK_FLAG_RELEASE_POSES 0x2 // evt_npc_release_filednpc: the field NPC poses are freed for the battle and rebuilt after
+// Field hit kinds: fbatHitCheck results, FieldBattleData.hitKind, fbatSetAttackAnnounce
+typedef enum FbatHitKind {
+    FBAT_HIT_NONE = 0,
+    FBAT_HIT_TOUCH = 0x10000,       // plain contact: no first strike
+    FBAT_HIT_JUMP = 0x20000,        // Mario first strikes ...
+    FBAT_HIT_HIP = 0x40000,         // ... landing in MARIO_MOTION_HIP
+    FBAT_HIT_JUMP_UNUSED = 0x80000, // handled like a jump; nothing produces it
+    FBAT_HIT_HAMMER = 0x100000,
+    FBAT_HIT_SPIN_HAMMER = 0x200000, // below hammer level 3
+    FBAT_HIT_ULTRA_SPIN_HAMMER = 0x400000,
+    FBAT_HIT_SHELL = 0x800000,         // the partner's shell (party member kind 2)
+    FBAT_HIT_BOMB = 0x1000000,         // the partner's bomb (party member kind 3)
+    FBAT_HIT_MARIO_FIRST = 0x1FE0000,  // every Mario first strike above
+    FBAT_HIT_ENEMY_FIRST = 0x10000000, // the enemy strikes first
+} FbatHitKind;
 
 // fbatHitCheck flags: which hits to look for
-#define FBAT_CHECK_LIVE_ATTACK 0x1  // the attacks are live: the hammer's current frame, Koops's shell, Bobbery's blast
-#define FBAT_CHECK_CONTACT 0x10     // enemy contact too (and no checks while Mario is invincible)
-#define FBAT_CHECK_JUMP 0x20        // touch and jump
-#define FBAT_CHECK_HAMMER 0x40      // hammer
-#define FBAT_CHECK_SPIN_HAMMER 0x80 // spin hammer
-#define FBAT_CHECK_SHELL 0x100      // Koops's shell
-#define FBAT_CHECK_BOMB 0x200       // Bobbery's bomb
-#define FBAT_CHECK_ENEMIES 0x1000   // test enemies (NPC_FLAG_ENEMY) instead of the other NPCs
-#define FBAT_CHECK_QUERY 0x2000     // only NPCs whose reactionFlags allow it, without the attack banner
+typedef enum FbatCheckFlags {
+    FBAT_CHECK_CURRENT = (1 << 0),     // 0x1, hammer: where the swing is now (not the whole swing); party: only while attacking
+    FBAT_CHECK_TOUCH = (1 << 4),       // 0x10, body contact; with it nothing is found while Mario is invincible
+    FBAT_CHECK_JUMP = (1 << 5),        // 0x20
+    FBAT_CHECK_HAMMER = (1 << 6),      // 0x40
+    FBAT_CHECK_SPIN_HAMMER = (1 << 7), // 0x80
+    FBAT_CHECK_SHELL = (1 << 8),       // 0x100
+    FBAT_CHECK_BOMB = (1 << 9),        // 0x200
+    FBAT_CHECK_ENEMY = (1 << 12),      // 0x1000, field enemies (otherwise other NPCs)
+    FBAT_CHECK_REACTION = (1 << 13),   // 0x2000, only NPCs whose NpcReactionFlags allow that hit; no first-strike announce
+} FbatCheckFlags;
 
-// NpcEntry.hazardFlags: Bowser-stage deaths the NPC is immune to; also the reason passed to npcGroupDead
-#define NPC_KOOPA_DEATH_STOMP 0x1 // stomped by Bowser (kpaEnemyHitChk 1); also set while the NPC is in lava
-#define NPC_KOOPA_DEATH_FIRE 0x2  // burnt by Bowser's fire (kpaEnemyHitChk 2)
-#define NPC_KOOPA_DEATH_STAR 0x4  // touched while Bowser is invincible (kpaEnemyHitChk 3)
-#define NPC_KOOPA_DEATH_BLOCK 0x8 // standing on a block bumped from below (npcKoopaModeMobjBoundDeadCheck)
-#define NPC_KOOPA_DEATH_LAVA 0x10 // standing on the lava floor "a_magu"
+// NpcEntry.reactionFlags (NpcSetupInfo.reactionFlags, evt_npc_reaction_flag_onoff): the hits a friendly NPC reacts
+// to; fbatHitCheck tests them only with FBAT_CHECK_REACTION
+typedef enum NpcReactionFlags {
+    NPC_REACTION_TOUCH = (1 << 0),  // 0x1, body contact and jumps (FBAT_CHECK_TOUCH / FBAT_CHECK_JUMP)
+    NPC_REACTION_HAMMER = (1 << 1), // 0x2, hammer and spin hammer
+    NPC_REACTION_SHELL = (1 << 2),  // 0x4, the partner's shell
+    NPC_REACTION_BOMB = (1 << 3),   // 0x8, the partner's bomb
+} NpcReactionFlags;
 
-// What fbatHitCheck found (FieldBattleData.hitKind, FirstStrikeInfo.hitKind). Every kind but
-// FBAT_HIT_CONTACT and FBAT_HIT_ENEMY_FIRST is a first strike by Mario or the partner.
-enum FbatHitKind {
-    FBAT_HIT_CONTACT = 0x10000,            // touched an enemy: no first strike
-    FBAT_HIT_JUMP = 0x20000,               // jumped on it (also the spring jump)
-    FBAT_HIT_SPIN_JUMP = 0x40000,          // jumped on it in the spin jump (MARIO_MOTION_HIP)
-    FBAT_HIT_JUMP_UNUSED = 0x80000,        // announced and handled like a jump, but nothing produces it
-    FBAT_HIT_HAMMER = 0x100000,            // hammer
-    FBAT_HIT_SPIN_HAMMER = 0x200000,       // spin hammer, hammer level below 3
-    FBAT_HIT_ULTRA_SPIN_HAMMER = 0x400000, // spin hammer, hammer level 3
-    FBAT_HIT_SHELL = 0x800000,             // Koops' shell
-    FBAT_HIT_BOMB = 0x1000000,             // Bobbery's bomb
-    FBAT_HIT_ENEMY_FIRST = 0x10000000,     // the enemy struck first (its attackMode event runs)
+// FirstStrikeInfo.type
+enum {
+    FIRST_STRIKE_NONE = 0,
+    FIRST_STRIKE_ENEMY = 1, // "fb_sensei_sareta", 60-frame hold
+    FIRST_STRIKE_MARIO = 2, // "fb_sensei_shita", slides in and out
 };
 
 typedef struct FirstStrikeInfo {
     BOOL enabled;        // 0x0
-    u32 hitKind;         // 0x4, FbatHitKind passed to fbatSetAttackAnnounce, 0 when done
+    u32 hitKind;         // 0x4, FbatHitKind, 0 when done
     u32 type;            // 0x8
     s32 timer;           // 0xC, frames into the announce slide (0..100)
     f32 x;               // 0x10, announce x, slides -600 -> 0 -> 600
@@ -372,30 +383,72 @@ typedef struct FirstStrikeInfo {
     GXColor color;       // 0x1C
 } FirstStrikeInfo;
 
+// FieldBattleInfo.result (BattleInformationSetResult; evt_npc_get_battle_result)
+typedef enum BattleResult {
+    BATTLE_RESULT_NONE = 0,
+    BATTLE_RESULT_WIN = 1,       // the enemy side was defeated
+    BATTLE_RESULT_WIN_FIELD = 2, // won without a battle (Bump Attack, battle skip)
+    BATTLE_RESULT_LOSE = 3,
+    BATTLE_RESULT_ESCAPE = 4,  // ran away (also the kiosk-mode idle timeout, GW_FLAG_E3_TIMEOUT)
+    BATTLE_RESULT_STOPPED = 5, // ended by btlevtcmd_InterruptStop, or no battle and no win in the field
+} BattleResult;
+
+// FieldBattleInfo.firstAttack (BattleInformationSetFirstAttack, from the field hit kind in seq_battle)
+typedef enum BattleFirstAttack {
+    FIRST_ATTACK_NONE = 0,
+    FIRST_ATTACK_JUMP = 1,
+    FIRST_ATTACK_SPIN_JUMP = 2,   // marioWeapon_KururinJump (FBAT_HIT_HIP)
+    FIRST_ATTACK_JUMP_UNUSED = 3, // FBAT_HIT_JUMP_UNUSED
+    FIRST_ATTACK_HAMMER = 4,
+    FIRST_ATTACK_SPIN_HAMMER = 5,
+    FIRST_ATTACK_ULTRA_HAMMER = 6,
+    FIRST_ATTACK_SHELL = 7, // the partner strikes first (partyWeapon_NokotarouFirstAttack)
+    FIRST_ATTACK_BOMB = 8,  // partyWeapon_SandersFirstAttack
+    FIRST_ATTACK_ENEMY = 9, // and above: the enemy strikes first
+} BattleFirstAttack;
+
+// FieldBattleData.mode (fbatChangeMode, evt_npc_change_fbat_mode): what the field NPC driver does each frame. 6 is
+// read like BATTLE (evt_npc.c) and handled in npcMain as no work, but nothing sets it.
+enum {
+    FBAT_MODE_OFF = 0,
+    FBAT_MODE_FIELD = 1,             // normal field play; hits and talk are checked
+    FBAT_MODE_TALK = 2,              // A pressed at talkTarget; fbatTalkMode
+    FBAT_MODE_REACTION_TALK = 3,     // fbatTalkMode, entered from an NPC's reaction
+    FBAT_MODE_BATTLE = 5,            // hit an enemy; fbatBattleMode
+    FBAT_MODE_EVENT = 7,             // events and menus own the field: no checks
+    FBAT_MODE_EVENT_MOBJ_ACTIVE = 8, // like EVENT, but mobjdrv keeps its objects running
+};
+
+// FieldBattleInfo.ruleKeepResult, set by BtlActRec_JudgeRuleKeep. The Glitz Pit reads bit 0x4 (evt_tou_set_rule_result).
+typedef enum RuleKeepResult {
+    RULE_KEEP_BROKEN = 1,       // outside both bounds
+    RULE_KEEP_WITHIN_LOOSE = 2, // missed ruleParam but within ruleParam2
+    RULE_KEEP_KEPT = 6,         // met ruleParam
+} RuleKeepResult;
+
 typedef struct FieldBattleInfo {
     u32 mode;             // 0x0, unused
     BattleUnitType party; // 0x4
-    u32 partyId;          // 0x8
+    u32 firstAttack;      // 0x8, BattleFirstAttack
     NpcBattleInfo* setup; // 0xC
-    u32 result;           // 0x10
+    u32 result;           // 0x10, BattleResult
     u32 coins;            // 0x14, BattleStoreCoin
     u8 ruleType;          // 0x18, NpcBattleInfo.battleRule[0], index into the _rule_msg tables
-    u8 ruleKeepResult;    // 0x19
+    u8 ruleKeepResult;    // 0x19, RuleKeepResult
     u8 ruleParam;         // 0x1A, battleRule[1], printed in the rule message
-    u8 ruleParam2;        // 0x1B, battleRule[2], turn limit for the rule check (battle_actrecord; 0xFF = none)
+    u8 ruleParam2;        // 0x1B, battleRule[2], secondary threshold used by battle_actrecord condition checks
 } FieldBattleInfo;
 
 typedef struct FieldBattleData {
     s16 mode;                    // 0x0
     u8 subState;                 // 0x2
-    u8 pad_03;                   // 0x3, never accessed
     NpcEntry* npc;               // 0x4, encounter npc
     NpcEntry* target;            // 0x8
     s32 evtId;                   // 0xC
-    s32 hitKind;                 // 0x10, FbatHitKind from fbatHitCheck (tou_03 forces FBAT_HIT_ENEMY_FIRST)
-    s32 firstAttackParam;        // 0x14, set to 0x10 by tou_03 _firstattack_setting; passed to BattleInformationSetFirstAttack (seq_battle)
-    u8 pad_18[0x1C - 0x18];      // 0x18, never accessed
-    u32 firstAttackFlags;        // 0x1C, bit 0: no first attack for either side (seq_battle); cleared by tou_03 _firstattack_setting
+    s32 hitKind;                 // 0x10, FbatHitKind
+    s32 firstAttackParam;        // 0x14, BattleFirstAttack of an enemy first strike (0x10 from tou_03 _firstattack_setting)
+    u8 pad_18[0x1C - 0x18];      // 0x18, receives FbatHitResult.dist when fbatHitCheck copies the 16-byte result over hitKind; not read
+    u32 firstAttackFlags;        // 0x1C, bit 0: seq_battle starts with FIRST_ATTACK_NONE; tou_03 _firstattack_setting clears it
     FieldBattleInfo info;        // 0x20
     EvtWord* postBattleEvent;    // 0x3C, evt run after a won battle (battle_seq_end)
     s32 postBattleEventId;       // 0x40
@@ -404,29 +457,30 @@ typedef struct FieldBattleData {
     NpcDeadInfo deadInfo[64];    // 0x4C
     u8 merleeCoinBonus;          // 0x54C, Merlee coin curse fired: coin drops x3
     u8 sandersBombTrigger;       // 0x54D
-    u8 pad_54E[0x550 - 0x54E];   // 0x54E, never accessed
     FirstStrikeInfo firstStrike; // 0x550
 #if VERSION >= VERSION_JP
     s32 battleWait; // 0x570, frames seq_battle has waited for the first-strike announce (gives up at 200)
 #endif
-    s32 kpaComboCount; // 0x574 (demo 0x570), Bowser stomp combo, score multiplier
-    s32 kpaJumpKills;  // 0x578 (demo 0x574), Bowser kills during one jump
-    s32 kpaJumpScore;  // 0x57C (demo 0x578), score banked during one jump, shown on landing
-} FieldBattleData;     // size 0x580 (demo 0x57C)
+    s32 kpaComboCount; // 0x574, Bowser stomp combo, score multiplier
+    s32 kpaJumpKills;  // 0x578, Bowser kills during one jump
+    s32 kpaJumpScore;  // 0x57C, score banked during one jump, shown on landing
+} FieldBattleData;
 
 NpcWork* npcGetWorkPtr(void);
 void npcReleaseFiledNpc(void);
 void npcRecoveryFiledNpc(void);
 void npcInit(void);
 void npcReset(BOOL inBattle);
+void npcSetupBattleAudienceRate(NpcBattleInfo* info, NpcSetupBattleInfo* setup);
 s32 npcGetReactionOfLivingBody(BOOL inBattle);
-s32 npcEntry(const char* name, const char* animName);
+s32 npcEntry(const char* description, const char* animName);
 NpcTribeInfo* npcGetTribe(const char* tribeName);
 void npcDelete(NpcEntry* entry);
 void npcDeleteGroup(NpcEntry* entry);
 void npcMain(void);
 NpcEntry* npcNameToPtr(const char* name);
 NpcEntry* npcNameToPtr_NoAssert(const char* name);
+NpcEntry* fbatNpcTalkCheck(void);
 void npcSetLink(NpcEntry* npc, NpcEntry* other);
 void npcSetBtlSetupWork(NpcEntry* npc, s32 index, s32 value);
 s32 npcGetBtlSetupWork(NpcEntry* npc, s32 index);
@@ -437,43 +491,47 @@ void npcStartForOneEvent(NpcEntry* npc);
 void npcStartForEvent(void);
 void npcStopForOneEvent(NpcEntry* npc);
 void npcStopForEvent(void);
-BOOL npcCheckInterrupt(NpcEntry* npc); // TRUE when an interrupt event was started
+BOOL npcCheckInterrupt(NpcEntry* npc);
 void npcGroupDead(NpcEntry* npc, u16 reason);
 f32 npcTransRytoFaceDir(NpcEntry* npc);
 
 FieldBattleData* fbatGetPointer(void);
-NpcEntry* fbatNpcTalkCheck(void); // the NPC Mario can talk to now, or NULL
-// The NPC found by the field hit checks that flags selects (talk, encounter, attacks), or NULL; when a1 is
-// not NULL it receives the hit kind, event id and distance.
-NpcEntry* fbatHitCheck(u32 flags, void* unused);
-NpcEntry* fbatHitCheckAll(void); // fbatHitCheck(0x13F1, NULL)
 
 void npcSetSlave(NpcEntry* npc, NpcEntry* slave, s32 id);
 void npcSetBattleInfo(NpcEntry* npc, s32 battleInfoId);
+void npcOnOffBtlSetupFlag(NpcEntry* npc, BOOL on, u32 flags);
 void fbatChangeMode(s16 mode);
+void fbatInit(void);
+void fbatReInit(void);
+void fbatMain(void);
 
 NpcTerritoryType dbGetDefData(NpcTerritoryInfo* info, const char* description);
 
-BOOL N_fbatPreventMarioEventChk(void);
+BOOL fbatPreventMarioEventChk(void);
 
 extern EvtWord evt_majinai_effect_se_btl[];
 void fbatSandersBombTriggerOn(void);
 
-extern EvtWord _evt_majinai_coin_up_effect[];
-
 s32 npcCalcScore(NpcEntry* npc);
 void npcGetBackItemEntry(NpcEntry* npc);
 void npcSetMarioAutoTalkPose(const char* stayPose, const char* talkPose);
+const char* npcGetMarioStayPose(void);
+const char* npcGetMarioTalkPose(void);
+void fbatTouchMode(void);
+void fbatWaitBattleMode(void);
 void npcTuningRy(NpcEntry* npc, f32 angle);
-
-BOOL npcCheckBlow(NpcEntry* npc);
-void fbatSetAttackAnnounce(s32 kind);
+void fbatSetAttackAnnounce(s32 hitKind);
 void fbatSetAttackAnnounceEnable(void);
-void npcExecAllInitEvt(void);
-BOOL npcWaitAllInitEvtEnd(void);
-void npcExecAllReglEvt(void);
+BOOL npcCheckBlow(NpcEntry* npc);
 void npcClearDeadInfo(void);
-s32 npcKoopaModeMobjBoundDeadCheck(struct HitEntry* hit);
+void npcExecAllInitEvt(void);
+void npcExecAllReglEvt(void);
+BOOL npcWaitAllInitEvtEnd(void);
 NpcEntry* npcNearDistCheck(f32 x, f32 y, f32 z, f32 range);
 void npcSetStayPose(char* name);
 void npcSetTalkPose(char* name);
+NpcEntry* fbatHitCheckAll(void);
+s32 npcKoopaModeMobjBoundDeadCheck(struct HitEntry* hit);
+BOOL npcCheckEnableTouchMario(NpcEntry* npc);
+BOOL npcCheckEnableLookMario(void);
+void fbatKoopaMode(void);

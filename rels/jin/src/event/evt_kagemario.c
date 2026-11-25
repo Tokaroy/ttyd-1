@@ -1,6 +1,9 @@
 // Creepy Steeple (jin): shadow-Mario (kagemario) effect, darkens Mario's colours during story steps 201-211 and clears the partners for steps 201-205.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_party.h"
 
 #include "mario/mario.h"
 #include "driver/mapdrv.h"
@@ -8,19 +11,17 @@
 #include "driver/animdrv.h"
 #include "party.h"
 #include "driver/swdrv.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_party.h"
-#include "jin.h"
-#include "evt/evt_story.h"
 
 static void callback(MapTevCallbackInfo* info);
 static s32 color_change_evt(s32 on);
 
 static USER_FUNC(check);
 static USER_FUNC(test);
+USER_FUNC(evt_kagemario_change);
+USER_FUNC(evt_kagemario_init);
 
 static EvtWord evt_check[4];
-extern EvtWord evt_usu_kagemario_party_kill[];
+EvtWord evt_usu_kagemario_party_kill[42];
 
 /**
  * Texture-environment callback for Mario while he is a shadow (Doopliss has taken his place):
@@ -28,8 +29,8 @@ extern EvtWord evt_usu_kagemario_party_kill[];
  */
 static void callback(MapTevCallbackInfo* info) {
     s32 stage = info->tevStage;
-    s32 texCoord = info->texCoord;
     s32 texMap = info->texMap;
+    s32 texCoord = info->texCoord;
     s32 indStage = info->indStage;
 
     if (marioGetPtr()->flags & MARIO_FLAG_BG_MODE) {
@@ -46,9 +47,9 @@ static void callback(MapTevCallbackInfo* info) {
     GXSetTevAlphaIn(stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
     GXSetTevSwapMode(stage, GX_TEV_SWAP0, GX_TEV_SWAP0);
     info->tevStage = stage + 1;
-    info->texMap = texMap;
-    info->indStage = indStage;
     info->texCoord = texCoord;
+    info->indStage = indStage;
+    info->texMap = texMap;
 }
 
 /**
@@ -60,13 +61,13 @@ static s32 color_change_evt(s32 on) {
 
     if (on == 0) {
         for (i = 0; i < 3; i++) {
-            animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[i], ANIM_MATERIAL_TEV_CALLBACK(10));
+            animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[i], MAP_OBJ_TEV_CALLBACK(10));
         }
         marioGetPtr()->flags &= ~MARIO_FLAG_IS_SHADOW_MARIO;
     } else {
         mapSetTevCallback(10, callback);
         for (i = 0; i < 3; i++) {
-            animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[i], ANIM_MATERIAL_TEV_CALLBACK(10));
+            animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[i], MAP_OBJ_TEV_CALLBACK(10));
         }
         marioGetPtr()->flags |= MARIO_FLAG_IS_SHADOW_MARIO;
     }
@@ -74,9 +75,10 @@ static s32 color_change_evt(s32 on) {
 }
 
 /** Script helper, blocks forever: keeps the partner's paper pose free of the shadow tint so only Mario is darkened. */
+// Keep removing the shadow-material override from the current partner while this event is blocked.
 static USER_FUNC(check) {
     if (partyGetPtr(0) != NULL) {
-        animPoseSetMaterialFlagOff(partyGetPtr(0)->paperAnimGroup, ANIM_MATERIAL_TEV_CALLBACK(10));
+        animPoseSetMaterialFlagOff(partyGetPtr(0)->paperAnimGroup, MAP_OBJ_TEV_CALLBACK(10));
     }
     return EVT_RETURN_BLOCK;
 }
@@ -87,9 +89,9 @@ static USER_FUNC(check) {
  * and off otherwise.
  */
 USER_FUNC(evt_kagemario_init) {
-    s32 sequence = swByteGet(GSW_STORY_PROGRESS);
+    s32 sequence = swByteGet(GSW_ID(GSW_STORY_PROGRESS));
 
-    if (sequence >= 201 && sequence < 212) {
+    if (sequence >= STG4_10_02_TRADING_PLACES && sequence < STG4_15_02_BACK_TO_NORMAL) {
         color_change_evt(1);
         evtEntry(evt_check, 0, 0);
     } else {
@@ -108,6 +110,7 @@ USER_FUNC(evt_kagemario_change) {
  * Script helper: forgets the previous partner ids stored in Mario's work so no partner is restored
  * after the shadow scene.
  */
+// Clear both remembered partner slots before the solo Shadow Mario section.
 static USER_FUNC(test) {
     marioGetPtr()->prevPartyMemberId[0] = 0;
     marioGetPtr()->prevPartyMemberId[1] = 0;
@@ -124,12 +127,12 @@ static EVT_BEGIN(evt_check)
 EVT_END()
 
 /**
- * Map-init script for story steps from "Trading Places" up to just before the Superbombomb is found:
+ * Map-init script for story steps from "Trading Places" up to and including "Superbombomb found":
  * removes both partners from the map and disables their control, since Mario goes on alone as the shadow.
  */
 EVT_BEGIN(evt_usu_kagemario_party_kill)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_10_02_TRADING_PLACES, STORY_STG4_12_01_SUPERBOMBBOMB_FOUND)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_10_02_TRADING_PLACES, STG4_12_01_SUPERBOMBBOMB_FOUND)
         CALL(evt_party_stop, 0)
         CALL(evt_party_set_pos, 0, 0, -1000, 0)
         CALL(evt_party_cont_onoff, 0, 0)

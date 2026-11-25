@@ -1,89 +1,66 @@
 // Declares the weapon special flags and shared battle drop-table types.
+
 #pragma once
 
 #include <dolphin/types.h>
 #include "evt/evt_word.h"
 
-// BattleWeapon.special. Read in battle_damage.c (BattleCalculateDamage, BattlePreCheckDamage, BattleSetStatusDamage,
-// BattleCheckDamage) unless noted.
-typedef enum BattleWeaponSpecialFlags {
-    SPECIAL_BADGE_BUFFABLE = 0x1,                // Power Plus, P-Up D-Down, All or Nothing, Mega/Power Rush, Ice Power, HP/FP Drain apply
-    SPECIAL_STATUS_BUFFABLE = 0x2,               // Huge, Attack Up, Tiny, Attack Down and Merlee's power bonus apply
-    SPECIAL_CHARGE_BUFFABLE = 0x4,               // Charge adds its strength (and is used up)
-    SPECIAL_ALWAYS_HITS = 0x8,                   // skips the Invisible, Veil, Lucky, Dodgy and accuracy checks
-    SPECIAL_DIMINISHING_BY_HIT = 0x10,           // damage minus the target's hpDamageCount (at least 1)
-    SPECIAL_DIMINISHING_BY_TARGET = 0x20,        // damage minus the attacker's per-action hit count (at least 1)
-    SPECIAL_PIERCES_DEFENSE = 0x40,              // defense counts as 0
-    SPECIAL_SHATTERS_FREEZE = 0x80,              // frozen-target hit code 0x8717 (its roll, irand(100) < 0, never passes)
-    SPECIAL_IGNORE_STATUS_VULNERABILITY = 0x100, // status chance not scaled by the target's resistance or levels
-    SPECIAL_UNUSED_200 = 0x200,                  // set only on Flurrie's breath attack; never read
-    SPECIAL_FIERY_IF_BURNED = 0x400,             // a burned attacker's hit is fire (and sets off explosive counters)
-    SPECIAL_ATTACK_FX = 0x800,                   // an equipped Attack FX badge replaces the hit sound (BattleCheckPikkyoro)
-    SPECIAL_FLIPS_SHELLED = 0x1000,              // flips a shelled part
-    SPECIAL_FLIPS_BOMB_FLIPPABLE = 0x2000,       // flips a part that a bomb can flip
-    SPECIAL_GROUNDS_WINGED = 0x4000,             // knocks a winged part to the ground
-    SPECIAL_FORCE_RESULT_10000 = 0x8000,         // with damage flag 0x100: result bit 0x10000 even on unit attribute 0x100; no weapon sets it
-    SPECIAL_USABLE_IF_CONFUSED = 0x10000,        // a confused unit may still pick it (battle_seq_command.c, battle_enemy_item.c)
-    SPECIAL_UNGUARDABLE = 0x20000,               // skips the guard and superguard check
-    SPECIAL_HITS_EVASIVE_PARTS = 0x40000,        // hits parts that otherwise always dodge (part attribute 0x4000); no weapon sets it
-} BattleWeaponSpecialFlags;
+/* BattleWeapon.targetClassFlags: which units an attack may target */
+#define TARGET_CLASS_NO_MARIO_OR_SHELL 0x1            // not Mario or the shell shield
+#define TARGET_CLASS_NO_PARTNER 0x2                   // not a partner
+#define TARGET_CLASS_UNUSED_4 0x4                     // set in weapon data, read by no code (name from LLCOOLT's tree)
+#define TARGET_CLASS_UNUSED_8 0x8                     // set in weapon data, read by no code (name from LLCOOLT's tree)
+#define TARGET_CLASS_NO_ENEMY 0x10                    // not an enemy (UNIT_GOOMBA..UNIT_UNUSED_FLAVIO)
+#define TARGET_CLASS_NO_TREE_OR_SWITCH 0x20           // not UNIT_UNUSED_TREE or UNIT_UNUSED_SWITCH
+#define TARGET_CLASS_NO_SYSTEM_UNIT 0x40              // not UNIT_UNUSED_TESTNPC..UNIT_PROLOGUE_GOOMBELLA
+#define TARGET_CLASS_NO_OPPOSITE_SIDE 0x100           // not the attacker's opponents
+#define TARGET_CLASS_NO_OWN_SIDE 0x200                // not the attacker's own side
+#define TARGET_CLASS_NO_SELF 0x1000                   // not the attacker
+#define TARGET_CLASS_NO_SAME_KIND 0x2000              // not another unit of the attacker's kind
+#define TARGET_CLASS_ONLY_SELF 0x4000                 // only the attacker
+#define TARGET_CLASS_ONLY_MARIO 0x10000               // only Mario
+#define TARGET_CLASS_ONLY_TREE_OR_SWITCH 0x20000      // only UNIT_UNUSED_TREE or UNIT_UNUSED_SWITCH
+#define TARGET_CLASS_ONLY_MAIN_PARTS 0x100000         // only main or important parts
+#define TARGET_CLASS_ONLY_MAIN_OR_SEMI_PARTS 0x200000 // only main, important or semi-important parts
+#define TARGET_CLASS_SINGLE 0x1000000                 // one target at a time
+#define TARGET_CLASS_MULTIPLE 0x2000000               // all targets at once
+#define TARGET_CLASS_NONE 0x80000000                  // no valid targets
 
-struct BattleUnit;
-struct BattleUnitPart;
-struct BattleWeapon;
-// BattleWeapon.hpDamageFn / fpDamageFn: the base power of the hit (battle_weapon_power.c and the sac_*.c moves).
-typedef s32 (*WeaponPowerFn)(struct BattleUnit* attacker, struct BattleWeapon* weapon, struct BattleUnit* target,
-                             struct BattleUnitPart* part);
+// BattleWeapon.targetPropertyFlags (battle_detect.c BattleSamplingEnemy; 0x4000000 excludes parts with kNoShadow,
+// part attribute 0x2000000)
+#define TARGET_PROP_TATTLE 0x1                     // only parts that can be tattled (tattle data, not kUntattleable)
+#define TARGET_PROP_NO_FLOATING2 0x2               // not floating units (same test as 0x8)
+#define TARGET_PROP_NO_CEILING 0x4                 // not ceiling units
+#define TARGET_PROP_NO_FLOATING 0x8                // not floating units
+#define TARGET_PROP_NO_GROUNDED 0x10               // only floating or ceiling units
+#define TARGET_PROP_JUMPLIKE 0x1000                // not parts immune to jumps
+#define TARGET_PROP_HAMMERLIKE 0x2000              // not parts immune to hammers
+#define TARGET_PROP_SHELL_TOSSLIKE 0x4000          // not parts immune to shell tosses
+#define TARGET_PROP_ONLY_SHELL_TOSS_IMMUNE 0x8000  // only parts immune to shell tosses
+#define TARGET_PROP_RECOIL 0x100000                // with HAMMERLIKE, the attacker itself stays a target
+#define TARGET_PROP_ONLY_FRONTMOST 0x1000000       // only the frontmost part of each side
+#define TARGET_PROP_NO_SHELL_SHIELDED 0x2000000    // not units under a shell shield
+#define TARGET_PROP_SHADOWED_ONLY 0x4000000        // not parts with kNoShadow
+#define TARGET_PROP_SAME_SIDE_FIRST 0x10000000     // first target on the attacker's side; sampling direction reversed
+#define TARGET_PROP_OPPOSITE_SIDE_FIRST 0x20000000 // first target on the opposing side
 
-// BattleWeapon.targetClassFlags: which units and parts a weapon may target.
-// Read by _btlSamplingEnemy (battle_detect.c) unless noted. "Opposing" is the
-// alliance passed to BattleSamplingEnemy as `belong`, the attacker's enemy side;
-// a confused attacker gets the two alliance flags swapped (BattleSamplingEnemy).
-typedef enum BattleWeaponTargetClassFlags {
-    TARGET_CLASS_NO_MARIO = 0x1,                // not Mario (nor the Shell Shield, except in the demo)
-    TARGET_CLASS_NO_PARTNER = 0x2,              // not a partner
-    TARGET_CLASS_UNUSED_4 = 0x4,                // never read
-    TARGET_CLASS_UNUSED_8 = 0x8,                // never read
-    TARGET_CLASS_NO_ENEMY = 0x10,               // not an enemy (kinds below UNIT_UNUSED_TREE)
-    TARGET_CLASS_NO_TREE_OR_SWITCH = 0x20,      // not UNIT_UNUSED_TREE or UNIT_UNUSED_SWITCH
-    TARGET_CLASS_NO_SYSTEM_UNIT = 0x40,         // not UNIT_UNUSED_TESTNPC..UNIT_PROLOGUE_GOOMBELLA
-    TARGET_CLASS_NO_OPPOSING_ALLIANCE = 0x100,  // not the opposing alliance
-    TARGET_CLASS_NO_OWN_ALLIANCE = 0x200,       // only the opposing alliance (or alliance 2)
-    TARGET_CLASS_NO_SELF = 0x1000,              // not the attacker
-    TARGET_CLASS_NO_SAME_KIND = 0x2000,         // not another unit of the attacker's kind
-    TARGET_CLASS_ONLY_SELF = 0x4000,            // only the attacker
-    TARGET_CLASS_ONLY_MARIO = 0x10000,          // only Mario
-    TARGET_CLASS_ONLY_TREE_OR_SWITCH = 0x20000, // only UNIT_UNUSED_TREE or UNIT_UNUSED_SWITCH
-    TARGET_CLASS_MAIN_PARTS = 0x100000,         // main or important parts; an important part is dropped when its unit's main part is a target
-    TARGET_CLASS_ANY_PART = 0x200000,           // main, important or semi-important parts
-    TARGET_CLASS_SINGLE = 0x1000000,            // one target (btlevtcmd_CheckWeaponPluralTarget, the command menu)
-    TARGET_CLASS_MULTIPLE = 0x2000000,          // all targets at once (the command menu)
-    TARGET_CLASS_NONE = 0x80000000,             // no targets: numTargets = -1
-} BattleWeaponTargetClassFlags;
+/* BattleWeapon.targetWeightFlags: how an enemy chooses among the targets */
+#define TARGET_WEIGHT_MARIO 0x1           // prefer Mario
+#define TARGET_WEIGHT_PARTNER 0x2         // prefer a partner
+#define TARGET_WEIGHT_FRONT 0x4           // prefer targets early in the target list
+#define TARGET_WEIGHT_BACK 0x8            // prefer targets late in the target list
+#define TARGET_WEIGHT_OWN_SIDE 0x10       // prefer the attacker's side
+#define TARGET_WEIGHT_OPPOSITE_SIDE 0x20  // prefer the attacker's opponents
+#define TARGET_WEIGHT_LOW_HP_RATIO 0x100  // prefer a low HP / max HP
+#define TARGET_WEIGHT_HIGH_HP_RATIO 0x200 // prefer a high HP / max HP
+#define TARGET_WEIGHT_LOW_HP 0x400        // prefer low HP
+#define TARGET_WEIGHT_HIGH_HP 0x800       // prefer high HP
+#define TARGET_WEIGHT_IN_PERIL 0x1000     // prefer targets in Peril
+#define TARGET_WEIGHT_UNUSED_2000 0x2000  // set in weapon data, read by no code (name from LLCOOLT's tree)
+#define TARGET_WEIGHT_RANDOM 0x80000000   // pick at random by weight (else the heaviest)
 
-// BattleWeapon.targetPropertyFlags: further target filters (_btlSamplingEnemy)
-// and where the command-menu cursor starts (_btlcmd_SelectWeaponDecide).
-typedef enum BattleWeaponTargetPropertyFlags {
-    TARGET_PROP_TATTLE = 0x1,                     // only parts that can be tattled
-    TARGET_PROP_NO_FLOATING = 0x2,                // not a floating unit (UNIT_ATTR_FLOATING)
-    TARGET_PROP_NO_CEILING = 0x4,                 // not a unit on the ceiling (UNIT_ATTR_CEILING)
-    TARGET_PROP_NO_FLOATING_2 = 0x8,              // the same test as TARGET_PROP_NO_FLOATING
-    TARGET_PROP_ONLY_AIRBORNE = 0x10,             // only floating or ceiling units
-    TARGET_PROP_JUMPLIKE = 0x1000,                // not parts with PART_ATTR_JUMPLIKE_CANNOT_TARGET
-    TARGET_PROP_HAMMERLIKE = 0x2000,              // not parts with PART_ATTR_HAMMERLIKE_CANNOT_TARGET
-    TARGET_PROP_SHELL_TOSS_LIKE = 0x4000,         // not parts with PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET
-    TARGET_PROP_ONLY_SHELL_TOSS_IMMUNE = 0x8000,  // only parts with PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET
-    TARGET_PROP_RECOIL = 0x100000,                // with HAMMERLIKE, the attacker's own hammer-immune parts stay targets (not in the demo)
-    TARGET_PROP_FRONTMOST = 0x1000000,            // only the frontmost target on each side
-    TARGET_PROP_NO_SHELL_SHIELDED = 0x2000000,    // not a unit behind the Shell Shield (UNIT_ATTR_SHELL_SHIELDED)
-    TARGET_PROP_NO_PART_ATTR_2000000 = 0x4000000, // not parts with attribute 0x2000000; no weapon sets it
-    TARGET_PROP_START_OWN_SIDE = 0x10000000,      // cursor starts on the attacker's alliance (and btlevtcmd_SamplingEnemy flips the direction)
-    TARGET_PROP_START_OPPOSING_SIDE = 0x20000000, // cursor starts on the opposing alliance
-} BattleWeaponTargetPropertyFlags;
-
-// BattleWeapon.counterResistFlags: counters the weapon ignores (BattlePreCheckDamage
-// and BattleCheckCounter, battle_damage.c).
-typedef enum BattleWeaponCounterResistFlags {
+// BattleWeapon.counterResistFlags: counters the weapon ignores (BattleCheckCounter)
+typedef enum BattleWeaponCounterResist_Flags {
     COUNTER_RESIST_ELECTRIC = 0x1,
     COUNTER_RESIST_TOP_SPIKY = 0x2,
     COUNTER_RESIST_PREEMPTIVE_SPIKY = 0x4,
@@ -93,68 +70,115 @@ typedef enum BattleWeaponCounterResistFlags {
     COUNTER_RESIST_POISON = 0x40,
     COUNTER_RESIST_EXPLOSIVE = 0x80,
     COUNTER_RESIST_VOLATILE_EXPLOSIVE = 0x100,
-    COUNTER_RESIST_PAYBACK = 0x200, // Payback status and Return Postage
-    COUNTER_RESIST_HOLD_FAST = 0x400,
+    COUNTER_RESIST_PAYBACK = 0x200,   // the Payback status and the Return Postage badge
+    COUNTER_RESIST_HOLD_FAST = 0x400, // the Hold Fast status
     COUNTER_RESIST_ALL = 0x7FF,
-} BattleWeaponCounterResistFlags;
+} BattleWeaponCounterResist_Flags;
 
-// BattleWeapon.targetWeightFlags: how BattleChoiceSamplingEnemy (battle_detect.c)
-// weights the targets when the game picks one for an AI or a random attack.
-typedef enum BattleWeaponTargetWeightFlags {
-    TARGET_WEIGHT_PREFER_MARIO = 0x1,
-    TARGET_WEIGHT_PREFER_PARTNER = 0x2,
-    TARGET_WEIGHT_PREFER_FRONT = 0x4,
-    TARGET_WEIGHT_PREFER_BACK = 0x8,
-    TARGET_WEIGHT_PREFER_OWN_ALLIANCE = 0x10,
-    TARGET_WEIGHT_PREFER_OPPOSING_ALLIANCE = 0x20,
-    TARGET_WEIGHT_PREFER_LOW_HP_RATIO = 0x100,
-    TARGET_WEIGHT_PREFER_HIGH_HP_RATIO = 0x200,
-    TARGET_WEIGHT_PREFER_LOW_HP = 0x400,
-    TARGET_WEIGHT_PREFER_HIGH_HP = 0x800,
-    TARGET_WEIGHT_PREFER_IN_PERIL = 0x1000,
-    TARGET_WEIGHT_UNUSED_2000 = 0x2000, // set on many weapons, never read
-    TARGET_WEIGHT_RANDOM = 0x80000000,  // pick by weighted chance instead of the highest weight
-} BattleWeaponTargetWeightFlags;
+// BattleWeapon.special (bits checked in battle_damage.c)
+typedef enum BattleWeaponSpecialFlags {
+    SPECIAL_BADGE_POWER = 0x1,  // badges add to or subtract from the power (BattleCalculateDamage)
+    SPECIAL_STATUS_POWER = 0x2, // Huge/Tiny, Attack Up/Down and Merlee's boost change the power
+    SPECIAL_CHARGEABLE = 0x4,   // uses up a Charge
+    SPECIAL_CANNOT_MISS = 0x8,
+    SPECIAL_DIMINISH_BY_HIT = 0x10,    // power minus the hits the target took this attack (min 1)
+    SPECIAL_DIMINISH_BY_TARGET = 0x20, // power minus the attacker's targets so far (min 1)
+    SPECIAL_PIERCE_DEFENSE = 0x40,
+    SPECIAL_FREEZE_CRUSH = 0x80,          // meant to break frozen targets; its rand(100) < 0 test never passes
+    SPECIAL_IGNORE_VULNERABILITY = 0x100, // status chance ignores the target's resistance (unless it is 0)
+    SPECIAL_UNUSED_200 = 0x200,           // set in weapon data, read by no code (name from LLCOOLT's tree)
+    SPECIAL_IGNITABLE = 0x400,            // fire element when the attacker is burning
+    SPECIAL_ATTACK_FX = 0x800,            // plays the Attack FX badge sounds
+    SPECIAL_FLIP_SHELLED = 0x1000,
+    SPECIAL_FLIP_BOMB_FLIPPABLE = 0x2000,
+    SPECIAL_GROUND_WINGED = 0x4000,
+    SPECIAL_FORCE_RESULT_10000 = 0x8000, // a final hit always adds result bit 0x10000 (BattleCheckDamage)
+    SPECIAL_CONFUSED_ACTION = 0x10000,   // can be picked as a confused unit's action
+    SPECIAL_UNGUARDABLE = 0x20000,
+    SPECIAL_CONTACTS_CLONES = 0x40000, // hits clone parts (kClone) instead of passing through
+} BattleWeaponSpecialFlags;
 
-// BattleWeapon.element: picks the target part's defence and defence attribute (defenses[element]) and the hit
-// type in BattleCalculateDamage; fire, explosion and electric set off explosive counters.
+// BattleWeapon.damagePattern / BattleUnit.damagePattern: the target's reaction to the hit. The names are the
+// ATTACKPATTERN_* constants of the 2024 remake (see docs/NAME_PROVENANCE.md); every value used here matches the
+// weapon that carries it (YoshiNomikomi_Spew 5, gonbaba_fumituke 11, gesso_ikasumi 13, KaitenHammer 14,
+// ChuchurinaNormalAttackLeft 21, ...) and the default damage event's subset_ultra_hammer_acrobat (18) and
+// subsetevt_binta_damage_left/right (21/22).
+typedef enum BattleDamagePattern {
+    ATTACKPATTERN_NULL,
+    ATTACKPATTERN_DAMAGE_SURPRISE,
+    ATTACKPATTERN_DAMAGE_MOTION,
+    ATTACKPATTERN_DAMAGE_MOTION_BLOW,
+    ATTACKPATTERN_SWALLOW_FAILED,
+    ATTACKPATTERN_SWALLOW_SPEW,
+    ATTACKPATTERN_SWALLOW_SHOT,
+    ATTACKPATTERN_SWALLOW_SAMBO_BODY,
+    ATTACKPATTERN_SHELL_ATTACK,
+    ATTACKPATTERN_ROTATE_SHELL_ATTACK,
+    ATTACKPATTERN_PRESS,
+    ATTACKPATTERN_PRESS_GONBABA,
+    ATTACKPATTERN_PRESS_BATTENDER,
+    ATTACKPATTERN_IKASUMI,
+    ATTACKPATTERN_KAITEN_HAMMER,
+    ATTACKPATTERN_KAITEN_HAMMER_INVOLVED,
+    ATTACKPATTERN_ULTRA_HAMMER,
+    ATTACKPATTERN_ULTRA_HAMMER_INVOLVED,
+    ATTACKPATTERN_ULTRA_HAMMER_ACROBAT,
+    ATTACKPATTERN_ULTRA_HAMMER_FINISH,
+    ATTACKPATTERN_CHUCHURINA_ITEMSTEAL,
+    ATTACKPATTERN_CHUCHURINA_BINTA_L,
+    ATTACKPATTERN_CHUCHURINA_BINTA_R,
+    ATTACKPATTERN_CHUCHURINA_BINTA_L_LAST,
+    ATTACKPATTERN_CHUCHURINA_BINTA_R_LAST,
+    ATTACKPATTERN_BLOW,
+    ATTACKPATTERN_BG_FALL_DOWN,
+    ATTACKPATTERN_NO_DAMAGE_FINISH,
+} BattleDamagePattern;
+
+// BattleWeapon.element (weapon tables: Ice Storm and blizzards 2, bombs and dynamite 3, thunder items 4)
 typedef enum BattleWeaponElement {
-    ELEMENT_NORMAL = 0,    // DAMAGE_HIT_NORMAL
-    ELEMENT_FIRE = 1,      // DAMAGE_HIT_FIRE; Ice Power reduces it; SPECIAL_FIERY_IF_BURNED switches to it
-    ELEMENT_ICE = 2,       // DAMAGE_HIT_ICE
-    ELEMENT_EXPLOSION = 3, // DAMAGE_HIT_EXPLOSION
-    ELEMENT_ELECTRIC = 4,  // DAMAGE_HIT_ELECTRIC
+    ELEMENT_NORMAL,
+    ELEMENT_FIRE,
+    ELEMENT_ICE,
+    ELEMENT_EXPLOSION,
+    ELEMENT_ELECTRIC,
 } BattleWeaponElement;
+
+struct BattleUnit;
+struct BattleWeapon;
+struct BattleWorkUnitPart;
+
+typedef u32 (*BattleWeaponDamageFn)(struct BattleUnit* attacker,
+                                    struct BattleWeapon* weapon, struct BattleUnit* target, struct BattleWorkUnitPart* part);
 
 typedef struct BattleWeapon {
     const char* name;                 // 0x0, msg tag
-    u16 icon;                         // 0x4
+    u16 icon;                         // 0x4, IconType shown in the battle menu
     u8 pad_06[0x8 - 0x6];             // 0x6, always 0, never accessed
-    s32 itemId;                       // 0x8
-    const char* description;          // 0xC
-    s8 baseAccuracy;                  // 0x10
-    s8 baseFpCost;                    // 0x11
-    u8 baseSpCost;                    // 0x12
-    u8 superguardsAllowed;            // 0x13
+    s32 itemId;                       // 0x8, item or badge the move belongs to (0 = none)
+    const char* description;          // 0xC, msg tag of the battle menu help text (shown when itemId is 0)
+    u8 baseAccuracy;                  // 0x10, hit chance % (halved when the attacker is dizzy or in fog)
+    u8 baseFpCost;                    // 0x11, FP cost
+    s8 baseSpCost;                    // 0x12, Star Power cost
+    u8 superguardsAllowed;            // 0x13, 0 = cannot be superguarded; 1-4 choose the result (BattleCheckDamage)
     f32 reserved_14;                  // 0x14, 1.0f in every weapon table, never read
-    s8 stylishCommandMultiplier;      // 0x18
-    s8 reserved_19;                   // 0x19, 1 (5 on player moves); copied to StarPowerInfo.reserved_09 (battle_ac.c), never read
-    s8 bingoSlotChance;               // 0x1A
+    s8 stylishCommandMultiplier;      // 0x18, audience bonus factor for action commands / Stylish
+    s8 reserved_19;                   // 0x19, 1 (5 on player moves); copied to StarPowerInfo.weaponParam, never read
+    s8 bingoSlotChance;               // 0x1A, % chance to fill a bingo slot (battle_audience)
     s8 reserved_1B;                   // 0x1B, 1 (50 on player moves), never read
-    WeaponPowerFn hpDamageFn;         // 0x1C, base HP damage (NULL: no damage)
-    u32 hpDamageWork[8];              // 0x20
-    WeaponPowerFn fpDamageFn;         // 0x40, base FP damage (NULL: none)
-    u32 fpDamageWork[8];              // 0x44
-    u32 targetClassFlags;             // 0x64
-    u32 targetPropertyFlags;          // 0x68
+    BattleWeaponDamageFn hpDamageFn;  // 0x1C, computes the HP damage; NULL = no HP damage
+    u32 hpDamageWork[8];              // 0x20, parameters of hpDamageFn
+    BattleWeaponDamageFn fpDamageFn;  // 0x40, computes the FP damage; NULL = no FP damage
+    u32 fpDamageWork[8];              // 0x44, parameters of fpDamageFn
+    u32 targetClassFlags;             // 0x64, TARGET_CLASS_* (who can be targeted)
+    u32 targetPropertyFlags;          // 0x68, TARGET_PROP_* (which parts can be targeted)
     u8 element;                       // 0x6C, BattleWeaponElement
-    u8 damagePattern;                 // 0x6D
-    s8 acLevel;                       // 0x6E
+    u8 damagePattern;                 // 0x6D, BattleDamagePattern, the target's hit reaction
+    s8 acLevel;                       // 0x6E, action command level, read by scripts (btlevtcmd)
     s8 reserved_6F;                   // 0x6F, 2 in every weapon table, never read
-    const char* acHelpMsg;            // 0x70
-    BattleWeaponSpecialFlags special; // 0x74
-    u32 counterResistFlags;           // 0x78
-    u32 targetWeightFlags;            // 0x7C
+    const char* acHelpMsg;            // 0x70, msg tag of the action command help
+    BattleWeaponSpecialFlags special; // 0x74, BattleWeaponSpecialFlags
+    u32 counterResistFlags;           // 0x78, BattleWeaponCounterResist_Flags
+    u32 targetWeightFlags;            // 0x7C, TARGET_WEIGHT_* (how an enemy picks its target)
     u8 sleepChance;                   // 0x80, status chances are % (0-100), times in turns
     s8 sleepTime;                     // 0x81
     u8 stopChance;                    // 0x82
@@ -185,28 +209,28 @@ typedef struct BattleWeapon {
     s8 defChangeStrength;             // 0x9B, >0 up, <0 down
     u8 allergicChance;                // 0x9C
     s8 allergicTime;                  // 0x9D
-    s8 ohkoChance;                    // 0x9E
-    s8 chargeStrength;                // 0x9F
+    s8 ohkoChance;                    // 0x9E, % chance of STATUS_DEAD (instant KO); also its turns
+    s8 chargeStrength;                // 0x9F, Charge given; nonzero always applies it (early demos: >0)
     u8 fastChance;                    // 0xA0
     s8 fastTime;                      // 0xA1
     u8 slowChance;                    // 0xA2
     s8 slowTime;                      // 0xA3
-    u8 frightChance;                  // 0xA4
-    u8 galeForceChance;               // 0xA5
-    s8 paybackTime;                   // 0xA6
-    s8 holdFastTime;                  // 0xA7
+    u8 frightChance;                  // 0xA4, % chance of STATUS_FRIGHT
+    u8 galeForceChance;               // 0xA5, % chance of STATUS_GALE_FORCE
+    s8 paybackTime;                   // 0xA6, Payback turns; nonzero always applies it (early demos: >0)
+    s8 holdFastTime;                  // 0xA7, Hold Fast turns; >0 always applies it
     u8 invisibleChance;               // 0xA8
     s8 invisibleTime;                 // 0xA9
-    s8 hpRegenTime;                   // 0xAA
+    s8 hpRegenTime;                   // 0xAA, >0 always applies HP Regen
     s8 hpRegenStrength;               // 0xAB
-    s8 fpRegenTime;                   // 0xAC
+    s8 fpRegenTime;                   // 0xAC, >0 always applies FP Regen
     s8 fpRegenStrength;               // 0xAD
     u8 pad_AE[0xB0 - 0xAE];           // 0xAE, always 0, never accessed
-    EvtWord* attackEvtScript;         // 0xB0
+    EvtWord* attackEvtScript;         // 0xB0, the move's attack script (-> BattleUnit.attackEventCode)
     u8 stageEffectRates[0xC0 - 0xB4]; // 0xB4, btlevtcmd_WeaponAftereffect: [0..3] A1+A2 / A1 / A2 / none fall weights, [4] B destroy, [5] nozzle turn, [6] nozzle fire, [7] iron frame fall, [8] object fall (%), [9..11] unused
 } BattleWeapon;
 
-#include "driver/npcdrv.h" /* ItemDropData, PointDropData */
+#include "driver/npcdrv.h" /* PointDropData */
 
 extern PointDropData battle_flower_drop_param_default[];
 extern PointDropData battle_flower_drop_param_default2[];
@@ -223,10 +247,18 @@ extern ItemDropData battle_item_atmic_teresa[];
 extern ItemDropData battle_item_badge_borodo[];
 extern ItemDropData battle_item_barriern[];
 extern ItemDropData battle_item_barriern_custom[];
+extern ItemDropData battle_item_barriern_customn_satellite[];
+extern ItemDropData battle_item_barriern_satellite[];
+extern ItemDropData battle_item_barriern_satellite_z[];
 extern ItemDropData battle_item_barriern_z[];
 extern ItemDropData battle_item_basabasa[];
 extern ItemDropData battle_item_basabasa_chururu[];
 extern ItemDropData battle_item_basabasa_green[];
+extern ItemDropData battle_item_batten_leader[];
+extern ItemDropData battle_item_batten_satellite[];
+extern ItemDropData battle_item_biribiri_kinoko[];
+extern ItemDropData battle_item_black_karon[];
+extern ItemDropData battle_item_black_peach[];
 extern ItemDropData battle_item_bllizard[];
 extern ItemDropData battle_item_bomhei[];
 extern ItemDropData battle_item_boomerang_bros[];
@@ -236,12 +268,14 @@ extern ItemDropData battle_item_bubble[];
 extern ItemDropData battle_item_burst_wanwan[];
 extern ItemDropData battle_item_champion[];
 extern ItemDropData battle_item_chorobon[];
+extern ItemDropData battle_item_chorobon_gundan[];
 extern ItemDropData battle_item_churantalar[];
 extern ItemDropData battle_item_cortez[];
 extern ItemDropData battle_item_dark_keeper[];
 extern ItemDropData battle_item_default_param_list[];
 extern ItemDropData battle_item_dokugassun[];
 extern ItemDropData battle_item_faker_mario[];
+extern ItemDropData battle_item_fighter[];
 extern ItemDropData battle_item_fire_bros[];
 extern ItemDropData battle_item_flower_chorobon[];
 extern ItemDropData battle_item_gesso[];
@@ -252,6 +286,7 @@ extern ItemDropData battle_item_green_chorobon[];
 extern ItemDropData battle_item_gundan_zako[];
 extern ItemDropData battle_item_gundan_zako_elite[];
 extern ItemDropData battle_item_gundan_zako_magician[];
+extern ItemDropData battle_item_guruguru_memawashi[];
 extern ItemDropData battle_item_hammer_bros[];
 extern ItemDropData battle_item_hannya[];
 extern ItemDropData battle_item_heavy_bom[];
@@ -259,9 +294,13 @@ extern ItemDropData battle_item_hennya[];
 extern ItemDropData battle_item_hermos[];
 extern ItemDropData battle_item_hinnya[];
 extern ItemDropData battle_item_honenoko[];
+extern ItemDropData battle_item_hyper_bomhei[];
 extern ItemDropData battle_item_hyper_jyugem[];
 extern ItemDropData battle_item_hyper_kuriboo[];
+extern ItemDropData battle_item_hyper_met[];
 extern ItemDropData battle_item_hyper_patakuri[];
+extern ItemDropData battle_item_hyper_patamet[];
+extern ItemDropData battle_item_hyper_patatogemet[];
 extern ItemDropData battle_item_hyper_sinemon[];
 extern ItemDropData battle_item_hyper_sinnosuke[];
 extern ItemDropData battle_item_hyper_togekuri[];
@@ -269,25 +308,40 @@ extern ItemDropData battle_item_hyper_togemet[];
 extern ItemDropData battle_item_ice_pakkun[];
 extern ItemDropData battle_item_iron_sinemon[];
 extern ItemDropData battle_item_iron_sinemon2[];
+extern ItemDropData battle_item_jiwajiwa_kinoko[];
 extern ItemDropData battle_item_jyugem[];
 extern ItemDropData battle_item_kamec[];
+extern ItemDropData battle_item_kamec_bunsin[];
+extern ItemDropData battle_item_kamec_obaba[];
+extern ItemDropData battle_item_kaminari_dokkan[];
+extern ItemDropData battle_item_kaminari_gorogoro[];
 extern ItemDropData battle_item_kanbu1[];
 extern ItemDropData battle_item_karon[];
+extern ItemDropData battle_item_katikati_koura[];
 extern ItemDropData battle_item_killer[];
 extern ItemDropData battle_item_killer_cannon[];
+extern ItemDropData battle_item_kinkyuu_kinoko[];
+extern ItemDropData battle_item_koopa[];
 extern ItemDropData battle_item_kuriboo[];
 extern ItemDropData battle_item_kurikuri[];
 extern ItemDropData battle_item_kurokumorn[];
 extern ItemDropData battle_item_macho_gance[];
+extern ItemDropData battle_item_madowaseno_kona[];
 extern ItemDropData battle_item_magnum_battender[];
+extern ItemDropData battle_item_magnum_battender_mkii[];
 extern ItemDropData battle_item_mahorn[];
 extern ItemDropData battle_item_mahorn_custom[];
+extern ItemDropData battle_item_majolyne1[];
+extern ItemDropData battle_item_marilyn1[];
 extern ItemDropData battle_item_met[];
+extern ItemDropData battle_item_minimini_kun[];
 extern ItemDropData battle_item_moamoa[];
 extern ItemDropData battle_item_monban[];
 extern ItemDropData battle_item_monochrome__pakkun[];
 extern ItemDropData battle_item_monochrome_kurokumorn[];
 extern ItemDropData battle_item_monochrome_sinemon[];
+extern ItemDropData battle_item_naniga_okorukana[];
+extern ItemDropData battle_item_nemure_yoikoyo[];
 extern ItemDropData battle_item_nokonoko[];
 extern ItemDropData battle_item_nokonoko_fighter[];
 extern ItemDropData battle_item_pakkun_flower[];
@@ -300,17 +354,25 @@ extern ItemDropData battle_item_patatogemet[];
 extern ItemDropData battle_item_phantom[];
 extern ItemDropData battle_item_piders[];
 extern ItemDropData battle_item_poison_pakkun[];
+extern ItemDropData battle_item_powan[];
 extern ItemDropData battle_item_purple_teresa[];
 extern ItemDropData battle_item_rampell[];
 extern ItemDropData battle_item_red_honenoko[];
 extern ItemDropData battle_item_sambo[];
 extern ItemDropData battle_item_sambo_mummy[];
+extern ItemDropData battle_item_shadow_queen[];
 extern ItemDropData battle_item_sinemon[];
 extern ItemDropData battle_item_sinnosuke[];
+extern ItemDropData battle_item_stop_watch[];
+extern ItemDropData battle_item_sukkiri_drink[];
 extern ItemDropData battle_item_super_killer[];
 extern ItemDropData battle_item_super_killer_cannon[];
+extern ItemDropData battle_item_super_kinoko[];
 extern ItemDropData battle_item_super_mahorn[];
+extern ItemDropData battle_item_super_mahorn_bunsin[];
+extern ItemDropData battle_item_teki_yokeeru[];
 extern ItemDropData battle_item_teresa[];
+extern ItemDropData battle_item_teresano_fuku[];
 extern ItemDropData battle_item_togedaruma[];
 extern ItemDropData battle_item_togekuri[];
 extern ItemDropData battle_item_togemet[];
@@ -318,6 +380,9 @@ extern ItemDropData battle_item_togenoko[];
 extern ItemDropData battle_item_togenoko_ace[];
 extern ItemDropData battle_item_togezo[];
 extern ItemDropData battle_item_twinkling_pansy[];
+extern ItemDropData battle_item_ufo[];
+extern ItemDropData battle_item_ultra_bomhei[];
+extern ItemDropData battle_item_ultra_kinoko[];
 extern ItemDropData battle_item_ura_noko[];
 extern ItemDropData battle_item_ura_pata[];
 extern ItemDropData battle_item_vivian1[];

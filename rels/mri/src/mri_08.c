@@ -1,11 +1,15 @@
 // mri_08 (巨木の中, The Great Tree): the first Jabbi hive (hachi): Jabbies 1-6 and the Punies' fight against
 // the Jabbies (puni_vs_toge).
+
 #include "battle/battle_unit.h"
+#include "driver/fadedrv.h"
+#include "evt/evt_urouro.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
 #include "mri.h"
 #include "evt/evt_npc.h"
+#include "data_tables.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_fade.h"
 #include "evt/evt_hit.h"
@@ -16,39 +20,50 @@
 #include "evt/evt_offscreen.h"
 #include "evt/evt_paper.h"
 #include "evt/evt_party.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_urouro.h"
 #include "mri_puni.h"
-#include "data_tables.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "driver/npcdrv.h"
 #include "driver/mapdrv.h"
-#include "driver/camdrv.h"
+#include "pmario_sound.h"
 
-extern EvtWord toge_1_init[];
-extern EvtWord toge_1_talk[];
-extern EvtWord toge_2_init[];
-extern EvtWord toge_2_talk[];
-extern EvtWord toge_3_init[];
-extern EvtWord toge_3_talk[];
-extern EvtWord toge_4_init[];
-extern EvtWord toge_4_talk[];
-extern EvtWord toge_5_init[];
-extern EvtWord toge_5_regl[];
-extern EvtWord toge_5_talk[];
-extern EvtWord toge_6_init[];
-extern EvtWord toge_6_talk[];
+static USER_FUNC(toge_enter_func00);
+
+static EvtWord toge_1_init[17];
+static EvtWord toge_1_talk[44];
+static EvtWord toge_2_init[17];
+static EvtWord toge_2_talk[44];
+static EvtWord toge_3_init[17];
+static EvtWord toge_3_talk[44];
+static EvtWord toge_4_init[17];
+static EvtWord toge_4_talk[44];
+static EvtWord toge_5_init[17];
+static EvtWord toge_5_regl[19];
+static EvtWord toge_5_talk[44];
+static EvtWord toge_6_init[17];
+static EvtWord toge_6_talk[44];
 static NpcSetupInfo npcEnt[7];
+static EvtWord patolight_sound_off[15];
 static BeroEntry bero_entry_data[3];
+static EvtWord puni_win_offscreen[104];
+static EvtWord puni_win[219];
+static EvtWord puni_lose[86];
+static EvtWord puni_winlose_check[44];
+static EvtWord toge_enter[106];
+static EvtWord puni_vs_toge_battlewait[36];
+static EvtWord puni_vs_toge_init[86];
+static EvtWord puni_vs_toge[140];
 static KusaAccess ueki_access_data[6];
+EvtWord mri_08_init_evt[190];
 
 /**
  * Init of Jabbi villager 1: once the chapter 2 finale has been played
- * and Mario has left the tree (GSWF_MRI_LEFT_TREE_AFTER_STG2), moves it to (-220, 0, 110).
+ * and Mario has left the tree (GSWF_MRI_LEFT_AFTER_BOSS_BATTLE), moves it to (-220, 0, 110).
  */
-EVT_BEGIN(toge_1_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(toge_1_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), -220, 0, 110)
         END_IF
     END_SWITCH
@@ -56,17 +71,17 @@ EVT_BEGIN(toge_1_init)
 EVT_END()
 
 /**
- * Talk script of Jabbi villager 1: a message in the Jabbi message style (evt_msg_toge) followed by the Jabbi's
+ * Talk script of Jabbi villager 1: a message with no speech-bubble tail followed by the Jabbi's
  * own line, with a second pair after the chapter 8 finale.
  */
-EVT_BEGIN(toge_1_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+static EVT_BEGIN(toge_1_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_028"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_029"), 0, STRING("me"))
         CASE_DEFAULT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_028_1"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_029_1"), 0, STRING("me"))
     END_SWITCH
@@ -75,12 +90,12 @@ EVT_END()
 
 /**
  * Init of Jabbi villager 2: once the chapter 2 finale has been played
- * and Mario has left the tree (GSWF_MRI_LEFT_TREE_AFTER_STG2), moves it to (-75, 0, -100).
+ * and Mario has left the tree (GSWF_MRI_LEFT_AFTER_BOSS_BATTLE), moves it to (-75, 0, -100).
  */
-EVT_BEGIN(toge_2_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(toge_2_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), -75, 0, -100)
         END_IF
     END_SWITCH
@@ -88,17 +103,17 @@ EVT_BEGIN(toge_2_init)
 EVT_END()
 
 /**
- * Talk script of Jabbi villager 2: a message in the Jabbi message style (evt_msg_toge) followed by the Jabbi's
+ * Talk script of Jabbi villager 2: a message with no speech-bubble tail followed by the Jabbi's
  * own line, with a second pair after the chapter 8 finale.
  */
-EVT_BEGIN(toge_2_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+static EVT_BEGIN(toge_2_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_030"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_031"), 0, STRING("me"))
         CASE_DEFAULT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_030_1"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_031_1"), 0, STRING("me"))
     END_SWITCH
@@ -107,12 +122,12 @@ EVT_END()
 
 /**
  * Init of Jabbi villager 3: once the chapter 2 finale has been played
- * and Mario has left the tree (GSWF_MRI_LEFT_TREE_AFTER_STG2), moves it to (70, 0, 80).
+ * and Mario has left the tree (GSWF_MRI_LEFT_AFTER_BOSS_BATTLE), moves it to (70, 0, 80).
  */
-EVT_BEGIN(toge_3_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(toge_3_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), 70, 0, 80)
         END_IF
     END_SWITCH
@@ -120,17 +135,17 @@ EVT_BEGIN(toge_3_init)
 EVT_END()
 
 /**
- * Talk script of Jabbi villager 3: a message in the Jabbi message style (evt_msg_toge) followed by the Jabbi's
+ * Talk script of Jabbi villager 3: a message with no speech-bubble tail followed by the Jabbi's
  * own line, with a second pair after the chapter 8 finale.
  */
-EVT_BEGIN(toge_3_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+static EVT_BEGIN(toge_3_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_032"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_033"), 0, STRING("me"))
         CASE_DEFAULT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_032_1"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_033_1"), 0, STRING("me"))
     END_SWITCH
@@ -139,12 +154,12 @@ EVT_END()
 
 /**
  * Init of Jabbi villager 4: once the chapter 2 finale has been played
- * and Mario has left the tree (GSWF_MRI_LEFT_TREE_AFTER_STG2), moves it to (180, 0, 60).
+ * and Mario has left the tree (GSWF_MRI_LEFT_AFTER_BOSS_BATTLE), moves it to (180, 0, 60).
  */
-EVT_BEGIN(toge_4_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(toge_4_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), 180, 0, 60)
         END_IF
     END_SWITCH
@@ -152,17 +167,17 @@ EVT_BEGIN(toge_4_init)
 EVT_END()
 
 /**
- * Talk script of Jabbi villager 4: a message in the Jabbi message style (evt_msg_toge) followed by the Jabbi's
+ * Talk script of Jabbi villager 4: a message with no speech-bubble tail followed by the Jabbi's
  * own line, with a second pair after the chapter 8 finale.
  */
-EVT_BEGIN(toge_4_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+static EVT_BEGIN(toge_4_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_034"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_035"), 0, STRING("me"))
         CASE_DEFAULT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_034_1"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_035_1"), 0, STRING("me"))
     END_SWITCH
@@ -171,12 +186,12 @@ EVT_END()
 
 /**
  * Init of Jabbi villager 5: once the chapter 2 finale has been played
- * and Mario has left the tree (GSWF_MRI_LEFT_TREE_AFTER_STG2), moves it to (-70, 0, -35).
+ * and Mario has left the tree (GSWF_MRI_LEFT_AFTER_BOSS_BATTLE), moves it to (-70, 0, -35).
  */
-EVT_BEGIN(toge_5_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(toge_5_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), -70, 0, -35)
         END_IF
     END_SWITCH
@@ -185,9 +200,9 @@ EVT_END()
 
 /**
  * Regular script of Jabbi villager 5: has it wander back
- * and forth around its spot (about 100 by 30 units, urouro walk).
+ * and forth around its spot (radius 100, move speed 30, urouro walk).
  */
-EVT_BEGIN(toge_5_regl)
+static EVT_BEGIN(toge_5_regl)
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
     CALL(urouro_main_func, STRING("me"))
@@ -195,17 +210,17 @@ EVT_BEGIN(toge_5_regl)
 EVT_END()
 
 /**
- * Talk script of Jabbi villager 5: a message in the Jabbi message style (evt_msg_toge) followed by the Jabbi's
+ * Talk script of Jabbi villager 5: a message with no speech-bubble tail followed by the Jabbi's
  * own line, with a second pair after the chapter 8 finale.
  */
-EVT_BEGIN(toge_5_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+static EVT_BEGIN(toge_5_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_036"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_037"), 0, STRING("me"))
         CASE_DEFAULT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_036_1"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_037_1"), 0, STRING("me"))
     END_SWITCH
@@ -214,12 +229,12 @@ EVT_END()
 
 /**
  * Init of Jabbi villager 6: once the chapter 2 finale has been played
- * and Mario has left the tree (GSWF_MRI_LEFT_TREE_AFTER_STG2), moves it to (300, 0, -60).
+ * and Mario has left the tree (GSWF_MRI_LEFT_AFTER_BOSS_BATTLE), moves it to (300, 0, -60).
  */
-EVT_BEGIN(toge_6_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(toge_6_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), 300, 0, -60)
         END_IF
     END_SWITCH
@@ -227,17 +242,17 @@ EVT_BEGIN(toge_6_init)
 EVT_END()
 
 /**
- * Talk script of Jabbi villager 6: a message in the Jabbi message style (evt_msg_toge) followed by the Jabbi's
+ * Talk script of Jabbi villager 6: a message with no speech-bubble tail followed by the Jabbi's
  * own line, with a second pair after the chapter 8 finale.
  */
-EVT_BEGIN(toge_6_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+static EVT_BEGIN(toge_6_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_038"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_039"), 0, STRING("me"))
         CASE_DEFAULT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_038_1"), 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_039_1"), 0, STRING("me"))
     END_SWITCH
@@ -247,8 +262,8 @@ EVT_END()
 /** The six Jabbies (トゲ族１ to 6) of the first hive. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "トゲ族１", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "トゲ族１", // name (a Jabbi)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         toge_1_init, // initEvent
         NULL, // regularEvent
@@ -259,8 +274,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲ族２", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "トゲ族２", // name (a Jabbi)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         toge_2_init, // initEvent
         NULL, // regularEvent
@@ -271,8 +286,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲ族３", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "トゲ族３", // name (a Jabbi)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         toge_3_init, // initEvent
         NULL, // regularEvent
@@ -283,8 +298,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲ族４", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "トゲ族４", // name (a Jabbi)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         toge_4_init, // initEvent
         NULL, // regularEvent
@@ -295,8 +310,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲ族５", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "トゲ族５", // name (a Jabbi)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         toge_5_init, // initEvent
         toge_5_regl, // regularEvent
@@ -307,8 +322,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲ族６", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "トゲ族６", // name (a Jabbi)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         toge_6_init, // initEvent
         NULL, // regularEvent
@@ -345,7 +360,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)patolight_sound_off, // exitEvent
+        patolight_sound_off, // exitEvent
         "mri_09", // nextMapName
         "w_bero", // nextBeroName
         1, // enterAnimeType
@@ -361,7 +376,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)patolight_sound_off, // exitEvent
+        patolight_sound_off, // exitEvent
         "mri_06", // nextMapName
         "e_bero02", // nextBeroName
         1, // enterAnimeType
@@ -373,7 +388,7 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Script helper that lines up three Jabbi chains (slots 110 to 112, 113 to 115, 116 to 119) at (450, 0, 0) with
- * togeMakeRetsu, for the Jabbi fortress scene.
+ * togeMakeRetsu (no script calls it).
  */
 static USER_FUNC(toge_enter_func00) {
     Vec pos = {450.0f, 0.0f, 0.0f};
@@ -403,8 +418,8 @@ static EVT_BEGIN(puni_win_offscreen)
     SET_VALUE(GW(1), 0)
     CALL(evt_snd_sfxoff, GW(0))
     CALL(evt_snd_sfxon_3d, STRING("SFX_OFF2_TORIDE_BREAK2"), 400, 0, 0, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hati"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_patolight"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hati"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_patolight"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_hati"), 1, 0)
     CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
     CALL(evt_img_onoff, STRING("capture_img"), 1)
@@ -420,14 +435,14 @@ EVT_END()
 
 /**
  * Victory scene of the first Puni-versus-Jabbi fight.
- * Waits until every Puni has landed, then the camera moves to the Puni crowd,
+ * Waits until no active Puni is above Y=0 (the early demos require Y=0), then the camera moves to the Puni crowd,
  * Punio (the guide) speaks (stg2_mri_e17_01), the crowd charges the hive (evt_mri_puni_win_attack)
- * and smashes the beacon with five rumbles, the Jabbi retreat (evt_mri_puni_win_end),
- * the beacon breaks (puni_win_offscreen), the field music returns,
- * GSWF_MRI08_JABBI_FIGHT_WON is set and Mario gets control back.
+ * and smashes the beacon with five rumbles, the Punies head back (evt_mri_puni_win_end),
+ * the beacon breaks (puni_win_offscreen), the field music is scheduled to return,
+ * GSWF_MRI_08_JABBI_SQUAD_DEFEATED is set and Mario gets control back.
  */
 static EVT_BEGIN(puni_win)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_puni_winddisable_onoff, 1)
@@ -442,21 +457,21 @@ static EVT_BEGIN(puni_win)
     CALL(evt_puni_get_position, 1, LW(0), LW(1), LW(2))
     CALL(evt_cam3d_get_shift, LW(0), LW(1), LW(2), LW(3))
     CALL(evt_cam3d_event_from_road, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7), LW(8), LW(9))
-    CALL(evt_cam3d_evt_set, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9), 500, 11)
+    CALL(evt_cam3d_evt_set, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9), 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    CALL(evt_puni_flag_onoff, 1, 0, 131072)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイドsp"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_puni_flag_onoff, 1, 0, PUNI_FLAG_SCRIPT_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイドsp"), NPC_FLAG_TALK_POSE)
     CALL(evt_puni_get_flag, 1, LW(0))
-    AND(LW(0), 16384)
+    AND(LW(0), PUNI_FLAG_DEAD)
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(evt_puni_flag_onoff, 1, 1, 16384)
+        CALL(evt_puni_flag_onoff, 1, 1, PUNI_FLAG_DEAD)
         CALL(evt_npc_set_anim, STRING("ガイドsp"), STRING("S_1"))
         CALL(evt_npc_get_position, STRING("ガイドsp"), LW(0), LW(1), LW(2))
         CALL(evt_npc_jump_position_nohit, STRING("ガイドsp"), LW(0), LW(1), LW(2), 300, 20)
     END_IF
     CALL(evt_msg_print, 0, STRING("stg2_mri_e17_01"), 0, STRING("ガイドsp"))
-    CALL(evt_puni_flag_onoff, 1, 1, 262144)
-    CALL(evt_cam3d_evt_set, -275, 140, 516, 275, 50, 0, 1000, 11)
+    CALL(evt_puni_flag_onoff, 1, 1, PUNI_FLAG_SCRIPT_CONTROL)
+    CALL(evt_cam3d_evt_set, -275, 140, 516, 275, 50, 0, 1000, EASING_SINE_IN_OUT)
     CALL(evt_party_stop, 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
@@ -480,10 +495,10 @@ static EVT_BEGIN(puni_win)
     CALL_CHILD(puni_win_offscreen)
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
-        CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG2_MRI1"), 3000)
+        CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG2_MRI1"), 3000)
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSWF(GSWF_MRI08_JABBI_FIGHT_WON), 1)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSWF_MRI_08_JABBI_SQUAD_DEFEATED, 1)
     CALL(evt_party_run, 0)
     CALL(evt_puni_winddisable_onoff, 0)
     CALL(evt_mario_key_onoff, 1)
@@ -491,27 +506,26 @@ static EVT_BEGIN(puni_win)
 EVT_END()
 
 /**
- * Defeat scene of the first Puni-versus-Jabbi fight:
- * the camera moves to the guide, a Jabbi message and a line (stg2_mri_e17_02) play,
- * the alarm and Puni sounds are cut, GSWF_MRI08_JABBI_FIGHT_LOST is set
- * and Mario is sent back to mri_06 through e_bero02 with a spotlight fade.
+ * Defeat scene of the Puni battle in mri_08: the camera moves to Puni 1 (the guide), who says stg2_mri_e17_02;
+ * GW(1) is cleared, the sound in GW(0) and the Puni sounds are stopped, GSWF_MRI_08_JABBI_BATTLE_LOST is set and
+ * Mario is sent to mri_06 through e_bero02 with a spotlight fade.
  */
 static EVT_BEGIN(puni_lose)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_puni_get_position, 1, LW(0), LW(1), LW(2))
     CALL(evt_cam3d_get_shift, LW(0), LW(1), LW(2), LW(3))
     CALL(evt_cam3d_event_from_road, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7), LW(8), LW(9))
-    CALL(evt_cam3d_evt_set, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9), 500, 11)
+    CALL(evt_cam3d_evt_set, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9), 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_puni_get_position, 1, LW(0), LW(1), LW(2))
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e17_02"), 0, 0)
     SET_VALUE(GW(1), 0)
     CALL(evt_snd_sfxoff, GW(0))
     CALL(evt_puni_force_se_off)
-    SET_VALUE(GSWF(GSWF_MRI08_JABBI_FIGHT_LOST), 1)
+    SET_VALUE(GSWF_MRI_08_JABBI_BATTLE_LOST, 1)
     CALL(evt_fade_set_mapchange_type, 0, FADE_OUT_SPOT, 500, -1, -1)
     CALL(evt_bero_mapchange, STRING("mri_06"), STRING("e_bero02"))
     RETURN
@@ -533,6 +547,8 @@ static EVT_BEGIN(puni_winlose_check)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
+    // Loss takes priority if both sides report annihilation on the same check.
     IF_INT_EQUAL(LW(10), 1)
         SPAWN_EVENT(puni_lose)
         RETURN
@@ -579,7 +595,7 @@ EVT_END()
 
 /**
  * Waits for Mario to walk to x=175, then lets the Punies attack (evt_puni_attack_on),
- * shows the Jabbi message (stg2_mri_e17_00_02) and starts the win-or-lose check.
+ * shows a message without a speech-bubble tail (stg2_mri_e17_00_02) and starts the win-or-lose check.
  */
 static EVT_BEGIN(puni_vs_toge_battlewait)
     LOOP(0)
@@ -591,7 +607,7 @@ static EVT_BEGIN(puni_vs_toge_battlewait)
     END_LOOP
     CALL(evt_puni_attack_on)
     BEGIN_INLINE_EVENT
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_e17_00_02"), 0, 0)
     END_INLINE_EVENT
     SPAWN_EVENT(puni_winlose_check)
@@ -619,15 +635,15 @@ static EVT_BEGIN(puni_vs_toge_init)
     CALL(evt_puni_all_movestop, 1)
     SET_VALUE(GW(1), 1)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_SIREN1"), 400, 0, 0, GW(0))
-    CALL(evt_map_playanim, STRING("light_02"), 1, 0)
-    CALL(evt_cam3d_evt_set, -275, 140, 516, 275, 50, 0, 1000, 11)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_map_playanim, STRING("light_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_cam3d_evt_set, -275, 140, 516, 275, 50, 0, 1000, EASING_SINE_IN_OUT)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
     WAIT_MS(1000)
     CALL_CHILD(mri_guide_goryu)
     CALL_CHILD(toge_enter)
     CALL(evt_puni_set_mode, 1, PUNI_MODE_JOIN)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG2_PUNITOGE1"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG2_PUNITOGE1"))
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_puni_all_movestop, 0)
     CALL(evt_mario_key_onoff, 1)
     SPAWN_EVENT(puni_vs_toge_battlewait)
@@ -637,7 +653,7 @@ EVT_END()
 /**
  * Start of the first fight with the Jabbi: as puni_vs_toge_init,
  * but Punio speaks to the Puni (stg2_mri_e17_00 and 00_01) while the camera zooms;
- * sets GSWF_MRI08_JABBI_FIGHT_STARTED.
+ * sets GSWF_MRI_08_JABBI_SQUAD_INTRO_SEEN.
  */
 static EVT_BEGIN(puni_vs_toge)
     CALL(evt_puni_wait_systemmode, 2)
@@ -654,26 +670,26 @@ static EVT_BEGIN(puni_vs_toge)
     CALL(evt_puni_all_movestop, 1)
     SET_VALUE(GW(1), 1)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_SIREN1"), 400, 0, 0, GW(0))
-    CALL(evt_map_playanim, STRING("light_02"), 1, 0)
-    CALL(evt_cam3d_evt_set, -275, 140, 516, 275, 50, 0, 1000, 11)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_map_playanim, STRING("light_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_cam3d_evt_set, -275, 140, 516, 275, 50, 0, 1000, EASING_SINE_IN_OUT)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
     WAIT_MS(1000)
     CALL_CHILD(mri_guide_goryu)
     CALL_CHILD(toge_enter)
     WAIT_FRAMES(1)
     CALL(evt_puni_get_position, 1, LW(0), LW(1), LW(2))
-    CALL(evt_puni_flag_onoff, 1, 0, 262144)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイドsp"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_puni_flag_onoff, 1, 0, PUNI_FLAG_SCRIPT_CONTROL)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイドsp"), NPC_FLAG_TALK_POSE)
     CALL(evt_npc_set_ry_lr, STRING("ガイドsp"), 1)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG2_PUNITOGE1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG2_PUNITOGE1"))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e17_00"), 0, STRING("ガイドsp"))
-    CALL(evt_cam3d_evt_set_rel, 0, 60, 345, 0, 40, 0, 1000, 11)
+    CALL(evt_cam3d_evt_set_rel, 0, 60, 345, 0, 40, 0, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e17_00_01"), 0, STRING("ガイドsp"))
-    CALL(evt_puni_flag_onoff, 1, 1, 262144)
+    CALL(evt_puni_flag_onoff, 1, 1, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_mode, 1, PUNI_MODE_JOIN)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSWF(GSWF_MRI08_JABBI_FIGHT_STARTED), 1)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSWF_MRI_08_JABBI_SQUAD_INTRO_SEEN, 1)
     CALL(evt_puni_all_movestop, 0)
     CALL(evt_mario_key_onoff, 1)
     SPAWN_EVENT(puni_vs_toge_battlewait)
@@ -692,14 +708,14 @@ static KusaAccess ueki_access_data[] = {
 
 /**
  * Map init script of mri_08, the first Jabbi fortress: sets up the Puni, NPCs, planters and waterfall;
- * if the Puni-versus-Jabbi fight has not been won yet it starts the fight scene (or its resume scene)
- * and keeps the fortress walls solid, otherwise hides the fortress.
+ * starts the first fight if its introduction is unseen, or a retry if it was seen but the fight is not won.
+ * The undefeated fortress remains solid; after a win its models are hidden.
  */
 EVT_BEGIN(mri_08_init_evt)
     CALL(evt_puni_mem_init)
     CALL(evt_puni_set_yuka, 8, 0, -310, -1000, -1000, 0, 0)
     CALL(evt_puni_set_hamari, 0, 0, 0, 2, -2, -1000, -1000)
-    IF_INT_EQUAL(GSWF(GSWF_MRI08_JABBI_FIGHT_WON), 0)
+    IF_INT_EQUAL(GSWF_MRI_08_JABBI_SQUAD_DEFEATED, 0)
         SET_VALUE(LW(6), 2)
         SET_VALUE(LW(7), 180)
         SET_VALUE(LW(8), 0)
@@ -719,41 +735,41 @@ EVT_BEGIN(mri_08_init_evt)
     SPAWN_EVENT(mri_countdown)
     SET_VALUE(LW(0), PTR(ueki_access_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_23_TIME_BOMB_ACTIVATED, STORY_STG2_23_01_X_NAUT_BATTLE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI9"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_23_TIME_BOMB_ACTIVATED, STG2_23_01_X_NAUT_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI9"))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI7"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI7"))
     END_SWITCH
-    CALL(evt_map_playanim, STRING("mizu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("mizu_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("kawa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("kawa_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("kawa_sibu_01"), 1, 0)
+    CALL(evt_map_playanim, STRING("mizu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kawa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kawa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kawa_sibu_01"), MAP_ANIM_PLAY_LOOP, 0)
     SET_VALUE(LW(0), -107)
     SET_VALUE(LW(1), 0)
     SET_VALUE(LW(2), -150)
     SET_FLOAT_VALUE(LW(3), FLOAT(1.0f))
     SPAWN_EVENT(mri_waterfall_effect)
     SET_VALUE(GW(1), 0)
-    IF_INT_EQUAL(GSWF(GSWF_MRI08_JABBI_FIGHT_STARTED), 0)
+    IF_INT_EQUAL(GSWF_MRI_08_JABBI_SQUAD_INTRO_SEEN, 0)
         SPAWN_EVENT(puni_vs_toge)
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_MRI08_JABBI_FIGHT_WON), 0)
+        IF_INT_EQUAL(GSWF_MRI_08_JABBI_SQUAD_DEFEATED, 0)
             SPAWN_EVENT(puni_vs_toge_init)
         END_IF
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_MRI08_JABBI_FIGHT_WON), 0)
+    IF_INT_EQUAL(GSWF_MRI_08_JABBI_SQUAD_DEFEATED, 0)
         CALL(evt_hitobj_onoff, STRING("A_gra_r"), 1, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_MRI08_JABBI_FIGHT_WON), 1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hati"), MAPOBJ_FLAG_HIDE)
+    IF_INT_EQUAL(GSWF_MRI_08_JABBI_SQUAD_DEFEATED, 1)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hati"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_hati"), 1, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_patolight"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_patolight"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()

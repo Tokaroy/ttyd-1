@@ -1,11 +1,30 @@
 // rsh_04 (列車, Excess Express): passenger car with compartments 3-5: Narikin family, conductor, salaryman and Powan
 // detective NPCs, and a lost-documents event; doors to rsh_03, rsh_05 and rsh_07.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_window.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_sub.h"
+#include "win/win_main.h"
+#include "evt/evt_pouch.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "party.h"
 
 #include "mario/mario.h"
 #include "driver/npcdrv.h"
-#include "driver/itemdrv.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_env.h"
 #include "evt/evt_msg.h"
@@ -13,21 +32,6 @@
 #include "rsh.h"
 #include "mario/mario_pouch.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_snd.h"
-#include "party.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_window.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
 
 static USER_FUNC(mario_flag);
 
@@ -37,24 +41,81 @@ static BeroEntry bero_data_c[3];
 static const char* door_3[7];
 static const char* door_4[7];
 static const char* door_5[7];
-extern EvtWord evt_allow_kamotsu[];
-extern EvtWord evt_mario_chuumoku[];
-extern EvtWord evt_party_chuumoku[];
-extern EvtWord evt_shorui_funshitu[];
+
+#if VERSION >= VERSION_US
+EvtWord evt_rsh_konarikin_irai_party_talk[89];
+#else
+EvtWord evt_rsh_konarikin_irai_party_talk[85];
+#endif
+
+#if VERSION >= VERSION_US
+static EvtWord evt_allow_kamotsu[77];
+#else
+static EvtWord evt_allow_kamotsu[73];
+#endif
+
+static EvtWord evt_mario_chuumoku[10];
+static EvtWord evt_party_chuumoku[11];
+
+#if VERSION >= VERSION_US
+static EvtWord evt_shorui_funshitu[362];
+#else
+static EvtWord evt_shorui_funshitu[352];
+#endif
+
 static s32 item_tbl[2];
-extern EvtWord evt_daijisouna_kami[];
-extern EvtWord evt_syasyou_auto_talk[];
+
+#if VERSION == VERSION_DEMO_JP
+static EvtWord evt_daijisouna_kami[206];
+#else
+static EvtWord evt_daijisouna_kami[208];
+#endif
+
+static EvtWord evt_syasyou_auto_talk[27];
+static EvtWord init_syashou[56];
 static s32 item_tbl2[2];
-extern EvtWord talk_sarary_repeat[];
-extern EvtWord talk_papa_mama[];
-extern EvtWord talk_papa_repeat[];
-extern EvtWord talk_mama_repeat[];
-s32 item_tbl3[2];
-extern EvtWord talk_powan_repeat[];
+
+#if VERSION >= VERSION_US
+static EvtWord talk_syashou[413];
+#elif VERSION == VERSION_DEMO_JP
+static EvtWord talk_syashou[354];
+#else
+static EvtWord talk_syashou[367];
+#endif
+
+static EvtWord talk_sarary_repeat[43];
+static EvtWord init_sarary[55];
+static EvtWord talk_sarary[72];
+static EvtWord talk_papa_mama[167];
+static EvtWord talk_papa_repeat[40];
+static EvtWord init_papa[46];
+static EvtWord talk_papa[49];
+static EvtWord talk_mama_repeat[40];
+static EvtWord init_mama[37];
+static EvtWord talk_mama[57];
+static EvtWord init_konari[46];
+static s32 item_tbl3[2];
+
+#if VERSION >= VERSION_US
+static EvtWord talk_konari[265];
+#elif VERSION == VERSION_DEMO_JP
+static EvtWord talk_konari[217];
+#else
+static EvtWord talk_konari[219];
+#endif
+
+static EvtWord talk_powan_repeat[43];
+static EvtWord init_powan[64];
+static EvtWord talk_powan[204];
 static NpcSetupInfo npc_data[7];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord evt_tana_5[];
-/* shelf access table read by READ_INT4: hit, msg, event, second msg (the demo reads three words with READ_INT3:
-   it has no second message); a NULL hit ends it */
+#else
+EvtWord evt_tana_5[50];
+#endif
+
+/* Shelf access rows: hit, msg, event (READ_INT3 in demos); retail adds a second msg (READ_INT4). A NULL hit ends the table. */
 typedef struct ShelfAccess {
     const char* hit;
     const char* msg;
@@ -68,14 +129,54 @@ typedef struct ShelfAccessTbl3 {
     const char* end[1];
 } ShelfAccessTbl3;
 static ShelfAccessTbl3 access_tbl;
-extern EvtWord evt_narikin_room[];
-extern EvtWord evt_powan_room[];
-extern EvtWord rsh_04_init_evt[];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord evt_access[21];
+static EvtWord evt_access_entry[24];
+#else
+static EvtWord evt_access[32];
+static EvtWord evt_access_entry[25];
+#endif
+
+static EvtWord evt_door_msg[102];
+static EvtWord evt_narikin_room[87];
+static EvtWord evt_powan_room[83];
+
+#if VERSION >= VERSION_US
+static EvtWord rsh_04_init_evt[214];
+#else
+static EvtWord rsh_04_init_evt[201];
+#endif
+
+EvtWord rsh_04_a_init_evt[96];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord rsh_04_b_init_evt[];
+#else
+EvtWord rsh_04_b_init_evt[44];
+#endif
+
 static const char* window_tbl[4];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord rsh_04_c_init_evt[];
+#else
+EvtWord rsh_04_c_init_evt[67];
+#endif
+
 static BeroEntry bero_data_a_return[3];
 static BeroEntry bero_data_b_return[3];
 static BeroEntry bero_data_c_return[3];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord rsh_04_init_evt_nidome[];
+#else
+EvtWord rsh_04_init_evt_nidome[149];
+#endif
+
+EvtWord rsh_04_a_init_evt_nidome[28];
+EvtWord rsh_04_b_init_evt_nidome[28];
+EvtWord rsh_04_c_init_evt_nidome[38];
 
 /** Doors and exits of rsh_04 variant a: w_bero to rsh_05_a; e_bero to rsh_03_a. */
 static BeroEntry bero_data_a[] = {
@@ -101,8 +202,8 @@ static BeroEntry bero_data_a[] = {
         "e_bero", // hitName
         1, // type
         8, // sfxId
-        BERO_DIR_AUTO, // directionId
-        BERO_POS_AUTO, // centerPosition
+        20000, // directionId
+        100000, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
         NULL, // enterEvent
@@ -142,8 +243,8 @@ static BeroEntry bero_data_b[] = {
         "e_bero", // hitName
         1, // type
         8, // sfxId
-        BERO_DIR_AUTO, // directionId
-        BERO_POS_AUTO, // centerPosition
+        20000, // directionId
+        100000, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
         NULL, // enterEvent
@@ -183,8 +284,8 @@ static BeroEntry bero_data_c[] = {
         "e_bero", // hitName
         1, // type
         8, // sfxId
-        BERO_DIR_AUTO, // directionId
-        BERO_POS_AUTO, // centerPosition
+        20000, // directionId
+        100000, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
         NULL, // enterEvent
@@ -243,17 +344,16 @@ static const char* door_5[] = {
 };
 
 /**
- * Partner reaction once Mario has heard both the conductor's and Toron's autograph hints:
- * the active partner comments (one of seven stg6_rsh_107 lines per partner)
- * and the story advances to STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD.
- * Does nothing until both talks have happened (GSWF_RSH04_CONDUCTOR_AUTOGRAPH_TALK and
- * GSWF_RSH01_TORON_AUTOGRAPH_TALK).
+ * Partner remark once Mario has heard both hints (GSWF_RSH_CONDUCTOR_BUB_HINT_HEARD and
+ * GSWF_RSH_ZIP_TOAD_BUB_HINT_HEARD; otherwise nothing): the current partner speaks its stg6_rsh_107_N line and the
+ * story moves to STG6_10_THE_CONDUCTOR_ZIP_TOAD (from US on only when it is not there yet; JP and the early demos
+ * always set it).
  */
 EVT_BEGIN(evt_rsh_konarikin_irai_party_talk)
-    IF_INT_EQUAL(GSWF(GSWF_RSH04_CONDUCTOR_AUTOGRAPH_TALK), 0)
+    IF_INT_EQUAL(GSWF_RSH_CONDUCTOR_BUB_HINT_HEARD, 0)
         RETURN
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_RSH01_TORON_AUTOGRAPH_TALK), 0)
+    IF_INT_EQUAL(GSWF_RSH_ZIP_TOAD_BUB_HINT_HEARD, 0)
         RETURN
     END_IF
     CALL(evt_party_stop, 0)
@@ -277,11 +377,11 @@ EVT_BEGIN(evt_rsh_konarikin_irai_party_talk)
     END_SWITCH
     CALL(evt_party_run, 0)
 #if VERSION >= VERSION_US
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD)
-#endif
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD)
-#if VERSION >= VERSION_US
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_10_THE_CONDUCTOR_ZIP_TOAD)
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_10_THE_CONDUCTOR_ZIP_TOAD)
     END_IF
+#else
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_10_THE_CONDUCTOR_ZIP_TOAD)
 #endif
     RETURN
 EVT_END()
@@ -289,11 +389,11 @@ EVT_END()
 /**
  * Scene where the conductor lets Mario into the baggage car (kamotsu):
  * Mario walks up, raises a hand, the conductor speaks (stg6_rsh_126, 127) and walks away,
- * the story advances to STORY_STG6_16_THE_BAGGAGE_CAR and the baggage car door (bero case) is switched on.
+ * the story advances to STG6_16_THE_BAGGAGE_CAR and the baggage car door (bero case) is switched on.
  */
-EVT_BEGIN(evt_allow_kamotsu)
+static EVT_BEGIN(evt_allow_kamotsu)
 #if VERSION >= VERSION_US
-    CALL(evt_npc_flag_onoff, 1, STRING("車掌"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("車掌"), NPC_FLAG_NO_HIT)
 #endif
     CALL(evt_mario_mov_pos, -360, -100, 500)
     CALL(evt_mario_set_dir_npc, STRING("車掌"))
@@ -307,13 +407,13 @@ EVT_BEGIN(evt_allow_kamotsu)
     WAIT_MS(600)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_127"), 0, STRING("車掌"))
-#if VERSION <= VERSION_JP
-    CALL(evt_npc_flag_onoff, 1, STRING("車掌"), NPC_FLAG_INTANGIBLE)
+#if VERSION < VERSION_US
+    CALL(evt_npc_flag_onoff, 1, STRING("車掌"), NPC_FLAG_NO_HIT)
 #endif
     CALL(evt_npc_move_position, STRING("車掌"), -395, -145, 1000, 0, 1)
-    CALL(evt_npc_flag_onoff, 0, STRING("車掌"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("車掌"), NPC_FLAG_NO_HIT)
     CALL(evt_set_dir_to_target, STRING("車掌"), STRING("mario"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_16_THE_BAGGAGE_CAR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_16_THE_BAGGAGE_CAR)
     SET_VALUE(LW(0), 0)
     CALL_CHILD(bero_case_switch_on)
     RETURN
@@ -323,7 +423,7 @@ EVT_END()
  * Helper loop for the lost documents scene: keeps turning Mario to face Detective Pennington every frame
  * (chuumoku means "pay attention").
  */
-EVT_BEGIN(evt_mario_chuumoku)
+static EVT_BEGIN(evt_mario_chuumoku)
     LOOP(0)
         CALL(evt_mario_set_dir_npc, STRING("ポワン探偵"))
         WAIT_FRAMES(1)
@@ -332,7 +432,7 @@ EVT_BEGIN(evt_mario_chuumoku)
 EVT_END()
 
 /** Helper loop for the lost documents scene: keeps turning the partner to face Detective Pennington every frame. */
-EVT_BEGIN(evt_party_chuumoku)
+static EVT_BEGIN(evt_party_chuumoku)
     LOOP(0)
         CALL(evt_party_set_dir_npc, 0, STRING("ポワン探偵"))
         WAIT_FRAMES(1)
@@ -341,15 +441,16 @@ EVT_BEGIN(evt_party_chuumoku)
 EVT_END()
 
 /**
- * Cutscene of the lost documents (shorui funshitu) in cabin 3 at STORY_STG6_21_DAY_2:
+ * Cutscene of the lost documents (shorui funshitu) in cabin 3 at STG6_21_DAY_2:
  * Pennington questions the salaryman while the camera frames them,
- * the salaryman paces and mumbles (stg6_rsh_169_xx),
- * the screen blurs as the mystery deepens and the story advances to STORY_STG6_22_DOCUMENT.
+ * Pennington paces and reasons aloud (stg6_rsh_169_xx),
+ * the screen blurs as the mystery deepens and the story advances to STG6_22_DOCUMENT.
  */
-EVT_BEGIN(evt_shorui_funshitu)
+// Each timed speech signals GF(0); the main movement waits for it before starting the next speech.
+static EVT_BEGIN(evt_shorui_funshitu)
     // The lost documents scene: Pennington's theme plays and he questions the salaryman.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_POWAN1"))
-    CALL(evt_cam3d_evt_set, 220, 130, 250, 220, 55, -180, 500, 11)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_POWAN1"))
+    CALL(evt_cam3d_evt_set, 220, 130, 250, 220, 55, -180, 500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_party, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
@@ -358,24 +459,26 @@ EVT_BEGIN(evt_shorui_funshitu)
         END_IF
     END_INLINE_EVENT
 #if VERSION >= VERSION_US
-    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_NO_HIT)
 #endif
     CALL(evt_mario_mov_pos, 260, -135, 500)
     CALL(evt_mario_set_dir_npc, STRING("ポワン探偵"))
     CALL(evt_set_dir_to_target, STRING("サラリーマン"), STRING("mario"))
     CALL(evt_set_dir_to_target, STRING("me"), STRING("mario"))
-#if VERSION >= VERSION_US
-    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_INTANGIBLE)
-#endif
-    CALL(evt_npc_status_onoff, 1, STRING("ポワン探偵"), 2)
 #if VERSION <= VERSION_DEMO_JP
+    CALL(evt_npc_status_onoff, 1, STRING("ポワン探偵"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_167"), 0, 0)
 #else
+#if VERSION >= VERSION_US
+    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_NO_HIT)
+#endif
+    CALL(evt_npc_status_onoff, 1, STRING("ポワン探偵"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_167"), 0, STRING("me"))
 #endif
     CALL(evt_set_dir_to_target, STRING("me"), STRING("サラリーマン"))
     WAIT_MS(500)
     CALL(evt_mario_set_dir_npc, STRING("サラリーマン"))
+
     // The salaryman answers while Pennington presses him.
     CALL(evt_msg_print, 0, STRING("stg6_rsh_168"), 0, STRING("サラリーマン"))
     WAIT_MS(500)
@@ -385,14 +488,15 @@ EVT_BEGIN(evt_shorui_funshitu)
     WAIT_MS(500)
     SPAWN_EVENT_GET_ID(PTR(evt_mario_chuumoku), LW(10))
     SPAWN_EVENT_GET_ID(PTR(evt_party_chuumoku), LW(11))
-    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_NO_HIT)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_ANIM)
-        // The salaryman paces and mumbles.
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE)
+
+        // Pennington paces and reasons aloud.
         CALL(evt_msg_print, 0, STRING("stg6_rsh_169_00"), 0, 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
     CALL(evt_npc_move_position, STRING("me"), 220, -125, 0, FLOAT(30.0f), 0)
@@ -408,9 +512,9 @@ EVT_BEGIN(evt_shorui_funshitu)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_169_01"), 0, 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
     CALL(evt_npc_move_position, STRING("me"), 270, -100, 0, FLOAT(30.0f), 0)
@@ -423,9 +527,9 @@ EVT_BEGIN(evt_shorui_funshitu)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_169_02"), 0, 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
     CALL(evt_npc_move_position, STRING("me"), 290, -140, 0, FLOAT(30.0f), 0)
@@ -439,24 +543,24 @@ EVT_BEGIN(evt_shorui_funshitu)
     END_LOOP
     CALL(evt_npc_move_position, STRING("me"), 230, -180, 0, FLOAT(30.0f), 0)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 225, 71, 17, 225, 35, -180, 200, 11)
+    CALL(evt_cam3d_evt_set, 225, 71, 17, 225, 35, -180, 200, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_env_blur_on, 0, 500)
     END_INLINE_EVENT
     CALL(evt_msg_print, 0, STRING("stg6_rsh_169_03"), 0, 0)
-    CALL(evt_cam3d_evt_set, 225, 93, 115, 225, 40, -180, 500, 11)
+    CALL(evt_cam3d_evt_set, 225, 93, 115, 225, 40, -180, 500, EASING_SINE_IN_OUT)
     CALL(evt_set_dir_to_target, STRING("me"), STRING("mario"))
     WAIT_MS(500)
+
     // The screen blurs as the mystery deepens.
     CALL(evt_msg_print, 0, STRING("stg6_rsh_169_04"), 0, 0)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     DELETE_EVENT(LW(10))
     DELETE_EVENT(LW(11))
-    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), -2147483648)
-    CALL(evt_npc_flag_onoff, 0, STRING("サラリーマン"), -2147483648)
-    // The story advances.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_22_DOCUMENT)
+    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_NO_TALK_BALLOON)
+    CALL(evt_npc_flag_onoff, 0, STRING("サラリーマン"), NPC_FLAG_NO_TALK_BALLOON)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_22_DOCUMENT)
     RETURN
 EVT_END()
 
@@ -468,11 +572,12 @@ static s32 item_tbl[] = {
 /**
  * Cutscene when Mario brings the important-looking paper (Vital Paper) to the cabin:
  * the camera frames the NPCs, Mario chooses the paper from the item menu,
- * the salaryman recognises it and says thanks (stg6_rsh_172 to 177),
- * and the story advances to STORY_STG6_24_A_VITAL_CLUE.
+ * the salaryman recognises it and Pennington asks where it was found (stg6_rsh_172 to 177),
+ * and the story advances to STG6_24_A_VITAL_CLUE.
  */
-EVT_BEGIN(evt_daijisouna_kami)
-    CALL(evt_cam3d_evt_set, 220, 107, 165, 220, 45, -180, 500, 11)
+// Cancelling leaves the clue unresolved; accepting displays a temporary paper without consuming the pouch item.
+static EVT_BEGIN(evt_daijisouna_kami)
+    CALL(evt_cam3d_evt_set, 220, 107, 165, 220, 45, -180, 500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_party, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
@@ -484,12 +589,12 @@ EVT_BEGIN(evt_daijisouna_kami)
             CALL(evt_party_set_dir_npc, 0, STRING("ポワン探偵"))
         END_IF
     END_INLINE_EVENT
-    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_NO_HIT)
     CALL(evt_mario_mov_pos, 255, -150, 500)
     CALL(evt_mario_set_dir_npc, STRING("ポワン探偵"))
     CALL(evt_set_dir_to_target, STRING("サラリーマン"), STRING("mario"))
     CALL(evt_set_dir_to_target, STRING("me"), STRING("mario"))
-    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_NO_HIT)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_172"), 0, STRING("me"))
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_win_item_select, PTR(item_tbl), LW(1))
@@ -498,16 +603,16 @@ EVT_BEGIN(evt_daijisouna_kami)
 #endif
     IF_INT_EQUAL(LW(1), -1)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_173_2"), 0, STRING("me"))
-        CALL(evt_cam3d_evt_off, 500, 11)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
         RETURN
     END_IF
     CALL(evt_mario_set_pose, STRING("M_C_3"))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     ADD(LW(0), -20)
     ADD(LW(1), 15)
-    CALL(evt_item_entry, STRING("dummy"), ITEM_VITAL_PAPER, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+    CALL(evt_item_entry, STRING("dummy"), ITEM_VITAL_PAPER, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_173"), 0, STRING("me"))
-    CALL(evt_eff_fukidashi, 1, STRING("a"), STRING("サラリーマン"), 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING("a"), STRING("サラリーマン"), 0, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(1200)
     BEGIN_INLINE_EVENT
         WAIT_MS(500)
@@ -528,42 +633,42 @@ EVT_BEGIN(evt_daijisouna_kami)
     WAIT_MS(2000)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_177_00"), 0, STRING("me"))
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_24_A_VITAL_CLUE)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_24_A_VITAL_CLUE)
     RETURN
 EVT_END()
 
 /**
- * Runs on entering rsh_04_a through the west door at STORY_STG6_17_GHOST_DIARY:
- * the conductor speaks to Mario once (stg6_rsh_129), guarded by GSWF_RSH04_CONDUCTOR_AUTO_TALK_DONE.
+ * Spawned by rsh_04_c_init_evt at STG6_17_GHOST_DIARY when Mario enters through w_bero: once Mario can move, the
+ * conductor speaks to him once (stg6_rsh_129), guarded by GSWF_RSH_CONDUCTOR_DIARY_TALK_DONE.
  */
-EVT_BEGIN(evt_syasyou_auto_talk)
-    IF_INT_EQUAL(GSWF(GSWF_RSH04_CONDUCTOR_AUTO_TALK_DONE), 1)
+static EVT_BEGIN(evt_syasyou_auto_talk)
+    IF_INT_EQUAL(GSWF_RSH_CONDUCTOR_DIARY_TALK_DONE, 1)
         RETURN
     END_IF
     CALL(evt_mario_wait_movable)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_set_dir_npc, STRING("車掌"))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_129"), 0, STRING("車掌"))
-    SET_VALUE(GSWF(GSWF_RSH04_CONDUCTOR_AUTO_TALK_DONE), 1)
+    SET_VALUE(GSWF_RSH_CONDUCTOR_DIARY_TALK_DONE, 1)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
 /**
- * Init event of the conductor (車掌) in rsh_04: at (-395, 0, -145) from STORY_STG6_16_THE_BAGGAGE_CAR to
- * STORY_STG6_17_GHOST_DIARY, off the map during day 3 (STORY_STG6_45 to 48), otherwise at (-400, 0, -100) on the
- * outward trip and off the map on the return trip (GSWF_TRAIN_RETURN_TRIP). When parked below y 0 his jumping
- * flag is turned off.
+ * Init event of the conductor (車掌) in rsh_04: at (-395, 0, -145) from STG6_16_THE_BAGGAGE_CAR to
+ * STG6_17_GHOST_DIARY, off the map from STG6_45_DAY_3_STARTS to STG6_48_SMORG_MIASMA, otherwise at (-400, 0,
+ * -100) unless the train is bound for Rogueport (GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT: off the map). When parked
+ * below y 0, NPC_FLAG_GRAVITY is turned off.
  */
 static EVT_BEGIN(init_syashou)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_16_THE_BAGGAGE_CAR, STORY_STG6_17_GHOST_DIARY)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_16_THE_BAGGAGE_CAR, STG6_17_GHOST_DIARY)
         CALL(evt_npc_set_position, STRING("車掌"), -395, 0, -145)
-        CASE_BETWEEN(STORY_STG6_45_DAY_3_STARTS, STORY_STG6_48_SMORG_MIASMA)
+        CASE_BETWEEN(STG6_45_DAY_3_STARTS, STG6_48_SMORG_MIASMA)
         CALL(evt_npc_set_position, STRING("車掌"), 0, -1000, 0)
         CASE_DEFAULT
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
             CALL(evt_npc_set_position, STRING("車掌"), -400, 0, -100)
         ELSE
             CALL(evt_npc_set_position, STRING("車掌"), 0, -1000, 0)
@@ -571,7 +676,7 @@ static EVT_BEGIN(init_syashou)
     END_SWITCH
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     IF_INT_LESS(LW(1), 0)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_JUMPING)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_GRAVITY)
     END_IF
     RETURN
 EVT_END()
@@ -583,18 +688,19 @@ static s32 item_tbl2[] = {
 
 /**
  * Talk script of the conductor (syashou) in rsh_04.
- * By story stage: his first greeting (sets STORY_STG6_01_THE_CONDUCTOR), ticket and autograph hints,
- * the night talk where Mario can agree to help (STORY_STG6_13_TALK_TO_THE_CONDUCTOR),
- * the Blanket exchange (takes the Blanket, gives a Mushroom, STORY_STG6_19_GIVE_BLANKET), and day 2,
+ * By story stage: his first greeting (sets STG6_01_THE_CONDUCTOR), threat and baggage-car remarks, autograph hints,
+ * the night talk where Mario can agree to help (STG6_13_TALK_TO_THE_CONDUCTOR),
+ * the Blanket exchange (takes the Blanket, gives a Mushroom, STG6_19_GIVE_BLANKET), and day 2,
  * day 3 and return-trip lines.
  */
 static EVT_BEGIN(talk_syashou)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_12_GIVE_AUTOGRAPH, STORY_STG6_18_BLANKET_EXCHANGE)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_12_GIVE_AUTOGRAPH, STG6_18_BLANKET_EXCHANGE)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
     END_SWITCH
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_01_THE_CONDUCTOR)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_01_THE_CONDUCTOR)
+
         // His first greeting.
         CALL(evt_msg_print, 0, STRING("stg6_rsh_06"), 0, 0)
         WAIT_MS(300)
@@ -606,30 +712,31 @@ static EVT_BEGIN(talk_syashou)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_06_01"), 0, 0)
         CALL(evt_npc_set_position, STRING("サラリーマン"), 0, -1000, 0)
         CALL(evt_npc_set_position, STRING("ポワン探偵"), 0, -1000, 0)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_01_THE_CONDUCTOR)
-        CASE_LESS(STORY_STG6_06_PENNINGTONS_ASSISTANT)
-        IF_INT_EQUAL(LSWF(9), 0)
-            // Ticket and autograph hints.
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_01_THE_CONDUCTOR)
+        CASE_LESS(STG6_06_PENNINGTONS_ASSISTANT)
+        IF_INT_EQUAL(LSWF_RSH_04_CONDUCTOR_TALK_TOGGLE, 0)
+            // Remarks about the threat and the baggage-car restriction.
             CALL(evt_msg_print, 0, STRING("stg6_rsh_07"), 0, 0)
-            SET_VALUE(LSWF(9), 1)
+            SET_VALUE(LSWF_RSH_04_CONDUCTOR_TALK_TOGGLE, 1)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg6_rsh_08"), 0, 0)
-            SET_VALUE(LSWF(9), 0)
+            SET_VALUE(LSWF_RSH_04_CONDUCTOR_TALK_TOGGLE, 0)
         END_IF
-        CASE_LESS(STORY_STG6_09_BUBS_REQUEST)
+        CASE_LESS(STG6_09_BUBS_REQUEST)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_84_01"), 0, 0)
-        CASE_LESS(STORY_STG6_12_GIVE_AUTOGRAPH)
+        CASE_LESS(STG6_12_GIVE_AUTOGRAPH)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_105"), 0, 0)
-        SET_VALUE(GSWF(GSWF_RSH04_CONDUCTOR_AUTOGRAPH_TALK), 1)
+        SET_VALUE(GSWF_RSH_CONDUCTOR_BUB_HINT_HEARD, 1)
         CALL_CHILD(evt_rsh_konarikin_irai_party_talk)
-        IF_INT_EQUAL(GSWF(GSWF_RSH04_BUB_NO_AUTOGRAPH_AGAIN), 1)
-            IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD)
-                SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD)
+        IF_INT_EQUAL(GSWF_RSH_BUB_HINT_REPEATED, 1)
+            IF_INT_LESS(GSW_STORY_PROGRESS, STG6_10_THE_CONDUCTOR_ZIP_TOAD)
+                SET_VALUE(GSW_STORY_PROGRESS, STG6_10_THE_CONDUCTOR_ZIP_TOAD)
             END_IF
         END_IF
-        CASE_LESS(STORY_STG6_13_TALK_TO_THE_CONDUCTOR)
-        IF_INT_EQUAL(GSWF(GSWF_RSH04_CONDUCTOR_NIGHT_FIRST_TALK), 0)
-            SET_VALUE(GSWF(GSWF_RSH04_CONDUCTOR_NIGHT_FIRST_TALK), 1)
+        CASE_LESS(STG6_13_TALK_TO_THE_CONDUCTOR)
+        IF_INT_EQUAL(GSWF_RSH_CONDUCTOR_BLANKET_TALK_DONE, 0)
+            SET_VALUE(GSWF_RSH_CONDUCTOR_BLANKET_TALK_DONE, 1)
+
             // The night talk: he asks Mario to help.
             CALL(evt_msg_print, 0, STRING("stg6_rsh_111"), 0, 0)
         ELSE
@@ -638,27 +745,29 @@ static EVT_BEGIN(talk_syashou)
         CALL(evt_msg_select, 0, STRING("stg6_rsh_114_yn"))
         IF_INT_EQUAL(LW(0), 0)
             CALL(evt_msg_print_add, 0, STRING("stg6_rsh_112"))
-            SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_13_TALK_TO_THE_CONDUCTOR)
+            SET_VALUE(GSW_STORY_PROGRESS, STG6_13_TALK_TO_THE_CONDUCTOR)
         ELSE
             CALL(evt_msg_print_add, 0, STRING("stg6_rsh_113"))
         END_IF
-        CASE_LESS(STORY_STG6_15_GHOST_REQUEST)
-        // Hints for the ghost and the baggage car.
+        CASE_LESS(STG6_15_GHOST_REQUEST)
+
+        // A reminder to find the missing blanket.
         CALL(evt_msg_print, 0, STRING("stg6_rsh_115"), 0, 0)
-        CASE_LESS(STORY_STG6_16_THE_BAGGAGE_CAR)
+        CASE_LESS(STG6_16_THE_BAGGAGE_CAR)
         CALL_CHILD(evt_allow_kamotsu)
-        CASE_LESS(STORY_STG6_17_GHOST_DIARY)
+        CASE_LESS(STG6_17_GHOST_DIARY)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_129_01"), 0, 0)
-        CASE_LESS(STORY_STG6_18_BLANKET_EXCHANGE)
+        CASE_LESS(STG6_18_BLANKET_EXCHANGE)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_129"), 0, 0)
-        CASE_LESS(STORY_STG6_19_GIVE_BLANKET)
+        CASE_LESS(STG6_19_GIVE_BLANKET)
+
         // The Blanket exchange: he takes the Blanket and gives a Mushroom.
         CALL(evt_msg_print, 0, STRING("stg6_rsh_142"), 0, 0)
 #if VERSION <= VERSION_DEMO_JP
         CALL(evt_win_item_select, PTR(item_tbl2), LW(1))
+        IF_INT_NOT_EQUAL(LW(1), -1)
 #else
         CALL(evt_win_item_select, 0, PTR(item_tbl2), LW(1), 0)
-#endif
         IF_INT_NOT_EQUAL(LW(1), -1)
 #if VERSION >= VERSION_US
             CALL(evt_mario_adjust_dir)
@@ -670,53 +779,56 @@ static EVT_BEGIN(talk_syashou)
                 ADD(LW(0), 18)
             END_IF
             ADD(LW(1), 18)
-            CALL(evt_item_entry, STRING("mofu"), ITEM_BLANKET, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("mofu"), ITEM_BLANKET, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_mario_set_pose, STRING("M_S_1"))
             CALL(evt_item_delete, STRING("mofu"))
 #endif
+#endif
             CALL(evt_msg_print, 0, STRING("stg6_rsh_143"), 0, 0)
-            CALL(evt_item_entry, STRING("orei"), ITEM_MUSHROOM, 0, 0, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("orei"), ITEM_MUSHROOM, 0, 0, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_item_get_item, STRING("orei"))
             CALL(evt_item_get_item_end_wait, STRING("orei"))
-            // Lines for day 2, day 3 and the return trip.
+
             CALL(evt_msg_print, 0, STRING("stg6_rsh_145"), 0, 0)
-            SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_19_GIVE_BLANKET)
+            SET_VALUE(GSW_STORY_PROGRESS, STG6_19_GIVE_BLANKET)
             CALL(evt_pouch_remove_item, ITEM_BLANKET, LW(0))
         END_IF
-        CASE_LESS(STORY_STG6_20_END_OF_DAY_1)
+        CASE_LESS(STG6_20_END_OF_DAY_1)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_145"), 0, 0)
-        CASE_LESS(STORY_STG6_27_RIVERSIDE_STATION)
-        IF_INT_EQUAL(LSWF(10), 0)
+
+        // Lines for day 2, day 3 and the return trip.
+        CASE_LESS(STG6_27_RIVERSIDE_STATION)
+        IF_INT_EQUAL(LSWF_RSH_04_CONDUCTOR_DAY2_TOGGLE, 0)
             CALL(evt_msg_print, 0, STRING("stg6_rsh_158"), 0, 0)
-            SET_VALUE(LSWF(10), 1)
+            SET_VALUE(LSWF_RSH_04_CONDUCTOR_DAY2_TOGGLE, 1)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg6_rsh_159"), 0, 0)
-            SET_VALUE(LSWF(10), 0)
+            SET_VALUE(LSWF_RSH_04_CONDUCTOR_DAY2_TOGGLE, 0)
         END_IF
-        CASE_LESS(STORY_STG6_43_CONDUCTOR_APPEARS)
+        CASE_LESS(STG6_43_CONDUCTOR_APPEARS)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_213"), 0, 0)
-        CASE_LESS(STORY_STG6_44_END_OF_DAY_2)
+        CASE_LESS(STG6_44_END_OF_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_220"), 0, 0)
-        CASE_LESS(STORY_STG6_57_A_MAIL_FROM_PEACH)
+        CASE_LESS(STG6_57_A_MAIL_FROM_PEACH)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_254"), 0, 0)
         CASE_DEFAULT
         CALL(evt_sub_get_mapname, LW(0))
         IF_STR_EQUAL(LW(0), STRING("rsh_04_a"))
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_POSHLEY), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_POSHLEY, 1)
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_c_09_1"), 0, 0)
                 RETURN
             END_IF
             CALL(evt_msg_print, 0, STRING("stg6_rsh_c_09"), 0, 0)
         ELSE
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_c_13"), 0, 0)
             ELSE
 #if VERSION <= VERSION_DEMO_JP
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_c_14"), 0, 0)
 #else
-                IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+                IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
                     CALL(evt_msg_print, 0, STRING("stg6_rsh_c_14"), 0, 0)
                 ELSE
                     CALL(evt_msg_print, 0, STRING("stg6_rsh_c_09_1"), 0, 0)
@@ -725,9 +837,9 @@ static EVT_BEGIN(talk_syashou)
             END_IF
         END_IF
     END_SWITCH
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_12_GIVE_AUTOGRAPH, STORY_STG6_19_GIVE_BLANKET)
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_12_GIVE_AUTOGRAPH, STG6_19_GIVE_BLANKET)
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
     END_SWITCH
     RETURN
 EVT_END()
@@ -736,14 +848,14 @@ EVT_END()
  * Overheard background line of the salaryman (stg6_rsh_165_01) shown in a repeating balloon
  * while Mario stands in cabin 3 on day 2 without talking to anybody; started by evt_powan_room.
  */
-EVT_BEGIN(talk_sarary_repeat)
-    CALL(evt_npc_flag_onoff, 1, STRING("サラリーマン"), -2147483648)
+static EVT_BEGIN(talk_sarary_repeat)
+    CALL(evt_npc_flag_onoff, 1, STRING("サラリーマン"), NPC_FLAG_NO_TALK_BALLOON)
     CALL(evt_npc_get_position, STRING("サラリーマン"), LW(0), LW(1), LW(2))
     CALL(evt_npc_get_height, STRING("サラリーマン"), LW(3))
     ADD(LW(0), -5)
     ADD(LW(1), LW(3))
     ADD(LW(1), 10)
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_165_01"), 0, STRING("サラリーマン"))
     LOOP(0)
         CALL(evt_msg_repeat)
@@ -752,50 +864,50 @@ EVT_BEGIN(talk_sarary_repeat)
 EVT_END()
 
 /**
- * Init event of the salaryman (サラリーマン) in rsh_04: off the map from STORY_STG6_01 to STORY_STG6_04, at
- * (190, 0, -150) from STORY_STG6_21_DAY_2 to STORY_STG6_26, off the map during day 3 (STORY_STG6_45 to 48) and
- * from STORY_STG6_49_POSHLEY_HEIGHTS on; otherwise he keeps his setup position.
- * When parked below y 0 his jumping
+ * Init event of the salaryman (サラリーマン) in rsh_04: off the map from STG6_01 to STG6_04, at
+ * (190, 0, -150) from STG6_21_DAY_2 to STG6_26, off the map during day 3 (STG6_45 to 48) and
+ * from STG6_49_POSHLEY_HEIGHTS on; otherwise he keeps his setup position.
+ * When parked below y 0 his gravity
  * flag is turned off.
  */
 static EVT_BEGIN(init_sarary)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_01_THE_CONDUCTOR, STORY_STG6_04_GRILLING_HEFF_T)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_01_THE_CONDUCTOR, STG6_04_GRILLING_HEFF_T)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_BETWEEN(STORY_STG6_21_DAY_2, STORY_STG6_26_ZIP_TOAD_CAUGHT)
+        CASE_BETWEEN(STG6_21_DAY_2, STG6_26_ZIP_TOAD_CAUGHT)
         CALL(evt_npc_set_position, STRING("me"), 190, 0, -150)
-        CASE_BETWEEN(STORY_STG6_45_DAY_3_STARTS, STORY_STG6_48_SMORG_MIASMA)
+        CASE_BETWEEN(STG6_45_DAY_3_STARTS, STG6_48_SMORG_MIASMA)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_49_POSHLEY_HEIGHTS)
+        CASE_GREATER_OR_EQUAL(STG6_49_POSHLEY_HEIGHTS)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
     END_SWITCH
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     IF_INT_LESS(LW(1), 0)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_JUMPING)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_GRAVITY)
     END_IF
     RETURN
 EVT_END()
 
-/** Talk script of the salaryman in rsh_04: lines for the story stage (stg6_rsh_18, 79, 125, 166, 215, 229). */
+/** Talk script of the salaryman in rsh_04: lines for the story stage (stg6_rsh_18, 79, 79_01, 125, 147_08, 166, 215, 229). */
 static EVT_BEGIN(talk_sarary)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_05_GALLEY_KETTLE_DISCOVERED)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_05_GALLEY_KETTLE_DISCOVERED)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_18"), 0, 0)
-        CASE_LESS(STORY_STG6_12_GIVE_AUTOGRAPH)
+        CASE_LESS(STG6_12_GIVE_AUTOGRAPH)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_79"), 0, 0)
-        CASE_LESS(STORY_STG6_19_GIVE_BLANKET)
-        IF_INT_EQUAL(GSWF(GSWF_RSH04_PENNINGTON_TALK_297), 0)
+        CASE_LESS(STG6_19_GIVE_BLANKET)
+        IF_INT_EQUAL(GSWF_RSH_PENNINGTON_GHOST_TALK_DONE, 0)
             CALL(evt_msg_print, 0, STRING("stg6_rsh_79_01"), 0, 0)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg6_rsh_125"), 0, 0)
         END_IF
-        CASE_LESS(STORY_STG6_20_END_OF_DAY_1)
+        CASE_LESS(STG6_20_END_OF_DAY_1)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_147_08"), 0, 0)
-        CASE_LESS(STORY_STG6_27_RIVERSIDE_STATION)
+        CASE_LESS(STG6_27_RIVERSIDE_STATION)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_166"), 0, 0)
-        CASE_LESS(STORY_STG6_43_CONDUCTOR_APPEARS)
+        CASE_LESS(STG6_43_CONDUCTOR_APPEARS)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_215"), 0, 0)
-        CASE_LESS(STORY_STG6_44_END_OF_DAY_2)
+        CASE_LESS(STG6_44_END_OF_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_229"), 0, 0)
     END_SWITCH
     RETURN
@@ -804,12 +916,12 @@ EVT_END()
 /**
  * Shared conversation of the Narikin parents and their child when Mario talks to either parent:
  * Mama, Papa and Bub speak (stg6_rsh_86 to 88_01), the partner steps aside,
- * and Bub asks a yes/no question (stg6_rsh_94_yn) that moves the story to STORY_STG6_09_BUBS_REQUEST (accepted)
- * or to STORY_STG6_07_SYLVIA or STORY_STG6_08_BUB.
+ * and Bub asks a yes/no question (stg6_rsh_94_yn) that moves the story to STG6_09_BUBS_REQUEST (accepted)
+ * or to STG6_08_BUB when declined (after writing STG6_07_SYLVIA).
  */
-EVT_BEGIN(talk_papa_mama)
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-    CALL(evt_cam3d_evt_set, -220, 105, 186, -220, 40, -183, 500, 11)
+static EVT_BEGIN(talk_papa_mama)
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+    CALL(evt_cam3d_evt_set, -220, 105, 186, -220, 40, -183, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_86"), 0, STRING("ナリキンママ"))
     WAIT_MS(300)
@@ -821,8 +933,8 @@ EVT_BEGIN(talk_papa_mama)
     WAIT_MS(300)
     CALL(evt_msg_print, 0, STRING("stg6_rsh_88_01"), 0, STRING("コナリキン"))
     WAIT_MS(300)
-    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンパパ"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンママ"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンパパ"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンママ"), NPC_FLAG_NO_HIT)
     CALL(evt_party_stop, 0)
     WAIT_MS(200)
     BEGIN_INLINE_EVENT
@@ -842,32 +954,31 @@ EVT_BEGIN(talk_papa_mama)
     CALL(evt_msg_select, 0, STRING("stg6_rsh_94_yn"))
     IF_INT_EQUAL(LW(0), 0)
         CALL(evt_msg_print_add, 0, STRING("stg6_rsh_92"))
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_09_BUBS_REQUEST)
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_09_BUBS_REQUEST)
     ELSE
         CALL(evt_msg_print_add, 0, STRING("stg6_rsh_93"))
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_07_SYLVIA)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_08_BUB)
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_07_SYLVIA)
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_08_BUB)
     END_IF
-    CALL(evt_npc_flag_onoff, 0, STRING("ナリキンパパ"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 0, STRING("ナリキンママ"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("ナリキンパパ"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 0, STRING("ナリキンママ"), NPC_FLAG_NO_HIT)
     CALL(evt_party_run, 0)
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     RETURN
 EVT_END()
 
 /**
  * Overheard background line of Papa Narikin (stg6_rsh_85_01) shown in a repeating balloon
  * while Mario stands in cabin 5 without talking to anybody; started by evt_narikin_room.
- * Repeats the parents' conversation (talk_papa_mama) when Mario talks to him at the right stage.
  */
-EVT_BEGIN(talk_papa_repeat)
-    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンパパ"), -2147483648)
+static EVT_BEGIN(talk_papa_repeat)
+    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンパパ"), NPC_FLAG_NO_TALK_BALLOON)
     CALL(evt_npc_get_position, STRING("ナリキンパパ"), LW(0), LW(1), LW(2))
     CALL(evt_npc_get_height, STRING("ナリキンパパ"), LW(3))
     ADD(LW(1), LW(3))
     ADD(LW(1), 15)
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_85_01"), 0, STRING("ナリキンパパ"))
     LOOP(0)
         CALL(evt_msg_repeat)
@@ -876,40 +987,40 @@ EVT_BEGIN(talk_papa_repeat)
 EVT_END()
 
 /**
- * Init event of Papa Narikin (ナリキンパパ): parks him off the map from STORY_STG6_27_RIVERSIDE_STATION to
- * STORY_STG6_42_DRAWBRIDGE_DOWN, during day 3 (STORY_STG6_45 to 48) and from STORY_STG6_49_POSHLEY_HEIGHTS on,
- * turning his jumping flag off; otherwise he keeps his setup position.
+ * Init event of Papa Narikin (ナリキンパパ): parks him off the map from STG6_27_RIVERSIDE_STATION to
+ * STG6_42_DRAWBRIDGE_DOWN, during day 3 (STG6_45 to 48) and from STG6_49_POSHLEY_HEIGHTS on,
+ * turning his gravity flag off; otherwise he keeps his setup position.
  */
 static EVT_BEGIN(init_papa)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_BETWEEN(STORY_STG6_45_DAY_3_STARTS, STORY_STG6_48_SMORG_MIASMA)
+        CASE_BETWEEN(STG6_45_DAY_3_STARTS, STG6_48_SMORG_MIASMA)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_49_POSHLEY_HEIGHTS)
+        CASE_GREATER_OR_EQUAL(STG6_49_POSHLEY_HEIGHTS)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
     END_SWITCH
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     IF_INT_LESS(LW(1), 0)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_JUMPING)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_GRAVITY)
     END_IF
     RETURN
 EVT_END()
 
 /** Talk script of Papa Narikin: by story stage; once the family has been introduced he runs talk_papa_mama. */
 static EVT_BEGIN(talk_papa)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_06_PENNINGTONS_ASSISTANT)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_06_PENNINGTONS_ASSISTANT)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_15"), 0, 0)
-        CASE_LESS(STORY_STG6_07_SYLVIA)
+        CASE_LESS(STG6_07_SYLVIA)
         CALL_CHILD(talk_papa_mama)
-        CASE_LESS(STORY_STG6_19_GIVE_BLANKET)
+        CASE_LESS(STG6_19_GIVE_BLANKET)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_85"), 0, 0)
-        CASE_LESS(STORY_STG6_20_END_OF_DAY_1)
+        CASE_LESS(STG6_20_END_OF_DAY_1)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_147_09"), 0, 0)
-        CASE_LESS(STORY_STG6_27_RIVERSIDE_STATION)
+        CASE_LESS(STG6_27_RIVERSIDE_STATION)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_163"), 0, 0)
-        CASE_LESS(STORY_STG6_44_END_OF_DAY_2)
+        CASE_LESS(STG6_44_END_OF_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_226"), 0, 0)
     END_SWITCH
     RETURN
@@ -917,16 +1028,15 @@ EVT_END()
 
 /**
  * Overheard background line of Mama Narikin (stg6_rsh_85_02),
- * shown alongside talk_papa_repeat while Mario stands in cabin 5;
- * repeats the parents' conversation (talk_papa_mama) when Mario talks to her at the right stage.
+ * shown alongside talk_papa_repeat while Mario stands in cabin 5.
  */
-EVT_BEGIN(talk_mama_repeat)
-    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンママ"), -2147483648)
+static EVT_BEGIN(talk_mama_repeat)
+    CALL(evt_npc_flag_onoff, 1, STRING("ナリキンママ"), NPC_FLAG_NO_TALK_BALLOON)
     CALL(evt_npc_get_position, STRING("ナリキンママ"), LW(0), LW(1), LW(2))
     CALL(evt_npc_get_height, STRING("ナリキンママ"), LW(3))
     ADD(LW(1), LW(3))
     ADD(LW(1), 10)
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_85_02"), 0, STRING("ナリキンママ"))
     LOOP(0)
         CALL(evt_msg_repeat)
@@ -935,88 +1045,90 @@ EVT_BEGIN(talk_mama_repeat)
 EVT_END()
 
 /**
- * Init event of Mama Narikin (ナリキンママ): parks her off the map during day 3 (STORY_STG6_45 to 48) and from
- * STORY_STG6_49_POSHLEY_HEIGHTS on, turning her jumping flag off; otherwise she keeps her setup position.
+ * Init event of Mama Narikin (ナリキンママ): parks her off the map during day 3 (STG6_45 to 48) and from
+ * STG6_49_POSHLEY_HEIGHTS on, turning her gravity flag off; otherwise she keeps her setup position.
  */
 static EVT_BEGIN(init_mama)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_45_DAY_3_STARTS, STORY_STG6_48_SMORG_MIASMA)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_45_DAY_3_STARTS, STG6_48_SMORG_MIASMA)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_49_POSHLEY_HEIGHTS)
+        CASE_GREATER_OR_EQUAL(STG6_49_POSHLEY_HEIGHTS)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
     END_SWITCH
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     IF_INT_LESS(LW(1), 0)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_JUMPING)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_GRAVITY)
     END_IF
     RETURN
 EVT_END()
 
 /** Talk script of Mama Narikin: by story stage; once the family has been introduced she runs talk_papa_mama. */
 static EVT_BEGIN(talk_mama)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_06_PENNINGTONS_ASSISTANT)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_06_PENNINGTONS_ASSISTANT)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_16"), 0, 0)
-        CASE_LESS(STORY_STG6_07_SYLVIA)
+        CASE_LESS(STG6_07_SYLVIA)
         CALL_CHILD(talk_papa_mama)
-        CASE_LESS(STORY_STG6_19_GIVE_BLANKET)
+        CASE_LESS(STG6_19_GIVE_BLANKET)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_89"), 0, 0)
-        CASE_LESS(STORY_STG6_20_END_OF_DAY_1)
+        CASE_LESS(STG6_20_END_OF_DAY_1)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_147_10"), 0, 0)
-        CASE_LESS(STORY_STG6_27_RIVERSIDE_STATION)
+        CASE_LESS(STG6_27_RIVERSIDE_STATION)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_164"), 0, 0)
-        CASE_LESS(STORY_STG6_43_CONDUCTOR_APPEARS)
+        CASE_LESS(STG6_43_CONDUCTOR_APPEARS)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_214"), 0, 0)
-        CASE_LESS(STORY_STG6_44_END_OF_DAY_2)
+        CASE_LESS(STG6_44_END_OF_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_227"), 0, 0)
     END_SWITCH
     RETURN
 EVT_END()
 
 /**
- * Init event of the Narikin child (コナリキン): parks it off the map from STORY_STG6_27_RIVERSIDE_STATION to
- * STORY_STG6_42_DRAWBRIDGE_DOWN, during day 3 (STORY_STG6_45 to 48) and from STORY_STG6_49_POSHLEY_HEIGHTS on,
- * turning its jumping flag off; otherwise it keeps its setup position.
+ * Init event of the Narikin child (コナリキン): parks it off the map from STG6_27_RIVERSIDE_STATION to
+ * STG6_42_DRAWBRIDGE_DOWN, during day 3 (STG6_45 to 48) and from STG6_49_POSHLEY_HEIGHTS on,
+ * turning its gravity flag off; otherwise it keeps its setup position.
  */
 static EVT_BEGIN(init_konari)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_BETWEEN(STORY_STG6_45_DAY_3_STARTS, STORY_STG6_48_SMORG_MIASMA)
+        CASE_BETWEEN(STG6_45_DAY_3_STARTS, STG6_48_SMORG_MIASMA)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_49_POSHLEY_HEIGHTS)
+        CASE_GREATER_OR_EQUAL(STG6_49_POSHLEY_HEIGHTS)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
     END_SWITCH
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     IF_INT_LESS(LW(1), 0)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_JUMPING)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_GRAVITY)
     END_IF
     RETURN
 EVT_END()
 
 /** Items the player may hand over for the autograph: the Autograph only, ended by -1. */
-s32 item_tbl3[] = {
+static s32 item_tbl3[] = {
     ITEM_AUTOGRAPH, -1,
 };
 
 /**
- * Talk script of the Narikin child.
- * At STORY_STG6_08_BUB it asks Mario for an autograph (yes/no, STORY_STG6_09_BUBS_REQUEST);
- * with the Autograph in the item menu Mario can hand it over for a Shine Sprite (STORY_STG6_12_GIVE_AUTOGRAPH,
- * GSWF_RSH04_SHINE_SPRITE_AUTOGRAPH); otherwise lines by story stage.
+ * Talk script of the Narikin child. From STG6_07_SYLVIA until STG6_09_BUBS_REQUEST he asks Mario about his birthday
+ * wish (setting STG6_08_BUB) with a yes/no; yes sets STG6_09_BUBS_REQUEST. Before STG6_12_GIVE_AUTOGRAPH, when Mario
+ * has the Autograph and picks it in the item window, he gives a Shine Sprite (STG6_12_GIVE_AUTOGRAPH, GSWF_SHINE_35);
+ * otherwise lines by story stage (none from STG6_44_END_OF_DAY_2 on).
  */
 static EVT_BEGIN(talk_konari)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_06_PENNINGTONS_ASSISTANT)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_06_PENNINGTONS_ASSISTANT)
+
         // Early on, Little Narikin's lines follow the story.
         CALL(evt_msg_print, 0, STRING("stg6_rsh_17"), 0, 0)
-        CASE_LESS(STORY_STG6_07_SYLVIA)
+        CASE_LESS(STG6_07_SYLVIA)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_90"), 0, 0)
-        CASE_LESS(STORY_STG6_09_BUBS_REQUEST)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_08_BUB)
-            SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_08_BUB)
-            // He asks Mario for an autograph.
+        CASE_LESS(STG6_09_BUBS_REQUEST)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG6_08_BUB)
+            SET_VALUE(GSW_STORY_PROGRESS, STG6_08_BUB)
+
+            // He asks Mario to work out what he wants for his birthday.
             CALL(evt_msg_print, 0, STRING("stg6_rsh_91"), 0, 0)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg6_rsh_94"), 0, 0)
@@ -1024,24 +1136,25 @@ static EVT_BEGIN(talk_konari)
         CALL(evt_msg_select, 0, STRING("stg6_rsh_94_yn"))
         IF_INT_EQUAL(LW(0), 0)
             CALL(evt_msg_print_add, 0, STRING("stg6_rsh_92"))
-            SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_09_BUBS_REQUEST)
+            SET_VALUE(GSW_STORY_PROGRESS, STG6_09_BUBS_REQUEST)
         ELSE
             CALL(evt_msg_print_add, 0, STRING("stg6_rsh_93"))
         END_IF
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-        CASE_LESS(STORY_STG6_12_GIVE_AUTOGRAPH)
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+        CASE_LESS(STG6_12_GIVE_AUTOGRAPH)
+
         // With the Autograph, Mario can hand it over.
         CALL(evt_pouch_check_item, ITEM_AUTOGRAPH, LW(0))
         IF_INT_LESS_OR_EQUAL(LW(0), 0)
-            IF_INT_EQUAL(GSWF(GSWF_RSH04_BUB_NO_AUTOGRAPH_FIRST), 0)
+            IF_INT_EQUAL(GSWF_RSH_BUB_HINT_GIVEN, 0)
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_95"), 0, 0)
-                SET_VALUE(GSWF(GSWF_RSH04_BUB_NO_AUTOGRAPH_FIRST), 1)
+                SET_VALUE(GSWF_RSH_BUB_HINT_GIVEN, 1)
             ELSE
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_95_01"), 0, 0)
-                SET_VALUE(GSWF(GSWF_RSH04_BUB_NO_AUTOGRAPH_AGAIN), 1)
-                IF_INT_EQUAL(GSWF(GSWF_RSH04_CONDUCTOR_AUTOGRAPH_TALK), 1)
-                    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD)
-                        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_10_THE_CONDUCTOR_ZIP_TOAD)
+                SET_VALUE(GSWF_RSH_BUB_HINT_REPEATED, 1)
+                IF_INT_EQUAL(GSWF_RSH_CONDUCTOR_BUB_HINT_HEARD, 1)
+                    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_10_THE_CONDUCTOR_ZIP_TOAD)
+                        SET_VALUE(GSW_STORY_PROGRESS, STG6_10_THE_CONDUCTOR_ZIP_TOAD)
                     END_IF
                 END_IF
             END_IF
@@ -1055,7 +1168,7 @@ static EVT_BEGIN(talk_konari)
             IF_INT_EQUAL(LW(1), -1)
                 CALL(evt_msg_print, 0, STRING("stg6_rsh_101"), 0, 0)
             ELSE
-                IF_INT_NOT_EQUAL(LW(1), 77)
+                IF_INT_NOT_EQUAL(LW(1), ITEM_AUTOGRAPH)
                     CALL(evt_msg_print, 0, STRING("stg6_rsh_100"), 0, 0)
                 ELSE
 #if VERSION >= VERSION_US
@@ -1068,32 +1181,34 @@ static EVT_BEGIN(talk_konari)
                         ADD(LW(0), 18)
                     END_IF
                     ADD(LW(1), 18)
-                    CALL(evt_item_entry, STRING("sign"), ITEM_AUTOGRAPH, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+                    CALL(evt_item_entry, STRING("sign"), ITEM_AUTOGRAPH, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
                     CALL(evt_mario_set_pose, STRING("M_C_3"))
                     WAIT_MS(1000)
                     CALL(evt_mario_set_pose, STRING("M_S_1"))
                     CALL(evt_item_delete, STRING("sign"))
 #endif
                     CALL(evt_msg_print, 0, STRING("stg6_rsh_97"), 0, 0)
+
                     // He pays Mario with a Shine Sprite.
-                    CALL(evt_item_entry, STRING("orei"), ITEM_SHINE_SPRITE, 0, 0, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+                    CALL(evt_item_entry, STRING("orei"), ITEM_SHINE_SPRITE, 0, 0, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
                     CALL(evt_item_get_item, STRING("orei"))
                     CALL(evt_item_get_item_end_wait, STRING("orei"))
                     CALL(evt_msg_print, 0, STRING("stg6_rsh_99"), 0, 0)
                     CALL(evt_pouch_remove_item, ITEM_AUTOGRAPH, LW(0))
-                    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_12_GIVE_AUTOGRAPH)
-                    SET_VALUE(GSWF(GSWF_RSH04_SHINE_SPRITE_AUTOGRAPH), 1)
+                    SET_VALUE(GSW_STORY_PROGRESS, STG6_12_GIVE_AUTOGRAPH)
+                    SET_VALUE(GSWF_SHINE_35, 1)
                 END_IF
             END_IF
         END_IF
-        CASE_LESS(STORY_STG6_19_GIVE_BLANKET)
+        CASE_LESS(STG6_19_GIVE_BLANKET)
+
         // Later lines follow the story stage.
         CALL(evt_msg_print, 0, STRING("stg6_rsh_102"), 0, 0)
-        CASE_LESS(STORY_STG6_20_END_OF_DAY_1)
+        CASE_LESS(STG6_20_END_OF_DAY_1)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_147_11"), 0, 0)
-        CASE_LESS(STORY_STG6_27_RIVERSIDE_STATION)
+        CASE_LESS(STG6_27_RIVERSIDE_STATION)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_165"), 0, 0)
-        CASE_LESS(STORY_STG6_44_END_OF_DAY_2)
+        CASE_LESS(STG6_44_END_OF_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_228"), 0, 0)
     END_SWITCH
     RETURN
@@ -1103,14 +1218,14 @@ EVT_END()
  * Overheard background line of Detective Pennington (stg6_rsh_165_02) shown in a repeating balloon beside the
  * salaryman's while Mario stands in cabin 3; started by evt_powan_room.
  */
-EVT_BEGIN(talk_powan_repeat)
-    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), -2147483648)
+static EVT_BEGIN(talk_powan_repeat)
+    CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_NO_TALK_BALLOON)
     CALL(evt_npc_get_position, STRING("ポワン探偵"), LW(0), LW(1), LW(2))
     CALL(evt_npc_get_height, STRING("ポワン探偵"), LW(3))
     ADD(LW(0), 15)
     ADD(LW(1), LW(3))
     SUBTRACT(LW(1), 4)
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg6_rsh_165_02"), 0, STRING("ポワン探偵"))
     LOOP(0)
         CALL(evt_msg_repeat)
@@ -1119,41 +1234,41 @@ EVT_BEGIN(talk_powan_repeat)
 EVT_END()
 
 /**
- * Init event of Pennington (ポワン探偵) in rsh_04: off the map from STORY_STG6_01 to STORY_STG6_04, at
- * (230, 0, -180) from STORY_STG6_21_DAY_2 to STORY_STG6_26, off the map from STORY_STG6_27 to STORY_STG6_42,
- * during day 3 (STORY_STG6_45 to 48) and from STORY_STG6_49_POSHLEY_HEIGHTS on; otherwise he keeps his setup
- * position. When parked below y 0 his jumping flag is turned off.
+ * Init event of Pennington (ポワン探偵) in rsh_04: off the map from STG6_01 to STG6_04, at
+ * (230, 0, -180) from STG6_21_DAY_2 to STG6_26, off the map from STG6_27 to STG6_42,
+ * during day 3 (STG6_45 to 48) and from STG6_49_POSHLEY_HEIGHTS on; otherwise he keeps his setup
+ * position. When parked below y 0 his gravity flag is turned off.
  */
 static EVT_BEGIN(init_powan)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_01_THE_CONDUCTOR, STORY_STG6_04_GRILLING_HEFF_T)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_01_THE_CONDUCTOR, STG6_04_GRILLING_HEFF_T)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_BETWEEN(STORY_STG6_21_DAY_2, STORY_STG6_26_ZIP_TOAD_CAUGHT)
+        CASE_BETWEEN(STG6_21_DAY_2, STG6_26_ZIP_TOAD_CAUGHT)
         CALL(evt_npc_set_position, STRING("me"), 230, 0, -180)
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_BETWEEN(STORY_STG6_45_DAY_3_STARTS, STORY_STG6_48_SMORG_MIASMA)
+        CASE_BETWEEN(STG6_45_DAY_3_STARTS, STG6_48_SMORG_MIASMA)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_49_POSHLEY_HEIGHTS)
+        CASE_GREATER_OR_EQUAL(STG6_49_POSHLEY_HEIGHTS)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
     END_SWITCH
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     IF_INT_LESS(LW(1), 0)
-        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_JUMPING)
+        CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_GRAVITY)
     END_IF
     RETURN
 EVT_END()
 
 /**
  * Talk script of Pennington in rsh_04: his case lines by story stage;
- * at STORY_STG6_05_GALLEY_KETTLE_DISCOVERED he takes Mario on as his assistant (stg6_rsh_65 to 68,
- * STORY_STG6_06_PENNINGTONS_ASSISTANT).
+ * at STG6_05_GALLEY_KETTLE_DISCOVERED he takes Mario on as his assistant (stg6_rsh_65 to 68,
+ * STG6_06_PENNINGTONS_ASSISTANT).
  */
 static EVT_BEGIN(talk_powan)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_05_GALLEY_KETTLE_DISCOVERED)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_05_GALLEY_KETTLE_DISCOVERED)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_14"), 0, 0)
-        CASE_LESS(STORY_STG6_06_PENNINGTONS_ASSISTANT)
+        CASE_LESS(STG6_06_PENNINGTONS_ASSISTANT)
         BEGIN_INLINE_EVENT
             CALL(evt_party_set_dir_npc, 0, STRING("ポワン探偵"))
         END_INLINE_EVENT
@@ -1164,7 +1279,7 @@ static EVT_BEGIN(talk_powan)
         WAIT_MS(800)
         CALL(evt_mario_set_pose, STRING("M_S_1"))
         CALL(evt_msg_print, 0, STRING("stg6_rsh_66"), 0, 0)
-        CALL(evt_cam3d_evt_set, 265, 93, 137, 265, 36, -183, 500, 11)
+        CALL(evt_cam3d_evt_set, 265, 93, 137, 265, 36, -183, 500, EASING_SINE_IN_OUT)
         WAIT_MS(500)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_67"), 0, 0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1176,31 +1291,31 @@ static EVT_BEGIN(talk_powan)
         WAIT_MS(800)
         CALL(evt_mario_set_pose, STRING("M_S_1"))
         CALL(evt_msg_print, 0, STRING("stg6_rsh_68"), 0, 0)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_06_PENNINGTONS_ASSISTANT)
-        CALL(evt_cam3d_evt_off, 500, 11)
-        CASE_LESS(STORY_STG6_09_BUBS_REQUEST)
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_06_PENNINGTONS_ASSISTANT)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+        CASE_LESS(STG6_09_BUBS_REQUEST)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_69"), 0, 0)
-        CASE_LESS(STORY_STG6_12_GIVE_AUTOGRAPH)
+        CASE_LESS(STG6_12_GIVE_AUTOGRAPH)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_103"), 0, 0)
-        SET_VALUE(GSWF(GSWF_RSH04_PENNINGTON_AUTOGRAPH_TALK), 1)
-        CASE_LESS(STORY_STG6_13_TALK_TO_THE_CONDUCTOR)
+        SET_VALUE(GSWF_RSH_PENNINGTON_BUB_TALK_UNUSED, 1)
+        CASE_LESS(STG6_13_TALK_TO_THE_CONDUCTOR)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_104"), 0, 0)
-        CASE_LESS(STORY_STG6_15_GHOST_REQUEST)
+        CASE_LESS(STG6_15_GHOST_REQUEST)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_116"), 0, 0)
-        CASE_LESS(STORY_STG6_19_GIVE_BLANKET)
+        CASE_LESS(STG6_19_GIVE_BLANKET)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_124"), 0, 0)
-        SET_VALUE(GSWF(GSWF_RSH04_PENNINGTON_TALK_297), 1)
-        CASE_LESS(STORY_STG6_20_END_OF_DAY_1)
+        SET_VALUE(GSWF_RSH_PENNINGTON_GHOST_TALK_DONE, 1)
+        CASE_LESS(STG6_20_END_OF_DAY_1)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_147"), 0, 0)
-        CASE_LESS(STORY_STG6_22_DOCUMENT)
+        CASE_LESS(STG6_22_DOCUMENT)
         CALL_CHILD(evt_shorui_funshitu)
-        CASE_LESS(STORY_STG6_23_VITAL_PAPER)
+        CASE_LESS(STG6_23_VITAL_PAPER)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_170"), 0, 0)
-        CASE_LESS(STORY_STG6_24_A_VITAL_CLUE)
+        CASE_LESS(STG6_24_A_VITAL_CLUE)
         CALL_CHILD(evt_daijisouna_kami)
-        CASE_LESS(STORY_STG6_26_ZIP_TOAD_CAUGHT)
+        CASE_LESS(STG6_26_ZIP_TOAD_CAUGHT)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_177_01"), 0, 0)
-        CASE_LESS(STORY_STG6_44_END_OF_DAY_2)
+        CASE_LESS(STG6_44_END_OF_DAY_2)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_225"), 0, 0)
     END_SWITCH
     RETURN
@@ -1209,8 +1324,8 @@ EVT_END()
 /** NPCs of the car: the conductor, the salaryman, Goldbob and his wife, Little Narikin and Pennington. */
 static NpcSetupInfo npc_data[] = {
     {
-        "車掌", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "車掌", // name (the conductor of the Excess Express)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_syashou, // initEvent
         NULL, // regularEvent
@@ -1221,8 +1336,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "サラリーマン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "サラリーマン", // name (the Ratooey businessman)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_sarary, // initEvent
         NULL, // regularEvent
@@ -1233,8 +1348,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ナリキンパパ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "ナリキンパパ", // name (Goldbob)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_papa, // initEvent
         NULL, // regularEvent
@@ -1245,8 +1360,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ナリキンママ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "ナリキンママ", // name (Sylvia)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_mama, // initEvent
         NULL, // regularEvent
@@ -1257,8 +1372,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "コナリキン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "コナリキン", // name (Bub)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_konari, // initEvent
         NULL, // regularEvent
@@ -1269,8 +1384,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ポワン探偵", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "ポワン探偵", // name (Pennington)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_powan, // initEvent
         NULL, // regularEvent
@@ -1284,28 +1399,30 @@ static NpcSetupInfo npc_data[] = {
 };
 
 /**
- * Trigger on the shelf tana_5: the first time it gives the hidden Star Piece (GSWF_RSH04_STAR_PIECE_SHELF);
- * afterwards it shows the shelf's description message (LW(1),
- * or LW(3) from the Rogueport arrival on in the releases).
+ * Shelf trigger: the first time it gives the hidden Star Piece (GSWF_STARPIECE_85); afterwards it prints the
+ * shelf message in LW(1) (in JP and later, LW(3) from STG6_56_ROGUEPORT_STATION on).
  */
 EVT_BEGIN(evt_tana_5)
-    IF_INT_EQUAL(GSWF(GSWF_RSH04_STAR_PIECE_SHELF), 1)
 #if VERSION <= VERSION_DEMO_JP
+    IF_INT_EQUAL(GSWF_STARPIECE_85, 1)
         CALL(evt_msg_print, 0, LW(1), 0, 0)
+        RETURN
+    END_IF
 #else
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_56_ROGUEPORT_STATION)
+    IF_INT_EQUAL(GSWF_STARPIECE_85, 1)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG6_56_ROGUEPORT_STATION)
             CALL(evt_msg_print, 0, LW(1), 0, 0)
         ELSE
             CALL(evt_msg_print, 0, LW(3), 0, 0)
         END_IF
-#endif
         RETURN
     END_IF
+#endif
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_item_entry, STRING("_item00"), ITEM_STAR_PIECE, -260, 0, -240, ITEM_ENTRY_FIXED, -1, 0)
-    CALL(evt_item_flag_on, STRING("_item00"), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_entry, STRING("_item00"), ITEM_STAR_PIECE, -260, 0, -240, ITEM_TYPE_STILL, -1, 0)
+    CALL(evt_item_flag_on, STRING("_item00"), ITEM_FLAG_NO_TOUCH_GET)
     CALL(evt_item_get_item, STRING("_item00"))
-    SET_VALUE(GSWF(GSWF_RSH04_STAR_PIECE_SHELF), 1)
+    SET_VALUE(GSWF_STARPIECE_85, 1)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
@@ -1326,18 +1443,18 @@ static ShelfAccessTbl3 access_tbl = {
     {NULL},
 };
 
-/** Trigger script for the shelves: prints the message in LW(1). */
+/** Trigger script for the shelves: runs LW(2) when present; otherwise prints LW(1), or retail LW(3) from STG6_56_ROGUEPORT_STATION onward. */
 static EVT_BEGIN(evt_access)
     CALL(evt_mario_key_onoff, 0)
     IF_INT_EQUAL(LW(2), 0)
-#if VERSION <= VERSION_DEMO_JP
-        CALL(evt_msg_print, 0, LW(1), 0, 0)
-#else
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_56_ROGUEPORT_STATION)
+#if VERSION >= VERSION_JP
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG6_56_ROGUEPORT_STATION)
             CALL(evt_msg_print, 0, LW(1), 0, 0)
         ELSE
             CALL(evt_msg_print, 0, LW(3), 0, 0)
         END_IF
+#else
+        CALL(evt_msg_print, 0, LW(1), 0, 0)
 #endif
     ELSE
         CALL_CHILD(LW(2))
@@ -1358,7 +1475,7 @@ static EVT_BEGIN(evt_access_entry)
         IF_INT_EQUAL(LW(0), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(0), 0, PTR(evt_access), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(0), 0, PTR(evt_access), 0)
     END_LOOP
     RETURN
 EVT_END()
@@ -1368,7 +1485,7 @@ static EVT_BEGIN(evt_door_msg)
     CALL(evt_mario_key_onoff, 0)
     BEGIN_INLINE_EVENT
         LOOP(3)
-            CALL(evt_sub_intpl_msec_init, 11, 0, -50, 200)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -50, 200)
             LABEL(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -1377,7 +1494,7 @@ static EVT_BEGIN(evt_door_msg)
             IF_INT_EQUAL(LW(1), 1)
                 GOTO(0)
             END_IF
-            CALL(evt_sub_intpl_msec_init, 11, -50, 0, 200)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -50, 0, 200)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -1388,37 +1505,36 @@ static EVT_BEGIN(evt_door_msg)
             END_IF
         END_LOOP
     END_INLINE_EVENT
-    IF_INT_EQUAL(GSWF(GSWF_RSH04_WEST_DOOR_MSG_SEEN), 0)
-        CALL(evt_cam3d_evt_set, 150, 135, 261, -200, 67, -13, 800, 11)
+    IF_INT_EQUAL(GSWF_RSH_04_STUCK_DOOR_SEEN, 0)
+        CALL(evt_cam3d_evt_set, 150, 135, 261, -200, 67, -13, 800, EASING_SINE_IN_OUT)
         WAIT_MS(800)
     END_IF
     CALL(evt_msg_print, 0, STRING("stg6_rsh_236_02"), 0, 0)
-    IF_INT_EQUAL(GSWF(GSWF_RSH04_WEST_DOOR_MSG_SEEN), 0)
-        CALL(evt_cam3d_evt_off, 500, 11)
-        SET_VALUE(GSWF(GSWF_RSH04_WEST_DOOR_MSG_SEEN), 1)
+    IF_INT_EQUAL(GSWF_RSH_04_STUCK_DOOR_SEEN, 0)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+        SET_VALUE(GSWF_RSH_04_STUCK_DOOR_SEEN, 1)
     END_IF
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
 /**
- * Watcher loop for cabin 5 (the Narikin cabin):
- * while Mario is inside (GSWF_RSH04_INSIDE_CABIN5) and not in a conversation,
- * starts the repeating background lines of Papa
- * and Mama (stages STORY_STG6_06_PENNINGTONS_ASSISTANT to STORY_STG6_18_BLANKET_EXCHANGE),
- * and stops and closes them when he talks or leaves.
+ * Watcher loop for room 5: while Mario is inside (GSWF_RSH_04_IN_ROOM_5) and mario_flag gives 0 (no talk, no ghost
+ * diary), it runs the repeating lines talk_papa_repeat and talk_mama_repeat (from STG6_06_PENNINGTONS_ASSISTANT to
+ * STG6_18_BLANKET_EXCHANGE; event ids in GW(14), GW(15)); when a talk starts or he leaves it deletes them and
+ * closes stg6_rsh_85_01 and 85_02.
  */
-EVT_BEGIN(evt_narikin_room)
+static EVT_BEGIN(evt_narikin_room)
     SET_TYPE(0)
     SET_VALUE(LF(0), 0)
     LOOP(0)
-        IF_INT_EQUAL(GSWF(GSWF_RSH04_INSIDE_CABIN5), 1)
+        IF_INT_EQUAL(GSWF_RSH_04_IN_ROOM_5, 1)
             IF_INT_EQUAL(LF(0), 0)
                 CALL(mario_flag, LW(0))
                 IF_INT_EQUAL(LW(0), 0)
                     SET_VALUE(LF(0), 1)
-                    SWITCH(GSW(GSW_STORY_PROGRESS))
-                        CASE_BETWEEN(STORY_STG6_06_PENNINGTONS_ASSISTANT, STORY_STG6_18_BLANKET_EXCHANGE)
+                    SWITCH(GSW_STORY_PROGRESS)
+                        CASE_BETWEEN(STG6_06_PENNINGTONS_ASSISTANT, STG6_18_BLANKET_EXCHANGE)
                         SPAWN_EVENT_GET_ID(PTR(talk_papa_repeat), GW(14))
                         SPAWN_EVENT_GET_ID(PTR(talk_mama_repeat), GW(15))
                     END_SWITCH
@@ -1436,8 +1552,8 @@ EVT_BEGIN(evt_narikin_room)
         ELSE
             IF_INT_EQUAL(LF(0), 1)
                 SET_VALUE(LF(0), 0)
-                SWITCH(GSW(GSW_STORY_PROGRESS))
-                    CASE_BETWEEN(STORY_STG6_06_PENNINGTONS_ASSISTANT, STORY_STG6_18_BLANKET_EXCHANGE)
+                SWITCH(GSW_STORY_PROGRESS)
+                    CASE_BETWEEN(STG6_06_PENNINGTONS_ASSISTANT, STG6_18_BLANKET_EXCHANGE)
                     DELETE_EVENT(GW(14))
                     DELETE_EVENT(GW(15))
                     CALL(evt_msg_close, STRING("stg6_rsh_85_01"))
@@ -1451,21 +1567,20 @@ EVT_BEGIN(evt_narikin_room)
 EVT_END()
 
 /**
- * Watcher loop for cabin 3 (Pennington and the salaryman):
- * while Mario is inside (GSWF_RSH04_INSIDE_CABIN3) and not in a conversation on day 2,
- * starts the repeating background lines of the salaryman and Pennington,
- * and stops and closes them when he talks or leaves.
+ * Watcher loop for cabin 3: at STG6_21_DAY_2, while Mario is inside (GSWF_RSH_04_IN_ROOM_3) and mario_flag
+ * reports no talk or Ghost Diary window, runs the repeating lines talk_sarary_repeat and talk_powan_repeat
+ * (GW(14), GW(15)); it stops them and closes their messages when a talk starts or Mario leaves.
  */
-EVT_BEGIN(evt_powan_room)
+static EVT_BEGIN(evt_powan_room)
     SET_VALUE(LF(0), 0)
     LOOP(0)
-        IF_INT_EQUAL(GSWF(GSWF_RSH04_INSIDE_CABIN3), 1)
+        IF_INT_EQUAL(GSWF_RSH_04_IN_ROOM_3, 1)
             IF_INT_EQUAL(LF(0), 0)
                 CALL(mario_flag, LW(0))
                 IF_INT_EQUAL(LW(0), 0)
                     SET_VALUE(LF(0), 1)
-                    SWITCH(GSW(GSW_STORY_PROGRESS))
-                        CASE_EQUAL(STORY_STG6_21_DAY_2)
+                    SWITCH(GSW_STORY_PROGRESS)
+                        CASE_EQUAL(STG6_21_DAY_2)
                         SPAWN_EVENT_GET_ID(PTR(talk_sarary_repeat), GW(14))
                         SPAWN_EVENT_GET_ID(PTR(talk_powan_repeat), GW(15))
                     END_SWITCH
@@ -1483,8 +1598,8 @@ EVT_BEGIN(evt_powan_room)
         ELSE
             IF_INT_EQUAL(LF(0), 1)
                 SET_VALUE(LF(0), 0)
-                SWITCH(GSW(GSW_STORY_PROGRESS))
-                    CASE_EQUAL(STORY_STG6_21_DAY_2)
+                SWITCH(GSW_STORY_PROGRESS)
+                    CASE_EQUAL(STG6_21_DAY_2)
                     DELETE_EVENT(GW(14))
                     DELETE_EVENT(GW(15))
                     CALL(evt_msg_close, STRING("stg6_rsh_165_01"))
@@ -1502,16 +1617,16 @@ EVT_END()
  * scenery, the three cabin doors, the NPCs, the baggage car door (open only while the story needs it),
  * the shelf signs, the cabin watchers (evt_narikin_room, evt_powan_room), and the music for the story stage.
  */
-EVT_BEGIN(rsh_04_init_evt)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_48_01_ARRIVING_AT_POSHLEY)
+static EVT_BEGIN(rsh_04_init_evt)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
+        CASE_GREATER_OR_EQUAL(STG6_49_00_TRAIN_ARRIVAL)
         CASE_DEFAULT
-        CALL(evt_map_playanim, STRING("yure"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_sora"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_yama"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_iwayama"), 1, 0)
-        CALL(evt_map_playanim, STRING("hai_saboten"), 1, 0)
+        CALL(evt_map_playanim, STRING("yure"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_sora"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_yama"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_iwayama"), MAP_ANIM_PLAY_LOOP, 0)
+        CALL(evt_map_playanim, STRING("hai_saboten"), MAP_ANIM_PLAY_LOOP, 0)
     END_SWITCH
     CALL_CHILD(evt_rsh_door_init)
     SET_VALUE(LW(0), PTR(&door_3))
@@ -1521,63 +1636,63 @@ EVT_BEGIN(rsh_04_init_evt)
     SET_VALUE(LW(0), PTR(&door_5))
     CALL_CHILD(evt_rsh_door_entry)
     CALL(evt_npc_setup, PTR(npc_data))
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_16_THE_BAGGAGE_CAR)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_16_THE_BAGGAGE_CAR)
         SET_VALUE(LW(0), 0)
         CALL_CHILD(bero_case_switch_off)
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_18_BLANKET_EXCHANGE)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_18_BLANKET_EXCHANGE)
         SET_VALUE(LW(0), 0)
         CALL_CHILD(bero_case_switch_off)
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_45_DAY_3_STARTS)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_45_DAY_3_STARTS)
         SET_VALUE(LW(0), 0)
         CALL_CHILD(bero_case_switch_on)
-#if VERSION >= VERSION_US
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_49_POSHLEY_HEIGHTS)
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_55_PEACH_GRODUS_AND_X_NAUT)
+#if VERSION >= VERSION_US
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_49_POSHLEY_HEIGHTS)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG6_55_PEACH_GRODUS_X_NAUT)
             SET_VALUE(LW(0), 0)
             CALL_CHILD(bero_case_switch_off)
         END_IF
-#endif
     END_IF
+#endif
     CALL_CHILD(evt_access_entry)
     SPAWN_EVENT(evt_narikin_room)
     SPAWN_EVENT(evt_powan_room)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG6_02_A_CASE_OF_LOST_STEW, STORY_STG6_04_GRILLING_HEFF_T)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_POWAN1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_22_DOCUMENT, STORY_STG6_26_ZIP_TOAD_CAUGHT)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_POWAN1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_27_RIVERSIDE_STATION, STORY_STG6_42_DRAWBRIDGE_DOWN)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_HOM1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-        CASE_BETWEEN(STORY_STG6_44_END_OF_DAY_2, STORY_STG6_45_DAY_3_STARTS)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_46_ENGINEER, STORY_STG6_47_ESCAPING_THE_SMORGS)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
-        CASE_BETWEEN(STORY_STG6_49_POSHLEY_HEIGHTS, STORY_STG6_55_04_BOWSER_RAWK_HAWK)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG6_02_A_CASE_OF_LOST_STEW, STG6_04_GRILLING_HEFF_T)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_POWAN1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_22_DOCUMENT, STG6_26_ZIP_TOAD_CAUGHT)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_POWAN1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_27_RIVERSIDE_STATION, STG6_42_DRAWBRIDGE_DOWN)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_HOM1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
+        CASE_BETWEEN(STG6_44_END_OF_DAY_2, STG6_45_DAY_3_STARTS)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_46_ENGINEER, STG6_47_ESCAPING_THE_SMORGS)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
+        CASE_BETWEEN(STG6_49_POSHLEY_HEIGHTS, STG6_55_04_BOWSER_RAWK_HAWK)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         CASE_DEFAULT
         CALL(evt_sub_get_mapname, LW(0))
         IF_STR_EQUAL(LW(0), STRING("rsh_04_a"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH1"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH1"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1"))
         END_IF
         IF_STR_EQUAL(LW(0), STRING("rsh_04_b"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH3"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH3"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1"))
         END_IF
         IF_STR_EQUAL(LW(0), STRING("rsh_04_c"))
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH2"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH2"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1"))
         END_IF
     END_SWITCH
     RETURN
@@ -1585,7 +1700,7 @@ EVT_END()
 
 /**
  * Init script of rsh_04_a (first visit): doors, shared init, the Smorg window effect,
- * the conductor's automatic talk at STORY_STG6_17_GHOST_DIARY and the locked west door message on day 3.
+ * and the locked west door message on day 3.
  */
 EVT_BEGIN(rsh_04_a_init_evt)
     SET_VALUE(LW(0), PTR(bero_data_a))
@@ -1593,13 +1708,13 @@ EVT_BEGIN(rsh_04_a_init_evt)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(rsh_04_init_evt)
     CALL_CHILD(evt_rsh_moamoa_on_window)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_45_DAY_3_STARTS)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG6_45_DAY_3_STARTS)
         SET_VALUE(LW(0), 0)
         CALL_CHILD(bero_case_switch_off)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("w_bero"), 0, PTR(evt_door_msg), 0)
-        CALL(evt_npc_entry, STRING("moa1"), STRING("c_n_moa_a"))
-        CALL(evt_npc_entry, STRING("moa2"), STRING("c_n_moa_a"))
-        CALL(evt_npc_entry, STRING("moa3"), STRING("c_n_moa_a"))
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("w_bero"), 0, PTR(evt_door_msg), 0)
+        CALL(evt_npc_entry, STRING("moa1"), STRING("c_n_moa_a")) // a Smorg blob by the locked west door on day 3
+        CALL(evt_npc_entry, STRING("moa2"), STRING("c_n_moa_a")) // a Smorg blob by the locked west door on day 3
+        CALL(evt_npc_entry, STRING("moa3"), STRING("c_n_moa_a")) // a Smorg blob by the locked west door on day 3
         CALL(evt_npc_set_position, STRING("moa1"), -440, 10, -100)
         CALL(evt_npc_set_position, STRING("moa2"), -441, 30, -125)
         CALL(evt_npc_set_position, STRING("moa3"), -442, 40, -75)
@@ -1618,12 +1733,12 @@ EVT_END()
 
 /** Init script of rsh_04_b (first visit): doors (a scripted entry skips the normal door run), shared init. */
 EVT_BEGIN(rsh_04_b_init_evt)
-    IF_INT_EQUAL(GSWF(GSWF_RSH_SCRIPTED_ENTRY_PENDING), 0)
+    IF_INT_EQUAL(GSWF_RSH_EVENT_ENTRY_PENDING, 0)
         SET_VALUE(LW(0), PTR(bero_data_b))
         CALL(evt_bero_get_info)
         CALL_CHILD(evt_bero_info_run)
     ELSE
-        SET_VALUE(GSWF(GSWF_RSH_SCRIPTED_ENTRY_PENDING), 0)
+        SET_VALUE(GSWF_RSH_EVENT_ENTRY_PENDING, 0)
         SET_VALUE(LW(0), PTR(bero_data_b))
         CALL(evt_bero_get_info)
         CALL_CHILD(bero_case_entry)
@@ -1631,7 +1746,7 @@ EVT_BEGIN(rsh_04_b_init_evt)
         CALL(evt_party_set_pos, 0, 200, 0, -20)
 #if VERSION >= VERSION_JP
         DEBUG_PUT_MSG(STRING("パーティドア移動フラグクリア"))
-        CALL(evt_party_trigflg_onoff, 0, PARTY_TRIG_FLAG_FOLLOW_CLOSE | PARTY_TRIG_FLAG_SMALL_HOSEI | PARTY_TRIG_FLAG_HOME_DIR_SET | PARTY_TRIG_FLAG_DOOR_MOVE, 0)
+        CALL(evt_party_trigflg_onoff, 0, PARTY_TRIG_FOLLOW_CLOSE | PARTY_TRIG_HALF_PUSH | PARTY_TRIG_BEHIND_DIR_SET | PARTY_TRIG_DOOR_MOVE, 0)
 #endif
     END_IF
     CALL_CHILD(rsh_04_init_evt)
@@ -1651,12 +1766,12 @@ static const char* window_tbl[] = {
  * shared init and window scenery.
  */
 EVT_BEGIN(rsh_04_c_init_evt)
-    IF_INT_EQUAL(GSWF(GSWF_RSH_SCRIPTED_ENTRY_PENDING), 0)
+    IF_INT_EQUAL(GSWF_RSH_EVENT_ENTRY_PENDING, 0)
         SET_VALUE(LW(0), PTR(bero_data_c))
         CALL(evt_bero_get_info)
         CALL_CHILD(evt_bero_info_run)
     ELSE
-        SET_VALUE(GSWF(GSWF_RSH_SCRIPTED_ENTRY_PENDING), 0)
+        SET_VALUE(GSWF_RSH_EVENT_ENTRY_PENDING, 0)
         SET_VALUE(LW(0), PTR(bero_data_c))
         CALL(evt_bero_get_info)
         CALL_CHILD(bero_case_entry)
@@ -1664,14 +1779,14 @@ EVT_BEGIN(rsh_04_c_init_evt)
         CALL(evt_party_set_pos, 0, -230, 0, -30)
 #if VERSION >= VERSION_JP
         DEBUG_PUT_MSG(STRING("パーティドア移動フラグクリア"))
-        CALL(evt_party_trigflg_onoff, 0, PARTY_TRIG_FLAG_FOLLOW_CLOSE | PARTY_TRIG_FLAG_SMALL_HOSEI | PARTY_TRIG_FLAG_HOME_DIR_SET | PARTY_TRIG_FLAG_DOOR_MOVE, 0)
+        CALL(evt_party_trigflg_onoff, 0, PARTY_TRIG_FOLLOW_CLOSE | PARTY_TRIG_HALF_PUSH | PARTY_TRIG_BEHIND_DIR_SET | PARTY_TRIG_DOOR_MOVE, 0)
 #endif
     END_IF
     CALL_CHILD(rsh_04_init_evt)
-    CALL(evt_map_playanim, STRING("ranpu"), 1, 0)
+    CALL(evt_map_playanim, STRING("ranpu"), MAP_ANIM_PLAY_LOOP, 0)
     SET_VALUE(LW(0), PTR(&window_tbl))
     CALL_CHILD(evt_rsh_window)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_17_GHOST_DIARY)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG6_17_GHOST_DIARY)
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("w_bero"))
             SPAWN_EVENT(evt_syasyou_auto_talk)
@@ -1809,20 +1924,20 @@ static BeroEntry bero_data_c_return[] = {
  * shelf signs and the music for the station the train has reached.
  */
 EVT_BEGIN(rsh_04_init_evt_nidome)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
-                CALL(evt_map_playanim, STRING("yure"), 1, 0)
-                IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
-                    CALL(evt_map_playanim, STRING("hai_sora"), 1, 0)
-                    CALL(evt_map_playanim, STRING("hai_yama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("hai_iwayama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("hai_saboten"), 1, 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
+                CALL(evt_map_playanim, STRING("yure"), MAP_ANIM_PLAY_LOOP, 0)
+                IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
+                    CALL(evt_map_playanim, STRING("hai_sora"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("hai_yama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("hai_iwayama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("hai_saboten"), MAP_ANIM_PLAY_LOOP, 0)
                 ELSE
-                    CALL(evt_map_playanim, STRING("rt_hai_sora"), 1, 0)
-                    CALL(evt_map_playanim, STRING("rt_hai_yama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("rt_hai_iwayama"), 1, 0)
-                    CALL(evt_map_playanim, STRING("rt_hai_saboten"), 1, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_sora"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_yama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_iwayama"), MAP_ANIM_PLAY_LOOP, 0)
+                    CALL(evt_map_playanim, STRING("rt_hai_saboten"), MAP_ANIM_PLAY_LOOP, 0)
                 END_IF
             END_IF
         END_IF
@@ -1836,30 +1951,32 @@ EVT_BEGIN(rsh_04_init_evt_nidome)
     CALL_CHILD(evt_rsh_door_entry)
     CALL_CHILD(evt_access_entry)
     CALL(evt_npc_setup, PTR(npc_data))
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_POSHLEY), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_POSHLEY, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_ROGUEPORT), 1)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
+        IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_ROGUEPORT, 1)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
 #if VERSION <= VERSION_DEMO_JP
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR5"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR5"))
 #else
-            CALL(evt_snd_envoff, PSND_FADE_OUT)
+            CALL(evt_snd_envoff, PSND_FADEOUT)
 #endif
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         ELSE
             CALL(evt_sub_get_mapname, LW(0))
             IF_STR_EQUAL(LW(0), STRING("rsh_04_a"))
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH1"))
-                CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH1"))
+                CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1"))
             END_IF
+
+            // Revisit variant B retains the current moving-train audio.
             IF_STR_EQUAL(LW(0), STRING("rsh_04_b"))
             END_IF
             IF_STR_EQUAL(LW(0), STRING("rsh_04_c"))
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH2"))
-                CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH2"))
+                CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1"))
             END_IF
         END_IF
     END_IF
@@ -1868,11 +1985,12 @@ EVT_BEGIN(rsh_04_init_evt_nidome)
 EVT_END()
 
 /**
- * Init script of rsh_04_a on the second visit: outbound or return-trip doors, shared second-visit init,
- * marks variant A active.
+ * Init script of rsh_04_a on a later visit: runs the arrival (bero_data_a, or bero_data_a_return once
+ * GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT is set), the shared rsh_04_init_evt_nidome, and marks map A as the last one
+ * (GSWF_RSH_REVISIT_MAP_A on, B and C off).
  */
 EVT_BEGIN(rsh_04_a_init_evt_nidome)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         SET_VALUE(LW(0), PTR(bero_data_a))
     ELSE
         SET_VALUE(LW(0), PTR(bero_data_a_return))
@@ -1880,18 +1998,15 @@ EVT_BEGIN(rsh_04_a_init_evt_nidome)
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(rsh_04_init_evt_nidome)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_A), 1)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_B), 0)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_C), 0)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_A, 1)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_B, 0)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_C, 0)
     RETURN
 EVT_END()
 
-/**
- * Init script of rsh_04_b on the second visit: outbound or return-trip doors, shared second-visit init,
- * marks variant B active.
- */
+/** rsh_04_a_init_evt_nidome for rsh_04_b (bero_data_b / bero_data_b_return, GSWF_RSH_REVISIT_MAP_B). */
 EVT_BEGIN(rsh_04_b_init_evt_nidome)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         SET_VALUE(LW(0), PTR(bero_data_b))
     ELSE
         SET_VALUE(LW(0), PTR(bero_data_b_return))
@@ -1899,18 +2014,18 @@ EVT_BEGIN(rsh_04_b_init_evt_nidome)
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(rsh_04_init_evt_nidome)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_A), 0)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_B), 1)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_C), 0)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_A, 0)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_B, 1)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_C, 0)
     RETURN
 EVT_END()
 
 /**
- * Init script of rsh_04_c on the second visit: outbound or return-trip doors, shared second-visit init,
- * lamp animation and window scenery, marks variant C active.
+ * rsh_04_a_init_evt_nidome for rsh_04_c (bero_data_c / bero_data_c_return, GSWF_RSH_REVISIT_MAP_C); also loops the
+ * ranpu lamp animation and starts the window scenery (evt_rsh_window with window_tbl).
  */
 EVT_BEGIN(rsh_04_c_init_evt_nidome)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         SET_VALUE(LW(0), PTR(bero_data_c))
     ELSE
         SET_VALUE(LW(0), PTR(bero_data_c_return))
@@ -1918,25 +2033,23 @@ EVT_BEGIN(rsh_04_c_init_evt_nidome)
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(rsh_04_init_evt_nidome)
-    CALL(evt_map_playanim, STRING("ranpu"), 1, 0)
+    CALL(evt_map_playanim, STRING("ranpu"), MAP_ANIM_PLAY_LOOP, 0)
     SET_VALUE(LW(0), PTR(&window_tbl))
     CALL_CHILD(evt_rsh_window)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_A), 0)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_B), 0)
-    SET_VALUE(GSWF(GSWF_RSH_REVISIT_VARIANT_C), 1)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_A, 0)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_B, 0)
+    SET_VALUE(GSWF_RSH_REVISIT_MAP_C, 1)
     RETURN
 EVT_END()
 
-BOOL winGhostDiaryChk(void);
-
 /**
- * Script helper: args[0] receives 1 while Mario is busy with a conversation (field mode 2)
- * or has the Ragged Diary window open, otherwise 0. The cabin watchers use it to stop the overheard lines.
+ * Script helper: returns 1 in args[0] while the field battle is in FBAT_MODE_TALK or the ghost diary window is open,
+ * else 0.
  */
 static USER_FUNC(mario_flag) {
     EvtWord* args = event->args;
     MarioWork* mario = marioGetPtr();
-    if (fbatGetPointer()->mode == 2 || winGhostDiaryChk()) {
+    if (fbatGetPointer()->mode == FBAT_MODE_TALK || winGhostDiaryChk()) {
         evtSetValue(event, args[0], 1);
     } else {
         evtSetValue(event, args[0], 0);

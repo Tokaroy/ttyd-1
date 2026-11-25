@@ -1,4 +1,6 @@
 // Script commands for the Pianta Parlor (yuugijou): minigame windows, Piantas and records.
+
+#include "version.h"
 #include "icon_ids.h"
 #include "evt/evt_yuugijou.h"
 #include "evt/evt_cmd.h"
@@ -9,16 +11,11 @@
 #include <dolphin/mtx.h>
 #include <string.h>
 #include "pmario_sound.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "sfx_name_word.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_msg.h"
 
-// Retail only: the per-minigame window script lookup, defined at the end of the file.
-#if VERSION >= VERSION_JP
-USER_FUNC(yuuminigame_get_window_evt);
-#endif
 static USER_FUNC(yuuminigame_end);
 static USER_FUNC(yuuminigame_window_end);
 
@@ -27,18 +24,19 @@ PiantaParlorWork yuugijouwork;
 
 //.sbss
 PiantaParlorWork* yuwp;
+
 #if VERSION >= VERSION_JP
-EvtWord* yuu_window_evt; // the demo has no per-game window script
+EvtWord* yuu_window_evt;
 #endif
 
 /**
- * Quits the current Pianta Parlor minigame: sets GW(0) = 2 and GSWF_YUU_MINIGAME_QUIT,
+ * Quits the current Pianta Parlor minigame: sets GW(0) = 2 and GSWF_GOR_RETURNING_FROM_MINIGAME,
  * parks the partner positions, then sends Mario back through pipe A_dokan_02 of gor_03.
- * Retail versions also turn the keys back on.
+ * JP and later also call evt_mario_set_enable_key before the map change.
  */
-EVT_BEGIN(minigame_end)
+static EVT_BEGIN(minigame_end)
     SET_VALUE(GW(0), 2)
-    SET_VALUE(GSWF(GSWF_YUU_MINIGAME_QUIT), 1)
+    SET_VALUE(GSWF_GOR_RETURNING_FROM_MINIGAME, 1)
     CALL(evt_mario_set_prev_party_pos, 0, 0, -1000, 0)
     CALL(evt_mario_set_prev_party_pos, 1, 0, -1000, 0)
 #if VERSION >= VERSION_JP
@@ -49,28 +47,12 @@ EVT_BEGIN(minigame_end)
 EVT_END()
 
 /**
- * Demo: the pause window during a minigame.
- * Asks whether to quit (sysyuu_all_01/02); picking the first choice runs minigame_end.
- * Then flags the window as closed for evtYuuWindowEndChk.
+ * The pause window during a minigame.
+ * JP and later first freeze Mario in place and run the minigame's own window script (evtYuuSetWindowEvt);
+ * then it asks whether to quit and runs minigame_end on the first choice, then flags it closed.
  */
-#if VERSION <= VERSION_DEMO_JP
-EVT_BEGIN(window_open)
-    CALL(evt_msg_print, 0, STRING("sysyuu_all_01"), 0, 0)
-    CALL(evt_msg_select, 0, STRING("sysyuu_all_02"))
-    CALL(evt_msg_continue)
-    IF_INT_EQUAL(LW(0), 0)
-        CALL(yuuminigame_end)
-    END_IF
-    CALL(yuuminigame_window_end)
-    RETURN
-EVT_END()
-#else
-/**
- * Retail: the pause window during a minigame.
- * Freezes Mario in place, runs the minigame's own window script (evtYuuSetWindowEvt),
- * asks whether to quit and runs minigame_end on the first choice, then flags it closed.
- */
-EVT_BEGIN(window_open)
+static EVT_BEGIN(window_open)
+#if VERSION >= VERSION_JP
     CALL(evt_mario_cont_onoff, 0)
     BEGIN_SIBLING_EVENT
         CALL(evt_mario_get_pos, 0, LW(1), LW(2), LW(3))
@@ -81,6 +63,7 @@ EVT_BEGIN(window_open)
     END_SIBLING_EVENT
     CALL(yuuminigame_get_window_evt, LW(0))
     CALL_CHILD(LW(0))
+#endif
     CALL(evt_msg_print, 0, STRING("sysyuu_all_01"), 0, 0)
     CALL(evt_msg_select, 0, STRING("sysyuu_all_02"))
     CALL(evt_msg_continue)
@@ -88,10 +71,11 @@ EVT_BEGIN(window_open)
         CALL(yuuminigame_end)
     END_IF
     CALL(yuuminigame_window_end)
+#if VERSION >= VERSION_JP
     CALL(evt_mario_cont_onoff, 1)
+#endif
     RETURN
 EVT_END()
-#endif
 
 /** Clamps a value to zero from below; used for the per-rank values of the default records. */
 static inline s32 MAX0(s32 x) {
@@ -101,24 +85,21 @@ static inline s32 MAX0(s32 x) {
 /**
  * Resets the Pianta Parlor work: token counts and flags cleared,
  * and the default record tables (five ranks per minigame, score plus a derived per-rank value) filled in.
- * Called on a new game (mariost.c) and from event.c.
- * The demo has its own records; US/PAL keep eight record rows, JP four.
+ * Called at boot (mariost.c) and on a new game (stg0_00_init in event.c).
+ * The early demos have their own records; US and later keep eight record rows, JP four.
  */
 void yuugijou_init(void) {
-#if VERSION >= VERSION_JP
     s32 t;
-#endif
     yuwp = &yuugijouwork;
     memset(yuwp, 0, sizeof(PiantaParlorWork));
 
-#if VERSION <= VERSION_DEMO_JP
-    // the demo has its own default records, with the per-rank values written out
     yuwp->recordOn[0][0] = 1;
     yuwp->recordOn[0][1] = 1;
     yuwp->recordOn[0][2] = 1;
     yuwp->recordOn[0][3] = 1;
     yuwp->recordOn[0][4] = 1;
 
+#if VERSION <= VERSION_DEMO_JP
     yuwp->recordScore[0][0] = 0x18EE8;
     yuwp->recordScore[0][1] = 0x1708E;
     yuwp->recordScore[0][2] = 0x13F42;
@@ -130,67 +111,7 @@ void yuugijou_init(void) {
     yuwp->recordParam[0][2] = 0x16;
     yuwp->recordParam[0][3] = 0x11;
     yuwp->recordParam[0][4] = 0xB;
-
-    yuwp->recordOn[1][0] = 1;
-    yuwp->recordOn[1][1] = 1;
-    yuwp->recordOn[1][2] = 1;
-    yuwp->recordOn[1][3] = 1;
-    yuwp->recordOn[1][4] = 1;
-
-    yuwp->recordScore[1][0] = 0x1D2;
-    yuwp->recordScore[1][1] = 0x1EA;
-    yuwp->recordScore[1][2] = 0x200;
-    yuwp->recordScore[1][3] = 0x21B;
-    yuwp->recordScore[1][4] = 0x22A;
-
-    yuwp->recordParam[1][0] = 0x18;
-    yuwp->recordParam[1][1] = 0x15;
-    yuwp->recordParam[1][2] = 0x12;
-    yuwp->recordParam[1][3] = 0xE;
-    yuwp->recordParam[1][4] = 0x8;
-
-    yuwp->recordOn[2][0] = 1;
-    yuwp->recordOn[2][1] = 1;
-    yuwp->recordOn[2][2] = 1;
-    yuwp->recordOn[2][3] = 1;
-    yuwp->recordOn[2][4] = 1;
-
-    yuwp->recordScore[2][0] = 0x62E8;
-    yuwp->recordScore[2][1] = 0x5410;
-    yuwp->recordScore[2][2] = 0x4B96;
-    yuwp->recordScore[2][3] = 0x2D82;
-    yuwp->recordScore[2][4] = 0x23DC;
-
-    yuwp->recordParam[2][0] = 0x25;
-    yuwp->recordParam[2][1] = 0x20;
-    yuwp->recordParam[2][2] = 0x1B;
-    yuwp->recordParam[2][3] = 0xC;
-    yuwp->recordParam[2][4] = 0x9;
-
-    yuwp->recordOn[3][0] = 1;
-    yuwp->recordOn[3][1] = 1;
-    yuwp->recordOn[3][2] = 1;
-    yuwp->recordOn[3][3] = 1;
-    yuwp->recordOn[3][4] = 1;
-
-    yuwp->recordScore[3][0] = 0x4EFC;
-    yuwp->recordScore[3][1] = 0x4416;
-    yuwp->recordScore[3][2] = 0x302A;
-    yuwp->recordScore[3][3] = 0x2044;
-    yuwp->recordScore[3][4] = 0x1428;
-
-    yuwp->recordParam[3][0] = 0x21;
-    yuwp->recordParam[3][1] = 0x1C;
-    yuwp->recordParam[3][2] = 0x16;
-    yuwp->recordParam[3][3] = 0x10;
-    yuwp->recordParam[3][4] = 0xC;
-#elif VERSION >= VERSION_US
-    yuwp->recordOn[0][0] = 1;
-    yuwp->recordOn[0][1] = 1;
-    yuwp->recordOn[0][2] = 1;
-    yuwp->recordOn[0][3] = 1;
-    yuwp->recordOn[0][4] = 1;
-
+#else
     yuwp->recordScore[0][0] = 0x5B964;
     yuwp->recordScore[0][1] = 0x5825A;
     yuwp->recordScore[0][2] = 0x4F826;
@@ -202,13 +123,26 @@ void yuugijou_init(void) {
     yuwp->recordParam[0][2] = 0xF;
     yuwp->recordParam[0][3] = 0xB;
     yuwp->recordParam[0][4] = 0xA;
-
+#endif
     yuwp->recordOn[1][0] = 1;
     yuwp->recordOn[1][1] = 1;
     yuwp->recordOn[1][2] = 1;
     yuwp->recordOn[1][3] = 1;
     yuwp->recordOn[1][4] = 1;
 
+#if VERSION <= VERSION_DEMO_JP
+    yuwp->recordScore[1][0] = 0x1D2;
+    yuwp->recordScore[1][1] = 0x1EA;
+    yuwp->recordScore[1][2] = 0x200;
+    yuwp->recordScore[1][3] = 0x21B;
+    yuwp->recordScore[1][4] = 0x22A;
+
+    yuwp->recordParam[1][0] = 0x18;
+    yuwp->recordParam[1][1] = 0x15;
+    yuwp->recordParam[1][2] = 0x12;
+    yuwp->recordParam[1][3] = 0xE;
+    yuwp->recordParam[1][4] = 0x8;
+#else
     yuwp->recordScore[1][0] = 2;
     yuwp->recordScore[1][1] = 5;
     yuwp->recordScore[1][2] = 0x12;
@@ -224,13 +158,26 @@ void yuugijou_init(void) {
     yuwp->recordParam[1][3] = MAX0(t / 700);
     t = (700 - (s32)yuwp->recordScore[1][4]) * 15;
     yuwp->recordParam[1][4] = MAX0(t / 700);
-
+#endif
     yuwp->recordOn[2][0] = 1;
     yuwp->recordOn[2][1] = 1;
     yuwp->recordOn[2][2] = 1;
     yuwp->recordOn[2][3] = 1;
     yuwp->recordOn[2][4] = 1;
 
+#if VERSION <= VERSION_DEMO_JP
+    yuwp->recordScore[2][0] = 0x62E8;
+    yuwp->recordScore[2][1] = 0x5410;
+    yuwp->recordScore[2][2] = 0x4B96;
+    yuwp->recordScore[2][3] = 0x2D82;
+    yuwp->recordScore[2][4] = 0x23DC;
+
+    yuwp->recordParam[2][0] = 0x25;
+    yuwp->recordParam[2][1] = 0x20;
+    yuwp->recordParam[2][2] = 0x1B;
+    yuwp->recordParam[2][3] = 0xC;
+    yuwp->recordParam[2][4] = 0x9;
+#else
     yuwp->recordScore[2][0] = 0x20850;
     yuwp->recordScore[2][1] = 0x20436;
     yuwp->recordScore[2][2] = 0x20184;
@@ -243,20 +190,38 @@ void yuugijou_init(void) {
     yuwp->recordParam[2][2] = MAX0(((s32)yuwp->recordScore[2][2] - 109000) / 2000) + 4;
     t = (s32)yuwp->recordScore[2][3] - 109000;
     yuwp->recordParam[2][3] = MAX0(t / 2000) + 4;
+#if VERSION >= VERSION_US
     yuwp->recordParam[2][4] = ((t = ((s32)yuwp->recordScore[2][4] - 109000) / 2000) >= 0 ? t : 0) + 1;
-
+#else
+    yuwp->recordParam[2][4] = MAX0(((s32)yuwp->recordScore[2][4] - 109000) / 2000) + 1;
+#endif
+#endif
     yuwp->recordOn[3][0] = 1;
     yuwp->recordOn[3][1] = 1;
     yuwp->recordOn[3][2] = 1;
     yuwp->recordOn[3][3] = 1;
     yuwp->recordOn[3][4] = 1;
 
+#if VERSION <= VERSION_DEMO_JP
+    yuwp->recordScore[3][0] = 0x4EFC;
+    yuwp->recordScore[3][1] = 0x4416;
+    yuwp->recordScore[3][2] = 0x302A;
+    yuwp->recordScore[3][3] = 0x2044;
+    yuwp->recordScore[3][4] = 0x1428;
+
+    yuwp->recordParam[3][0] = 0x21;
+    yuwp->recordParam[3][1] = 0x1C;
+    yuwp->recordParam[3][2] = 0x16;
+    yuwp->recordParam[3][3] = 0x10;
+    yuwp->recordParam[3][4] = 0xC;
+#else
     yuwp->recordScore[3][0] = 0x16BDE;
     yuwp->recordScore[3][1] = 0x16968;
     yuwp->recordScore[3][2] = 0x16382;
     yuwp->recordScore[3][3] = 0x1627E;
     yuwp->recordScore[3][4] = 0x15950;
 
+#if VERSION >= VERSION_US
     yuwp->recordParam[3][0] = ((t = ((s32)yuwp->recordScore[3][0] - 74000) / 2000) >= 0 ? t : 0) + 7;
     yuwp->recordParam[3][1] = ((t = ((s32)yuwp->recordScore[3][1] - 74000) / 2000) >= 0 ? t : 0) + 6;
     yuwp->recordParam[3][2] = ((t = ((s32)yuwp->recordScore[3][2] - 74000) / 2000) >= 0 ? t : 0) + 4;
@@ -344,78 +309,6 @@ void yuugijou_init(void) {
     yuwp->recordParam[7][3] = MAX0(t / 2000) + 3;
     yuwp->recordParam[7][4] = MAX0(((s32)yuwp->recordScore[7][4] - 74000) / 2000) + 4;
 #else
-    yuwp->recordOn[0][0] = 1;
-    yuwp->recordOn[0][1] = 1;
-    yuwp->recordOn[0][2] = 1;
-    yuwp->recordOn[0][3] = 1;
-    yuwp->recordOn[0][4] = 1;
-
-    yuwp->recordScore[0][0] = 0x5B964;
-    yuwp->recordScore[0][1] = 0x5825A;
-    yuwp->recordScore[0][2] = 0x4F826;
-    yuwp->recordScore[0][3] = 0x4C3D8;
-    yuwp->recordScore[0][4] = 0x4237E;
-
-    yuwp->recordParam[0][0] = 0xE;
-    yuwp->recordParam[0][1] = 0xC;
-    yuwp->recordParam[0][2] = 0xF;
-    yuwp->recordParam[0][3] = 0xB;
-    yuwp->recordParam[0][4] = 0xA;
-
-    yuwp->recordOn[1][0] = 1;
-    yuwp->recordOn[1][1] = 1;
-    yuwp->recordOn[1][2] = 1;
-    yuwp->recordOn[1][3] = 1;
-    yuwp->recordOn[1][4] = 1;
-
-    yuwp->recordScore[1][0] = 2;
-    yuwp->recordScore[1][1] = 5;
-    yuwp->recordScore[1][2] = 0x12;
-    yuwp->recordScore[1][3] = 0x1B;
-    yuwp->recordScore[1][4] = 0x8A;
-
-    yuwp->recordParam[1][0] = MAX0(((700 - (s32)yuwp->recordScore[1][0]) * 15) / 700) + 1;
-    t = (700 - (s32)yuwp->recordScore[1][1]) * 15;
-    yuwp->recordParam[1][1] = MAX0(t / 700);
-    t = (700 - (s32)yuwp->recordScore[1][2]) * 15;
-    yuwp->recordParam[1][2] = MAX0(t / 700);
-    t = (700 - (s32)yuwp->recordScore[1][3]) * 15;
-    yuwp->recordParam[1][3] = MAX0(t / 700);
-    t = (700 - (s32)yuwp->recordScore[1][4]) * 15;
-    yuwp->recordParam[1][4] = MAX0(t / 700);
-
-    yuwp->recordOn[2][0] = 1;
-    yuwp->recordOn[2][1] = 1;
-    yuwp->recordOn[2][2] = 1;
-    yuwp->recordOn[2][3] = 1;
-    yuwp->recordOn[2][4] = 1;
-
-    yuwp->recordScore[2][0] = 0x20850;
-    yuwp->recordScore[2][1] = 0x20436;
-    yuwp->recordScore[2][2] = 0x20184;
-    yuwp->recordScore[2][3] = 0x1F91E;
-    yuwp->recordScore[2][4] = 0x1E3AC;
-
-    yuwp->recordParam[2][0] = MAX0(((s32)yuwp->recordScore[2][0] - 109000) / 2000) + 7;
-    t = (s32)yuwp->recordScore[2][1] - 109000;
-    yuwp->recordParam[2][1] = MAX0(t / 2000) + 6;
-    yuwp->recordParam[2][2] = MAX0(((s32)yuwp->recordScore[2][2] - 109000) / 2000) + 4;
-    t = (s32)yuwp->recordScore[2][3] - 109000;
-    yuwp->recordParam[2][3] = MAX0(t / 2000) + 4;
-    yuwp->recordParam[2][4] = MAX0(((s32)yuwp->recordScore[2][4] - 109000) / 2000) + 1;
-
-    yuwp->recordOn[3][0] = 1;
-    yuwp->recordOn[3][1] = 1;
-    yuwp->recordOn[3][2] = 1;
-    yuwp->recordOn[3][3] = 1;
-    yuwp->recordOn[3][4] = 1;
-
-    yuwp->recordScore[3][0] = 0x16BDE;
-    yuwp->recordScore[3][1] = 0x16968;
-    yuwp->recordScore[3][2] = 0x16382;
-    yuwp->recordScore[3][3] = 0x1627E;
-    yuwp->recordScore[3][4] = 0x15950;
-
     t = (s32)yuwp->recordScore[3][0] - 74000;
     yuwp->recordParam[3][0] = MAX0(t / 2000) + 7;
     t = (s32)yuwp->recordScore[3][1] - 74000;
@@ -425,21 +318,22 @@ void yuugijou_init(void) {
     yuwp->recordParam[3][3] = MAX0(t / 2000) + 3;
     yuwp->recordParam[3][4] = MAX0(((s32)yuwp->recordScore[3][4] - 74000) / 2000) + 4;
 #endif
+#endif
 }
-
-// the demo's 2D icon flag is 4 (retail 0x10)
 
 /**
  * Draws the Pianta token counter (window, token icons and number) while flags 1 and 2 are set,
  * higher on screen with flag 4.
  * Every 4th frame the shown count steps a tenth of the way (at least 1) toward the real count,
- * with a tick sound; retail versions space the sound out to every 8 steps.
+ * with a tick sound; JP and later space the sound out to every 8 steps.
  * Called from the draw callbacks of gor_03 (the Pianta Changer)
  * and of the Pianta Parlor games (yuu_00 to yuu_03).
  */
+#if VERSION <= VERSION_DEMO_JP
 void monteCountDisp(void) {
     static s32 monte_snd_flag;
     s32 y = -0xB4;
+    s32 delta;
     u32 flags = yuwp->flags;
     Mtx mtx;
     GXColor c1, c2, c3, c4;
@@ -450,73 +344,125 @@ void monteCountDisp(void) {
     {
         {
             c1 = (GXColor){255, 255, 255, 153};
-            windowDispGX_Waku_col(0, c1, -288.0f, (f32)(y + 0x2C), 200.0f, 44.0f, 16.0f);
+            windowDispGX_Waku_col(-288.0f, (f32)(y + 0x2C), 200.0f, 44.0f, 16.0f, 0, c1);
             PSMTXTrans(mtx, -260.0f, (f32)(y + 2), 0.0f);
             c2 = (GXColor){255, 255, 255, 255};
-            iconDispGxCol(mtx, ICON_DISP_2D, ICON_13F, c2);
+            iconDispGxCol(mtx, ICON_FLAG_2D, ICON_ITEM_PIANTA_TOKEN, c2);
             PSMTXTrans(mtx, -230.0f, (f32)(y + 2), 0.0f);
             c3 = (GXColor){255, 255, 255, 255};
-            iconDispGxCol(mtx, ICON_DISP_2D, ICON_1D6, c3);
+            iconDispGxCol(mtx, ICON_FLAG_2D, ICON_TIMES, c3);
             PSMTXTrans(mtx, -128.0f, (f32)(y + 2), 0.0f);
             c4 = (GXColor){255, 255, 255, 255};
             iconNumberDispGx(mtx, yuwp->dispTokens, 0, c4);
             yuwp->dispTick++;
             if ((yuwp->dispTick & 3) == 0) {
-                y = yuwp->tokens - yuwp->dispTokens;
+                delta = yuwp->tokens - yuwp->dispTokens;
                 yuwp->dispTick = 0;
-                if (monte_snd_flag == 0 && y != 0) {
-                    psndSFXOn(SFX_NAME_WORD(0x8CA));
-#if VERSION >= VERSION_JP
+                if (monte_snd_flag == 0 && delta != 0) {
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_EVT_GAME_MONTE_COUNT1));
                     monte_snd_flag = 8;
-#endif
                 }
-#if VERSION <= VERSION_DEMO_JP
-                monte_snd_flag = 0; // the demo plays the count sound every step
-#endif
-                if (y != 0) {
-                    y = y / 10;
-                    if (y == 0) {
-                        s32 sg;
-                        if ((s32)yuwp->tokens > (s32)yuwp->dispTokens)
-                            sg = 1;
-                        else
-                            sg = -1;
-                        y = sg;
+                monte_snd_flag = 0;
+                if (delta != 0) {
+                    delta = delta / 10;
+                    if (delta == 0) {
+                        delta = yuwp->tokens > (s32)yuwp->dispTokens ? 1 : -1;
                     }
-                    yuwp->dispTokens += y;
+                    yuwp->dispTokens += delta;
                 }
             }
-#if VERSION <= VERSION_DEMO_JP
             monte_snd_flag = 0;
-#else
-            if (monte_snd_flag != 0)
-                monte_snd_flag--;
-#endif
         }
     }
 }
+#else
+void monteCountDisp(void) {
+    static s32 monte_snd_flag;
+    s32 y = -0xB4;
+    s32 delta;
+    u32 flags = yuwp->flags;
+    Mtx mtx;
+    GXColor c1, c2, c3, c4;
+    if (flags & PARLOR_FLAG_COUNTER_HIGH) {
+        y = -0x78;
+    }
+    if (!(flags & PARLOR_FLAG_COUNTER_SHOWN) || !(flags & PARLOR_FLAG_TOKENS_OUT)) {
+        return;
+    }
+    c1 = (GXColor){255, 255, 255, 153};
+    windowDispGX_Waku_col(-288.0f, (f32)(y + 0x2C), 200.0f, 44.0f, 16.0f, 0, c1);
+    PSMTXTrans(mtx, -260.0f, (f32)(y + 2), 0.0f);
+    c2 = (GXColor){255, 255, 255, 255};
+    iconDispGxCol(mtx, ICON_FLAG_2D, ICON_ITEM_PIANTA_TOKEN, c2);
+    PSMTXTrans(mtx, -230.0f, (f32)(y + 2), 0.0f);
+    c3 = (GXColor){255, 255, 255, 255};
+    iconDispGxCol(mtx, ICON_FLAG_2D, ICON_TIMES, c3);
+    PSMTXTrans(mtx, -128.0f, (f32)(y + 2), 0.0f);
+    c4 = (GXColor){255, 255, 255, 255};
+    iconNumberDispGx(mtx, yuwp->dispTokens, 0, c4);
+    yuwp->dispTick++;
+    if ((yuwp->dispTick & 3) == 0) {
+        delta = yuwp->tokens - yuwp->dispTokens;
+        yuwp->dispTick = 0;
+        if (monte_snd_flag == 0 && delta != 0) {
+            psndSFXOn(SFX_NAME_WORD(PSND_SFX_EVT_GAME_MONTE_COUNT1));
+            monte_snd_flag = 8;
+        }
+        if (delta != 0) {
+            delta = delta / 10;
+            if (delta == 0) {
+                delta = yuwp->tokens > (s32)yuwp->dispTokens ? 1 : -1;
+            }
+            yuwp->dispTokens += delta;
+        }
+    }
+    if (monte_snd_flag != 0) {
+        monte_snd_flag--;
+    }
+}
+#endif
 
 /**
- * Adds args[1] Pianta tokens (negative to spend). Retail caps the total at 99999; the demo does not.
+ * Adds args[1] Pianta tokens (negative to spend). JP and later cap the total at 99999; the early demos do not.
  * A nonzero args[0] snaps the counter display to the new total instead of letting it count up.
  */
 USER_FUNC(yuugijou_add_montemedal) {
     EvtWord* args = event->args;
-    s32 a = evtGetValue(event, args[0]);
+    s32 immediate = evtGetValue(event, args[0]);
 #if VERSION <= VERSION_DEMO_JP
-    yuwp->tokens += evtGetValue(event, args[1]); // no 99999 cap in the demo
+    yuwp->tokens += evtGetValue(event, args[1]);
+    if (immediate != 0) {
+        yuwp->dispTokens = yuwp->tokens;
+    }
 #else
     s32 sum = yuwp->tokens + evtGetValue(event, args[1]);
-    if (sum < 0x1869F) {
+    if (sum < 99999) {
         yuwp->tokens = sum;
     } else {
-        yuwp->tokens = 0x1869F;
+        yuwp->tokens = 99999;
+    }
+    if (immediate != 0) {
+        yuwp->dispTokens = yuwp->tokens;
     }
 #endif
-    if (a != 0)
-        yuwp->dispTokens = yuwp->tokens;
     return EVT_RETURN_DONE;
 }
+
+#if VERSION <= VERSION_DEMO_JP
+/** Sets the Pianta tokens to args[1]; a nonzero args[0] snaps the counter display to the new total. */
+// Original name and size (0x6c) from the JP demo map (UNUSED there: no script uses it); the early demos'
+// yuugijou_add_montemedal storing the value instead of adding it. Whether JP and later kept it (and capped it like
+// their yuugijou_add_montemedal) is not known, so only the early demos build it.
+USER_FUNC(yuugijou_set_montemedal) {
+    EvtWord* args = event->args;
+    s32 immediate = evtGetValue(event, args[0]);
+    yuwp->tokens = evtGetValue(event, args[1]);
+    if (immediate != 0) {
+        yuwp->dispTokens = yuwp->tokens;
+    }
+    return EVT_RETURN_DONE;
+}
+#endif
 
 /** Writes the Pianta tokens Mario is holding to args[0]. */
 USER_FUNC(yuugijou_get_montemedal) {
@@ -539,13 +485,40 @@ USER_FUNC(yuugijou_get_montemedal_keep) {
  * Adds args[1] to keptTokens while the tokens are taken out (flag 2); args[0] is read but ignored.
  * keptTokens is overwritten by the next yuugijou_montemedal_keep, so nothing comes of it.
  * Its one caller, gor_03's Pianta Changer (exchange_set), passes only the tokens bought,
- * so args[1] reads the next script word. Guess: meant to add the purchase to the deposit too.
+ * so args[1] reads the next script word.
  */
 USER_FUNC(yuugijou_add_montemedal_moto) {
     EvtWord* args = event->args;
     evtGetValue(event, args[0]);
     if (yuwp->flags & PARLOR_FLAG_TOKENS_OUT) {
         yuwp->keptTokens += evtGetValue(event, args[1]);
+    }
+    return EVT_RETURN_DONE;
+}
+
+/** Sets keptTokens to args[1] while the tokens are taken out; args[0] is read but ignored. */
+// Original name and size (0x64) from the JP demo map (UNUSED there: no script uses it);
+// yuugijou_add_montemedal_moto storing the value instead of adding it.
+USER_FUNC(yuugijou_set_montemedal_moto) {
+    EvtWord* args = event->args;
+    evtGetValue(event, args[0]);
+    if (yuwp->flags & PARLOR_FLAG_TOKENS_OUT) {
+        yuwp->keptTokens = evtGetValue(event, args[1]);
+    }
+    return EVT_RETURN_DONE;
+}
+
+/** Writes keptTokens to args[0] while the tokens are taken out, otherwise 0. */
+// Original name and size (0x50) from the JP demo map (UNUSED there: no script uses it), between
+// yuugijou_set_montemedal_moto and yuugijou_montemedal_disp_onoff: yuugijou_get_montemedal_keep's form (the same
+// size) for the moto commands' case, the tokens taken out (a plain read is 0x34). Which arm returns 0 is not fixed by
+// the size; this follows the _moto setters, which act only while the tokens are out.
+USER_FUNC(yuugijou_get_montemedal_moto) {
+    EvtWord* args = event->args;
+    if (yuwp->flags & PARLOR_FLAG_TOKENS_OUT) {
+        evtSetValue(event, args[0], yuwp->keptTokens);
+    } else {
+        evtSetValue(event, args[0], 0);
     }
     return EVT_RETURN_DONE;
 }
@@ -563,8 +536,9 @@ USER_FUNC(yuugijou_montemedal_disp_onoff) {
 
 /** Blocks the script until the token counter has finished counting up or down to the real total. */
 USER_FUNC(yuugijou_montemedal_wait) {
-    if ((s32)yuwp->dispTokens != yuwp->tokens)
+    if ((s32)yuwp->dispTokens != yuwp->tokens) {
         return EVT_RETURN_BLOCK;
+    }
     return EVT_RETURN_DONE;
 }
 
@@ -622,18 +596,22 @@ static USER_FUNC(yuuminigame_window_end) {
 
 /** Starts minigame_end as a separate event so the quit warp runs after the pause window. */
 static USER_FUNC(yuuminigame_end) {
-    evtEntryType(minigame_end, 0, 0, 0xEF);
+    evtEntryType(minigame_end, 0, 0, EVENT_TYPE_DEFAULT);
     return EVT_RETURN_DONE;
 }
 
-/** Retail: writes to args[0] the current minigame's window script, set by evtYuuSetWindowEvt. */
+// Descriptive name (not in the symbol maps); placeholder unk_802243a4, JP 0x802243A4. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
+/** Returns the script set by evtYuuSetWindowEvt (the minigame's window event) in args[0]. */
 USER_FUNC(yuuminigame_get_window_evt) {
     evtSetValue(event, event->args[0], (EvtWord)yuu_window_evt);
     return EVT_RETURN_DONE;
 }
+#endif
 
-/** Retail: sets the script window_open runs as a child before the quit prompt; each minigame sets its own. */
+// Descriptive name (not in the symbol maps); placeholder unk_8022439c, JP 0x8022439C. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
+/** JP and later: sets the script window_open runs as a child before the quit prompt; each minigame sets its own. */
 void evtYuuSetWindowEvt(EvtWord* evt) {
     yuu_window_evt = evt;
 }

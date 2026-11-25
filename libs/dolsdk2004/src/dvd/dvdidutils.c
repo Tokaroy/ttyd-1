@@ -3,7 +3,6 @@
 
 #include "__dvd.h"
 
-/** Returns the length of a string, capped at n bytes (a bounded strlen). */
 static u32 strnlen(const char* str, u32 maxlen) {
     u32 i;
 
@@ -16,11 +15,6 @@ static u32 strnlen(const char* str, u32 maxlen) {
     return maxlen;
 }
 
-/**
- * Returns 1 if two disc IDs match.
- * The game name only has to match when both are non-empty, the maker code must be present and equal,
- * and the disc number and version match unless either is 0xFF.
- */
 int DVDCompareDiskID(const DVDDiskID* id1, const DVDDiskID* id2) {
 #ifdef DEBUG
     const char* game1;
@@ -45,6 +39,7 @@ int DVDCompareDiskID(const DVDDiskID* id1, const DVDDiskID* id2) {
     version1 = id1->gameVersion;
     version2 = id2->gameVersion;
 
+    // BUG: game1/game2 are pointers, so sizeof is the pointer size (4), not the length of the game name field; correct only because both are 4.
     length = strnlen(game1, sizeof(game1));
     ASSERTMSGLINE(78, length == 0 || length == 4, "DVDCompareDiskID(): Specified game name for id1 is neither NULL nor 4 character long\n");
     ASSERTMSGLINE(79, company1, "DVDCompareDiskID(): Specified company name for id1 is NULL\n");
@@ -79,10 +74,6 @@ int DVDCompareDiskID(const DVDDiskID* id1, const DVDDiskID* id2) {
     return 1;
 }
 
-/**
- * Clears a disc ID and fills in the 4 character game name (if given), the 2 character maker code,
- * the disc number and the version. Returns id.
- */
 DVDDiskID* DVDGenerateDiskID(DVDDiskID* id, const char* game, const char* company, u8 diskNum, u8 version) {
     ASSERTMSGLINE(123, id, "DVDGenerateDiskID(): Specified id is NULL\n");
     ASSERTMSGLINE(124, game == NULL || strlen(game) == 4, "DVDGenerateDiskID(): Specified game name is neither NULL nor 4 character long\n");

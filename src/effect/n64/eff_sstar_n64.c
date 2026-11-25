@@ -1,5 +1,6 @@
-// Paper Mario 64 effect: a star that streaks across the screen toward a target point, leaving a trail of 8 copies.
-#include "eff/n64/eff_sstar_n64.h"
+// Paper Mario 64 effect: a star that streaks across the screen toward a target point, leaving a dust trail.
+
+#include "version.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -16,7 +17,6 @@
 #include "libc_decls.h"
 #include <math.h>
 #include "eff/eff_n64.h"
-#include "version.h"
 
 typedef struct EffSstarN64Work {
     s32 type;          // 0x0
@@ -25,17 +25,17 @@ typedef struct EffSstarN64Work {
     f32 bounce;        // 0x1c
     f32 rotZ;          // 0x20
     f32 rotZ2;         // 0x24
-    f32 reserved_28;   // 0x28, only cleared at entry
+    f32 reserved_28;   // 0x28, only set to 0
     f32 rotSpeed;      // 0x2c
     s32 life;          // 0x30
-    f32 screenSpeedX;  // 0x34, signed speed across the screen, sets the travel angle
+    f32 screenVelX;    // 0x34
     s32 subtype;       // 0x38
     s32 idx;           // 0x3c
     Mtx mtx[8];        // 0x40
     f32 scale;         // 0x1c0
-    s32 c1c4;          // 0x1c4
-    s32 c1c8;          // 0x1c8
-    s32 c1cc;          // 0x1cc
+    s32 r;             // 0x1c4, red of the star colour (GX_TEVREG0 in the disp); random for type 3, else 210
+    s32 g;             // 0x1c8, green of the star colour (GX_TEVREG0); random for type 3, else 186
+    s32 b;             // 0x1cc, blue of the star colour (GX_TEVREG0); 0xFF - r - g for type 3, else 90
     effN64Vtx vtx[10]; // 0x1d0
 } EffSstarN64Work;
 
@@ -47,8 +47,8 @@ static effN64Vtx size64x64_tex64x64_vtx[] = {
     {-30, 30, 0, 0, 2048, 0, 0, 0, 191},
 };
 
-/** 128x128 glow diamond around the star: clear corners fading in to a solid centre vertex. */
-effN64Vtx size128x128_tex32x32_vtx[] = {
+/** Glow diamond (256 units across) around the star: clear corners fading in to a solid centre vertex. */
+static effN64Vtx size128x128_tex32x32_vtx[] = {
     {-128, 0, 0, 0, 0, 255, 255, 255, 0},
     {0, -128, 0, 1024, 0, 255, 255, 255, 0},
     {128, 0, 0, 1024, 1024, 255, 255, 255, 0},
@@ -58,9 +58,9 @@ effN64Vtx size128x128_tex32x32_vtx[] = {
 
 /**
  * Template for the star's dust trail: five pairs of top and bottom points, widening along the trail,
- * copied into the work and placed along the last eight frames' positions.
+ * copied into the work and placed by five of the eight stored frame matrices (3 to 7 frames back).
  */
-effN64Vtx shooting_dust_vtx[10] = {
+static effN64Vtx shooting_dust_vtx[10] ATTRIBUTE_ALIGN(8) = {
     {0, 8, 0, 0, 0, 0, 0, 0, 191},
     {0, -8, 0, 0, 2048, 0, 0, 0, 191},
     {0, 9, 0, 512, 0, 0, 0, 0, 191},
@@ -74,11 +74,11 @@ effN64Vtx shooting_dust_vtx[10] = {
 };
 
 static void effSstarMain(EffectEntry* effect);
-static void effSstarDisp(CameraId cameraId, EffectEntry* effect);
+static void effSstarDisp(CameraId cameraId, void* param);
 
 /**
- * Spawns a star at (x, y, z) flying toward (tx, ty, tz) at `speed` per frame.
- * Spawned by event scripts through evt_eff.
+ * Spawns a star at (x, y, z) flying toward (tx, ty, tz) at `speed` per frame; the life it computes from the
+ * distance is never counted down. Spawned by battle item scripts through evt_eff64 "sstar_n64".
  */
 EffectEntry* effSstarN64Entry(s32 type, f32 x, f32 y, f32 z, f32 tx, f32 ty, f32 tz, f32 speed) {
     EffectEntry* effect;
@@ -104,14 +104,14 @@ EffectEntry* effSstarN64Entry(s32 type, f32 x, f32 y, f32 z, f32 tx, f32 ty, f32
     w->subtype = type;
     if (type == 3) {
         w->scale = 0.2f;
-        w->c1c4 = rand() % 256;
-        w->c1c8 = rand() % (0xFF - w->c1c4);
-        w->c1cc = 0xFF - w->c1c4 - w->c1c8;
+        w->r = rand() % 256;
+        w->g = rand() % (0xFF - w->r);
+        w->b = 0xFF - w->r - w->g;
     } else {
         w->scale = 0.5f;
-        w->c1c4 = 210;
-        w->c1c8 = 186;
-        w->c1cc = 90;
+        w->r = 210;
+        w->g = 186;
+        w->b = 90;
     }
     dx = tx - x;
     dy = ty - y;
@@ -144,7 +144,7 @@ EffectEntry* effSstarN64Entry(s32 type, f32 x, f32 y, f32 z, f32 tx, f32 ty, f32
     ang = angleABf(0.0f, 0.0f, -w->velocity.y, sq);
     w->rotZ2 = ang;
     w->rotZ = ang;
-    w->screenSpeedX = sq;
+    w->screenVelX = sq;
     w->life = (s32)(len / speed);
     for (i = 0; i < 8; i++) {
         PSMTXTrans(w->mtx[i], w->position.x, w->position.y, w->position.z);
@@ -155,10 +155,10 @@ EffectEntry* effSstarN64Entry(s32 type, f32 x, f32 y, f32 z, f32 tx, f32 ty, f32
 
 /**
  * Moves the star by its velocity.
- * Subtypes 2+ bounce off the ground below (hitCheckFilter):
- * each bounce keeps 60% of the fall speed and 70% of the sideways speed and spin,
- * then gravity (-0.5) and spin take over; 10 bounces end it.
- * It also ends 300 units below Mario (in battle, below y = -300; the demos only check Mario).
+ * Subtypes 2+ bounce off the ground below (hitCheckFilter), but only once (the bounce clears `type`, which the
+ * test requires): it keeps 60% of the fall speed and 70% of the x and screen speed and spin,
+ * then gravity (-0.5) and spin take over; the 10-bounce end is never reached.
+ * It also ends 300 units below Mario (in battle, below y = -300; the early demos only check Mario).
  * CAMERA_3D, layer 2.
  */
 static void effSstarMain(EffectEntry* effect) {
@@ -184,11 +184,11 @@ static void effSstarMain(EffectEntry* effect) {
         pz = w->position.z - 32.0f * (w->velocity.z * len);
         len = 64.0f;
         if (w->type != 0 && w->velocity.y < 0.0f &&
-            hitCheckFilter(NULL, &hx, &hx, &hz, &len, &hnx, &hny, &hnz, px, py, pz, 0.0f, -1.0f, 0.0f) &&
+            hitCheckFilter(NULL, px, py, pz, 0.0f, -1.0f, 0.0f, &hx, &hx, &hz, &len, &hnx, &hny, &hnz) &&
             len < 42.0f) {
             w->velocity.y = 0.6f * -w->velocity.y;
             w->velocity.x *= 0.7f;
-            w->screenSpeedX *= 0.7f;
+            w->screenVelX *= 0.7f;
             w->rotSpeed *= 0.7f;
             w->bounce += 1.0f;
             w->type = 0;
@@ -199,38 +199,54 @@ static void effSstarMain(EffectEntry* effect) {
         if (w->bounce) {
             w->velocity.y += -0.5f;
             w->rotZ2 += w->rotSpeed;
-            w->rotZ = angleABf(0.0f, 0.0f, -w->velocity.y, w->screenSpeedX);
+            w->rotZ = angleABf(0.0f, 0.0f, -w->velocity.y, w->screenVelX);
         }
     }
-#if VERSION <= VERSION_DEMO_JP
-    if (mario->position.y - w->position.y > 300.0f) {
-        w->life = -1;
-    }
-#else
+#if VERSION >= VERSION_JP
     if (gp->inBattle == 0) {
         if (mario->position.y - w->position.y > 300.0f) {
             w->life = -1;
         }
     } else if (w->position.y < -300.0f) {
+#else
+    if (mario->position.y - w->position.y > 300.0f) {
+#endif
         w->life = -1;
     }
-#endif
     w->position.x += w->velocity.x;
     w->position.y += w->velocity.y;
     w->position.z += w->velocity.z;
     if (w->life < 0) {
         effDelete(effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&pos), 2, (DispCallback)effSstarDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_XLU, effSstarDisp, effect);
     }
 }
 
+/** Copies vertex `src` to `dst` and transforms its position by `mtx` (fast-cast s16 <-> f32 conversions). */
+static void vtx_copy(effN64Vtx* dst, effN64Vtx* src, Mtx mtx) {
+    Vec v;
+
+    memcpy(dst, src, sizeof(effN64Vtx));
+    OSInitFastCast();
+    OSs16tof32(&dst->x, &v.x);
+    OSs16tof32(&dst->y, &v.y);
+    OSs16tof32(&dst->z, &v.z);
+    PSMTXMultVec(mtx, &v, &v);
+    OSInitFastCast();
+    // FAKE: x stored through an s16* view of dst; &dst->x lets the loop fold the address into its own register
+    OSf32tos16(&v.x, (s16*)dst);
+    OSf32tos16(&v.y, &dst->y);
+    OSf32tos16(&v.z, &dst->z);
+}
+
 /**
- * Draws the star camera-facing: a 64x64 star from texture 9 in its colour plus a 128x128 glow, then,
- * until its second bounce, a five-segment dust trail built from the last eight frames' matrices with texture 0xA
- * (0xB for subtype 3).
+ * Draws the star camera-facing: a 60x60 star from texture 9 in its colour plus the glow diamond, then,
+ * while it has bounced at most once (always), a four-segment dust trail placed by five of the eight stored frame
+ * matrices with texture 0xA (0xB for subtype 3).
  */
-static void effSstarDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSstarDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffSstarN64Work* w;
     s32 i;
@@ -242,16 +258,14 @@ static void effSstarDisp(CameraId cameraId, EffectEntry* effect) {
     Mtx sc;
     Mtx tmp;
     GXTexObj tex;
-    Vec v0;
-    Vec v1;
 
     camera = camGetPtr(cameraId);
     w = effect->userdata;
     scale = w->scale;
     base = w->subtype;
-    c1 = w->c1c4;
-    c2 = w->c1c8;
-    c3 = w->c1cc;
+    c1 = w->r;
+    c2 = w->g;
+    c3 = w->b;
     PSMTXTrans(mtx, w->position.x, w->position.y, w->position.z);
     PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
     PSMTXConcat(mtx, rot, tmp);
@@ -264,7 +278,7 @@ static void effSstarDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevColor(GX_TEVREG1, (GXColor){127, 127, 127, 127});
     GXSetTevColor(GX_TEVREG2, (GXColor){80, 80, 80, 80});
     GXSetNumChans(1);
-    GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
     PSMTXScale(sc, 0.015625f, 0.015625f, 0.0f);
@@ -272,42 +286,42 @@ static void effSstarDisp(CameraId cameraId, EffectEntry* effect) {
     effGetTexObjN64(9, &tex);
     GXLoadTexObj(&tex, GX_TEXMAP0);
     GXSetNumTevStages(3);
-    GXSetTevOrder(0, 0, 0, 0xFF);
-    GXSetTevColorOp(0, 0, 0, 0, 0, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 0xF, 8, 5, 2);
-    GXSetTevAlphaIn(0, 7, 4, 1, 7);
-    GXSetTevOrder(1, 0xFF, 0xFF, 0xFF);
-    GXSetTevColorOp(1, 1, 0, 0, 1, 0);
-    GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(1, 0xF, 4, 5, 0);
-    GXSetTevAlphaIn(1, 7, 7, 7, 0);
-    GXSetTevOrder(2, 0xFF, 0xFF, 4);
-    GXSetTevColorOp(2, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(2, 6, 0xF, 0xF, 0);
-    GXSetTevAlphaIn(2, 7, 0, 5, 7);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_A1, GX_CC_C0);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C1, GX_CC_A1, GX_CC_CPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+    GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_C2, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_APREV, GX_CA_RASA, GX_CA_ZERO);
     effSetVtxDescN64(size64x64_tex64x64_vtx);
     PSMTXConcat(camera->view, tmp, mtx);
     GXLoadPosMtxImm(mtx, GX_PNMTX0);
     GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
     tri2(0, 1, 2, 0, 0, 2, 3, 0);
     GXSetNumTevStages(1);
-    GXSetTevOrder(0, 0xFF, 0xFF, 4);
-    GXSetTevColorOp(0, 0, 0, 0, 0, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 0xF, 0xF, 0xF, 0xC);
-    GXSetTevAlphaIn(0, 7, 5, 3, 7);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ONE);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_A2, GX_CA_ZERO);
     effSetVtxDescN64(size128x128_tex32x32_vtx);
     GXBegin(GX_TRIANGLES, GX_VTXFMT0, 12);
     tri2(0, 1, 4, 0, 1, 2, 4, 0);
     tri2(0, 4, 3, 0, 4, 2, 3, 0);
     GXSetNumTevStages(1);
-    GXSetTevOrder(0, 0, 0, 4);
-    GXSetTevColorOp(0, 0, 0, 0, 0, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 0xF, 0xF, 0xF, 0xC);
-    GXSetTevAlphaIn(0, 7, 5, 4, 7);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ONE);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_TEXA, GX_CA_ZERO);
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
     PSMTXScale(sc, 0.03125f, 0.03125f, 0.0f);
@@ -333,29 +347,11 @@ static void effSstarDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'z', 0.017453292f * w->rotZ);
         PSMTXConcat(mtx, rot, w->mtx[w->idx]);
         for (i = 0; i < 5; i++) {
-            memcpy(&w->vtx[i * 2], &shooting_dust_vtx[i * 2], sizeof(effN64Vtx));
-            OSInitFastCast();
-            OSs16tof32(&w->vtx[i * 2].x, &v0.x);
-            OSs16tof32(&w->vtx[i * 2].y, &v0.y);
-            OSs16tof32(&w->vtx[i * 2].z, &v0.z);
-            PSMTXMultVec(w->mtx[(k - i + 8) % 8], &v0, &v0);
-            OSInitFastCast();
-            OSf32tos16(&v0.x, &w->vtx[i * 2].x);
-            OSf32tos16(&v0.y, &w->vtx[i * 2].y);
-            OSf32tos16(&v0.z, &w->vtx[i * 2].z);
-            memcpy(&w->vtx[i * 2 + 1], &shooting_dust_vtx[i * 2 + 1], sizeof(effN64Vtx));
-            OSInitFastCast();
-            OSs16tof32((s16*)&w->vtx[i * 2 + 1], &v1.x);
-            OSs16tof32((s16*)&w->vtx[i * 2 + 1] + 1, &v1.y);
-            OSs16tof32((s16*)&w->vtx[i * 2 + 1] + 2, &v1.z);
-            PSMTXMultVec(w->mtx[(k - i + 8) % 8], &v1, &v1);
-            OSInitFastCast();
-            OSf32tos16(&v1.x, (s16*)&w->vtx[i * 2 + 1]);
-            OSf32tos16(&v1.y, &w->vtx[i * 2 + 1].y);
-            OSf32tos16(&v1.z, &w->vtx[i * 2 + 1].z);
+            vtx_copy(&w->vtx[i * 2], &shooting_dust_vtx[i * 2], w->mtx[(k - i + 8) % 8]);
+            vtx_copy(&w->vtx[i * 2 + 1], &shooting_dust_vtx[i * 2 + 1], w->mtx[(k - i + 8) % 8]);
         }
         GXInvalidateVtxCache();
-        DCFlushRange(w->vtx, 0x8C);
+        DCFlushRange(w->vtx, sizeof(w->vtx));
         effSetVtxDescN64(w->vtx);
         GXLoadPosMtxImm(camera->view, GX_PNMTX0);
         for (c1 = 0; c1 < 4; c1++) {

@@ -1,7 +1,34 @@
 // mri_01 (巨木の中, The Great Tree): the Puni Elder's room: the Elder and the Punies, troubles (irai), the
 // first X-Naut battle, the Magnus von Grapple fight with Lord Crump, the Crystal Star, and Bowser's interludes.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_story.h"
+#include "evt/evt_window.h"
+#include "kpa_act.h"
 #include "evt/evt_cmd.h"
+#include "countdown.h"
+#include "mri_puni.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_env.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_img.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_pouch.h"
+#include "driver/punidrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "mario/mario.h"
+#include "driver/mapdrv.h"
 
 #include "driver/fadedrv.h"
 #include "mario/mariost.h"
@@ -18,80 +45,109 @@
 #include "evt/evt_memcard.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_sub.h"
+#include "party/party_motion.h"
 #include "mri.h"
 #include "data_tables.h"
 #include "mario/mario_pouch.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_env.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_window.h"
-#include "kpa_act.h"
-#include "mri_puni.h"
-#include "driver/punidrv.h"
-#include "driver/itemdrv.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/camdrv.h"
+#include "driver/seqdrv.h"
+#include "evt/evt_save_flags.h"
 
 static u8* bp;
 
+static USER_FUNC(akari_charge_entry);
+static USER_FUNC(bossrobot);
+static USER_FUNC(elder_talk_sub_fadeoff);
+USER_FUNC(elder_talk_sub_punicheck);
 static USER_FUNC(evtflash);
-static void bossrobot_batu(CameraId camera, void* param);
-static void mri_stg3_012_cb(s32 type, void* param);
+static USER_FUNC(evt_countdown_stop);
 
-s32 puni_return_data[204];
+static EvtWord guide_init[29];
+static EvtWord guide_talk[20];
+static EvtWord rival_init[30];
+static EvtWord rival_talk[8];
+static EvtWord elder_init[39];
+static s32 puni_return_data[204];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord puni_return[];
-extern EvtWord elder_talk_sub[];
-s32 irai_item_tbl[2];
-static s32 iri_17_item_tbl[2];
-extern EvtWord puni_1_init[];
-extern EvtWord puni_1_talk[];
-extern EvtWord puni_2_init[];
-extern EvtWord puni_2_talk[];
-extern EvtWord puni_init[];
-extern EvtWord sister_jump[];
-static NpcSetupInfo npcEnt[9];
-extern EvtWord bero_00_doa_close[];
-extern EvtWord bero_00_doa_open[];
-extern EvtWord out_mri_event[];
-static BeroEntry bero_entry_data[4];
-extern EvtWord bigtree_firstbattle[];
-extern EvtWord meet_rival[];
-extern EvtWord rival_nakama[];
-extern EvtWord elder_kaisetsu[];
-extern EvtWord puni_taiki[];
-s32 puni_position[102];
-extern EvtWord boss_battle_init[];
-extern EvtWord dai3kanbu_suikomare[];
-extern EvtWord boss_robot_pera[];
-extern EvtWord boss_robot_pera_after[];
-extern EvtWord boss_battle[];
-extern EvtWord starstone_item[];
-extern EvtWord boss_robot_electro[];
-extern EvtWord boss_robot_kemuri[];
-extern EvtWord boss_battle_win_init[];
-extern EvtWord boss_battle_win[];
-extern EvtWord ueki_puni_nigeru[];
-extern EvtWord evt_ueki_01[];
-extern EvtWord evt_ueki_03[];
-static KusaAccess ueki_access_data[5];
-extern EvtWord puni_mario_wait[];
-extern EvtWord mri_01_koopa_first_evt[];
-extern EvtWord mri_01_koopa_second_evt[];
+#else
+EvtWord puni_return[99];
+#endif
 
-/** Screen flash: fades out over 20 frames, holds for 50 ms, then fades back in over 80 frames. */
+static EvtWord elder_talk_sub[376];
+static s32 irai_item_tbl[2];
+static s32 iri_17_item_tbl[2];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord elder_talk[173];
+#else
+static EvtWord elder_talk[177];
+#endif
+
+static EvtWord puni_1_init[24];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord puni_1_talk[];
+#else
+EvtWord puni_1_talk[43];
+#endif
+
+static EvtWord puni_2_init[24];
+static EvtWord puni_2_talk[20];
+static EvtWord puni_init[9];
+static EvtWord baba_init[9];
+static EvtWord baba_talk[8];
+static EvtWord sister_init[31];
+static EvtWord sister_jump[48];
+static EvtWord sister_talk[230];
+static NpcSetupInfo npcEnt[9];
+static EvtWord bero_00_doa_close[10];
+static EvtWord bero_00_doa_open[10];
+static EvtWord bero_01_doa_close[10];
+static EvtWord bero_01_doa_open[10];
+static EvtWord out_mri_event[5];
+static BeroEntry bero_entry_data[4];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord bigtree_firstbattle[];
+#else
+EvtWord bigtree_firstbattle[734];
+#endif
+
+static EvtWord meet_rival[2247];
+static EvtWord rival_nakama[1137];
+static EvtWord elder_kaisetsu[206];
+static EvtWord puni_taiki[119];
+static s32 puni_position[102];
+static EvtWord boss_battle_init[215];
+EvtWord dai3kanbu_suikomare[];
+static EvtWord boss_robot_pera[34];
+static EvtWord boss_robot_pera_after[19];
+static EvtWord boss_battle[1224];
+static EvtWord starstone_item[19];
+static EvtWord boss_robot_electro[43];
+static EvtWord boss_robot_kemuri[49];
+static EvtWord boss_battle_win_init[49];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord boss_battle_win[];
+#else
+EvtWord boss_battle_win[1493];
+#endif
+
+static EvtWord door_switch_init[17];
+static EvtWord ueki_puni_nigeru[100];
+static EvtWord evt_ueki_01[18];
+static EvtWord evt_ueki_02[24];
+static EvtWord evt_ueki_03[49];
+static EvtWord evt_ueki_08[8];
+static KusaAccess ueki_access_data[5];
+static EvtWord puni_mario_wait[49];
+static EvtWord mri_01_koopa_first_evt[400];
+static EvtWord mri_01_koopa_second_evt[682];
+EvtWord mri_01_init_evt[464];
+
+/** Screen flash: fades out over 20 ms, holds for 50 ms, then fades back in over 80 ms. */
 static USER_FUNC(evtflash) {
     if (isFirstCall) {
         event->userdata[2] = 0;
@@ -131,11 +187,16 @@ static USER_FUNC(evtflash) {
 
 /**
  * Checks whether the Punies are ready for the Puni elder's check.
- * Returns in args[0]: 0 if some Puni is away or lost in another area, 1 if every Puni is with Mario,
- * 2 if all are present but some are caught in traps.
- * Punio waiting at the cell in mri_03 is not counted (US and later).
+ * Returns in args[0]: 0 when missing Punies are counted, 1 when neither missing nor trapped Punies are counted,
+ * 2 when traps are counted but no missing Punies are counted.
+ * Punio waiting at the cell in mri_03 is not counted (JP and later versions, the September demos included).
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(elder_talk_sub_punicheck) {
+#else
+USER_FUNC(elder_talk_sub_punicheck) {
+#endif
+
     EvtWord* args = event->args;
     PuniWork* punigp = puniGetPunigp();
     s32 i;
@@ -145,11 +206,10 @@ static USER_FUNC(elder_talk_sub_punicheck) {
     Vec pos;
     s32 trap;
     s32 puni;
-
-#if VERSION <= VERSION_DEMO_JP
     for (i = 1; i < 103; i++) {
         puniGetPunidat();
-        puniswGetindex(LSW(0), i - 1, &puni, &pos);
+#if VERSION <= VERSION_DEMO_JP
+        puniswGetindex(LSW_MRI_PUNI_RECORDS, i - 1, &puni, &pos);
         if (puni != 0 && puni != punigp->floor) {
             others++;
         } else {
@@ -158,55 +218,57 @@ static USER_FUNC(elder_talk_sub_punicheck) {
                 traps++;
             }
         }
-    }
-    result = 1;
-    if (traps != 0) {
-        result = 2;
-    }
-    if (others != 0) {
-        result = 0;
-    }
 #else
-    for (i = 1; i < 103; i++) {
-        puniGetPunidat();
-        if (i == 1 && swGet(GSWF_MRI03_PUNIO_WAITING_AT_CELL)) {
+        if (i == 1 && swGet(GSWF_ID(GSWF_MRI_PUNIO_WAITING_AT_JAIL))) {
             continue;
         }
-        puniswGetindex(LSW(0), i - 1, &puni, &pos);
+        puniswGetindex(LSW_MRI_PUNI_RECORDS, i - 1, &puni, &pos);
         puniswTrapGetindex(i, &trap);
         if (trap != 0) {
             traps++;
         } else if (puni != 0 && puni != punigp->floor) {
             others++;
         }
+#endif
     }
     result = 1;
+#if VERSION <= VERSION_DEMO_JP
+    if (traps != 0) {
+        result = 2;
+    }
+#endif
+#if VERSION >= VERSION_JP
     if (others != 0) {
         result = 0;
     } else if (traps != 0) {
         result = 2;
+    }
+#else
+    if (others != 0) {
+        result = 0;
     }
 #endif
     evtSetValue(event, args[0], result);
     return EVT_RETURN_DONE;
 }
 
-/** Fades the Puni display out (args[0] = 0) or back in (args[0] = 1) through puniFadeOff. */
+/** Sets whether Punies follow the map's blend colour (args[0] = 0) or are drawn without it (args[0] = 1). */
 static USER_FUNC(elder_talk_sub_fadeoff) {
     puniFadeOff(evtGetValue(event, event->args[0]));
     return EVT_RETURN_DONE;
 }
 
 /**
- * Init script of Punio in the village: during Bowser's visit (STORY_STG3_33_04 to 33_06) talking is switched
- * off; once Mario has left the tree after the Puni praise he stands near the middle of the village.
+ * Init event of the guide Puni (ガイド, Punio): from STG3_33_04_PEACH_BACK_TO_TEC to
+ * STG3_33_06_BOWSER_TREASURE its talk event is cleared; otherwise from STG2_26_PRAISE_FROM_THE_PUNI on,
+ * once GSWF_MRI_LEFT_AFTER_BOSS_BATTLE is set, it stands at (-20, 0, 40) facing 270.
  */
 static EVT_BEGIN(guide_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG3_33_04_PEACH_BACK_TO_TEC, STORY_STG3_33_06_BOWSER_PUNI_ELDER)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG3_33_04_PEACH_BACK_TO_TEC, STG3_33_06_BOWSER_TREASURE)
         CALL(evt_npc_change_interrupt, STRING("me"), 6, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), -20, 0, 40)
             CALL(evt_npc_set_ry, STRING("me"), 270)
         END_IF
@@ -216,8 +278,8 @@ EVT_END()
 
 /** Talk script of Punio: one line until the end of the game's last battle, another line after it. */
 static EVT_BEGIN(guide_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_002"), 0, STRING("me"))
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_002_1"), 0, STRING("me"))
@@ -227,16 +289,16 @@ EVT_END()
 
 /**
  * Init script of the rival Puni in the village:
- * placed near the middle while the rival is arriving (STORY_STG2_12 to 13),
- * moved once the elder has been freed (STORY_STG2_14), and unable to talk during Bowser's visit.
+ * placed near the middle while the rival is arriving (STG2_12 to 13),
+ * moved once the elder has been freed (STG2_14), and unable to talk during Bowser's visit.
  */
 static EVT_BEGIN(rival_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_12_RIVAL_ARRIVAL, STORY_STG2_13_MS_MOWZ)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_12_RIVAL_ARRIVAL, STG2_13_MS_MOWZ)
         CALL(evt_npc_set_position, STRING("me"), -5, 0, 70)
-        CASE_EQUAL(STORY_STG2_14_PUNI_ELDER_FREED)
+        CASE_EQUAL(STG2_14_PUNI_ELDER_FREED)
         CALL(evt_npc_set_position, STRING("me"), -20, 0, 38)
-        CASE_BETWEEN(STORY_STG3_33_04_PEACH_BACK_TO_TEC, STORY_STG3_33_06_BOWSER_PUNI_ELDER)
+        CASE_BETWEEN(STG3_33_04_PEACH_BACK_TO_TEC, STG3_33_06_BOWSER_TREASURE)
         CALL(evt_npc_change_interrupt, STRING("me"), 6, 0)
     END_SWITCH
     RETURN
@@ -250,19 +312,19 @@ EVT_END()
 
 /**
  * Init script of the Puni elder in the village:
- * stands left of the middle from the point he is freed to Lord Crump's appearance
+ * stands left of the middle from the point she is freed to Lord Crump's appearance
  * and again once Mario has left the tree after the praise.
- * During Bowser's visit he cannot talk and the status icon is set.
+ * During Bowser's visit she cannot talk and is set to face her movement direction.
  */
 static EVT_BEGIN(elder_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_14_PUNI_ELDER_FREED, STORY_STG2_22_LORD_CRUMP_APPEARS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_14_PUNI_ELDER_FREED, STG2_22_LORD_CRUMP_APPEARS)
         CALL(evt_npc_set_position, STRING("me"), -78, 0, 38)
-        CASE_BETWEEN(STORY_STG3_33_04_PEACH_BACK_TO_TEC, STORY_STG3_33_06_BOWSER_PUNI_ELDER)
-        CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+        CASE_BETWEEN(STG3_33_04_PEACH_BACK_TO_TEC, STG3_33_06_BOWSER_TREASURE)
+        CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
         CALL(evt_npc_change_interrupt, STRING("me"), 6, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), -78, 0, 38)
         END_IF
     END_SWITCH
@@ -270,7 +332,7 @@ static EVT_BEGIN(elder_init)
 EVT_END()
 
 /** Grid of (x, z) spots in the village where returning Punies are put back, filled column by column. */
-s32 puni_return_data[] = {
+static s32 puni_return_data[] = {
     200, 0, 200, 10, 200, 20, 200, 30,
     200, 40, 200, 50, 200, 60, 200, 70,
     200, 80, 200, 90, 210, 90, 210, 80,
@@ -300,9 +362,10 @@ s32 puni_return_data[] = {
 };
 
 /**
- * Brings every missing Puni back: for each Puni slot (1 to 102) that is lost or left in another area,
+ * Brings missing Punies back: for each eligible Puni slot (1 to 102) that is lost or left in another area,
  * clears its area data and re-enters it at the next free spot from puni_return_data in the village.
- * Puni that are already beside Mario stay.
+ * Puni that are already beside Mario stay. JP and later versions (the September demos included) also skip trapped
+ * Punies and Punio waiting at the jail.
  */
 EVT_BEGIN(puni_return)
     SET_VALUE(LW(10), 1)
@@ -310,16 +373,29 @@ EVT_BEGIN(puni_return)
     LOOP(0)
         SET_VALUE(LW(11), LW(10))
         ADD(LW(11), -1)
-        CALL(evt_puni_get_lsw_index, LSW(0), LW(11), LW(0), LW(1), LW(2), LW(3))
+        CALL(evt_puni_get_lsw_index, LSW_MRI_PUNI_RECORDS, LW(11), LW(0), LW(1), LW(2), LW(3))
         CALL(evt_puni_get_flag, LW(10), LW(4))
-#if VERSION >= VERSION_JP
+#if VERSION <= VERSION_DEMO_JP
+        IF_INT_NOT_EQUAL(LW(0), 0)
+            IF_BITS_SET(LW(4), PUNI_FLAG_ACTIVE)
+                DEBUG_PUT_MSG(STRING("長老の能力"))
+                DEBUG_PUT_MSG(STRING("プニ番号"))
+                DEBUG_PUT_REG(LW(11))
+                DEBUG_PUT_MSG(STRING("同じエリアにいます"))
+            ELSE
+                READ_INT2(LW(12), LW(13))
+                CALL(evt_puni_set_lsw_index, LSW_MRI_PUNI_RECORDS, LW(11), 0, 0, 0, 0)
+                CALL(evt_puni_init_puni, LW(10), 1, LW(12), 0, LW(13), 0)
+#else
         CALL(evt_puni_get_trap_index, LW(10), LW(5))
         IF_INT_EQUAL(LW(10), 1)
-            IF_INT_EQUAL(GSWF(GSWF_MRI03_PUNIO_WAITING_AT_CELL), 1)
+            IF_INT_EQUAL(GSWF_MRI_PUNIO_WAITING_AT_JAIL, 1)
                 DEBUG_PUT_MSG(STRING("牢屋の前に待機しています"))
                 GOTO(100)
+#endif
             END_IF
         END_IF
+#if VERSION >= VERSION_JP
         IF_INT_NOT_EQUAL(LW(5), 0)
             DEBUG_PUT_MSG(STRING("トラップにかかっています"))
             GOTO(100)
@@ -328,34 +404,15 @@ EVT_BEGIN(puni_return)
             DEBUG_PUT_MSG(STRING("ここにいます＆仲間になっていません"))
             GOTO(100)
         END_IF
-#endif
-#if VERSION <= VERSION_DEMO_JP
-        IF_INT_NOT_EQUAL(LW(0), 0)
-#endif
-            IF_BITS_SET(LW(4), 1024)
-#if VERSION <= VERSION_DEMO_JP
-                DEBUG_PUT_MSG(STRING("長老の能力"))
-                DEBUG_PUT_MSG(STRING("プニ番号"))
-                DEBUG_PUT_REG(LW(11))
-#endif
-                DEBUG_PUT_MSG(STRING("同じエリアにいます"))
-#if VERSION >= VERSION_JP
+        IF_BITS_SET(LW(4), PUNI_FLAG_ACTIVE)
+            DEBUG_PUT_MSG(STRING("同じエリアにいます"))
             GOTO(100)
         END_IF
         DEBUG_PUT_MSG(STRING("はぐれから合流しました"))
-#endif
-#if VERSION <= VERSION_DEMO_JP
-            ELSE
-#endif
-                READ_INT2(LW(12), LW(13))
-                CALL(evt_puni_set_lsw_index, LSW(0), LW(11), 0, 0, 0, 0)
-                CALL(evt_puni_init_puni, LW(10), 1, LW(12), 0, LW(13), 0)
-#if VERSION >= VERSION_JP
+        READ_INT2(LW(12), LW(13))
+        CALL(evt_puni_set_lsw_index, LSW_MRI_PUNI_RECORDS, LW(11), 0, 0, 0, 0)
+        CALL(evt_puni_init_puni, LW(10), 1, LW(12), 0, LW(13), 0)
         LABEL(100)
-#endif
-#if VERSION <= VERSION_DEMO_JP
-            END_IF
-        END_IF
 #endif
         ADD(LW(10), 1)
         IF_INT_EQUAL(LW(10), 103)
@@ -366,26 +423,29 @@ EVT_BEGIN(puni_return)
 EVT_END()
 
 /**
- * Dialog of the Puni elder's "gather the Punies" offer: the elder asks whether to call them;
+ * Dialog of the Puni elder's "gather the Punies" offer: the elder offers three choices;
  * if some Punies are lost the elder calls them back with puni_return (a loud call with a camera zoom),
- * then reports that everyone has gathered. The camera is restored and the Punies unfreeze at the end.
+ * then reports that everyone has gathered. The "I love you" choice freezes the Punies and unfreezes them
+ * (and restores the camera) at its end.
  */
-EVT_BEGIN(elder_talk_sub)
+static EVT_BEGIN(elder_talk_sub)
     // The Elder asks what Mario wants and offers three choices: just saying hi, lost Punies, or "I love you".
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_22"), 0, STRING("me"))
     CALL(evt_msg_select, 0, STRING("stg2_mri_e15_22_sel"))
     SWITCH(LW(0))
         CASE_EQUAL(0)
-        // Plain greeting: he reminds Mario the Crystal Star is at the bottom of the tree.
+
+        // Plain greeting: she reminds Mario the Crystal Star is at the bottom of the tree.
         CALL(evt_msg_print_add, 0, STRING("stg2_mri_e15_28"))
         CASE_EQUAL(1)
         CALL(elder_talk_sub_punicheck, LW(0))
         SWITCH(LW(0))
             CASE_EQUAL(0)
+
             // Lost Punies: if any are lost the Elder calls them back with a loud shout and a camera zoom;
-            // otherwise he says none are missing, or that everyone is trapped in a cell.
+            // otherwise she says none are missing, or that everyone is trapped in a cell.
             CALL(evt_msg_print_add, 0, STRING("stg2_mri_e15_23"))
-            CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 500, 11)
+            CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 500, EASING_SINE_IN_OUT)
             WAIT_MS(1000)
             CALL(evt_npc_set_autotalkpose, STRING("me"), STRING("S_1"), STRING("T_2"))
             WAIT_FRAMES(1)
@@ -393,17 +453,17 @@ EVT_BEGIN(elder_talk_sub)
             BEGIN_INLINE_EVENT
                 CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
                 CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_CHOUROU_CALL_PUNI1"), LW(0), LW(1), LW(2), 0)
-                CALL(evt_cam3d_evt_set, -75, 85, 351, -75, 25, 7, 100, 11)
+                CALL(evt_cam3d_evt_set, -75, 85, 351, -75, 25, 7, 100, EASING_SINE_IN_OUT)
                 WAIT_MS(100)
-                CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 100, 11)
+                CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 100, EASING_SINE_IN_OUT)
                 WAIT_MS(100)
-                CALL(evt_cam3d_evt_set, -75, 85, 351, -75, 25, 7, 100, 11)
+                CALL(evt_cam3d_evt_set, -75, 85, 351, -75, 25, 7, 100, EASING_SINE_IN_OUT)
                 WAIT_MS(100)
-                CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 100, 11)
+                CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 100, EASING_SINE_IN_OUT)
                 WAIT_MS(100)
-                CALL(evt_cam3d_evt_set, -75, 85, 351, -75, 25, 7, 100, 11)
+                CALL(evt_cam3d_evt_set, -75, 85, 351, -75, 25, 7, 100, EASING_SINE_IN_OUT)
                 WAIT_MS(100)
-                CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 100, 11)
+                CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 100, EASING_SINE_IN_OUT)
                 WAIT_MS(100)
                 SET_VALUE(GF(0), 0)
             END_INLINE_EVENT
@@ -413,7 +473,7 @@ EVT_BEGIN(elder_talk_sub)
             CALL(evt_msg_print, 0, STRING("stg2_mri_e15_24"), 0, STRING("me"))
             WAIT_WHILE(GF(0))
             WAIT_MS(500)
-            CALL(evt_cam3d_evt_off, 500, 11)
+            CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
             CALL(evt_mario_set_dir, 270, 200, 0)
             WAIT_MS(500)
             CALL_CHILD(puni_return)
@@ -430,13 +490,14 @@ EVT_BEGIN(elder_talk_sub)
         CALL(evt_msg_continue)
         CALL(evt_puni_all_movestop, 1)
         CALL(evt_party_stop, 0)
-        CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 500, 11)
+        CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 500, EASING_SINE_IN_OUT)
         WAIT_MS(1000)
+
         // "I love you": the Elder is offended and launches into a long story about how she became the Puni
         // elder.
         CALL(evt_msg_print, 0, STRING("stg2_mri_e15_29"), 0, STRING("me"))
         CALL(elder_talk_sub_fadeoff, 0)
-        CALL(evt_sub_intpl_msec_init, 11, 255, 0, 1500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 1500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_map_set_blend, 0, LW(0), LW(0), LW(0), 255)
@@ -445,7 +506,7 @@ EVT_BEGIN(elder_talk_sub)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_e15_30"), 0, STRING("me"))
         SET_VALUE(GF(3), 0)
         BEGIN_INLINE_EVENT
@@ -460,7 +521,7 @@ EVT_BEGIN(elder_talk_sub)
         END_INLINE_EVENT
         CALL(evt_mario_sleep_on)
         CALL(evt_party_sleep_on, 0)
-        CALL(evt_sub_intpl_msec_init, 11, 0, 255, 1500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 1500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_map_set_blend, 0, LW(0), LW(0), LW(0), 255)
@@ -480,14 +541,14 @@ EVT_BEGIN(elder_talk_sub)
         CALL(evt_mario_set_pose, STRING("M_N_2"))
         WAIT_MS(1000)
         CALL(evt_party_run, 0)
-        CALL(evt_cam3d_evt_off, 500, 11)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
         CALL(evt_puni_all_movestop, 0)
     END_SWITCH
     RETURN
 EVT_END()
 
 /** Item list for the key window of Trouble Center job 10: only the Life Shroom (-1 ends the list). */
-s32 irai_item_tbl[] = {
+static s32 irai_item_tbl[] = {
     151, -1,
 };
 
@@ -500,14 +561,14 @@ static s32 iri_17_item_tbl[] = {
  * Talk script of the Puni elder.
  * Handles two of Rogueport's trouble-center requests first:
  * trouble 10 (bring a Life Shroom, pays 60 coins)
- * and trouble 17 (take the Routing Slip: the elder asks which item to hand over,
- * then gives out the slip as an item).
- * Otherwise he explains the Puni's powers (story points 15_11 to 26,
- * once explained he repeats a shorter version),
+ * and trouble 17 (Mario hands over the Routing Slip from an item window,
+ * then the elder gives the slip back as an item).
+ * Otherwise, at story points 15_11 to 26, she gives the Crystal Star hint while the Elder tip flag is clear,
+ * or opens elder_talk_sub's menu once it is set,
  * and has a different line after the praise and after the game's end.
  */
 static EVT_BEGIN(elder_talk)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 10)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_EMERGENCY_SHROOM)
         CALL(evt_pouch_check_item, ITEM_LIFE_SHROOM, LW(0))
         IF_INT_GREATER_OR_EQUAL(LW(0), 1)
             CALL(evt_msg_print, 0, STRING("irai_10_01"), 0, STRING("me"))
@@ -520,8 +581,8 @@ static EVT_BEGIN(elder_talk)
                 CALL(evt_msg_print, 0, STRING("irai_10_02"), 0, STRING("me"))
                 CALL(evt_sub_get_coin, 60)
                 CALL(evt_pouch_remove_item, ITEM_LIFE_SHROOM, LW(0))
-                SET_VALUE(GSW(GSW_TROUBLE_ACTIVE), 0)
-                SET_VALUE(GSWF(GSWF_TROUBLE_10_SOLVED), 1)
+                SET_VALUE(GSW_TROUBLE_ACCEPTED, TROUBLE_NONE)
+                SET_VALUE(GSWF_TROUBLE_DONE(TROUBLE_EMERGENCY_SHROOM), 1)
                 CALL(evt_msg_print, 0, STRING("sys_request_finish"), 0, 0)
             END_IF
         ELSE
@@ -529,10 +590,10 @@ static EVT_BEGIN(elder_talk)
         END_IF
         RETURN
     END_IF
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 17)
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_BASE), 0)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_NEWSLETTER)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(0), 0)
         ELSE
-            IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_1), 0)
+            IF_INT_EQUAL(GSWF_TROUBLE_WORK(1), 0)
                 CALL(evt_msg_print, 0, STRING("irai_17_00"), 0, 0)
 #if VERSION <= VERSION_DEMO_JP
                 CALL(evt_win_item_select, PTR(iri_17_item_tbl), LW(0))
@@ -542,14 +603,14 @@ static EVT_BEGIN(elder_talk)
                 IF_INT_NOT_EQUAL(LW(0), -1)
                     CALL(evt_pouch_remove_item, ITEM_ROUTING_SLIP, LW(0))
                     CALL(evt_msg_print, 0, STRING("irai_17_01"), 0, 0)
-                    CALL(evt_item_entry, STRING("kairanban"), ITEM_ROUTING_SLIP, 0, -1000, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+                    CALL(evt_item_entry, STRING("kairanban"), ITEM_ROUTING_SLIP, 0, -1000, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
                     CALL(evt_item_get_item, STRING("kairanban"))
                     CALL(evt_item_get_item_end_wait, STRING("kairanban"))
-                    SET_VALUE(GSWF(GSWF_TROUBLE_WORK_1), 1)
+                    SET_VALUE(GSWF_TROUBLE_WORK(1), 1)
                 END_IF
                 RETURN
             ELSE
-                IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_2), 0)
+                IF_INT_EQUAL(GSWF_TROUBLE_WORK(2), 0)
                     CALL(evt_msg_print, 0, STRING("irai_17_02"), 0, 0)
                     RETURN
                 ELSE
@@ -559,14 +620,14 @@ static EVT_BEGIN(elder_talk)
             END_IF
         END_IF
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_15_11_PUNIES, STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI01_ELDER_POWERS_EXPLAINED), 0)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_15_11_PUNIES, STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_01_ELDER_TIP_SEEN, 0)
             CALL(evt_msg_print, 0, STRING("stg2_mri_e15_28"), 0, STRING("me"))
         ELSE
             CALL_CHILD(elder_talk_sub)
         END_IF
-        CASE_BETWEEN(STORY_STG2_26_PRAISE_FROM_THE_PUNI, STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_BETWEEN(STG2_26_PRAISE_FROM_THE_PUNI, STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_001"), 0, STRING("me"))
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_001_1"), 0, STRING("me"))
@@ -575,14 +636,15 @@ static EVT_BEGIN(elder_talk)
 EVT_END()
 
 /**
- * Init for the first villager Puni NPC: during Bowser's visit (story 33_04 to 33_06) it is left alone;
- * after chapter 2 and once Mario has left the tree it is placed at its post.
+ * Init event of the first villager Puni: does nothing from STG3_33_04_PEACH_BACK_TO_TEC to
+ * STG3_33_06_BOWSER_TREASURE; otherwise from STG2_26_PRAISE_FROM_THE_PUNI on, once
+ * GSWF_MRI_LEFT_AFTER_BOSS_BATTLE is set, it stands at (-280, 0, 10) facing 270.
  */
-EVT_BEGIN(puni_1_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG3_33_04_PEACH_BACK_TO_TEC, STORY_STG3_33_06_BOWSER_PUNI_ELDER)
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(puni_1_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG3_33_04_PEACH_BACK_TO_TEC, STG3_33_06_BOWSER_TREASURE)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), -280, 0, 10)
             CALL(evt_npc_set_ry, STRING("me"), 270)
         END_IF
@@ -592,24 +654,27 @@ EVT_END()
 
 /**
  * Talk script of the first villager Puni.
- * In chapter 7 it gives the hint about the white Boggly Tree;
+ * Its General White hint branch is at STG7_02_MAYOR_BOB in JP and later versions (the September demos included),
+ * but runs through the finale in the June US demo and the JP demo;
  * otherwise it has a line that changes after the story.
  */
 EVT_BEGIN(puni_1_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
 #if VERSION <= VERSION_DEMO_JP
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
+        IF_INT_EQUAL(GSWF_TOU_GENERAL_WHITE_HINT_HEARD, 0)
 #else
-        CASE_BETWEEN(STORY_STG7_02_MAYOR_BOB, STORY_STG7_02_MAYOR_BOB)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG7_02_MAYOR_BOB, STG7_02_MAYOR_BOB)
+        IF_INT_EQUAL(GSWF_TOU_GENERAL_WHITE_HINT_HEARD, 0)
 #endif
-        IF_INT_EQUAL(GSWF(GSWF_STG7_WHITE_GLITZVILLE_HINT), 0)
             CALL(evt_msg_print, 0, STRING("stg2_mri_re_000"), 0, STRING("me"))
         ELSE
             CALL(evt_msg_print, 0, STRING("stg2_mri_re_000_1"), 0, STRING("me"))
-            SET_VALUE(GSWF(GSWF_STG7_WHITE_BOGGLY_HINT), 1)
+            SET_VALUE(GSWF_MRI_GENERAL_WHITE_HINT_HEARD, 1)
         END_IF
 #if VERSION >= VERSION_JP
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_000"), 0, STRING("me"))
 #endif
         CASE_DEFAULT
@@ -619,11 +684,11 @@ EVT_BEGIN(puni_1_talk)
 EVT_END()
 
 /** Init for the second villager Puni NPC (same placement rules as puni_1_init). */
-EVT_BEGIN(puni_2_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG3_33_04_PEACH_BACK_TO_TEC, STORY_STG3_33_06_BOWSER_PUNI_ELDER)
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+static EVT_BEGIN(puni_2_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG3_33_04_PEACH_BACK_TO_TEC, STG3_33_06_BOWSER_TREASURE)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), 340, 0, 100)
             CALL(evt_npc_set_ry, STRING("me"), 270)
         END_IF
@@ -632,9 +697,9 @@ EVT_BEGIN(puni_2_init)
 EVT_END()
 
 /** Talk script of the second villager Puni: one line before the finale and a different one afterwards. */
-EVT_BEGIN(puni_2_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+static EVT_BEGIN(puni_2_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_017"), 0, STRING("me"))
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_017_1"), 0, STRING("me"))
@@ -642,21 +707,21 @@ EVT_BEGIN(puni_2_talk)
     RETURN
 EVT_END()
 
-/** Init for the generic villager Puni NPCs; only runs the shared NPC init. */
-EVT_BEGIN(puni_init)
+/** Init for the generic villager Puni NPCs; runs the shared NPC init and enables facing the movement direction. */
+static EVT_BEGIN(puni_init)
     CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
-/** Init script of the old woman Puni in Bowser's chapter 3 scene: does the shared NPC init and sets the status icon. */
+/** Init script of Kammy Koopa (ババ) in Bowser's chapter 3 scene: does the shared NPC init and enables facing the movement direction. */
 static EVT_BEGIN(baba_init)
     CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
-/** Talk script of the old woman Puni: her line in Bowser's scene (kpa_stg3_006). */
+/** Talk script of Kammy Koopa: her line in Bowser's scene (kpa_stg3_006). */
 static EVT_BEGIN(baba_talk)
     CALL(evt_msg_print, 0, STRING("kpa_stg3_006"), 0, STRING("me"))
     RETURN
@@ -668,11 +733,11 @@ EVT_END()
  * and clears the hopping flags GF(10) and GF(11).
  */
 static EVT_BEGIN(sister_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG3_33_04_PEACH_BACK_TO_TEC, STORY_STG3_33_06_BOWSER_PUNI_ELDER)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG3_33_04_PEACH_BACK_TO_TEC, STG3_33_06_BOWSER_TREASURE)
         CALL(evt_npc_change_interrupt, STRING("me"), 6, 0)
-        CASE_GREATER_OR_EQUAL(STORY_STG2_26_PRAISE_FROM_THE_PUNI)
-        IF_INT_EQUAL(GSWF(GSWF_MRI_LEFT_TREE_AFTER_STG2), 1)
+        CASE_GREATER_OR_EQUAL(STG2_26_PRAISE_FROM_THE_PUNI)
+        IF_INT_EQUAL(GSWF_MRI_LEFT_AFTER_BOSS_BATTLE, 1)
             CALL(evt_npc_set_position, STRING("me"), 100, 0, -10)
         END_IF
     END_SWITCH
@@ -685,7 +750,7 @@ EVT_END()
  * Makes the sister Puni hop in place over and over with the Puni jump sound, until the talk script sets GF(11).
  * GF(10) is set while she hops.
  */
-EVT_BEGIN(sister_jump)
+static EVT_BEGIN(sister_jump)
     SET_VALUE(GF(10), 1)
     SET_VALUE(GF(11), 0)
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
@@ -704,22 +769,20 @@ EVT_BEGIN(sister_jump)
 EVT_END()
 
 /**
- * Talk script of Petuni.
- * She stops hopping (GF(11)); once the quiz prize has been given she only repeats her last line.
- * Otherwise she greets Mario, then offers a quiz:
- * four multiple-choice questions about the Puni village (the answers must be the right ones for questions 1 to
- * 4); with all correct she gives a Mystic Egg (GSWF_MRI01_PETUNI_QUIZ_EGG_GIVEN),
- * with any wrong answer she tells Mario to try again.
+ * Talk script of Petuni: sets GF(11) and waits for GF(10) to clear. If she has given her prize this visit
+ * (GSWF_MRI_PETUNI_GAME_WON_THIS_VISIT) she only says stg2_mri_re_015. Otherwise she offers a quiz of four
+ * choices; the answers first, second, second, first win a Mystic Egg and set the flag, any other set gets
+ * stg2_mri_re_013. Declining the quiz runs sister_jump.
  */
 static EVT_BEGIN(sister_talk)
     SET_VALUE(GF(11), 1)
     WAIT_WHILE(GF(10))
-    IF_INT_EQUAL(GSWF(GSWF_MRI01_PETUNI_QUIZ_EGG_GIVEN), 1)
+    IF_INT_EQUAL(GSWF_MRI_PETUNI_GAME_WON_THIS_VISIT, 1)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_015"), 0, STRING("me"))
         RETURN
     END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_003"), 0, STRING("me"))
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_016_1"), 0, STRING("me"))
@@ -727,7 +790,7 @@ static EVT_BEGIN(sister_talk)
     CALL(evt_msg_select, 0, STRING("stg2_mri_re_004"))
     IF_INT_EQUAL(LW(0), 0)
         CALL(evt_msg_print_add, 0, STRING("stg2_mri_re_005"))
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("stg2_mri_re_006"), 0, 0)
         CALL(evt_msg_select, 0, STRING("stg2_mri_re_007"))
         SET_VALUE(LW(1), LW(0))
@@ -766,10 +829,10 @@ static EVT_BEGIN(sister_talk)
             CALL(evt_npc_jump_position_nohit, STRING("me"), LW(0), LW(1), LW(2), 200, 18)
             CALL(evt_msg_print, 0, STRING("stg2_mri_re_012"), 0, STRING("me"))
             CALL(evt_msg_print, 0, STRING("stg2_mri_re_014"), 0, STRING("me"))
-            CALL(evt_item_entry, STRING("puniko_item"), ITEM_MYSTIC_EGG, 0, -1000, 0, ITEM_ENTRY_FIXED, -1, 0)
+            CALL(evt_item_entry, STRING("puniko_item"), ITEM_MYSTIC_EGG, 0, -1000, 0, ITEM_TYPE_STILL, -1, 0)
             CALL(evt_item_get_item, STRING("puniko_item"))
             CALL(evt_msg_print, 0, STRING("stg2_mri_re_015"), 0, STRING("me"))
-            SET_VALUE(GSWF(GSWF_MRI01_PETUNI_QUIZ_EGG_GIVEN), 1)
+            SET_VALUE(GSWF_MRI_PETUNI_GAME_WON_THIS_VISIT, 1)
         ELSE
             CALL(evt_msg_print, 0, STRING("stg2_mri_re_013"), 0, STRING("me"))
         END_IF
@@ -786,8 +849,8 @@ EVT_END()
  */
 static NpcSetupInfo npcEnt[] = {
     {
-        "ガイド", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ガイド", // name (Punio)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         guide_init, // initEvent
         NULL, // regularEvent
@@ -798,8 +861,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ライバル", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ライバル", // name (Puniper)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         rival_init, // initEvent
         NULL, // regularEvent
@@ -810,8 +873,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "プニ族長老", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "プニ族長老", // name (the Puni elder)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         elder_init, // initEvent
         NULL, // regularEvent
@@ -822,8 +885,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "プニ族１", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "プニ族１", // name (a Puni villager (the first talkable one))
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         puni_1_init, // initEvent
         NULL, // regularEvent
@@ -834,8 +897,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "プニ族２", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "プニ族２", // name (a Puni)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         puni_2_init, // initEvent
         NULL, // regularEvent
@@ -846,8 +909,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "プニ族", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "プニ族", // name (a Puni villager who flees from Bowser)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         puni_init, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -856,8 +919,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "プニ族B", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "プニ族B", // name (a second Puni villager who flees from Bowser)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         puni_init, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -866,8 +929,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ガイド妹", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ガイド妹", // name (Petuni)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
         0, // reactionFlags
         sister_init, // initEvent
         NULL, // regularEvent
@@ -881,7 +944,7 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /** Closing animation of the west door (to mri_00), played after Mario enters the village. */
-EVT_BEGIN(bero_00_doa_close)
+static EVT_BEGIN(bero_00_doa_close)
     SET_VALUE(LW(9), 1)
     SET_VALUE(LW(10), STRING("S_doa_l_a"))
     SPAWN_EVENT(evt_mri_door_close)
@@ -889,7 +952,7 @@ EVT_BEGIN(bero_00_doa_close)
 EVT_END()
 
 /** Opening animation of the west door (to mri_00), played when Mario leaves through it. */
-EVT_BEGIN(bero_00_doa_open)
+static EVT_BEGIN(bero_00_doa_open)
     SET_VALUE(LW(9), 1)
     SET_VALUE(LW(10), STRING("S_doa_l_a"))
     SPAWN_EVENT(evt_mri_door_open)
@@ -913,7 +976,7 @@ static EVT_BEGIN(bero_01_doa_open)
 EVT_END()
 
 /** Exit script of the west door; returns 0 so the map change goes ahead. */
-EVT_BEGIN(out_mri_event)
+static EVT_BEGIN(out_mri_event)
     SET_VALUE(LW(0), 0)
     RETURN
 EVT_END()
@@ -933,7 +996,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)out_mri_event, // exitEvent
+        out_mri_event, // exitEvent
         "mri_00", // nextMapName
         "ne_bero", // nextBeroName
         4, // enterAnimeType
@@ -982,7 +1045,7 @@ static BeroEntry bero_entry_data[] = {
 /**
  * First visit to the village (story STG2_10): Punio leads Mario in and the door opens,
  * but two X-Naut grunts rush in. Mario fights them (battle info 4).
- * Sets the story to STORY_STG2_11_X_NAUT_BATTLE and starts meet_rival.
+ * Sets the story to STG2_11_X_NAUT_BATTLE and starts meet_rival.
  */
 EVT_BEGIN(bigtree_firstbattle)
     LOOP(0)
@@ -992,15 +1055,16 @@ EVT_BEGIN(bigtree_firstbattle)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // Punio leads Mario into the empty village; he wonders where everyone is and calls out.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
 #if VERSION >= VERSION_JP
     BEGIN_INLINE_EVENT
-        CALL(evt_mario_dispflag_onoff, 1, 4)
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_NO_REAR_POSE)
         CALL(evt_mario_set_dir, 90, 200, 0)
         CALL(evt_mario_adjust_dir)
-        CALL(evt_mario_dispflag_onoff, 0, 4)
+        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_NO_REAR_POSE)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         LOOP(0)
@@ -1014,14 +1078,14 @@ EVT_BEGIN(bigtree_firstbattle)
         CALL(evt_party_set_dir, 0, 90, 200)
     END_INLINE_EVENT
 #endif
-    CALL(evt_cam3d_evt_set, -28, 152, 548, -28, 57, 7, 1000, 11)
+    CALL(evt_cam3d_evt_set, -28, 152, 548, -28, 57, 7, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     SET_VALUE(LW(10), STRING("ガイド"))
     CALL(evt_party_get_pos, 1, LW(0), LW(1), LW(2))
     CALL(evt_npc_set_position, STRING("ガイド"), LW(0), LW(1), LW(2))
     CALL(evt_mario_clear_party, 1)
     CALL(evt_npc_set_ry, LW(10), 90)
-    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     SET_VALUE(LW(0), LW(10))
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, LW(10), -20, 73, 0, FLOAT(120.0f), 0)
@@ -1037,15 +1101,16 @@ EVT_BEGIN(bigtree_firstbattle)
     CALL(evt_npc_move_position, LW(10), 0, 73, 0, FLOAT(120.0f), 0)
     DELETE_EVENT(LW(9))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e11_01"), 0, LW(10))
-    CALL(evt_cam3d_evt_set, 350, 115, 400, 350, 45, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 350, 115, 400, 350, 45, 7, 500, EASING_SINE_IN_OUT)
+
     // The music stops as the door opens and the village doors close behind them.
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     WAIT_MS(580)
     CALL(evt_mapobj_get_position, STRING("S_lights_r"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_DOOR_UNLOCK"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(500)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_DOOR_LAMP"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("doalight01"), 0, 0)
+    CALL(evt_map_playanim, STRING("doalight01"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_MS(580)
     SET_VALUE(LW(9), 1)
     SET_VALUE(LW(10), STRING("S_doa_r_a"))
@@ -1063,7 +1128,7 @@ EVT_BEGIN(bigtree_firstbattle)
     SET_VALUE(LW(10), STRING("第三勢力部下Ａ"))
     SET_VALUE(LW(11), STRING("第三勢力部下Ｂ"))
     BEGIN_INLINE_EVENT
-        CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
         CALL(evt_npc_set_position, LW(10), 445, 0, 30)
         CALL(evt_npc_set_ry, LW(10), 270)
         SET_VALUE(LW(0), LW(10))
@@ -1072,15 +1137,16 @@ EVT_BEGIN(bigtree_firstbattle)
         DELETE_EVENT(LW(9))
     END_INLINE_EVENT
     WAIT_MS(500)
-    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_position, LW(11), 445, 0, 30)
     CALL(evt_npc_set_ry, LW(11), 270)
     CALL(evt_npc_move_position, LW(11), 337, 50, 0, FLOAT(120.0f), 0)
+
     // Danger music: two X-Naut grunts burst in.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER2"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER2"))
     CALL(evt_snd_bgm_scope, 0, -1)
-    CALL(evt_eff_fukidashi, 1, STRING(""), LW(10), 0, 0, 0, 0, 0, 0, 0, 60)
-    CALL(evt_eff_fukidashi, 1, STRING(""), LW(11), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), LW(10), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), LW(11), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_move_position, LW(10), 200, 20, 0, FLOAT(240.0f), 0)
@@ -1091,7 +1157,7 @@ EVT_BEGIN(bigtree_firstbattle)
         CALL(evt_npc_set_position, LW(11), 0, -1000, 0)
     END_INLINE_EVENT
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, -20, 130, 450, -20, 50, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -20, 130, 450, -20, 50, 7, 0, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         WAIT_MS(600)
@@ -1114,16 +1180,17 @@ EVT_BEGIN(bigtree_firstbattle)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_3"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
-    CALL(evt_eff_fukidashi, 0, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
-    CALL(evt_eff_fukidashi, 3, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ガイド"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ガイド"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
+
     // The grunts recognize Mario and argue whether to report him to Lord Crump or capture him themselves for
     // the credit.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e11_02"), 0, LW(10))
-    CALL(evt_eff_fukidashi, 1, STRING(""), LW(11), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), LW(11), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 52, 85, 303, 50, 35, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 52, 85, 303, 50, 35, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e11_03"), 0, LW(11))
     CALL(evt_npc_set_ry, LW(10), 90)
@@ -1134,9 +1201,9 @@ EVT_BEGIN(bigtree_firstbattle)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e11_07"), 0, LW(11))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e11_08"), 0, LW(10))
     CALL(evt_npc_set_ry, LW(10), 270)
-    CALL(evt_cam3d_evt_set, -20, 135, 500, -20, 50, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -20, 135, 500, -20, 50, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, -40, 135, 500, -40, 50, 7, 700, 11)
+    CALL(evt_cam3d_evt_set, -40, 135, 500, -40, 50, 7, 700, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_move_position, LW(10), -28, 20, 0, FLOAT(180.0f), 0)
     END_INLINE_EVENT
@@ -1145,6 +1212,7 @@ EVT_BEGIN(bigtree_firstbattle)
     END_INLINE_EVENT
     WAIT_MS(250)
     CALL(evt_npc_release_filednpc, 1)
+
     // The battle with the X-Nauts (battle info 4) starts and the script waits for it to end.
     CALL(evt_npc_set_battle_info, LW(10), 4)
     CALL(evt_npc_battle_start, LW(10))
@@ -1153,25 +1221,24 @@ EVT_BEGIN(bigtree_firstbattle)
 #if VERSION >= VERSION_JP
     CALL(evt_party_run, 0)
 #endif
-    // The story advances and the next scene, meet_rival, begins.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_11_X_NAUT_BATTLE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_11_X_NAUT_BATTLE)
     SET_VALUE(LW(10), STRING("第三勢力部下Ａ"))
     SET_VALUE(LW(11), STRING("第三勢力部下Ｂ"))
     CALL(evt_npc_set_position, STRING("ガイド"), -80, 0, 50)
     CALL(evt_npc_set_ry, STRING("ガイド"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_mario_set_pos, -60, 0, 30)
     CALL(evt_party_set_pos, 0, -100, 0, 20)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_party_set_dir, 0, 90, -1)
     CALL(evt_npc_set_position, LW(10), -18, 0, 20)
     CALL(evt_npc_set_ry, LW(10), 270)
-    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_position, LW(11), 1, 0, 50)
     CALL(evt_npc_set_ry, LW(11), 270)
-    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_map_playanim, STRING("doalight01"), 0, 0)
-    CALL(evt_cam3d_evt_set, -20, 125, 450, -20, 45, 7, 0, 11)
+    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_map_playanim, STRING("doalight01"), MAP_ANIM_PLAY_ONCE, 0)
+    CALL(evt_cam3d_evt_set, -20, 125, 450, -20, 45, 7, 0, EASING_SINE_IN_OUT)
     SPAWN_EVENT(meet_rival)
     RETURN
 EVT_END()
@@ -1179,34 +1246,34 @@ EVT_END()
 /**
  * After the X-Naut battle: the Punies hurry back, the rival Puni turns up,
  * argues with Punio and the villagers react; at the end Punio joins Mario's Puni group
- * (GSWF_MRI_PUNIO_IN_PUNI_GROUP). Sets the story to STORY_STG2_12_RIVAL_ARRIVAL.
+ * (GSWF_MRI_PUNIO_JOINED). Sets the story to STG2_12_RIVAL_ARRIVAL.
  */
-EVT_BEGIN(meet_rival)
+static EVT_BEGIN(meet_rival)
     // The beaten grunts decide to run back and report to Lord Crump.
     CALL(evt_mario_key_onoff, 0)
     SET_VALUE(LW(15), 5)
     LOOP(9)
         CALL(evt_puni_init_puni, LW(15), 30, 0, -1000, 0, 0)
-        CALL(evt_puni_flag_onoff, LW(15), 0, 8388608)
+        CALL(evt_puni_flag_onoff, LW(15), 0, PUNI_FLAG_NOT_IN_PARTY)
         ADD(LW(15), 1)
     END_LOOP
     SET_VALUE(LW(10), STRING("第三勢力部下Ａ"))
     SET_VALUE(LW(11), STRING("第三勢力部下Ｂ"))
     CALL(evt_npc_set_position, STRING("ガイド"), -80, 0, 50)
     CALL(evt_npc_set_ry, STRING("ガイド"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_mario_set_pos, -60, 0, 30)
     CALL(evt_party_set_pos, 0, -100, 0, 20)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_party_set_dir, 0, 90, -1)
     CALL(evt_npc_set_position, LW(10), -18, 0, 20)
     CALL(evt_npc_set_ry, LW(10), 270)
-    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_position, LW(11), 1, 0, 50)
     CALL(evt_npc_set_ry, LW(11), 270)
-    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_map_playanim, STRING("doalight01"), 0, 0)
-    CALL(evt_cam3d_evt_set, -20, 125, 450, -20, 45, 7, 0, 11)
+    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_map_playanim, STRING("doalight01"), MAP_ANIM_PLAY_ONCE, 0)
+    CALL(evt_cam3d_evt_set, -20, 125, 450, -20, 45, 7, 0, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_npc_move_position, LW(10), 2, 20, 0, FLOAT(180.0f), 0)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e11_09"), 0, LW(10))
@@ -1217,7 +1284,7 @@ EVT_BEGIN(meet_rival)
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
         CALL(evt_mapobj_trans, 1, STRING("S_doa_r_a"), 5, 0, -60)
-        CALL(evt_cam3d_evt_set, 350, 115, 400, 350, 45, 7, 0, 11)
+        CALL(evt_cam3d_evt_set, 350, 115, 400, 350, 45, 7, 0, EASING_SINE_IN_OUT)
         WAIT_MS(1000)
         SET_VALUE(LW(9), 1)
         SET_VALUE(LW(10), STRING("S_doa_r_a"))
@@ -1227,10 +1294,11 @@ EVT_BEGIN(meet_rival)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_DOOR_UNLOCK"), LW(0), LW(1), LW(2), 0)
         WAIT_MS(500)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_DOOR_LAMP"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_map_playanim, STRING("doalight02"), 0, 0)
+        CALL(evt_map_playanim, STRING("doalight02"), MAP_ANIM_PLAY_ONCE, 0)
         WAIT_MS(1000)
+
         // The village music returns and Punio calls the hiding Punies out.
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
         SET_VALUE(GF(0), 0)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
@@ -1248,28 +1316,29 @@ EVT_BEGIN(meet_rival)
     WAIT_WHILE(GF(0))
     SET_VALUE(LW(10), STRING("ガイド"))
     SET_VALUE(LW(11), STRING("ライバル"))
-    CALL(evt_cam3d_evt_set, -20, 141, 500, -20, 55, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -20, 141, 500, -20, 55, 7, 0, EASING_SINE_IN_OUT)
     SET_VALUE(LW(0), LW(10))
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, LW(10), -60, 50, 0, FLOAT(180.0f), 0)
     DELETE_EVENT(LW(9))
+
     // Punio thanks Mario; the Puni theme starts as the few remaining Punies creep out and see the huge,
     // mustached Mario.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_00"), 0, LW(10))
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_CH(1), STRING("BGM_EVT_STG2_PUNI1"), 2000)
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_SLOT(1), STRING("BGM_EVT_STG2_PUNI1"), 2000)
     CALL(evt_puni_pera_onoff, 5, 1)
     CALL(evt_puni_set_dir, 5, 270)
     CALL(evt_puni_set_position, 5, 40, 0, -66)
     CALL(evt_puni_move_position2, 5, -10, -66, FLOAT(150.0f))
     CALL(evt_puni_set_dir, 5, 90)
     WAIT_MS(200)
-    CALL(evt_eff_fukidashi, 1, STRING(""), LW(10), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), LW(10), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(800)
     CALL(evt_puni_move_position2, 5, 14, -66, FLOAT(150.0f))
     CALL(evt_puni_pera_onoff, 5, 0)
     WAIT_MS(1500)
-    CALL(evt_cam3d_evt_set, 150, 90, 275, 40, 40, 0, 1500, 11)
+    CALL(evt_cam3d_evt_set, 150, 90, 275, 40, 40, 0, 1500, EASING_SINE_IN_OUT)
     SET_VALUE(LW(0), LW(10))
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, LW(10), 24, -38, 0, FLOAT(120.0f), 0)
@@ -1286,7 +1355,7 @@ EVT_BEGIN(meet_rival)
     CALL(evt_puni_set_anim, 5, 1)
     CALL(evt_puni_move_position2, 5, -15, 20, FLOAT(120.0f))
     CALL(evt_puni_set_anim, 5, 0)
-    CALL(evt_cam3d_evt_set, -20, 150, 550, -20, 55, 9, 0, 11)
+    CALL(evt_cam3d_evt_set, -20, 150, 550, -20, 55, 9, 0, EASING_SINE_IN_OUT)
     WAIT_MS(400)
     BEGIN_INLINE_EVENT
         SET_VALUE(LW(0), LW(10))
@@ -1308,7 +1377,8 @@ EVT_BEGIN(meet_rival)
     CALL(evt_puni_set_anim, 5, 0)
     WAIT_MS(1000)
     CALL(evt_puni_get_position, 5, LW(0), LW(1), LW(2))
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
+
     // The Punies are frightened of Mario, with one comment after another about his size and his mustache.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_02"), 0, 0)
     CALL(evt_puni_set_position, 6, 60, 0, -66)
@@ -1318,10 +1388,10 @@ EVT_BEGIN(meet_rival)
     CALL(evt_puni_pera_onoff, 6, 0)
     WAIT_MS(500)
     CALL(evt_puni_get_position, 6, LW(0), LW(1), LW(2))
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_03"), 0, 0)
     CALL(evt_npc_set_ry, LW(10), 90)
-    CALL(evt_eff_fukidashi, 1, STRING(""), LW(10), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), LW(10), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_04"), 0, LW(10))
     BEGIN_INLINE_EVENT
@@ -1397,33 +1467,33 @@ EVT_BEGIN(meet_rival)
     WAIT_MS(1500)
     BEGIN_INLINE_EVENT
         CALL(evt_puni_get_position, 7, LW(0), LW(1), LW(2))
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e12_05"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_puni_get_position, 12, LW(0), LW(1), LW(2))
         ADD(LW(1), 40)
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e12_10"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_puni_get_position, 11, LW(0), LW(1), LW(2))
         ADD(LW(1), 20)
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e12_09"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_puni_get_position, 9, LW(0), LW(1), LW(2))
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e12_07"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_puni_get_position, 10, LW(0), LW(1), LW(2))
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e12_08"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(500)
@@ -1431,13 +1501,13 @@ EVT_BEGIN(meet_rival)
         CALL(evt_puni_get_position, 13, LW(0), LW(1), LW(2))
         ADD(LW(0), 10)
         ADD(LW(1), 10)
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e12_11"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_puni_get_position, 8, LW(0), LW(1), LW(2))
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e12_06"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(2000)
@@ -1453,6 +1523,7 @@ EVT_BEGIN(meet_rival)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_PUNI_JUMP1"), LW(10), LW(11), LW(12), 0)
     END_INLINE_EVENT
     CALL(evt_npc_jump_position_nohit, LW(10), LW(0), LW(1), LW(2), 200, 18)
+
     // Punio explains that Mario is a friend and asks the Punies to gather.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_12"), 0, LW(10))
     BEGIN_INLINE_EVENT
@@ -1577,20 +1648,21 @@ EVT_BEGIN(meet_rival)
     END_INLINE_EVENT
     WAIT_MS(3000)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_13"), 0, LW(10))
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_13_01"), 0, 0)
     CALL(evt_npc_set_ry, LW(10), 90)
     CALL(evt_npc_set_position, LW(11), 47, 0, -82)
-    CALL(evt_cam3d_evt_set, 20, 90, 303, 20, 40, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 20, 90, 303, 20, 40, 7, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_set_ry, LW(11), 270)
-    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, LW(11), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     SET_VALUE(LW(0), LW(11))
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, LW(11), 20, -21, 0, FLOAT(120.0f), 0)
     DELETE_EVENT(LW(9))
+
     // Puniper, the rival, doubts that Mario is an ally and quarrels with Punio.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_14"), 0, LW(11))
-    CALL(evt_cam3d_evt_set, 3, 71, 226, 3, 49, 104, 1000, 11)
+    CALL(evt_cam3d_evt_set, 3, 71, 226, 3, 49, 104, 1000, EASING_SINE_IN_OUT)
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
         SET_VALUE(LW(0), LW(10))
@@ -1605,18 +1677,18 @@ EVT_BEGIN(meet_rival)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_16"), 0, LW(11))
     BEGIN_INLINE_EVENT
         WAIT_MS(200)
-        CALL(evt_npc_flag_onoff, 0, LW(10), NPC_FLAG_MOVE_ANIM)
+        CALL(evt_npc_flag_onoff, 0, LW(10), NPC_FLAG_AUTO_MOVE_ANIM)
         SET_VALUE(LW(0), LW(10))
         SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
         CALL(evt_npc_move_position, LW(10), -20, -10, 0, FLOAT(180.0f), 0)
         DELETE_EVENT(LW(9))
-        CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_MOVE_ANIM)
+        CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_AUTO_MOVE_ANIM)
     END_INLINE_EVENT
     SET_VALUE(LW(0), LW(11))
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, LW(11), -15, 50, 0, FLOAT(120.0f), 0)
     DELETE_EVENT(LW(9))
-    CALL(evt_cam3d_evt_set, -28, 152, 548, -28, 57, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -28, 152, 548, -28, 57, 7, 0, EASING_SINE_IN_OUT)
     CALL(evt_npc_set_ry, LW(10), 90)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_17"), 0, LW(10))
@@ -1637,8 +1709,9 @@ EVT_BEGIN(meet_rival)
     CALL(evt_npc_set_ry, LW(10), 270)
     WAIT_MS(700)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_17_02"), 0, LW(10))
-    CALL(evt_cam3d_evt_set, 0, 80, 309, 0, 28, 9, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 80, 309, 0, 28, 9, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // Puniper explains that the elder, Petuni and the other Punies were captured by the X-Nauts; Punio is
     // shocked and vows to save them.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_18"), 0, LW(11))
@@ -1650,7 +1723,7 @@ EVT_BEGIN(meet_rival)
     CALL(evt_npc_jump_position_nohit, LW(10), LW(0), LW(1), LW(2), 200, 18)
     BEGIN_INLINE_EVENT
         WAIT_MS(100)
-        CALL(evt_cam3d_evt_set, -20, 80, 309, -20, 28, 9, 300, 11)
+        CALL(evt_cam3d_evt_set, -20, 80, 309, -20, 28, 9, 300, EASING_SINE_IN_OUT)
         SET_VALUE(LW(0), LW(11))
         SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
         CALL(evt_npc_move_position, LW(11), -35, 50, 0, FLOAT(120.0f), 0)
@@ -1680,6 +1753,7 @@ EVT_BEGIN(meet_rival)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_PUNI_JUMP1"), LW(10), LW(11), LW(12), 0)
     END_INLINE_EVENT
     CALL(evt_npc_jump_position_nohit, LW(11), LW(0), LW(1), LW(2), 200, 18)
+
     // Puniper scoffs that nobody can beat the giants and sets Punio and Mario a challenge.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_22"), 0, LW(11))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_23"), 0, LW(10))
@@ -1688,7 +1762,7 @@ EVT_BEGIN(meet_rival)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_24_00"), 0, LW(10))
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
-        CALL(evt_cam3d_evt_set, -35, 95, 352, -35, 35, 7, 500, 11)
+        CALL(evt_cam3d_evt_set, -35, 95, 352, -35, 35, 7, 500, EASING_SINE_IN_OUT)
         WAIT_MS(200)
         CALL(evt_npc_set_ry, LW(11), 270)
         WAIT_MS(800)
@@ -1698,14 +1772,14 @@ EVT_BEGIN(meet_rival)
     WAIT_MS(200)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_24_01"), 0, LW(11))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e12_25"), 0, LW(10))
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI1"))
-    SET_VALUE(GSWF(GSWF_MRI_PUNIO_IN_PUNI_GROUP), 1)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI1"))
+    SET_VALUE(GSWF_MRI_PUNIO_JOINED, 1)
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
     CALL(evt_npc_set_position, LW(10), 0, -1000, 0)
     CALL(evt_puni_init_puni, 1, 1, LW(0), LW(1), LW(2), 0)
-    CALL(evt_npc_flag_onoff, 0, LW(11), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, LW(11), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_puni_set_mode, 4, PUNI_MODE_STOP)
     CALL(evt_puni_set_mode, 5, PUNI_MODE_STOP)
     CALL(evt_puni_set_mode, 6, PUNI_MODE_STOP)
@@ -1716,9 +1790,8 @@ EVT_BEGIN(meet_rival)
     CALL(evt_puni_set_mode, 11, PUNI_MODE_STOP)
     CALL(evt_puni_set_mode, 12, PUNI_MODE_STOP)
     CALL(evt_puni_set_mode, 13, PUNI_MODE_STOP)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    // Punio joins Mario's Puni group, the music returns to normal and the story advances.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_12_RIVAL_ARRIVAL)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_12_RIVAL_ARRIVAL)
     CALL(evt_mario_key_onoff, 1)
     WAIT_MS(2000)
     BEGIN_INLINE_EVENT
@@ -1763,35 +1836,35 @@ EVT_END()
 /**
  * The rival Puni joins Mario (story STG2_14, elder freed):
  * the Puni elder gives Mario the Puni Orb, the rival and Punio join the group and nine Punies follow Mario.
- * Sets the story to STORY_STG2_15_11_PUNIES and starts elder_kaisetsu.
+ * Sets the story to STG2_15_11_PUNIES and starts elder_kaisetsu.
  */
-EVT_BEGIN(rival_nakama)
+static EVT_BEGIN(rival_nakama)
     CALL(evt_puni_init_puni, 5, 14, -89, 0, 0, 0)
-    CALL(evt_puni_flag_onoff, 5, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 5, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 5, 90)
     CALL(evt_puni_init_puni, 6, 14, -63, 0, -10, 0)
-    CALL(evt_puni_flag_onoff, 6, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 6, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 6, 90)
     CALL(evt_puni_init_puni, 7, 14, -116, 0, 54, 0)
-    CALL(evt_puni_flag_onoff, 7, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 7, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 7, 90)
     CALL(evt_puni_init_puni, 8, 14, -75, 0, 86, 0)
-    CALL(evt_puni_flag_onoff, 8, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 8, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 8, 90)
     CALL(evt_puni_init_puni, 9, 14, -105, 0, 84, 0)
-    CALL(evt_puni_flag_onoff, 9, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 9, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 9, 90)
     CALL(evt_puni_init_puni, 10, 14, -120, 0, 10, 0)
-    CALL(evt_puni_flag_onoff, 10, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 10, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 10, 90)
     CALL(evt_puni_init_puni, 11, 14, -134, 0, 42, 0)
-    CALL(evt_puni_flag_onoff, 11, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 11, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 11, 90)
     CALL(evt_puni_init_puni, 12, 14, -151, 0, 72, 0)
-    CALL(evt_puni_flag_onoff, 12, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 12, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 12, 90)
     CALL(evt_puni_init_puni, 13, 14, -136, 0, -19, 0)
-    CALL(evt_puni_flag_onoff, 13, 0, 8388608)
+    CALL(evt_puni_flag_onoff, 13, 0, PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_set_dir, 13, 90)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1800,7 +1873,8 @@ EVT_BEGIN(rival_nakama)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    // Puniper, the rival, sneers that Punio will not impress him; the freed Puni Elder arrives and scolds him.
+
+    // Puniper, the rival, sneers that Punio will not impress him; the freed Puni Elder scolds him.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_party_stop, 0)
@@ -1811,10 +1885,10 @@ EVT_BEGIN(rival_nakama)
     CALL(evt_puni_set_mode, 1, PUNI_MODE_INERT)
     CALL(evt_npc_set_position, STRING("ガイド"), LW(0), LW(1), LW(2))
     CALL(evt_npc_set_ry, STRING("ガイド"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ライバル"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ライバル"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -5, 95, 352, -5, 35, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -5, 95, 352, -5, 35, 7, 500, EASING_SINE_IN_OUT)
     SET_VALUE(LW(0), STRING("ガイド"))
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, STRING("ガイド"), 10, 38, 0, FLOAT(120.0f), 0)
@@ -1835,21 +1909,21 @@ EVT_BEGIN(rival_nakama)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_02"), 0, STRING("ライバル"))
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
-        CALL(evt_cam3d_evt_set, -45, 95, 352, -45, 35, 7, 200, 11)
+        CALL(evt_cam3d_evt_set, -45, 95, 352, -45, 35, 7, 200, EASING_SINE_IN_OUT)
         WAIT_MS(500)
-        CALL(evt_cam3d_evt_set, FLOAT(-45.0f), FLOAT(93.19922f), FLOAT(342.0f), FLOAT(-45.0f), FLOAT(35.0f), FLOAT(7.0f), 1000, 9)
+        CALL(evt_cam3d_evt_set, FLOAT(-45.0f), FLOAT(93.19922f), FLOAT(342.0f), FLOAT(-45.0f), FLOAT(35.0f), FLOAT(7.0f), 1000, EASING_WAVE_GROWING_FASTER)
         WAIT_MS(900)
-        CALL(evt_cam3d_evt_set, -45, 95, 352, -45, 35, 7, 200, 11)
+        CALL(evt_cam3d_evt_set, -45, 95, 352, -45, 35, 7, 200, EASING_SINE_IN_OUT)
         WAIT_MS(200)
         SET_VALUE(GF(0), 0)
     END_INLINE_EVENT
     WAIT_MS(200)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG2_PUNI1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG2_PUNI1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI1"))
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("プニ族長老"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_CHOUROU_BIG1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 2, FLOAT(1.0f), FLOAT(3.0f), 200)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, FLOAT(1.0f), FLOAT(3.0f), 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_scale, STRING("プニ族長老"), LW(0), LW(0), LW(0))
@@ -1863,10 +1937,11 @@ EVT_BEGIN(rival_nakama)
         WAIT_MS(300)
         CALL(evt_npc_set_ry, STRING("ライバル"), 270)
     END_INLINE_EVENT
+
     // The Elder orders everyone to help Mario; Puniper grudgingly agrees.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_03"), 0, STRING("プニ族長老"))
     WAIT_WHILE(GF(0))
-    CALL(evt_sub_intpl_msec_init, 5, FLOAT(3.0f), FLOAT(1.0f), 200)
+    CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, FLOAT(3.0f), FLOAT(1.0f), 200)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_npc_set_scale, STRING("プニ族長老"), LW(0), LW(0), LW(0))
@@ -1880,10 +1955,10 @@ EVT_BEGIN(rival_nakama)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_04"), 0, STRING("ライバル"))
     WAIT_MS(300)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_05"), 0, STRING("プニ族長老"))
-    CALL(evt_cam3d_evt_set, 40, 95, 352, 40, 35, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 40, 95, 352, 40, 35, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_06"), 0, STRING("ガイド"))
-    CALL(evt_cam3d_evt_set, -45, 95, 352, -45, 35, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -45, 95, 352, -45, 35, 7, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_07"), 0, STRING("プニ族長老"))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_08"), 0, STRING("ライバル"))
@@ -1896,28 +1971,29 @@ EVT_BEGIN(rival_nakama)
         ADD(LW(10), 1)
     END_LOOP
     WAIT_MS(700)
-    CALL(evt_cam3d_evt_set, -39, 152, 548, -39, 57, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -39, 152, 548, -39, 57, 7, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_09"), 0, STRING("プニ族長老"))
-    CALL(evt_cam3d_evt_set, 60, 115, 400, 60, 45, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 60, 115, 400, 60, 45, 7, 500, EASING_SINE_IN_OUT)
     SET_VALUE(LW(10), 5)
     LOOP(9)
         CALL(evt_puni_set_mode, LW(10), PUNI_MODE_JOIN)
-        CALL(evt_puni_flag_onoff, LW(10), 1, 8388608)
+        CALL(evt_puni_flag_onoff, LW(10), 1, PUNI_FLAG_NOT_IN_PARTY)
         ADD(LW(10), 1)
     END_LOOP
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    // Ten Punies join Mario's party (Punio and Puniper among them) with the party jingle.
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("FF_GET_KEYITEM1"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+
+    // Ten Punies (Puniper and nine followers) join Mario's group with the party jingle.
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("FF_GET_KEYITEM1"))
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_GET_PARTY1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_GET_PARTY1"))
         WAIT_MS(2000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_11"), 0, 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(500)
@@ -1928,12 +2004,13 @@ EVT_BEGIN(rival_nakama)
             ADD(LW(10), 1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_npc_set_ry, STRING("ライバル"), 90)
+
     // Punio thanks the others; the Elder tells Mario where the Crystal Star is hidden and that he must hurry.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_12"), 0, STRING("ガイド"))
-    CALL(evt_cam3d_evt_set, -50, 115, 400, -50, 45, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -50, 115, 400, -50, 45, 7, 500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("ガイド"), LW(10), LW(11), LW(12))
         ADD(LW(10), -20)
@@ -1961,11 +2038,11 @@ EVT_BEGIN(rival_nakama)
         CALL(evt_mario_set_dir, 270, 200, 0)
     END_INLINE_EVENT
     CALL(evt_msg_print_party, STRING("stg2_mri_e15_13"))
-    CALL(evt_cam3d_evt_set, -75, 69, 253, -75, 25, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -75, 69, 253, -75, 25, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_14"), 0, STRING("プニ族長老"))
-    CALL(evt_npc_flag_onoff, 1, STRING("ライバル"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_cam3d_evt_set, -25, 115, 400, -25, 45, 7, 0, 11)
+    CALL(evt_npc_flag_onoff, 1, STRING("ライバル"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_cam3d_evt_set, -25, 115, 400, -25, 45, 7, 0, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_15"), 0, STRING("プニ族長老"))
     BEGIN_INLINE_EVENT
@@ -1976,10 +2053,11 @@ EVT_BEGIN(rival_nakama)
     WAIT_MS(500)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     WAIT_MS(1000)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("プニ族長老"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("プニ族長老"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1500)
-    CALL(evt_cam3d_evt_set, -75, 69, 253, -75, 25, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -75, 69, 253, -75, 25, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // The Elder gives Mario the Puni Orb to place on the pedestals around the tree.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_16"), 0, STRING("プニ族長老"))
     CALL(evt_npc_set_ry, STRING("ガイド"), 270)
@@ -1989,12 +2067,12 @@ EVT_BEGIN(rival_nakama)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_CHOUROU_PUNIDAMA1"), LW(0), LW(1), LW(2), 0)
     ADD(LW(1), 5)
     ADD(LW(2), -2)
-    CALL(evt_item_entry, STRING("item00"), ITEM_PUNI_ORB, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED, -1, 0)
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_entry, STRING("item00"), ITEM_PUNI_ORB, LW(0), LW(1), LW(2), ITEM_TYPE_STILL, -1, 0)
+    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET)
     ADD(LW(1), 8)
-    CALL(evt_item_move_3d_position, STRING("item00"), LW(0), LW(1), LW(2), 500, 0)
+    CALL(evt_item_move_3d_position, STRING("item00"), LW(0), LW(1), LW(2), 500, EASING_LINEAR)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, -40, 115, 400, -40, 45, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -40, 115, 400, -40, 45, 7, 0, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_party_move_pos2, 0, -30, 10, FLOAT(120.0f))
     END_INLINE_EVENT
@@ -2008,8 +2086,8 @@ EVT_BEGIN(rival_nakama)
     CALL(evt_mario_set_pose, STRING("M_C_3"))
     WAIT_MS(700)
     CALL(evt_item_get_item, STRING("item00"))
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_party_move_pos2, 0, 10, 25, FLOAT(120.0f))
         CALL(evt_party_set_dir, 0, 270, -1)
@@ -2019,6 +2097,7 @@ EVT_BEGIN(rival_nakama)
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, STRING("ガイド"), -19, 56, 0, FLOAT(120.0f), 0)
     DELETE_EVENT(LW(9))
+
     // Punio rallies the group to rescue everyone; the village music returns.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_18"), 0, STRING("ガイド"))
     SET_VALUE(LW(10), 5)
@@ -2031,20 +2110,18 @@ EVT_BEGIN(rival_nakama)
     END_LOOP
     CALL(evt_puni_all_movestop, 0)
     WAIT_MS(700)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI3"))
-    SET_VALUE(GSWF(GSWF_MRI_RIVAL_IN_PUNI_GROUP), 1)
-    SET_VALUE(GSW(GSW_MRI_PUNI_FOLLOWERS), 9)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI3"))
+    SET_VALUE(GSWF_MRI_PUNIPER_JOINED, 1)
+    SET_VALUE(GSW_MRI_PUNI_FOLLOWER_COUNT, 9)
     CALL(evt_npc_get_position, STRING("ライバル"), LW(0), LW(1), LW(2))
     CALL(evt_npc_set_position, STRING("ライバル"), 0, -1000, 0)
     CALL(evt_puni_init_puni, 4, 1, LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_get_position, STRING("ガイド"), LW(0), LW(1), LW(2))
     CALL(evt_npc_set_position, STRING("ガイド"), 0, -1000, 0)
     CALL(evt_puni_init_puni, 1, 1, LW(0), LW(1), LW(2), 0)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    // Puniper is marked as part of the group, the story advances and the Elder's explanation (elder_kaisetsu)
-    // begins.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_15_11_PUNIES)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_15_11_PUNIES)
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
     SPAWN_EVENT(elder_kaisetsu)
@@ -2052,10 +2129,10 @@ EVT_BEGIN(rival_nakama)
 EVT_END()
 
 /**
- * The Puni elder explains the Punies' powers to Mario right after the Puni Orb scene,
- * with a camera shake as a Puni lands on Mario. Sets GSWF_MRI01_ELDER_POWERS_EXPLAINED.
+ * The Puni elder calls Mario back right after the Puni Orb scene (Mario takes a fall pose with a camera shake)
+ * and tells him she can call lost Punies back for him. Sets GSWF_MRI_01_ELDER_TIP_SEEN.
  */
-EVT_BEGIN(elder_kaisetsu)
+static EVT_BEGIN(elder_kaisetsu)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         IF_INT_GREATER_OR_EQUAL(LW(0), 25)
@@ -2084,7 +2161,7 @@ EVT_BEGIN(elder_kaisetsu)
         SET_VALUE(LW(2), 105)
     END_IF
     CALL(evt_mario_mov_pos2, LW(0), LW(2), LW(10))
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_LAND_DAMAGE1"), LW(0), LW(1), LW(2), 0)
@@ -2101,33 +2178,33 @@ EVT_BEGIN(elder_kaisetsu)
     CALL(evt_mario_set_dir, 270, 200, 0)
     WAIT_MS(500)
     WAIT_WHILE(GF(0))
-    CALL(evt_cam3d_evt_set, -25, 152, 548, -25, 57, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -25, 152, 548, -25, 57, 7, 500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_party_move_pos2, 0, 50, -15, FLOAT(120.0f))
         CALL(evt_party_set_dir, 0, 270, 200)
     END_INLINE_EVENT
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_20"), 0, STRING("プニ族長老"))
-    CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -75, 77, 303, -75, 25, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e15_21"), 0, STRING("プニ族長老"))
-    CALL(evt_cam3d_evt_off, 500, 11)
-    CALL(evt_mario_dispflag_onoff, 0, 2)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
-    SET_VALUE(GSWF(GSWF_MRI01_ELDER_POWERS_EXPLAINED), 1)
+    SET_VALUE(GSWF_MRI_01_ELDER_TIP_SEEN, 1)
     RETURN
 EVT_END()
 
 /**
- * Draw callback for the boss robot's cross-mark model ("batu"):
- * draws it at the robot's locator23 bone with the alpha passed in param, once per render mode.
+ * Draw callback (param = alpha): draws the NPC ボスロボットバツ (the cross mark) at the boss robot's locator23, turned with it
+ * and 0.2 units in front, with that alpha, in the current render mode.
  */
 static void bossrobot_batu(CameraId camera, void* param) {
     u8* alpha = param;
     NpcEntry* robot = npcNameToPtr("ボスロボット");
     NpcEntry* batu = npcNameToPtr("ボスロボットバツ");
-    Mtx* mtxs = *animPoseGetAnimPosePtr(robot->poseId)->worldMatrices;
+    Mtx* mtxs = (Mtx*)animPoseGetAnimPosePtr(robot->poseId)->worldMatrices->address;
     s32 idx = animPoseGetGroupIdx(robot->poseId, "locator23");
     Mtx rot;
     Mtx mtx;
@@ -2138,16 +2215,16 @@ static void bossrobot_batu(CameraId camera, void* param) {
     PSMTXTrans(rot, 0.0f, 0.0f, 0.2f);
     PSMTXConcat(mtx, rot, mtx);
     animPosePeraOff(batu->poseId);
-    animPoseSetMaterialFlagOn(batu->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(batu->poseId, MAP_OBJ_FLAG_COLOR);
     animPoseSetMaterialEvtColor(batu->poseId, (GXColor){0xFF, 0xFF, 0xFF, *alpha});
     switch (dispGetCurWork()->renderMode) {
-        case 0:
+        case DISP_MODE_OPAQUE:
             animPoseDrawMtx(batu->poseId, mtx, 1, 0.0f, 2.0f);
             break;
-        case 1:
+        case DISP_MODE_ALPHA_TEST:
             animPoseDrawMtx(batu->poseId, mtx, 2, 0.0f, 2.0f);
             break;
-        case 2:
+        case DISP_MODE_XLU:
             animPoseDrawMtx(batu->poseId, mtx, 3, 0.0f, 2.0f);
             break;
     }
@@ -2175,19 +2252,19 @@ static USER_FUNC(bossrobot) {
         bp = _mapAlloc(1);
         animPoseWorldMatrixEvalOn(robot->poseId);
         pose = animPoseGetAnimPosePtr(robot->poseId);
-        mtxs = *pose->worldMatrices;
+        mtxs = (Mtx*)pose->worldMatrices->address;
         for (i = 0; i < pose->numWorldMatrices; i++) {
             PSMTXTrans(mtxs[i], 0.0f, -1000.0f, 0.0f);
         }
     }
-    mtxs = *animPoseGetAnimPosePtr(robot->poseId)->worldMatrices;
+    mtxs = (Mtx*)animPoseGetAnimPosePtr(robot->poseId)->worldMatrices->address;
     idx = animPoseGetGroupIdx(robot->poseId, "locator17");
     maru->position = (Vec){mtxs[idx][0][3], mtxs[idx][1][3], mtxs[idx][2][3]};
     pos = (Vec){0.0f, 0.0f, 0.0f};
     *bp = alpha;
-    dispEntry(CAMERA_3D, dispCalcZ(&pos), 0, bossrobot_batu, bp);
-    dispEntry(CAMERA_3D, dispCalcZ(&pos), 1, bossrobot_batu, bp);
-    dispEntry(CAMERA_3D, dispCalcZ(&pos), 2, bossrobot_batu, bp);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_OPAQUE, bossrobot_batu, bp);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_ALPHA_TEST, bossrobot_batu, bp);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_XLU, bossrobot_batu, bp);
     return EVT_RETURN_BLOCK;
 }
 
@@ -2212,15 +2289,15 @@ static USER_FUNC(akari_charge_entry) {
     f32 scale = evtGetFloat(event, args[6]);
     EffectEntry* eff = effAkariChargeN64Entry(0, evtGetValue(event, args[7]), x, y, z, scale);
 
-    ((EffAkariChargeN64Work*)eff->userdata)->elem[0].r = a;
-    ((EffAkariChargeN64Work*)eff->userdata)->elem[0].g = b;
-    ((EffAkariChargeN64Work*)eff->userdata)->elem[0].b = c;
+    ((EffAkariChargeN64Work*)eff->userdata)->r = a;
+    ((EffAkariChargeN64Work*)eff->userdata)->g = b;
+    ((EffAkariChargeN64Work*)eff->userdata)->b = c;
     return EVT_RETURN_DONE;
 }
 
 /**
  * Message callback for the "kpa_stg3_012" line:
- * at the callback type 3, when the message result is 1 it sets local flag LSWF(2). Used in Bowser's visit.
+ * at callback type 3, when the current page index is 1 it sets local flag LSWF_MRI_01_KOOPA_MSG_CUE. Used in Bowser's visit.
  */
 static void mri_stg3_012_cb(s32 type, void* param) {
     u16* work = *(u16**)param;
@@ -2228,37 +2305,37 @@ static void mri_stg3_012_cb(s32 type, void* param) {
     switch (type) {
         case 3:
             if (work[4] == 1) {
-                evtSetValue(NULL, LSWF(2), TRUE);
+                evtSetValue(NULL, LSWF_MRI_01_KOOPA_MSG_CUE, TRUE);
             }
             break;
     }
 }
 
-/** Places the Punies 5 to 13 at fixed idle spots in the village (inert, no collision). */
-EVT_BEGIN(puni_taiki)
+/** Places the Punies 5 to 13 at fixed idle spots in the village (with the collision and not-in-party flags cleared). */
+static EVT_BEGIN(puni_taiki)
     CALL(evt_puni_init_puni, 5, 14, -55, 0, 20, 0)
-    CALL(evt_puni_flag_onoff, 5, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 5, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 6, 14, -40, 0, 93, 0)
-    CALL(evt_puni_flag_onoff, 6, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 6, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 7, 14, 19, 0, 52, 0)
-    CALL(evt_puni_flag_onoff, 7, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 7, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 8, 14, 50, 0, 18, 0)
-    CALL(evt_puni_flag_onoff, 8, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 8, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 9, 14, 52, 0, 66, 0)
-    CALL(evt_puni_flag_onoff, 9, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 9, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 10, 14, -35, 0, 50, 0)
-    CALL(evt_puni_flag_onoff, 10, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 10, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 11, 14, 38, 0, 46, 0)
-    CALL(evt_puni_flag_onoff, 11, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 11, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 12, 14, 24, 0, 92, 0)
-    CALL(evt_puni_flag_onoff, 12, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 12, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     CALL(evt_puni_init_puni, 13, 14, 71, 0, 39, 0)
-    CALL(evt_puni_flag_onoff, 13, 0, 9437184)
+    CALL(evt_puni_flag_onoff, 13, 0, PUNI_FLAG_COLLIDE | PUNI_FLAG_NOT_IN_PARTY)
     RETURN
 EVT_END()
 
 /** Packed positions of the Punies in the Elder's room for the thank-you scene, one 32-bit value per Puni. */
-s32 puni_position[] = {
+static s32 puni_position[] = {
     19267575, 23724122, 25100278, 19857429, 20774962, 24182781, 21037044, 23789617,
     25100278, 17956936, 18415731, 18153523, 19136593, 24051726, 22151142, 20840431,
     19136500, 20709482, 19922987, 22413292, 22020198, 21561381, 22282199, 22741005,
@@ -2278,50 +2355,50 @@ s32 puni_position[] = {
  * Creates the NPCs of the boss scene: the third-force executive (Lord Crump),
  * the Magnus von Grapple robot with its cross and circle parts, five X-Naut grunts and a dummy.
  */
-EVT_BEGIN(boss_battle_init)
-    CALL(evt_npc_entry, STRING("第三勢力幹部"), STRING("c_kanbu_ibt"))
+static EVT_BEGIN(boss_battle_init)
+    CALL(evt_npc_entry, STRING("第三勢力幹部"), STRING("c_kanbu_ibt")) // Lord Crump
     CALL(evt_npc_set_tribe, STRING("第三勢力幹部"), STRING("第三勢力幹部"))
     CALL(evt_npc_set_position, STRING("第三勢力幹部"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_SHADOW_NO_COLLISION)
-    CALL(evt_npc_entry, STRING("ボスロボット"), STRING("c_mb_robo_1a"))
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_SHADOW_NO_FLOOR)
+    CALL(evt_npc_entry, STRING("ボスロボット"), STRING("c_mb_robo_1a")) // Magnus von Grapple
     CALL(evt_npc_set_tribe, STRING("ボスロボット"), STRING("ボスロボット"))
     CALL(evt_npc_set_position, STRING("ボスロボット"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボット"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボット"), NPC_FLAG_NO_HIT | NPC_FLAG_SHADOW_NO_FLOOR | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_ry, STRING("ボスロボット"), 270)
-    CALL(evt_npc_entry, STRING("ボスロボットバツ"), STRING("c_mb_robo_c"))
+    CALL(evt_npc_entry, STRING("ボスロボットバツ"), STRING("c_mb_robo_c")) // the cross mark drawn on Magnus von Grapple
     CALL(evt_npc_set_tribe, STRING("ボスロボットバツ"), STRING("ボスロボットバツ"))
     CALL(evt_npc_set_position, STRING("ボスロボットバツ"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボットバツ"), NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_NO_SHADOW)
+    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボットバツ"), NPC_FLAG_NO_SHADOW | NPC_FLAG_SHADOW_NO_FLOOR)
     CALL(evt_npc_set_ry, STRING("ボスロボットバツ"), 270)
-    CALL(evt_npc_entry, STRING("ボスロボットマル"), STRING("c_mb_robo_1a"))
+    CALL(evt_npc_entry, STRING("ボスロボットマル"), STRING("c_mb_robo_1a")) // circle mark kept at Magnus von Grapple's locator
     CALL(evt_npc_set_tribe, STRING("ボスロボットマル"), STRING("ボスロボット"))
     CALL(evt_npc_set_position, STRING("ボスロボットマル"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボットマル"), NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_NO_SHADOW)
+    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボットマル"), NPC_FLAG_NO_SHADOW | NPC_FLAG_SHADOW_NO_FLOOR)
     CALL(evt_npc_set_anim, STRING("ボスロボットマル"), STRING("L_1"))
     CALL(evt_npc_set_ry, STRING("ボスロボットマル"), 270)
-    CALL(evt_npc_entry, STRING("部下１"), STRING("c_zako_n"))
+    CALL(evt_npc_entry, STRING("部下１"), STRING("c_zako_n")) // an X-Naut grunt in the boss scene
     CALL(evt_npc_set_tribe, STRING("部下１"), STRING("第三勢力部下"))
     CALL(evt_npc_set_position, STRING("部下１"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("部下１"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("部下２"), STRING("c_zako_n"))
+    CALL(evt_npc_flag_onoff, 1, STRING("部下１"), NPC_FLAG_NO_HIT | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_entry, STRING("部下２"), STRING("c_zako_n")) // an X-Naut grunt in the boss scene
     CALL(evt_npc_set_tribe, STRING("部下２"), STRING("第三勢力部下"))
     CALL(evt_npc_set_position, STRING("部下２"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("部下２"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("部下３"), STRING("c_zako_n"))
+    CALL(evt_npc_flag_onoff, 1, STRING("部下２"), NPC_FLAG_NO_HIT | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_entry, STRING("部下３"), STRING("c_zako_n")) // an X-Naut grunt in the boss scene
     CALL(evt_npc_set_tribe, STRING("部下３"), STRING("第三勢力部下"))
     CALL(evt_npc_set_position, STRING("部下３"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("部下３"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("部下４"), STRING("c_zako_n"))
+    CALL(evt_npc_flag_onoff, 1, STRING("部下３"), NPC_FLAG_NO_HIT | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_entry, STRING("部下４"), STRING("c_zako_n")) // an X-Naut grunt in the boss scene
     CALL(evt_npc_set_tribe, STRING("部下４"), STRING("第三勢力部下"))
     CALL(evt_npc_set_position, STRING("部下４"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("部下４"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("部下５"), STRING("c_zako_n"))
+    CALL(evt_npc_flag_onoff, 1, STRING("部下４"), NPC_FLAG_NO_HIT | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_entry, STRING("部下５"), STRING("c_zako_n")) // an X-Naut grunt in the boss scene
     CALL(evt_npc_set_tribe, STRING("部下５"), STRING("第三勢力部下"))
     CALL(evt_npc_set_position, STRING("部下５"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("部下５"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("ダミー"), STRING("c_zako_n"))
+    CALL(evt_npc_flag_onoff, 1, STRING("部下５"), NPC_FLAG_NO_HIT | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_entry, STRING("ダミー"), STRING("c_zako_n")) // invisible stand-in that bounces the Emerald Star in
     CALL(evt_npc_set_position, STRING("ダミー"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("ダミー"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_HIDDEN | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ダミー"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_DRAW | NPC_FLAG_NO_WALL_COLLISION)
     SET_VALUE(GW(10), 0)
     BEGIN_INLINE_EVENT_GET_ID(GW(11))
         SET_TYPE(0)
@@ -2340,7 +2417,7 @@ EVT_BEGIN(dai3kanbu_suikomare)
 #else
     BEGIN_INLINE_EVENT
 #endif
-        CALL(evt_sub_intpl_msec_init, 0, 100, 0, 300)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 100, 0, 300)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -2374,7 +2451,7 @@ EVT_END()
  * Starts the X-Naut paper animation: loads the OFF_d_xten paper,
  * captures it full screen into the "img" image and plays A_1.
  */
-EVT_BEGIN(boss_robot_pera)
+static EVT_BEGIN(boss_robot_pera)
     CALL(evt_paper_entry, STRING("OFF_d_xten"))
     CALL(evt_img_entry, STRING("img"))
     CALL(evt_img_set_paper, STRING("img"), STRING("OFF_d_xten"))
@@ -2386,7 +2463,7 @@ EVT_BEGIN(boss_robot_pera)
 EVT_END()
 
 /** Waits for the X-Naut paper animation to end, then releases the capture, image and paper. */
-EVT_BEGIN(boss_robot_pera_after)
+static EVT_BEGIN(boss_robot_pera_after)
     CALL(evt_img_wait_animend, STRING("img"))
     CALL(evt_img_free_capture, STRING("img"), 0)
     CALL(evt_img_onoff, STRING("img"), 0)
@@ -2396,17 +2473,17 @@ EVT_BEGIN(boss_robot_pera_after)
 EVT_END()
 
 /**
- * The boss intro in the village (story 23_01): Crump confronts the Puni elder, the Punies are hidden,
- * the time bomb is set and Crump gloats, then the Magnus von Grapple lands.
- * Mario then fights it (battle info 20). Sets the story to STORY_STG2_24_BOSS_BATTLE, then runs boss_battle_win.
+ * The boss intro in the village (story STG2_23_01_X_NAUT_BATTLE): Crump confronts the Puni elder, the Punies are hidden,
+ * Crump gloats and stops the time bomb's countdown, then the Magnus von Grapple lands.
+ * Mario then fights it (battle info 20). Sets the story to STG2_24_BOSS_BATTLE, then runs boss_battle_win.
  */
-EVT_BEGIN(boss_battle)
+static EVT_BEGIN(boss_battle)
     CALL(evt_npc_set_position, STRING("プニ族長老"), -320, 0, 30)
     CALL(evt_npc_set_ry, STRING("プニ族長老"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニ族長老"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニ族長老"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_position, STRING("第三勢力幹部"), -250, 0, 30)
     CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         IF_INT_LESS_OR_EQUAL(LW(0), 0)
@@ -2422,12 +2499,13 @@ EVT_BEGIN(boss_battle)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // Controls off; Lord Crump bursts into the village.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_party_stop, 0)
     CALL(evt_puni_puninum_onoff, 0)
-    CALL(evt_cam3d_evt_set, -285, 152, 548, -285, 57, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -285, 152, 548, -285, 57, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     SET_VALUE(LW(10), 1)
     LOOP(0)
@@ -2438,6 +2516,7 @@ EVT_BEGIN(boss_battle)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // The Puni Elder bars the way; Crump scoffs and calls her an old geezer.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_00"), 0, STRING("プニ族長老"))
     CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
@@ -2447,15 +2526,15 @@ EVT_BEGIN(boss_battle)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_01"), 0, STRING("第三勢力幹部"))
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
-        CALL(evt_cam3d_evt_set, FLOAT(-285.0f), FLOAT(150.19922f), FLOAT(538.2998f), FLOAT(-285.0f), FLOAT(57.0f), FLOAT(7.0f), 1000, 9)
+        CALL(evt_cam3d_evt_set, FLOAT(-285.0f), FLOAT(150.19922f), FLOAT(538.2998f), FLOAT(-285.0f), FLOAT(57.0f), FLOAT(7.0f), 1000, EASING_WAVE_GROWING_FASTER)
         WAIT_MS(900)
-        CALL(evt_cam3d_evt_set, -285, 152, 548, -285, 57, 7, 500, 11)
+        CALL(evt_cam3d_evt_set, -285, 152, 548, -285, 57, 7, 500, EASING_SINE_IN_OUT)
         WAIT_MS(200)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("プニ族長老"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_CHOUROU_BIG1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 2, FLOAT(1.0f), FLOAT(3.0f), 200)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, FLOAT(1.0f), FLOAT(3.0f), 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_scale, STRING("プニ族長老"), LW(0), LW(0), LW(0))
@@ -2491,10 +2570,11 @@ EVT_BEGIN(boss_battle)
         SET_FLOAT_VALUE(LW(0), FLOAT(0.39941406f))
         CALL(evt_npc_set_scale, STRING("第三勢力幹部"), LW(0), LW(0), LW(0))
     END_INLINE_EVENT
+
     // The Elder's back gives out as she tries to stand up to him.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_02"), 0, STRING("プニ族長老"))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 5, FLOAT(3.0f), FLOAT(1.0f), 200)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, FLOAT(3.0f), FLOAT(1.0f), 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_scale, STRING("プニ族長老"), LW(0), LW(0), LW(0))
@@ -2512,12 +2592,12 @@ EVT_BEGIN(boss_battle)
     CALL(evt_msg_continue)
     SET_FLOAT_VALUE(LW(0), FLOAT(1.0f))
     CALL(evt_npc_set_scale, STRING("第三勢力幹部"), LW(0), LW(0), LW(0))
-    CALL(evt_cam3d_evt_set, -240, 86, 302, -240, 35, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -240, 86, 302, -240, 35, 7, 0, EASING_SINE_IN_OUT)
     CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
     ADD(LW(0), 10)
     CALL(evt_npc_move_position, STRING("第三勢力幹部"), LW(0), LW(2), 200, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_03"), 0, STRING("第三勢力幹部"))
-    CALL(evt_cam3d_evt_set, -275, 86, 302, -275, 35, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -275, 86, 302, -275, 35, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_04"), 0, STRING("プニ族長老"))
     BEGIN_INLINE_EVENT
@@ -2539,28 +2619,29 @@ EVT_BEGIN(boss_battle)
     WAIT_MS(333)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_04_02"), 0, STRING("第三勢力幹部"))
     WAIT_MS(250)
-    // Mario's partner steps in front of her and Crump laughs; the Punies hide.
+
+    // Mario's partner steps in front of her and Crump laughs, then shuts off the bomb timer.
     CALL(evt_msg_print_party, STRING("stg2_mri_e24_05"))
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("第三勢力幹部"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("第三勢力幹部"), 0, 0, 0, 0, 0, 0, 0, 60)
     CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 90)
     CALL(evt_mario_set_pos, -100, 0, 30)
     CALL(evt_party_set_pos, 0, -70, 0, 30)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -180, 152, 548, -180, 57, 7, 1000, 11)
+    CALL(evt_cam3d_evt_set, -180, 152, 548, -180, 57, 7, 1000, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_party_move_pos2, 0, -120, 30, FLOAT(120.0f))
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_mario_mov_pos2, -150, 30, FLOAT(120.0f))
-        CALL(evt_mario_dispflag_onoff, 1, 2)
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
         CALL(evt_mario_set_pose, STRING("M_I_Y"))
     END_INLINE_EVENT
     WAIT_MS(1000)
     CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
     ADD(LW(1), 30)
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print_party, STRING("stg2_mri_e24_05_01"))
-    CALL(evt_cam3d_evt_set, -230, 88, 253, -230, 45, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -230, 88, 253, -230, 45, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_06"), 0, STRING("第三勢力幹部"))
     CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
@@ -2570,13 +2651,13 @@ EVT_BEGIN(boss_battle)
     CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_BOMB_TIMER_SET1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_anim, STRING("第三勢力幹部"), STRING("I_7"))
-    CALL(evt_sub_countdown_flag_onoff, 1, 8)
+    CALL(evt_sub_countdown_flag_onoff, 1, COUNTDOWN_FLAG_STOPPED)
     CALL(evt_countdown_stop)
     BEGIN_INLINE_EVENT_GET_ID(LW(10))
         LOOP(0)
-            CALL(evt_sub_countdown_flag_onoff, 1, 4)
+            CALL(evt_sub_countdown_flag_onoff, 1, COUNTDOWN_FLAG_HIDDEN)
             WAIT_MS(200)
-            CALL(evt_sub_countdown_flag_onoff, 0, 4)
+            CALL(evt_sub_countdown_flag_onoff, 0, COUNTDOWN_FLAG_HIDDEN)
             WAIT_MS(200)
         END_LOOP
     END_INLINE_EVENT
@@ -2589,9 +2670,10 @@ EVT_BEGIN(boss_battle)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_BOMB_SWITCH_AWAY1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_anim, STRING("第三勢力幹部"), STRING("I_8"))
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -180, 152, 548, -180, 57, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -180, 152, 548, -180, 57, 7, 0, EASING_SINE_IN_OUT)
     WAIT_MS(333)
-    // Crump sets the time bomb and calls his giant machine.
+
+    // Crump calls his giant machine.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_07"), 0, STRING("第三勢力幹部"))
     CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_BOMB_SWITCH_APPEAR1"), LW(0), LW(1), LW(2), 0)
@@ -2601,7 +2683,7 @@ EVT_BEGIN(boss_battle)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_BOMB_TIMER_SET1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_anim, STRING("第三勢力幹部"), STRING("I_7"))
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 150, 186, 549, 150, 90, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 150, 186, 549, 150, 90, 7, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_BOMB_SWITCH_AWAY1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_anim, STRING("第三勢力幹部"), STRING("I_8"))
@@ -2614,8 +2696,8 @@ EVT_BEGIN(boss_battle)
     SET_VALUE(LW(10), STRING("ボスロボット"))
     CALL(evt_npc_set_anim, LW(10), STRING("Z_1"))
     CALL(evt_npc_set_position, LW(10), 150, 240, 30)
-    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 0, LW(10), NPC_FLAG_SHADOW_NO_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_TALK_POSE)
+    CALL(evt_npc_flag_onoff, 0, LW(10), NPC_FLAG_SHADOW_NO_FLOOR)
     CALL(evt_npc_set_width, LW(10), 100)
     CALL(evt_npc_set_autotalkpose, LW(10), STRING("S_1"), STRING("T_1"))
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
@@ -2636,8 +2718,9 @@ EVT_BEGIN(boss_battle)
     WAIT_MS(1000)
     CALL(evt_npc_set_anim, LW(10), STRING("S_1"))
     CALL(evt_npc_sound_data_reset, LW(10))
+
     // Magnus von Grapple lands in the village to the sound of its entrance theme.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_MAGNUM_APP1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_MAGNUM_APP1"))
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_snd_sfxon, STRING("SFX_STG2_BOSS_APPEAR2"), LW(9))
     CALL_CHILD(boss_robot_pera)
@@ -2647,10 +2730,10 @@ EVT_BEGIN(boss_battle)
     CALL_CHILD(boss_robot_pera_after)
     CALL(evt_snd_sfxoff, LW(9))
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 150, 185, 400, 150, 115, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 150, 185, 400, 150, 115, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("stg2_mri_e24_08"), 0, STRING("ボスロボット"))
-    CALL(evt_cam3d_evt_set, 145, 186, 549, 145, 90, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 145, 186, 549, 145, 90, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_snd_sfxon, STRING("SFX_STG2_BOSS_LIGHT1"), 0)
     CALL(evtflash)
@@ -2669,7 +2752,7 @@ EVT_BEGIN(boss_battle)
     CALL(evt_npc_set_anim, LW(10), STRING("C_1"))
     BEGIN_INLINE_EVENT
         WAIT_MS(3830)
-        CALL(evt_sub_intpl_msec_init, 0, 0, 255, 666)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 255, 666)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(GW(10), LW(0))
@@ -2681,7 +2764,7 @@ EVT_BEGIN(boss_battle)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(4400)
-        CALL(evt_cam3d_evt_set, 145, 167, 549, 150, 71, 7, 500, 11)
+        CALL(evt_cam3d_evt_set, 145, 167, 549, 150, 71, 7, 500, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(4600)
@@ -2693,23 +2776,22 @@ EVT_BEGIN(boss_battle)
     CALL(evt_npc_set_position, LW(10), 150, 0, 30)
     CALL(evt_npc_set_anim, LW(10), STRING("S_3"))
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -20, 167, 549, -20, 71, 7, 1500, 11)
-    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボット"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_cam3d_evt_set, -20, 167, 549, -20, 71, 7, 1500, EASING_SINE_IN_OUT)
+    CALL(evt_npc_flag_onoff, 1, STRING("ボスロボット"), NPC_FLAG_AUTO_MOVE_ANIM)
     BEGIN_INLINE_EVENT_GET_ID(LW(12))
         CALL(evt_npc_move_position, LW(10), -20, 30, 1500, 0, 0)
     END_INLINE_EVENT
     WAIT_MS(1300)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    // The story advances and the battle with Magnus von Grapple (battle info 20) starts.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_24_BOSS_BATTLE)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_24_BOSS_BATTLE)
     CALL(evt_npc_release_filednpc, 1)
     CALL(evt_npc_set_battle_info, STRING("ボスロボット"), 20)
     CALL(evt_npc_battle_start, STRING("ボスロボット"))
     CALL(evt_npc_wait_battle_end)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI3"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI3"))
     DELETE_EVENT(LW(12))
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_mario_dispflag_onoff, 0, 2)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
@@ -2720,9 +2802,10 @@ EVT_BEGIN(boss_battle)
     CALL(evt_npc_set_ry, STRING("プニ族長老"), 90)
     CALL(evt_npc_set_position, STRING("プニ族長老"), -100, 0, 30)
     CALL(evt_npc_set_position, STRING("ボスロボット"), 90, 0, 30)
-    CALL(evt_cam3d_evt_set, 70, 156, 549, 70, 60, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, 70, 156, 549, 70, 60, 7, 0, EASING_SINE_IN_OUT)
     SET_VALUE(LW(0), 0)
-    // Control returns briefly, then the victory scene begins.
+
+    // The cast is reset with controls disabled, then the victory scene begins.
     SPAWN_EVENT(boss_battle_win)
     RETURN
 EVT_END()
@@ -2731,7 +2814,7 @@ EVT_END()
  * Keeps a Star Stone item on top of an NPC: copies the position of the NPC named in LW(8) onto the item in LW(9)
  * every frame.
  */
-EVT_BEGIN(starstone_item)
+static EVT_BEGIN(starstone_item)
     LOOP(0)
         CALL(evt_npc_get_position, LW(8), LW(0), LW(1), LW(2))
         CALL(evt_item_set_position, LW(9), LW(0), LW(1), LW(2))
@@ -2744,7 +2827,7 @@ EVT_END()
  * Boss robot damage effect: electric charge effects and crackling sounds at the NPC in LW(10),
  * forever until the event is deleted.
  */
-EVT_BEGIN(boss_robot_electro)
+static EVT_BEGIN(boss_robot_electro)
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
     BEGIN_SIBLING_EVENT
         LOOP(0)
@@ -2765,7 +2848,7 @@ EVT_END()
  * Boss robot damage effect: smoke puffs and explosion sounds at the NPC in LW(10),
  * forever until the event is deleted.
  */
-EVT_BEGIN(boss_robot_kemuri)
+static EVT_BEGIN(boss_robot_kemuri)
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
     BEGIN_SIBLING_EVENT
         LOOP(0)
@@ -2783,7 +2866,7 @@ EVT_BEGIN(boss_robot_kemuri)
 EVT_END()
 
 /** Places the cast for the boss-win scene: Mario, his partner, the Puni elder and the robot. */
-EVT_BEGIN(boss_battle_win_init)
+static EVT_BEGIN(boss_battle_win_init)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
@@ -2798,17 +2881,18 @@ EVT_BEGIN(boss_battle_win_init)
 EVT_END()
 
 /**
- * After beating the Magnus von Grapple: the robot breaks down, Crump is sucked away,
+ * After beating the Magnus von Grapple: the robot breaks down, Crump jumps out and retreats,
  * the Emerald Star appears and Mario receives it, and the Punies and the elder thank the party.
- * Sets the story to STORY_STG2_25_AFTER_THE_BOSS_BATTLE and runs the Star Stone sequence.
+ * Sets the story to STG2_25_AFTER_THE_BOSS_BATTLE and runs the Star Stone sequence.
  */
 EVT_BEGIN(boss_battle_win)
-    CALL(evt_cam3d_evt_set, 70, 156, 549, 70, 60, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, 70, 156, 549, 70, 60, 7, 0, EASING_SINE_IN_OUT)
+
     // The robot sparks and breaks down; the Punies come out of hiding.
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     IF_INT_EQUAL(LW(0), 1)
         CALL(evt_party_stop, 0)
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
+        CALL(evt_snd_envoff, PSND_FADEOUT)
         CALL(evt_puni_wait_systemmode, 2)
         CALL(evt_puni_puninum_onoff, 0)
         SET_VALUE(GW(10), 255)
@@ -2910,26 +2994,27 @@ EVT_BEGIN(boss_battle_win)
             BREAK_LOOP
         END_IF
     END_LOOP
-    // The Punies in the party run up to the wreckage (the Jabbi among them, if he joined).
-    IF_INT_EQUAL(GSWF(GSWF_MRI_JABBI_IN_PUNI_GROUP), 1)
+
+    // The named Punies of the party are placed beside Mario (the Jabbi among them, if he joined).
+    IF_INT_EQUAL(GSWF_MRI_JABBLE_JOINED, 1)
         CALL(evt_puni_set_mode, 3, PUNI_MODE_INERT)
         CALL(evt_puni_set_position, 3, -120, 0, 10)
         CALL(evt_puni_set_anim, 3, 0)
         CALL(evt_puni_set_dir, 3, 90)
     END_IF
-    CALL(evt_puni_flag_onoff, 1, 0, 262144)
+    CALL(evt_puni_flag_onoff, 1, 0, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_mode, 1, PUNI_MODE_INERT)
     CALL(evt_puni_set_anim, 1, 0)
     CALL(evt_npc_set_position, STRING("ガイドsp"), -90, 0, 10)
     CALL(evt_npc_set_ry, STRING("ガイドsp"), 90)
     CALL(evt_npc_set_anim, STRING("ガイドsp"), STRING("S_1"))
-    CALL(evt_puni_flag_onoff, 2, 0, 262144)
+    CALL(evt_puni_flag_onoff, 2, 0, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_mode, 2, PUNI_MODE_INERT)
     CALL(evt_puni_set_anim, 2, 0)
     CALL(evt_npc_set_position, STRING("ガイド妹sp"), -80, 0, 50)
     CALL(evt_npc_set_ry, STRING("ガイド妹sp"), 90)
     CALL(evt_npc_set_anim, STRING("ガイド妹sp"), STRING("S_1"))
-    CALL(evt_puni_flag_onoff, 4, 0, 262144)
+    CALL(evt_puni_flag_onoff, 4, 0, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_mode, 4, PUNI_MODE_INERT)
     CALL(evt_puni_set_anim, 4, 0)
     CALL(evt_npc_set_position, STRING("ライバルsp"), -20, 0, 50)
@@ -2939,7 +3024,7 @@ EVT_BEGIN(boss_battle_win)
     CALL(evt_party_cont_onoff, 0, 1)
     SET_VALUE(LW(10), STRING("ボスロボット"))
     SPAWN_EVENT_GET_ID(PTR(boss_robot_electro), LW(15))
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
@@ -2974,7 +3059,7 @@ EVT_BEGIN(boss_battle_win)
     SET_VALUE(LW(10), STRING("第三勢力幹部"))
     CALL(evt_npc_set_position, LW(10), 100, 40, 20)
     CALL(evt_npc_set_ry, LW(10), 270)
-    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
         CALL(evt_mario_set_dir, 270, 200, 0)
@@ -2985,7 +3070,7 @@ EVT_BEGIN(boss_battle_win)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_npc_set_rotate_offset, STRING("第三勢力幹部"), 0, 25, 0)
-        CALL(evt_sub_intpl_msec_init, 0, 1800, 855, 700)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 1800, 855, 700)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_rotate, STRING("第三勢力幹部"), 0, 0, LW(0))
@@ -2995,7 +3080,7 @@ EVT_BEGIN(boss_battle_win)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -200, 153, 549, -200, 57, 7, 1000, 11)
+    CALL(evt_cam3d_evt_set, -200, 153, 549, -200, 57, 7, 1000, EASING_SINE_IN_OUT)
     SET_VALUE(LW(10), STRING("第三勢力幹部"))
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_KANBU_ROUND1"), LW(0), LW(1), LW(2), 0)
@@ -3022,8 +3107,9 @@ EVT_BEGIN(boss_battle_win)
         MULTIPLY(LW(13), 9)
         ADD(LW(13), LW(0))
         CALL(evt_npc_set_position, STRING("ダミー"), LW(0), LW(1), LW(2))
-        // The Emerald Star is created off screen and then slid into place above the wreckage.
-        CALL(evt_item_entry, STRING("item00"), ITEM_EMERALD_STAR, 0, -1000, 0, ITEM_ENTRY_FIXED, -1, 0)
+
+        // The Emerald Star is created off screen and then bounced into place using the dummy NPC.
+        CALL(evt_item_entry, STRING("item00"), ITEM_EMERALD_STAR, 0, -1000, 0, ITEM_TYPE_STILL, -1, 0)
         SET_VALUE(LW(8), STRING("ダミー"))
         SET_VALUE(LW(9), STRING("item00"))
         SPAWN_EVENT_GET_ID(PTR(starstone_item), LW(15))
@@ -3037,18 +3123,19 @@ EVT_BEGIN(boss_battle_win)
         CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_STARSTONE_JUMP1"), LW(14), 0, LW(2), 0)
         DELETE_EVENT(LW(15))
         CALL(evt_npc_set_position, STRING("ダミー"), 0, -1000, 0)
-        CALL(evt_item_flag_off, STRING("item00"), ITEM_FLAG_NO_TOUCH)
+        CALL(evt_item_flag_off, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET)
         CALL(evt_item_set_position, STRING("item00"), LW(14), 0, LW(2))
     END_INLINE_EVENT
     WAIT_MS(800)
+
     // Lord Crump rages at Magnus's failure, vows revenge and calls his X-Nauts to retreat.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_HAPPY1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_HAPPY1"))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e25_00_00"), 0, LW(10))
     WAIT_MS(500)
     CALL(evt_npc_set_rotate, LW(10), 0, 0, 0)
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
     CALL(evt_npc_jump_position_nohit, LW(10), LW(0), LW(1), LW(2), 225, 30)
-    CALL(evt_cam3d_evt_set, -200, 88, 253, -200, 45, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, -200, 88, 253, -200, 45, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_npc_set_ry, LW(10), 90)
     WAIT_MS(833)
@@ -3067,7 +3154,7 @@ EVT_BEGIN(boss_battle_win)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_KANBU_ESCAPE1"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     SET_VALUE(LW(10), STRING("部下１"))
     SET_VALUE(LW(11), STRING("部下２"))
@@ -3131,8 +3218,9 @@ EVT_BEGIN(boss_battle_win)
         ADD(LW(0), -80)
 #endif
         ADD(LW(1), 30)
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
-        // The Punies cheer and the grunts flee in a panic.
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
+
+        // The fleeing grunts cry out in panic.
         CALL(evt_msg_print, 0, STRING("stg2_mri_e25_00_03"), 0, 0)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
@@ -3148,7 +3236,7 @@ EVT_BEGIN(boss_battle_win)
         ADD(LW(0), -80)
 #endif
         ADD(LW(1), 30)
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e25_00_04"), 0, 0)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
@@ -3164,7 +3252,7 @@ EVT_BEGIN(boss_battle_win)
         ADD(LW(0), -80)
 #endif
         ADD(LW(1), 30)
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e25_00_05"), 0, 0)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
@@ -3180,14 +3268,14 @@ EVT_BEGIN(boss_battle_win)
         ADD(LW(0), -80)
 #endif
         ADD(LW(1), 30)
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_msg_print, 0, STRING("stg2_mri_e25_00_06"), 0, 0)
     END_INLINE_EVENT
     WAIT_MS(3000)
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_KANBU_ESCAPE1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_move_position, LW(10), 30, LW(2), 0, FLOAT(180.0f), 0)
-    CALL(evt_npc_flag_onoff, 0, LW(10), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 0, LW(10), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_anim, LW(10), STRING("D_4"))
     CALL(evt_npc_jump_position_nohit, LW(10), 0, 0, LW(2), 200, 15)
     BEGIN_INLINE_EVENT
@@ -3196,7 +3284,7 @@ EVT_BEGIN(boss_battle_win)
     CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_3RD1_MISS1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(1000)
-    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, LW(10), NPC_FLAG_AUTO_MOVE_ANIM)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, LW(10), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_KANBU_ESCAPE1"), LW(0), LW(1), LW(2), 0)
@@ -3210,14 +3298,15 @@ EVT_BEGIN(boss_battle_win)
     CALL(evt_npc_set_ry, STRING("ガイド妹sp"), 270)
     CALL(evt_npc_set_ry, STRING("ライバルsp"), 270)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -50, 115, 400, -50, 45, 7, 0, 11)
+    CALL(evt_cam3d_evt_set, -50, 115, 400, -50, 45, 7, 0, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_party_set_dir, 0, 90, -1)
     CALL(evt_npc_set_ry, STRING("ガイドsp"), 90)
     CALL(evt_npc_set_ry, STRING("ガイド妹sp"), 90)
     CALL(evt_npc_set_ry, STRING("ライバルsp"), 90)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_HAPPY1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_HAPPY1"))
     CALL(evt_msg_print_party, STRING("stg2_mri_e25_00"))
+
     // Punio celebrates; the Elder tells Mario to take the Emerald Star.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e25_01"), 0, STRING("ガイドsp"))
     WAIT_MS(500)
@@ -3234,19 +3323,22 @@ EVT_BEGIN(boss_battle_win)
     END_INLINE_EVENT
     CALL(evt_npc_set_ry_lr, STRING("ライバルsp"), 0)
     CALL(evt_mario_mov_pos, -50, 60, 500)
+
     // The story advances and the Emerald Star is held up for the Star Stone sequence.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_25_AFTER_THE_BOSS_BATTLE)
     CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
     CALL(evt_item_set_position, STRING("item00"), 0, -1000, 0)
     SET_VALUE(LW(10), STRING("item01"))
-    CALL(evt_item_entry, LW(10), ITEM_EMERALD_STAR, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED, -1, 0)
-    CALL(evt_item_flag_on, LW(10), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_entry, LW(10), ITEM_EMERALD_STAR, LW(0), LW(1), LW(2), ITEM_TYPE_STILL, -1, 0)
+    CALL(evt_item_flag_on, LW(10), ITEM_FLAG_NO_TOUCH_GET)
     SET_VALUE(LW(0), 2)
     SET_VALUE(LW(1), LW(10))
-#if VERSION >= VERSION_JP
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-#endif
+#if VERSION <= VERSION_DEMO_JP
     CALL_CHILD(evt_sub_starstone)
+#else
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+    CALL_CHILD(evt_sub_starstone)
+#endif
     RETURN
 EVT_END()
 
@@ -3255,25 +3347,25 @@ EVT_END()
  * switches the east loading zone off; otherwise plays the lit door animation.
  */
 static EVT_BEGIN(door_switch_init)
-    IF_INT_EQUAL(GSWF(GSWF_MRI05_WEST_DOOR_UNLOCKED), 0)
+    IF_INT_EQUAL(GSWF_MRI_05_DOOR_SWITCH_ON, 0)
         SET_VALUE(LW(0), STRING("e_bero"))
         CALL_CHILD(bero_case_switch_off)
     ELSE
-        CALL(evt_map_playanim, STRING("doalight01"), 2, 0)
+        CALL(evt_map_playanim, STRING("doalight01"), MAP_ANIM_PLAY_AT_END, 0)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * The Puni NPC "プニ族" appears at a planter (x in LW(0), z in LW(1), message key in LW(2)), says its line,
- * hops and runs off.
+ * The Puni NPC "プニ族" speaks its line while hidden at a planter (x in LW(0), z in LW(1), message key in LW(2)),
+ * then appears, hops and runs off.
  */
-EVT_BEGIN(ueki_puni_nigeru)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニ族"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニ族"), NPC_FLAG_HIDDEN)
+static EVT_BEGIN(ueki_puni_nigeru)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニ族"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニ族"), NPC_FLAG_NO_DRAW)
     CALL(evt_npc_set_position, STRING("プニ族"), LW(0), 0, LW(1))
     CALL(evt_msg_print, 0, LW(2), 0, STRING("プニ族"))
-    CALL(evt_npc_flag_onoff, 0, STRING("プニ族"), NPC_FLAG_HIDDEN)
+    CALL(evt_npc_flag_onoff, 0, STRING("プニ族"), NPC_FLAG_NO_DRAW)
     ADD(LW(0), 50)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("プニ族"), LW(10), LW(11), LW(12))
@@ -3291,13 +3383,13 @@ EVT_BEGIN(ueki_puni_nigeru)
     CALL(evt_npc_move_position, STRING("プニ族"), LW(0), LW(1), 0, 150, 0)
     DELETE_EVENT(LW(9))
     CALL(evt_npc_set_position, STRING("プニ族"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 0, STRING("プニ族"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("プニ族"), NPC_FLAG_NO_HIT)
     RETURN
 EVT_END()
 
 /** Planter hit script 1: during Bowser's visit the rival Puni speaks a line from a planter. */
-EVT_BEGIN(evt_ueki_01)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
+static EVT_BEGIN(evt_ueki_01)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_05_BOWSER_THE_GREAT_TREE)
         CALL(evt_mario_key_onoff, 0)
         CALL(evt_msg_print, 0, STRING("kpa_stg3_005"), 0, STRING("ライバル"))
         CALL(evt_mario_key_onoff, 1)
@@ -3306,11 +3398,11 @@ EVT_BEGIN(evt_ueki_01)
 EVT_END()
 
 /**
- * Planter hit script 2: during Bowser's visit (STORY_STG3_33_05) Punio's sister and Punio speak their lines
- * when Mario hits it.
+ * Planter hit script 2: during Bowser's visit (STG3_33_05) Punio's sister and Punio speak their lines
+ * when Bowser hits it.
  */
 static EVT_BEGIN(evt_ueki_02)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_05_BOWSER_THE_GREAT_TREE)
         CALL(evt_mario_key_onoff, 0)
         CALL(evt_msg_print, 0, STRING("kpa_stg3_003"), 0, STRING("ガイド妹"))
         CALL(evt_msg_print, 0, STRING("kpa_stg3_004"), 0, STRING("ガイド"))
@@ -3320,35 +3412,36 @@ static EVT_BEGIN(evt_ueki_02)
 EVT_END()
 
 /**
- * Planter hit script 3: during Bowser's visit a Puni runs out of it (once,
- * GSWF_MRI01_BOWSER_PLANTER_SCENE_DONE); outside of it the planter drops a coin.
+ * Planter hit script 3: at STG3_33_05_BOWSER_THE_GREAT_TREE a Puni runs out of it (once,
+ * GSWF_MRI_01_BOWSER_PLANT_SCENE_SEEN); at other times the planter drops a coin (GSWF_MRI_01_COIN_PLANT) when it
+ * is not already out.
  */
-EVT_BEGIN(evt_ueki_03)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
-        IF_INT_EQUAL(GSWF(GSWF_MRI01_BOWSER_PLANTER_SCENE_DONE), 0)
+static EVT_BEGIN(evt_ueki_03)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_05_BOWSER_THE_GREAT_TREE)
+        IF_INT_EQUAL(GSWF_MRI_01_BOWSER_PLANT_SCENE_SEEN, 0)
             CALL(evt_mario_key_onoff, 0)
             SET_VALUE(LW(0), -245)
             SET_VALUE(LW(1), -15)
             SET_VALUE(LW(2), STRING("kpa_stg3_006_2"))
             CALL_CHILD(ueki_puni_nigeru)
-            SET_VALUE(GSWF(GSWF_MRI01_BOWSER_PLANTER_SCENE_DONE), 1)
+            SET_VALUE(GSWF_MRI_01_BOWSER_PLANT_SCENE_SEEN, 1)
             CALL(evt_mario_key_onoff, 1)
         END_IF
     ELSE
         CALL(evt_item_delete_check, STRING("item_ueki_03"), LW(0))
         IF_INT_EQUAL(LW(0), 1)
-            CALL(evt_item_entry, STRING("item_ueki_03"), ITEM_COIN, -240, 0, -20, ITEM_ENTRY_LAUNCH, GSWF(GSWF_MRI01_PLANTER_COIN_TAKEN), 0)
+            CALL(evt_item_entry, STRING("item_ueki_03"), ITEM_COIN, -240, 0, -20, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_MRI_01_COIN_PLANT, 0)
         END_IF
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Planter hit script 8: during Bowser's visit (STORY_STG3_33_05) it starts the second Koopa scene
+ * Planter hit script 8: during Bowser's visit (STG3_33_05) it starts the second Koopa scene
  * (mri_01_koopa_second_evt).
  */
 static EVT_BEGIN(evt_ueki_08)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_05_BOWSER_THE_GREAT_TREE)
         SPAWN_EVENT(mri_01_koopa_second_evt)
     END_IF
     RETURN
@@ -3368,10 +3461,10 @@ static KusaAccess ueki_access_data[] = {
 };
 
 /**
- * When Mario comes back from mri_02, puts every Puni that is not stuck in a trap on the village floor at a
+ * When Mario comes back from mri_02, places eligible Punies that are not stuck in a trap on the village floor at a
  * random spot.
  */
-EVT_BEGIN(puni_mario_wait)
+static EVT_BEGIN(puni_mario_wait)
     CALL(evt_puni_wait_systemmode, 2)
     SET_VALUE(LW(10), 1)
     LOOP(0)
@@ -3392,26 +3485,26 @@ EVT_BEGIN(puni_mario_wait)
 EVT_END()
 
 /**
- * Bowser's chapter 3 interlude, part 1 (story 33_04):
+ * Bowser's chapter 3 interlude, part 1 (at STG3_33_04_PEACH_BACK_TO_TEC):
  * Bowser and Kammy Koopa arrive in the village and a Puni sees them.
- * Sets the story to STORY_STG3_33_05_BOWSER_THE_GREAT_TREE.
+ * Sets the story to STG3_33_05_BOWSER_THE_GREAT_TREE.
  */
-EVT_BEGIN(mri_01_koopa_first_evt)
-    // Bowser and Kammy arrive in the village after the doors close behind them.
+static EVT_BEGIN(mri_01_koopa_first_evt)
+    // Bowser and Kammy arrive in the village; the room's exits are disabled.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_set_pos, -415, 0, 30)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_npc_set_position, STRING("ババ"), -415, 0, 30)
-    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_HIT)
     CALL(evt_npc_set_ry, STRING("ババ"), 90)
     CALL(evt_npc_set_position, STRING("プニ族"), -126, 0, 11)
     CALL(evt_npc_set_position, STRING("プニ族B"), -95, 0, 11)
     CALL(evt_npc_set_position, STRING("プニ族長老"), 0, -1000, 0)
     CALL(evt_npc_set_ry, STRING("プニ族"), 90)
     CALL(evt_npc_set_ry, STRING("プニ族B"), 270)
-    CALL(evt_cam3d_evt_set, -126, 134, 399, -126, 65, 8, 0, 11)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_cam3d_evt_set, -126, 134, 399, -126, 65, 8, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     CALL(evt_fade_end_wait)
     SET_VALUE(LW(0), STRING("w_bero"))
     CALL_CHILD(bero_case_switch_off)
@@ -3424,8 +3517,8 @@ EVT_BEGIN(mri_01_koopa_first_evt)
         CALL(evt_npc_move_position, STRING("ババ"), -355, 30, 0, FLOAT(60.0f), 0)
     END_INLINE_EVENT
     CALL(evt_mario_mov_pos2, -280, 30, FLOAT(60.0f))
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("プニ族"), 0, 0, 0, 0, 0, 0, 0, 60)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("プニ族B"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("プニ族"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("プニ族B"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     CALL(evt_npc_set_ry, STRING("プニ族"), 270)
     WAIT_MS(300)
@@ -3435,6 +3528,7 @@ EVT_BEGIN(mri_01_koopa_first_evt)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_PUNI_JUMP1"), LW(10), LW(11), LW(12), 0)
     END_INLINE_EVENT
     CALL(evt_npc_jump_position_nohit, STRING("プニ族"), LW(0), LW(1), LW(2), 200, 10)
+
     // A Puni sees the giant Bowser and tells everyone to hide.
     CALL(evt_msg_print, 0, STRING("kpa_stg3_000"), 0, STRING("プニ族"))
     BEGIN_INLINE_EVENT
@@ -3444,7 +3538,7 @@ EVT_BEGIN(mri_01_koopa_first_evt)
         SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
         CALL(evt_npc_move_position, STRING("プニ族B"), LW(10), LW(12), 0, FLOAT(90.0f), 0)
         DELETE_EVENT(LW(9))
-        CALL(evt_npc_flag_onoff, 1, STRING("プニ族B"), NPC_FLAG_HIDDEN | NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("プニ族B"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_DRAW)
     END_INLINE_EVENT
     CALL(evt_npc_get_position, STRING("プニ族"), LW(10), LW(11), LW(12))
     ADD(LW(10), 150)
@@ -3452,15 +3546,16 @@ EVT_BEGIN(mri_01_koopa_first_evt)
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_move_position, STRING("プニ族"), LW(10), LW(12), 0, FLOAT(90.0f), 0)
     DELETE_EVENT(LW(9))
-    CALL(evt_npc_flag_onoff, 1, STRING("プニ族"), NPC_FLAG_HIDDEN | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニ族"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_DRAW)
     WAIT_MS(300)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg3_000_01"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, -165, 135, 365, -310, 65, 7, 1000, 11)
+    CALL(evt_cam3d_evt_set, -165, 135, 365, -310, 65, 7, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // Bowser's theme: he grumbles about Mario cheating, Kammy asks what he said, and he points out the little
     // creatures they saw.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_KUPPA1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_KUPPA1"))
     CALL(evt_snd_bgm_scope, 0, 1)
     WAIT_MS(500)
     WAIT_MS(250)
@@ -3473,23 +3568,24 @@ EVT_BEGIN(mri_01_koopa_first_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg3_001"), 0, STRING("mario"))
     WAIT_MS(250)
     CALL(evt_msg_print, 0, STRING("kpa_stg3_002"), 0, STRING("ババ"))
-    CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_NO_HIT)
     CALL(evt_mario_set_dir, 90, 300, 0)
+
     // The story advances and Bowser gets his controls back.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_33_05_BOWSER_THE_GREAT_TREE)
     CALL(evt_npc_set_position, STRING("ライバル"), -198, -5, 53)
     CALL(evt_npc_set_ry, STRING("ライバル"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("ライバル"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ライバル"), NPC_FLAG_NO_HIT)
     CALL(evt_npc_set_position, STRING("ガイド"), -202, 5, -59)
     CALL(evt_npc_set_position, STRING("ガイド妹"), -196, -3, -69)
     CALL(evt_npc_set_ry, STRING("ガイド"), 270)
     CALL(evt_npc_set_ry, STRING("ガイド妹"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイド妹"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイド妹"), NPC_FLAG_NO_HIT)
     CALL(evt_npc_set_position, STRING("プニ族長老"), 261, 0, 62)
     CALL(evt_npc_set_ry, STRING("プニ族長老"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニ族長老"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニ族長老"), NPC_FLAG_NO_HIT)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_snd_bgm_scope, 0, 0)
@@ -3497,16 +3593,15 @@ EVT_BEGIN(mri_01_koopa_first_evt)
 EVT_END()
 
 /**
- * Bowser's chapter 3 interlude, part 2 (story 33_05):
- * Bowser leaps up to the Puni elder, who grows huge, and they talk about the Star Stone;
- * the scene ends with a save and a Bowser-style map change.
- * Sets the story to STORY_STG3_33_06_BOWSER_PUNI_ELDER.
+ * Bowser's chapter 3 interlude, part 2 (at STG3_33_05_BOWSER_THE_GREAT_TREE):
+ * Bowser leaps up to the Puni Elder, who grows huge, and they talk about the Crystal Star.
+ * Sets the story to STG3_33_06_BOWSER_TREASURE, saves and changes the map to tou_02.
  */
-EVT_BEGIN(mri_01_koopa_second_evt)
+static EVT_BEGIN(mri_01_koopa_second_evt)
     // Bowser leaps up to the Puni Elder, who suddenly grows huge and shouts at him to begone.
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_cam3d_evt_zoom_in, 15, 800, 0, 11)
+    CALL(evt_cam3d_evt_zoom_in, 15, 800, 0, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_npc_get_position, STRING("プニ族長老"), LW(3), LW(4), LW(5))
@@ -3535,7 +3630,7 @@ EVT_BEGIN(mri_01_koopa_second_evt)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("プニ族長老"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_CHOUROU_BIG1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 2, FLOAT(1.0f), FLOAT(3.0f), 200)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, FLOAT(1.0f), FLOAT(3.0f), 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_scale, STRING("プニ族長老"), LW(0), LW(0), LW(0))
@@ -3547,8 +3642,9 @@ EVT_BEGIN(mri_01_koopa_second_evt)
     END_INLINE_EVENT
     CALL(evt_msg_print, 0, STRING("kpa_stg3_008"), 0, STRING("プニ族長老"))
     CALL(evt_fade_out, 700)
-    // The Elder accuses him of being one of the evildoers; Kammy insists she knows where the Crystal Star is.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG2_PUNI1"))
+
+    // The Elder accuses him of being one of the evildoers; Kammy insists the Elder knows where the Crystal Star is.
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG2_PUNI1"))
     CALL(evt_npc_set_scale, STRING("プニ族長老"), FLOAT(1.0f), FLOAT(1.0f), FLOAT(1.0f))
     CALL(evt_mario_set_pos, 0, 0, 25)
     CALL(evt_mario_set_dir, 90, 0, 0)
@@ -3562,11 +3658,11 @@ EVT_BEGIN(mri_01_koopa_second_evt)
     CALL(evt_npc_set_position, STRING("ライバル"), 121, 0, 13)
     CALL(evt_npc_set_ry, STRING("ライバル"), 270)
     CALL(kpa_chg_pose, STRING("KPA_S_1"))
-    CALL(evt_cam3d_evt_set, 45, 151, 500, 45, 67, 27, 0, 11)
+    CALL(evt_cam3d_evt_set, 45, 151, 500, 45, 67, 27, 0, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_fade_in, 700)
     CALL(evt_msg_print, 0, STRING("kpa_stg3_010"), 0, STRING("プニ族長老"))
-    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_HIT)
     CALL(evt_npc_move_position, STRING("ババ"), 20, 40, 0, FLOAT(120.0f), 0)
     WAIT_FRAMES(1)
     CALL(evt_npc_set_autotalkpose, STRING("ババ"), STRING("A_1B"), STRING("T_4"))
@@ -3574,7 +3670,7 @@ EVT_BEGIN(mri_01_koopa_second_evt)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("プニ族長老"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_CHOUROU_BIG1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 2, FLOAT(1.0f), FLOAT(3.0f), 200)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, FLOAT(1.0f), FLOAT(3.0f), 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_scale, STRING("プニ族長老"), LW(0), LW(0), LW(0))
@@ -3589,15 +3685,15 @@ EVT_BEGIN(mri_01_koopa_second_evt)
         WAIT_MS(50)
         CALL(evt_npc_set_anim, STRING("ババ"), STRING("P_1"))
     END_INLINE_EVENT
-    SET_VALUE(LSWF(2), 0)
+    SET_VALUE(LSWF_MRI_01_KOOPA_MSG_CUE, 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(2), 0)
+            IF_INT_NOT_EQUAL(LSWF_MRI_01_KOOPA_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 5, FLOAT(3.0f), FLOAT(1.0f), 200)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, FLOAT(3.0f), FLOAT(1.0f), 200)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_npc_set_scale, STRING("プニ族長老"), LW(0), LW(0), LW(0))
@@ -3607,22 +3703,23 @@ EVT_BEGIN(mri_01_koopa_second_evt)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -20, 151, 500, -20, 67, 27, 200, 11)
+    CALL(evt_cam3d_evt_set, -20, 151, 500, -20, 67, 27, 200, EASING_SINE_IN_OUT)
     CALL(evt_msg_print, 0, STRING("kpa_stg3_012"), PTR(mri_stg3_012_cb), STRING("プニ族長老"))
     CALL(evt_npc_set_scale, STRING("プニ族長老"), FLOAT(1.0f), FLOAT(1.0f), FLOAT(1.0f))
     CALL(evt_npc_set_autotalkpose, STRING("ババ"), STRING("K_1"), STRING("T_7"))
     CALL(evt_msg_print, 0, STRING("kpa_stg3_013"), 0, STRING("ババ"))
     WAIT_FRAMES(1)
     CALL(evt_npc_set_anim, STRING("ババ"), STRING("S_1"))
-    CALL(evt_cam3d_evt_set, 17, 131, 388, 17, 67, 27, 800, 11)
+    CALL(evt_cam3d_evt_set, 17, 131, 388, 17, 67, 27, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_THINK1_2"), LW(0), LW(1), LW(2), 0)
     CALL(kpa_chg_pose, STRING("KPA_N_1"))
     WAIT_MS(500)
+
     // Kammy and the Elder call each other old and squabble; Bowser answers a choice about it.
     CALL(evt_msg_select, 0, STRING("kpa_stg3_014"))
-    CALL(evt_cam3d_evt_set, -20, 151, 500, -20, 67, 27, 800, 11)
+    CALL(evt_cam3d_evt_set, -20, 151, 500, -20, 67, 27, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_7"), STRING("KPA_S_7"))
     CALL(evt_msg_print, 0, STRING("kpa_stg3_016"), 0, STRING("mario"))
@@ -3634,31 +3731,32 @@ EVT_BEGIN(mri_01_koopa_second_evt)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg3_018"), 0, STRING("mario"))
     CALL(evt_mario_set_dir, 90, 300, 0)
-    CALL(evt_cam3d_evt_set, 45, 151, 500, 45, 67, 27, 300, 11)
+    CALL(evt_cam3d_evt_set, 45, 151, 500, 45, 67, 27, 300, EASING_SINE_IN_OUT)
     WAIT_MS(300)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
+
     // Bowser demands to know where the Crystal Star is; the Elder says he is too late because it was given to
     // a mustached man.
     CALL(evt_msg_print, 0, STRING("kpa_stg3_018_1"), 0, STRING("mario"))
     CALL(evt_msg_print, 0, STRING("kpa_stg3_019"), 0, STRING("プニ族長老"))
     CALL(kpa_chg_pose, STRING("KPA_O_1"))
-    CALL(evt_cam3d_evt_set, 20, 125, 353, 20, 67, 27, 500, 11)
+    CALL(evt_cam3d_evt_set, 20, 125, 353, 20, 67, 27, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SURPRISED3"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SURPRISED3"))
         WAIT_MS(1000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_SURPRISED2_1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_5"), STRING("KPA_T_5"))
     CALL(evt_msg_print, 0, STRING("kpa_stg3_020"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 45, 151, 500, 45, 67, 27, 500, 11)
+    CALL(evt_cam3d_evt_set, 45, 151, 500, 45, 67, 27, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("kpa_stg3_021"), 0, STRING("プニ族長老"))
-    CALL(evt_cam3d_evt_set, -20, 151, 500, -20, 67, 27, 800, 11)
+    CALL(evt_cam3d_evt_set, -20, 151, 500, -20, 67, 27, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_msg_print, 0, STRING("kpa_stg3_022"), 0, STRING("ババ"))
     CALL(kpa_chg_pose, STRING("KPA_S_4"))
@@ -3667,11 +3765,12 @@ EVT_BEGIN(mri_01_koopa_second_evt)
     WAIT_MS(250)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
     CALL(evt_msg_print, 0, STRING("kpa_stg3_023"), 0, STRING("mario"))
-    // The story advances, the screen closes to a spot, the game is saved and the scene ends in Rogueport
+
+    // The story advances, the screen closes to a spot, the game is saved and the scene ends in the Glitz Pit lobby
     // (tou_02).
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_06_BOWSER_PUNI_ELDER)
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_33_06_BOWSER_TREASURE)
     WAIT_MS(2000)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
     CALL(evt_fade_entry, FADE_OUT_SPOT_3D, 300, 0, 0, 0)
     CALL(evt_fade_end_wait)
     WAIT_MS(2000)
@@ -3695,9 +3794,10 @@ EVT_END()
  */
 EVT_BEGIN(mri_01_init_evt)
     SET_VALUE(LF(0), 0)
-    // Start the Puni system and register the doors and planters, unless Bowser's interlude is running.
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_04_PEACH_BACK_TO_TEC)
-        IF_INT_LESS_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
+
+    // Start the Puni system unless Bowser's interlude is running; doors and planters are registered below in either case.
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_33_04_PEACH_BACK_TO_TEC)
+        IF_INT_LESS_OR_EQUAL(GSW_STORY_PROGRESS, STG3_33_05_BOWSER_THE_GREAT_TREE)
             SET_VALUE(LF(0), 1)
         END_IF
     END_IF
@@ -3717,94 +3817,89 @@ EVT_BEGIN(mri_01_init_evt)
     IF_INT_EQUAL(LF(0), 0)
         SPAWN_EVENT(puni_disp_info)
     END_IF
-    // The bomb countdown runs during the boss part of the story.
     SPAWN_EVENT(mri_countdown)
     SET_VALUE(LW(0), PTR(ueki_access_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    CALL(evt_map_playanim, STRING("mizu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("mizu_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("kawa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("kawa_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("kawa_sibu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("kawa_01"), 1, 0)
+    CALL(evt_map_playanim, STRING("mizu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kawa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kawa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kawa_sibu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kawa_01"), MAP_ANIM_PLAY_LOOP, 0)
     SET_VALUE(LW(0), 110)
     SET_VALUE(LW(1), 0)
     SET_VALUE(LW(2), -45)
     SET_FLOAT_VALUE(LW(3), FLOAT(1.0f))
     SPAWN_EVENT(mri_waterfall_effect)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        // Music by story: danger music while the time bomb ticks, the Puni theme during Bowser's visit, the
-        // village theme otherwise.
-        CASE_BETWEEN(STORY_STG2_23_TIME_BOMB_ACTIVATED, STORY_STG2_23_01_X_NAUT_BATTLE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI9"))
-        CASE_BETWEEN(STORY_STG3_33_04_PEACH_BACK_TO_TEC, STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG2_PUNI1"))
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("ENV_STG2_MRI3"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_23_TIME_BOMB_ACTIVATED, STG2_23_01_X_NAUT_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI9"))
+        CASE_BETWEEN(STG3_33_04_PEACH_BACK_TO_TEC, STG3_33_05_BOWSER_THE_GREAT_TREE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG2_PUNI1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("ENV_STG2_MRI3"))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI3"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI3"))
     END_SWITCH
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_mobj_save_blk, STRING("mobj_save"), 330, 60, -25, PTR(mri_puni_save), 0)
         CALL(evt_mobj_recovery_blk, STRING("mobj_recover"), 8, 260, 60, -25, 0, 0)
     END_IF
     CALL(evt_npc_setup, PTR(npcEnt))
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_10_SECRET_ENTRANCE_REVEALED)
-        // The story scenes in order: the X-Naut ambush, meeting the rival, the Elder's rescue, the boss and
-        // its aftermath.
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_10_SECRET_ENTRANCE_REVEALED)
         SPAWN_EVENT(bigtree_firstbattle)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_11_X_NAUT_BATTLE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_11_X_NAUT_BATTLE)
         SPAWN_EVENT(meet_rival)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_14_PUNI_ELDER_FREED)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_14_PUNI_ELDER_FREED)
         SPAWN_EVENT(rival_nakama)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_23_01_X_NAUT_BATTLE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_23_01_X_NAUT_BATTLE)
         CALL_CHILD(boss_battle_init)
         SPAWN_EVENT(boss_battle)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_24_BOSS_BATTLE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_24_BOSS_BATTLE)
         CALL_CHILD(boss_battle_init)
         SET_VALUE(LW(0), 1)
         CALL_CHILD(boss_battle_win_init)
         SPAWN_EVENT(boss_battle_win)
     END_IF
-    // The door switches are set up and a Puni waits for Mario when he came back from the next map.
     SPAWN_EVENT(door_switch_init)
-    IF_INT_EQUAL(GSW(GSW_MRI_PUNI_CUR_MAP), 2)
-        IF_INT_EQUAL(GSW(GSW_MRI_PUNI_PREV_MAP), 1)
+    IF_INT_EQUAL(GSW_MRI_PUNI_ROOM, 2)
+        IF_INT_EQUAL(GSW_MRI_PUNI_PREV_ROOM, 1)
             SPAWN_EVENT(puni_mario_wait)
         END_IF
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_15_11_PUNIES)
-        IF_INT_EQUAL(GSWF(GSWF_MRI01_ELDER_POWERS_EXPLAINED), 0)
-            // Once the Puni group exists, the Elder explains the Punies' powers if she has not yet.
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_15_11_PUNIES)
+        IF_INT_EQUAL(GSWF_MRI_01_ELDER_TIP_SEEN, 0)
+            // Once the Puni group exists, the Elder gives her call-back tip if she has not yet.
             SPAWN_EVENT(elder_kaisetsu)
         END_IF
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_04_PEACH_BACK_TO_TEC)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_04_PEACH_BACK_TO_TEC)
         CALL(evt_mario_set_mode, 2)
         CALL(evt_mario_kill_party, 0)
+
         // Bowser's visit: Kammy is created and the first (or, later, second) part of the interlude plays.
-        CALL(evt_npc_entry, STRING("ババ"), STRING("c_kamek_be"))
+        CALL(evt_npc_entry, STRING("ババ"), STRING("c_kamek_be")) // Kammy Koopa
         CALL(evt_npc_set_tribe, STRING("ババ"), STRING("カメックババ（地上）"))
-        CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-        CALL(evt_npc_status_onoff, 1, STRING("ババ"), 2)
+        CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+        CALL(evt_npc_status_onoff, 1, STRING("ババ"), NPC_STATUS_FACE_MOVE_DIR)
         CALL(evt_npc_set_position, STRING("ババ"), 0, -1000, 0)
         CALL(evt_npc_set_ry, STRING("ババ"), 90)
         CALL(evt_npc_change_interrupt, STRING("ババ"), 6, PTR(baba_talk))
         SPAWN_EVENT(mri_01_koopa_first_evt)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_05_BOWSER_THE_GREAT_TREE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_05_BOWSER_THE_GREAT_TREE)
         CALL(evt_mario_set_mode, 2)
         CALL(evt_npc_entry, STRING("ババ"), STRING("c_kamek_be"))
         CALL(evt_npc_set_tribe, STRING("ババ"), STRING("カメックババ（地上）"))
-        CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-        CALL(evt_npc_status_onoff, 1, STRING("ババ"), 2)
+        CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+        CALL(evt_npc_status_onoff, 1, STRING("ババ"), NPC_STATUS_FACE_MOVE_DIR)
         CALL(evt_npc_set_position, STRING("ババ"), 0, -1000, 0)
         CALL(evt_npc_set_ry, STRING("ババ"), 90)
         CALL(evt_npc_change_interrupt, STRING("ババ"), 6, PTR(baba_talk))
@@ -3816,16 +3911,16 @@ EVT_BEGIN(mri_01_init_evt)
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_npc_set_position, STRING("ライバル"), -198, -5, 53)
         CALL(evt_npc_set_ry, STRING("ライバル"), 270)
-        CALL(evt_npc_flag_onoff, 1, STRING("ライバル"), NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("ライバル"), NPC_FLAG_NO_HIT)
         CALL(evt_npc_set_position, STRING("ガイド"), -202, 5, -59)
         CALL(evt_npc_set_position, STRING("ガイド妹"), -196, -3, -69)
         CALL(evt_npc_set_ry, STRING("ガイド"), 270)
         CALL(evt_npc_set_ry, STRING("ガイド妹"), 270)
-        CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_INTANGIBLE)
-        CALL(evt_npc_flag_onoff, 1, STRING("ガイド妹"), NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_HIT)
+        CALL(evt_npc_flag_onoff, 1, STRING("ガイド妹"), NPC_FLAG_NO_HIT)
         CALL(evt_npc_set_position, STRING("プニ族長老"), 261, 0, 62)
         CALL(evt_npc_set_ry, STRING("プニ族長老"), 270)
-        CALL(evt_npc_flag_onoff, 1, STRING("プニ族長老"), NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("プニ族長老"), NPC_FLAG_NO_HIT)
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("player"))
             CALL(evt_mario_set_pos, -280, 0, 30)
@@ -3836,13 +3931,13 @@ EVT_BEGIN(mri_01_init_evt)
             CALL(evt_mario_set_pos, 226, 0, 48)
             CALL(evt_mario_set_dir, 90, 0, 0)
             BEGIN_INLINE_EVENT
-                CALL(evt_seq_wait, 2)
+                CALL(evt_seq_wait, SEQ_GAME)
                 SPAWN_EVENT(mri_01_koopa_second_evt)
             END_INLINE_EVENT
         END_IF
     END_IF
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_SET(LW(0), GLOBAL_FLAG_KIOSK)
+    IF_BITS_SET(LW(0), GW_FLAG_E3)
         SET_VALUE(LW(0), STRING("w_bero"))
         CALL_CHILD(bero_case_switch_off)
     END_IF

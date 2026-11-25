@@ -1,5 +1,4 @@
 
-/*
 
 
 
@@ -15,7 +14,8 @@
 
 
 
-*/
+
+
 
 #include "musyx/assert.h"
 #include "musyx/sal.h"
@@ -41,24 +41,22 @@ static CHANNEL_DEFAULTS inpChannelDefaults[8][16];
 static CHANNEL_DEFAULTS inpFXChannelDefaults[64];
 
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
-/** Default cut-off settings of the low-pass filter. */
 static u32 lpfHighFrequencyDefault = 0;
 static u32 lpfLowFrequencyDefault = 0;
 #endif
 
-/** Returns whether any of the bits in flag are set in the global dirty flags of this MIDI channel. */
 static inline bool GetGlobalFlagSet(u8 chan, u8 midiSet, s32 flag) {
   return (flag & inpGlobalMIDIDirtyFlags[midiSet][chan]) != 0;
 }
 
-/*
 
 
 
 
 
 
-*/
+
+
 static void inpResetGlobalMIDIDirtyFlags() {
   u32 i, j;
   for (i = 0; i < 8; ++i) {
@@ -68,35 +66,32 @@ static void inpResetGlobalMIDIDirtyFlags() {
   }
 }
 
-/** Returns nonzero if any bit of flag was set in the channel's global dirty flags, clearing those bits. Not allowed for
- * the effect set (0xFF). */
 static u32 inpResetGlobalMIDIDirtyFlag(u8 chan, u8 midiSet, u32 flag) {
   u32 ret;
+
   // clang-format off
   MUSY_ASSERT(midiSet!=SYNTH_FX_MIDISET);
+
   // clang-format on
-  ;
+
   if ((ret = (flag & inpGlobalMIDIDirtyFlags[midiSet][chan]) != 0) != 0) {
     inpGlobalMIDIDirtyFlags[midiSet][chan] &= ~flag;
   }
   return ret;
 }
 
-/** Sets bits in the global dirty flags of a MIDI channel so aux inputs are recomputed next time. */
 void inpSetGlobalMIDIDirtyFlag(u8 chan, u8 midiSet, s32 flag) {
   // clang-format off
   MUSY_ASSERT(midiSet!=SYNTH_FX_MIDISET);
+
   // clang-format on
   inpGlobalMIDIDirtyFlags[midiSet][chan] |= flag;
 }
 
-/** Handles a data-entry MSB (controller 6) for the registered parameter selected by controllers 100/101: RPN 0 sets the
- * pitch bend range (up to 24 semitones), RPN 0x7F7D and 0x7F7E set the high bits of the low-pass filter lower and upper
- * boundary frequencies. Updates the channel defaults and the matching voices. */
 void inpSetRPNHi(u8 set, u8 channel, u8 value) {
-  u16 rpn;  // r28
-  u32 i;    // r31
-  u8 range; // r29
+  u16 rpn;
+  u32 i;
+  u8 range;
 
   rpn = (midi_ctrl[set][channel][100]) | (midi_ctrl[set][channel][101] << 8);
   switch (rpn) {
@@ -139,12 +134,10 @@ void inpSetRPNHi(u8 set, u8 channel, u8 value) {
   }
 }
 
-/** Handles a data-entry LSB (controller 38): sets the low bits of the filter lower or upper boundary frequency for RPN
- * 0x7F7D / 0x7F7E. */
 void inpSetRPNLo(u8 set, u8 channel, u8 value) {
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
-  u16 rpn; // r28
-  u32 i;   // r31
+  u16 rpn;
+  u32 i;
 
   rpn = (midi_ctrl[set][channel][100]) | (midi_ctrl[set][channel][101] << 8);
   switch (rpn) {
@@ -173,12 +166,10 @@ void inpSetRPNLo(u8 set, u8 channel, u8 value) {
 #endif
 }
 
-/** Data decrement (controller 96): lowers the selected parameter by one (pitch bend range or filter boundary frequency)
- * and updates the matching voices. */
 void inpSetRPNDec(u8 set, u8 channel) {
-  u16 rpn;  // r28
-  u32 i;    // r31
-  u8 range; // r30
+  u16 rpn;
+  u32 i;
+  u8 range;
 
   rpn = (midi_ctrl[set][channel][100]) | (midi_ctrl[set][channel][101] << 8);
   switch (rpn) {
@@ -225,12 +216,10 @@ void inpSetRPNDec(u8 set, u8 channel) {
   }
 }
 
-/** Data increment (controller 97): raises the selected parameter by one (pitch bend range up to 24, or filter boundary
- * up to 0x3FFF) and updates the matching voices. */
 void inpSetRPNInc(u8 set, u8 channel) {
-  u16 rpn;  // r28
-  u32 i;    // r31
-  u8 range; // r30
+  u16 rpn;
+  u32 i;
+  u8 range;
 
   rpn = (midi_ctrl[set][channel][100]) | (midi_ctrl[set][channel][101] << 8);
   switch (rpn) {
@@ -278,8 +267,6 @@ void inpSetRPNInc(u8 set, u8 channel) {
   }
 }
 
-/** Sets a 7-bit MIDI controller on a channel (set 0xFF = sound effect channel). Controllers 6, 38, 96 and 97 go to the
- * RPN handlers. If the value changed, every voice on that channel is flagged to recompute its inputs. */
 void inpSetMidiCtrl(u8 ctrl, u8 channel, u8 set, u8 value) {
   u32 i;
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
@@ -327,7 +314,7 @@ void inpSetMidiCtrl(u8 ctrl, u8 channel, u8 set, u8 value) {
     if (changed) {
       for (i = 0; i < synthInfo.voiceNum; ++i) {
         if (set == synthVoice[i].midiSet && channel == synthVoice[i].midi) {
-          synthVoice[i].midiDirtyFlags = 0x7fff;
+          synthVoice[i].midiDirtyFlags = SYNTH_DIRTY_ALL;
           synthKeyStateUpdate(&synthVoice[i]);
         }
       }
@@ -336,7 +323,7 @@ void inpSetMidiCtrl(u8 ctrl, u8 channel, u8 set, u8 value) {
 #else
     for (i = 0; i < synthInfo.voiceNum; ++i) {
       if (set == synthVoice[i].midiSet && channel == synthVoice[i].midi) {
-        synthVoice[i].midiDirtyFlags = 0x1fff;
+        synthVoice[i].midiDirtyFlags = SYNTH_DIRTY_ALL_NO_FILTER;
         synthKeyStateUpdate(&synthVoice[i]);
       }
     }
@@ -344,6 +331,8 @@ void inpSetMidiCtrl(u8 ctrl, u8 channel, u8 set, u8 value) {
 #endif
 
   } else {
+    // BUG: in this FX branch set is 0xFF, but the RPN helpers (controllers 6, 38, 96, 97) index
+    // midi_ctrl[set] and inpChannelDefaults[set], which have 8 rows.
     switch (ctrl) {
     case 6:
       inpSetRPNHi(set, channel, value);
@@ -381,7 +370,7 @@ void inpSetMidiCtrl(u8 ctrl, u8 channel, u8 set, u8 value) {
     if (changed) {
       for (i = 0; i < synthInfo.voiceNum; ++i) {
         if (set == synthVoice[i].midiSet && channel == synthVoice[i].midi) {
-          synthVoice[i].midiDirtyFlags = 0x7fff;
+          synthVoice[i].midiDirtyFlags = SYNTH_DIRTY_ALL;
           synthKeyStateUpdate(&synthVoice[i]);
         }
       }
@@ -389,7 +378,7 @@ void inpSetMidiCtrl(u8 ctrl, u8 channel, u8 set, u8 value) {
 #else
     for (i = 0; i < synthInfo.voiceNum; ++i) {
       if (set == synthVoice[i].midiSet && channel == synthVoice[i].midi) {
-        synthVoice[i].midiDirtyFlags = 0x1fff;
+        synthVoice[i].midiDirtyFlags = SYNTH_DIRTY_ALL_NO_FILTER;
         synthKeyStateUpdate(&synthVoice[i]);
       }
     }
@@ -397,8 +386,6 @@ void inpSetMidiCtrl(u8 ctrl, u8 channel, u8 set, u8 value) {
   }
 }
 
-/** Sets a 14-bit controller by writing its MSB and LSB halves (controllers below 64 pair with +32, 128/129 and 132/133
- * are pairs; others take only the MSB). */
 void inpSetMidiCtrl14(u8 ctrl, u8 channel, u8 set, u16 value) {
 
   if (channel == 0xFF) {
@@ -419,7 +406,6 @@ void inpSetMidiCtrl14(u8 ctrl, u8 channel, u8 set, u16 value) {
   }
 }
 
-/** Values every MIDI controller is set to on a full reset; 0xFF entries are not written. */
 static const u8 inpColdMIDIDefaults[134] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x7F, 0x00, 0x00, 0x40, 0x7F, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -431,7 +417,6 @@ static const u8 inpColdMIDIDefaults[134] = {
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x40, 0x00,
 };
-/** Values the MIDI controllers are set to on a soft reset; 0xFF entries are left alone. */
 static const u8 inpWarmMIDIDefaults[134] = {
     0xFF, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0xFF, 0xFF, 0xFF,
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -445,20 +430,18 @@ static const u8 inpWarmMIDIDefaults[134] = {
 
 };
 
-/** Resets a channel's controllers: a cold reset copies the full default table (volume 127, pan 64, expression 127 and
- * so on), a warm reset only applies the defaults flagged in the warm table. Also clears the last note. */
 void inpResetMidiCtrl(u8 ch, u8 set, u32 coldReset) {
-  const u8* values; // r30
-  u8* dest;         // r29
-  u32 i;            // r31
+  const u8* values;
+  u8* dest;
+  u32 i;
 
   values = (coldReset ? inpColdMIDIDefaults : inpWarmMIDIDefaults);
-  dest = set != 0xFF ? midi_ctrl[set][ch] : fx_ctrl[ch];
+  dest = set != SYNTH_FX_MIDISET ? midi_ctrl[set][ch] : fx_ctrl[ch];
 
   if (coldReset) {
-    memcpy(dest, values, 134);
+    memcpy(dest, values, sizeof(inpColdMIDIDefaults));
   } else {
-    for (i = 0; i < 134; ++i) {
+    for (i = 0; i < sizeof(inpWarmMIDIDefaults); ++i) {
       if (values[i] != 0xFF) {
         dest[i] = values[i];
       }
@@ -468,8 +451,6 @@ void inpResetMidiCtrl(u8 ch, u8 set, u32 coldReset) {
   inpSetMidiLastNote(ch, set, 0xFF);
 }
 
-/** Reads a controller as a 14-bit value: controllers below 64 combine MSB and LSB, switches 64-69 read as 0 or 0x3FFF,
- * 128/129 and 132/133 combine two bytes, others are the 7-bit value shifted up by 7. */
 u16 inpGetMidiCtrl(u8 ctrl, u8 channel, u8 set) {
 
   if (channel != 0xff) {
@@ -517,8 +498,6 @@ u16 inpGetMidiCtrl(u8 ctrl, u8 channel, u8 set) {
   return 0;
 }
 
-/** Returns the defaults (pitch bend range, filter boundary frequencies) of a MIDI channel, or of a sound effect channel
- * when midiSet is 0xFF. */
 CHANNEL_DEFAULTS* inpGetChannelDefaults(u8 midi, u8 midiSet) {
   if (midiSet == 0xFF) {
     return &inpFXChannelDefaults[midi];
@@ -527,9 +506,8 @@ CHANNEL_DEFAULTS* inpGetChannelDefaults(u8 midi, u8 midiSet) {
   return &inpChannelDefaults[midiSet][midi];
 }
 
-/** Resets a channel's defaults: pitch bend range 2 semitones and the default low-pass filter boundaries. */
 void inpResetChannelDefaults(u8 midi, u8 midiSet) {
-  CHANNEL_DEFAULTS* channelDefaults; // r31
+  CHANNEL_DEFAULTS* channelDefaults;
   channelDefaults =
       midiSet != 0xFF ? &inpChannelDefaults[midiSet][midi] : &inpFXChannelDefaults[midi];
   channelDefaults->pbRange = 2;
@@ -539,10 +517,8 @@ void inpResetChannelDefaults(u8 midi, u8 midiSet) {
 #endif
 }
 
-/** Adds a controller source to an input (CTRL_DEST) with a scale and a combine mode (0 starts a new list, up to 4
- * sources); isVar marks the source as a macro variable instead of a MIDI controller. */
 void inpAddCtrl(CTRL_DEST* dest, u8 ctrl, s32 scale, u8 comb, u32 isVar) {
-  u8 n; // r30
+  u8 n;
   if (comb == 0) {
     dest->numSource = 0;
   }
@@ -561,11 +537,9 @@ void inpAddCtrl(CTRL_DEST* dest, u8 ctrl, s32 scale, u8 comb, u32 isVar) {
   }
 }
 
-/** Copies a controller value (both halves for 14-bit ones) from one sound effect channel to another when cloning a
- * voice's MIDI setup. */
 void inpFXCopyCtrl(u8 ctrl, SYNTH_VOICE* dvoice, SYNTH_VOICE* svoice) {
-  u8 di; // r30
-  u8 si; // r29
+  u8 di;
+  u8 si;
   di = dvoice->id;
   si = svoice->id;
 
@@ -583,7 +557,6 @@ void inpFXCopyCtrl(u8 ctrl, SYNTH_VOICE* dvoice, SYNTH_VOICE* svoice) {
   }
 }
 
-/** Stores the last key played on a channel (used for portamento). */
 void inpSetMidiLastNote(u8 midi, u8 midiSet, u8 key) {
   if (midiSet != 0xFF) {
     midi_lastNote[midiSet][midi] = key;
@@ -592,7 +565,6 @@ void inpSetMidiLastNote(u8 midi, u8 midiSet, u8 key) {
   }
 }
 
-/** Returns the last key played on a channel. */
 u8 inpGetMidiLastNote(u8 midi, u8 midiSet) {
   if (midiSet != 0xFF) {
     return midi_lastNote[midiSet][midi];
@@ -600,23 +572,19 @@ u8 inpGetMidiLastNote(u8 midi, u8 midiSet) {
   return fx_lastNote[midi];
 }
 
-/** Computes a voice input (volume, pan, ...) as a 14-bit value by combining its sources in order: each is a MIDI
- * controller, an LFO, the original key, original velocity, elapsed time or a macro variable, scaled, and combined by
- * the source's mode (set, add, multiply, subtract). Signed sources centre on 0x2000. Stores the result as the input's
- * old value. */
-static u16 _GetInputValue(struct SYNTH_VOICE* svoice /* r27 */, struct CTRL_DEST* inp /* r24 */,
-                          u8 midi /* r22 */, u8 midiSet /* r23 */) {
-  u32 i;     // r26
-  u32 value; // r29
-  u8 ctrl;   // r28
-  s32 tmp;   // r31
-  s32 vtmp;  // r30
-  bool sign; // r25
+static u16 _GetInputValue(struct SYNTH_VOICE* svoice, struct CTRL_DEST* inp,
+                          u8 midi, u8 midiSet) {
+  u32 i;
+  u32 value;
+  u8 ctrl;
+  s32 tmp;
+  s32 vtmp;
+  bool sign;
 
   for (value = 0, i = 0; i < inp->numSource; ++i) {
     if (inp->source[i].combine & 0x10) {
       tmp = (svoice != NULL ? varGet(svoice, 0, inp->source[i].midiCtrl) : 0);
-      goto block_18;
+      goto apply_scale;
     }
     ctrl = inp->source[i].midiCtrl;
     if (ctrl == 128 || ctrl == 1 || ctrl == 10 || ctrl == 160 || ctrl == 161 || ctrl == 131) {
@@ -634,9 +602,12 @@ static u16 _GetInputValue(struct SYNTH_VOICE* svoice /* r27 */, struct CTRL_DEST
         tmp = inpGetMidiCtrl(ctrl, midi, midiSet) - 0x2000;
         break;
       }
-    block_18:
+    apply_scale:
       tmp = (tmp * (inp->source[i].scale >> 1)) >> 15;
       tmp = CLAMP_INV(tmp, -0x2000, 0x1FFF);
+
+      // sign is never initialised and only ever set TRUE: a list whose first source has combine 1-3
+      // reads it unset.
       switch (inp->source[i].combine & 15) {
       case 0:
         value = tmp + 0x2000;
@@ -742,7 +713,6 @@ static u16 _GetInputValue(struct SYNTH_VOICE* svoice /* r27 */, struct CTRL_DEST
   return value;
 }
 
-/** Returns the voice input's value, recomputing it only if its dirty bit is set in the voice's midiDirtyFlags. */
 static u16 GetInputValue(SYNTH_VOICE* svoice, CTRL_DEST* inp, u32 dirtyMask) {
 
   if (!(svoice->midiDirtyFlags & dirtyMask)) {
@@ -754,7 +724,6 @@ static u16 GetInputValue(SYNTH_VOICE* svoice, CTRL_DEST* inp, u32 dirtyMask) {
   return _GetInputValue(svoice, inp, svoice->midi, svoice->midiSet);
 }
 
-/** Returns an aux input's value, recomputing it only if its global dirty flag for the channel was set. */
 static u16 GetGlobalInputValue(CTRL_DEST* inp, u32 dirtyMask, u8 midi, u8 midiSet) {
   if (!inpResetGlobalMIDIDirtyFlag(midi, midiSet, dirtyMask)) {
     return inp->oldValue;
@@ -762,127 +731,122 @@ static u16 GetGlobalInputValue(CTRL_DEST* inp, u32 dirtyMask, u8 midi, u8 midiSe
   return _GetInputValue(NULL, inp, midi, midiSet);
 }
 
-/** Returns the voice's volume input (controllers 7 and 11 by default) as a 14-bit value. */
-u16 inpGetVolume(SYNTH_VOICE* svoice) { return GetInputValue(svoice, &svoice->inpVolume, 0x1); }
+u16 inpGetVolume(SYNTH_VOICE* svoice) {
+  return GetInputValue(svoice, &svoice->inpVolume, SYNTH_DIRTY_VOLUME);
+}
 
-/** Returns the voice's pan input (controller 10 by default). */
-u16 inpGetPanning(SYNTH_VOICE* svoice) { return GetInputValue(svoice, &svoice->inpPanning, 0x2); }
+u16 inpGetPanning(SYNTH_VOICE* svoice) {
+  return GetInputValue(svoice, &svoice->inpPanning, SYNTH_DIRTY_PANNING);
+}
 
-/** Returns the voice's surround pan input (controller 131 by default). */
 u16 inpGetSurPanning(SYNTH_VOICE* svoice) {
-  return GetInputValue(svoice, &svoice->inpSurroundPanning, 0x4);
+  return GetInputValue(svoice, &svoice->inpSurroundPanning, SYNTH_DIRTY_SURROUND_PANNING);
 }
 
-/** Returns the voice's pitch bend input (controller 128 by default). */
 u16 inpGetPitchBend(SYNTH_VOICE* svoice) {
-  return GetInputValue(svoice, &svoice->inpPitchBend, 0x8);
+  return GetInputValue(svoice, &svoice->inpPitchBend, SYNTH_DIRTY_PITCH_BEND);
 }
 
-/** Returns the voice's doppler input (controller 132 by default), used by 3D sound. */
-u16 inpGetDoppler(SYNTH_VOICE* svoice) { return GetInputValue(svoice, &svoice->inpDoppler, 0x10); }
+u16 inpGetDoppler(SYNTH_VOICE* svoice) {
+  return GetInputValue(svoice, &svoice->inpDoppler, SYNTH_DIRTY_DOPPLER);
+}
 
-/** Returns the voice's modulation input (controller 1 by default). */
 u16 inpGetModulation(SYNTH_VOICE* svoice) {
-  return GetInputValue(svoice, &svoice->inpModulation, 0x20);
+  return GetInputValue(svoice, &svoice->inpModulation, SYNTH_DIRTY_MODULATION);
 }
 
-/** Returns the voice's sustain pedal input (controller 64 by default). */
-u16 inpGetPedal(SYNTH_VOICE* svoice) { return GetInputValue(svoice, &svoice->inpPedal, 0x40); }
+u16 inpGetPedal(SYNTH_VOICE* svoice) {
+  return GetInputValue(svoice, &svoice->inpPedal, SYNTH_DIRTY_PEDAL);
+}
 
-/** Returns the voice's pre-fader aux A send input (no source by default). */
-u16 inpGetPreAuxA(SYNTH_VOICE* svoice) { return GetInputValue(svoice, &svoice->inpPreAuxA, 0x100); }
+u16 inpGetPreAuxA(SYNTH_VOICE* svoice) {
+  return GetInputValue(svoice, &svoice->inpPreAuxA, SYNTH_DIRTY_PRE_AUXA);
+}
 
-/** Returns the voice's reverb send input (controller 91 by default). */
-u16 inpGetReverb(SYNTH_VOICE* svoice) { return GetInputValue(svoice, &svoice->inpReverb, 0x200); }
+u16 inpGetReverb(SYNTH_VOICE* svoice) {
+  return GetInputValue(svoice, &svoice->inpReverb, SYNTH_DIRTY_REVERB);
+}
 
-/** Returns the voice's pre-fader aux B send input (no source by default). */
-u16 inpGetPreAuxB(SYNTH_VOICE* svoice) { return GetInputValue(svoice, &svoice->inpPreAuxB, 0x400); }
+u16 inpGetPreAuxB(SYNTH_VOICE* svoice) {
+  return GetInputValue(svoice, &svoice->inpPreAuxB, SYNTH_DIRTY_PRE_AUXB);
+}
 
-/** Returns the voice's post-fader aux B (chorus) send input (controller 93 by default). */
 u16 inpGetPostAuxB(SYNTH_VOICE* svoice) {
-  return GetInputValue(svoice, &svoice->inpPostAuxB, 0x800);
+  return GetInputValue(svoice, &svoice->inpPostAuxB, SYNTH_DIRTY_POST_AUXB);
 }
 
-/** Returns the voice's tremolo input (no source by default). */
 u16 inpGetTremolo(SYNTH_VOICE* svoice) {
-  return GetInputValue(svoice, &svoice->inpTremolo, 0x1000);
+  return GetInputValue(svoice, &svoice->inpTremolo, SYNTH_DIRTY_TREMOLO);
 }
 
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
-/** Returns the voice's low-pass filter switch input (controller 0x4F by default). */
 u16 inpGetFilterSwitch(SYNTH_VOICE* svoice) {
-  return GetInputValue(svoice, &svoice->inpFilterSwitch, 0x2000);
+  return GetInputValue(svoice, &svoice->inpFilterSwitch, SYNTH_DIRTY_FILTER_SWITCH);
 }
 
-/** Returns the voice's low-pass filter cutoff input (controller 0x1F by default). */
 u16 inpGetFilterParameter(SYNTH_VOICE* svoice) {
-  return GetInputValue(svoice, &svoice->inpFilterParameter, 0x4000);
+  return GetInputValue(svoice, &svoice->inpFilterParameter, SYNTH_DIRTY_FILTER_PARAM);
 }
 #endif
 
-/** Returns the studio's aux A input number index for a MIDI channel. */
 u16 inpGetAuxA(u8 studio, u8 index, u8 midi, u8 midiSet) {
   static u32 dirtyMask[4] = {0x80000001, 0x80000002, 0x80000004, 0x80000008};
   return GetGlobalInputValue(&inpAuxA[studio][index], dirtyMask[index], midi, midiSet);
 }
 
-/** Returns the studio's aux B input number index for a MIDI channel. */
 u16 inpGetAuxB(u8 studio, u8 index, u8 midi, u8 midiSet) {
   static u32 dirtyMask[4] = {0x80000010, 0x80000020, 0x80000040, 0x80000080};
 
   return GetGlobalInputValue(&inpAuxB[studio][index], dirtyMask[index], midi, midiSet);
 }
 
-/** With a voice: sets up its default controller routing (volume = controller 7 times 11, pan 10, surround 131, pitch
- * bend 128, modulation 1, pedal 64, portamento 65, reverb 91, aux B 93, doppler 132, filter 0x4F/0x1F). With NULL:
- * clears the studio aux inputs and the global dirty flags. Also sets the default low-pass range of 80 to 16000 Hz. */
 void inpInit(SYNTH_VOICE* svoice) {
-  u32 i; // r30
-  u32 s; // r29
+  u32 i;
+  u32 s;
 
   if (svoice != NULL) {
-    svoice->inpVolume.source[0].midiCtrl = 7;
+    svoice->inpVolume.source[0].midiCtrl = SND_MIDICTRL_VOLUME;
     svoice->inpVolume.source[0].combine = 0;
     svoice->inpVolume.source[0].scale = 0x10000;
     svoice->inpVolume.source[1].midiCtrl = 11;
     svoice->inpVolume.source[1].combine = 2;
     svoice->inpVolume.source[1].scale = 0x10000;
     svoice->inpVolume.numSource = 2;
-    svoice->inpPanning.source[0].midiCtrl = 10;
+    svoice->inpPanning.source[0].midiCtrl = SND_MIDICTRL_PANNING;
     svoice->inpPanning.source[0].combine = 0;
     svoice->inpPanning.source[0].scale = 0x10000;
     svoice->inpPanning.numSource = 1;
-    svoice->inpSurroundPanning.source[0].midiCtrl = 131;
+    svoice->inpSurroundPanning.source[0].midiCtrl = SND_MIDICTRL_SPANNING;
     svoice->inpSurroundPanning.source[0].combine = 0;
     svoice->inpSurroundPanning.source[0].scale = 0x10000;
     svoice->inpSurroundPanning.numSource = 1;
-    svoice->inpPitchBend.source[0].midiCtrl = 128;
+    svoice->inpPitchBend.source[0].midiCtrl = SND_MIDICTRL_PITCHBEND;
     svoice->inpPitchBend.source[0].combine = 0;
     svoice->inpPitchBend.source[0].scale = 0x10000;
     svoice->inpPitchBend.numSource = 1;
-    svoice->inpModulation.source[0].midiCtrl = 1;
+    svoice->inpModulation.source[0].midiCtrl = SND_MIDICTRL_MODULATION;
     svoice->inpModulation.source[0].combine = 0;
     svoice->inpModulation.source[0].scale = 0x10000;
     svoice->inpModulation.numSource = 1;
-    svoice->inpPedal.source[0].midiCtrl = 64;
+    svoice->inpPedal.source[0].midiCtrl = SND_MIDICTRL_PEDAL;
     svoice->inpPedal.source[0].combine = 0;
     svoice->inpPedal.source[0].scale = 0x10000;
     svoice->inpPedal.numSource = 1;
-    svoice->inpPortamento.source[0].midiCtrl = 65;
+    svoice->inpPortamento.source[0].midiCtrl = SND_MIDICTRL_PORTAMENTO;
     svoice->inpPortamento.source[0].combine = 0;
     svoice->inpPortamento.source[0].scale = 0x10000;
     svoice->inpPortamento.numSource = 1;
     svoice->inpPreAuxA.numSource = 0;
-    svoice->inpReverb.source[0].midiCtrl = 91;
+    svoice->inpReverb.source[0].midiCtrl = SND_MIDICTRL_REVERB;
     svoice->inpReverb.source[0].combine = 0;
     svoice->inpReverb.source[0].scale = 0x10000;
     svoice->inpReverb.numSource = 1;
     svoice->inpPreAuxB.numSource = 0;
-    svoice->inpPostAuxB.source[0].midiCtrl = 93;
+    svoice->inpPostAuxB.source[0].midiCtrl = SND_MIDICTRL_CHORUS;
     svoice->inpPostAuxB.source[0].combine = 0;
     svoice->inpPostAuxB.source[0].scale = 0x10000;
     svoice->inpPostAuxB.numSource = 1;
-    svoice->inpDoppler.source[0].midiCtrl = 132;
+    svoice->inpDoppler.source[0].midiCtrl = SND_MIDICTRL_DOPPLER;
     svoice->inpDoppler.source[0].combine = 0;
     svoice->inpDoppler.source[0].scale = 0x10000;
     svoice->inpDoppler.numSource = 1;
@@ -899,9 +863,9 @@ void inpInit(SYNTH_VOICE* svoice) {
 #endif
 
 #if MUSY_VERSION <= MUSY_VERSION_CHECK(2, 0, 0)
-    svoice->midiDirtyFlags = 0x1fff;
+    svoice->midiDirtyFlags = SYNTH_DIRTY_ALL_NO_FILTER;
 #else
-    svoice->midiDirtyFlags = 0x7fff;
+    svoice->midiDirtyFlags = SYNTH_DIRTY_ALL;
 #endif
     svoice->lfoUsedByInput[0] = 0;
     svoice->lfoUsedByInput[1] = 0;
@@ -924,15 +888,12 @@ void inpInit(SYNTH_VOICE* svoice) {
 }
 
 #if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 1)
-/** Sets the default low and high filter boundary frequencies used by inpResetChannelDefaults. */
 void inpSetLPFDefaultRange(u32 lowFrq, u32 highFrq) {
   lpfLowFrequencyDefault = lowFrq;
   lpfHighFrequencyDefault = highFrq;
 }
 #endif
 
-/** Maps the extended controller numbers used in macro data (0x80-0x88) to the internal controller numbers (LFO 0/1 as
- * 160/161, key, velocity and time sources as 162-164, and so on). */
 u8 inpTranslateExCtrl(u8 ctrl) {
   switch (ctrl) {
   case 0x80:
@@ -965,10 +926,8 @@ u8 inpTranslateExCtrl(u8 ctrl) {
   }
   return ctrl;
 }
-/** Reads an extended controller of a voice as a 14-bit value; the LFO controllers return the voice's LFO value centred
- * on 0x2000, others the MIDI controller of the voice's channel (0 for voices without one). */
 u16 inpGetExCtrl(SYNTH_VOICE* svoice, u8 ctrl) {
-  u16 v; // r30
+  u16 v;
   switch (inpTranslateExCtrl(ctrl)) {
   case 160:
     v = (svoice->lfo[0].value << 1) + 0x2000;
@@ -983,8 +942,6 @@ u16 inpGetExCtrl(SYNTH_VOICE* svoice, u8 ctrl) {
 
   return v;
 }
-/** Sets an extended controller of a voice from v (clamped to 0..0x3FFF) by writing the MIDI controller of the voice's
- * channel; LFO controllers cannot be set. */
 void inpSetExCtrl(SYNTH_VOICE* svoice, u8 ctrl, s16 v) {
   v = v < 0 ? 0 : v > 0x3fff ? 0x3fff : v;
 

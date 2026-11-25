@@ -1,66 +1,74 @@
-/**
- * memset for the stub: fills n bytes at dst with the byte val,
- * byte-wise for short blocks and with 32-byte unrolled word stores for long ones.
- */
-asm void TRK_fill_mem(void* dst, int val, unsigned int n) {
-    nofralloc
-    cmplwi r5, 0x20
-    clrlwi r4, r4, 24
-    subi r6, r3, 0x1
-    mr r7, r4
-    blt L_8025B04C
-    nor r0, r6, r6
-    clrlwi. r3, r0, 30
-    beq L_8025AFDC
-    subf r5, r3, r5
-L_8025AFD0:
-    subic. r3, r3, 0x1
-    stbu r7, 0x1(r6)
-    bne L_8025AFD0
-L_8025AFDC:
-    cmplwi r7, 0x0
-    beq L_8025AFFC
-    slwi r3, r7, 24
-    slwi r0, r7, 16
-    slwi r4, r7, 8
-    or r0, r3, r0
-    or r0, r4, r0
-    or r7, r7, r0
-L_8025AFFC:
-    srwi. r4, r5, 5
-    subi r3, r6, 0x3
-    beq L_8025B030
-L_8025B008:
-    stw r7, 0x4(r3)
-    subic. r4, r4, 0x1
-    stw r7, 0x8(r3)
-    stw r7, 0xc(r3)
-    stw r7, 0x10(r3)
-    stw r7, 0x14(r3)
-    stw r7, 0x18(r3)
-    stw r7, 0x1c(r3)
-    stwu r7, 0x20(r3)
-    bne L_8025B008
-L_8025B030:
-    extrwi. r4, r5, 3, 27
-    beq L_8025B044
-L_8025B038:
-    subic. r4, r4, 0x1
-    stwu r7, 0x4(r3)
-    bne L_8025B038
-L_8025B044:
-    addi r6, r3, 0x3
-    clrlwi r5, r5, 30
-L_8025B04C:
-    cmplwi r5, 0x0
-    beqlr
-L_8025B054:
-    subic. r5, r5, 0x1
-    stbu r7, 0x1(r6)
-    bne L_8025B054
-    blr
+typedef unsigned char u8;
+typedef unsigned int u32;
+
+/* Fills n bytes at dst with the byte val: single bytes up to a word boundary, then eight words per step, the rest
+   in words and bytes. dst itself walks the buffer with pre-increment stores (stbu/stwu), so it always points one
+   unit before the next address to write. The casts on the left are CodeWarrior's cast-as-lvalue extension.
+   Form after the matched GC 2.6 decompilations of pikmin2 and ac-decomp (CC0). The eight word stores per step
+   are written out: with them the function has more than the 30 statements MWCC auto-inlines, so TRK_memset
+   calls it under the TRK library's default -inline auto,deferred. */
+static void TRK_fill_mem(void* dst, int val, unsigned int n) {
+    u32 v, i;
+    v = (u8)val;
+
+    ((u8*)dst) = ((u8*)dst) - 1;
+
+    if (n >= 32) {
+        i = ~(u32)dst & 3;
+
+        if (i) {
+            n -= i;
+
+            do {
+                *++((u8*)dst) = v;
+            } while (--i);
+        }
+
+        if (v)
+            v |= v << 24 | v << 16 | v << 8;
+
+        // one byte before the next word -> one word before it, in two steps (written as one step, or with a
+        // second pointer variable, the compiler allocates other registers)
+        ((u32*)dst) = ((u32*)(((u8*)dst) + 4)) - 1;
+        ((u32*)dst) = ((u32*)(((u8*)dst) + 1)) - 1;
+
+        i = n / 32;
+
+        if (i) {
+            do {
+                *++((u32*)dst) = v;
+                *++((u32*)dst) = v;
+                *++((u32*)dst) = v;
+                *++((u32*)dst) = v;
+                *++((u32*)dst) = v;
+                *++((u32*)dst) = v;
+                *++((u32*)dst) = v;
+                *++((u32*)dst) = v;
+            } while (--i);
+        }
+
+        i = (n / 4) % 8;
+
+        if (i) {
+            do {
+                *++((u32*)dst) = v;
+            } while (--i);
+        }
+
+        // one word before the next byte -> one byte before it
+        ((u8*)dst) = ((u8*)(((u32*)dst) + 1)) - 1;
+
+        n %= 4;
+    }
+
+    if (n) {
+        do {
+            *++((u8*)dst) = v;
+        } while (--n);
+    }
 }
 
+/* Forward byte copy only (the runtime memcpy in __mem.c also copies backward for overlaps). */
 __declspec(section ".init") void* TRK_memcpy(void* dst, const void* src, unsigned int n) {
     const unsigned char* s = (const unsigned char*)src - 1;
     unsigned char* d = (unsigned char*)dst - 1;

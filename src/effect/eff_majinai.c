@@ -1,5 +1,7 @@
-// Spell effect (majinai: charm/spell): plays the MOBJ_EFF_majinai animation while the map darkens and Mario glows,
+// Spell effect (majinai: charm/spell): plays the MOBJ_EFF_majinai animation while the map darkens and Mario stays lit,
 // with a stardust burst, then restores the map (states 0-3: load, darken, wait, restore). The type is stored, never read.
+
+#include "version.h"
 #include "eff/eff_majinai.h"
 #include "eff/eff_stardust.h"
 #include "battle/battle.h"
@@ -11,10 +13,9 @@
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
-#include "version.h"
-
-static void effMajinaiDisp(CameraId cameraId, EffectEntry* effect);
+#include "driver/effdrv.h"
 static void effMajinaiMain(EffectEntry* effect);
+static void effMajinaiDisp(CameraId cameraId, EffectEntry* effect);
 
 /**
  * Spawns the charm/spell effect at (x, y, z); called when Mario casts a spell in battle (battle_mario.c),
@@ -23,7 +24,7 @@ static void effMajinaiMain(EffectEntry* effect);
 EffectEntry* effMajinaiEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffMajinaiWork* work;
-    static const GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
+    MapWork* map;
 
     effect = effEntry();
     effect->type = "Majinai";
@@ -31,7 +32,7 @@ EffectEntry* effMajinaiEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffMajinaiWork) * effect->count);
     effect->userdata = work;
     effect->callback = effMajinaiMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -40,13 +41,14 @@ EffectEntry* effMajinaiEntry(s32 type, f32 x, f32 y, f32 z) {
     work->alpha = 255;
     work->state = 0;
     work->poseId = -1;
-    mapGetWork()->entries[0].color = white;
+    map = mapGetWork();
+    map->entries[0].color = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
     return effect;
 }
 
 /**
- * Per frame: runs the 4-state sequence (load the MOBJ_EFF_majinai animation, darken the map and make Mario glow,
- * wait, restore) and deletes the effect when the animation has looped.
+ * Per frame: runs the 4-state sequence (load the MOBJ_EFF_majinai animation, darken the map while Mario's poses
+ * skip the map colour, wait for the loop, restore while fading out) and deletes the effect when the fade ends.
  */
 static void effMajinaiMain(EffectEntry* effect) {
     EffMajinaiWork* work = effect->userdata;
@@ -62,12 +64,12 @@ static void effMajinaiMain(EffectEntry* effect) {
     inBattle = gp->inBattle ? TRUE : FALSE;
 
     // soft delete
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (work->poseId != -1) {
             animPoseRelease(work->poseId);
         }
-        mapGetWork()->entries[0].flags &= ~8;
+        mapGetWork()->entries[0].flags &= ~MAP_ENTRY_COLOR;
         effDelete(effect);
         return;
     }
@@ -76,35 +78,34 @@ static void effMajinaiMain(EffectEntry* effect) {
             if (!animGroupBaseAsync("MOBJ_EFF_majinai", inBattle, NULL)) {
                 return;
             }
-            work->poseId = animPoseEntry("MOBJ_EFF_majinai", (u32)inBattle);
+            work->poseId = animPoseEntry("MOBJ_EFF_majinai", inBattle);
             animPoseSetAnim(work->poseId, "A_1", TRUE);
             work->state++;
             break;
         case 1:
-            // darken the map and make Mario glow
+            // darken the map; Mario's poses skip the map colour
             map = mapGetWork();
             color = map->entries[0].color.r - 5;
             if (color < 64) {
                 color = 64;
             }
             map->entries[0].color = (GXColor){color, color, color, 0xFF};
-            map->entries[0].flags |= 8;
+            map->entries[0].flags |= MAP_ENTRY_COLOR;
             if (!gp->inBattle) {
                 mario = marioGetPtr();
 #if VERSION >= VERSION_DEMO_EU
                 for (i = 0; i < 3; i++) {
                     if (mario->paperAnimGroupId[i] != -1) {
-                        animPoseSetMaterialFlagOn(mario->paperAnimGroupId[i], ANIM_MATERIAL_FLAG_NO_BLEND);
+                        animPoseSetMaterialFlagOn(mario->paperAnimGroupId[i], MAP_OBJ_FLAG_NO_MAP_BLEND);
                     }
-                }
 #else
                 for (i = 0; i < 5; i++) {
-                    animPoseSetMaterialFlagOn(mario->paperAnimGroupId[i], ANIM_MATERIAL_FLAG_NO_BLEND);
-                }
+                    animPoseSetMaterialFlagOn(mario->paperAnimGroupId[i], MAP_OBJ_FLAG_NO_MAP_BLEND);
 #endif
+                }
             } else {
                 unit = BattleGetMarioPtr(_battleWorkPointer);
-                animPoseSetMaterialFlagOn(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->poseId, ANIM_MATERIAL_FLAG_NO_BLEND);
+                animPoseSetMaterialFlagOn(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->poseId, MAP_OBJ_FLAG_NO_MAP_BLEND);
             }
             if (animPoseGetLoopTimes(work->poseId) >= 0.93f) {
 #if VERSION <= VERSION_DEMO_JP
@@ -129,36 +130,35 @@ static void effMajinaiMain(EffectEntry* effect) {
                 color = 255;
             }
             map->entries[0].color = (GXColor){color, color, color, 0xFF};
-            map->entries[0].flags |= 8;
+            map->entries[0].flags |= MAP_ENTRY_COLOR;
             if (!gp->inBattle) {
                 mario = marioGetPtr();
 #if VERSION >= VERSION_DEMO_EU
                 for (i = 0; i < 3; i++) {
                     if (mario->paperAnimGroupId[i] != -1) {
-                        animPoseSetMaterialFlagOff(mario->paperAnimGroupId[i], ANIM_MATERIAL_FLAG_NO_BLEND);
+                        animPoseSetMaterialFlagOff(mario->paperAnimGroupId[i], MAP_OBJ_FLAG_NO_MAP_BLEND);
                     }
-                }
 #else
                 for (i = 0; i < 5; i++) {
-                    animPoseSetMaterialFlagOff(mario->paperAnimGroupId[i], ANIM_MATERIAL_FLAG_NO_BLEND);
-                }
+                    animPoseSetMaterialFlagOff(mario->paperAnimGroupId[i], MAP_OBJ_FLAG_NO_MAP_BLEND);
 #endif
+                }
             } else {
                 unit = BattleGetMarioPtr(_battleWorkPointer);
-                animPoseSetMaterialFlagOff(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->poseId, ANIM_MATERIAL_FLAG_NO_BLEND);
+                animPoseSetMaterialFlagOff(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->poseId, MAP_OBJ_FLAG_NO_MAP_BLEND);
             }
             work->alpha -= 5;
             if (work->alpha < 0) {
                 if (work->poseId != -1) {
                     animPoseRelease(work->poseId);
                 }
-                mapGetWork()->entries[0].flags &= ~8;
+                mapGetWork()->entries[0].flags &= ~MAP_ENTRY_COLOR;
                 effDelete(effect);
                 return;
             }
             break;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMajinaiDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effMajinaiDisp, effect);
 }
 
 /** Draws the MOBJ_EFF_majinai animation pose at the effect position. */
@@ -174,7 +174,7 @@ static void effMajinaiDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR | ANIM_MATERIAL_FLAG_NO_BLEND);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR | MAP_OBJ_FLAG_NO_MAP_BLEND);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 10.0f);

@@ -1,4 +1,5 @@
 // Battle icons: floating item and badge icons, with their script commands.
+
 #include "battle/battle_icon.h"
 #include "battle/battle.h"
 #include "data/item_data.h"
@@ -7,14 +8,9 @@
 #include <string.h>
 #include "battle/battle_sub.h"
 #include "libc_decls.h"
-#include "driver/icondrv.h"
 
 #include "system.h"
 
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
-// FAKE: inlining off for the whole file (FAKES.md); without it 7 functions change length, e.g. btlevtcmd_BtlIconEntryItemId 72 -> 122 instructions
-#pragma dont_inline on
 /**
  * Finds the in-use battle icon (of the 16 slots in BattleWork) whose slot index matches; NULL if none.
  * Scripts refer to icons by this index.
@@ -25,7 +21,7 @@ BattleIcon* BtlIconGetPtr(s32 index) {
 
     for (i = 0; i < 16; i++) {
         icon = &_battleWorkPointer->icons[i];
-        if (icon->flags & 1 && icon->index == index) {
+        if ((icon->flags & BATTLE_ICON_FLAG_ACTIVE) && icon->index == index) {
             return icon;
         }
     }
@@ -49,14 +45,14 @@ void BattleIconMain(void) {
     wp = _battleWorkPointer;
     for (i = 0; i < 16; i++) {
         icon = &wp->icons[i];
-        if (icon->flags & 1) { // in use
+        if (icon->flags & BATTLE_ICON_FLAG_ACTIVE) { // in use
             if (icon->base) {
                 iconSetPos(icon->base->name, icon->position.x, icon->position.y, icon->position.z);
                 iconSetScale(icon->base->name, icon->scale * icon->scaleMul);
-                if (icon->flags & 2) {
-                    iconFlagOn(icon->base->name, 2);
+                if (icon->flags & BATTLE_ICON_FLAG_HIDDEN) {
+                    iconFlagOn(icon->base->name, ICON_FLAG_HIDDEN);
                 } else {
-                    iconFlagOff(icon->base->name, 2);
+                    iconFlagOff(icon->base->name, ICON_FLAG_HIDDEN);
                 }
             }
         }
@@ -74,8 +70,8 @@ void BattleIconEnd(void) {
 }
 
 /**
- * Takes a free icon slot and creates an icondrv icon named "_biu_NN" showing iconId at (x, y, z), scale 1.
- * Returns the slot, or NULL when all 16 are in use.
+ * Takes a free battle icon slot and creates an icondrv icon named "_biu_<slot in hex>" showing iconId at
+ * (x, y, z), scale 1. Returns the slot, or NULL when all 16 are in use.
  */
 BattleIcon* BtlIcon_Entry(u16 iconId, f32 x, f32 y, f32 z) {
     BattleIcon* icon;
@@ -84,8 +80,8 @@ BattleIcon* BtlIcon_Entry(u16 iconId, f32 x, f32 y, f32 z) {
 
     for (i = 0; i < 16; i++) {
         icon = &_battleWorkPointer->icons[i];
-        if (!(icon->flags & 1)) {
-            break; // found one not in use
+        if (!(icon->flags & BATTLE_ICON_FLAG_ACTIVE)) {
+            break; // free slot
         }
     }
     if (i >= 16) {
@@ -93,7 +89,7 @@ BattleIcon* BtlIcon_Entry(u16 iconId, f32 x, f32 y, f32 z) {
     }
     memset(icon, 0, sizeof(BattleIcon));
     icon->index = i;
-    icon->flags = 1;
+    icon->flags = BATTLE_ICON_FLAG_ACTIVE;
     icon->scale = 1.0f;
     icon->scaleMul = 1.0f;
     icon->position.x = x;
@@ -109,15 +105,15 @@ BattleIcon* BtlIcon_Entry(u16 iconId, f32 x, f32 y, f32 z) {
 
 /** Removes a live battle icon's icondrv icon and frees its slot; safe on an unused slot. */
 void BtlIcon_Delete(BattleIcon* icon) {
-    if (icon->flags & 1) {
+    if (icon->flags & BATTLE_ICON_FLAG_ACTIVE) {
         iconDelete(icon->base->name);
-        icon->flags &= ~1;
+        icon->flags &= ~BATTLE_ICON_FLAG_ACTIVE;
     }
 }
 
 /**
- * s32 iconId, f32 x, f32 y, f32 z, s32 evtIndex Script:
- * creates a battle icon (see BtlIcon_Entry) and stores its index in args[4] for the other BtlIcon commands.
+ * Script: creates a battle icon (BtlIcon_Entry) of icon id args[0] at args[1], args[2], args[3] (read as integers)
+ * and stores its index in the variable args[4], which the other btlevtcmd_BtlIcon* commands take.
  */
 USER_FUNC(btlevtcmd_BtlIconEntry) {
     EvtWord* args = event->args;
@@ -130,15 +126,19 @@ USER_FUNC(btlevtcmd_BtlIconEntry) {
     y = (f32)evtGetValue(event, args[2]);
     z = (f32)evtGetValue(event, args[3]);
     index = args[4];
+
+    // BtlIcon_Entry returns NULL when all 16 icon slots are in use; icon is used below without a check.
     icon = BtlIcon_Entry(iconId, x, y, z);
     evtSetValue(event, index, icon->index);
     return EVT_RETURN_DONE;
 }
 
 /**
- * s32 itemId (index for itemDataTable) , f32 x, f32 y, f32 z, s32 evtIndex Script:
+ * s32 itemId (index for itemDataTable), x, y, z (read as integers), s32 evtIndex Script:
  * like btlevtcmd_BtlIconEntry but takes an item id and shows that item's icon from itemDataTable.
  */
+// args: item id (its itemDataTable icon is shown), x, y, z (read as integers), variable that receives the battle
+// icon index
 USER_FUNC(btlevtcmd_BtlIconEntryItemId) {
     EvtWord* args = event->args;
     BattleIcon* icon;
@@ -150,6 +150,8 @@ USER_FUNC(btlevtcmd_BtlIconEntryItemId) {
     y = (f32)evtGetValue(event, args[2]);
     z = (f32)evtGetValue(event, args[3]);
     index = args[4];
+
+    // BtlIcon_Entry returns NULL when all 16 icon slots are in use; icon is used below without a check.
     icon = BtlIcon_Entry(itemDataTable[itemId].icon_id, x, y, z);
     evtSetValue(event, index, icon->index);
     return EVT_RETURN_DONE;
@@ -158,6 +160,7 @@ USER_FUNC(btlevtcmd_BtlIconEntryItemId) {
 /**
  * s32 index for BtlIconGetPtr Script: deletes the battle icon with the given index.
  */
+// args: battle icon index (BtlIconGetPtr)
 USER_FUNC(btlevtcmd_BtlIconDelete) {
     BattleIcon* icon;
     s32 value;
@@ -172,6 +175,7 @@ USER_FUNC(btlevtcmd_BtlIconDelete) {
  * s32 index for BtlIconGetPtr, f32 x, f32 y, f32 z Script:
  * moves the battle icon with the given index to (x, y, z).
  */
+// args: battle icon index, x, y, z (floats)
 USER_FUNC(btlevtcmd_BtlIconSetPosition) {
     EvtWord* args = event->args;
     BattleIcon* icon;
@@ -189,10 +193,36 @@ USER_FUNC(btlevtcmd_BtlIconSetPosition) {
     return EVT_RETURN_DONE;
 }
 
+// btlevtcmd_BtlIconSetMoveSpeed and btlevtcmd_BtlIconSetJumpSpeed: original names and sizes (0x50 each) from the JP
+// demo map (UNUSED there: no script uses them; listed in this order between btlevtcmd_BtlIconSetPosition and
+// btlevtcmd_BtlIconSetFallAccel, as btlevtcmd_SetMoveSpeed, _SetJumpSpeed and _SetFallAccel are for units). Both
+// are btlevtcmd_BtlIconSetFallAccel's form. btlevtcmd_BtlIconJumpPosition is btlevtcmd_JumpPosition on the icon's
+// fields, which pairs them: jumpSpeed is the unit's moveSpeedXZ (BtlUnit_SetMoveSpeed) and jumpVelY its
+// moveSpeedY (BtlUnit_SetJumpSpeed).
+
+/** Script: sets the horizontal speed of battle icon args[0] (read by btlevtcmd_BtlIconJumpPosition). */
+USER_FUNC(btlevtcmd_BtlIconSetMoveSpeed) {
+    EvtWord* args = event->args;
+    s32 index = evtGetValue(event, args[0]);
+    BattleIcon* icon = BtlIconGetPtr(index);
+    icon->jumpSpeed = evtGetFloat(event, args[1]);
+    return EVT_RETURN_DONE;
+}
+
+/** Script: sets the vertical speed of battle icon args[0] (btlevtcmd_BtlIconJumpPosition recomputes it). */
+USER_FUNC(btlevtcmd_BtlIconSetJumpSpeed) {
+    EvtWord* args = event->args;
+    s32 index = evtGetValue(event, args[0]);
+    BattleIcon* icon = BtlIconGetPtr(index);
+    icon->jumpVelY = evtGetFloat(event, args[1]);
+    return EVT_RETURN_DONE;
+}
+
 /**
  * s32 index for BtlIconGetPtr, f32 fallAccel Script:
  * sets the gravity per frame used by btlevtcmd_BtlIconJumpPosition for that icon.
  */
+// args: battle icon index, fall acceleration (float)
 USER_FUNC(btlevtcmd_BtlIconSetFallAccel) {
     EvtWord* args = event->args;
     s32 index = evtGetValue(event, args[0]);
@@ -253,7 +283,7 @@ USER_FUNC(btlevtcmd_BtlIconJumpPosition) {
             icon->jumpDist -= icon->jumpFrames * icon->jumpSpeed;
         }
         if (icon->jumpFrames == 0) {
-            return 2;
+            return EVT_RETURN_DONE;
         }
         icon->jumpVelY = dy / icon->jumpFrames + icon->fallAccel * icon->jumpFrames / 2.0f;
         icon->jumpSpeed += icon->jumpDist / icon->jumpFrames;
@@ -272,18 +302,119 @@ USER_FUNC(btlevtcmd_BtlIconJumpPosition) {
         icon->position.x = icon->jumpTarget.x;
         icon->position.y = icon->jumpTarget.y;
         icon->position.z = icon->jumpTarget.z;
-        return 1;
+        return EVT_RETURN_YIELD;
     }
-    return 0;
+    return EVT_RETURN_BLOCK;
 }
 
 /**
- * Never called: a stand-in for a function the linker stripped, so that 0.0f,
- * 1.0f and 0.5f come first in the unit's float constant pool as in the original.
+ * Script: continues the fall of battle icon args[0] from its position with its current speeds (no target) until it
+ * reaches the battle floor; blocks the script until then.
  */
-// FAKE: uncalled stand-in for a stripped function; orders 0.0f, 1.0f, 0.5f in .sdata2
-void btlIconStrippedPool(f32* f) {
-    f[0] = 0.0f;
-    f[1] = 1.0f;
-    f[2] = 0.5f;
+// Original name and size (0xfc) from the JP demo map (UNUSED there: no script uses it), between
+// btlevtcmd_BtlIconJumpPosition and btlevtcmd_BtlIconFallPosition, as btlevtcmd_JumpContinue sits between the unit
+// commands. Body: btlevtcmd_JumpContinue (0x118) on the icon's fields, as btlevtcmd_BtlIconJumpPosition mirrors
+// btlevtcmd_JumpPosition (the unit's moveCurrentPos is the icon's jumpPos, BtlUnit_SetPos the position stores);
+// the size fits exactly. Copying the position through x/y/z locals, as the unit command does with BtlUnit_GetPos,
+// gives the same bytes.
+USER_FUNC(btlevtcmd_BtlIconJumpContinue) {
+    BattleIcon* icon;
+    s32 index;
+    f32 h;
+
+    index = evtGetValue(event, event->args[0]);
+    icon = BtlIconGetPtr(index);
+    if (isFirstCall) {
+        event->blocked = 1;
+        icon->jumpPos.x = icon->position.x;
+        icon->jumpPos.y = icon->position.y;
+        icon->jumpPos.z = icon->position.z;
+    }
+    icon->jumpPos.y += icon->jumpVelY;
+    icon->jumpVelY -= icon->fallAccel;
+    btlMovePos(icon->jumpSpeed, icon->jumpAngle, &icon->jumpPos.x, &icon->jumpPos.z);
+    icon->position.x = icon->jumpPos.x;
+    icon->position.y = icon->jumpPos.y;
+    icon->position.z = icon->jumpPos.z;
+    h = BattleGetFloorHeight(_battleWorkPointer, icon->jumpPos.x, icon->jumpPos.y, icon->jumpPos.z);
+    if (icon->jumpPos.y < h) {
+        icon->jumpPos.y = h;
+        icon->position.x = icon->jumpPos.x;
+        icon->position.y = icon->jumpPos.y;
+        icon->position.z = icon->jumpPos.z;
+        return EVT_RETURN_YIELD;
+    }
+    return EVT_RETURN_BLOCK;
+}
+
+/**
+ * Script: drops a battle icon from its position to (x, y, z) over args[4] frames (0 = from its speed), starting
+ * with no upward speed and choosing the gravity to land exactly; blocks the script until it lands.
+ */
+// Original name and size (0x348) from the JP demo map (UNUSED there: no script uses it), after
+// btlevtcmd_BtlIconJumpPosition. Body: btlevtcmd_FallPosition (also 0x348) on the icon's fields, as
+// btlevtcmd_BtlIconJumpPosition mirrors btlevtcmd_JumpPosition; the size fits exactly. Its 1.0f is the constant the
+// former stand-in btlIconStrippedPool kept in the pool.
+USER_FUNC(btlevtcmd_BtlIconFallPosition) {
+    EvtWord* args = event->args;
+    BattleIcon* icon;
+    s32 index, frames;
+    f32 sx, sy, sz;
+    f32 x, y, z;
+    f32 dy;
+
+    index = evtGetValue(event, args[0]);
+    x = (f32)evtGetValue(event, args[1]);
+    y = (f32)evtGetValue(event, args[2]);
+    z = (f32)evtGetValue(event, args[3]);
+    frames = evtGetValue(event, args[4]);
+    icon = BtlIconGetPtr(index);
+    if (isFirstCall) {
+        event->blocked = 1;
+        icon->jumpFrames = frames;
+        icon->jumpTarget.x = x;
+        icon->jumpTarget.y = y;
+        icon->jumpTarget.z = z;
+        sx = icon->position.x;
+        sz = icon->position.z;
+        sy = icon->position.y;
+        icon->jumpPos.x = sx;
+        icon->jumpPos.y = sy;
+        icon->jumpPos.z = sz;
+        icon->jumpAngle = angleABf(sx, sz, x, z);
+        icon->jumpDist = distABf(sx, sz, x, z);
+        if (x - sx > 0.0f) {
+            icon->jumpDir = 1;
+        } else if (x - sx < 0.0f) {
+            icon->jumpDir = -1;
+        }
+        dy = y - sy;
+        if (icon->jumpFrames == 0) {
+            if (icon->jumpSpeed == 0.0f) {
+                icon->jumpSpeed = 1.0f;
+            }
+            icon->jumpFrames = icon->jumpDist / icon->jumpSpeed;
+            if (icon->jumpFrames == 0) {
+                icon->jumpFrames = 1;
+            }
+        } else {
+            icon->jumpSpeed = icon->jumpDist / icon->jumpFrames;
+        }
+        icon->jumpVelY = 0.0f;
+        icon->fallAccel = (dy / icon->jumpFrames - icon->jumpVelY) / (-icon->jumpFrames / 2.0f);
+    }
+    icon->jumpPos.y += icon->jumpVelY;
+    icon->jumpVelY -= icon->fallAccel;
+    btlMovePos(icon->jumpSpeed, icon->jumpAngle, &icon->jumpPos.x, &icon->jumpPos.z);
+    icon->position.x = icon->jumpPos.x;
+    icon->position.y = icon->jumpPos.y;
+    icon->position.z = icon->jumpPos.z;
+    icon->jumpFrames--;
+    if (icon->jumpFrames <= 0) {
+        icon->position.x = icon->jumpTarget.x;
+        icon->position.y = icon->jumpTarget.y;
+        icon->position.z = icon->jumpTarget.z;
+        return EVT_RETURN_YIELD;
+    }
+    return EVT_RETURN_BLOCK;
 }

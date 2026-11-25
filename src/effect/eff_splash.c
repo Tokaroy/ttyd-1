@@ -1,5 +1,7 @@
 // Water splash: columns and droplets rising and falling around a point; types 0-4 vary the shape and size,
 // type 3 also adds a water-damage effect.
+
+#include "version.h"
 #include "eff/eff_splash.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,11 +11,11 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "version.h"
 #include <string.h>
 #include "eff/eff_funemizu.h"
 #include "eff/n64/eff_water_damage_n64.h"
 #include "eff/eff_kemu_test.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 static void effSplashMain(EffectEntry* effect);
@@ -23,8 +25,8 @@ static void effSplashGetCol(CameraId cameraId, EffectEntry* effect);
 typedef struct EffSplashWork {
     s32 type;      // 0x0
     Vec position;  // 0x4
-    f32 velX;      // 0x10
-    f32 velZ;      // 0x14
+    f32 vx;        // 0x10, random horizontal speed (r * sin); added to position.x each frame after the delay
+    f32 vz;        // 0x14, random horizontal speed (r * cos); added to position.z each frame after the delay
     f32 sx;        // 0x18
     f32 sy;        // 0x1C
     f32 sz;        // 0x20
@@ -37,11 +39,22 @@ typedef struct EffSplashWork {
     GXColor color; // 0x3C
 } EffSplashWork;
 
-// Model data in the exporter's layout: indexed vertex arrays (positions, normals, colours, texture coordinates),
-// display lists of GX commands (each padded to 32 bytes with GX_NOP) and, per list table, the list sizes in
-// 32-byte units for GXCallDisplayList.
 static s16 geso_shibuki_vertex_tbl[] __attribute__((aligned(32))) = {-27648, 0, 0, -21503, 0, 0, -15871, 0, 0, -10751, 0, 0, -5631, 0, 0, 0, 0, 0, -28426, 333, 0, -23324, 3291, 0, -18243, 5029, 0, -13562, 6464, 0, -8405, 6754, 0, -1797, 4829, 0, -28349, 2048, 0, -23897, 4665, 0, -19006, 6861, 0, -14421, 8524, 0, -9359, 9043, 0, -3897, 6702, 0};
 static s16 geso_shibuki_texcoord0_tbl[] __attribute__((aligned(32))) = {-11004, 6276, -3325, 6276, -3325, 18299, -11004, 18299, 4352, 6276, 4352, 18299, 12031, 6276, 12031, 18299, 19709, 6276, 19709, 18299, 27388, 6276, 27388, 18299, -11004, 512, -3325, 512, 4352, 512, 12031, 512, 19709, 512, 27388, 0};
+
+/**
+ * Height of the first six spray columns of the Blooper splash (type 3) per frame, in 96ths:
+ * they shoot up to about two and a half times full height, then sink over 60 frames.
+ */
+#if VERSION >= VERSION_JP
+static u8 geso_scale_dt[] = {0x60, 0x60, 0x72, 0x88, 0x9F, 0xB6, 0xCC, 0xDF, 0xEE, 0xF7, 0xF9, 0xF7, 0xF5, 0xF3, 0xF1, 0xEE, 0xEB, 0xE8, 0xE4, 0xE1, 0xDD, 0xD9, 0xD5, 0xD0, 0xCC, 0xC7, 0xC2, 0xBD, 0xB8, 0xB3, 0xAE, 0xA8, 0xA3, 0x9D, 0x97, 0x91, 0x8C, 0x86, 0x80, 0x7A, 0x74, 0x6D, 0x67, 0x61, 0x5B, 0x55, 0x4F, 0x49, 0x43, 0x3D, 0x37, 0x31, 0x2B, 0x25, 0x20, 0x1A, 0x15, 0x0F, 0x0A, 0x05, 0x00};
+#endif
+
+/** Path of the Blooper splash spray columns: an x, y offset pair per frame for 71 frames. */
+#if VERSION >= VERSION_JP
+static s8 geso_trans_dt[] = {-40, -12, -40, -12, -39, -9, -39, -6, -39, -3, -39, 0, -38, 3, -38, 5, -38, 8, -39, 10, -40, 12, -41, 13, -42, 13, -43, 13, -45, 13, -47, 13, -49, 13, -51, 12, -52, 12, -54, 12, -56, 12, -57, 12, -58, 12, -59, 12, -61, 12, -62, 12, -63, 12, -65, 12, -66, 12, -67, 12, -69, 12, -70, 12, -71, 12, -73, 12, -74, 12, -75, 12, -76, 12, -78, 12, -79, 12, -80, 12, -81, 12, -83, 12, -84, 12, -85, 12, -87, 12, -88, 12, -89, 12, -90, 12, -92, 12, -93, 12, -94, 12, -95, 12, -97, 12, -98, 12, -99, 12, -100, 12, -102, 12, -103, 12, -104, 12, -106, 12, -107, 12, -108, 12, -109, 12, -111, 12, -112, 12, -113, 12, -114, 12, -116, 12, -117, 12, -118, 12, -120, 12};
+#endif
+
 static s8 geso_shibuki_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64};
 static u8 geso_shibuki_color0_tbl[] __attribute__((aligned(32))) = {0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 static u8 geso_shibuki_dl_0_0[] __attribute__((aligned(32))) = {0x98, 0x00, 0x06, 0x0C, 0x00, 0x01, 0x0C, 0x0D, 0x00, 0x01, 0x0D, 0x06, 0x00, 0x00, 0x00, 0x07, 0x00, 0x01, 0x01, 0x00, 0x00, 0x00, 0x03, 0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
@@ -49,62 +62,85 @@ static u8 geso_shibuki_dl_0_1[] __attribute__((aligned(32))) = {0x98, 0x00, 0x06
 static u8 geso_shibuki_dl_0_2[] __attribute__((aligned(32))) = {0x98, 0x00, 0x06, 0x0E, 0x00, 0x01, 0x0E, 0x0F, 0x00, 0x01, 0x0F, 0x08, 0x00, 0x01, 0x04, 0x09, 0x00, 0x01, 0x06, 0x02, 0x00, 0x00, 0x05, 0x03, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00};
 static u8 geso_shibuki_dl_0_3[] __attribute__((aligned(32))) = {0x98, 0x00, 0x06, 0x0F, 0x00, 0x01, 0x0F, 0x10, 0x00, 0x01, 0x10, 0x09, 0x00, 0x01, 0x06, 0x0A, 0x00, 0x01, 0x08, 0x03, 0x00, 0x00, 0x07, 0x04, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00};
 static u8 geso_shibuki_dl_0_4[] __attribute__((aligned(32))) = {0x98, 0x00, 0x06, 0x10, 0x00, 0x01, 0x10, 0x11, 0x00, 0x01, 0x11, 0x0A, 0x00, 0x01, 0x08, 0x0B, 0x00, 0x01, 0x0A, 0x04, 0x00, 0x00, 0x09, 0x05, 0x00, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x00, 0x00};
+
 /** The five display lists of the Blooper spray (shibuki) model. */
 static u8* geso_shibuki_dl_0_tbl[] = {geso_shibuki_dl_0_0, geso_shibuki_dl_0_1, geso_shibuki_dl_0_2, geso_shibuki_dl_0_3, geso_shibuki_dl_0_4};
-/**
- * Height of the first six spray columns of the Blooper splash (type 3) per frame, in 96ths:
- * they shoot up to about two and a half times full height, then sink over 60 frames.
- */
+
+#if VERSION <= VERSION_DEMO_JP
 static u8 geso_scale_dt[] = {0x60, 0x60, 0x72, 0x88, 0x9F, 0xB6, 0xCC, 0xDF, 0xEE, 0xF7, 0xF9, 0xF7, 0xF5, 0xF3, 0xF1, 0xEE, 0xEB, 0xE8, 0xE4, 0xE1, 0xDD, 0xD9, 0xD5, 0xD0, 0xCC, 0xC7, 0xC2, 0xBD, 0xB8, 0xB3, 0xAE, 0xA8, 0xA3, 0x9D, 0x97, 0x91, 0x8C, 0x86, 0x80, 0x7A, 0x74, 0x6D, 0x67, 0x61, 0x5B, 0x55, 0x4F, 0x49, 0x43, 0x3D, 0x37, 0x31, 0x2B, 0x25, 0x20, 0x1A, 0x15, 0x0F, 0x0A, 0x05, 0x00};
-/** Path of the Blooper splash spray columns: an x, y offset pair per frame for 71 frames. */
 static s8 geso_trans_dt[] = {-40, -12, -40, -12, -39, -9, -39, -6, -39, -3, -39, 0, -38, 3, -38, 5, -38, 8, -39, 10, -40, 12, -41, 13, -42, 13, -43, 13, -45, 13, -47, 13, -49, 13, -51, 12, -52, 12, -54, 12, -56, 12, -57, 12, -58, 12, -59, 12, -61, 12, -62, 12, -63, 12, -65, 12, -66, 12, -67, 12, -69, 12, -70, 12, -71, 12, -73, 12, -74, 12, -75, 12, -76, 12, -78, 12, -79, 12, -80, 12, -81, 12, -83, 12, -84, 12, -85, 12, -87, 12, -88, 12, -89, 12, -90, 12, -92, 12, -93, 12, -94, 12, -95, 12, -97, 12, -98, 12, -99, 12, -100, 12, -102, 12, -103, 12, -104, 12, -106, 12, -107, 12, -108, 12, -109, 12, -111, 12, -112, 12, -113, 12, -114, 12, -116, 12, -117, 12, -118, 12, -120, 12};
+#endif
+
 /** Display-list sizes (32-byte units) of the Blooper spray (shibuki) model's five lists. */
 static u8 geso_shibuki_dl_0_size_tbl[] = {1, 1, 1, 1, 1};
+
+/** Sets up the Blooper spray model's vertex formats and arrays and calls its five display lists. */
+// Original name and size (0x140) from the JP demo map (UNUSED there: every call is inlined).
+static void geso_shibuki_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 8);
+    GXSetArray(GX_VA_POS, geso_shibuki_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, geso_shibuki_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, geso_shibuki_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, geso_shibuki_texcoord0_tbl, 4);
+    for (i = 0; i < 5; i++) {
+        GXCallDisplayList(geso_shibuki_dl_0_tbl[i], geso_shibuki_dl_0_size_tbl[i] << 5);
+    }
+}
 
 /**
  * Spawns the splash at (x, y, z) with `size`.
  * Types: 0 falls in water, 1 jumps out of water, 2 falls into lava/fire (also starts a smoke effect),
- * 3 Blooper (gesso) entrance, 4 its background variant. Allocates 1+n1+n2 records.
+ * 3 Blooper (gesso) entrance, 4 its background variant. Allocates 1+coneCount+dropCount records.
  */
 EffectEntry* effSplashEntry(s32 type, f32 x, f32 y, f32 z, f32 size) {
     EffectEntry* effect;
     EffSplashWork* work;
-    EffSplashWork* p;
     s32 i;
-    s32 n1;
-    s32 n2;
+    s32 coneCount;
+    s32 dropCount;
     f32 ang;
     f32 r;
     f32 s;
     f32 c;
-    f32 yaw;
+    f32 dx;
+    f32 dz;
 
     effect = effEntry();
-    n1 = 0;
-    n2 = 0;
+    coneCount = 0;
+    dropCount = 0;
     switch (type) {
         case 0:
         case 1:
-            n1 = 2;
-            n2 = 10;
+            coneCount = 2;
+            dropCount = 10;
             break;
         case 2:
-            n1 = 1;
-            n2 = 10;
+            coneCount = 1;
+            dropCount = 10;
             break;
         case 3:
             size *= 0.5f;
-            n1 = 6;
-            n2 = 0;
+            coneCount = 6;
+            dropCount = 0;
             effWaterDamageN64Entry(2, 60, x, y, z, 1.0f);
             break;
         case 4:
-            n1 = 2;
-            n2 = 10;
+            coneCount = 2;
+            dropCount = 10;
             break;
     }
     effect->type = "splash";
-    effect->count = n1 + n2 + 1;
+    effect->count = coneCount + dropCount + 1;
     work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(EffSplashWork));
     effect->userdata = work;
     effect->callback = effSplashMain;
@@ -118,12 +154,12 @@ EffectEntry* effSplashEntry(s32 type, f32 x, f32 y, f32 z, f32 size) {
     work->timer = 0;
     work->hasColor = 0;
     work++;
-    for (i = 1; i < n1 + 1; i++, work++) {
+    for (i = 1; i < coneCount + 1; i++, work++) {
         work->position.z = 0.0f;
         work->position.y = 0.0f;
         work->position.x = 0.0f;
-        work->velX = 0.0f;
-        work->velZ = 0.0f;
+        work->vx = 0.0f;
+        work->vz = 0.0f;
         work->delay = 0;
         work->sz = 1.0f;
         work->sy = 1.0f;
@@ -182,17 +218,17 @@ EffectEntry* effSplashEntry(s32 type, f32 x, f32 y, f32 z, f32 size) {
                 break;
         }
     }
-    for (i = n1 + 1; i < effect->count; i++, work++) {
+    for (i = coneCount + 1; i < effect->count; i++, work++) {
         ang = (f32)irand(360);
         r = (f32)irand(5);
         ang = 6.2831855f * ang / 360.0f;
         s = sin(ang);
-        work->velX = r * s;
+        work->vx = r * s;
         c = cos(ang);
-        work->velZ = r * c;
-        work->position.x = 2.0f * work->velX;
+        work->vz = r * c;
+        work->position.x = 2.0f * work->vx;
         work->position.y = 0.0f;
-        work->position.z = 2.0f * work->velZ;
+        work->position.z = 2.0f * work->vz;
         work->vy = 10.0f;
         work->grav = 1.0f;
         work->delay = irand(10);
@@ -204,11 +240,10 @@ EffectEntry* effSplashEntry(s32 type, f32 x, f32 y, f32 z, f32 size) {
         r = 6.2831855f * camGetPtr(CAMERA_3D)->viewYaw / 360.0f;
         s = (f32)sin(r);
         c = (f32)cos(r);
-        {
-            f32 dx = size * (-30.0f * s);
-            f32 dz = size * (30.0f * c);
-            effKemuTestEntry(6, x + dx, y + 5.0f * size, z + dz, size);
-        }
+        dx = size * (-30.0f * s);
+        dz = size * (30.0f * c);
+
+        effKemuTestEntry(6, x + dx, y + 5.0f * size, z + dz, size);
     }
     return effect;
 }
@@ -222,7 +257,6 @@ static void effSplashMain(EffectEntry* effect) {
     EffSplashWork* work = effect->userdata;
     Vec position;
     Vec v = {0.0f, 0.0f, 0.0f};
-    EffSplashWork* p;
     s32 type;
     s32 i;
     u32 t;
@@ -234,7 +268,7 @@ static void effSplashMain(EffectEntry* effect) {
     position = v;
     type = work->type;
     if (work->hasColor == 0) {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 8, (DispCallback)effSplashGetCol, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_CUSTOM_MID, (DispCallback)effSplashGetCol, effect);
         return;
     }
     switch (type) {
@@ -262,8 +296,8 @@ static void effSplashMain(EffectEntry* effect) {
             work->delay--;
             continue;
         }
-        work->position.x += work->velX;
-        work->position.z += work->velZ;
+        work->position.x += work->vx;
+        work->position.z += work->vz;
         work->position.y += work->vy;
         work->vy -= work->grav;
         switch (type) {
@@ -280,7 +314,6 @@ static void effSplashMain(EffectEntry* effect) {
                         work->sy = (f32)geso_scale_dt[t] / 96.0f;
                     }
                     if (t < 71) {
-
                         work->position.x = 10.0f * ((f32)(geso_trans_dt[t * 2] + 40) / 8.0f);
                         work->position.y = 10.0f * ((f32)(geso_trans_dt[t * 2 + 1] - 12) / 8.0f);
                     }
@@ -314,12 +347,12 @@ static void effSplashMain(EffectEntry* effect) {
                 break;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 1, (DispCallback)effSplashDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_ALPHA_TEST, (DispCallback)effSplashDisp, effect);
 }
 
 /**
- * Projects the splash position to the screen and reads the frame buffer pixel there for the water tint (the
- * retail build then overrides it with the map colour from eff_funemizu).
+ * Projects the splash position to the screen and reads the frame buffer pixel there for the water tint (JP and
+ * later then override it with the map colour from eff_funemizu; the early demos only for some muj, dou and gor maps).
  */
 static void effSplashGetCol(CameraId cameraId, EffectEntry* effect) {
     EffSplashWork* work = effect->userdata;
@@ -327,11 +360,13 @@ static void effSplashGetCol(CameraId cameraId, EffectEntry* effect) {
     f32 proj[7];
     f32 vp[6];
     f32 sx, sy, sz;
-    u8 argb[4];
-#if VERSION >= VERSION_JP
+    union {
+        u32 word;
+        struct {
+            u8 a, r, g, b;
+        } color;
+    } pixel;
     GXColor c;
-#endif
-
     cam = camGetPtr(cameraId);
     GXSetProjection(cam->projection, cam->projType);
     GXGetProjectionv(proj);
@@ -339,15 +374,14 @@ static void effSplashGetCol(CameraId cameraId, EffectEntry* effect) {
     GXProject(work->position.x, work->position.y, work->position.z, cam->view, proj, vp, &sx, &sy, &sz);
     if (sx > 0.0f && sx < 608.0f && sy > 0.0f && sy < 480.0f) {
         sysWaitDrawSync();
-        GXPeekARGB(sx, sy, (u32*)argb);
-        work->color.r = argb[1];
-        work->color.g = argb[2];
-        work->color.b = argb[3];
+        GXPeekARGB(sx, sy, &pixel.word);
+        work->color.r = pixel.color.r;
+        work->color.g = pixel.color.g;
+        work->color.b = pixel.color.b;
         work->color.a = 255;
     }
     work->hasColor = 1;
 #if VERSION <= VERSION_DEMO_JP
-    // The demo picks the water colour per map here; retail asks eff_funemizu.
     if (strcmp(gp->currentMapName, "muj_02") == 0) {
         work->color.r = 0x20;
         work->color.g = 0x2C;
@@ -386,26 +420,16 @@ static void effSplashDisp(CameraId cameraId, EffectEntry* effect) {
     Mtx mtx;
     GXTexObj texObj;
     GXColor color;
-
     s32 i;
     s32 k;
     s32 type;
     s32 n;
     CameraEntry* cam;
-    f32 a, b, c;
+    f32 topRadius, bottomRadius, height;
     f32 r0, g0, b0, r1, g1, b1;
     f32 ang, sn, cs;
     f32 w;
-    u32 u;
-
-    f32 nw;
-    u32 k2;
-    u8* sz;
-    u8** dl;
-#if VERSION >= VERSION_JP
     s32 kb;
-#endif
-
     cam = camGetPtr(cameraId);
     type = work->type;
     color = work->color;
@@ -487,28 +511,28 @@ static void effSplashDisp(CameraId cameraId, EffectEntry* effect) {
         switch (type) {
             case 0:
             case 2:
-                a = 23.0f;
-                b = 15.0f;
-                c = -37.0f;
+                topRadius = 23.0f;
+                bottomRadius = 15.0f;
+                height = -37.0f;
                 break;
             case 1:
                 if (i == 1) {
-                    a = 1.8f;
-                    b = 6.0f;
-                    c = -85.0f;
+                    topRadius = 1.8f;
+                    bottomRadius = 6.0f;
+                    height = -85.0f;
                 } else {
-                    a = b = 11.6f;
-                    c = -21.0f;
+                    topRadius = bottomRadius = 11.6f;
+                    height = -21.0f;
                 }
                 break;
             case 4:
                 if (i == 1) {
-                    a = b = 10.0f;
-                    c = -20.0f;
+                    topRadius = bottomRadius = 10.0f;
+                    height = -20.0f;
                 } else {
-                    a = 15.0f;
-                    b = 12.0f;
-                    c = -10.0f;
+                    topRadius = 15.0f;
+                    bottomRadius = 12.0f;
+                    height = -10.0f;
                 }
                 break;
         }
@@ -540,19 +564,13 @@ static void effSplashDisp(CameraId cameraId, EffectEntry* effect) {
                     ang = 6.2831855f * (f32)k / 8.0f;
                     cs = (f32)cos(ang);
                     sn = (f32)sin(ang);
-#if VERSION >= VERSION_JP
                     kb = k & 1;
-#endif
-                    GXPosition3f32(a * sn, 0.0f, a * cs);
+                    GXPosition3f32(topRadius * sn, 0.0f, topRadius * cs);
                     GXColor4u8((u8)(255.0f * r0), (u8)(255.0f * g0), (u8)(255.0f * b0), 255);
-#if VERSION <= VERSION_DEMO_JP
-                    GXTexCoord2f32((f32)(k & 1), 0.1f);
-#else
                     GXTexCoord2f32((f32)kb, 0.1f);
-#endif
                     cs = (f32)cos(ang);
                     sn = (f32)sin(ang);
-                    GXPosition3f32(b * sn, c, b * cs);
+                    GXPosition3f32(bottomRadius * sn, height, bottomRadius * cs);
                     GXColor4u8((u8)(255.0f * r1), (u8)(255.0f * g1), (u8)(255.0f * b1), 255);
 #if VERSION <= VERSION_DEMO_JP
                     GXTexCoord2f32((f32)(k & 1), 2.1f);
@@ -563,25 +581,7 @@ static void effSplashDisp(CameraId cameraId, EffectEntry* effect) {
                 break;
             case 3:
                 *(GXColor*)geso_shibuki_color0_tbl = color;
-                GXClearVtxDesc();
-                GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
-                GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 8);
-                GXSetArray(GX_VA_POS, geso_shibuki_vertex_tbl, 6);
-                GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
-                GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
-                GXSetArray(GX_VA_NRM, geso_shibuki_normal_tbl, 3);
-                GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
-                GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
-                GXSetArray(GX_VA_CLR0, geso_shibuki_color0_tbl, 4);
-                GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
-                GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
-                GXSetArray(GX_VA_TEX0, geso_shibuki_texcoord0_tbl, 4);
-                {
-
-                    for (k2 = 0, sz = geso_shibuki_dl_0_size_tbl, dl = geso_shibuki_dl_0_tbl; k2 < 5; k2++, sz++, dl++) {
-                        GXCallDisplayList(*dl, *sz << 5);
-                    }
-                }
+                geso_shibuki_polygon_0();
                 break;
         }
     }
@@ -594,7 +594,6 @@ static void effSplashDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     w = 8.0f;
-
     for (i = n + 1; i < effect->count; i++, work++) {
         if (work->delay != 0) {
             continue;
@@ -621,6 +620,7 @@ static void effSplashDisp(CameraId cameraId, EffectEntry* effect) {
                 r0 = (1.0f + color.r / 255.0f) / 2;
                 g0 = (1.0f + color.g / 255.0f) / 2;
                 b0 = (1.0f + color.b / 255.0f) / 2;
+                break;
         }
         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
         GXPosition3f32(-w / 2, (w / 2), 0.0f);

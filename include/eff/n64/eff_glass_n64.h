@@ -1,4 +1,5 @@
 // eff_glass_n64.c: Paper Mario 64 Glass effect entry (effGlassN64Entry) and its work data (EffGlassN64Work).
+
 #pragma once
 
 #include "driver/effdrv.h"
@@ -16,7 +17,7 @@ typedef struct EffGlassN64Work {
     s32 alpha2;     // 0x34
     f32 scale;      // 0x38
     f32 rotZ;       // 0x3C
-    f32 rotY;       // 0x40
+    f32 rotZSpeed;  // 0x40
     f32 texV;       // 0x44
     f32 texVSpeed;  // 0x48
     f32 vx;         // 0x4C

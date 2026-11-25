@@ -1,8 +1,21 @@
 // eff_nice.c: "NICE" rating-text effect entry (effNiceEntry), effNiceAsync and its work struct (NiceEffectWork).
+
 #pragma once
 
 #include "driver/effdrv.h"
 #include <dolphin/mtx.h>
+
+// effNiceEntry type: animation-table indices, plus the separate acrobat letter effect.
+typedef enum NiceEffectType {
+    NICE_EFFECT_NICE = 0,
+    NICE_EFFECT_GOOD = 1,
+    NICE_EFFECT_GREAT = 2,
+    NICE_EFFECT_WONDERFUL = 3,
+    NICE_EFFECT_EXCELLENT = 4,
+    // 5 is a NULL table slot; effNiceEntry redirects it to NICE.
+    NICE_EFFECT_LUCKY = 6,
+    NICE_EFFECT_ACROBAT = 7,
+} NiceEffectType;
 
 typedef struct NiceEffectWork {
     s32 type;               // 0x0

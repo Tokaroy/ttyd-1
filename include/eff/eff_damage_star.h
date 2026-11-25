@@ -1,4 +1,5 @@
 // eff_damage_star.c: damage-star effect: effDamageStarEntry.
+
 #pragma once
 
 #include "driver/effdrv.h"

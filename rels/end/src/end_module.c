@@ -1,6 +1,5 @@
-// end.rel (エンディング, ending), Japanese store demo: the REL entry points, in a unit of their own after end_00
-// (its "end_00" string starts this unit's .rodata on an 8-byte boundary and the header's math constants follow
-// end_00's data). The releases have them in end_00.c.
+// end.rel, Japanese demo only: the module entry points, in a unit of their own after end_00. The other versions have
+// them in end_00.c. The math constants of the precompiled header follow end_00's data in this version.
 
 #include "evt/evt_cmd.h"
 #include "data/mapdata.h"

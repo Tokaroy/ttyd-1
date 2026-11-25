@@ -1,4 +1,5 @@
 // Hooktail Castle (gon) battle setups: enemy groups, battle stages and the field-battle tables for the area's maps.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "battle/battle_weapon_power.h"
@@ -10,67 +11,67 @@
 
 extern BattleUnitKind unit_red_honenoko;
 
-BattleStageObjectData gon_btlobject_data[10];
-BattleStageData gon_btlstage_data[5];
-BattleUnitSetup btlparty_gon_gon_02_02_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_02_02_off_1;
-BattleUnitSetup btlparty_gon_gon_02_03_off_1[2];
-BattleGroupSetup btlgrp_gon_gon_02_03_off_1;
-BattleUnitSetup btlparty_gon_gon_02_04_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_02_04_off_1;
-BattleUnitSetup btlparty_gon_gon_03_01_off_1[5];
-BattleGroupSetup btlgrp_gon_gon_03_01_off_1;
-BattleUnitSetup btlparty_gon_gon_04_01_off_1[2];
-BattleGroupSetup btlgrp_gon_gon_04_01_off_1;
-BattleUnitSetup btlparty_gon_gon_04_02_off_1[4];
-BattleGroupSetup btlgrp_gon_gon_04_02_off_1;
-BattleUnitSetup btlparty_gon_gon_04_03_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_04_03_off_1;
-BattleUnitSetup btlparty_gon_gon_06_03_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_06_03_off_1;
-BattleUnitSetup btlparty_gon_gon_06_04_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_06_04_off_1;
-BattleUnitSetup btlparty_gon_gon_08_01_off_1[2];
-BattleGroupSetup btlgrp_gon_gon_08_01_off_1;
-BattleUnitSetup btlparty_gon_gon_08_03_off_1[2];
-BattleGroupSetup btlgrp_gon_gon_08_03_off_1;
-BattleUnitSetup btlparty_gon_gon_08_05_off_1[2];
-BattleGroupSetup btlgrp_gon_gon_08_05_off_1;
-BattleUnitSetup btlparty_gon_gon_09_01_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_09_01_off_1;
-BattleUnitSetup btlparty_gon_gon_09_02_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_09_02_off_1;
-BattleUnitSetup btlparty_gon_gon_09_04_off_1[4];
-BattleGroupSetup btlgrp_gon_gon_09_04_off_1;
-BattleUnitSetup btlparty_gon_gon_10_01_off_1[4];
-BattleGroupSetup btlgrp_gon_gon_10_01_off_1;
-BattleUnitSetup btlparty_gon_gon_10_02_off_1[3];
-BattleGroupSetup btlgrp_gon_gon_10_02_off_1;
-BattleUnitSetup btlparty_gon_gon_10_03_off_1[4];
-BattleGroupSetup btlgrp_gon_gon_10_03_off_1;
-BattleUnitSetup btlparty_gon_gon_11_01_off_1[1];
-BattleGroupSetup btlgrp_gon_gon_11_01_off_1;
-NpcBattleSelect btlgrpsel_gon_btlno_gon_test1_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_test2_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_test3_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_02_02_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_02_03_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_02_04_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_03_01_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_04_02_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_04_03_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_06_03_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_06_04_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_08_01_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_08_03_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_08_05_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_09_01_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_09_02_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_09_04_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_10_01_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_10_02_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_10_03_off[2];
-NpcBattleSelect btlgrpsel_gon_btlno_gon_11_01_off[2];
+static BattleStageObjectData gon_btlobject_data[10];
+static BattleStageData gon_btlstage_data[5];
+static BattleUnitSetup btlparty_gon_gon_02_02_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_02_02_off_1;
+static BattleUnitSetup btlparty_gon_gon_02_03_off_1[2];
+static BattleGroupSetup btlgrp_gon_gon_02_03_off_1;
+static BattleUnitSetup btlparty_gon_gon_02_04_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_02_04_off_1;
+static BattleUnitSetup btlparty_gon_gon_03_01_off_1[5];
+static BattleGroupSetup btlgrp_gon_gon_03_01_off_1;
+static BattleUnitSetup btlparty_gon_gon_04_01_off_1[2];
+static BattleGroupSetup btlgrp_gon_gon_04_01_off_1;
+static BattleUnitSetup btlparty_gon_gon_04_02_off_1[4];
+static BattleGroupSetup btlgrp_gon_gon_04_02_off_1;
+static BattleUnitSetup btlparty_gon_gon_04_03_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_04_03_off_1;
+static BattleUnitSetup btlparty_gon_gon_06_03_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_06_03_off_1;
+static BattleUnitSetup btlparty_gon_gon_06_04_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_06_04_off_1;
+static BattleUnitSetup btlparty_gon_gon_08_01_off_1[2];
+static BattleGroupSetup btlgrp_gon_gon_08_01_off_1;
+static BattleUnitSetup btlparty_gon_gon_08_03_off_1[2];
+static BattleGroupSetup btlgrp_gon_gon_08_03_off_1;
+static BattleUnitSetup btlparty_gon_gon_08_05_off_1[2];
+static BattleGroupSetup btlgrp_gon_gon_08_05_off_1;
+static BattleUnitSetup btlparty_gon_gon_09_01_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_09_01_off_1;
+static BattleUnitSetup btlparty_gon_gon_09_02_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_09_02_off_1;
+static BattleUnitSetup btlparty_gon_gon_09_04_off_1[4];
+static BattleGroupSetup btlgrp_gon_gon_09_04_off_1;
+static BattleUnitSetup btlparty_gon_gon_10_01_off_1[4];
+static BattleGroupSetup btlgrp_gon_gon_10_01_off_1;
+static BattleUnitSetup btlparty_gon_gon_10_02_off_1[3];
+static BattleGroupSetup btlgrp_gon_gon_10_02_off_1;
+static BattleUnitSetup btlparty_gon_gon_10_03_off_1[4];
+static BattleGroupSetup btlgrp_gon_gon_10_03_off_1;
+static BattleUnitSetup btlparty_gon_gon_11_01_off_1[1];
+static BattleGroupSetup btlgrp_gon_gon_11_01_off_1;
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_test1_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_test2_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_test3_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_02_02_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_02_03_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_02_04_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_03_01_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_04_02_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_04_03_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_06_03_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_06_04_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_08_01_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_08_03_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_08_05_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_09_01_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_09_02_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_09_04_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_10_01_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_10_02_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_10_03_off[2];
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_11_01_off[2];
 NpcSetupBattleInfo btlsetup_gon_tbl[22];
 NpcTerritoryInfo btl_gon_setup_no_tbl[22];
 
@@ -78,31 +79,187 @@ NpcTerritoryInfo btl_gon_setup_no_tbl[22];
  * Props of the Hooktail Castle battle stage: each entry names a model of the backdrop and where it stands,
  * the last entries being the background layers.
  */
-BattleStageObjectData gon_btlobject_data[] = {
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"haikei_B_a", 2, 2, {0}, 0, 60, {0}},
-    {"haikei_C_a", 2, 3, {0}, 0, 60, {0}},
-    {"haikei_B_b", 2, 2, {0}, 0, 60, {0}},
-    {"haikei_C_b", 2, 3, {0}, 0, 60, {0}},
-    {"haikei_B_c", 2, 2, {0}, 0, 60, {0}},
-    {"haikei_C_c", 2, 3, {0}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
+static BattleStageObjectData gon_btlobject_data[] = {
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"haikei_B_a", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"haikei_C_a", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"haikei_B_b", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"haikei_C_b", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"haikei_B_c", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"haikei_C_c", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
 };
 
 /**
  * Battle stage of Hooktail Castle: the stage model directories, the props above, the backdrop weapons and the
  * background event that runs during the fight.
  */
-BattleStageData gon_btlstage_data[] = {
+static BattleStageData gon_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_01_5", // specificStageDataDir
         2, // numObjects
         gon_btlobject_data, // objects
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, NULL, {0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgAWeapon
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, weaponGetPowerDefault, {1, 0, 0, 0, 0, 0, 0, 0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgBWeapon
+        { // bgAWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            NULL, // hpDamageFn
+            {0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
+        { // bgBWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            weaponGetPowerDefault, // hpDamageFn
+            {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // initEvt..bgCEvt
         0, 0, 0, 0, // reserved_1B0..disableBgBDestroy
     },
@@ -111,8 +268,164 @@ BattleStageData gon_btlstage_data[] = {
         "stg_01_6", // specificStageDataDir
         2, // numObjects
         &gon_btlobject_data[8], // objects
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, NULL, {0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgAWeapon
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, weaponGetPowerDefault, {1, 0, 0, 0, 0, 0, 0, 0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgBWeapon
+        { // bgAWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            NULL, // hpDamageFn
+            {0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
+        { // bgBWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            weaponGetPowerDefault, // hpDamageFn
+            {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // initEvt..bgCEvt
         0, 0, 0, 0, // reserved_1B0..disableBgBDestroy
     },
@@ -121,8 +434,164 @@ BattleStageData gon_btlstage_data[] = {
         "stg_01_3", // specificStageDataDir
         2, // numObjects
         &gon_btlobject_data[2], // objects
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, NULL, {0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgAWeapon
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, weaponGetPowerDefault, {1, 0, 0, 0, 0, 0, 0, 0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgBWeapon
+        { // bgAWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            NULL, // hpDamageFn
+            {0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
+        { // bgBWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            weaponGetPowerDefault, // hpDamageFn
+            {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // initEvt..bgCEvt
         0, 0, 0, 0, // reserved_1B0..disableBgBDestroy
     },
@@ -131,8 +600,164 @@ BattleStageData gon_btlstage_data[] = {
         "stg_01_3", // specificStageDataDir
         2, // numObjects
         &gon_btlobject_data[4], // objects
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, NULL, {0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgAWeapon
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, weaponGetPowerDefault, {1, 0, 0, 0, 0, 0, 0, 0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgBWeapon
+        { // bgAWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            NULL, // hpDamageFn
+            {0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
+        { // bgBWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            weaponGetPowerDefault, // hpDamageFn
+            {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // initEvt..bgCEvt
         0, 0, 0, 0, // reserved_1B0..disableBgBDestroy
     },
@@ -141,21 +766,173 @@ BattleStageData gon_btlstage_data[] = {
         "stg_01_3", // specificStageDataDir
         2, // numObjects
         &gon_btlobject_data[6], // objects
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, NULL, {0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgAWeapon
-        {NULL, 0, {0}, 0, NULL, 100, 0, 0, 2, 0.0f, 0, 0, 0, 0, weaponGetPowerDefault, {1, 0, 0, 0, 0, 0, 0, 0}, NULL, {0}, 0x2100060, 0x20000000, 0, 26, 3, 2, NULL, 0, 0x7FF, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, {0}, NULL, {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}}, // bgBWeapon
+        { // bgAWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            NULL, // hpDamageFn
+            {0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
+        { // bgBWeapon
+            NULL, // name
+            0, // icon
+            {0}, // pad_06
+            0, // itemId
+            NULL, // description
+            100, // baseAccuracy
+            0, // baseFpCost
+            0, // baseSpCost
+            2, // superguardsAllowed
+            0.0f, // reserved_14
+            0, // stylishCommandMultiplier
+            0, // reserved_19
+            0, // bingoSlotChance
+            0, // reserved_1B
+            weaponGetPowerDefault, // hpDamageFn
+            {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
+            NULL, // fpDamageFn
+            {0}, // fpDamageWork
+            0x2100060, // targetClassFlags
+            0x20000000, // targetPropertyFlags
+            0, // element
+            26, // damagePattern
+            3, // acLevel
+            2, // reserved_6F
+            NULL, // acHelpMsg
+            0, // special
+            0x7FF, // counterResistFlags
+            0, // targetWeightFlags
+            0, // sleepChance
+            0, // sleepTime
+            0, // stopChance
+            0, // stopTime
+            0, // dizzyChance
+            0, // dizzyTime
+            0, // poisonChance
+            0, // poisonTime
+            0, // poisonStrength
+            0, // confuseChance
+            0, // confuseTime
+            0, // electricChance
+            0, // electricTime
+            0, // dodgyChance
+            0, // dodgyTime
+            0, // burnChance
+            0, // burnTime
+            0, // freezeChance
+            0, // freezeTime
+            0, // sizeChangeChance
+            0, // sizeChangeTime
+            0, // sizeChangeStrength
+            0, // atkChangeChance
+            0, // atkChangeTime
+            0, // atkChangeStrength
+            0, // defChangeChance
+            0, // defChangeTime
+            0, // defChangeStrength
+            0, // allergicChance
+            0, // allergicTime
+            0, // ohkoChance
+            0, // chargeStrength
+            0, // fastChance
+            0, // fastTime
+            0, // slowChance
+            0, // slowTime
+            0, // frightChance
+            0, // galeForceChance
+            0, // paybackTime
+            0, // holdFastTime
+            0, // invisibleChance
+            0, // invisibleTime
+            0, // hpRegenTime
+            0, // hpRegenStrength
+            0, // fpRegenTime
+            0, // fpRegenStrength
+            {0}, // pad_AE
+            NULL, // attackEvtScript
+            {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+        },
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // initEvt..bgCEvt
         0, 0, 0, 0, // reserved_1B0..disableBgBDestroy
     },
 };
 
-/**
- * Enemy party of battle gon_02_02 in Hooktail Castle: 3 x Paratroopa (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_gon_gon_02_02_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_02_02_off_1[] = {
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -165,7 +942,7 @@ BattleUnitSetup btlparty_gon_gon_02_02_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -175,9 +952,9 @@ BattleUnitSetup btlparty_gon_gon_02_02_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -185,11 +962,7 @@ BattleUnitSetup btlparty_gon_gon_02_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_02_02 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_02_02_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_02_02_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_02_02_off_1, // enemyData
     25, // heldItemWeight
@@ -200,14 +973,10 @@ BattleGroupSetup btlgrp_gon_gon_02_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_02_03 in Hooktail Castle: Koopa Troopa and Paratroopa (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_02_03_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_02_03_off_1[] = {
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -217,7 +986,7 @@ BattleUnitSetup btlparty_gon_gon_02_03_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -227,11 +996,7 @@ BattleUnitSetup btlparty_gon_gon_02_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_02_03 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_02_03_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_02_03_off_1 = {
     2, // numEnemies
     btlparty_gon_gon_02_03_off_1, // enemyData
     25, // heldItemWeight
@@ -242,14 +1007,10 @@ BattleGroupSetup btlgrp_gon_gon_02_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_02_04 in Hooktail Castle: Paratroopa and 2 x Koopa Troopa (start positions and
- * item drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_02_04_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_02_04_off_1[] = {
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -259,7 +1020,7 @@ BattleUnitSetup btlparty_gon_gon_02_04_off_1[] = {
     },
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -269,7 +1030,7 @@ BattleUnitSetup btlparty_gon_gon_02_04_off_1[] = {
     },
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -279,11 +1040,7 @@ BattleUnitSetup btlparty_gon_gon_02_04_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_02_04 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_02_04_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_02_04_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_02_04_off_1, // enemyData
     25, // heldItemWeight
@@ -294,14 +1051,10 @@ BattleGroupSetup btlgrp_gon_gon_02_04_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_03_01 in Hooktail Castle: Red Bones and 4 x Dull Bones (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_03_01_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_03_01_off_1[] = {
     {
         &unit_red_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -311,7 +1064,7 @@ BattleUnitSetup btlparty_gon_gon_03_01_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {10.0f, 0.0f, -20.0f}, // position
@@ -321,7 +1074,7 @@ BattleUnitSetup btlparty_gon_gon_03_01_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -331,7 +1084,7 @@ BattleUnitSetup btlparty_gon_gon_03_01_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -341,7 +1094,7 @@ BattleUnitSetup btlparty_gon_gon_03_01_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {170.0f, 0.0f, 20.0f}, // position
@@ -351,11 +1104,7 @@ BattleUnitSetup btlparty_gon_gon_03_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_03_01 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_03_01_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_03_01_off_1 = {
     5, // numEnemies
     btlparty_gon_gon_03_01_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -365,14 +1114,10 @@ BattleGroupSetup btlgrp_gon_gon_03_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_04_01 in Hooktail Castle: 2 x Dull Bones (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_gon_gon_04_01_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_04_01_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -382,7 +1127,7 @@ BattleUnitSetup btlparty_gon_gon_04_01_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -392,11 +1137,7 @@ BattleUnitSetup btlparty_gon_gon_04_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_04_01 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_04_01_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_04_01_off_1 = {
     2, // numEnemies
     btlparty_gon_gon_04_01_off_1, // enemyData
     25, // heldItemWeight
@@ -407,14 +1148,10 @@ BattleGroupSetup btlgrp_gon_gon_04_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_04_02 in Hooktail Castle: 4 x Dull Bones (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_gon_gon_04_02_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_04_02_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -424,7 +1161,7 @@ BattleUnitSetup btlparty_gon_gon_04_02_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -434,7 +1171,7 @@ BattleUnitSetup btlparty_gon_gon_04_02_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -444,7 +1181,7 @@ BattleUnitSetup btlparty_gon_gon_04_02_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -454,11 +1191,7 @@ BattleUnitSetup btlparty_gon_gon_04_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_04_02 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_04_02_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_04_02_off_1 = {
     4, // numEnemies
     btlparty_gon_gon_04_02_off_1, // enemyData
     25, // heldItemWeight
@@ -469,14 +1202,10 @@ BattleGroupSetup btlgrp_gon_gon_04_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_04_03 in Hooktail Castle: 3 x Dull Bones (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_gon_gon_04_03_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_04_03_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -486,7 +1215,7 @@ BattleUnitSetup btlparty_gon_gon_04_03_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -496,7 +1225,7 @@ BattleUnitSetup btlparty_gon_gon_04_03_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -506,11 +1235,7 @@ BattleUnitSetup btlparty_gon_gon_04_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_04_03 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_04_03_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_04_03_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_04_03_off_1, // enemyData
     25, // heldItemWeight
@@ -521,14 +1246,10 @@ BattleGroupSetup btlgrp_gon_gon_04_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_06_03 in Hooktail Castle: Paragoomba and 2 x Paratroopa (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_06_03_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_06_03_off_1[] = {
     {
         &unit_patakuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -538,7 +1259,7 @@ BattleUnitSetup btlparty_gon_gon_06_03_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -548,9 +1269,9 @@ BattleUnitSetup btlparty_gon_gon_06_03_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -558,11 +1279,7 @@ BattleUnitSetup btlparty_gon_gon_06_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_06_03 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_06_03_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_06_03_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_06_03_off_1, // enemyData
     25, // heldItemWeight
@@ -573,14 +1290,11 @@ BattleGroupSetup btlgrp_gon_gon_06_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_06_04 in Hooktail Castle: Dull Bones and 2 x Paragoomba (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_06_04_off_1[] = {
+// The third unit below is a Paragoomba with the Paratroopa item-drop table.
+static BattleUnitSetup btlparty_gon_gon_06_04_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -590,7 +1304,7 @@ BattleUnitSetup btlparty_gon_gon_06_04_off_1[] = {
     },
     {
         &unit_patakuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -600,7 +1314,7 @@ BattleUnitSetup btlparty_gon_gon_06_04_off_1[] = {
     },
     {
         &unit_patakuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -610,11 +1324,7 @@ BattleUnitSetup btlparty_gon_gon_06_04_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_06_04 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_06_04_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_06_04_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_06_04_off_1, // enemyData
     25, // heldItemWeight
@@ -625,14 +1335,10 @@ BattleGroupSetup btlgrp_gon_gon_06_04_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_08_01 in Hooktail Castle: 2 x Dull Bones (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_gon_gon_08_01_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_08_01_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -642,7 +1348,7 @@ BattleUnitSetup btlparty_gon_gon_08_01_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -652,11 +1358,7 @@ BattleUnitSetup btlparty_gon_gon_08_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_08_01 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_08_01_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_08_01_off_1 = {
     2, // numEnemies
     btlparty_gon_gon_08_01_off_1, // enemyData
     25, // heldItemWeight
@@ -667,14 +1369,10 @@ BattleGroupSetup btlgrp_gon_gon_08_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_08_03 in Hooktail Castle: Dull Bones and Spiky Goomba (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_08_03_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_08_03_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -684,7 +1382,7 @@ BattleUnitSetup btlparty_gon_gon_08_03_off_1[] = {
     },
     {
         &unit_togekuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -694,11 +1392,7 @@ BattleUnitSetup btlparty_gon_gon_08_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_08_03 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_08_03_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_08_03_off_1 = {
     2, // numEnemies
     btlparty_gon_gon_08_03_off_1, // enemyData
     25, // heldItemWeight
@@ -709,14 +1403,10 @@ BattleGroupSetup btlgrp_gon_gon_08_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_08_05 in Hooktail Castle: Paragoomba and Paratroopa (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_08_05_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_08_05_off_1[] = {
     {
         &unit_patakuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -726,7 +1416,7 @@ BattleUnitSetup btlparty_gon_gon_08_05_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -736,11 +1426,7 @@ BattleUnitSetup btlparty_gon_gon_08_05_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_08_05 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_08_05_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_08_05_off_1 = {
     2, // numEnemies
     btlparty_gon_gon_08_05_off_1, // enemyData
     25, // heldItemWeight
@@ -751,14 +1437,10 @@ BattleGroupSetup btlgrp_gon_gon_08_05_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_09_01 in Hooktail Castle: 2 x Koopa Troopa and Dull Bones (start positions and
- * item drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_09_01_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_09_01_off_1[] = {
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -768,7 +1450,7 @@ BattleUnitSetup btlparty_gon_gon_09_01_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -778,7 +1460,7 @@ BattleUnitSetup btlparty_gon_gon_09_01_off_1[] = {
     },
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -788,11 +1470,7 @@ BattleUnitSetup btlparty_gon_gon_09_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_09_01 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_09_01_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_09_01_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_09_01_off_1, // enemyData
     25, // heldItemWeight
@@ -803,14 +1481,10 @@ BattleGroupSetup btlgrp_gon_gon_09_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_09_02 in Hooktail Castle: 2 x Dull Bones and Koopa Troopa (start positions and
- * item drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_09_02_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_09_02_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -820,7 +1494,7 @@ BattleUnitSetup btlparty_gon_gon_09_02_off_1[] = {
     },
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -830,7 +1504,7 @@ BattleUnitSetup btlparty_gon_gon_09_02_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -840,11 +1514,7 @@ BattleUnitSetup btlparty_gon_gon_09_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_09_02 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_09_02_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_09_02_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_09_02_off_1, // enemyData
     25, // heldItemWeight
@@ -855,14 +1525,10 @@ BattleGroupSetup btlgrp_gon_gon_09_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_09_04 in Hooktail Castle: 2 x Dull Bones and 2 x Koopa Troopa (start positions
- * and item drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_09_04_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_09_04_off_1[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -872,7 +1538,7 @@ BattleUnitSetup btlparty_gon_gon_09_04_off_1[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -882,7 +1548,7 @@ BattleUnitSetup btlparty_gon_gon_09_04_off_1[] = {
     },
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -892,7 +1558,7 @@ BattleUnitSetup btlparty_gon_gon_09_04_off_1[] = {
     },
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -902,11 +1568,7 @@ BattleUnitSetup btlparty_gon_gon_09_04_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_09_04 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_09_04_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_09_04_off_1 = {
     4, // numEnemies
     btlparty_gon_gon_09_04_off_1, // enemyData
     25, // heldItemWeight
@@ -917,14 +1579,10 @@ BattleGroupSetup btlgrp_gon_gon_09_04_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_10_01 in Hooktail Castle: 2 x Spiky Goomba, Koopa Troopa and Paratroopa (start
- * positions and item drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_10_01_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_10_01_off_1[] = {
     {
         &unit_togekuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -934,7 +1592,7 @@ BattleUnitSetup btlparty_gon_gon_10_01_off_1[] = {
     },
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -944,7 +1602,7 @@ BattleUnitSetup btlparty_gon_gon_10_01_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -954,7 +1612,7 @@ BattleUnitSetup btlparty_gon_gon_10_01_off_1[] = {
     },
     {
         &unit_togekuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -964,11 +1622,7 @@ BattleUnitSetup btlparty_gon_gon_10_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_10_01 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_10_01_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_10_01_off_1 = {
     4, // numEnemies
     btlparty_gon_gon_10_01_off_1, // enemyData
     25, // heldItemWeight
@@ -979,14 +1633,10 @@ BattleGroupSetup btlgrp_gon_gon_10_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_10_02 in Hooktail Castle: 3 x Paratroopa (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_gon_gon_10_02_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_10_02_off_1[] = {
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -996,7 +1646,7 @@ BattleUnitSetup btlparty_gon_gon_10_02_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -1006,9 +1656,9 @@ BattleUnitSetup btlparty_gon_gon_10_02_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
-        BATTLE_PHASE_ENEMY, // attackPhase
+        0x4000004, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
         0, // hitOffsetX
         {0}, // unitWork
@@ -1016,11 +1666,7 @@ BattleUnitSetup btlparty_gon_gon_10_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_10_02 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_10_02_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_10_02_off_1 = {
     3, // numEnemies
     btlparty_gon_gon_10_02_off_1, // enemyData
     25, // heldItemWeight
@@ -1031,14 +1677,10 @@ BattleGroupSetup btlgrp_gon_gon_10_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_10_03 in Hooktail Castle: Koopa Troopa, Spiky Goomba, Paragoomba and Paratroopa
- * (start positions and item drop tables included).
- */
-BattleUnitSetup btlparty_gon_gon_10_03_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_10_03_off_1[] = {
     {
         &unit_nokonoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -1048,7 +1690,7 @@ BattleUnitSetup btlparty_gon_gon_10_03_off_1[] = {
     },
     {
         &unit_togekuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1058,7 +1700,7 @@ BattleUnitSetup btlparty_gon_gon_10_03_off_1[] = {
     },
     {
         &unit_patakuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -1068,7 +1710,7 @@ BattleUnitSetup btlparty_gon_gon_10_03_off_1[] = {
     },
     {
         &unit_patapata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 40.0f, 20.0f}, // position
@@ -1078,11 +1720,7 @@ BattleUnitSetup btlparty_gon_gon_10_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_10_03 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_10_03_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_10_03_off_1 = {
     4, // numEnemies
     btlparty_gon_gon_10_03_off_1, // enemyData
     25, // heldItemWeight
@@ -1093,14 +1731,10 @@ BattleGroupSetup btlgrp_gon_gon_10_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gon_11_01 in Hooktail Castle: Hooktail (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_gon_gon_11_01_off_1[] = {
+static BattleUnitSetup btlparty_gon_gon_11_01_off_1[] = {
     {
         &unit_boss_gonbaba, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {365.0f, 0.0f, 0.0f}, // position
@@ -1110,11 +1744,7 @@ BattleUnitSetup btlparty_gon_gon_11_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gon_11_01 in Hooktail Castle: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gon_gon_11_01_off_1 = {
+static BattleGroupSetup btlgrp_gon_gon_11_01_off_1 = {
     1, // numEnemies
     btlparty_gon_gon_11_01_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1124,128 +1754,108 @@ BattleGroupSetup btlgrp_gon_gon_11_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Developer test battle 1 in Hooktail Castle: always fights gon_02_02_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_test1_off[] = {
+// These three test selectors reuse the same three-Paratroopa group on different stage rows.
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_test1_off[] = {
     {50, &btlgrp_gon_gon_02_02_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Developer test battle 2 in Hooktail Castle: always fights gon_02_02_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_test2_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_test2_off[] = {
     {50, &btlgrp_gon_gon_02_02_off_1, gon_btlstage_data},
     {0},
 };
 
-/** Developer test battle 3 in Hooktail Castle: always fights gon_02_02_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_test3_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_test3_off[] = {
     {50, &btlgrp_gon_gon_02_02_off_1, &gon_btlstage_data[1]},
     {0},
 };
 
-/** Battle 02_02 in Hooktail Castle always fights one group, gon_02_02_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_02_02_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_02_02_off[] = {
     {50, &btlgrp_gon_gon_02_02_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 02_03 in Hooktail Castle always fights one group, gon_02_03_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_02_03_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_02_03_off[] = {
     {10, &btlgrp_gon_gon_02_03_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 02_04 in Hooktail Castle always fights one group, gon_02_04_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_02_04_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_02_04_off[] = {
     {10, &btlgrp_gon_gon_02_04_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 03_01 in Hooktail Castle always fights one group, gon_03_01_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_03_01_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_03_01_off[] = {
     {10, &btlgrp_gon_gon_03_01_off_1, &gon_btlstage_data[4]},
     {0},
 };
 
-/** Battle 04_02 in Hooktail Castle always fights one group, gon_04_02_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_04_02_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_04_02_off[] = {
     {10, &btlgrp_gon_gon_04_02_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 04_03 in Hooktail Castle always fights one group, gon_04_03_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_04_03_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_04_03_off[] = {
     {10, &btlgrp_gon_gon_04_03_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 06_03 in Hooktail Castle always fights one group, gon_06_03_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_06_03_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_06_03_off[] = {
     {10, &btlgrp_gon_gon_06_03_off_1, &gon_btlstage_data[3]},
     {0},
 };
 
-/** Battle 06_04 in Hooktail Castle always fights one group, gon_06_04_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_06_04_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_06_04_off[] = {
     {10, &btlgrp_gon_gon_06_04_off_1, &gon_btlstage_data[3]},
     {0},
 };
 
-/** Battle 08_01 in Hooktail Castle always fights one group, gon_08_01_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_08_01_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_08_01_off[] = {
     {10, &btlgrp_gon_gon_08_01_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 08_03 in Hooktail Castle always fights one group, gon_08_03_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_08_03_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_08_03_off[] = {
     {10, &btlgrp_gon_gon_08_03_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 08_05 in Hooktail Castle always fights one group, gon_08_05_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_08_05_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_08_05_off[] = {
     {10, &btlgrp_gon_gon_08_05_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 09_01 in Hooktail Castle always fights one group, gon_09_01_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_09_01_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_09_01_off[] = {
     {10, &btlgrp_gon_gon_09_01_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 09_02 in Hooktail Castle always fights one group, gon_09_02_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_09_02_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_09_02_off[] = {
     {10, &btlgrp_gon_gon_09_02_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 09_04 in Hooktail Castle always fights one group, gon_09_04_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_09_04_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_09_04_off[] = {
     {10, &btlgrp_gon_gon_09_04_off_1, &gon_btlstage_data[2]},
     {0},
 };
 
-/** Battle 10_01 in Hooktail Castle always fights one group, gon_10_01_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_10_01_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_10_01_off[] = {
     {10, &btlgrp_gon_gon_10_01_off_1, gon_btlstage_data},
     {0},
 };
 
-/** Battle 10_02 in Hooktail Castle always fights one group, gon_10_02_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_10_02_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_10_02_off[] = {
     {10, &btlgrp_gon_gon_10_02_off_1, gon_btlstage_data},
     {0},
 };
 
-/** Battle 10_03 in Hooktail Castle always fights one group, gon_10_03_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_10_03_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_10_03_off[] = {
     {10, &btlgrp_gon_gon_10_03_off_1, gon_btlstage_data},
     {0},
 };
 
-/** Battle 11_01 in Hooktail Castle always fights one group, gon_11_01_off_1. */
-NpcBattleSelect btlgrpsel_gon_btlno_gon_11_01_off[] = {
+static NpcBattleSelect btlgrpsel_gon_btlno_gon_11_01_off[] = {
     {20, &btlgrp_gon_gon_11_01_off_1, &gon_btlstage_data[1]},
     {0},
 };
@@ -1261,7 +1871,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1271,7 +1881,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_test2_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1281,7 +1891,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_test3_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1291,7 +1901,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_02_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {0}, {5, 5}, {0}, {0}, {10, 10}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1301,7 +1911,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_02_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {0}, {5, 5}, {0}, {0}, {10, 10}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1311,7 +1921,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_02_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {0}, {5, 5}, {0}, {0}, {10, 10}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1321,7 +1931,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_03_01_off, // select
-        NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         3, // randomMode
         {{0}, {0}, {0}, {0}, {1, 1}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}}, // randomRanges
         "BGM_CHUBOSS_BATTLE1", // bgmName
@@ -1332,7 +1942,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_04_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {10, 10}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1342,7 +1952,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_04_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {10, 10}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1352,7 +1962,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_06_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {10, 10}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1362,7 +1972,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_06_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {10, 10}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1372,7 +1982,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_08_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {10, 10}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1382,7 +1992,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_08_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {10, 10}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1392,7 +2002,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_08_05_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {10, 10}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1402,7 +2012,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_09_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {10, 10}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1412,7 +2022,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_09_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {10, 10}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1422,7 +2032,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_09_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {10, 10}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1432,7 +2042,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_10_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {10, 10}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1442,7 +2052,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_10_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {10, 10}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1452,7 +2062,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_10_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {10, 10}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1463,7 +2073,7 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gon_btlno_gon_11_01_off, // select
-        NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_NO_PLAYER_ENTRY | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_NO_PARTY_ENTRY | NPC_BATTLE_STORY), // battleFlags
         3, // randomMode
         {{5, 5}, {0}, {0}, {0}, {5, 5}, {5, 5}, {0}, {0}, {5, 5}, {0}, {5, 5}, {0}, {1, 1}, {0}, {0}, {0}}, // randomRanges
         "BGM_BOSS_STG1_GONBABA1", // bgmName
@@ -1471,10 +2081,6 @@ NpcSetupBattleInfo btlsetup_gon_tbl[] = {
     {0},
 };
 
-/**
- * Battle ids of Hooktail Castle (BTLNO_GON_*) and their index into btlsetup_gon_tbl; handed to the battle
- * system by relSetBtlAddr.
- */
 NpcTerritoryInfo btl_gon_setup_no_tbl[] = {
     {"BTLNO_GON_TEST1", 0},
     {"BTLNO_GON_TEST2", 1},

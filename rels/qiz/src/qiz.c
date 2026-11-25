@@ -1,10 +1,18 @@
-// qiz.rel (はてなむしクイズ, the question-bug quiz; JP and PAL): registers qiz_00.
+// qiz.rel (はてなむしクイズ, a quiz; JP, JP demo and PAL): registers qiz_00.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 
 #include "data/mapdata.h"
 #include "qiz.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Module entry point: runs the static constructors,
@@ -27,6 +35,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Placeholder the linker points unresolved relocations at; it does nothing. */
 void _unresolved(void) {
 }

@@ -1,29 +1,51 @@
 // rsh_07 (列車, Excess Express): small room with a driver NPC, controls and schedule board, and a save block; door to
 // rsh_04.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "rsh.h"
 #include "evt/evt_npc.h"
-#include "evt/evt_case.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_msg.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_story.h"
+#include "driver/npcdrv.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_data_a[2];
 static BeroEntry bero_data_b[2];
 static BeroEntry bero_data_c[2];
+static EvtWord init_unten[6];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord talk_unten[8];
+#else
+static EvtWord talk_unten[19];
+#endif
+
 static NpcSetupInfo npc_data[2];
 static const char* access_tbl[5];
-extern EvtWord rsh_07_init_evt[];
-static const char* window_tbl[5];
+static EvtWord evt_access[14];
+static EvtWord evt_access_entry[23];
 
-/** Doors and exits of rsh_07 variant a: e_bero to rsh_04_a. */
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord rsh_07_init_evt[];
+#else
+EvtWord rsh_07_init_evt[113];
+#endif
+
+EvtWord rsh_07_a_init_evt[11];
+EvtWord rsh_07_b_init_evt[11];
+static const char* window_tbl[5];
+EvtWord rsh_07_c_init_evt[16];
+
 static BeroEntry bero_data_a[] = {
     {
         "e_bero", // hitName
@@ -46,7 +68,6 @@ static BeroEntry bero_data_a[] = {
     {0},
 };
 
-/** Doors and exits of rsh_07 variant b: w_bero to rsh_04_b. */
 static BeroEntry bero_data_b[] = {
     {
         "w_bero", // hitName
@@ -69,7 +90,6 @@ static BeroEntry bero_data_b[] = {
     {0},
 };
 
-/** Doors and exits of rsh_07 variant c: w_bero to rsh_04_c. */
 static BeroEntry bero_data_c[] = {
     {
         "w_bero", // hitName
@@ -92,25 +112,25 @@ static BeroEntry bero_data_c[] = {
     {0},
 };
 
-/** Init event of the driver (運転手) in rsh_07: turns him to face 270 degrees. */
+/** Init event of the driver (運転手): turns him to face 270 degrees. */
 static EVT_BEGIN(init_unten)
     CALL(evt_npc_set_ry, STRING("me"), 270)
     RETURN
 EVT_END()
 
 /**
- * Talk script of the driver in rsh_07: stg6_rsh_c_08 on the outbound trip or, on the return trip,
- * stg6_rsh_c_08_1 once the train is at Rogueport.
+ * Talk script of the driver: stg6_rsh_c_08, or stg6_rsh_c_08_1 once GSWF_HOM_TRAIN_AT_ROGUEPORT is set
+ * (JP and later; the early demos always use stg6_rsh_c_08).
  */
 static EVT_BEGIN(talk_unten)
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08"), 0, 0)
-#else
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+#if VERSION >= VERSION_JP
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
         CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08"), 0, 0)
     ELSE
         CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08_1"), 0, 0)
     END_IF
+#else
+    CALL(evt_msg_print, 0, STRING("stg6_rsh_c_08"), 0, 0)
 #endif
     RETURN
 EVT_END()
@@ -118,8 +138,8 @@ EVT_END()
 /** NPCs of the small room: the driver. */
 static NpcSetupInfo npc_data[] = {
     {
-        "運転手", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_JUMPING | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_LAND_ON_FLOOR, // flags
+        "運転手", // name (the engineer of the Excess Express)
+        NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_GRAVITY | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_unten, // initEvent
         NULL, // regularEvent
@@ -132,7 +152,7 @@ static NpcSetupInfo npc_data[] = {
     {0},
 };
 
-/** Signboards of the room: the schedule board (nittei) and the controls, each with the message it shows. */
+// Alternating interaction-hit names and message IDs, terminated by a null hit name.
 static const char* access_tbl[] = {
     "nittei",
     "stg6_rsh_c_00_1",
@@ -157,56 +177,58 @@ static EVT_BEGIN(evt_access_entry)
         IF_INT_EQUAL(LW(0), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(0), 0, PTR(evt_access), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(0), 0, PTR(evt_access), 0)
     END_LOOP
     RETURN
 EVT_END()
 
 /**
- * Shared map init for the three variants of rsh_07 (a small room off rsh_04 with a driver NPC):
- * starts the scenery animation unless the train is at a station, sets up the driver NPC,
- * the signboards and the save block (mobj_save at 210, 60, -145),
- * and the music and ambience for the station the train has reached or the per-variant train theme.
+ * Shared map init of the three rsh_07 variants: plays the scenery animations unless the train is stopped
+ * (GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, GSWF_HOM_TRAIN_AT_POSHLEY, GSWF_HOM_TRAIN_AT_ROGUEPORT), sets up the driver,
+ * the signboards and the save block (mobj_save at 210, 60, -145), then starts the music of the station the train is
+ * at (GSWF_RSH_TRAIN_AT_*, silenced to level 6) or the variant's train music (rsh_07_b leaves the audio as it is).
  */
 EVT_BEGIN(rsh_07_init_evt)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
-                CALL(evt_map_playanim, STRING("yure"), 1, 0)
-                CALL(evt_map_playanim, STRING("hai_sora"), 1, 0)
-                CALL(evt_map_playanim, STRING("hai_yama"), 1, 0)
-                CALL(evt_map_playanim, STRING("hai_iwayama"), 1, 0)
-                CALL(evt_map_playanim, STRING("hai_saboten"), 1, 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
+                CALL(evt_map_playanim, STRING("yure"), MAP_ANIM_PLAY_LOOP, 0)
+                CALL(evt_map_playanim, STRING("hai_sora"), MAP_ANIM_PLAY_LOOP, 0)
+                CALL(evt_map_playanim, STRING("hai_yama"), MAP_ANIM_PLAY_LOOP, 0)
+                CALL(evt_map_playanim, STRING("hai_iwayama"), MAP_ANIM_PLAY_LOOP, 0)
+                CALL(evt_map_playanim, STRING("hai_saboten"), MAP_ANIM_PLAY_LOOP, 0)
             END_IF
         END_IF
     END_IF
     CALL(evt_npc_setup, PTR(npc_data))
     CALL_CHILD(evt_access_entry)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), 210, 60, -145, 0, 0)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_POSHLEY), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_POSHLEY, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_ROGUEPORT), 1)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
+        IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_ROGUEPORT, 1)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
 #if VERSION <= VERSION_DEMO_JP
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR5"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR5"))
 #else
-            CALL(evt_snd_envoff, PSND_FADE_OUT)
+            CALL(evt_snd_envoff, PSND_FADEOUT)
 #endif
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         ELSE
             CALL(evt_sub_get_mapname, LW(0))
             IF_STR_EQUAL(LW(0), STRING("rsh_07_a"))
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH1"))
-                CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH1"))
+                CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
             END_IF
+
+            // This variant leaves the current moving-train audio unchanged.
             IF_STR_EQUAL(LW(0), STRING("rsh_07_b"))
             END_IF
             IF_STR_EQUAL(LW(0), STRING("rsh_07_c"))
-                CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_RSH2"))
-                CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
+                CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_RSH2"))
+                CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
             END_IF
         END_IF
     END_IF

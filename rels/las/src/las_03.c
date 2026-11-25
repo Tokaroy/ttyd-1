@@ -1,5 +1,6 @@
 // las_03 (ラストダンジョン, Palace of Shadow): the hall with the spike traps (toge).
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -8,23 +9,37 @@
 #include "manager/evtmgr_cmd.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_seq.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "las.h"
-#include "evt/evt_story.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "system.h"
+#include "driver/seqdrv.h"
+#include "pmario_sound.h"
 
-u16 toge_flag;
+static u16 toge_flag;
 
 static USER_FUNC(get_toge_name);
 static USER_FUNC(toge_check_flag);
 static USER_FUNC(toge_flag_onoff);
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
 static BeroEntry bero_entry_data[3];
 static HitDamageReturn dmgRetPoint[3];
-const char* toge_data[18];
+static const char* toge_data[18];
+static EvtWord toge_evt_sub[121];
+static EvtWord toge_evt[86];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_03_init_evt[];
+#else
+EvtWord las_03_init_evt[32];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -120,8 +135,8 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Where Mario is put back after damage from falling: the floor panels A_yuka_02 and A_yuka_03 send him to
- * the point set at y = -1000 (the spike pit below).
+ * Where Mario is put back after damage from falling: for floor panels A_yuka_02 and A_yuka_03,
+ * y = -1000 tells the damage-return helper to use each hit object's own position.
  */
 static HitDamageReturn dmgRetPoint[] = {
     {"A_yuka_02", {0.0f, -1000.0f, 0.0f}},
@@ -129,11 +144,7 @@ static HitDamageReturn dmgRetPoint[] = {
     {0},
 };
 
-/**
- * Spike trap objects of the hall as pairs: the model S_toge_NN and its hit area A_toge_NN, one pair per
- * trap.
- */
-const char* toge_data[] = {
+static const char* toge_data[] = {
     "S_toge_01",
     "A_toge_01",
     "S_toge_02",
@@ -159,7 +170,7 @@ const char* toge_data[] = {
  * If its busy bit is clear it sets the bit, pops the spikes up 30 units in 150 ms, holds them for a second,
  * retracts them over 400 ms and clears the bit. Does nothing if that trap is already active.
  */
-EVT_BEGIN(toge_evt_sub)
+static EVT_BEGIN(toge_evt_sub)
     SET_VALUE(LW(2), LW(0))
     CALL(get_toge_name, LW(2), LW(3), LW(4))
     CALL(toge_check_flag, LW(2), LW(0))
@@ -169,7 +180,7 @@ EVT_BEGIN(toge_evt_sub)
     CALL(toge_flag_onoff, LW(2), 1)
     CALL(evt_mapobj_get_position, LW(3), LW(7), LW(8), LW(9))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MOBJ_FLOOR_TRAP1"), LW(7), LW(8), LW(9), 0)
-    CALL(evt_sub_intpl_msec_init, 0, 0, 30, 150)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 30, 150)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 0, LW(3), 0, LW(0), 0)
@@ -181,7 +192,7 @@ EVT_BEGIN(toge_evt_sub)
     WAIT_MS(1000)
     CALL(evt_mapobj_get_position, LW(3), LW(7), LW(8), LW(9))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MOBJ_FLOOR_TRAP2"), LW(7), LW(8), LW(9), 0)
-    CALL(evt_sub_intpl_msec_init, 0, 30, 0, 400)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 30, 0, 400)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 0, LW(3), 0, LW(0), 0)
@@ -202,7 +213,7 @@ EVT_END()
  * then every frame checks whether Mario is within 90 units of one of the 9 traps (unless he is in motion 32)
  * and spawns toge_evt_sub for it.
  */
-EVT_BEGIN(toge_evt)
+static EVT_BEGIN(toge_evt)
     CALL(evt_hit_damage_return_set, PTR(dmgRetPoint))
     CALL_CHILD(evt_gazigazi_entry)
     SET_INT_READ_ADDR(PTR(&toge_data))
@@ -210,8 +221,8 @@ EVT_BEGIN(toge_evt)
         READ_INT2(LW(0), LW(1))
         CALL(evt_hit_bind_mapobj, LW(1), LW(0))
     END_LOOP
-    CALL(evt_seq_wait, 2)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     LOOP(0)
         CALL(evt_mario_get_motion, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 32)
@@ -241,23 +252,20 @@ EVT_END()
  * the All or Nothing badge block, and starts the spike trap event.
  */
 EVT_BEGIN(las_03_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_mobj_badgeblk, STRING("mobj_badge_gat"), -350, 0, -100, ITEM_ALL_OR_NOTHING, 0, GSWF(GSWF_LAS03_ALL_OR_NOTHING_BLOCK_HIT), 1)
+    CALL(evt_mobj_badgeblk, STRING("mobj_badge_gat"), -350, 0, -100, ITEM_ALL_OR_NOTHING, 0, GSWF_LAS_03_ALL_OR_NOTHING_BADGE_BLOCK, 1)
     SPAWN_EVENT(toge_evt)
     RETURN
 EVT_END()
 
-/**
- * Script helper: for trap index args[0] returns the map object name in args[1]
- * and the hit object name in args[2] from toge_data.
- */
+/** Script helper: returns the two names of toge_data pair args[0] in args[1] and args[2]. */
 static USER_FUNC(get_toge_name) {
     EvtWord* args = event->args;
     s32 idx = evtGetValue(event, args[0]);
@@ -265,6 +273,7 @@ static USER_FUNC(get_toge_name) {
     evtSetValue(event, args[2], (EvtWord)toge_data[idx * 2 + 1]);
     return EVT_RETURN_DONE;
 }
+
 /**
  * Script helper: returns in args[1] whether bit args[0] (a trap index) of toge_flag is set,
  * that is whether that spike trap is currently active.
@@ -276,6 +285,7 @@ static USER_FUNC(toge_check_flag) {
     evtSetValue(event, args[1], toge_flag & (1 << bit));
     return EVT_RETURN_DONE;
 }
+
 /**
  * Script helper: sets (args[1] nonzero) or clears the bit args[0] in toge_flag,
  * marking one spike trap as active or idle.

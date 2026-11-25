@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 5 (kemuri: smoke) at a point, oriented by an angle.
+
 #include "eff/n64/eff_kemuri5_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,14 +10,14 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffKemuri5N64Work {
     s32 active;      // 0x0
-    u16 type;        // 0x4, never read or written
+    u16 field_4;     // 0x4
     s16 timer;       // 0x6
     u8 alpha;        // 0x8
-    u8 pad_9[3];     // 0x9
     Vec position;    // 0xC
     Vec scale;       // 0x18
     f32 baseScaleX;  // 0x24
@@ -26,7 +27,7 @@ typedef struct EffKemuri5N64Work {
     f32 velY;        // 0x34
     f32 accelY;      // 0x38
     f32 accelY2;     // 0x3C
-    f32 reserved_40; // 0x40, only cleared at entry
+    f32 reserved_40; // 0x40
     f32 dirX;        // 0x44
     f32 dirZ;        // 0x48
 } EffKemuri5N64Work;
@@ -40,31 +41,27 @@ static effN64Vtx kmr_a_1_v[] = {
 };
 
 static void effKemuri5Main(EffectEntry* effect);
-/** Returns the brown-yellow puff tint with the given alpha. */
-static inline GXColor mkc(u8 a) {
-    GXColor c = {0x70, 0x60, 0x18, 0};
-    c.a = a;
-    return c;
+
+static void effKemuri5Disp(CameraId cameraId, void* param);
+
+/** sin and cos of an angle in degrees. */
+static inline f32 sind(f32 deg) {
+    return sin(6.2831855f * deg / 360.0f);
+}
+static inline f32 cosd(f32 deg) {
+    return cos(6.2831855f * deg / 360.0f);
 }
 
-static void effKemuri5Disp(CameraId cameraId, EffectEntry* effect);
-
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_propagation off
 /**
- * Spawns eight dust puffs at (x, y, z) fanned 45 degrees apart from the angle, with randomized sizes; 30 frames.
- * Called via evt_eff "kemuri5".
  * Spawns eight cloud-smoke puffs ("landing" in the effect table) at (x, y, z), 45 degrees apart from the angle,
  * with randomized sizes; 30 frames. Called via evt_eff64 "kemuri5_n64".
  */
 EffectEntry* effKemuri5N64Entry(f32 x, f32 y, f32 z, f32 angle) {
-    s32 ang;
     EffectEntry* effect;
     EffKemuri5N64Work* work;
     f32 angF;
     s32 i;
-    f32 rad;
-    f32 a = angle;
+    f32 deg;
 
     effect = effEntry();
     effect->type = "Kemuri5N64";
@@ -72,7 +69,7 @@ EffectEntry* effKemuri5N64Entry(f32 x, f32 y, f32 z, f32 angle) {
     work = __memAlloc(HEAP_EFFECT, 8 * sizeof(EffKemuri5N64Work));
     effect->userdata = work;
     effect->callback = effKemuri5Main;
-    for (i = 0, ang = 0; i < 8; i++, work++) {
+    for (i = 0; i < 8; i++, work++) {
 
         work->active = 1;
         work->reserved_40 = 0.0f;
@@ -83,30 +80,30 @@ EffectEntry* effKemuri5N64Entry(f32 x, f32 y, f32 z, f32 angle) {
         work->scale.y = 1.0f;
         work->scale.z = 1.0f;
         work->alpha = 255;
-        work->baseScaleX = 0.03f * (0, (f32)(rand() % 11)) + 1.0f;
+        work->baseScaleX = 0.03f * (f32)(rand() % 11) + 1.0f;
         work->baseScaleY = 0.03f * (f32)(rand() % 11) + 1.7f;
         work->angle = (f32)(rand() % 61);
         work->timer = 30;
-        angF = (f32)ang; // FAKE: early float conversion temp; (f32)ang / implicit int at use both differ
+        angF = i * 45;
         work->velY = 0.5f;
         work->accelY = -0.02f;
         work->accelY2 = 0.00005f;
         work->speed = -3.9f;
-        rad = 6.2831855f * reviseAngle(a + angF) / 360.0f;
-        work->dirX = (f32)sin(rad);
-        work->dirZ = (f32)cos(rad);
-        ang += 45;
+        deg = reviseAngle(angle + angF);
+        work->dirX = sind(deg);
+        work->dirZ = cosd(deg);
     }
     return effect;
 }
 
-/** Pulses each puff size with a sine/cosine of its angle, drifts it outward and up, shrinks it, fades late in life. */
+/** Pulses each puff size with a sine/cosine of its angle, drifts it outward and up, widens it while its height shrinks, fades late in life. */
 static void effKemuri5Main(EffectEntry* effect) {
     EffKemuri5N64Work* work = effect->userdata;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 i;
     s32 anyActive = 0;
+    f32 sv;
 
     tmp.x = work->position.x;
     tmp.y = work->position.y;
@@ -122,14 +119,10 @@ static void effKemuri5Main(EffectEntry* effect) {
         }
         anyActive = 1;
         work->angle = reviseAngle(12.0f + work->angle);
-        {
-            f32 sv = (f32)sin(6.2831855f * work->angle / 360.0f);
-            work->scale.x = 0.1f * sv + work->baseScaleX;
-        }
-        {
-            f32 cv = (f32)cos(6.2831855f * work->angle / 360.0f);
-            work->scale.y = 0.1f * cv + work->baseScaleY;
-        }
+
+        sv = sind(work->angle);
+        work->scale.x = 0.1f * sv + work->baseScaleX;
+        work->scale.y = 0.1f * cosd(work->angle) + work->baseScaleY;
         work->speed *= 0.83f;
         work->position.x = work->speed * work->dirX + work->position.x;
         work->position.z = work->speed * work->dirZ + work->position.z;
@@ -148,14 +141,13 @@ static void effKemuri5Main(EffectEntry* effect) {
     if (anyActive == 0) {
         effDelete(effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKemuri5Disp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effKemuri5Disp, effect);
     }
 }
 
-#pragma opt_propagation reset
-
 /** Draws each puff as a camera-facing (Y-billboarded) textured quad using effect texture 0x4E. */
-static void effKemuri5Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri5Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera = camGetPtr(cameraId);
     EffKemuri5N64Work* work = effect->userdata;
     s32 i;
@@ -163,7 +155,6 @@ static void effKemuri5Disp(CameraId cameraId, EffectEntry* effect) {
     Mtx scaleMtx;
     Mtx rot;
     GXTexObj texObj;
-    GXColor color;
 
     GXSetNumChans(0);
     GXSetNumTexGens(1);
@@ -184,7 +175,7 @@ static void effKemuri5Disp(CameraId cameraId, EffectEntry* effect) {
         if (work->active == 0) {
             continue;
         }
-        GXSetTevColor(GX_TEVREG0, mkc(work->alpha));
+        GXSetTevColor(GX_TEVREG0, (GXColor){0x70, 0x60, 0x18, work->alpha});
         PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
         PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
         PSMTXConcat(mtx, rot, mtx);

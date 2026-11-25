@@ -1,18 +1,17 @@
 // Uranoko: plays the MOBJ_EFF_uranoko model animation at a point, fading out at the end of its duration.
+
 #include "eff/eff_uranoko.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
-
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
 static void effUranokoDisp(CameraId cameraId, EffectEntry* effect);
 static void effUranokoMain(EffectEntry* effect);
 
-/**
- * Spawns the black aura at (x, y, z) for `duration` frames (0 or less: until removed).
- * Callers: the ura_noko and ura_pata enemy units (jon, tou2) and evt_eff "uranoko".
- */
+/** Spawns the uranoko animation at (x, y, z) for duration frames (0 or less, or 1000 and more: until soft deleted). */
 EffectEntry* effUranokoEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffUranokoWork* work;
@@ -23,7 +22,7 @@ EffectEntry* effUranokoEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffUranokoWork) * effect->count);
     effect->userdata = work;
     effect->callback = effUranokoMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -59,8 +58,8 @@ static void effUranokoMain(EffectEntry* effect) {
     }
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -78,7 +77,7 @@ static void effUranokoMain(EffectEntry* effect) {
     }
     work->frame++;
     work->scale += (1.0f - work->scale) / 8.0f;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effUranokoDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effUranokoDisp, effect);
 }
 
 /** Draws the aura pose camera-facing, with the fade alpha as an event colour. */
@@ -96,7 +95,7 @@ static void effUranokoDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 6.0f);

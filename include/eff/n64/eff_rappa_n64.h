@@ -1,4 +1,5 @@
 // eff_rappa_n64.c: trumpet spark burst effect entry (effRappaN64Entry).
+
 #pragma once
 
 #include <dolphin/types.h>

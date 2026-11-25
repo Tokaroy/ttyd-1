@@ -1,31 +1,66 @@
 // gra_05 (ウスグラの道, Twilight Trail): the woods with the breaking floor, between gra_04 and gra_06.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
+#include "gra.h"
 #include "cam_road.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_cloud.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_party.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "gra.h"
-#include "evt/evt_story.h"
+#include "evt/evt_mobj.h"
 #include "driver/mapdrv.h"
+#include "system.h"
+#include "pmario_sound.h"
+#include "mario/mario.h"
 
 static USER_FUNC(camera_curve_off);
 static USER_FUNC(camera_curve_on);
 
-static BeroEntry bero_entry_data[7];
-static const char* fukitobashi_tbl[4];
+static EvtWord gra_05_in_01[5];
 
-/** Enter event of the first hole (in_01) of gra_05: just returns 1 in LW(0). */
-EVT_BEGIN(gra_05_in_01)
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord gra_05_out_01[];
+#else
+EvtWord gra_05_out_01[149];
+#endif
+
+static EvtWord gra_05_in_02[5];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord gra_05_out_02[];
+#else
+EvtWord gra_05_out_02[149];
+#endif
+
+static EvtWord in_evt[5];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord out_evt[148];
+static EvtWord out_evt2[130];
+#else
+static EvtWord out_evt[113];
+static EvtWord out_evt2[150];
+#endif
+
+static BeroEntry bero_entry_data[7];
+static EvtWord gra_05_futa_open_evt[28];
+static EvtWord evt_gra_05iwa_move_init[31];
+static EvtWord evt_gra_05iwa_move_evt[186];
+static EvtWord evt_break_floor[7];
+static const char* fukitobashi_tbl[4];
+EvtWord gra_05_init_evt[108];
+
+/** Enter event of both holes (bero entries A_ana_1 and A_ana_2): only returns 1 in LW(0). */
+static EVT_BEGIN(gra_05_in_01)
     SET_VALUE(LW(0), 1)
     RETURN
 EVT_END()
@@ -64,7 +99,7 @@ EVT_BEGIN(gra_05_out_01)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_party_set_dir, 0, 90, -1)
     CALL(evt_party_set_dir, 1, 90, -1)
-    CALL(evt_cam3d_evt_off, 500, 0)
+    CALL(evt_cam3d_evt_off, 500, EASING_LINEAR)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         WAIT_MS(400)
@@ -84,7 +119,7 @@ EVT_BEGIN(gra_05_out_01)
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FLD_JUMP2"), LW(1), LW(2), LW(3), 0)
     CALL(evt_mario_jump_pos, 310, 0, 0, 700, 0, -1000)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_cam_y_on)
 #if VERSION >= VERSION_JP
@@ -94,8 +129,8 @@ EVT_BEGIN(gra_05_out_01)
     RETURN
 EVT_END()
 
-/** Enter event of the second hole (in_02) of gra_05: just returns 1 in LW(0). */
-EVT_BEGIN(gra_05_in_02)
+/** Same body as gra_05_in_01. No bero entry or script refers to it: both holes use gra_05_in_01. */
+static EVT_BEGIN(gra_05_in_02)
     SET_VALUE(LW(0), 1)
     RETURN
 EVT_END()
@@ -133,7 +168,7 @@ EVT_BEGIN(gra_05_out_02)
     CALL(evt_mario_set_dir, 270, 0, 0)
     CALL(evt_party_set_dir, 0, 270, -1)
     CALL(evt_party_set_dir, 1, 270, -1)
-    CALL(evt_cam3d_evt_off, 500, 0)
+    CALL(evt_cam3d_evt_off, 500, EASING_LINEAR)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         WAIT_MS(400)
@@ -153,7 +188,7 @@ EVT_BEGIN(gra_05_out_02)
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FLD_JUMP4"), LW(1), LW(2), LW(3), 0)
     CALL(evt_mario_jump_pos, -60, 0, 0, 700, 0, -1000)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_cam_y_off)
 #if VERSION >= VERSION_JP
@@ -163,14 +198,14 @@ EVT_BEGIN(gra_05_out_02)
     RETURN
 EVT_END()
 
-/** Enter event of the ana_1 and ana_2 holes: just returns 1 in LW(0) so the transition goes ahead. */
+/** Enter event of the ana_1 and ana_2 holes: returns 1 in LW(0) so the default walk-in is skipped. */
 static EVT_BEGIN(in_evt)
     SET_VALUE(LW(0), 1)
     RETURN
 EVT_END()
 
 /**
- * Exit event of the hole ana_1: the partners walk to the hole and are removed,
+ * Exit event of the hole ana_1: the main partner walks to the hole (both partners in the early demos), then both are removed,
  * Mario enters background mode and reappears at the other hole ana_2 (50 units lower) with the jump voice,
  * hopping out to (-140, 60, -450) before control returns. Returns 1 in LW(0).
  */
@@ -228,7 +263,7 @@ static EVT_BEGIN(out_evt)
     CALL(evt_mario_cam_y_off)
     CALL(evt_cam_road_reset)
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 700, 11)
+    CALL(evt_cam3d_evt_off, 700, EASING_SINE_IN_OUT)
     CALL(evt_hit_get_position, STRING("ana_2"), LW(0), LW(1), LW(2))
     SUBTRACT(LW(1), 50)
     ADD(LW(2), -10)
@@ -269,7 +304,7 @@ static EVT_BEGIN(out_evt2)
     CALL(evt_mario_set_prev_party, 1)
     CALL(evt_cam_road_reset)
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 700, 11)
+    CALL(evt_cam3d_evt_off, 700, EASING_SINE_IN_OUT)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_party_set_dir, 0, 90, -1)
     CALL(evt_party_set_dir, 1, 90, -1)
@@ -288,7 +323,7 @@ static EVT_BEGIN(out_evt2)
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FLD_JUMP3"), LW(1), LW(2), LW(3), 0)
     CALL(evt_mario_jump_pos, -190, 0, 0, 700, 0, -1000)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_key_onoff, 1)
     SET_VALUE(LW(0), 1)
@@ -341,9 +376,9 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)in_evt, // enterEvent
+        in_evt, // enterEvent
         0, // caseType
-        (s32*)out_evt, // exitEvent
+        out_evt, // exitEvent
         "gra_05", // nextMapName
         "ana_2", // nextBeroName
         4, // enterAnimeType
@@ -358,9 +393,9 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)in_evt, // enterEvent
+        in_evt, // enterEvent
         0, // caseType
-        (s32*)out_evt2, // exitEvent
+        out_evt2, // exitEvent
         "gra_05", // nextMapName
         "ana_1", // nextBeroName
         4, // enterAnimeType
@@ -375,9 +410,9 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)gra_05_in_01, // enterEvent
+        gra_05_in_01, // enterEvent
         0, // caseType
-        (s32*)gra_05_out_01, // exitEvent
+        gra_05_out_01, // exitEvent
         0, NULL, // nextMapName..nextBeroName
         4, // enterAnimeType
         4, // exitAnimeType
@@ -391,9 +426,9 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)gra_05_in_01, // enterEvent
+        gra_05_in_01, // enterEvent
         0, // caseType
-        (s32*)gra_05_out_02, // exitEvent
+        gra_05_out_02, // exitEvent
         0, NULL, // nextMapName..nextBeroName
         4, // enterAnimeType
         4, // exitAnimeType
@@ -404,32 +439,32 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Callback run when Flurrie's wind has blown the lid (A_futa) off the hole:
- * plays a jingle, switches the lid's collision off and advances the story to STORY_STG4_06_01_BLOW_THE_FLOOR.
+ * plays a jingle, switches the lid's collision off and advances the story to STG4_06_01_BLOW_THE_FLOOR.
  */
-EVT_BEGIN(gra_05_futa_open_evt)
+static EVT_BEGIN(gra_05_futa_open_evt)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(1000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
     CALL(evt_hitobj_onoff, STRING("A_futa"), 0, 0)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_06_01_BLOW_THE_FLOOR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_06_01_BLOW_THE_FLOOR)
     RETURN
 EVT_END()
 
 /**
  * Initial state of the pushable boulder (A_iwa / S_iwa):
- * binds its collision to the model and, if the story is already at STORY_STG4_07_TRICK_ROCK,
+ * binds its collision to the model and, if the story is already at STG4_07_TRICK_ROCK,
  * puts it in its pushed position (120 units over) and hides the lid.
  */
-EVT_BEGIN(evt_gra_05iwa_move_init)
+static EVT_BEGIN(evt_gra_05iwa_move_init)
     CALL(evt_hit_bind_mapobj, STRING("A_iwa"), STRING("S_iwa"))
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_07_TRICK_ROCK)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG4_07_TRICK_ROCK)
         CALL(evt_mapobj_trans, 0, STRING("S_iwa"), FLOAT(120.0f), 0, 0)
         CALL(evt_hit_bind_update, STRING("A_iwa"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_futa"), 0, 0)
     END_IF
     RETURN
@@ -438,18 +473,18 @@ EVT_END()
 /**
  * Event run when Mario has pushed the boulder long enough:
  * the boulder slides 120 units sideways over 3 seconds with dust puffs and camera shake, carrying Mario along,
- * then the story is set to STORY_STG4_07_TRICK_ROCK.
+ * then the story is set to STG4_07_TRICK_ROCK.
  */
-EVT_BEGIN(evt_gra_05iwa_move_evt)
+static EVT_BEGIN(evt_gra_05iwa_move_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mapobj_get_position, STRING("S_iwa"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_MOVE_ROCK1"), LW(0), LW(1), LW(2), LW(9))
     BEGIN_INLINE_EVENT
-        CALL(evt_cam_shake, 4, FLOAT(0.0048828125f), FLOAT(0.0f), 3000)
+        CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0f), 3000)
     END_INLINE_EVENT
     CALL(evt_mario_get_pos, 0, LW(2), LW(3), LW(4))
     CALL(evt_mario_set_pose, STRING("M_O_1"))
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     BEGIN_INLINE_EVENT
         LOOP(10)
             CALL(evt_mapobj_get_position, STRING("S_iwa"), LW(0), LW(1), LW(2))
@@ -470,7 +505,7 @@ EVT_BEGIN(evt_gra_05iwa_move_evt)
             WAIT_MS(300)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 0, 0, 120, 3000)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 120, 3000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 0, STRING("S_iwa"), LW(0), 0, 0)
@@ -482,30 +517,26 @@ EVT_BEGIN(evt_gra_05iwa_move_evt)
         GOTO(0)
     END_IF
     CALL(evt_snd_sfxoff, LW(9))
-    CALL(evt_mario_dispflag_onoff, 0, 2)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL(evt_hit_bind_update, STRING("A_iwa"))
     CALL(evt_snd_sfxoff, LW(9))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_07_TRICK_ROCK)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_07_TRICK_ROCK)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
 /**
- * Callback of the breaking floor: advances the story to STORY_STG4_06_02_THROUGH_THE_HOLE
+ * Callback of the breaking floor: advances the story to STG4_06_02_THROUGH_THE_HOLE
  * and turns the camera curve on.
  */
-EVT_BEGIN(evt_break_floor)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_06_02_THROUGH_THE_HOLE)
+static EVT_BEGIN(evt_break_floor)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_06_02_THROUGH_THE_HOLE)
     CALL(camera_curve_on)
     RETURN
 EVT_END()
 
-/**
- * Guess: the map objects (the floor cover S_futa, S_kura and the grass S_gra04_kusa) that the cloud effect
- * covers until the story passes STORY_STG4_06_01_BLOW_THE_FLOOR.
- */
 static const char* fukitobashi_tbl[] = {
     "S_futa",
     "S_kura",
@@ -518,16 +549,16 @@ static const char* fukitobashi_tbl[] = {
  * the blow-away lid and the breaking floor (until their story steps are done), and the boulder Mario can push.
  */
 EVT_BEGIN(gra_05_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_GRA1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_GRA1"))
-    CALL(evt_mobj_brick, STRING("blk00"), -475, 60, 25, 0, 13, 0, GSWF(GSWF_GRA05_HIDDEN_COIN_BLOCK_EMPTIED))
-    CALL(evt_mobj_powerupblk, STRING("blk01"), 630, 60, 40, 0, GSWF(GSWF_GRA05_SHINE_SPRITE), 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_GRA1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_GRA1"))
+    CALL(evt_mobj_brick, STRING("blk00"), -475, 60, 25, ITEM_NULL, MOBJ_BRICK_HIDDEN_TEN_COIN, 0, GSWF_GRA_05_HIDDEN_TEN_COIN_BRICK)
+    CALL(evt_mobj_powerupblk, STRING("blk01"), 630, 60, 40, 0, GSWF_SHINE_23, 0)
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_usu_kagemario_party_kill)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_06_01_BLOW_THE_FLOOR)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_06_01_BLOW_THE_FLOOR)
         CALL(evt_cloud_init)
         CALL(evt_cloud_ent, 1, PTR(&fukitobashi_tbl), STRING("A_futa"), PTR(gra_05_futa_open_evt))
         CALL(evt_cloud_set_cap_size, 256, 256)
@@ -535,24 +566,22 @@ EVT_BEGIN(gra_05_init_evt)
         CALL(evt_mapobj_trans, 1, STRING("S_futa"), 0, FLOAT(0.099609375f), 0)
         CALL(evt_hit_bind_update, STRING("A_futa"))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_futa"), 0, 0)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_06_02_THROUGH_THE_HOLE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_06_02_THROUGH_THE_HOLE)
         CALL(camera_curve_off)
-        CALL(evt_mobj_breaking_floor, STRING("breaking_floor"), -250, -7, 0, 0, PTR(evt_break_floor), GSWF(GSWF_GRA05_BREAKING_FLOOR_BROKEN))
+        CALL(evt_mobj_breaking_floor, STRING("breaking_floor"), -250, -7, 0, 0, PTR(evt_break_floor), GSWF_GRA_05_BREAKING_FLOOR_BROKEN)
     END_IF
     SPAWN_EVENT(evt_gra_05iwa_move_init)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_07_TRICK_ROCK)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_07_TRICK_ROCK)
         CALL(evt_iwamove_init)
         CALL(evt_iwamove_ent, PTR(evt_gra_05iwa_move_evt))
     END_IF
     RETURN
 EVT_END()
 
-void camRoadCurveOff(const char* name);
-
-/** Script helper: turns the camera road curve "curve2" off so the camera stops following it. */
+/** Script helper: turns off the camera road curve |MarioSt_CameraRoad|curve2 (camRoadCurveOff). */
 static USER_FUNC(camera_curve_off) {
     camRoadCurveOff("|MarioSt_CameraRoad|curve2");
     return EVT_RETURN_DONE;

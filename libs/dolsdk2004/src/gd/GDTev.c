@@ -1,11 +1,6 @@
 #include <dolphin/gd.h>
 #include <dolphin/os.h>
 
-/**
- * Sets one TEV stage's color and alpha combiners for a standard mode:
- * modulate (texture times previous), decal (blend previous to texture by texture alpha), blend,
- * replace (texture only) or pass color (rasterized color for stage 0, the previous stage otherwise).
- */
 void GDSetTevOp(GXTevStageID stage, GXTevMode mode) {
     GXTevColorArg carg = GX_CC_RASC;
     GXTevAlphaArg aarg = GX_CA_RASA;
@@ -42,10 +37,6 @@ void GDSetTevOp(GXTevStageID stage, GXTevMode mode) {
     }
 }
 
-/**
- * Writes a TEV stage's color combiner: inputs a to d, operation, bias, scale, clamp and output register.
- * Compare operations are encoded with bias 3.
- */
 void GDSetTevColorCalc(GXTevStageID stage, GXTevColorArg a, GXTevColorArg b,
                        GXTevColorArg c, GXTevColorArg d, GXTevOp op,
                        GXTevBias bias, GXTevScale scale, u8 clamp,
@@ -57,10 +48,6 @@ void GDSetTevColorCalc(GXTevStageID stage, GXTevColorArg a, GXTevColorArg b,
     }
 }
 
-/**
- * Writes a TEV stage's alpha combiner (inputs a to d, operation, bias, scale, clamp,
- * output register) together with the swap table choices for rasterized and texture color.
- */
 void GDSetTevAlphaCalcAndSwap(GXTevStageID stage, GXTevAlphaArg a,
                               GXTevAlphaArg b, GXTevAlphaArg c, GXTevAlphaArg d,
                               GXTevOp op, GXTevBias bias, GXTevScale scale,
@@ -73,7 +60,6 @@ void GDSetTevAlphaCalcAndSwap(GXTevStageID stage, GXTevAlphaArg a,
     }
 }
 
-/** Writes one of the TEV color registers (RGBA). The blue/green register is written three times. */
 void GDSetTevColor(GXTevRegID reg, GXColor color) {
     u32 regRA;
     u32 regBG;
@@ -87,7 +73,6 @@ void GDSetTevColor(GXTevRegID reg, GXColor color) {
     GDWriteBPCmd(regBG);
 }
 
-/** Writes a TEV color register from signed 10 bit components. The blue/green register is written three times. */
 void GDSetTevColorS10(GXTevRegID reg, GXColorS10 color) {
     u32 regRA;
     u32 regBG;
@@ -101,7 +86,6 @@ void GDSetTevColorS10(GXTevRegID reg, GXColorS10 color) {
     GDWriteBPCmd(regBG);
 }
 
-/** Writes one of the four TEV konstant color registers (RGBA). */
 void GDSetTevKColor(GXTevKColorID reg, GXColor color) {
     u32 regRA;
     u32 regBG;
@@ -113,7 +97,6 @@ void GDSetTevKColor(GXTevKColorID reg, GXColor color) {
     GDWriteBPCmd(regBG);
 }
 
-/** Chooses the konstant color and alpha for a pair of TEV stages starting at an even stage. */
 void GDSetTevKonstantSel(GXTevStageID evenStage, GXTevKColorSel kcsel0,
                          GXTevKAlphaSel kasel0, GXTevKColorSel kcsel1,
                          GXTevKAlphaSel kasel1) {
@@ -121,7 +104,6 @@ void GDSetTevKonstantSel(GXTevStageID evenStage, GXTevKColorSel kcsel0,
     GDWriteBPCmd(BP_TEV_KSEL(0, 0, kcsel0, kasel0, kcsel1, kasel1, evenStage / 2 + 0xF6));
 }
 
-/** Writes one of the four TEV swap tables: which source channel goes to red, green, blue and alpha. */
 void GDSetTevSwapModeTable(GXTevSwapSel table, GXTevColorChan red,
                            GXTevColorChan green, GXTevColorChan blue,
                            GXTevColorChan alpha) {
@@ -132,12 +114,10 @@ void GDSetTevSwapModeTable(GXTevSwapSel table, GXTevColorChan red,
     GDWriteBPCmd(BP_TEV_KSEL(blue, alpha, 0, 0, 0, 0, table * 2 + 0xF7));
 }
 
-/** Writes the alpha test: two comparisons against reference values, combined with AND, OR, XOR or XNOR. */
 void GDSetAlphaCompare(GXCompare comp0, u8 ref0, GXAlphaOp op, GXCompare comp1, u8 ref1) {
     GDWriteBPCmd(BP_ALPHA_COMPARE(ref0, ref1, comp0, comp1, op, 0xF3));
 }
 
-/** Writes the Z texture settings: the operation, the depth format (Z8, Z16 or Z24X8) and the bias. */
 void GDSetZTexture(GXZTexOp op, GXTexFmt fmt, u32 bias) {
     u32 zfmt;
 
@@ -161,10 +141,6 @@ void GDSetZTexture(GXZTexOp op, GXTexFmt fmt, u32 bias) {
     GDWriteBPCmd(BP_ZTEX_PARAMS_1(zfmt, op, 0xF5));
 }
 
-/**
- * Writes which texture coordinate, texture map and color channel feed a pair of TEV stages starting at an even
- * stage.
- */
 void GDSetTevOrder(GXTevStageID evenStage, GXTexCoordID coord0, GXTexMapID map0,
                    GXChannelID color0, GXTexCoordID coord1, GXTexMapID map1,
                    GXChannelID color1) {

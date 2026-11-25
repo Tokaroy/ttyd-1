@@ -1,4 +1,6 @@
-// Paper Mario 64 effect: a yellow electric shock flash that expands and fades; also spawned by the thunder effect.
+// Paper Mario 64 effect: a yellow electric shock flash that expands and fades (green for type 2); used by the
+// Flower Fuzzy units through evt_eff64 and by the Shadow Queen unit from C.
+
 #include "eff/n64/eff_shock_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -9,14 +11,11 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 
-GXColor shock_zero_color0;
-GXColor shock_zero_color1;
-
 /**
  * The jagged shock-flash mesh: white-edged spikes around a dark inner rim,
  * drawn textured and then plain for types 1-3.
  */
-effN64Vtx testsrc_shock_v[] = {
+static effN64Vtx testsrc_shock_v[] = {
     {242, -140, 0, 1800, 576, 0xFF, 0xFF, 0xFF, 0xFF},
     {189, -51, 0, 1630, 862, 0x00, 0x00, 0x00, 0xFF},
     {174, -47, 0, 1581, 875, 0x00, 0x00, 0x00, 0xFF},
@@ -116,11 +115,11 @@ effN64Vtx testsrc_shock_v[] = {
 };
 
 static void effShockMain(EffectEntry* effect);
-static void effShockDisp(CameraId cameraId, EffectEntry* effect);
+static void effShockDisp(CameraId cameraId, void* param);
 
 /**
- * Spawns a 30-frame shock flash at (x, y, z) with extents a and b.
- * Used by the Shadow Queen (black_peach) battle code in las and by event scripts through evt_eff.
+ * Spawns a shock flash at (x, y, z) living 30 frames, yellow for types 0, 1 and 3 (else green); half of a and half
+ * of b are kept as its two offsets.
  */
 EffectEntry* effShockN64Entry(s32 type, f32 x, f32 y, f32 z, f32 a, f32 b) {
     EffectEntry* effect;
@@ -135,9 +134,9 @@ EffectEntry* effShockN64Entry(s32 type, f32 x, f32 y, f32 z, f32 a, f32 b) {
     w->type = type;
     w->age = 0;
     w->life = 30;
-    w->c10 = 255;
-    w->c14 = 255;
-    w->c18 = 255;
+    w->reserved_10 = 255;
+    w->flashAlpha = 255;
+    w->alpha = 255;
     w->position.x = x;
     w->position.y = y;
     w->position.z = z;
@@ -207,17 +206,17 @@ static void effShockMain(EffectEntry* effect) {
     } else {
         w->scale += 0.05f * (8.0f - w->scale);
     }
-    w->c14 *= 0.9f;
+    w->flashAlpha *= 0.9f;
     if (life < 5) {
-        w->c18 *= 0.8f;
+        w->alpha *= 0.8f;
     }
     if (age > 6) {
-        w->c10 -= 13;
-        if (w->c10 < 0) {
-            w->c10 = 0;
+        w->reserved_10 -= 13;
+        if (w->reserved_10 < 0) {
+            w->reserved_10 = 0;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effShockDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effShockDisp, effect);
 }
 
 /**
@@ -225,7 +224,8 @@ static void effShockMain(EffectEntry* effect) {
  * an outer ring textured with 0x85 (yellow and fading for type 1) and an untextured inner pass,
  * both in the work's two colours. Type 0 and types above 3 draw nothing.
  */
-static void effShockDisp(CameraId cameraId, EffectEntry* effect) {
+static void effShockDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffShockN64Work* w;
     s32 type;
@@ -242,19 +242,19 @@ static void effShockDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
     PSMTXConcat(base, rot, base);
     PSMTXConcat(camera->view, base, res);
-    GXSetTevColor(GX_TEVREG0, (GXColor){w->col0[0], w->col0[1], w->col0[2], w->c18});
+    GXSetTevColor(GX_TEVREG0, (GXColor){w->col0[0], w->col0[1], w->col0[2], w->alpha});
     GXSetTevColor(GX_TEVREG1, (GXColor){w->col1[0], w->col1[1], w->col1[2], 0});
     GXSetCullMode(GX_CULL_NONE);
-    if (type - 1 <= 1U || type == 3) {
+    if (type == 1 || type == 2 || type == 3) {
         if (type == 1) {
-            GXSetTevColor(GX_TEVREG0, (GXColor){0xFF, 0xFF, 0, w->c14});
+            GXSetTevColor(GX_TEVREG0, (GXColor){0xFF, 0xFF, 0, w->flashAlpha});
         }
         PSMTXTrans(base, 0.0f, w->offset2, 0.0f);
         PSMTXScale(mtx, 0.25f * w->scale, 0.25f * w->scale, 1.0f);
         PSMTXConcat(base, mtx, base);
         PSMTXConcat(res, base, base);
-        GXLoadPosMtxImm(base, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(base, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXSetNumChans(1);
         GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
         GXSetNumTexGens(1);

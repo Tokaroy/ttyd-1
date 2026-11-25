@@ -1,9 +1,10 @@
 // party_cloud.c: Flurrie's (cloud) field partner functions and the Gale Force work (PartyCloud, PartyCloudSweep).
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/mtx.h>
 #include "party.h"
-#include "version.h"
 
 struct HitEntry;
 
@@ -12,7 +13,7 @@ typedef struct PartyCloudSweep {
     s32 reverse; // 0x4, 0 = angle rising, 1 = falling
 } PartyCloudSweep;
 
-/* Flurrie's Gale Force work: PartyEntry.useStruct, __memAlloc(HEAP_DEFAULT, 0x48) + memset in N__cloud_use */
+/* Flurrie's Gale Force work: PartyEntry.useStruct, __memAlloc(HEAP_DEFAULT, 0x48) + memset in _cloud_use */
 typedef struct PartyCloud {
     f32 reserved_0;               // 0x0, 100.0f at use start, never read
     f32 breathDir;                // 0x4, Gale Force breath direction (toMovedir)
@@ -20,30 +21,34 @@ typedef struct PartyCloud {
     f32 breathDistMax;            // 0xC, 120.0f; breathDist clamps here
     PartyCloudSweep sweep[2];     // 0x10, two side rays (cloudSweep)
     struct HitEntry* hitFront;    // 0x20, straight ray (getHitBreatheout2); cloudGetHitBreathout(0)
-    struct HitEntry* hitDown;     // 0x24, -45 degree ray (N__cloud_use case 12); cloudGetHitBreathout(1)
+    struct HitEntry* hitDown;     // 0x24, -45 degree ray (_cloud_use case 12); cloudGetHitBreathout(1)
     struct HitEntry* hitSweep[2]; // 0x28, side rays; cloudGetHitBreathout(2), (3)
     s32 autoTimer;                // 0x30, frames left when used by an event (flags & 0x80000000)
-    s32 sfxId;                    // 0x34, breath sfx 0x930, -1 = none
+    u32 sfxId;                    // 0x34, breath sfx 0x930, -1 = none (unsigned: the tests compile cmplwi)
     s16 breathLevel;              // 0x38, 0..2 cycles: ray height 8 / 20 / 40
-    u8 pad_3A[0x48 - 0x3A];       // 0x3A
+    u8 pad3A[0x48 - 0x3A];        // 0x3A
 } PartyCloud;                     // size 0x48
 
 void cloudGetAt(Vec* position);
-void cloudResetAt();
-u8 cloudGetStatus();
+void cloudResetAt(void);
+u8 cloudGetStatus(void);
 f32 cloudGetBreathDir(void);
-struct HitEntry* cloudGetHitBreathout(s32 rayId);
+struct HitEntry* cloudGetHitBreathout(s32 which); // 0 front, 1 down, 2-3 the two sweep hits
 
 void cloud_exit(PartyEntry* party);
-#if VERSION >= VERSION_JP // the demo has them as static inline functions in party_cloud.c
+
+#if VERSION >= VERSION_JP
 void cloud_hover_init(PartyEntry* party);
 void cloud_hover_main(PartyEntry* party);
 #endif
+
 void cloud_init(PartyEntry* party);
 void cloud_move(PartyEntry* party);
 void cloud_use(PartyEntry* party);
-
+void cloudLockAnimationsOff(PartyEntry* party);
+void cloudLockAnimationsOn(PartyEntry* party);
 f32 cloudGetBreathDist(void);
 f32 cloudGetBreathPower(Vec pos, f32 width);
-void N_cloudLockAnimationsOff(PartyEntry* party);
-void N_cloudLockAnimationsOn(PartyEntry* party);
+#if VERSION >= VERSION_JP
+void mot_cloud(void);
+#endif

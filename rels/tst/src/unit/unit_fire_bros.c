@@ -1,4 +1,5 @@
 // Battle unit Fire Bro (`fire_bros`): tst.rel's copy of rels/tou2/src/unit/unit_fire_bros.c.
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 
@@ -12,12 +13,9 @@
 #include "manager/evtmgr_cmd.h"
 #include "battle/battle_sub.h"
 #include "evt/evt_sub.h"
-
-// Unit work slots of this unit (btlevtcmd_SetUnitWork / GetUnitWork).
-enum {
-    UW_FIRE_BROS_THROWN = 0,   // fireballs thrown so far in the barrage (nagemakuri) attack
-    UW_FIRE_BROS_FINISHED = 1, // fireballs whose flight has finished (fire_move_event counts them)
-};
+#include "battle/battle_damage.h"
+#include "battle/battle_camera.h"
+#include "battle/unit/unit_fire_bros.h"
 
 BattleUnitKind unit_fire_bros;
 static BattleUnitDefense defence;
@@ -97,7 +95,7 @@ USER_FUNC(fire_bros_nagemakuri_set_target) {
  * size, offsets, sounds, status vulnerability, parts, init script and event table.
  */
 BattleUnitKind unit_fire_bros = {
-    58,
+    UNIT_FIRE_BRO,
     "btl_un_fire_bros",
     7,
     0,
@@ -163,39 +161,37 @@ BattleUnitKind unit_fire_bros = {
 };
 
 #if VERSION <= VERSION_DEMO_JP
+
 /**
  * Defence of the Fire Bro: 1 against normal, ice, explosion and electric hits;
- * immune to fire (defence 99 cancels the hit).
+ * immune to fire (its fire-immunity attribute cancels the hit).
  */
 static BattleUnitDefense defence = {{1, 99, 1, 1, 1}};
-#else
-/**
- * Defence of Fire Bro per element (normal, fire, ice, explosion, electric), subtracted from each hit:
- * 1 against every element.
- */
-static BattleUnitDefense defence = {{1, 1, 1, 1, 1}};
-#endif
 
-#if VERSION <= VERSION_DEMO_JP
 /** Element reactions of Fire Bro: fire immune; the other elements hit normally. */
-static BattleUnitDefenseAttr defence_attr = {{0, 2, 0, 0, 0}};
-#else
-/** Element reactions of Fire Bro: none, every element hits normally. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
-#endif
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_IMMUNE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
-#if VERSION <= VERSION_DEMO_JP
 /**
- * Status vulnerability of Fire Bro (the demos), as the percent chance a status takes hold:
- * always hit by Poison, Electric, Burn, Huge, Attack Up, Defense Up, Fast, Dodgy and Invisible;
+ * Status vulnerability of Fire Bro (the early demos), as a percent multiplier on each move's status chance:
+ * the normal chance (100) for Poison, Electric, Burn, Huge, Attack Up, Defense Up, Fast, Dodgy and Invisible;
  * otherwise Sleep 60, Stop 80, Dizzy 80, Confuse 80, Freeze 80, Tiny 80, Attack Down 80, Defense Down 80,
  * Allergic 80, Fright 40, Gale Force 60, Slow 80 and instant KO 95.
  */
 static StatusVulnerability regist = {60, 80, 80, 100, 80, 100, 100, 80, 100, 80, 100, 80, 100, 80, 80, 40, 60, 100, 80, 100, 100, 95};
 #else
+
 /**
- * Status vulnerability of Fire Bro (the final versions), as the percent chance a status takes hold:
- * always hit by Poison, Electric, Burn, Huge, Attack Up, Defense Up, Fast, Dodgy and Invisible;
+ * Defence of Fire Bro per element (normal, fire, ice, explosion, electric), subtracted from each hit:
+ * 1 against every element.
+ */
+static BattleUnitDefense defence = {{1, 1, 1, 1, 1}};
+
+/** Element reactions of Fire Bro: none, every element hits normally. */
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
+
+/**
+ * Status vulnerability of Fire Bro (JP and later), as a percent multiplier on each move's status chance:
+ * the normal chance (100) for Poison, Electric, Burn, Huge, Attack Up, Defense Up, Fast, Dodgy and Invisible;
  * otherwise Sleep 80, Stop 80, Dizzy 70, Confuse 80, Freeze 70, Tiny 80, Attack Down 80, Defense Down 95,
  * Allergic 80, Fright 70, Gale Force 60, Slow 80 and instant KO 95.
  */
@@ -207,24 +203,24 @@ static StatusVulnerability regist = {80, 80, 70, 100, 80, 100, 100, 70, 100, 80,
  * animation names, 18 entries such as BRO_N_1, BRO_Y_1, BRO_K_1, BRO_X_1.
  */
 static PoseTableEntry pose_table[] = {
-    {1, "BRO_N_1"},
-    {2, "BRO_Y_1"},
-    {9, "BRO_Y_1"},
-    {5, "BRO_K_1"},
-    {4, "BRO_X_1"},
-    {3, "BRO_X_1"},
-    {27, "BRO_D_1"},
-    {BTL_POSE_NORMAL, "BRO_S_1"},
-    {29, "BRO_Q_1"},
-    {30, "BRO_Q_1"},
-    {31, "BRO_S_1"},
-    {BTL_POSE_DAMAGE, "BRO_D_1"},
-    {BTL_POSE_RUN, "BRO_R_1"},
-    {BTL_POSE_WALK, "BRO_W_1"},
-    {BTL_POSE_DANGER, "BRO_X_1"},
-    {BTL_POSE_PERIL, "BRO_X_1"},
-    {BTL_POSE_TALK, "BRO_T_1"},
-    {BTL_POSE_STAY_DEFAULT, "BRO_S_1"},
+    {POSE_TYPE_SLEEP, "BRO_N_1"},
+    {POSE_TYPE_STOP, "BRO_Y_1"},
+    {POSE_TYPE_FREEZE, "BRO_Y_1"},
+    {POSE_TYPE_CONFUSE, "BRO_K_1"},
+    {POSE_TYPE_POISON, "BRO_X_1"},
+    {POSE_TYPE_DIZZY, "BRO_X_1"},
+    {POSE_TYPE_KO, "BRO_D_1"},
+    {POSE_TYPE_NORMAL, "BRO_S_1"},
+    {POSE_TYPE_DAMAGE_FIRE, "BRO_Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "BRO_Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "BRO_S_1"},
+    {POSE_TYPE_DAMAGE, "BRO_D_1"},
+    {POSE_TYPE_RUN, "BRO_R_1"},
+    {POSE_TYPE_WALK, "BRO_W_1"},
+    {POSE_TYPE_DANGER, "BRO_X_1"},
+    {POSE_TYPE_PERIL, "BRO_X_1"},
+    {POSE_TYPE_TALK, "BRO_T_1"},
+    {POSE_TYPE_ACTION, "BRO_S_1"},
 };
 
 /**
@@ -240,13 +236,13 @@ static BattleDataEntry data_table[] = {
  * Each part names its defence tables and pose table.
  */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 0.0f, 35.0f, 0.0f, 0.0f, 45.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER, 0, pose_table},
-    {2, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {3, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {4, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {5, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {6, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {7, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
+    {1, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 0.0f, 35.0f, 0.0f, 0.0f, 45.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart, 0, pose_table},
+    {2, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {3, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {4, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {5, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {6, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {7, "btl_un_fire_bros", "c_burosu_f", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
 };
 
 /** Attack data of Fire Bro's attack: base damage 3, 100% accuracy; may inflict burn 30%. */
@@ -266,14 +262,14 @@ BattleWeapon weapon_fire_bros_attack = {
     {3, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
+    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SELF | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
     ELEMENT_FIRE, // element
-    0, // damagePattern
+    ATTACKPATTERN_NULL, // damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -306,14 +302,14 @@ BattleWeapon weapon_fire_bros_renzoku_attack = {
     {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
+    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SELF | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
     ELEMENT_FIRE, // element
-    0, // damagePattern
+    ATTACKPATTERN_NULL, // damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -346,14 +342,14 @@ BattleWeapon weapon_fire_bros_nagemakuri_attack = {
     {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
+    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SELF | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
     ELEMENT_FIRE, // element
-    0, // damagePattern
+    ATTACKPATTERN_NULL, // damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -374,11 +370,11 @@ BattleWeapon weapon_fire_bros_nagemakuri_attack = {
  * damage and confusion handlers (confusion reuses the attack) and starts the wait event.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -387,31 +383,31 @@ EVT_END()
  * (LW(10) = -2, LW(11) = 1).
  */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
 EVT_END()
 
 /**
- * Attack script of the Fire Bro. When the battle flag 2 is set it just throws one fireball.
+ * Attack script of the Fire Bro. On a first strike (BATTLE_FLAG_FIRST_ATTACK) it just throws one fireball.
  * Otherwise, after the item-use check: at 3 HP or less it picks the double throw 30 percent of the time
  * and the all-target barrage (nagemakuri) otherwise;
  * with more HP it picks the single throw 70 percent and the double throw 30 percent.
  */
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_check_battleflag, LW(0), 2)
+    CALL(btlevtcmd_check_battleflag, LW(0), BATTLE_FLAG_FIRST_ATTACK)
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(normal_attack_event)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    CALL(btlevtcmd_GetHp, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetHp, UNIT_ID_SELF, LW(0))
     IF_INT_LESS_OR_EQUAL(LW(0), 3)
         SET_VALUE(LW(0), 50)
         ADD(LW(0), 50)
@@ -436,35 +432,35 @@ static EVT_BEGIN(attack_event)
         GOTO(99)
     END_IF
     LABEL(99)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
  * Resolves one fireball against the target LW(3), LW(4) (weapon in LW(6)) and returns LW(0) = 1 on a hit.
- * On a dodge (pre-check results 2, 3, 4, 6) the target starts its avoid animation and nothing else happens.
- * A hit is marked for damage_check_last (parts work 10 of part 2 for the double throw; with LW(8) = 1, the
+ * On pre-check results 2, 3 or 6 the target starts its avoid animation; result 4 skips the hit without starting one.
+ * A hit is marked for damage_check_last (PARTS_WORK_HIT of part 2 for the double throw; with LW(8) = 1, the
  * barrage, the mark of that target's slot in the fireball parts' work), then the guard result and the damage
  * are applied, as the last hit when LW(7) = 1.
  */
 static EVT_BEGIN(damage_check_sub)
     SET_VALUE(LW(0), 0)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(6), 0, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(6), 0, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
@@ -476,7 +472,7 @@ static EVT_BEGIN(damage_check_sub)
     LABEL(91)
     SET_VALUE(LW(0), 1)
     IF_INT_EQUAL(LW(6), PTR(&weapon_fire_bros_renzoku_attack))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 2, 10, 1)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 2, PARTS_WORK_HIT, 1)
     END_IF
     IF_INT_EQUAL(LW(8), 1)
         SET_VALUE(LW(13), 0)
@@ -484,12 +480,12 @@ static EVT_BEGIN(damage_check_sub)
         LOOP(0)
             SET_VALUE(LW(12), 2)
             LOOP(0)
-                CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(12), LW(13), LW(1))
-                CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(12), LW(14), LW(2))
+                CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(12), LW(13), LW(1))
+                CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(12), LW(14), LW(2))
                 IF_INT_EQUAL(LW(3), LW(1))
                     IF_INT_EQUAL(LW(4), LW(2))
                         ADD(LW(13), 10)
-                        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(12), LW(13), 1)
+                        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(12), LW(13), 1)
                         GOTO(98)
                     END_IF
                 END_IF
@@ -505,9 +501,9 @@ static EVT_BEGIN(damage_check_sub)
     LABEL(98)
     CALL(btlevtcmd_ResultACDefence, LW(3), LW(6))
     IF_INT_EQUAL(LW(7), 1)
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(6), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(6), DAMAGE_RESULT_FINAL_HIT, LW(5))
     ELSE
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(6), 0, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(6), 0, LW(5))
     END_IF
     LABEL(99)
     RETURN
@@ -531,7 +527,7 @@ EVT_END()
  */
 static EVT_BEGIN(damage_check_last)
     IF_INT_EQUAL(LW(6), PTR(&weapon_fire_bros_renzoku_attack))
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, 2, 10, LW(0))
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, 2, PARTS_WORK_HIT, LW(0))
         IF_INT_EQUAL(LW(0), 1)
             SET_VALUE(LW(0), 1)
         ELSE
@@ -545,12 +541,12 @@ static EVT_BEGIN(damage_check_last)
         LOOP(0)
             SET_VALUE(LW(12), 2)
             LOOP(0)
-                CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(12), LW(13), LW(1))
-                CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(12), LW(14), LW(2))
+                CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(12), LW(13), LW(1))
+                CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(12), LW(14), LW(2))
                 IF_INT_EQUAL(LW(3), LW(1))
                     IF_INT_EQUAL(LW(4), LW(2))
                         ADD(LW(13), 10)
-                        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(12), LW(13), LW(0))
+                        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(12), LW(13), LW(0))
                         GOTO(10)
                     END_IF
                 END_IF
@@ -566,7 +562,7 @@ static EVT_BEGIN(damage_check_last)
     LABEL(10)
     IF_INT_EQUAL(LW(0), 1)
         CALL(btlevtcmd_ResultACDefence, LW(3), LW(6))
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(6), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(6), DAMAGE_RESULT_FINAL_HIT, LW(5))
     ELSE
         SET_VALUE(LW(7), 1)
         CALL_CHILD(damage_check_sub)
@@ -579,28 +575,29 @@ EVT_END()
  * toward the target (SFX_ENM_FIREB_ATTACK1, then ATTACK2 per bounce).
  * A watcher resolves the hit when it reaches the target's x (damage_check_last when LW(14) is set, else
  * damage_check_no_last): a hit makes the fireball vanish, a dodge lets it fly on until it leaves x -250..250.
- * Then it is hidden and unit work 1 goes up by one.
+ * Then it is hidden and UNIT_WORK_FIRE_DONE goes up by one.
  */
 EVT_BEGIN(fire_move_event)
     // The fireball leaves the Bro's hand with the throw sound, spinning.
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, LW(15), STRING("BRO_A_1B"))
-    CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(15), 15, 0)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, LW(15), STRING("BRO_A_1B"))
+    CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, 0)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(1), 15)
+
     // It starts at the Bro's side and rolls toward the target.
-    CALL(btlevtcmd_SetPartsPos, BTL_UNIT_SELF, LW(15), LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, LW(15), 0, 0, -180)
-    CALL(btlevtcmd_SetPartsRotateOffset, BTL_UNIT_SELF, LW(15), 0, 0, 0)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_SetPartsPos, UNIT_ID_SELF, LW(15), LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, LW(15), 0, 0, -180)
+    CALL(btlevtcmd_SetPartsRotateOffset, UNIT_ID_SELF, LW(15), 0, 0, 0)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(9), LW(10), LW(11))
     SUBTRACT(LW(9), LW(0))
     SET_VALUE(LW(10), 0)
     BEGIN_SIBLING_EVENT
         LOOP(0)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_GetPartsPos, BTL_UNIT_SELF, LW(15), LW(0), LW(12), LW(13))
+            CALL(btlevtcmd_GetPartsPos, UNIT_ID_SELF, LW(15), LW(0), LW(12), LW(13))
             SWITCH(LW(10))
                 CASE_EQUAL(0)
                 CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(11), LW(12), LW(13))
@@ -614,34 +611,35 @@ EVT_BEGIN(fire_move_event)
                     END_IF
                 END_IF
                 IF_INT_EQUAL(LW(14), 0)
+
                     // When the fireball reaches the target it either hits and vanishes, or is dodged and flies on.
                     CALL_CHILD(damage_check_no_last)
                 ELSE
                     CALL_CHILD(damage_check_last)
                 END_IF
                 IF_INT_EQUAL(LW(0), 1)
-                    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-                    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+                    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+                    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
                     SET_VALUE(LW(10), 2)
                 ELSE
                     SET_VALUE(LW(10), 1)
                 END_IF
                 CASE_END
                 CASE_EQUAL(1)
-                CALL(btlevtcmd_GetPartsPos, BTL_UNIT_SELF, LW(15), LW(11), LW(12), LW(13))
+                CALL(btlevtcmd_GetPartsPos, UNIT_ID_SELF, LW(15), LW(11), LW(12), LW(13))
                 IF_INT_GREATER_OR_EQUAL(LW(11), 250)
-                    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-                    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+                    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+                    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
                     SET_VALUE(LW(10), 2)
                 END_IF
                 IF_INT_LESS_OR_EQUAL(LW(11), -250)
-                    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-                    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+                    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+                    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
                     SET_VALUE(LW(10), 2)
                 END_IF
                 CASE_END
                 CASE_EQUAL(2)
-                CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(15), 15, 1)
+                CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, 1)
                 BREAK_LOOP
                 CASE_END
             END_SWITCH
@@ -650,132 +648,135 @@ EVT_BEGIN(fire_move_event)
     BEGIN_SIBLING_EVENT
         LOOP(0)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddPartsRotate, BTL_UNIT_SELF, LW(15), 0, 0, 16)
+            CALL(btlevtcmd_AddPartsRotate, UNIT_ID_SELF, LW(15), 0, 0, 16)
         END_LOOP
     END_SIBLING_EVENT
     CALL(evt_sub_random, 1, LW(11))
     IF_INT_EQUAL(LW(11), 0)
-        CALL(btlevtcmd_GetPartsPos, BTL_UNIT_SELF, LW(15), LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_GetPartsPos, UNIT_ID_SELF, LW(15), LW(0), LW(1), LW(2))
+
         // It bounces along the floor in hops, with a bounce sound at each landing.
-        CALL(btlevtcmd_JumpPartsSetting, BTL_UNIT_SELF, LW(15), 0, 6, FLOAT(0.5996094f))
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_JumpPartsSetting, UNIT_ID_SELF, LW(15), 0, 6, FLOAT(0.5996094f))
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     ELSE
-        CALL(btlevtcmd_GetPartsPos, BTL_UNIT_SELF, LW(15), LW(0), LW(1), LW(2))
-        // The bouncing carries on until the fireball leaves the stage.
-        CALL(btlevtcmd_JumpPartsSetting, BTL_UNIT_SELF, LW(15), 0, 5, FLOAT(0.5996094f))
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_GetPartsPos, UNIT_ID_SELF, LW(15), LW(0), LW(1), LW(2))
+
+        // Or it bounces with jump speed 5 instead of 6, again at most five hops.
+        CALL(btlevtcmd_JumpPartsSetting, UNIT_ID_SELF, LW(15), 0, 5, FLOAT(0.5996094f))
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
         IF_INT_EQUAL(LW(10), 2)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-        CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 100)
-        CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
-        CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), 15, LW(10))
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 100)
+        CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(0), 0, LW(2), 0, -1)
+        CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), PARTS_WORK_DONE, LW(10))
         IF_INT_EQUAL(LW(10), 1)
             GOTO(99)
         END_IF
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_FIREB_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_IF
+
     // The fireball is hidden and the throw counts as finished.
     LABEL(99)
     WAIT_FRAMES(6)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
-    CALL(btlevtcmd_AddUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, 1)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
+    CALL(btlevtcmd_AddUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, 1)
     RETURN
 EVT_END()
 
 /**
  * The Fire Bro's single fireball (weapon_fire_bros_attack):
  * picks a target, plays BRO_A_1A, starts fire_move_event for one fireball (LW(15) = 2 is the first fireball
- * part) and waits until it has landed (unit work 1).
+ * part) and waits until it has landed (UNIT_WORK_FIRE_DONE).
  */
 static EVT_BEGIN(normal_attack_event)
-    CALL(btlevtcmd_check_battleflag, LW(0), 2)
+    CALL(btlevtcmd_check_battleflag, LW(0), BATTLE_FLAG_FIRST_ATTACK)
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL(btlevtcmd_GetFirstAttackTarget, LW(3), LW(4))
     ELSE
-        CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-        CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_fire_bros_attack))
+        CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+        CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_fire_bros_attack))
         CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_fire_bros_attack), LW(3), LW(4))
     END_IF
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_fire_bros_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_fire_bros_attack))
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("BRO_A_1A"))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_fire_bros_attack))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, 0)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("BRO_A_1A"))
     WAIT_FRAMES(40)
     SET_VALUE(LW(15), 2)
     SET_VALUE(LW(14), 1)
@@ -784,44 +785,44 @@ static EVT_BEGIN(normal_attack_event)
     SPAWN_EVENT(fire_move_event)
     LOOP(0)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, LW(0))
         IF_INT_GREATER_OR_EQUAL(LW(0), 1)
             BREAK_LOOP
         END_IF
     END_LOOP
     WAIT_FRAMES(20)
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
  * The Fire Bro's double throw (weapon_fire_bros_renzoku_attack): picks a target, then throws twice (BRO_A_2A),
  * starting fire_move_event for fireball parts 2 and 3, the second as the last hit, and waits until both are done
- * (unit work 1 reaches 2).
+ * (UNIT_WORK_FIRE_DONE reaches 2).
  */
 static EVT_BEGIN(renzoku_attack_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_fire_bros_renzoku_attack))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_fire_bros_renzoku_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_fire_bros_renzoku_attack), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_fire_bros_renzoku_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_fire_bros_renzoku_attack))
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, 0)
-    CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, 2, 10, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("BRO_A_2A"))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_fire_bros_renzoku_attack))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, 0)
+    CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, 2, PARTS_WORK_HIT, 0)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("BRO_A_2A"))
     WAIT_FRAMES(20)
     SET_VALUE(LW(15), 2)
     SET_VALUE(LW(14), 0)
@@ -829,7 +830,7 @@ static EVT_BEGIN(renzoku_attack_event)
     SET_VALUE(LW(8), 0)
     SPAWN_EVENT(fire_move_event)
     WAIT_FRAMES(12)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("BRO_A_2A"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("BRO_A_2A"))
     WAIT_FRAMES(20)
     SET_VALUE(LW(15), 3)
     SET_VALUE(LW(14), 1)
@@ -838,14 +839,14 @@ static EVT_BEGIN(renzoku_attack_event)
     SPAWN_EVENT(fire_move_event)
     LOOP(0)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, LW(0))
         IF_INT_GREATER_OR_EQUAL(LW(0), 2)
             BREAK_LOOP
         END_IF
     END_LOOP
     WAIT_FRAMES(20)
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -853,66 +854,68 @@ EVT_END()
  * The Fire Bro's barrage (weapon_fire_bros_nagemakuri_attack): it declares the attack on all targets and gives
  * each fireball part (2 to 7) five random targets (fire_bros_nagemakuri_set_target) in its parts work, of which
  * only the first is used.
- * It then throws the six fireballs 15 frames apart with BRO_A_2A, turning toward each one's target
- * (nagemakuri_judge_last_attack_event decides the last hits), and finishes once all six are done (unit work 1
+ * It then throws the six fireballs 35 frames apart with BRO_A_2A, turning toward each one's target
+ * (nagemakuri_judge_last_attack_event decides the last hits), and finishes once all six are done (UNIT_WORK_FIRE_DONE
  * reaches 6).
  */
 static EVT_BEGIN(nagemakuri_attack_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+
     // The Fire Bro picks his targets; with none, he ends the turn (or flusters when confused).
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_fire_bros_nagemakuri_attack))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_fire_bros_nagemakuri_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_fire_bros_nagemakuri_attack), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_fire_bros_nagemakuri_attack))
+
     // The attack is declared on every target and its cost paid.
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_fire_bros_nagemakuri_attack))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_fire_bros_nagemakuri_attack))
     SET_VALUE(LW(10), 2)
     LOOP(0)
         IF_INT_GREATER(LW(10), 7)
             BREAK_LOOP
         END_IF
         CALL(fire_bros_nagemakuri_set_target, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7), LW(8), LW(9))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 0, LW(0))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 1, LW(2))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 2, LW(4))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 3, LW(6))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 4, LW(8))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 5, LW(1))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 6, LW(3))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 7, LW(5))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 8, LW(7))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 9, LW(9))
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 10, 0)
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 11, 0)
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 12, 0)
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 13, 0)
-        CALL(btlevtcmd_SetPartsWork, BTL_UNIT_SELF, LW(10), 14, 0)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET, LW(0))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET + 1, LW(2))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET + 2, LW(4))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET + 3, LW(6))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET + 4, LW(8))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET_PART, LW(1))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET_PART + 1, LW(3))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET_PART + 2, LW(5))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET_PART + 3, LW(7))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_TARGET_PART + 4, LW(9))
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_HIT, 0)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_HIT + 1, 0)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_HIT + 2, 0)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_HIT + 3, 0)
+        CALL(btlevtcmd_SetPartsWork, UNIT_ID_SELF, LW(10), PARTS_WORK_HIT + 4, 0)
         ADD(LW(10), 1)
     END_LOOP
     WAIT_FRAMES(12)
     SET_VALUE(LW(10), 0)
     SET_VALUE(LW(11), 5)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_THROWN, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_THROWN, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, 0)
     LOOP(0)
         SET_VALUE(LW(15), 2)
         LOOP(0)
-            CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_THROWN, LW(1))
+            CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_THROWN, LW(1))
             IF_INT_GREATER_OR_EQUAL(LW(1), 6)
                 LOOP(0)
                     WAIT_FRAMES(1)
-                    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_THROWN, LW(1))
-                    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, LW(2))
+                    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_THROWN, LW(1))
+                    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, LW(2))
                     SUBTRACT(LW(1), 6)
                     IF_INT_GREATER(LW(2), LW(1))
                         WAIT_FRAMES(3)
@@ -920,18 +923,19 @@ static EVT_BEGIN(nagemakuri_attack_event)
                     END_IF
                 END_LOOP
             END_IF
-            // He turns toward each fireball's target and throws it, one every 15 frames.
-            CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("BRO_A_2A"))
+
+            // He turns toward each fireball's target and throws it, one every 35 frames.
+            CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("BRO_A_2A"))
             WAIT_FRAMES(20)
-            CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), LW(10), LW(3))
-            CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(15), LW(11), LW(4))
-            CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(14))
-            CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(14))
+            CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), LW(10), LW(3))
+            CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(15), LW(11), LW(4))
+            CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(14))
+            CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(14))
             CALL_CHILD(nagemakuri_judge_last_attack_event)
             SET_VALUE(LW(6), PTR(&weapon_fire_bros_nagemakuri_attack))
             SET_VALUE(LW(8), 1)
             SPAWN_EVENT(fire_move_event)
-            CALL(btlevtcmd_AddUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_THROWN, 1)
+            CALL(btlevtcmd_AddUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_THROWN, 1)
             WAIT_FRAMES(15)
             ADD(LW(15), 1)
             IF_INT_GREATER(LW(15), 7)
@@ -944,17 +948,19 @@ static EVT_BEGIN(nagemakuri_attack_event)
             BREAK_LOOP
         END_IF
     END_LOOP
+
+    // After the last fireball he waits for them all to land.
     LOOP(0)
         WAIT_FRAMES(1)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_FIRE_BROS_FINISHED, LW(0))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_FIRE_DONE, LW(0))
         IF_INT_GREATER_OR_EQUAL(LW(0), 6)
             BREAK_LOOP
         END_IF
     END_LOOP
     WAIT_FRAMES(30)
-    // After the last fireball he waits for them all to land.
+
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -977,8 +983,8 @@ EVT_BEGIN(nagemakuri_judge_last_attack_event)
                 SET_VALUE(LW(13), 2)
                 BREAK_LOOP
             END_IF
-            CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(13), LW(0), LW(5))
-            CALL(btlevtcmd_GetPartsWork, BTL_UNIT_SELF, LW(13), LW(1), LW(6))
+            CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(13), LW(0), LW(5))
+            CALL(btlevtcmd_GetPartsWork, UNIT_ID_SELF, LW(13), LW(1), LW(6))
             IF_INT_EQUAL(LW(3), LW(5))
                 IF_INT_EQUAL(LW(4), LW(6))
                     SET_VALUE(LW(14), 0)
@@ -996,6 +1002,6 @@ EVT_END()
 
 /** Idle script: sets the standard waiting pose from the unit's pose table. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()

@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: four spinning wind bands around a Mario target, used in battle; `life` sets the duration.
+
 #include "mario/mario.h"
 #include "eff/eff_n64.h"
 #include "eff/n64/eff_whirlwind_n64.h"
@@ -14,12 +15,21 @@
  * Colours a wind band can take (white, red or blue), as red, green and blue tables;
  * the type picks one per band.
  */
-u8 col_r[3] = {0xFF, 0xFF, 0x40};
-u8 col_g[3] = {0xFF, 0x40, 0x40};
-u8 col_b[3] = {0xFF, 0x40, 0xFF};
+static u8 col_r[3] = {0xFF, 0xFF, 0x40};
+static u8 col_g[3] = {0xFF, 0x40, 0x40};
+static u8 col_b[3] = {0xFF, 0x40, 0xFF};
+
+// Stripped: nothing reads it (JP demo map: UNUSED, 0x24, first in this file's .data). Every 0x24 color_rotation_data
+// table of the other effects (eff_damage_star, eff_kiss, eff_recovery, eff_onpu_n64, eff_peach_dust_n64, ...) holds
+// these twelve colours, so this one takes them.
+static u8 color_rotation_data[] = {
+    0xFE, 0xAC, 0xAC, 0xFE, 0xAC, 0xD5, 0xFE, 0xB4, 0x9A, 0xD5, 0xB4, 0xFE,
+    0xB4, 0xB4, 0xFE, 0xB4, 0xDD, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5,
+    0xB4, 0xFE, 0xB4, 0xD5, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5, 0xAC,
+};
 
 /** The wind band mesh: a thin curved strip that wraps around the centre, drawn once for each band. */
-effN64Vtx eff_whirlwind_v[] = {
+static effN64Vtx eff_whirlwind_v[] = {
     {-5, -2, 9, 939, 0, 0xFF, 0xFF, 0xFF, 0xFF},
     {-5, 2, 9, 939, 512, 0xFF, 0xFF, 0xFF, 0xFF},
     {-9, 2, 5, 853, 512, 0xFF, 0xFF, 0xFF, 0xFF},
@@ -49,14 +59,14 @@ effN64Vtx eff_whirlwind_v[] = {
 };
 
 static void effWhirlwindMain(EffectEntry* effect);
-static void effWhirlwindDisp(CameraId cameraId, EffectEntry* effect);
+static void effWhirlwindDisp(CameraId cameraId, void* param);
 
 /**
- * Spawns four wind bands around a Mario work target for `life` frames; type is nonzero when facing left.
- * Used by battle_mario, battle_event_subset and event scripts.
+ * Spawns four wind bands around a Mario work target (may be NULL) for `life` frames. Odd types spin the other
+ * way, types 2-7 pick the band colours, other types (8) tumble. Used by battle_mario and battle_event_subset
+ * (target NULL, type 1 when the unit faces left) and event scripts.
  */
 EffectEntry* effWhirlwindN64Entry(s32 type, MarioWork* target, f32 scale, s32 life) {
-    f32 quarter;
     EffectEntry* effect;
     EffWhirlwindN64Work* work;
     s32 i;
@@ -119,8 +129,8 @@ EffectEntry* effWhirlwindN64Entry(s32 type, MarioWork* target, f32 scale, s32 li
                 work->vel.x = (rand() % 2 * 2 - 1) * 4;
                 work->vel.y = 0.0f;
                 work->vel.z = (rand() % 2 * 2 - 1) * 4;
-                quarter = 0.25f;
-                work->scale = 0.5f + 0.5f * ((f32)(i - 1) * quarter);
+
+                work->scale = 0.5f + 0.5f * ((f32)(i - 1) / 4.0f);
                 work->rot.x = 25 * i;
                 work->rot.y = (i - 1) * 360 / 4;
                 work->rot.z = 360 - 38 * i;
@@ -151,7 +161,7 @@ EffectEntry* effWhirlwindN64Entry(s32 type, MarioWork* target, f32 scale, s32 li
 }
 
 /**
- * Follows the target's position each frame.
+ * Follows the target's position each frame when a target is set.
  * Type 8: alpha eases to 255, size shrinks with the remaining life and it fades over the last 10 frames,
  * while each band tumbles and alternate bands spin opposite ways (40 degrees per frame).
  * Other types: alpha eases to 100, the bands spin about Y, and over the last 10 frames they fade 20% per frame,
@@ -225,7 +235,7 @@ static void effWhirlwindMain(EffectEntry* effect) {
                 break;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effWhirlwindDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effWhirlwindDisp, effect);
 }
 
 /**
@@ -233,7 +243,8 @@ static void effWhirlwindMain(EffectEntry* effect) {
  * set out from the centre (types below 8 pull in as they widen) and turned by its rotations,
  * around the camera-facing centre.
  */
-static void effWhirlwindDisp(CameraId cameraId, EffectEntry* effect) {
+static void effWhirlwindDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffWhirlwindN64Work* work;
     s32 i;
@@ -293,8 +304,8 @@ static void effWhirlwindDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTXConcat(rot, mtx, mtx);
         }
         PSMTXConcat(viewMtx, mtx, mtx);
-        GXLoadPosMtxImm(mtx, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(mtx, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXSetTevColor(GX_TEVREG0, (GXColor){work->r, work->g, work->b, alpha});
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 72);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);

@@ -1,3 +1,5 @@
+#include "trk.h"
+
 typedef int BOOL;
 typedef int DSError;
 
@@ -19,13 +21,21 @@ void TRKGetInput(void);
 BOOL TRKTargetStopped(void);
 DSError TRKTargetContinue(void);
 
-/**
- * The stub's event loop: takes events off the queue and handles them (type 2 message goes to TRKDispatchMessage,
- * 1 shuts the loop down, 3 and 4 are CPU interrupts for TRKTargetInterrupt, 5 is a game file-support request).
- * With the queue empty it polls the host link for a packet, and resumes the game if it is not stopped.
- */
+void TRKHandleRequestEvent(TRKEvent* event) {
+    void* buffer = TRKGetBuffer(event->msgBufID);
+    TRKDispatchMessage(buffer);
+}
+
+void TRKHandleSupportEvent(TRKEvent* event) {
+    TRKTargetSupportRequest();
+}
+
+void TRKIdle(void) {
+    if (TRKTargetStopped() == 0)
+        TRKTargetContinue();
+}
+
 void TRKNubMainLoop(void) {
-    void* msg;
     TRKEvent event;
     BOOL isShutdownRequested = 0;
     BOOL isNewInput = 0;
@@ -35,21 +45,20 @@ void TRKNubMainLoop(void) {
             isNewInput = 0;
 
             switch (event.eventType) {
-            case 0:
+            case TRK_EVENT_NULL:
                 break;
-            case 2:
-                msg = TRKGetBuffer(event.msgBufID);
-                TRKDispatchMessage(msg);
+            case TRK_EVENT_REQUEST:
+                TRKHandleRequestEvent(&event);
                 break;
-            case 1:
+            case TRK_EVENT_SHUTDOWN:
                 isShutdownRequested = 1;
                 break;
-            case 3:
-            case 4:
+            case TRK_EVENT_BREAKPOINT:
+            case TRK_EVENT_EXCEPTION:
                 TRKTargetInterrupt(&event);
                 break;
-            case 5:
-                TRKTargetSupportRequest();
+            case TRK_EVENT_SUPPORT:
+                TRKHandleSupportEvent(&event);
                 break;
             }
 
@@ -57,15 +66,14 @@ void TRKNubMainLoop(void) {
             continue;
         }
 
+        // gTRKInputPendingPtr points at the comm driver's input-pending byte (set in TRKInitializeNub)
         if ((isNewInput == 0) || (*(unsigned char*)gTRKInputPendingPtr != '\0')) {
             isNewInput = 1;
             TRKGetInput();
             continue;
         }
 
-        if (TRKTargetStopped() == 0)
-            TRKTargetContinue();
-
+        TRKIdle();
         isNewInput = 0;
     }
 }

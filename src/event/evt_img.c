@@ -1,5 +1,5 @@
 // Script commands for 2D images and pictures (imgdrv).
-#include "evt/evt_img.h"
+
 #include "driver/animdrv.h"
 #include "driver/imgdrv.h"
 #include "driver/offscreendrv.h"
@@ -8,6 +8,7 @@
 #include "manager/evtmgr_cmd.h"
 #include <dolphin/gx.h>
 #include "sdk/DEMOInit.h"
+#include "driver/mapdrv.h"
 
 /** Creates an image entry named args[0] in the field or battle image list. */
 USER_FUNC(evt_img_entry) {
@@ -36,7 +37,7 @@ USER_FUNC(evt_img_set_paper) {
     ImageEntry* img = imgNameToPtr(name, group);
     img->poseId = animPaperPoseGetId(anim, group);
     img->animTime = animTimeGetTime(group);
-    animPoseSetMaterialFlagOn(img->poseId, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+    animPoseSetMaterialFlagOn(img->poseId, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);
     return EVT_RETURN_DONE;
 }
 
@@ -78,7 +79,7 @@ USER_FUNC(evt_img_alloc_capture) {
     } else {
         offId = -1;
     }
-    if (sh->flags & IMG_SHADOW_USED) {
+    if (sh->flags & IMG_SHADOW_ACTIVE) {
         return EVT_RETURN_DONE;
     }
     x -= x & 1;
@@ -86,7 +87,7 @@ USER_FUNC(evt_img_alloc_capture) {
     w += w & 1;
     h += h & 1;
     for (i = 0; i < 3; i++) {
-        if (i != shadowId && (img->shadows[i].flags & IMG_SHADOW_USED) && (img->width != (u16)w || img->height != (u16)h)) {
+        if (i != shadowId && (img->shadows[i].flags & IMG_SHADOW_ACTIVE) && (img->width != (u16)w || img->height != (u16)h)) {
             return EVT_RETURN_DONE;
         }
     }
@@ -96,13 +97,13 @@ USER_FUNC(evt_img_alloc_capture) {
         sh->x = 0;
         sh->y = 0;
         if (shadowId == 2) {
-            sh->copyFmt = 39;
-            sh->texFmt = 1;
+            sh->copyFmt = GX_CTF_A8;
+            sh->texFmt = GX_TF_I8;
         } else {
-            sh->copyFmt = 6;
-            sh->texFmt = 6;
+            sh->copyFmt = GX_TF_RGBA8;
+            sh->texFmt = GX_TF_RGBA8;
         }
-        img->flags |= IMG_FLAG_OFFSCREEN_RECT;
+        img->flags |= IMAGE_FLAG_OFFSCREEN_RECT;
     } else {
         if (x < 0 || y < 0 || w <= 0 || h <= 0 ||
             x + w > DEMOGetRenderModeObj()->fbWidth || y + h > DEMOGetRenderModeObj()->efbHeight) {
@@ -113,18 +114,18 @@ USER_FUNC(evt_img_alloc_capture) {
         sh->x = x;
         sh->y = y;
         if (shadowId == 2) {
-            sh->copyFmt = 39;
-            sh->texFmt = 1;
+            sh->copyFmt = GX_CTF_A8;
+            sh->texFmt = GX_TF_I8;
         } else {
-            sh->copyFmt = 6;
-            sh->texFmt = 6;
+            sh->copyFmt = GX_TF_RGBA8;
+            sh->texFmt = GX_TF_RGBA8;
         }
     }
     sh->offscreenId = offId;
-    sh->flags = IMG_SHADOW_USED | IMG_SHADOW_PENDING;
+    sh->flags = IMG_SHADOW_ACTIVE | IMG_SHADOW_PENDING;
     sh->allocMode = allocMode;
     if (allocMode != 0) {
-        sh->flags |= IMG_SHADOW_COPY_ONCE;
+        sh->flags |= IMG_SHADOW_COPY_PENDING;
     }
     return EVT_RETURN_DONE;
 }
@@ -138,16 +139,16 @@ USER_FUNC(evt_img_free_capture) {
     return EVT_RETURN_DONE;
 }
 
-/** Shows (args[1] nonzero) or hides image args[0] by clearing or setting IMG_FLAG_HIDDEN. */
+/** Shows (args[1] nonzero) or hides the image named args[0] by clearing or setting IMAGE_FLAG_HIDE. */
 USER_FUNC(evt_img_onoff) {
     EvtWord* args = event->args;
     const char* name = (const char*)evtGetValue(event, args[0]);
     s32 on = evtGetValue(event, args[1]);
     ImageEntry* img = imgNameToPtr(name, gp->inBattle != 0);
     if (on != 0) {
-        img->flags &= ~IMG_FLAG_HIDDEN;
+        img->flags &= ~IMAGE_FLAG_HIDE;
     } else {
-        img->flags |= IMG_FLAG_HIDDEN;
+        img->flags |= IMAGE_FLAG_HIDE;
     }
     return EVT_RETURN_DONE;
 }
@@ -160,13 +161,16 @@ USER_FUNC(evt_img_set_virtual_point) {
     f32 y = evtGetFloat(event, args[2]);
     f32 z = evtGetFloat(event, args[3]);
     ImageEntry* img = imgNameToPtr(name, gp->inBattle != 0);
-    Vec tmp;
-    Vec pos = {0.0f, 0.0f, 0.0f};
-    pos.x = x;
-    pos.y = y;
-    pos.z = z;
-    tmp = pos;
-    imgSetVirtualPoint(img, &tmp);
+    Vec point;
+
+    {
+        Vec pos = {0.0f, 0.0f, 0.0f};
+        pos.x = x;
+        pos.y = y;
+        pos.z = z;
+        point = pos;
+    }
+    imgSetVirtualPoint(img, &point);
     return EVT_RETURN_DONE;
 }
 
@@ -180,6 +184,16 @@ USER_FUNC(evt_img_clear_virtual_point) {
 USER_FUNC(evt_img_release) {
     ImageEntry* img = imgNameToPtr((const char*)evtGetValue(event, event->args[0]), gp->inBattle != 0);
     imgRelease(img, gp->inBattle != 0);
+    return EVT_RETURN_DONE;
+}
+
+/** Writes how many times image args[0]'s animation has played through (whole loops) to args[1]. */
+// Original name and size (0x70) from the JP demo map (UNUSED there: no script uses it), at this slot between
+// evt_img_release and evt_img_wait_animend. Body: their image lookup and wait_animend's loopTimes. The size picks
+// the integer write (evtSetValue, 0x70) over evtSetFloat (0x64).
+USER_FUNC(evt_img_get_loop_times) {
+    ImageEntry* img = imgNameToPtr((const char*)evtGetValue(event, event->args[0]), gp->inBattle != 0);
+    evtSetValue(event, event->args[1], (s32)img->loopTimes);
     return EVT_RETURN_DONE;
 }
 
@@ -223,13 +237,13 @@ USER_FUNC(evt_img_set_color) {
     u8 b = evtGetValue(event, args[3]);
     u8 a = evtGetValue(event, args[4]);
     ImageEntry* img = imgNameToPtr(name, gp->inBattle != 0);
-    animPoseSetMaterialFlagOn(img->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(img->poseId, MAP_OBJ_FLAG_COLOR);
     animPoseSetMaterialEvtColor(img->poseId, (GXColor){r, g, b, a});
     return EVT_RETURN_DONE;
 }
 
-/** Sets the draw order value of image args[0] to the float args[1]. */
-USER_FUNC(N_evt_img_set_z) {
+/** Sets the draw order value of image args[0] to the float args[1]. Descriptive name (not in the symbol maps). */
+USER_FUNC(evt_img_set_z) {
     EvtWord* args = event->args;
     const char* name = (const char*)evtGetValue(event, args[0]);
     f32 z = evtGetFloat(event, args[1]);

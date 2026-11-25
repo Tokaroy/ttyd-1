@@ -2,7 +2,10 @@
 // a map TEV callback (gra.rel and jin.rel have the same code).
 
 #include "battle/battle_unit.h"
+#include "usu.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_party.h"
 
 #include "mario/mario.h"
 #include "driver/mapdrv.h"
@@ -10,15 +13,16 @@
 #include "driver/animdrv.h"
 #include "party.h"
 #include "driver/swdrv.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_party.h"
-#include "usu.h"
-#include "evt/evt_story.h"
 
 static void callback(MapTevCallbackInfo* info);
 static s32 color_change_evt(s32 on);
 
+static USER_FUNC(check);
+static USER_FUNC(test);
+USER_FUNC(evt_kagemario_change);
+
 static EvtWord evt_check[4];
+EvtWord evt_usu_kagemario_party_kill[42];
 
 /**
  * Map TEV callback 10 that draws Shadow Mario: appends a TEV stage that outputs a flat color,
@@ -26,8 +30,8 @@ static EvtWord evt_check[4];
  */
 static void callback(MapTevCallbackInfo* info) {
     s32 stage = info->tevStage;
-    s32 texCoord = info->texCoord;
     s32 texMap = info->texMap;
+    s32 texCoord = info->texCoord;
     s32 indStage = info->indStage;
 
     if (marioGetPtr()->flags & MARIO_FLAG_BG_MODE) {
@@ -44,9 +48,9 @@ static void callback(MapTevCallbackInfo* info) {
     GXSetTevAlphaIn(stage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
     GXSetTevSwapMode(stage, GX_TEV_SWAP0, GX_TEV_SWAP0);
     info->tevStage = stage + 1;
-    info->texMap = texMap;
-    info->indStage = indStage;
     info->texCoord = texCoord;
+    info->indStage = indStage;
+    info->texMap = texMap;
 }
 
 /**
@@ -59,13 +63,13 @@ static s32 color_change_evt(s32 on) {
 
     if (on == 0) {
         for (i = 0; i < 3; i++) {
-            animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[i], ANIM_MATERIAL_TEV_CALLBACK(10));
+            animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[i], MAP_OBJ_TEV_CALLBACK(10));
         }
         marioGetPtr()->flags &= ~MARIO_FLAG_IS_SHADOW_MARIO;
     } else {
         mapSetTevCallback(10, callback);
         for (i = 0; i < 3; i++) {
-            animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[i], ANIM_MATERIAL_TEV_CALLBACK(10));
+            animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[i], MAP_OBJ_TEV_CALLBACK(10));
         }
         marioGetPtr()->flags |= MARIO_FLAG_IS_SHADOW_MARIO;
     }
@@ -73,12 +77,12 @@ static s32 color_change_evt(s32 on) {
 }
 
 /**
- * Script helper that blocks forever after clearing the Shadow Mario tint from the active partner's pose,
- * so the partner is not drawn dark.
+ * Script helper that never finishes: on every call (each frame) it clears the Shadow Mario tint from the active
+ * partner's pose, so the partner is not drawn dark.
  */
 static USER_FUNC(check) {
-    if (partyGetPtr(0) != NULL) {
-        animPoseSetMaterialFlagOff(partyGetPtr(0)->paperAnimGroup, ANIM_MATERIAL_TEV_CALLBACK(10));
+    if (partyGetPtr(PARTY_SLOT_PARTY) != NULL) {
+        animPoseSetMaterialFlagOff(partyGetPtr(PARTY_SLOT_PARTY)->paperAnimGroup, MAP_OBJ_TEV_CALLBACK(10));
     }
     return EVT_RETURN_BLOCK;
 }
@@ -88,9 +92,9 @@ static USER_FUNC(check) {
  * name) it turns Shadow Mario on and starts the partner-tint cleaner, otherwise it turns it off.
  */
 USER_FUNC(evt_kagemario_init) {
-    s32 sequence = swByteGet(GSW_STORY_PROGRESS);
+    s32 sequence = swByteGet(GSW_ID(GSW_STORY_PROGRESS));
 
-    if (sequence >= 201 && sequence < 212) {
+    if (sequence >= STG4_10_02_TRADING_PLACES && sequence < STG4_15_02_BACK_TO_NORMAL) {
         color_change_evt(1);
         evtEntry(evt_check, 0, 0);
     } else {
@@ -100,7 +104,7 @@ USER_FUNC(evt_kagemario_init) {
 }
 
 /** Script helper: turns the Shadow Mario look on or off from args[0]. */
-static USER_FUNC(evt_kagemario_change) {
+USER_FUNC(evt_kagemario_change) {
     color_change_evt(event->args[0]);
     return EVT_RETURN_DONE;
 }
@@ -110,8 +114,8 @@ static USER_FUNC(evt_kagemario_change) {
  * so no partner is called back afterwards.
  */
 static USER_FUNC(test) {
-    marioGetPtr()->prevPartyMemberId[0] = 0;
-    marioGetPtr()->prevPartyMemberId[1] = 0;
+    marioGetPtr()->prevPartyMemberId[PARTY_SLOT_PARTY] = PARTY_NONE;
+    marioGetPtr()->prevPartyMemberId[PARTY_SLOT_FOLLOWER] = PARTY_NONE;
     return EVT_RETURN_DONE;
 }
 
@@ -125,13 +129,13 @@ static EVT_BEGIN(evt_check)
 EVT_END()
 
 /**
- * Between STORY_STG4_10_02_TRADING_PLACES and STORY_STG4_12_01_SUPERBOMBBOMB_FOUND (Mario has swapped places
+ * Between STG4_10_02_TRADING_PLACES and STG4_12_01_SUPERBOMBBOMB_FOUND (Mario has swapped places
  * with Doopliss) it removes both partner slots:
  * stops them, moves them out of the map, disables control and clears them from the party.
  */
 EVT_BEGIN(evt_usu_kagemario_party_kill)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_10_02_TRADING_PLACES, STORY_STG4_12_01_SUPERBOMBBOMB_FOUND)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_10_02_TRADING_PLACES, STG4_12_01_SUPERBOMBBOMB_FOUND)
         CALL(evt_party_stop, 0)
         CALL(evt_party_set_pos, 0, 0, -1000, 0)
         CALL(evt_party_cont_onoff, 0, 0)

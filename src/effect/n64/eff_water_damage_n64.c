@@ -1,6 +1,8 @@
 // Paper Mario 64 effect: water damage: a splash of water droplets and mist at a point.
-#include "eff/n64/eff_water_damage_n64.h"
+
+#include "version.h"
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_water_damage_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -11,7 +13,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
-#include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffWaterDamageN64Work {
@@ -22,7 +24,7 @@ typedef struct EffWaterDamageN64Work {
     f32 velZ;     // 0x18
     s32 lifetime; // 0x1C
     s32 frame;    // 0x20
-    s32 r;        // 0x24, color set at entry; never read
+    s32 r;        // 0x24
     s32 g;        // 0x28
     s32 b;        // 0x2C
     s32 alpha;    // 0x30
@@ -31,21 +33,23 @@ typedef struct EffWaterDamageN64Work {
 } EffWaterDamageN64Work;
 
 /** Round 8x8 droplet quad; with the wide and tall shapes below it is cycled so each droplet wobbles. */
-effN64Vtx size8x8_tex16x16_0_vtx[] = {
+static effN64Vtx size8x8_tex16x16_0_vtx[] = {
     {-4, -4, 0, 0, 0, 0, 0, 0, 255},
     {4, -4, 0, 512, 0, 0, 0, 0, 255},
     {4, 4, 0, 512, 512, 0, 0, 0, 255},
     {-4, 4, 0, 0, 512, 0, 0, 0, 255},
 };
+
 /** Wide, squashed droplet quad used in the wobble cycle. */
-effN64Vtx size8x8_tex16x16_1_vtx[] = {
+static effN64Vtx size8x8_tex16x16_1_vtx[] = {
     {-5, -3, 0, 0, 0, 0, 0, 0, 255},
     {5, -3, 0, 512, 0, 0, 0, 0, 255},
     {5, 3, 0, 512, 512, 0, 0, 0, 255},
     {-5, 3, 0, 0, 512, 0, 0, 0, 255},
 };
+
 /** Tall, stretched droplet quad used in the wobble cycle. */
-effN64Vtx size8x8_tex16x16_2_vtx[] = {
+static effN64Vtx size8x8_tex16x16_2_vtx[] = {
     {-3, -5, 0, 0, 0, 0, 0, 0, 255},
     {3, -5, 0, 512, 0, 0, 0, 0, 255},
     {3, 5, 0, 512, 512, 0, 0, 0, 255},
@@ -63,20 +67,18 @@ u32 water_damage_tex[32] __attribute__((aligned(32))) = {
 
 static void effWaterDamageMain(EffectEntry* effect);
 static void effWaterDamageDisp(CameraId cameraId, EffectEntry* effect);
-static void effWaterDamageDisp2(CameraId cameraId, EffectEntry* effect);
+static void effWaterDamageDisp2(CameraId cameraId, void* param);
 
 /**
  * Spawns water droplets and mist at (x, y, z); type picks the splash shape.
- * Used by Mario's water code (mario_kemuri), eff_splash, eff_fall and event scripts.
+ * Used by Mario's water code (mario_kemuri), eff_splash, eff_fall, gor_00, muj_20, muj_21 and event scripts.
  */
 EffectEntry* effWaterDamageN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
-    s32 variant;
-    s32 j;
     EffectEntry* effect;
-    EffWaterDamageN64Work* p;
-    s32 i;
     EffWaterDamageN64Work* work;
     s32 count;
+    s32 i;
+    s32 variant;
     f32 a;
     MarioWork* mario;
 
@@ -106,7 +108,7 @@ EffectEntry* effWaterDamageN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z,
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffWaterDamageN64Work));
     effect->userdata = work;
     effect->callback = effWaterDamageMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -123,71 +125,71 @@ EffectEntry* effWaterDamageN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z,
     work->g = 180;
     work->b = 255;
     work->variant = variant;
-    p = work + 1;
-    for (i = 1, j = 3; i < effect->count; j += 3, i++, p++) {
-        p->position.x = 0.0f;
-        p->position.y = 0.0f;
-        p->position.z = 0.0f;
-        p->scale = 2.0f;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->scale = 2.0f;
         switch (type) {
             case 0:
-                p->velX = rand() % 11 - 2;
-                p->velY = rand() % 11 - 5;
-                p->velZ = rand() % 11 - 5;
+                work->velX = rand() % 11 - 2;
+                work->velY = rand() % 11 - 5;
+                work->velZ = rand() % 11 - 5;
                 break;
             case 1:
-                p->velX = -(rand() % 11 - 2);
-                p->velY = rand() % 11 - 5;
-                p->velZ = rand() % 11 - 5;
+                work->velX = -(rand() % 11 - 2);
+                work->velY = rand() % 11 - 5;
+                work->velZ = rand() % 11 - 5;
                 break;
             case 2:
-                p->velX = 0.07f * (rand() % 100 - 50);
-                p->velY = 0.2f * (rand() % 100 + 10);
-                p->velZ = 0.07f * (rand() % 100 - 50);
+                work->velX = 0.07f * (rand() % 100 - 50);
+                work->velY = 0.2f * (rand() % 100 + 10);
+                work->velZ = 0.07f * (rand() % 100 - 50);
                 break;
             case 3:
-                p->velX = 0.5f * (rand() % 10 - 5);
-                p->velY = 0.5f * (rand() % 10 - 5);
-                p->velZ = 0.5f * (rand() % 10 - 5);
-                p->scale = 0.4f;
-                p->lifetime = i;
+                work->velX = 0.5f * (rand() % 10 - 5);
+                work->velY = 0.5f * (rand() % 10 - 5);
+                work->velZ = 0.5f * (rand() % 10 - 5);
+                work->scale = 0.4f;
+                work->lifetime = i;
                 break;
             case 4:
-                p->velX = rand() % 7 - 3;
-                p->velY = rand() % 3 + 1;
-                p->velZ = rand() % 7 - 3;
+                work->velX = rand() % 7 - 3;
+                work->velY = rand() % 3 + 1;
+                work->velZ = rand() % 7 - 3;
                 break;
             case 5:
-                p->velX = 0.3f * (rand() % 10 - 5);
-                p->velY = 0.3f * (rand() % 10 + 5);
-                p->velZ = 0.3f * (rand() % 10 - 5);
-                p->scale = 1.0f;
-                p->lifetime = i;
+                work->velX = 0.3f * (rand() % 10 - 5);
+                work->velY = 0.3f * (rand() % 10 + 5);
+                work->velZ = 0.3f * (rand() % 10 - 5);
+                work->scale = 1.0f;
+                work->lifetime = i;
                 break;
             case 6:
                 a = 6.2831855f * i;
-                p->position.x = 10.0f * (f32)sin(a / effect->count);
-                p->position.z = 10.0f * (f32)cos(a / effect->count);
-                p->velX = p->position.x / 12.0f;
-                p->velY = 0.3f * (rand() % 5);
-                p->velZ = p->position.z / 12.0f;
-                p->scale = 1.0f;
-                p->lifetime = i;
+                work->position.x = 10.0f * (f32)sin(a / effect->count);
+                work->position.z = 10.0f * (f32)cos(a / effect->count);
+                work->velX = work->position.x / 12.0f;
+                work->velY = 0.3f * (rand() % 5);
+                work->velZ = work->position.z / 12.0f;
+                work->scale = 1.0f;
+                work->lifetime = i;
                 break;
             case 7:
             default:
                 mario = marioGetPtr();
                 a = irand(90) - 45;
-                p->position.x = (f32)sin(6.2831855f * (a + (-mario->directionView + camGetPtr(CAMERA_3D)->viewYaw)) / 360.0f);
-                p->position.z = (f32)cos(6.2831855f * (a + (-mario->directionView + camGetPtr(CAMERA_3D)->viewYaw)) / 360.0f);
-                p->velX = mario->baseSpeed * p->position.x / 2.0f;
-                p->velY = 0.1f * (rand() % 10 + 5);
-                p->velZ = mario->baseSpeed * p->position.z / 2.0f;
-                p->scale = 1.0f;
-                p->lifetime = j;
+                work->position.x = (f32)sin(6.2831855f * (a + (-mario->directionView + camGetPtr(CAMERA_3D)->viewYaw)) / 360.0f);
+                work->position.z = (f32)cos(6.2831855f * (a + (-mario->directionView + camGetPtr(CAMERA_3D)->viewYaw)) / 360.0f);
+                work->velX = mario->baseSpeed * work->position.x / 2.0f;
+                work->velY = 0.1f * (rand() % 10 + 5);
+                work->velZ = mario->baseSpeed * work->position.z / 2.0f;
+                work->scale = 1.0f;
+                work->lifetime = i * 3;
                 break;
         }
-        p->alpha = 255;
+        work->alpha = 255;
     }
     return effect;
 }
@@ -212,8 +214,8 @@ static void effWaterDamageMain(EffectEntry* effect) {
     calcPos = pos;
     type = work->type;
     variant = work->variant;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -246,36 +248,41 @@ static void effWaterDamageMain(EffectEntry* effect) {
         }
     }
     if (variant == 0) {
-        dispEntry(CAMERA_3D, dispCalcZ(&calcPos), 8, (DispCallback)effWaterDamageDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&calcPos), DISP_MODE_CUSTOM_MID, (DispCallback)effWaterDamageDisp, effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&calcPos), 8, (DispCallback)effWaterDamageDisp2, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&calcPos), DISP_MODE_CUSTOM_MID, effWaterDamageDisp2, effect);
     }
 }
 
 /**
- * Draws each droplet as a camera-facing 8x8 quad of texture 0x89 (frame cycling every two retraces) in pale cyan
- * with a refraction layer: the demos copy the screen each frame and sample it shifted by the droplet's position,
- * the retail builds use the small built-in water_damage_tex instead.
+ * Draws each droplet as a camera-facing 8x8 quad of texture 0x89 (the quad shape cycling every two retraces) in pale cyan
+ * with a refraction layer: the early demos copy the screen each frame and sample it shifted by the droplet's position,
+ * JP and later use the small built-in water_damage_tex instead.
  */
 static void effWaterDamageDisp(CameraId cameraId, EffectEntry* effect) {
     EffWaterDamageN64Work* work;
     CameraEntry* cam;
+#if VERSION >= VERSION_JP
+    s32 ix;
+#endif
     Mtx trans;
     Mtx scale;
     Mtx rot;
     Mtx mtx;
+#if VERSION >= VERSION_JP
+    s32 i;
+    s32 iy;
+    s32 alpha;
+#endif
     GXTexObj texObj;
 #if VERSION <= VERSION_DEMO_JP
     void* buffer;
-#endif
     s32 i;
     s32 alpha;
     s32 ix;
     s32 iy;
-#if VERSION <= VERSION_DEMO_JP
     s32 dx, dy;
 #endif
-
     cam = camGetPtr(cameraId);
     work = effect->userdata;
     alpha = work->alpha;
@@ -318,8 +325,7 @@ static void effWaterDamageDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetCullMode(GX_CULL_NONE);
     work++;
 #if VERSION <= VERSION_DEMO_JP
-    // the second map is a copy of the screen, shifted by each drop's position
-    buffer = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB565, GX_FALSE, 0), 4)->address;
+    buffer = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB565, GX_FALSE, 0), SMART_GROUP_TEMP_KEEP)->address;
     GXSetTexCopySrc(0, 0, 608, 480);
     GXSetTexCopyDst(304, 240, GX_TF_RGB565, GX_TRUE);
     GXCopyTex(buffer, GX_FALSE);
@@ -336,11 +342,11 @@ static void effWaterDamageDisp(CameraId cameraId, EffectEntry* effect) {
         dy = (s32)work->position.y + iy;
         dx = dx < 0 ? -(dx & 0x7F) : (dx & 0x7F);
         dy = dy > 0 ? -(dy & 0x3F) : (dy & 0x3F);
+#endif
         PSMTXScale(scale, 0.0625f, 0.0625f, 0.0f);
+#if VERSION <= VERSION_DEMO_JP
         PSMTXTrans(trans, (f32)(dx + 160) / 320.0f, (f32)(dy + 120) / 240.0f, 0.0f);
         PSMTXConcat(scale, trans, scale);
-#else
-        PSMTXScale(scale, 0.0625f, 0.0625f, 0.0f);
 #endif
         GXLoadTexMtxImm(scale, GX_TEXMTX1, GX_MTX2x4);
         PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
@@ -351,7 +357,7 @@ static void effWaterDamageDisp(CameraId cameraId, EffectEntry* effect) {
         GXSetCurrentMtx(GX_PNMTX0);
         GXSetTevColor(GX_TEVREG0, (GXColor){0xC8, 0xFF, 0xFF, alpha * work->alpha / 255});
         GXSetTevColor(GX_TEVREG1, (GXColor){0x00, 0x20, 0x20, 0x00});
-        switch (i + (gp->retraceCount >> 1) & 3) {
+        switch ((i + (gp->retraceCount >> 1)) & 3) {
             case 0:
             case 2:
                 effSetVtxDescN64(size8x8_tex16x16_0_vtx);
@@ -372,7 +378,8 @@ static void effWaterDamageDisp(CameraId cameraId, EffectEntry* effect) {
  * Plain variant of effWaterDamageDisp: the same camera-facing 8x8 droplet quads of texture 0x89 in pale cyan,
  * with no refraction layer.
  */
-static void effWaterDamageDisp2(CameraId cameraId, EffectEntry* effect) {
+static void effWaterDamageDisp2(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffWaterDamageN64Work* work;
     CameraEntry* cam;
     Mtx trans;
@@ -424,7 +431,7 @@ static void effWaterDamageDisp2(CameraId cameraId, EffectEntry* effect) {
         PSMTXConcat(trans, scale, trans);
         PSMTXConcat(mtx, trans, trans);
         GXLoadPosMtxImm(trans, GX_PNMTX0);
-        switch (i + (gp->retraceCount >> 1) & 3) {
+        switch ((i + (gp->retraceCount >> 1)) & 3) {
             case 0:
             case 2:
                 effSetVtxDescN64(size8x8_tex16x16_0_vtx);

@@ -1,22 +1,43 @@
 // gon_09 (ゴンババ, Hooktail Castle): room between gon_08 and gon_05.
-// Floating block and switch puzzle with a Star Piece and Dry Bones-type enemies.
+// Floating block and switch puzzle with a Star Piece and Dull Bones-type enemies.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "gon.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "evt/evt_item.h"
+#include "driver/npcdrv.h"
 #include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "gon.h"
 
+static EvtWord door01_close[12];
+static EvtWord door01_open[12];
+static EvtWord door02_close[12];
+static EvtWord door02_open[12];
 static BeroEntry bero_entry_data[3];
+static EvtWord init_0[37];
+
+#if VERSION >= VERSION_US
+static EvtWord main_0[465];
+#elif VERSION <= VERSION_DEMO_JP
+static EvtWord main_0[489];
+#else
+static EvtWord main_0[491];
+#endif
+
+EvtWord gon_09_init_evt[239];
 
 /**
  * Door animation callback, closing for the w_bero exit to gon_08:
@@ -101,18 +122,18 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Map-init helper for the floating block blk_0 and its switch (sw_0):
- * if the local flag LSWF(1) says the switch has been used,
+ * if the local flag LSWF_GON_09_FLOAT_BLOCK_MOVED is clear,
  * it lifts the block 200 units above its resting height.
  */
 static EVT_BEGIN(init_0)
     IF_INT_EQUAL(1, 0)
-        IF_INT_NOT_EQUAL(LSWF(1), 0)
+        IF_INT_NOT_EQUAL(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
             CALL(evt_mobj_get_y_position, STRING("blk_0"), LW(5))
             ADD_FLOAT(LW(5), FLOAT(200.0f))
             CALL(evt_mobj_set_y_position, STRING("blk_0"), LW(5))
         END_IF
     ELSE
-        IF_INT_EQUAL(LSWF(1), 0)
+        IF_INT_EQUAL(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
             CALL(evt_mobj_get_y_position, STRING("blk_0"), LW(5))
             ADD_FLOAT(LW(5), FLOAT(200.0f))
             CALL(evt_mobj_set_y_position, STRING("blk_0"), LW(5))
@@ -123,33 +144,35 @@ EVT_END()
 
 /**
  * Handler of the sw_0 switch for the floating block blk_0:
- * the camera shakes with rumble while the block rises
- * or falls 200 units (the direction follows LSWF(1), which is toggled), with block-float sounds;
- * if Mario or his partner bumps the block with the head during the move,
+ * the camera shakes (with controller rumble in JP and the early demos only) while the block rises
+ * or falls 200 units (the direction follows LSWF_GON_09_FLOAT_BLOCK_MOVED, which is toggled), with block-float sounds;
+ * if the descending block's head-contact check matches,
  * it reverses and the switch is cancelled.
  */
 static EVT_BEGIN(main_0)
 #if VERSION >= VERSION_JP
     SET_TYPE(239)
 #endif
+
     // The switch is pressed: the block stops reacting to hits while it moves.
     CALL(evt_mobj_hitevt_onoff, STRING("me"), 0)
     IF_INT_NOT_EQUAL(1, 0)
         // The block rises if it is down and falls if it is up (remembered in a room flag).
         SET_VALUE(LW(10), 0)
         IF_INT_EQUAL(1, 0)
-            IF_INT_EQUAL(LSWF(1), 0)
+            IF_INT_EQUAL(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
                 SET_VALUE(LW(10), 0)
             ELSE
                 SET_VALUE(LW(10), 1)
             END_IF
         ELSE
-            IF_INT_EQUAL(LSWF(1), 0)
+            IF_INT_EQUAL(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
                 SET_VALUE(LW(10), 1)
             ELSE
                 SET_VALUE(LW(10), 0)
             END_IF
         END_IF
+
         // Work out the target height, a fixed distance up or down, and the speed.
         IF_INT_EQUAL(LW(10), 0)
             CALL(evt_mobj_get_y_position, STRING("blk_0"), LW(2))
@@ -176,11 +199,11 @@ static EVT_BEGIN(main_0)
         BEGIN_SIBLING_EVENT
 #endif
             WAIT_FRAMES(10)
-            CALL(evt_sub_intpl_init, 11, 10, 3, 4)
+            CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 10, 3, 4)
             LABEL(0)
             CALL(evt_sub_intpl_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
-            CALL(evt_cam_shake, 4, FLOAT(0.0f), LW(0), 100)
+            CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), LW(0), 100)
             IF_INT_EQUAL(LW(1), 1)
                 GOTO(0)
             END_IF
@@ -189,6 +212,7 @@ static EVT_BEGIN(main_0)
 #else
         END_SIBLING_EVENT
 #endif
+
         // After the camera shake, the block starts to float and its movement sound plays.
         WAIT_MS(500)
         CALL(evt_mobj_get_position, STRING("blk_0"), LW(12), LW(13), LW(14))
@@ -218,14 +242,16 @@ static EVT_BEGIN(main_0)
                 CALL(evt_snd_sfxon_3d, STRING("SFX_MOBJ_BLOCK_S_FLOAT_DOWN1"), LW(12), LW(13), LW(14), LW(15))
             END_IF
         END_IF
+
+        // LW2/LW3 are the endpoints, LW4 is the current height, and LW8/LW9 are acceleration/velocity.
         SET_FLOAT_VALUE(LW(4), LW(2))
         SET_VALUE(LF(0), 0)
+
         // Each frame the block moves toward its target height.
         LOOP(0)
             // BUG: with no partner out the head test uses the bare mobj name, but mobj hit objects are
             // named "MOBJ_" + name, so it never matches; with a partner it tests LW(7), which nothing sets,
-            // instead of the partner's head object. Fix: test "MOBJ_" + name, and fill LW(7) with
-            // evt_party_get_name_hitobj_head.
+            // instead of the partner's head object.
             CALL(evt_mario_get_party, LW(5))
             IF_INT_EQUAL(LW(5), 0)
                 CALL(evt_mario_get_name_hitobj_head, LW(6))
@@ -243,6 +269,8 @@ static EVT_BEGIN(main_0)
             END_IF
             GOTO(2)
             LABEL(1)
+
+            // A head-contact match while descending reverses the endpoints and cancels the switch event.
             // If a falling block lands on Mario or his partner it turns around and rises again, and the switch
             // is cancelled.
             IF_INT_EQUAL(LW(10), 1)
@@ -252,10 +280,10 @@ static EVT_BEGIN(main_0)
                 SET_FLOAT_VALUE(LW(9), FLOAT(2.0f))
                 SET_FLOAT_VALUE(LW(8), 0)
                 SET_FLOAT_VALUE(LW(10), 0)
-                IF_INT_EQUAL(LSWF(1), 0)
-                    SET_VALUE(LSWF(1), 1)
+                IF_INT_EQUAL(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
+                    SET_VALUE(LSWF_GON_09_FLOAT_BLOCK_MOVED, 1)
                 ELSE
-                    SET_VALUE(LSWF(1), 0)
+                    SET_VALUE(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
                 END_IF
                 CALL(evt_mobj_exec_cancel, STRING("sw_0"))
             END_IF
@@ -288,6 +316,7 @@ static EVT_BEGIN(main_0)
             // The block has arrived: the moving sound stops.
             CALL(evt_snd_sfxoff, LW(15))
         END_IF
+
         // The landing thud plays for a block that came down.
         BEGIN_INLINE_EVENT
             CALL(evt_mobj_get_position, STRING("blk_0"), LW(13), LW(14), LW(15))
@@ -306,6 +335,7 @@ static EVT_BEGIN(main_0)
                 CALL(evt_snd_sfxon_3d, STRING("SFX_MOBJ_BLOCK_B_FLOAT_STOP1"), LW(13), LW(14), LW(15), 0)
             END_IF
         END_INLINE_EVENT
+
         // A block that came down shakes the camera again and the scene waits a moment.
         IF_INT_EQUAL(LW(10), 1)
 #if VERSION >= VERSION_US
@@ -318,11 +348,11 @@ static EVT_BEGIN(main_0)
             END_SIBLING_EVENT
             BEGIN_SIBLING_EVENT
 #endif
-                CALL(evt_sub_intpl_init, 11, 10, 3, 10)
+                CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 10, 3, 10)
                 LABEL(2)
                 CALL(evt_sub_intpl_get_value)
                 DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
-                CALL(evt_cam_shake, 4, FLOAT(0.0f), LW(0), 100)
+                CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), LW(0), 100)
                 IF_INT_EQUAL(LW(1), 1)
                     GOTO(2)
                 END_IF
@@ -333,11 +363,12 @@ static EVT_BEGIN(main_0)
 #endif
             WAIT_MS(1000)
         END_IF
+
         // Remember the block's new position for the next press.
-        IF_INT_EQUAL(LSWF(1), 0)
-            SET_VALUE(LSWF(1), 1)
+        IF_INT_EQUAL(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
+            SET_VALUE(LSWF_GON_09_FLOAT_BLOCK_MOVED, 1)
         ELSE
-            SET_VALUE(LSWF(1), 0)
+            SET_VALUE(LSWF_GON_09_FLOAT_BLOCK_MOVED, 0)
         END_IF
     ELSE
         // Unused: cancel the switch and wait a few frames.
@@ -358,59 +389,59 @@ static EVT_BEGIN(main_0)
 EVT_END()
 
 /**
- * Map init for gon_09: sets up the doors, four dormant Dry Bones,
+ * Map init for gon_09: sets up the doors, four dormant Dull Bones,
  * the Star Piece and the floating block (blk_0) with its switch (sw_0).
  */
 EVT_BEGIN(gon_09_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_GON1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_GON1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_GON1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_GON1"))
     CALL(evt_snd_set_rev_mode, 2)
-    CALL(evt_npc_change_fbat_mode, 1)
-    CALL(evt_npc_entry, STRING("\"カロン00\""), STRING("c_karon_g"))
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
+    CALL(evt_npc_entry, STRING("\"カロン00\""), STRING("c_karon_g")) // a Dull Bones lying as a bone pile
     CALL(evt_npc_set_position, STRING("\"カロン00\""), -482, 0, 79)
     CALL(evt_npc_set_rotate, STRING("\"カロン00\""), 0, 0, 0)
     CALL(evt_npc_set_anim, STRING("\"カロン00\""), STRING("KRN_Z_2"))
     CALL(evt_npc_pera_onoff, STRING("\"カロン00\""), 0)
-    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン00\""), NPC_FLAG_NO_AUTO_UPDATE)
-    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン00\""), NPC_FLAG_NO_BILLBOARD)
+    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン00\""), NPC_FLAG_UPDATE_BY_EVENT)
+    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン00\""), NPC_FLAG_NO_VIEW_CORRECTION)
     CALL(evt_npc_set_width, STRING("\"カロン00\""), 30)
     CALL(evt_npc_set_height, STRING("\"カロン00\""), 7)
-    CALL(evt_npc_entry, STRING("\"カロン01\""), STRING("c_karon_g"))
+    CALL(evt_npc_entry, STRING("\"カロン01\""), STRING("c_karon_g")) // a Dull Bones lying as a bone pile
     CALL(evt_npc_set_position, STRING("\"カロン01\""), -351, 0, 23)
     CALL(evt_npc_set_rotate, STRING("\"カロン01\""), 0, 180, 0)
     CALL(evt_npc_set_anim, STRING("\"カロン01\""), STRING("KRN_Z_2"))
     CALL(evt_npc_pera_onoff, STRING("\"カロン01\""), 0)
-    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン01\""), NPC_FLAG_NO_AUTO_UPDATE)
-    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン01\""), NPC_FLAG_NO_BILLBOARD)
+    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン01\""), NPC_FLAG_UPDATE_BY_EVENT)
+    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン01\""), NPC_FLAG_NO_VIEW_CORRECTION)
     CALL(evt_npc_set_width, STRING("\"カロン01\""), 30)
     CALL(evt_npc_set_height, STRING("\"カロン01\""), 7)
-    CALL(evt_npc_entry, STRING("\"カロン02\""), STRING("c_karon_g"))
+    CALL(evt_npc_entry, STRING("\"カロン02\""), STRING("c_karon_g")) // a Dull Bones lying as a bone pile
     CALL(evt_npc_set_position, STRING("\"カロン02\""), 59, 0, 98)
     CALL(evt_npc_set_rotate, STRING("\"カロン02\""), 0, 0, 0)
     CALL(evt_npc_set_anim, STRING("\"カロン02\""), STRING("KRN_Z_2"))
     CALL(evt_npc_pera_onoff, STRING("\"カロン02\""), 0)
-    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン02\""), NPC_FLAG_NO_AUTO_UPDATE)
-    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン02\""), NPC_FLAG_NO_BILLBOARD)
+    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン02\""), NPC_FLAG_UPDATE_BY_EVENT)
+    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン02\""), NPC_FLAG_NO_VIEW_CORRECTION)
     CALL(evt_npc_set_width, STRING("\"カロン02\""), 30)
     CALL(evt_npc_set_height, STRING("\"カロン02\""), 7)
-    CALL(evt_npc_entry, STRING("\"カロン03\""), STRING("c_karon_g"))
+    CALL(evt_npc_entry, STRING("\"カロン03\""), STRING("c_karon_g")) // a Dull Bones lying as a bone pile
     CALL(evt_npc_set_position, STRING("\"カロン03\""), 177, 0, 82)
     CALL(evt_npc_set_rotate, STRING("\"カロン03\""), 0, 180, 0)
     CALL(evt_npc_set_anim, STRING("\"カロン03\""), STRING("KRN_Z_2"))
     CALL(evt_npc_pera_onoff, STRING("\"カロン03\""), 0)
-    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン03\""), NPC_FLAG_NO_AUTO_UPDATE)
-    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン03\""), NPC_FLAG_NO_BILLBOARD)
+    CALL(evt_npc_flag_onoff, 0, STRING("\"カロン03\""), NPC_FLAG_UPDATE_BY_EVENT)
+    CALL(evt_npc_flag_onoff, 1, STRING("\"カロン03\""), NPC_FLAG_NO_VIEW_CORRECTION)
     CALL(evt_npc_set_width, STRING("\"カロン03\""), 30)
     CALL(evt_npc_set_height, STRING("\"カロン03\""), 7)
-    CALL(evt_item_entry, STRING("piece00"), ITEM_STAR_PIECE, 575, 200, -110, ITEM_ENTRY_FIXED, GSWF(GSWF_GON09_STAR_PIECE), 0)
-    CALL(evt_mobj_float_blk, STRING("blk_0"), 325, -50, 75, 2, 1, 0, LSWF(1))
+    CALL(evt_item_entry, STRING("piece00"), ITEM_STAR_PIECE, 575, 200, -110, ITEM_TYPE_STILL, GSWF_STARPIECE_40, 0)
+    CALL(evt_mobj_float_blk, STRING("blk_0"), 325, -50, 75, 2, 1, 0, LSWF_GON_09_FLOAT_BLOCK_MOVED)
     CALL_CHILD(init_0)
-    CALL(evt_mobj_switch_float_blk, STRING("sw_0"), 588, -50, 138, STRING("blk_0"), 2, PTR(main_0), LSWF(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("fuyu_boxS"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("hokori"), 1, 0)
+    CALL(evt_mobj_switch_float_blk, STRING("sw_0"), 588, -50, 138, STRING("blk_0"), 2, PTR(main_0), LSWF_GON_09_FLOAT_BLOCK_MOVED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("fuyu_boxS"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("hokori"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_map_entry_airport_harbor, 0, STRING("hikou"), STRING("a_hi"))
     RETURN
 EVT_END()

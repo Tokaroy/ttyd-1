@@ -1,4 +1,5 @@
-// Paper Mario 64 effect: pokopi charge (pcharge) at a point with a scale and lifetime; types 0-9.
+// Paper Mario 64 effect: pokopi charge (pcharge) at a point with a scale and lifetime; types 0-12.
+
 #include "eff/n64/eff_pokopi_pcharge_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -8,13 +9,14 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 
 /**
- * Number of charge streaks in the ring for each type.
- * vx_data: speed of the streaks along their rays for each type.
+ * Number of effect records for each type: one header plus the charge streaks of the ring.
+ * vx_data: distance from the centre added to every streak's position along its ray, for each type.
  */
-u8 n_data[13] = {11, 11, 11, 11, 17, 11, 11, 21, 21, 21, 21, 21, 21};
+static u8 n_data[13] = {11, 11, 11, 11, 17, 11, 11, 21, 21, 21, 21, 21, 21};
+
 static u8 vx_data[13] = {20, 5, 20, 20, 10, 20, 20, 8, 8, 8, 1, 1, 1};
 
 /** Short streak quads for types 0-2, each type showing its own band of the streak texture. */
@@ -99,13 +101,15 @@ static effN64Vtx size128x10_tex32x32_2_vtx[] = {
     {128, 5, 0, 0, 4096, 0, 0, 0, 255},
     {0, 5, 0, 1024, 4096, 0, 0, 0, 255},
 };
+
 static void effPokopiPchargeMain(EffectEntry* effect);
-static void effPokopiPchargeDisp(CameraId cameraId, EffectEntry* effect);
+static void effPokopiPchargeDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns an energy-charge effect at (x, y, z): 10-20 streaks (count by type) spaced evenly around a ring,
  * flowing inward (negative speed: types 0-2, 6, 7, 9) or outward. lifetime <= 0 means until deleted.
- * Soft-deletable. Used by map scripts in gor, tik and tou2 via evt_eff64 "pokopi_pcharge_n64"; type 9 is orange.
+ * Soft-deletable. Used by map scripts in gor, tik and tou2 via evt_eff64 "pokopi_pcharge_n64" and directly from C
+ * (las_29, the Kamek units); type 9 is orange.
  */
 EffectEntry* effPokopiPchargeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffPokopiPchargeN64Elem* work;
@@ -122,7 +126,7 @@ EffectEntry* effPokopiPchargeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffPokopiPchargeN64Elem));
     effect->userdata = work;
     effect->callback = effPokopiPchargeMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -132,7 +136,6 @@ EffectEntry* effPokopiPchargeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     }
     work->alpha = 0;
     work->position.x = x;
-    p = work + 1;
     work->position.y = y;
     work->position.z = z;
     work->scale = scale;
@@ -144,6 +147,7 @@ EffectEntry* effPokopiPchargeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     work->b2 = 0;
     work->mult = 1.0f;
     work->speed = (f32)vx_data[type];
+    p = work + 1;
     base = (f32)(rand() % 360);
     for (i = 1; i < effect->count; i++, p++) {
         p->type = type % 3;
@@ -243,8 +247,8 @@ static void effPokopiPchargeMain(EffectEntry* effect) {
     tmp.y = p->position.y;
     tmp.z = p->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         p->lifetime = 16;
     }
     if (p->lifetime < 1000) {
@@ -285,11 +289,12 @@ static void effPokopiPchargeMain(EffectEntry* effect) {
             p->alpha = (s32)(255.0f * sv);
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effPokopiPchargeDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effPokopiPchargeDisp, effect);
 }
 
 /** Draws each streak as a camera-facing sprite (texture 0x86) pushed out along its ray, in a shape chosen by type. */
-static void effPokopiPchargeDisp(CameraId cameraId, EffectEntry* effect) {
+static void effPokopiPchargeDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffPokopiPchargeN64Elem* p;
     s32 i;
@@ -366,6 +371,9 @@ static void effPokopiPchargeDisp(CameraId cameraId, EffectEntry* effect) {
             case 4:
             case 5:
                 effSetVtxDescN64(size10x10_tex32x32_2_vtx);
+
+                // BUG: changes the effect's type inside the per-streak loop, so only the first streak of types 3-5
+                // uses this vertex table; the later ones take cases 0-2 and the first table.
                 type -= 3;
                 GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(type * 4, type * 4 + 1, type * 4 + 2, 0, type * 4, type * 4 + 2, type * 4 + 3, 0);

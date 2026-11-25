@@ -1,9 +1,15 @@
 // muj (無人島, Keelhaul Key; muj is mujinto, "desert island"): the REL prolog/epilog, the map list, and area-wide
 // events: Cortez appearing and vanishing in his tornado (korutesu_apper, korutesu_vanish) and the ship bobbing
 // (muj_ship_puka).
+
 #include "eff/n64/eff_kameki_tornade_n64.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_eff.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_sub.h"
+#include "driver/npcdrv.h"
 
 #include "mario/mario.h"
 #include "system.h"
@@ -15,23 +21,30 @@
 #include "dolphin/os.h"
 #include "pmario_sound.h"
 #include "data/mapdata.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
 #include "muj.h"
-#include "rel_module.h"
 
 static USER_FUNC(muj_ship_puka_func);
-static USER_FUNC(tornade_alpha_func);
 
-f32 muj_ship_puka_data[16];
-extern EvtWord muj_mario_pos_osreport[];
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+static USER_FUNC(tornade_alpha_func);
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
+
+static f32 muj_ship_puka_data[16];
+EvtWord muj_ship_puka[21];
+EvtWord korutesu_apper[234];
+EvtWord korutesu_vanish[227];
+EvtWord muj_mario_pos_osreport[4];
 
 /**
  * Height offsets of one 16-step cycle of the pirate ship bobbing on the waves, stepped through every 130 ms
  * by muj_ship_puka.
  */
-f32 muj_ship_puka_data[] = {
+static f32 muj_ship_puka_data[] = {
     -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -2.2f, -2.5f, -2.7f,
     -2.7f, -2.7f, -2.5f, -2.2f, -2.0f, -1.5f, -1.0f, -0.5f,
 };
@@ -100,6 +113,7 @@ static USER_FUNC(muj_ship_puka_func) {
     s32 index = evtGetValue(event, args[0]);
     f32 value = evtGetFloat(event, args[1]);
 
+    // The mask repeats the sixteen-sample displacement table.
     evtSetFloat(event, args[2], value * muj_ship_puka_data[index & 0xF]);
     return EVT_RETURN_DONE;
 }
@@ -280,6 +294,8 @@ USER_FUNC(muj_npc_buruburu) {
             break;
     }
     event->userdataf[0] = offset;
+
+    // A zero duration keeps shaking indefinitely and does not restore the saved position.
     if (duration == 0) {
         return EVT_RETURN_BLOCK;
     }
@@ -310,7 +326,7 @@ static USER_FUNC(tornade_alpha_func) {
 }
 
 /**
- * Debug stub for muj_mario_pos_osreport: reads Mario's state and the A-button trigger
+ * Debug stub for muj_mario_pos_osreport: reads Mario's state and pad 0's button triggers
  * but prints nothing in this build; always blocks.
  */
 static USER_FUNC(muj_mario_pos_osreport_func) {
@@ -337,7 +353,7 @@ EVT_BEGIN(korutesu_apper)
     CALL(evt_eff64, STRING("tornade"), STRING("kameki_tornade_n64"), 0, LW(0), LW(1), LW(2), FLOAT(2.5f), 0, 0, 0, 0, 0, 0, 0)
     CALL(tornade_alpha_func, STRING("tornade"), FLOAT(0.0f))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, FLOAT(0.0f), FLOAT(100.0f), 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, FLOAT(0.0f), FLOAT(100.0f), 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -353,45 +369,45 @@ EVT_BEGIN(korutesu_apper)
         CALL(evt_eff_softdelete, STRING("tornade"))
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(700)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(600)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(500)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(400)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(300)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(200)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(100)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(50)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(30)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(30)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
     END_INLINE_EVENT
     WAIT_MS(3000)
@@ -400,7 +416,8 @@ EVT_END()
 
 /**
  * Cortez's exit: the same tornado effect fades in around him while he flickers hidden
- * and visible at growing intervals, then the tornado is deleted and he stays hidden.
+ * and visible at growing intervals, and the tornado is deleted after three seconds. The script returns at once
+ * (the effects run on in inline events) and the last flicker leaves him drawn; the caller moves him away.
  * Called at the end of his scenes in muj_12.
  */
 EVT_BEGIN(korutesu_vanish)
@@ -408,7 +425,7 @@ EVT_BEGIN(korutesu_vanish)
     CALL(evt_eff64, STRING("tornade"), STRING("kameki_tornade_n64"), 0, LW(0), LW(1), LW(2), FLOAT(2.5f), 0, 0, 0, 0, 0, 0, 0)
     CALL(tornade_alpha_func, STRING("tornade"), FLOAT(0.0f))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, FLOAT(0.0f), FLOAT(100.0f), 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, FLOAT(0.0f), FLOAT(100.0f), 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -426,49 +443,49 @@ EVT_BEGIN(korutesu_vanish)
         CALL(evt_eff_softdelete, STRING("tornade"))
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(30)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(30)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(50)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(100)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(200)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(300)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(400)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(500)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(600)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(700)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
-        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_MS(800)
-        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
         WAIT_FRAMES(1)
     END_INLINE_EVENT
     RETURN

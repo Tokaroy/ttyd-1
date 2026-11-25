@@ -1,4 +1,3 @@
-// eff_dogabon_attack_n64.c: Paper Mario 64 DogabonAttack effect entry (effDogabonAttackN64Entry).
 #pragma once
 
 #include "driver/effdrv.h"

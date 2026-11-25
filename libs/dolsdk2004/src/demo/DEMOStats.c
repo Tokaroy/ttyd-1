@@ -4,17 +4,13 @@
 
 #include "__demo.h"
 
-/**
- * Non-zero while the on-screen hardware statistics overlay is turned on. The statics below hold its
- * counters.
- */
 u8 DemoStatEnable = 0;
 static DemoStatData* DemoStat;
 static u32 DemoStatIndx;
 static u32 DemoStatMaxIndx;
 static u32 DemoStatClocks;
 static u32 DemoStatDisp;
-static u32 DemoStatStrLen;
+static u32 DemoStatStrLen; // set in DEMOSetStats, never read
 static u32 topPixIn;
 static u32 topPixOut;
 static u32 botPixIn;
@@ -35,16 +31,8 @@ static u32 peReq;
 static u32 rfReq;
 static u32 fiReq;
 
-// prototypes
-static void DEMOWriteStats(u8 update);
-static void DEMOWriteStats(u8 update);
-
-/**
- * Selects the list of statistics to collect and how to display them (to the console or to a screen corner);
- * a NULL list or zero count turns stats off.
- */
 void DEMOSetStats(DemoStatData* stat, u32 nstats, DEMO_STAT_DISP disp) {
-    if (stat == 0 || nstats == 0) {
+    if (stat == NULL || nstats == 0) {
         DemoStatEnable = FALSE;
     } else {
         DemoStatEnable = TRUE;
@@ -56,12 +44,6 @@ void DEMOSetStats(DemoStatData* stat, u32 nstats, DEMO_STAT_DISP disp) {
     }
 }
 
-/**
- * Starts or finishes the collection of one statistic:
- * with 'update' set it reads the GX metric of the current entry (GP counter, memory, pixel, vertex cache,
- * frame-rate or texture bandwidth values) into its static variables and disables the metric;
- * otherwise it programs and clears the metric for the entry.
- */
 static void DEMOWriteStats(u8 update) {
     u32 cnt0;
     u32 cnt1;
@@ -178,11 +160,10 @@ static void DEMOWriteStats(u8 update) {
         case DEMO_STAT_MYR:
             break;
         default:
-            OSPanic(__FILE__, 295, "DEMOSetStats: Unknown demo stat type\n");
+            OSPanic(__FILE__, 295, "DEMOSetStats: Unknown demo stat type\n"); // the text names DEMOSetStats
     }
 }
 
-/** Calls DEMOWriteStats and, when 'inc' is set, moves on to the next statistic in the list (wrapping). */
 void DEMOUpdateStats(u8 inc) {
     DEMOWriteStats(inc);
     if (inc) {
@@ -193,11 +174,6 @@ void DEMOUpdateStats(u8 inc) {
     }
 }
 
-/**
- * Prints all statistics: with the console display it uses OSReport,
- * otherwise it picks a screen corner (full or half size) and draws one line per statistic with DEMOPrintf,
- * computing rates for the frame-rate and bandwidth entries.
- */
 void DEMOPrintStats(void) {
     GXRenderModeObj* rmode;
     u32 i;
@@ -303,6 +279,8 @@ void DEMOPrintStats(void) {
         }
     } else {
         rmode = DEMOGetRenderModeObj();
+
+        // no default: an unknown display mode leaves text_x, text_y, text_yinc, wd and ht unset
         switch (DemoStatDisp) {
             case DEMO_STAT_TL:
                 text_x = 0x10;
@@ -333,7 +311,7 @@ void DEMOPrintStats(void) {
                 ht = rmode->xfbHeight / 2;
                 break;
         }
-        DEMOInitCaption(0, wd, ht);
+        DEMOInitCaption(DM_FT_OPQ, wd, ht);
         for (i = 0; i < DemoStatMaxIndx; i++) {
             switch (DemoStat[i].stat_type) {
                 case DEMO_STAT_PIX:
@@ -367,6 +345,7 @@ void DEMOPrintStats(void) {
                     DEMOPrintf(text_x, text_y, 0, "%s: %8.2f\n", DemoStat[i].text, rate);
                     break;
                 case DEMO_STAT_TBP:
+                    // BUG: divides by topPixIn - botPixIn; the same rate in the first output branch above divides by their sum
                     rate = (tcReq << 5) / (f32) (topPixIn - botPixIn);
                     DEMOPrintf(text_x, text_y, 0, "%s: %8.3f\n", DemoStat[i].text, rate);
                     break;

@@ -1,6 +1,8 @@
-// The chapter title card ("telop") shown when a chapter starts.
-#include "evt/evt_telop.h"
+// The area name banner ("telop") shown the first time a map script calls it for an area.
+
+#include "version.h"
 #include "driver/camdrv.h"
+#include "evt/evt_story.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
 #include "driver/msgdrv.h"
@@ -16,8 +18,6 @@
 #include <dolphin/os.h>
 #include <stdlib.h>
 #include <string.h>
-#include "version.h"
-#include "evt/evt_story.h"
 
 typedef struct TelopWork {
     s32 id;
@@ -32,6 +32,7 @@ typedef struct TelopWork {
 #define TELOP_TEX_A 0x81
 #define TELOP_TEX_B 0x80
 #endif
+
 /**
  * Message labels of the area name banners, one per area id
  * (Rogueport, Petal Meadows, Petalburg and so on up to the Palace of Shadow).
@@ -45,6 +46,7 @@ static const char* msg_tbl[] = {
 };
 
 static TelopWork work;
+
 /** State of the area name banner (fade timer and the area shown); wp points to it. */
 static TelopWork* wp = &work;
 
@@ -74,31 +76,31 @@ USER_FUNC(evt_telop_entry) {
             event->userdata[0]++;
             break;
         case 1:
-            ms = ((u32)event->lifetime - (u32)wp->time) / (OS_TIMER_CLOCK / 1000);
+            ms = OSTicksToMilliseconds((u32)event->lifetime - (u32)wp->time);
             if (ms < 1000) {
-                wp->alpha = intplGetValue(11, -256.0f, 256.0f, ms, 1000);
+                wp->alpha = intplGetValue(EASING_SINE_IN_OUT, -256.0f, 256.0f, ms, 1000);
             } else {
                 wp->time = event->lifetime;
                 event->userdata[0]++;
             }
-            dispEntry(CAMERA_2D, 300.0f, 0, telop, NULL);
+            dispEntry(CAMERA_2D, 300.0f, DISP_MODE_OPAQUE, telop, NULL);
             break;
         case 2:
-            ms = ((u32)event->lifetime - (u32)wp->time) / (OS_TIMER_CLOCK / 1000);
+            ms = OSTicksToMilliseconds((u32)event->lifetime - (u32)wp->time);
             if (ms > 5000) {
                 wp->time = event->lifetime;
                 event->userdata[0]++;
             }
-            dispEntry(CAMERA_2D, 300.0f, 0, telop, NULL);
+            dispEntry(CAMERA_2D, 300.0f, DISP_MODE_OPAQUE, telop, NULL);
             break;
         case 3:
-            ms = ((u32)event->lifetime - (u32)wp->time) / (OS_TIMER_CLOCK / 1000);
+            ms = OSTicksToMilliseconds((u32)event->lifetime - (u32)wp->time);
             if (ms < 1000) {
-                wp->alpha = intplGetValue(11, 256.0f, -256.0f, ms, 1000);
+                wp->alpha = intplGetValue(EASING_SINE_IN_OUT, 256.0f, -256.0f, ms, 1000);
             } else {
                 event->userdata[0]++;
             }
-            dispEntry(CAMERA_2D, 300.0f, 0, telop, NULL);
+            dispEntry(CAMERA_2D, 300.0f, DISP_MODE_OPAQUE, telop, NULL);
             break;
         case 4:
             return EVT_RETURN_DONE;
@@ -107,9 +109,9 @@ USER_FUNC(evt_telop_entry) {
 }
 
 /**
- * Draws the area name banner each frame: the banner texture with a drop shadow,
- * masked by a randomly scrolled noise texture, then the area name (from the menu_monosiri messages) centred on
- * it, shrunk to fit when gp->language is not 0 (Japanese).
+ * Draws the area name banner: its texture twice (a dark offset shadow, then white) at the banner's fade alpha plus a
+ * randomly offset second texture, and the area's name (msg_tbl, "???" for none) centred on it, squeezed to fit outside
+ * Japanese.
  */
 static void telop(CameraId cameraId, void* param) {
     GXTexObj texObj;
@@ -122,7 +124,7 @@ static void telop(CameraId cameraId, void* param) {
     f32 y, x, scale;
     s32 alpha, a;
     const char* msg;
-    s32 k, i;
+    s32 i;
     u16 width;
 
     camera = camGetPtr(cameraId);
@@ -178,18 +180,16 @@ static void telop(CameraId cameraId, void* param) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
 
-    i = 1;
-    k = 5;
-    do {
+    for (i = 1; i >= 0; i--) {
         if (i != 0) {
             GXSetTevColor(GX_TEVREG1, (GXColor){0, 0, 0, 0x60});
         } else {
             GXSetTevColor(GX_TEVREG1, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
         }
-        PSMTXTrans(mtx, -15.0f + (f32)k, -105.0f - (f32)k, 0.0f);
+        PSMTXTrans(mtx, -15.0f + (f32)(i * 5), -105.0f - (f32)(i * 5), 0.0f);
         PSMTXConcat(camera->view, mtx, mtx);
-        GXLoadPosMtxImm(mtx, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(mtx, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
         GXPosition3f32(0.0f, 0.0f, 0.0f);
         GXTexCoord2f32(0.0f, 0.0f);
@@ -199,22 +199,21 @@ static void telop(CameraId cameraId, void* param) {
         GXTexCoord2f32(1.0f, 1.0f);
         GXPosition3f32(0.0f, -texH, 0.0f);
         GXTexCoord2f32(0.0f, 1.0f);
-        k -= 5;
-    } while (--i >= 0);
+    }
 
 #if VERSION >= VERSION_US
     {
-        const char* def = (u32)gp->language != 0 ? "???" : "\x81H\x81H\x81H";
+        const char* def = gp->language != LANGUAGE_JP ? "???" : "？？？";
         msg = (msg_tbl[wp->id] != NULL) ? msgSearch(msg_tbl[wp->id]) : def;
     }
 #else
-    msg = (msg_tbl[wp->id] != NULL) ? msgSearch(msg_tbl[wp->id]) : "\x81H\x81H\x81H";
+    msg = (msg_tbl[wp->id] != NULL) ? msgSearch(msg_tbl[wp->id]) : "？？？";
 #endif
     width = FontGetMessageWidth(msg);
     scale = 1.0f;
-    if ((u32)gp->language != 0U) {
-        if ((f32)width / (texW - 100.0f) < scale) {
-            scale = scale; // FAKE: the empty branch as a self-assignment keeps the target's branch layout
+    if (gp->language != LANGUAGE_JP) {
+        if ((f32)width / (texW - 100.0f) < 1.0f) {
+            scale = 1.0f;
         } else {
             scale = (texW - 100.0f) / (f32)width;
         }

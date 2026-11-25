@@ -1,40 +1,52 @@
 // gra_04 (ウスグラの道, Twilight Trail): the woods between gra_03 and gra_05.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "gra.h"
 #include "manager/evtmgr_cmd.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_cloud.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_party.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
-#include "evt/evt_story.h"
+#include "mot/mot_roll.h"
+#include "evt/evt_mobj.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
 
-#if VERSION >= VERSION_JP
-// Declaration of roll_release_check, defined at the bottom of the file (JP and later).
 USER_FUNC(roll_release_check);
+
+static EvtWord in_evt[5];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord out_evt[120];
+static EvtWord out_evt2[82];
+#else
+static EvtWord out_evt[142];
+static EvtWord out_evt2[110];
 #endif
 
 static BeroEntry bero_entry_data[5];
+static EvtWord gra_04_tree_open_evt[41];
 static const char* fukitobashi_tbl[6];
+EvtWord gra_04_init_evt[64];
 
-/** Enter event of the w_bero_1 and w_bero_2 doors: just returns 1 in LW(0) so the door transition goes ahead. */
+/** Enter event of the w_bero_1 and w_bero_2 doors: returns 1 in LW(0) so the default walk-in is skipped. */
 static EVT_BEGIN(in_evt)
     SET_VALUE(LW(0), 1)
     RETURN
 EVT_END()
 
 /**
- * Exit event of w_bero_1, the door leading into the back lane of the same map:
- * Mario (after releasing a roll in JP and later) and the partners walk to the door while the camera holds,
- * the partners are removed, Mario is switched to background mode (bgmode_on, camera y off),
- * placed at (-242, 10, -450) and walks on with the camera released. Returns 1 in LW(0).
+ * Exit event of w_bero_1 (JP and later first try to release a roll; when that fails Mario lands and walks to
+ * (-315, -15)): Mario and the partners walk to the door, the camera holds, Mario is switched to background mode
+ * (evt_mario_bgmode_on, camera y off), the partners are removed, and Mario is placed at (-242, 10, -450) and walks
+ * on with the camera released. Returns 1 in LW(0).
  */
 static EVT_BEGIN(out_evt)
     CALL(evt_mario_key_onoff, 0)
@@ -98,7 +110,7 @@ static EVT_BEGIN(out_evt)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_road_reset)
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 1000, 11)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
     SET_VALUE(LW(0), 1)
     RETURN
 EVT_END()
@@ -110,15 +122,15 @@ EVT_END()
  */
 static EVT_BEGIN(out_evt2)
     CALL(evt_mario_key_onoff, 0)
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mario_normalize)
-#else
+#if VERSION >= VERSION_JP
     CALL(roll_release_check, LW(0))
     IF_INT_EQUAL(LW(0), 1)
         CALL(evt_mario_normalize)
     ELSE
         DEBUG_PUT_MSG(STRING("ロール解除できません"))
     END_IF
+#else
+    CALL(evt_mario_normalize)
 #endif
     CALL(evt_mario_mov_pos2, -242, -450, FLOAT(150.0f))
     WAIT_MS(800)
@@ -144,12 +156,12 @@ static EVT_BEGIN(out_evt2)
 #endif
     CALL(evt_mario_mov_pos2, -280, -10, FLOAT(150.0f))
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_road_reset)
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 1000, 11)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
     SET_VALUE(LW(0), 1)
     RETURN
 EVT_END()
@@ -182,9 +194,9 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)in_evt, // enterEvent
+        in_evt, // enterEvent
         -1, // caseType
-        (s32*)out_evt, // exitEvent
+        out_evt, // exitEvent
         "gra_04", // nextMapName
         "w_bero_2", // nextBeroName
         1, // enterAnimeType
@@ -199,9 +211,9 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)in_evt, // enterEvent
+        in_evt, // enterEvent
         0, // caseType
-        (s32*)out_evt2, // exitEvent
+        out_evt2, // exitEvent
         "gra_04", // nextMapName
         "w_bero_1", // nextBeroName
         1, // enterAnimeType
@@ -230,15 +242,15 @@ static BeroEntry bero_entry_data[] = {
 /**
  * Callback run when Flurrie's wind has blown the tree away from the trail:
  * plays a short jingle, waits until Mario's partner is no longer in use,
- * opens the w_bero_1 exit and advances the story to STORY_STG4_06_TREE_TRUNK.
+ * opens the w_bero_1 exit and advances the story to STG4_06_TREE_TRUNK.
  */
-EVT_BEGIN(gra_04_tree_open_evt)
+static EVT_BEGIN(gra_04_tree_open_evt)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(1000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
     LOOP(0)
         CALL(evt_mario_party_use_check, LW(0))
@@ -248,14 +260,10 @@ EVT_BEGIN(gra_04_tree_open_evt)
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_hitobj_onoff, STRING("w_bero_1"), 0, 1)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_06_TREE_TRUNK)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_06_TREE_TRUNK)
     RETURN
 EVT_END()
 
-/**
- * Guess: the map objects (the lid S_futa and the plants and rocks around it) that the cloud effect covers
- * until the story passes STORY_STG4_06_TREE_TRUNK.
- */
 static const char* fukitobashi_tbl[] = {
     "S_futa",
     "S_gra04_kideka",
@@ -267,32 +275,32 @@ static const char* fukitobashi_tbl[] = {
 
 /**
  * Init script of gra_04: trail music, the exits and the shadow Mario party removal;
- * while the story is before STORY_STG4_06_TREE_TRUNK the w_bero_1 exit stays closed;
+ * while the story is before STG4_06_TREE_TRUNK the w_bero_1 exit stays closed;
  * places the Hammer Throw badge block.
  */
 EVT_BEGIN(gra_04_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_GRA1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_GRA1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_GRA1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_GRA1"))
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_usu_kagemario_party_kill)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_06_TREE_TRUNK)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_06_TREE_TRUNK)
         CALL(evt_cloud_init)
         CALL(evt_cloud_ent, 1, PTR(&fukitobashi_tbl), STRING("A_futa"), PTR(gra_04_tree_open_evt))
         CALL(evt_cloud_set_cap_size, 256, 256)
         CALL(evt_hitobj_onoff, STRING("w_bero_1"), 0, 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_futa"), 0, 0)
     END_IF
-    CALL(evt_mobj_badgeblk, STRING("m"), 250, 60, -20, ITEM_HAMMER_THROW, 0, GSWF(GSWF_GRA04_HAMMER_THROW_BLOCK_HIT), 1)
+    CALL(evt_mobj_badgeblk, STRING("m"), 250, 60, -20, ITEM_HAMMER_THROW, 0, GSWF_GRA_04_HAMMER_THROW_BADGE_BLOCK, 1)
     RETURN
 EVT_END()
 
+// Descriptive name (not in the symbol maps); placeholder unk_gra_00000530, JP gra .text+0x46C. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
-s32 marioRollCancelDisable(void);
 
 /**
  * Script helper used by the exit scripts of this map:

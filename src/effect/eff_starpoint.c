@@ -1,4 +1,5 @@
 // Star Points: star icons launched up and outward from a point one after another, then falling and fading.
+
 #include "eff/eff_starpoint.h"
 #include "driver/dispdrv.h"
 #include "driver/icondrv.h"
@@ -6,7 +7,7 @@
 #include <dolphin/mtx.h>
 #include <stdlib.h>
 #include "icon_ids.h"
-
+#include "poly_trig.h"
 static void effStarPointDisp(CameraId cameraId, EffectEntry* effect);
 static void effStarPointMain(EffectEntry* effect);
 
@@ -14,56 +15,18 @@ static void effStarPointMain(EffectEntry* effect);
 #define HALF_PI 1.5707964f
 
 typedef struct EffStarPointWork {
-    s32 type;     // 0x0
-    s32 timer;    // 0x4
-    s32 frame;    // 0x8
-    Vec position; // 0xC
-    f32 velX;     // 0x18
-    f32 velZ;     // 0x1C
-    f32 velY;     // 0x20
-    f32 gravity;  // 0x24
-    u8 pad_28[4]; // 0x28
-    s32 alpha;    // 0x2C
-    s32 delay;    // 0x30
+    s32 type;         // 0x0
+    s32 timer;        // 0x4
+    s32 frame;        // 0x8
+    Vec position;     // 0xC
+    f32 velX;         // 0x18
+    f32 velZ;         // 0x1C
+    f32 velY;         // 0x20
+    f32 gravity;      // 0x24
+    u8 field_0x28[4]; // 0x28
+    s32 alpha;        // 0x2C
+    s32 delay;        // 0x30
 } EffStarPointWork;
-
-/** cheap polynomial approximations, valid for x in [0, 2pi] */
-static inline f32 _sinf(f32 x) {
-    f32 a = 0.00761f;
-    f32 b = 0.16605f;
-    f32 c = 1.0f;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        } else {
-            x = HALF_PI - (x - HALF_PI);
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        }
-    } else if (x < 4.712389f) {
-        x = x - PI;
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * x;
-        a = -a;
-    } else {
-        x = HALF_PI - (x - 4.712389f);
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * x;
-        a = -a;
-    }
-    return a;
-}
 
 /** Cosine approximation by a quartic polynomial, valid for x in [0, 2pi]. */
 static inline f32 _cosf(f32 x) {
@@ -73,13 +36,12 @@ static inline f32 _cosf(f32 x) {
     f32 x2;
 
     if (x <= PI) {
-        // FAKE: dead guard, no code (COLOURING W); its float temps keep the hoisted 2.0 deferred (f31)
         {
             s32 gz = 0;
             if (gz != 0) {
                 a = (a / x) / (x / a);
             }
-        }
+        } // FAKE: dead guard (gz is always 0, emits no code); without it the caller's 2.0f constant is loaded at a different point and the object changes
         if (x <= HALF_PI) {
             x2 = x * x;
             a = a * x2 - b;
@@ -112,7 +74,7 @@ static inline f32 _cosf(f32 x) {
 #pragma opt_lifetimes off
 /**
  * Spawns `count` star icons at (x, y, z), each launched at a random horizontal angle
- * and release delay (staggered every 3 frames). Caller: the evt_eff "starpoint" effect.
+ * and release delay (staggered every 3 frames). Caller: the evt_eff "star_point" effect (battle event scripts).
  */
 EffectEntry* effStarPointEntry(s32 type, s32 count, f32 x, f32 y, f32 z) {
     s32 delay;
@@ -141,7 +103,7 @@ EffectEntry* effStarPointEntry(s32 type, s32 count, f32 x, f32 y, f32 z) {
         work->position.y = 0.0f;
         work->position.z = 0.0f;
         angle = r * 6.2831855f / 360.0f;
-        work->velX = 2.0f * _sinf(angle);
+        work->velX = 2.0f * polySinf(angle);
         work->velZ = 2.0f * _cosf(angle);
         work->velY = 14.0f;
         work->gravity = 2.0f;
@@ -188,10 +150,13 @@ static void effStarPointMain(EffectEntry* effect) {
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 1, (DispCallback)effStarPointDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_ALPHA_TEST, (DispCallback)effStarPointDisp, effect);
 }
 
-/** Draws each visible star as an icon billboarded to the camera yaw (ICON_18C). */
+/**
+ * Draws each visible star (alpha not 0; entries after the first, which holds the base position) as icon
+ * ICON_STAR_POINT at its offset from the base, turned to the camera yaw.
+ */
 static void effStarPointDisp(CameraId cameraId, EffectEntry* effect) {
     EffStarPointWork* work = effect->userdata;
     Mtx mtx;
@@ -206,7 +171,7 @@ static void effStarPointDisp(CameraId cameraId, EffectEntry* effect) {
         if (work->alpha) {
             PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
             PSMTXConcat(mtx, trans, trans);
-            iconDispGx2(trans, 0, ICON_18C);
+            iconDispGx2(trans, 0, ICON_STAR_POINT);
         }
     }
 }

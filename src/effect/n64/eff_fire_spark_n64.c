@@ -1,6 +1,7 @@
-// Paper Mario 64 effect: fire sparks, count sparks launched within a range with a set upward and forward speed.
-#include "eff/n64/eff_fire_spark_n64.h"
+// Paper Mario 64 effect: fire sparks, count sparks launched within a range with a set starting and eased-toward upward speed.
+
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_fire_spark_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -29,15 +30,17 @@ typedef struct EffFireSparkN64Work {
 } EffFireSparkN64Work;
 
 static void effFireSparkMain(EffectEntry* effect);
-static void effFireSparkDisp(CameraId cameraId, EffectEntry* effect);
+static void effFireSparkDisp(CameraId cameraId, void* param);
 
 /** Spark size over its 30-step cycle: grows in, holds at full size, then shrinks away. */
 static f32 scale_data[30] = {
-    0.01f, 0.05f, 0.1f, 0.2f, 0.35f, 0.5f, 0.65f, 0.8f, 0.95f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 0.95f, 0.8f, 0.65f, 0.5f, 0.35f, 0.2f, 0.1f, 0.05f, 0.01f,
+    0.01f, 0.05f, 0.1f, 0.2f, 0.35f, 0.5f, 0.65f, 0.8f, 0.95f, 1.0f,
+    1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+    1.0f, 0.95f, 0.8f, 0.65f, 0.5f, 0.35f, 0.2f, 0.1f, 0.05f, 0.01f,
 };
 
 /** Camera-facing 4x4 spark sprite. */
-effN64Vtx size4x4_tex32x32_vtx[] = {
+static effN64Vtx size4x4_tex32x32_vtx[] = {
     {-2, -2, 0, 0, 0, 0, 0, 0, 255},
     {2, -2, 0, 1024, 0, 0, 0, 0, 255},
     {2, 2, 0, 1024, 1024, 0, 0, 0, 255},
@@ -46,13 +49,14 @@ effN64Vtx size4x4_tex32x32_vtx[] = {
 
 /**
  * Spawns count small sparks that rise from a strip of width rangeX and height rangeY around (x, y, z);
- * speedY and speedZ set how fast they drift. eff_fire.c spawns it for fire embers; event scripts via evt_eff.
+ * speedY scales each spark's starting rise speed and speedZ the rise speed it eases toward (both act on Y).
+ * eff_fire.c spawns it for fire embers; event scripts via evt_eff64.
  */
 EffectEntry* effFireSparkN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 y, f32 z, f32 rangeX, f32 rangeY,
                                   f32 scale, f32 speedY, f32 speedZ) {
     EffectEntry* effect;
     EffFireSparkN64Work* work;
-    f32 h = 0.5f;
+
     f32 step;
     s32 i;
 
@@ -62,7 +66,7 @@ EffectEntry* effFireSparkN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffFireSparkN64Work) * count);
     effect->userdata = work;
     effect->callback = effFireSparkMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -87,7 +91,7 @@ EffectEntry* effFireSparkN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 
     work->b2 = 0;
     work->a2 = 255;
     step = 30.0f / (f32)(count - 1);
-    step = step * h;
+    step *= 0.5f;
     work++;
     for (i = 1; i < count; i++, work++) {
         work->index = (s32)(-(f32)i * step) - 1;
@@ -98,7 +102,8 @@ EffectEntry* effFireSparkN64Entry(s32 type, s32 count, s32 lifetime, f32 x, f32 
 /**
  * Fades in over the first 16 frames and out over the last 16.
  * Each spark runs a 30-step cycle: it respawns at a random spot in the strip,
- * drifts with a velocity that eases toward a random target, and scales by scale_data.
+ * drifts with a velocity that eases toward a random target, and stores a scale from scale_data
+ * (the draw code never reads it; every spark uses the spawn scale).
  */
 static void effFireSparkMain(EffectEntry* effect) {
     Vec position;
@@ -117,8 +122,8 @@ static void effFireSparkMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -176,14 +181,15 @@ static void effFireSparkMain(EffectEntry* effect) {
         work->vel.y += 0.04f * (work->velTgt.y - work->vel.y);
         work->vel.z += 0.04f * (work->velTgt.z - work->vel.z);
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effFireSparkDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effFireSparkDisp, effect);
 }
 
 /**
  * Draws each live spark as a camera-facing sprite blending texture 0x8b with 0x65,
  * one texture row per spark (i % 4) and scrolled by its own offset.
  */
-static void effFireSparkDisp(CameraId cameraId, EffectEntry* effect) {
+static void effFireSparkDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     s32 i;
     EffFireSparkN64Work* work;
     CameraEntry* camera;
@@ -219,8 +225,8 @@ static void effFireSparkDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
     GXSetTevKColorSel(GX_TEVSTAGE1, GX_TEV_KCSEL_K0);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0 + 0, GX_FALSE, GX_PTIDENTITY + 0x0);
-    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0 + 3, GX_FALSE, GX_PTIDENTITY + 0x0);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
     GXSetTevKColor(GX_KCOLOR0, (GXColor){0x7F, 0x7F, 0x7F, 0});
     effGetTexObjN64(0x8b, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
@@ -240,11 +246,11 @@ static void effFireSparkDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXScale(scale, 0.03125f, 0.0078125f, 0.0f);
         PSMTXTrans(mtx, 0.0f, (f32)((i % 4) * 32), 0.0f);
         PSMTXConcat(scale, mtx, scale);
-        GXLoadTexMtxImm(scale, GX_TEXMTX0 + 0, GX_MTX2x4);
+        GXLoadTexMtxImm(scale, GX_TEXMTX0, GX_MTX2x4);
         PSMTXScale(scale, 0.03125f, 0.03125f, 0.0f);
         PSMTXTrans(mtx, work->uv[0], work->uv[1], 0.0f);
         PSMTXConcat(scale, mtx, scale);
-        GXLoadTexMtxImm(scale, GX_TEXMTX0 + 3, GX_MTX2x4);
+        GXLoadTexMtxImm(scale, GX_TEXMTX1, GX_MTX2x4);
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);
     }

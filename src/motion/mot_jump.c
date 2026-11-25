@@ -1,10 +1,20 @@
 // Mario's jump, fall and landing motions: jump data tables and mot_jump, mot_fall, mot_land and mot_upstairs.
+
 #include "version.h"
-// Mario's jump, fall and landing motions.
+#include "sfx_name_word.h"
+#include "mario/mario_hit.h"
+#include "koopa_motion.h"
+#include "koopa.h"
+#include "mario/mario_sbr.h"
+#include "system.h"
+#include "mot/mot_jump.h"
+#include "mot/mot_stay.h"
+#include "mot/mot_jabara.h"
+
 #if VERSION >= VERSION_US
 #include "mario/mariost.h"
-#include <string.h>
 #endif
+
 #include "dolphin/types.h"
 #include "driver/hitdrv.h"
 #include "mario/mario.h"
@@ -14,31 +24,44 @@
 #include "pmario_sound.h"
 #include <string.h>
 #include "driver/mobjdrv.h"
-#include "system.h"
-#include "mario/mario_sbr.h"
-#include "mot/mot_stay.h"
-#include "koopa.h"
-#include "mot/mot_jabara.h"
-#include "koopa_motion.h"
-#include "mario/mario_hit.h"
-#include "mot/mot_jump.h"
+#include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+
+// Stripped copies of mot_hammer's three hammer-impact camera shakes: nothing here runs them (JP demo map: UNUSED,
+// 0x20 each, first in this file's .data). Same names and sizes as the linked scripts in mot_hammer.o, whose
+// contents they take.
+static EVT_BEGIN(lv1quake_evt)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.009765625f), 90)
+    RETURN
+EVT_END()
+
+static EVT_BEGIN(lv2quake_evt)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.01953125f), 110)
+    RETURN
+EVT_END()
+
+static EVT_BEGIN(lv3quake_evt)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.029296875f), 140)
+    RETURN
+EVT_END()
 
 /**
  * Jump curves (speed, acceleration, jerk, snap): Mario's launch off a blue jump stand (mot_jumpStand), with its
- * fall and easing values; then the jump off a red switch, rising then falling (marioSetJumpPara).
+ * fall and easing values; then the bounce off a switch (mot_jumpSw), rising (marioSetJumpPara) then falling.
  */
-static f32 marioJumpStandData[] = {1.52f, -0.188f, 2.925f, -0.847f, -0.1f, -0.4f, 0.024f, -0.004f, 0.125f, 0.7f};
+f32 marioJumpStandData[] = {1.52f, -0.188f, 2.925f, -0.847f, -0.1f, -0.4f, 0.024f, -0.004f, 0.125f, 0.7f};
 f32 marioJumpSwData[] = {2.5f, -0.1f, 0.02f, -0.01f, -0.08f, -0.4f, 0.0f, -0.002f};
 
 /** Switches to the rising jump pose M_J_1B, only for plain Mario (not Bowser, and not while carrying Bobbery). */
 static inline void chgPoseB(MarioWork* mario) {
-    if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == 0) {
+    if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == CHARACTER_MARIO) {
         marioChgPose("M_J_1B");
     }
 }
+
 /** Switches to the falling jump pose M_J_1C, only for plain Mario (not Bowser, and not while carrying Bobbery). */
 static inline void chgPoseC(MarioWork* mario) {
-    if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == 0) {
+    if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == CHARACTER_MARIO) {
         marioChgPose("M_J_1C");
     }
 }
@@ -46,7 +69,7 @@ static inline void chgPoseC(MarioWork* mario) {
 /**
  * Common take-off for every jump: sets the jumping flag, clears the air timers, remembers the floor jumped from,
  * detaches from riding objects, loads the jump parameters and the take-off position.
- * The US and later releases also record the run speed at take-off for the Spring Jump check in mot_fall.
+ * US and later also record the run speed at take-off for the Spring Jump check in mot_fall.
  */
 void marioPreJump(void) {
     MarioWork* mario = marioGetPtr();
@@ -59,7 +82,7 @@ void marioPreJump(void) {
     marioSetJumpPara();
     mario->lastGroundPos = mario->position;
 #if VERSION >= VERSION_US
-    *&mario->jumpStartSpeed = mario->baseSpeed;
+    mario->jumpStartSpeed = mario->baseSpeed;
 #endif
 }
 
@@ -168,7 +191,7 @@ void mot_jumpStand(void) {
  */
 void mot_jumpSw(void) {
     MarioWork* mario = marioGetPtr();
-    void* mobj;
+    MapObjectEntry* mobj;
     f32 dir;
     f32 x, z;
     f32 s, c;
@@ -197,13 +220,11 @@ void mot_jumpSw(void) {
                         mario->moveDirection = mario->directionView = revise360(180.0f + mario->directionView);
                     }
                 }
-                {
-                    sincosf(&s, &c, mario->directionView);
-                    x = 30.0f * s + ((MapObjectEntry*)mobj)->position.x;
-                    z = 30.0f * c + ((MapObjectEntry*)mobj)->position.z;
-                    mario->multiTimer = 20;
-                    mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)(s32)mario->multiTimer;
-                }
+                sincosf(&s, &c, mario->directionView);
+                x = 30.0f * s + ((MapObjectEntry*)mobj)->position.x;
+                z = 30.0f * c + ((MapObjectEntry*)mobj)->position.z;
+                mario->multiTimer = 20;
+                mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)mario->multiTimer;
             }
         } else {
             dir = revise360(180.0f + mario->directionView);
@@ -213,13 +234,13 @@ void mot_jumpSw(void) {
             mario->directionView = dir;
             mario->moveDirection = dir;
             mario->multiTimer = 20;
-            mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)(s32)mario->multiTimer;
+            mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)mario->multiTimer;
         }
         mario->currSubMotionId = 0;
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
-            mario->multiTimer = (s32)mario->multiTimer - 1;
+            mario->multiTimer = mario->multiTimer - 1;
             marioMakeJumpPara();
             if (mario->jumpVelocityY <= 0.0f) {
                 chgPoseC(mario);
@@ -251,23 +272,22 @@ void mot_jumpSw(void) {
  */
 void mot_jumpNpc(void) {
     MarioWork* mario = marioGetPtr();
-    f32 s, c;
-    void* mobj;
+    MapObjectEntry* mobj;
     f32 dir;
     f32 x, z;
-    if (mario->characterId == 2) {
+    if (mario->characterId == CHARACTER_BOWSER) {
         kpa_jumpNpc();
         return;
     }
     if (mario->trigFlags & MARIO_TRIG_FLAG_IS_STARTING_NEW_MOTION) {
         mario->trigFlags &= ~MARIO_TRIG_FLAG_IS_STARTING_NEW_MOTION;
         marioResetCamFollowRate();
-        if (mario->characterId != 2) {
+        if (mario->characterId != CHARACTER_BOWSER) {
             mario->flags |= MARIO_FLAG_STOP_AIR_MOVEMENT;
         }
         camFollowYOff();
         marioPreJump();
-        if (mario->characterId == 2) {
+        if (mario->characterId == CHARACTER_BOWSER) {
             mario->jumpVelocityY = 2.6f;
             mario->jumpAccelerationY = -0.06f;
             mario->jumpJerkY = -0.01f;
@@ -282,29 +302,31 @@ void mot_jumpNpc(void) {
         if (mario->hitobjJumpFrom != NULL) {
             if (hitGetAttr(mario->hitobjJumpFrom) & HIT_ATTR_MOBJ) {
                 mobj = mobjHitObjPtrToPtr(mario->hitobjJumpFrom);
-                mario->mot.jump.standSpeed = ((MapObjectEntry*)mobj)->position.x;
-                mario->mot.jump.standHeight = ((MapObjectEntry*)mobj)->position.z;
+                mario->mot.jump.standSpeed = mobj->position.x;
+                mario->mot.jump.standHeight = mobj->position.z;
                 {
                     Vec v;
                     Vec t = {0.0f, 0.0f, 0.0f};
-                    Vec out;
-                    t.x = ((MapObjectEntry*)mobj)->position.x;
-                    t.y = 0.5f * mario->wPlayerCollisionBox.y + ((MapObjectEntry*)mobj)->position.y;
-                    t.z = ((MapObjectEntry*)mobj)->position.z;
+                    f32 directionX, directionZ;
+                    f32 frontDistance;
+                    t.x = mobj->position.x;
+                    t.y = 0.5f * mario->wPlayerCollisionBox.y + mobj->position.y;
+                    t.z = mobj->position.z;
                     v = t;
-                    if (marioChkFront(&out.x, &v, mario->directionView, 5.0f * mario->wPlayerCollisionBox.x) != NULL && out.x >= 0.0f &&
-                        out.x <= 0.5f * mario->wPlayerCollisionBox.x + 30.0f) {
+                    if (marioChkFront(&frontDistance, &v, mario->directionView, 5.0f * mario->wPlayerCollisionBox.x) != NULL && frontDistance >= 0.0f &&
+                        frontDistance <= 0.5f * mario->wPlayerCollisionBox.x + 30.0f) {
                         mario->moveDirection = mario->directionView = revise360(180.0f + mario->directionView);
                     }
-
-                    sincosf(&out.z, &out.y, mario->directionView);
-                    x = 30.0f * out.z + ((MapObjectEntry*)mobj)->position.x;
-                    z = 30.0f * out.y + ((MapObjectEntry*)mobj)->position.z;
+                    sincosf(&directionX, &directionZ, mario->directionView);
+                    x = 30.0f * directionX + mobj->position.x;
+                    z = 30.0f * directionZ + mobj->position.z;
                     mario->multiTimer = 20;
-                    mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)(s32)mario->multiTimer;
+                    mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)mario->multiTimer;
                 }
             }
         } else {
+            f32 s, c;
+            // The revise360 result is discarded: unlike mot_jumpSw, the direction is not turned around.
             revise360(180.0f + mario->directionView);
             dir = mario->directionView;
             sincosf(&s, &c, dir);
@@ -313,13 +335,13 @@ void mot_jumpNpc(void) {
             mario->directionView = dir;
             mario->moveDirection = dir;
             mario->multiTimer = 20;
-            mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)(s32)mario->multiTimer;
+            mario->baseSpeed = distABf(mario->position.x, mario->position.z, x, z) / (f32)mario->multiTimer;
         }
         mario->currSubMotionId = 0;
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
-            mario->multiTimer = (s32)mario->multiTimer - 1;
+            mario->multiTimer = mario->multiTimer - 1;
             marioMakeJumpPara();
             if (mario->jumpVelocityY <= 0.0f) {
                 chgPoseC(mario);
@@ -349,15 +371,15 @@ static inline void jumpSfx(MarioWork* mario) {
     s32 r = irand(10000);
     s32 id;
     if (r < 2000) {
-        id = 0x9D;
+        id = PSND_SFX_VOICE_MARIO_FLD_JUMP1;
     } else if (r < 4000) {
-        id = 0x9E;
+        id = PSND_SFX_VOICE_MARIO_FLD_JUMP2;
     } else if (r < 6000) {
-        id = 0x9F;
+        id = PSND_SFX_VOICE_MARIO_FLD_JUMP3;
     } else if (r < 8000) {
-        id = 0xA0;
+        id = PSND_SFX_VOICE_MARIO_FLD_JUMP4;
     } else {
-        id = 0xA1;
+        id = PSND_SFX_VOICE_MARIO_FLD_JUMP5;
     }
     psndSFXOn_3D(SFX_NAME_WORD(id), &mario->position);
 }
@@ -366,23 +388,24 @@ static inline void jumpSfx(MarioWork* mario) {
 /**
  * Turns camera y-follow back on when the mot_jumpNpc bounce ends on gon_10 (Hooktail Castle),
  * where it would otherwise stay off. US and later only.
+ * Descriptive name (not in the symbol maps).
  */
-void N_mot_jumpNpc_post(void) {
+void mot_jumpNpc_post(void) {
     MarioWork* mario = marioGetPtr();
     if (!strcmp(gp->currentMapName, "gon_10") && (mario->dispFlags & MARIO_DISP_FLAG_CAM_FOLLOW_Y_OFF)) {
         camFollowYOn();
     }
 }
 #endif
+
 /**
- * Normal A-button jump (also MARIO_MOTION_JUMP_2 and the script-driven JUMP_3):
- * jump voice and sound, rising pose, stops camera y-follow (JUMP_3 turns it on from the US release),
- * and records where the fall starts. The arc itself is run by the shared jump code in mario_motion.c.
- * Bowser runs kpa_jump.
+ * Jump motion (Bowser uses kpa_jump). On entry: marioPreJump, the takeoff pose and jump sounds (no voice for
+ * MARIO_MOTION_JUMP_3), and camera y-follow off (the third jump keeps it; from JP on it turns it on). After 2 frames
+ * the air pose and sub-motion 10 follow; counts airTimer.
  */
 void mot_jump(void) {
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId == 2) {
+    if (mario->characterId == CHARACTER_BOWSER) {
         kpa_jump();
         return;
     }
@@ -395,26 +418,24 @@ void mot_jump(void) {
         marioPreJump();
 #if VERSION <= VERSION_DEMO_JP
         if (mario->currMotionId != MARIO_MOTION_JUMP_3) {
-            camFollowYOff();
-        }
 #else
         if (mario->currMotionId == MARIO_MOTION_JUMP_3) {
             camFollowYOn();
         } else {
+#endif
             camFollowYOff();
         }
-#endif
         chgPoseB(mario);
         if (mario->currMotionId != MARIO_MOTION_JUMP_3) {
             jumpSfx(mario);
         }
-        psndSFXOn_3D((char*)0x14D, &mario->position);
+        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_MARIO_JUMP1), &mario->position);
         if (mario->airTimer == 0) {
             mario->fallStartPos = mario->position;
         }
         mario->trigFlags &= ~MARIO_TRIG_FLAG_SET_JUMP_PARAMS;
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             if (--mario->multiTimer <= 0) {
                 chgPoseB(mario);
@@ -428,7 +449,7 @@ void mot_jump(void) {
 /** Small jump: the same set-up as mot_jump for the lower jump arc (MARIO_MOTION_JUMP_SMALL). */
 void mot_jumpSmall(void) {
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId == 2) {
+    if (mario->characterId == CHARACTER_BOWSER) {
         kpa_jump();
         return;
     }
@@ -446,13 +467,13 @@ void mot_jumpSmall(void) {
         if (mario->currMotionId != MARIO_MOTION_JUMP_3) {
             jumpSfx(mario);
         }
-        psndSFXOn_3D((char*)0x14D, &mario->position);
+        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_MARIO_JUMP1), &mario->position);
         if (mario->airTimer == 0) {
             mario->fallStartPos = mario->position;
         }
         mario->trigFlags &= ~MARIO_TRIG_FLAG_SET_JUMP_PARAMS;
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             if (--mario->multiTimer <= 0) {
                 chgPoseB(mario);
@@ -475,10 +496,10 @@ void mot_upstairs(void) {
         mario->flags |= MARIO_FLAG_STOP_AIR_MOVEMENT;
         marioClearJumpPara();
         mario->multiTimer = 3;
-        mario->jumpVelocityY = (mario->stepUpY - mario->position.y) / (f32)(s32)mario->multiTimer;
+        mario->jumpVelocityY = (mario->stepUpY - mario->position.y) / (f32)mario->multiTimer;
         mario->currSubMotionId = 0;
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             mario->position.y = mario->position.y + mario->jumpVelocityY;
             if (--mario->multiTimer <= 0) {
@@ -502,15 +523,14 @@ void mot_upstairs(void) {
 }
 
 /**
- * Falling off a ledge or after a jump peak: falling pose (not for FALL_2, which also stops air steering),
- * camera y-follow back on once below the take-off height,
- * and faster camera follow near the bottom of the screen.
- * From the US release it also arms the mid-air Spring Jump input
- * when Mario fell from standing with the Ultra Boots. Bowser runs kpa_fall.
+ * Fall motion (Bowser uses kpa_fall). On entry: marks Mario falling, stops any sound in soundId[2] (nothing sets it)
+ * and sets the fall pose (MARIO_MOTION_FALL_2 stops air movement instead). Camera y-follow comes back on once he
+ * drops to his last ground height (not in background mode); at screenY 430 or more the follow rate rises 0.1 a frame
+ * to 0.8. Counts airTimer; US and later also set the Spring Jump trigger flags (marioPriCheckJabara).
  */
 void mot_fall(void) {
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId == 2) {
+    if (mario->characterId == CHARACTER_BOWSER) {
         kpa_fall();
         return;
     }
@@ -529,9 +549,9 @@ void mot_fall(void) {
         marioResetCamFollowRate();
         mario->currSubMotionId = 0;
         if (mario->currMotionId != MARIO_MOTION_FALL_2) {
-            if (mario->characterId == 2) {
+            if (mario->characterId == CHARACTER_BOWSER) {
                 kpaChgPose("KPA_J_1B", "KPA2_J_1B");
-            } else if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == 0) {
+            } else if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == CHARACTER_MARIO) {
                 marioChgPose("M_J_1C");
             }
         } else {
@@ -541,7 +561,7 @@ void mot_fall(void) {
             mario->fallStartPos = mario->position;
         }
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             if (mario->position.y <= mario->lastGroundPos.y) {
                 if (!marioBgmodeChk()) {
@@ -555,7 +575,7 @@ void mot_fall(void) {
 #if VERSION >= VERSION_US
     mario->trigFlags &= ~MARIO_TRIG_FLAG_JABARA_CHK;
     if (marioPriCheckJabara() && mario->jumpStartSpeed == 0.0f && mario->jumpPeakAirTime != 0 && mario->jumpPeakAirTime < mario->airTimer) {
-        if (mario->airTimer < 0x12) {
+        if (mario->airTimer < 18) {
             if (mario->controlStickSensitivity) {
                 mario->trigFlags |= MARIO_TRIG_FLAG_JABARA_MOVE_CHK;
             }
@@ -567,7 +587,7 @@ void mot_fall(void) {
         }
     }
 #endif
-    if (mario->screenY >= 0x1AE) {
+    if (mario->screenY >= 430) {
         f32 r = marioGetCamFollowRate();
         r += 0.1f;
         if (r >= 0.8f) {
@@ -577,7 +597,7 @@ void mot_fall(void) {
     }
 }
 
-/** Stops the looping sound in mario->soundId[2] when the fall motion ends. */
+/** Stops any sound in mario->soundId[2] (nothing sets it) when the fall motion ends. */
 void mot_fall_post(void) {
     MarioWork* mario = marioGetPtr();
     if (mario->soundId[2] != (u32)-1) {
@@ -587,8 +607,8 @@ void mot_fall_post(void) {
 }
 
 /**
- * Landing: clears the jump state and the looping sound,
- * then goes to the stay motion at once or after mario->multiTimer frames.
+ * Landing: clears the jump state and stops any sound in soundId[2] (nothing sets it), then goes to the stay
+ * motion at once or after mario->multiTimer frames.
  */
 void mot_land(void) {
     MarioWork* mario = marioGetPtr();
@@ -605,7 +625,7 @@ void mot_land(void) {
             mario->soundId[2] = -1;
         }
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             marioChgMot(MARIO_MOTION_STAY);
             break;

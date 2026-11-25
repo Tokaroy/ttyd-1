@@ -2,12 +2,6 @@
 
 #include "__card.h"
 
-/**
- * Completion callback for each erased sector of a file:
- * stops with CANCELED if the file was cancelled,
- * stamps the modification time and saves the directory after the last sector,
- * otherwise follows the FAT to the next block and erases it.
- */
 static void EraseCallback(s32 chan, s32 result) {
     CARDControl* card;
     CARDCallback callback;
@@ -61,10 +55,6 @@ error:
     callback(chan, result);
 }
 
-/**
- * Erases 'length' bytes at 'offset' of an open file, one sector at a time;
- * both must be multiples of the sector size and the file must be writable. Completes through the callback.
- */
 s32 CARDEraseAsync(CARDFileInfo* fileInfo, s32 length, s32 offset, CARDCallback callback) {
     CARDControl* card;
     s32 result;
@@ -102,7 +92,6 @@ s32 CARDEraseAsync(CARDFileInfo* fileInfo, s32 length, s32 offset, CARDCallback 
     return result;
 }
 
-/** Blocking CARDEraseAsync. */
 s32 CARDErase(CARDFileInfo* fileInfo, s32 length, s32 offset) {
     s32 result = CARDEraseAsync(fileInfo, length, offset, __CARDSyncCallback);
     if (result < 0) {

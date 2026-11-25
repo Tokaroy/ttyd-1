@@ -77,7 +77,7 @@ The cleanup keeps every build byte-identical; each change is checked on JP (32 f
 | Script arrays declared with a hard-coded size | 7,990 | 2,245 (sized where a forward declaration needs it) |
 | `#pragma` lines other than `once` | 1,692 | 708 |
 | `TODO` comments | 168 | 79 |
-| Behaviour-identical fakes ([FAKES.md](FAKES.md) rows / `FAKE` comments) | 214 / 427 | 140 / 238 |
+| Behaviour-identical fakes ([FAKES.md](FAKES.md) rows / `FAKE` comments) | 214 / 427 | 164 / 254 |
 
 Placements that stay are needed or kept on purpose: SDK startup sections, padding fillers, and small main-executable data that the original source most likely placed by hand too. Behaviour-identical fakes stay as well, and each is listed in [FAKES.md](FAKES.md).
 

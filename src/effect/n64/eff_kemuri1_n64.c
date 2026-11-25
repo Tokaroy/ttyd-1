@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 1 (kemuri: smoke) at a point; types 0-7 pick the smoke pattern.
+
 #include "eff/n64/eff_kemuri1_n64.h"
 #include "memory.h"
 #include "driver/camdrv.h"
@@ -6,49 +7,75 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "system.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
+#include "driver/dispdrv.h"
 
-typedef struct effKemuri1Data {
-    u16 type;               // 0x0
-    u8 align_2[2];          // 0x2, padding
-    Vec position;           // 0x4
-    u8 motion[0x38 - 0x10]; // 0x10, per-particle speeds and direction
-    s32 variant;            // 0x38, set per type at entry; never read
-    s32 timer;              // 0x3C
-    u8 anim[0x4C - 0x40];   // 0x40, animation frames and color
-    s32 duration;           // 0x4C
-} effKemuri1Data;
+// One entry per element: entry 0 is the effect header (type, position, frame counter, duration, texture frames),
+// entries 1.. are the puffs (position, speeds, direction, colour).
+typedef struct EffKemuri1Work {
+    u16 type;                  // 0x0
+    Vec position;              // 0x4
+    f32 hSpeed;                // 0x10, along (dirX, dirZ)
+    f32 hStep, hStep2, hStep3; // 0x14, types 0/1: hStep3 adds to hStep2, hStep2 to hStep, hStep to hSpeed;
+                               // types 4-7: hSpeed *= hStep
+    f32 vSpeed;                // 0x20
+    f32 vStep, vStep2, vStep3; // 0x24, vStep adds to vSpeed; types 0/1: vStep3 adds to vStep2, vStep2 to vStep;
+                               // types 3-7: vStep *= vStep2; types 4-7: vSpeed *= vStep3
+    f32 dirX;                  // 0x30, sin of the puff's direction
+    f32 dirZ;                  // 0x34, cos of the puff's direction
+    s32 reserved_38;           // 0x38, header: 0/3/2 by type, never read
+    s32 frame;                 // 0x3C, header: frames elapsed
+    s32 animFrame;             // 0x40, header: texture frame (0..15); puffs with one above 15 are not drawn
+    u8 r, g, b;                // 0x44, puff colour
+    s32 nextAnimFrame;         // 0x48, header: texture frame of the next frame
+    s32 duration;              // 0x4C, header: frames for the 16 texture frames
+} EffKemuri1Work;
 
-// local prototypes
 static void effKemuri1Main(EffectEntry* effect);
 
-typedef struct effKemuri1EWork {
-    u16 type;
-    u8 pad_2[2];
-    Vec position;                                         // 0x4
-    f32 f10, f14, f18, f1C, f20, f24, f28, f2C, f30, f34; // 0x10
-    s32 variant;                                          // 0x38, set per type; never read
-    s32 timer;                                            // 0x3C
-    s32 animFrame;                                        // 0x40
-    u8 r, g, b;                                           // 0x44
-    u8 pad_47;
-    s32 nextAnimFrame; // 0x48
-    s32 duration;      // 0x4C
-} effKemuri1EWork;
+/** Moves one puff of types 0 and 1 (the landing puffs): speeds ramp by their factors, out along its direction and up. */
+// Original name and size from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_land(EffKemuri1Work* work) {
+    work->hStep2 += work->hStep3;
+    work->hStep += work->hStep2;
+    work->hSpeed += work->hStep;
+    work->position.x += work->hSpeed * work->dirX;
+    work->position.z += work->hSpeed * work->dirZ;
+    work->vStep2 += work->vStep3;
+    work->vStep += work->vStep2;
+    work->vSpeed += work->vStep;
+    work->position.y += work->vSpeed;
+}
+
+/** Moves one puff of type 3: up by its speed, which eases by vStep (itself scaled by vStep2 each frame). */
+// Original name and size from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_dosun(EffKemuri1Work* work) {
+    work->position.y += work->vSpeed;
+    work->vSpeed += work->vStep;
+    work->vStep *= work->vStep2;
+}
+
+/** Moves one puff of types 4-7 (the ring): out along its direction and up, each speed scaled down every frame. */
+// Original name and size from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_dosun2(EffKemuri1Work* work) {
+    work->position.x += work->hSpeed * work->dirX;
+    work->position.z += work->hSpeed * work->dirZ;
+    work->hSpeed *= work->hStep;
+    kemuri_dosun(work);
+    work->vSpeed *= work->vStep3;
+}
 
 /**
- * Spawns smoke effect 1 at (x, y, z).
- * Types 0-1 make two sprites, 3 three dust clouds,
- * 4-7 a ring of eight (a5 is the start angle; 5 and 6 are coloured); type 2 makes none.
- * Used by stage objects, eff_fall.c and effKemuri11.
+ * Spawns smoke effect 1 at (x, y, z): two puffs out to the sides for types 0 and 1 (15 frames), three rising
+ * puffs for type 3 (129 frames), a ring of eight puffs starting at angle angleOfs for types 4-7 (65 frames); type 2
+ * has no puffs.
  */
-EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
-
+EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 angleOfs) {
     EffectEntry* effect;
-    effKemuri1EWork* data;
+    EffKemuri1Work* data;
     s32 effCount;
     s32 i;
-    f32 off;
     f32 angle;
     f32 tmp;
     f32 angle2;
@@ -74,32 +101,32 @@ EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
 
     effect->type = "Kemuri1N64";
     effect->count = effCount;
-    data = __memAlloc(HEAP_EFFECT, sizeof(effKemuri1EWork) * effCount);
+    data = __memAlloc(HEAP_EFFECT, sizeof(EffKemuri1Work) * effCount);
     effect->userdata = data;
     effect->callback = effKemuri1Main;
     switch (type) {
         case 0:
         case 1:
-            data->variant = 0;
+            data->reserved_38 = 0;
             data->duration = 15;
             break;
         case 2:
-            data->variant = 3;
+            data->reserved_38 = 3;
             data->duration = 65;
             break;
         case 3:
-            data->variant = 2;
+            data->reserved_38 = 2;
             data->duration = 129;
             break;
         case 4:
         case 5:
         case 6:
         case 7:
-            data->variant = 3;
+            data->reserved_38 = 3;
             data->duration = 65;
             break;
     }
-    data->timer = 0;
+    data->frame = 0;
     data->type = type;
     data->position.x = x;
     data->position.y = y;
@@ -109,21 +136,21 @@ EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
         case 0:
         case 1:
             for (i = 1; i < effCount; i++, data++) {
-                data->f10 = -3.0f;
-                data->f14 = 0.29999998f;
-                data->f18 = 0.0f;
-                data->f1C = 0.0f;
-                data->f20 = 1.75f;
-                data->f24 = -0.16f;
-                data->f28 = 0.0f;
-                data->f2C = 0.0f;
+                data->hSpeed = -3.0f;
+                data->hStep = 0.29999998f;
+                data->hStep2 = 0.0f;
+                data->hStep3 = 0.0f;
+                data->vSpeed = 1.75f;
+                data->vStep = -0.16f;
+                data->vStep2 = 0.0f;
+                data->vStep3 = 0.0f;
                 data->position.x = 0.0f;
                 data->position.y = 0.0f;
                 data->position.z = 4.0f;
                 angle = reviseAngle(90.0f + 180.0f * (i - 1));
                 angle = 6.2831855f * angle / 360.0f;
-                data->f30 = sin(angle);
-                data->f34 = cos(angle);
+                data->dirX = sin(angle);
+                data->dirZ = cos(angle);
                 data->r = 0xFF;
                 data->g = 0xFF;
                 data->b = 0xFF;
@@ -139,9 +166,9 @@ EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
                         data->position.y = 0.0f;
                         tmp = cos(angle);
                         data->position.z = 25.0f * -tmp;
-                        data->f20 = 0.95f;
-                        data->f24 = -0.04f;
-                        data->f28 = 0.94f;
+                        data->vSpeed = 0.95f;
+                        data->vStep = -0.04f;
+                        data->vStep2 = 0.94f;
                         break;
                     case 1:
                         angle = -2.3561945f;
@@ -150,9 +177,9 @@ EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
                         data->position.y = 4.0f;
                         tmp = cos(angle);
                         data->position.z = 25.0f * -tmp;
-                        data->f20 = 0.84999996f;
-                        data->f24 = -0.04f;
-                        data->f28 = 0.94f;
+                        data->vSpeed = 0.84999996f;
+                        data->vStep = -0.04f;
+                        data->vStep2 = 0.94f;
                         break;
                     case 2:
                         angle = 0.34906587f;
@@ -161,13 +188,13 @@ EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
                         data->position.y = 10.0f;
                         tmp = cos(angle);
                         data->position.z = 25.0f * -tmp;
-                        data->f20 = 0.75f;
-                        data->f24 = -0.04f;
-                        data->f28 = 0.94f;
+                        data->vSpeed = 0.75f;
+                        data->vStep = -0.04f;
+                        data->vStep2 = 0.94f;
                         break;
                 }
-                data->f30 = 0.0f;
-                data->f34 = 0.0f;
+                data->dirX = 0.0f;
+                data->dirZ = 0.0f;
                 data->r = 0xFF;
                 data->g = 0xFF;
                 data->b = 0xFF;
@@ -178,22 +205,22 @@ EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
         case 6:
         case 7:
             for (i = 1; i < effCount; i++, data++) {
-                data->f10 = -3.0f;
-                data->f14 = 0.93f;
-                data->f20 = 0.0f;
-                data->f24 = 0.099999994f;
-                data->f28 = 0.94f;
-                data->f2C = 0.94f;
-                angle2 = (a5 + (f32)(((i - 1) * 360) / (effCount - 1))) * 6.2831855f / 360.0f;
+                data->hSpeed = -3.0f;
+                data->hStep = 0.93f;
+                data->vSpeed = 0.0f;
+                data->vStep = 0.099999994f;
+                data->vStep2 = 0.94f;
+                data->vStep3 = 0.94f;
+                angle2 = (angleOfs + (f32)(((i - 1) * 360) / (effCount - 1))) * 6.2831855f / 360.0f;
                 tmp = sin(angle2);
                 data->position.x = 10.0f * -tmp;
                 data->position.y = 0.0f;
                 tmp = cos(angle2);
                 data->position.z = 10.0f * -tmp;
                 tmp = sin(angle2);
-                data->f30 = tmp;
+                data->dirX = tmp;
                 tmp = cos(angle2);
-                data->f34 = tmp;
+                data->dirZ = tmp;
                 switch (type) {
                     case 4:
                     case 7:
@@ -218,81 +245,51 @@ EffectEntry* effKemuri1N64Entry(s32 type, f32 x, f32 y, f32 z, f32 a5) {
     return effect;
 }
 
-#include "driver/dispdrv.h"
-static void effKemuri1Disp(CameraId cameraId, EffectEntry* effect);
-
-typedef struct effKemuri1MWork {
-    u16 type;
-    u8 pad_2[2];
-    Vec position;                                         // 0x4
-    f32 f10, f14, f18, f1C, f20, f24, f28, f2C, f30, f34; // 0x10
-    s32 variant;                                          // 0x38
-    s32 timer;                                            // 0x3C
-    s32 animFrame;                                        // 0x40
-    s32 color;                                            // 0x44, r, g, b in effKemuri1EWork
-    s32 nextAnimFrame;                                    // 0x48
-    s32 duration;                                         // 0x4C
-} effKemuri1MWork;
+static void effKemuri1Disp(CameraId cameraId, void* param);
 
 /**
  * Steps an animation index through 16 frames across the effect's duration (15 to 129 frames),
  * moves each sprite by its velocity and deletes the effect when the animation ends.
  */
 static void effKemuri1Main(EffectEntry* effect) {
-    effKemuri1MWork* work = effect->userdata;
+    EffKemuri1Work* work = effect->userdata;
     Vec pos2;
     Vec pos = {0.0f, 0.0f, 0.0f};
-    s32 type, i, t, b, a;
+    s32 type, i, frame, animFrame, nextAnimFrame;
 
     pos.x = work->position.x;
     pos.y = work->position.y;
     pos.z = work->position.z;
     pos2 = pos;
 
-    t = work->timer;
+    frame = work->frame;
     type = work->type;
-    b = 16.0f * t / work->duration;
-    a = 16.0f * (t + 1) / work->duration;
-    work->timer = t + 1;
-    if (a > 15) {
-        a = 15;
+    animFrame = 16.0f * frame / work->duration;
+    nextAnimFrame = 16.0f * (frame + 1) / work->duration;
+    work->frame = frame + 1;
+    if (nextAnimFrame > 15) {
+        nextAnimFrame = 15;
     }
-    if (b > 15) {
+    if (animFrame > 15) {
         effDelete(effect);
         return;
     }
-    work->animFrame = b;
-    work->nextAnimFrame = a;
+    work->animFrame = animFrame;
+    work->nextAnimFrame = nextAnimFrame;
     for (i = 1, work++; i < effect->count; i++, work++) {
         switch (type) {
             case 0:
             case 1:
-                work->f18 += work->f1C;
-                work->f14 += work->f18;
-                work->f10 += work->f14;
-                work->position.x += work->f10 * work->f30;
-                work->position.z += work->f10 * work->f34;
-                work->f28 += work->f2C;
-                work->f24 += work->f28;
-                work->f20 += work->f24;
-                work->position.y += work->f20;
+                kemuri_land(work);
                 break;
             case 3:
-                work->position.y += work->f20;
-                work->f20 += work->f24;
-                work->f24 *= work->f28;
+                kemuri_dosun(work);
                 break;
             case 4:
             case 5:
             case 6:
             case 7:
-                work->position.x += work->f10 * work->f30;
-                work->position.z += work->f10 * work->f34;
-                work->f10 *= work->f14;
-                work->position.y += work->f20;
-                work->f20 += work->f24;
-                work->f24 *= work->f28;
-                work->f20 *= work->f2C;
+                kemuri_dosun2(work);
                 break;
         }
     }
@@ -300,40 +297,29 @@ static void effKemuri1Main(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&pos2), 2, (DispCallback)effKemuri1Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_XLU, effKemuri1Disp, effect);
 }
-
-typedef struct effKemuri1Work {
-    u16 type; // 0x0
-    u8 pad_2[2];
-    Vec position;           // 0x4
-    u8 motion[0x40 - 0x10]; // 0x10
-    s32 timer;              // 0x40
-    u8 r, g, b;             // 0x44
-    u8 pad_47;
-    s32 nextAnimFrame; // 0x48
-    u8 pad_4C[4];
-} effKemuri1Work;
 
 /**
  * Draws each smoke sprite as a camera-facing quad with texture 0x28, picking the animation frame from the timer;
  * types 5-7 are half size.
  */
-static void effKemuri1Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri1Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     Mtx mtx, scale, rot, view;
     GXTexObj tex;
-    effKemuri1Work* work;
+    EffKemuri1Work* work;
     CameraEntry* camera;
     s32 type;
     s32 i, j;
     f32 s, ofsS, ofsT;
-    s32 a, b;
+    s32 animFrame, nextAnimFrame;
 
     work = effect->userdata;
     camera = camGetPtr(cameraId);
     type = work->type;
-    a = work->timer;
-    b = work->nextAnimFrame;
+    animFrame = work->animFrame;
+    nextAnimFrame = work->nextAnimFrame;
     s = 1.0f;
     switch (type) {
         case 5:
@@ -378,12 +364,15 @@ static void effKemuri1Disp(CameraId cameraId, EffectEntry* effect) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    ofsS = 0.0625f * a;
-    ofsT = 0.0625f * b;
+    ofsS = 0.0625f * animFrame;
+    ofsT = 0.0625f * nextAnimFrame;
     for (i = 1, work++; i < effect->count; i++, work++) {
         f32 h;
         f32 w;
-        if (work->timer > 15) {
+
+        // BUG: animFrame is only written to the header element; the puffs' copy is never set (heap not cleared),
+        // so a puff is skipped whenever that leftover value is above 15.
+        if (work->animFrame > 15) {
             continue;
         }
         PSMTXTrans(mtx, ofsS, 0.0f, 0.0f);
@@ -402,10 +391,9 @@ static void effKemuri1Disp(CameraId cameraId, EffectEntry* effect) {
                 PSMTXConcat(view, mtx, mtx);
                 GXLoadPosMtxImm(mtx, GX_PNMTX0);
             } else {
-                {
-                    GXColor* c;
-                    GXSetChanMatColor(GX_COLOR0A0, *(c = &(GXColor){0, 0, 0, 0}, c->r = work->r, c->g = work->g, c->b = work->b, c->a = 0xFF, c));
-                }
+                u8 alpha = 0xFF;
+
+                GXSetChanMatColor(GX_COLOR0A0, (GXColor){work->r, work->g, work->b, alpha});
                 PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
                 PSMTXConcat(view, mtx, mtx);
                 GXLoadPosMtxImm(mtx, GX_PNMTX0);

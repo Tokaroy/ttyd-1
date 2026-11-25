@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: sweat drops flung out in a fan (six for type 0, four for type 1); used by the Yoshi partner.
+
 #include "eff/n64/eff_sweat_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,14 +8,10 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-
-// FAKE: local prototype: sin takes a float (libc: double); this file was compiled with it and the header prototype changes the code.
-double sin(float);
-// FAKE: local prototype: cos takes a float (libc: double); this file was compiled with it and the header prototype changes the code.
-double cos(float);
+#include "libc_decls.h"
 
 static void effSweatMain(EffectEntry* effect);
-static void effSweatDisp(CameraId cameraId, EffectEntry* effect);
+static void effSweatDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns sweat drops at (x, y, z) for `life` frames, fanned around `angle`.
@@ -23,7 +20,6 @@ static void effSweatDisp(CameraId cameraId, EffectEntry* effect);
 EffectEntry* effSweatN64Entry(s32 type, f32 x, f32 y, f32 z, f32 base, f32 angle, s32 life) {
     EffectEntry* effect;
     EffSweatN64Work* work;
-    EffSweatN64Work* w;
     s32 count;
     s32 i;
     f32 rot;
@@ -51,12 +47,14 @@ EffectEntry* effSweatN64Entry(s32 type, f32 x, f32 y, f32 z, f32 base, f32 angle
     work->position.x = x;
     work->position.y = y;
     work->position.z = z;
-    w = work + 1;
-    for (i = 1; i < effect->count; i++, w++) {
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
         Vec axis;
         Vec dir = {0.0f, 0.0f, 0.0f};
-        dir.x = (f32)sin(0.0f);
-        dir.z = -(f32)cos(0.0f);
+        f32 yaw = 0.0f;
+
+        dir.x = (f32)sin(yaw);
+        dir.z = -(f32)cos(yaw);
         axis = dir;
         switch (type) {
             case 0:
@@ -71,19 +69,21 @@ EffectEntry* effSweatN64Entry(s32 type, f32 x, f32 y, f32 z, f32 base, f32 angle
         }
         rot = angle + spread;
         PSMTXRotAxisRad(mtx, &axis, 0.017453292f * -rot);
-        w->position.x = mtx[0][1] * len;
-        w->position.y = mtx[1][1] * len;
-        w->position.z = mtx[2][2] * len;
-        w->velocity.x = mtx[0][1];
-        w->velocity.y = mtx[1][1];
-        w->velocity.z = mtx[2][1];
-        w->rot = rot;
-        w->life = life;
-        w->age = 0;
-        w->delay = irand(10);
-        w->alpha = 0;
+        work->position.x = mtx[0][1] * len;
+        work->position.y = mtx[1][1] * len;
+
+        // Z position uses column 2, unlike X/Y and the velocity below.
+        work->position.z = mtx[2][2] * len;
+        work->velocity.x = mtx[0][1];
+        work->velocity.y = mtx[1][1];
+        work->velocity.z = mtx[2][1];
+        work->rot = rot;
+        work->life = life;
+        work->age = 0;
+        work->delay = irand(10);
+        work->alpha = 0;
         if (type == 0 && i >= 4) {
-            w->delay += 16;
+            work->delay += 16;
         }
     }
     return effect;
@@ -142,17 +142,16 @@ static void effSweatMain(EffectEntry* effect) {
     if (done >= effect->count - 1) {
         effDelete(effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effSweatDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effSweatDisp, effect);
     }
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_loop_invariants off
 /**
  * Draws each started drop as a camera-facing 6.4 x 9.6 white quad of the TTYD sweat-drop texture 93,
  * tilted by its angle and mirrored when the angle is positive.
  */
-static void effSweatDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSweatDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffSweatN64Work* work;
     Mtx trans;
@@ -161,13 +160,11 @@ static void effSweatDisp(CameraId cameraId, EffectEntry* effect) {
     GXTexObj texObj;
     s32 i;
     f32 x2;
-    f32 nsize;
     f32 x1;
     f32 yt;
     f32 size;
     f32 yb;
     f32 h = 9.6f;
-    f32 neg;
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
@@ -193,15 +190,12 @@ static void effSweatDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    neg = -h;
     work++;
     for (i = 1; i < effect->count; i++, work++) {
         if (work->delay != 0) {
             continue;
         }
-        {
-            GXSetChanMatColor(GX_COLOR0A0, (GXColor){255, 255, 255, work->alpha});
-        }
+        GXSetChanMatColor(GX_COLOR0A0, (GXColor){255, 255, 255, work->alpha});
         PSMTXTrans(trans, work->position.x, work->position.y, work->position.z);
         PSMTXRotRad(rot, 'z', 0.017453292f * work->rot);
         PSMTXConcat(trans, rot, trans);
@@ -213,11 +207,10 @@ static void effSweatDisp(CameraId cameraId, EffectEntry* effect) {
         if (work->rot > 0.0f) {
             size *= -1.0f;
         }
-        yt = 4.8f;
-        nsize = 0.5f;
-        x1 = -size * nsize;
-        x2 = size * nsize;
-        yb = neg * nsize;
+        yt = h / 2.0f;
+        x1 = -size / 2.0f;
+        x2 = size / 2.0f;
+        yb = -h / 2.0f;
         GXPosition3f32(x1, yt, 0.0f);
         GXTexCoord2f32(0.0f, 0.0f);
         GXPosition3f32(x2, yt, 0.0f);
@@ -228,4 +221,3 @@ static void effSweatDisp(CameraId cameraId, EffectEntry* effect) {
         GXTexCoord2f32(0.0f, 1.0f);
     }
 }
-#pragma opt_loop_invariants reset

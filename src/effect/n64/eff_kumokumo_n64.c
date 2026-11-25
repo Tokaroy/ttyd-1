@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: cloud (kumokumo) drawn from model display-list data; types 0-4.
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -6,18 +7,13 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "system.h"
 #include "version.h"
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
-
-#include "eff/n64/eff_kumokumo_n64.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
+#include "system.h"
+#include "eff/n64/eff_kumokumo_n64.h"
 
-// Model data in the exporter's layout: indexed vertex arrays (positions, normals, colours, texture coordinates),
-// display lists of GX commands (each padded to 32 bytes with GX_NOP) and, per list table, the list sizes in
-// 32-byte units for GXCallDisplayList.
-s16 cloud_vertex_tbl[] __attribute__((aligned(32))) = {
+static s16 cloud_vertex_tbl[] __attribute__((aligned(32))) = {
     25023, 2076, 0, 27200, 6605, 0,
     27743, 12288, 0, 26383, 16490, 0,
     24751, 17685, 0, 22303, -522, 0,
@@ -37,7 +33,7 @@ s16 cloud_vertex_tbl[] __attribute__((aligned(32))) = {
     0, 0, 0, 0, 351, 0,
     0, 788, 0,
 };
-s16 cloud_texcoord0_tbl[] __attribute__((aligned(32))) = {
+static s16 cloud_texcoord0_tbl[] __attribute__((aligned(32))) = {
     0, -13107, 4096, -13107, 4096, -16383, 0, -16383,
     8192, -13107, 8192, -16383, 12288, -13107, 12288, -16383,
     16384, -13107, 16384, -16383, 0, -10649, 4096, -10649,
@@ -48,7 +44,7 @@ s16 cloud_texcoord0_tbl[] __attribute__((aligned(32))) = {
     12288, -3276, 16384, -3276, 0, 0, 4096, 0,
     8192, 0, 12288, 0, 16384, 0,
 };
-s16 cloud_texcoord1_tbl[] __attribute__((aligned(32))) = {
+static s16 cloud_texcoord1_tbl[] __attribute__((aligned(32))) = {
     0, -13107, 4096, -13107, 4096, -16383, 0, -16383,
     8192, -13107, 8192, -16383, 12288, -13107, 12288, -16383,
     16384, -13107, 16384, -16383, 0, -10649, 4096, -10649,
@@ -59,22 +55,25 @@ s16 cloud_texcoord1_tbl[] __attribute__((aligned(32))) = {
     12288, -3276, 16384, -3276, 0, 0, 4096, 0,
     8192, 0, 12288, 0, 16384, 0,
 };
-s8 cloud_normal_tbl[] __attribute__((aligned(32))) = {
-    0, 0, 64,
-};
-GXColor cloud_color0_tbl[] __attribute__((aligned(32))) = {
+
+#if VERSION <= VERSION_DEMO_JP
+static GXColor cloud_color0_tbl[] __attribute__((aligned(32))) = {
     {255, 255, 255, 0}, {255, 255, 255, 51}, {255, 255, 255, 102}, {255, 255, 255, 127},
     {255, 255, 255, 204},
 };
-u32 cloud_dl_0_0[] __attribute__((aligned(32))) = {0x98000E1E, 0x00001E1E, 0x1F00001F, 0x1F190001, 0x19191A00, 0x031A1A14, 0x00011414, 0x15000315, 0x150F0001, 0x0F0F1000, 0x0310100A, 0x00010A0A, 0x0B00030B, 0x0B050000, 0x00000600, 0x01010100, 0x00000303, 0x01000002, 0x02000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-u32 cloud_dl_0_1[] __attribute__((aligned(32))) = {0x98000E1F, 0x00001F1F, 0x20000020, 0x201A0003, 0x1A1A1B00, 0x041B1B15, 0x00031515, 0x16000416, 0x16100003, 0x10101100, 0x0411110B, 0x00030B0B, 0x0C00040C, 0x0C060001, 0x01010700, 0x02040401, 0x00000202, 0x02000005, 0x05000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-u32 cloud_dl_0_2[] __attribute__((aligned(32))) = {0x98000E20, 0x00002020, 0x21000021, 0x211B0004, 0x1B1B1C00, 0x031C1C16, 0x00041616, 0x17000317, 0x17110004, 0x11111200, 0x0312120C, 0x00040C0C, 0x0D00030D, 0x0D070002, 0x04040800, 0x01060602, 0x00000505, 0x03000007, 0x07000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-u32 cloud_dl_0_3[] __attribute__((aligned(32))) = {0x98000E21, 0x00002121, 0x22000022, 0x221C0003, 0x1C1C1D00, 0x011D1D17, 0x00031717, 0x18000118, 0x18120003, 0x12121300, 0x0113130D, 0x00030D0D, 0x0E00010E, 0x0E080001, 0x06060900, 0x00080803, 0x00000707, 0x04000009, 0x09000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-/** The round cloud model's four display lists. */
-void* cloud_dl_0_tbl[] = {cloud_dl_0_0, cloud_dl_0_1, cloud_dl_0_2, cloud_dl_0_3};
-/** Size in 32-byte units of each of the round cloud model's four display lists. */
-u8 cloud_dl_0_size_tbl[] = {0x03, 0x03, 0x03, 0x03};
-s16 batten_vertex_tbl[] __attribute__((aligned(32))) = {
+#endif
+
+/* GX display lists (GX_TRIANGLESTRIP 0x98 with u8 position/normal/color/texcoord0/texcoord1 indices, 32-byte padded), drawn with GXCallDisplayList */
+static u32 cloud_dl_0_0[] __attribute__((aligned(32))) = {0x98000E1E, 0x00001E1E, 0x1F00001F, 0x1F190001, 0x19191A00, 0x031A1A14, 0x00011414, 0x15000315, 0x150F0001, 0x0F0F1000, 0x0310100A, 0x00010A0A, 0x0B00030B, 0x0B050000, 0x00000600, 0x01010100, 0x00000303, 0x01000002, 0x02000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+static u32 cloud_dl_0_1[] __attribute__((aligned(32))) = {0x98000E1F, 0x00001F1F, 0x20000020, 0x201A0003, 0x1A1A1B00, 0x041B1B15, 0x00031515, 0x16000416, 0x16100003, 0x10101100, 0x0411110B, 0x00030B0B, 0x0C00040C, 0x0C060001, 0x01010700, 0x02040401, 0x00000202, 0x02000005, 0x05000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+static u32 cloud_dl_0_2[] __attribute__((aligned(32))) = {0x98000E20, 0x00002020, 0x21000021, 0x211B0004, 0x1B1B1C00, 0x031C1C16, 0x00041616, 0x17000317, 0x17110004, 0x11111200, 0x0312120C, 0x00040C0C, 0x0D00030D, 0x0D070002, 0x04040800, 0x01060602, 0x00000505, 0x03000007, 0x07000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+static u32 cloud_dl_0_3[] __attribute__((aligned(32))) = {0x98000E21, 0x00002121, 0x22000022, 0x221C0003, 0x1C1C1D00, 0x011D1D17, 0x00031717, 0x18000118, 0x18120003, 0x12121300, 0x0113130D, 0x00030D0D, 0x0E00010E, 0x0E080001, 0x06060900, 0x00080803, 0x00000707, 0x04000009, 0x09000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+
+#if VERSION <= VERSION_DEMO_JP
+static void* cloud_dl_0_tbl[] = {cloud_dl_0_0, cloud_dl_0_1, cloud_dl_0_2, cloud_dl_0_3};
+#endif
+
+static s16 batten_vertex_tbl[] __attribute__((aligned(32))) = {
     -14192, -15455, 0, -8515, -16128, 0,
     0, -16800, 0, 8515, -16128, 0,
     14192, -15455, 0, -10866, -12768, 0,
@@ -94,7 +93,7 @@ s16 batten_vertex_tbl[] __attribute__((aligned(32))) = {
     0, 0, 0, 2571, 0, 0,
     4285, 0, 0,
 };
-s16 batten_texcoord0_tbl[] __attribute__((aligned(32))) = {
+static s16 batten_texcoord0_tbl[] __attribute__((aligned(32))) = {
     0, 10922, 4096, 10922, 4096, 12288, 0, 12288,
     8192, 10922, 8192, 12288, 12288, 10922, 12288, 12288,
     16384, 10922, 16384, 12288, 0, 9557, 4096, 9557,
@@ -105,7 +104,7 @@ s16 batten_texcoord0_tbl[] __attribute__((aligned(32))) = {
     12288, 5461, 16384, 5461, 0, 4096, 4096, 4096,
     8192, 4096, 12288, 4096, 16384, 4096,
 };
-s16 batten_texcoord1_tbl[] __attribute__((aligned(32))) = {
+static s16 batten_texcoord1_tbl[] __attribute__((aligned(32))) = {
     0, 10922, 4096, 10922, 4096, 12288, 0, 12288,
     8192, 10922, 8192, 12288, 12288, 10922, 12288, 12288,
     16384, 10922, 16384, 12288, 0, 9557, 4096, 9557,
@@ -116,63 +115,129 @@ s16 batten_texcoord1_tbl[] __attribute__((aligned(32))) = {
     12288, 5461, 16384, 5461, 0, 4096, 4096, 4096,
     8192, 4096, 12288, 4096, 16384, 4096,
 };
-s8 batten_normal_tbl[] __attribute__((aligned(32))) = {
+
 #if VERSION <= VERSION_DEMO_JP
-    0, 0, 64,
-#else
-    0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0,
-#endif
-};
-GXColor batten_color0_tbl[] __attribute__((aligned(32))) = {
+static GXColor batten_color0_tbl[] __attribute__((aligned(32))) = {
     {255, 255, 255, 51}, {255, 255, 255, 102}, {255, 255, 255, 0}, {255, 255, 255, 153},
     {255, 255, 255, 127}, {255, 255, 255, 204},
 };
-u32 batten_dl_0_0[] __attribute__((aligned(32))) = {0x98000E1E, 0x00021E1E, 0x1F00021F, 0x1F190000, 0x19191A00, 0x041A1A14, 0x00001414, 0x15000415, 0x150F0000, 0x0F0F1000, 0x0410100A, 0x00000A0A, 0x0B00040B, 0x0B050000, 0x00000600, 0x01010100, 0x00020303, 0x01000202, 0x02000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-u32 batten_dl_0_1[] __attribute__((aligned(32))) = {0x98000E1F, 0x00021F1F, 0x20000220, 0x201A0004, 0x1A1A1B00, 0x051B1B15, 0x00041515, 0x16000516, 0x16100004, 0x10101100, 0x0511110B, 0x00040B0B, 0x0C00050C, 0x0C060001, 0x01010700, 0x03040401, 0x00020202, 0x02000205, 0x05000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-u32 batten_dl_0_2[] __attribute__((aligned(32))) = {0x98000E20, 0x00022020, 0x21000221, 0x211B0005, 0x1B1B1C00, 0x041C1C16, 0x00051616, 0x17000417, 0x17110005, 0x11111200, 0x0412120C, 0x00050C0C, 0x0D00040D, 0x0D070003, 0x04040800, 0x01060602, 0x00020505, 0x03000207, 0x07000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-u32 batten_dl_0_3[] __attribute__((aligned(32))) = {0x98000E21, 0x00022121, 0x22000222, 0x221C0004, 0x1C1C1D00, 0x001D1D17, 0x00041717, 0x18000018, 0x18120004, 0x12121300, 0x0013130D, 0x00040D0D, 0x0E00000E, 0x0E080001, 0x06060900, 0x00080803, 0x00020707, 0x04000209, 0x09000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
-void* batten_dl_0_tbl[] = {batten_dl_0_0, batten_dl_0_1, batten_dl_0_2, batten_dl_0_3};
-/** Size in 32-byte units of each of the X-shaped (batten) cloud model's four display lists. */
-u8 batten_dl_0_size_tbl[] = {0x03, 0x03, 0x03, 0x03};
-/** Extra Z rotation in degrees of a cloud puff over its 31-frame cycle, swinging up to about 185. */
-u8 rz_tbl[] = {0x00, 0x09, 0x12, 0x1C, 0x25, 0x2F, 0x39, 0x43, 0x4D, 0x57, 0x61, 0x6B, 0x74, 0x7D, 0x86, 0x8F, 0x97, 0x9F, 0xA6, 0xAD, 0xB4, 0xB8, 0xB9, 0xB9, 0xB6, 0xB4, 0xB1, 0xAE, 0xAE, 0xAF, 0xB4};
+#endif
 
-/* GX display lists (GX_TRIANGLESTRIP 0x98 with u8 position/normal/texcoord indices, 32-byte padded), drawn with GXCallDisplayList */
-/* GX display lists (GX_TRIANGLESTRIP 0x98 with u8 position/normal/texcoord indices, 32-byte padded), drawn with GXCallDisplayList */
-#define KK_ARRAYS(vtx, tex0, tex1, norm, clr)                          \
-    GXClearVtxDesc();                                                  \
-    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);                                \
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 6);     \
-    GXSetArray(GX_VA_POS, vtx, 6);                                     \
-    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);                                \
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);      \
-    GXSetArray(GX_VA_NRM, norm, 3);                                    \
-    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);                               \
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0); \
-    GXSetArray(GX_VA_CLR0, clr, 4);                                    \
-    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);                               \
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);    \
-    GXSetArray(GX_VA_TEX0, tex0, 4);                                   \
-    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX8);                               \
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 14);    \
-    GXSetArray(GX_VA_TEX1, tex1, 4);
+/* GX display lists (GX_TRIANGLESTRIP 0x98 with u8 position/normal/color/texcoord0/texcoord1 indices, 32-byte padded), drawn with GXCallDisplayList */
+static u32 batten_dl_0_0[] __attribute__((aligned(32))) = {0x98000E1E, 0x00021E1E, 0x1F00021F, 0x1F190000, 0x19191A00, 0x041A1A14, 0x00001414, 0x15000415, 0x150F0000, 0x0F0F1000, 0x0410100A, 0x00000A0A, 0x0B00040B, 0x0B050000, 0x00000600, 0x01010100, 0x00020303, 0x01000202, 0x02000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+static u32 batten_dl_0_1[] __attribute__((aligned(32))) = {0x98000E1F, 0x00021F1F, 0x20000220, 0x201A0004, 0x1A1A1B00, 0x051B1B15, 0x00041515, 0x16000516, 0x16100004, 0x10101100, 0x0511110B, 0x00040B0B, 0x0C00050C, 0x0C060001, 0x01010700, 0x03040401, 0x00020202, 0x02000205, 0x05000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+static u32 batten_dl_0_2[] __attribute__((aligned(32))) = {0x98000E20, 0x00022020, 0x21000221, 0x211B0005, 0x1B1B1C00, 0x041C1C16, 0x00051616, 0x17000417, 0x17110005, 0x11111200, 0x0412120C, 0x00050C0C, 0x0D00040D, 0x0D070003, 0x04040800, 0x01060602, 0x00020505, 0x03000207, 0x07000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+static u32 batten_dl_0_3[] __attribute__((aligned(32))) = {0x98000E21, 0x00022121, 0x22000222, 0x221C0004, 0x1C1C1D00, 0x001D1D17, 0x00041717, 0x18000018, 0x18120004, 0x12121300, 0x0013130D, 0x00040D0D, 0x0E00000E, 0x0E080001, 0x06060900, 0x00080803, 0x00020707, 0x04000209, 0x09000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000, 0x00000000};
+static s8 cloud_normal_tbl[] __attribute__((aligned(32))) = {
+    0, 0, 64,
+};
+
+#if VERSION >= VERSION_JP
+static GXColor cloud_color0_tbl[] __attribute__((aligned(32))) = {
+    {255, 255, 255, 0}, {255, 255, 255, 51}, {255, 255, 255, 102}, {255, 255, 255, 127},
+    {255, 255, 255, 204},
+};
+#endif
+
+/** The round cloud model's four display lists. */
+#if VERSION >= VERSION_JP
+static void* cloud_dl_0_tbl[] = {cloud_dl_0_0, cloud_dl_0_1, cloud_dl_0_2, cloud_dl_0_3};
+#endif
+
+/** Size in 32-byte units of each of the round cloud model's four display lists. */
+#if VERSION >= VERSION_JP
+static u8 cloud_dl_0_size_tbl[] = {0x03, 0x03, 0x03, 0x03};
+static s8 batten_normal_tbl[] __attribute__((aligned(32))) = {
+    0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0,
+};
+static GXColor batten_color0_tbl[] __attribute__((aligned(32))) = {
+    {255, 255, 255, 51}, {255, 255, 255, 102}, {255, 255, 255, 0}, {255, 255, 255, 153},
+    {255, 255, 255, 127}, {255, 255, 255, 204},
+};
+#endif
+
+/** Size in 32-byte units of each of the round cloud model's four display lists. */
+#if VERSION <= VERSION_DEMO_JP
+static u8 cloud_dl_0_size_tbl[] = {0x03, 0x03, 0x03, 0x03};
+static s8 batten_normal_tbl[] __attribute__((aligned(32))) = {0, 0, 64};
+#endif
+
+static void* batten_dl_0_tbl[] = {batten_dl_0_0, batten_dl_0_1, batten_dl_0_2, batten_dl_0_3};
+
+/** Size in 32-byte units of each of the X-shaped (batten) cloud model's four display lists. */
+static u8 batten_dl_0_size_tbl[] = {0x03, 0x03, 0x03, 0x03};
+
+/** Extra Z rotation in degrees of a cloud puff over its 31-frame cycle, swinging up to about 185. */
+static u8 rz_tbl[] = {0x00, 0x09, 0x12, 0x1C, 0x25, 0x2F, 0x39, 0x43, 0x4D, 0x57, 0x61, 0x6B, 0x74, 0x7D, 0x86, 0x8F, 0x97, 0x9F, 0xA6, 0xAD, 0xB4, 0xB8, 0xB9, 0xB9, 0xB6, 0xB4, 0xB1, 0xAE, 0xAE, 0xAF, 0xB4};
 
 static void effKumokumoMain(EffectEntry* effect);
-static void effKumokumoDisp(CameraId cameraId, EffectEntry* effect);
+static void effKumokumoDisp(CameraId cameraId, void* param);
+
+/** Sets up the round cloud model's vertex formats and arrays and calls its four display lists. */
+// Original name and size (0x174) from the JP demo map (UNUSED there: every call is inlined).
+static void cloud_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 6);
+    GXSetArray(GX_VA_POS, cloud_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, cloud_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, cloud_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, cloud_texcoord0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX1, cloud_texcoord1_tbl, 4);
+    for (i = 0; i < 4; i++) {
+        GXCallDisplayList(cloud_dl_0_tbl[i], cloud_dl_0_size_tbl[i] << 5);
+    }
+}
+
+/** Sets up the X-shaped (batten) cloud model's vertex formats and arrays and calls its four display lists. */
+// Original name and size (0x174) from the JP demo map (UNUSED there: every call is inlined).
+static void batten_polygon_0(void) {
+    u32 i;
+
+    GXClearVtxDesc();
+    GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 6);
+    GXSetArray(GX_VA_POS, batten_vertex_tbl, 6);
+    GXSetVtxDesc(GX_VA_NRM, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_NRM, GX_NRM_XYZ, GX_S8, 6);
+    GXSetArray(GX_VA_NRM, batten_normal_tbl, 3);
+    GXSetVtxDesc(GX_VA_CLR0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_CLR0, GX_CLR_RGBA, GX_RGBA8, 0);
+    GXSetArray(GX_VA_CLR0, batten_color0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX0, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX0, batten_texcoord0_tbl, 4);
+    GXSetVtxDesc(GX_VA_TEX1, GX_INDEX8);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX1, GX_TEX_ST, GX_S16, 14);
+    GXSetArray(GX_VA_TEX1, batten_texcoord1_tbl, 4);
+    for (i = 0; i < 4; i++) {
+        GXCallDisplayList(batten_dl_0_tbl[i], batten_dl_0_size_tbl[i] << 5);
+    }
+}
 
 /**
  * Spawns a cloud effect at (x, y, z) scaled by scale, lasting time frames (time <= 0 means until deleted).
  * Record 0 is the main cloud model (colors, alpha, texture scroll); records 1+ are textured puff sprites.
  * Types 0-4 pick colors and motion: 0 and 4 puffs drift outward, 1 is the model alone,
  * 2 uses an X-shaped model with converging puffs, 3 is a blue swirl of five clouds.
- * Used for Flurrie's breath (party_cloud.c, unit_party_clauda.c).
+ * Used for Flurrie's breath (party_cloud.c, unit_party_clauda.c, type 0), Mario's battle helper in unit_act_mario.c,
+ * Magnus 2.0's inhale (type 2), the ice barrier in unit_bllizard.c (type 3) and evt_eff64.
  */
 EffectEntry* effKumokumoN64Entry(s32 type, s32 time, f32 x, f32 y, f32 z, f32 rot, f32 unused, f32 scale) {
     EffectEntry* effect;
     EffKumokumoN64Particle* work;
-    EffKumokumoN64Particle* p;
     s32 count;
     s32 i;
 
@@ -189,7 +254,7 @@ EffectEntry* effKumokumoN64Entry(s32 type, s32 time, f32 x, f32 y, f32 z, f32 ro
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffKumokumoN64Particle));
     effect->userdata = work;
     effect->callback = effKumokumoMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (time <= 0) {
@@ -204,7 +269,7 @@ EffectEntry* effKumokumoN64Entry(s32 type, s32 time, f32 x, f32 y, f32 z, f32 ro
     work->scale = scale;
     work->a2 = 255;
     work->rot = rot;
-    work->camera = 4;
+    work->camera = CAMERA_3D;
     work->s1 = 0.0f;
     work->t1 = 0.0f;
     work->s2 = 0.0f;
@@ -255,51 +320,51 @@ EffectEntry* effKumokumoN64Entry(s32 type, s32 time, f32 x, f32 y, f32 z, f32 ro
             work->b2 = 0;
             break;
     }
-    p = work + 1;
-    for (i = 1; i < effect->count; i++, p++) {
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
         switch (type) {
             case 0:
             case 1:
-                p->x = 0.0f;
-                p->y = 3.0f;
-                p->z = 0.0f;
-                p->scale = 0.0f;
-                p->alpha = 204;
-                p->delay = i * 30;
-                p->rot = (f32)-irand(20);
-                p->s1 = 8.0f;
+                work->x = 0.0f;
+                work->y = 3.0f;
+                work->z = 0.0f;
+                work->scale = 0.0f;
+                work->alpha = 204;
+                work->delay = i * 30;
+                work->rot = (f32)-irand(20);
+                work->s1 = 8.0f;
                 break;
             case 2:
-                p->x = (f32)(200 - irand(400));
-                p->y = -(f32)(irand(50) + 200);
-                p->z = 0.0f;
-                p->scale = 1.0f;
-                p->alpha = 0;
-                p->delay = i * 15;
-                p->rot = 0.0f;
+                work->x = (f32)(200 - irand(400));
+                work->y = -(f32)(irand(50) + 200);
+                work->z = 0.0f;
+                work->scale = 1.0f;
+                work->alpha = 0;
+                work->delay = i * 15;
+                work->rot = 0.0f;
                 break;
             case 3:
                 rot = (f32)irand(360);
                 scale = 200.0f + (f32)irand(200);
                 rot = 6.2831855f * rot / 360.0f;
-                p->x = scale * (f32)sin(rot);
-                p->y = scale * (f32)cos(rot);
-                p->z = 0.0f;
-                p->scale = 2.0f;
-                p->alpha = 0;
-                p->delay = i * 15;
-                p->rot = 0.0f;
+                work->x = scale * (f32)sin(rot);
+                work->y = scale * (f32)cos(rot);
+                work->z = 0.0f;
+                work->scale = 2.0f;
+                work->alpha = 0;
+                work->delay = i * 15;
+                work->rot = 0.0f;
                 break;
             case 4:
             default:
-                p->x = 0.0f;
-                p->y = 3.0f;
-                p->z = 0.0f;
-                p->scale = 0.0f;
-                p->alpha = 204;
-                p->delay = i * 30;
-                p->rot = (f32)-irand(20);
-                p->s1 = 8.0f;
+                work->x = 0.0f;
+                work->y = 3.0f;
+                work->z = 0.0f;
+                work->scale = 0.0f;
+                work->alpha = 204;
+                work->delay = i * 30;
+                work->rot = (f32)-irand(20);
+                work->s1 = 8.0f;
                 break;
         }
     }
@@ -328,8 +393,8 @@ static void effKumokumoMain(EffectEntry* effect) {
     position = tmp;
     camera = work->camera;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->delay = 16;
     }
     if (work->delay < 1000) {
@@ -396,7 +461,7 @@ static void effKumokumoMain(EffectEntry* effect) {
                     work->delay = i * 15;
                     work->rot = 0.0f;
                 }
-                work->rot = (f32)(u32)(rz_tbl[(u32)work->frame % 31] + (u32)(work->frame * 180) / 31);
+                work->rot = (f32)(rz_tbl[(u32)work->frame % 31] + (u32)(work->frame * 180) / 31);
                 work->rot = fmod(work->rot, 360.0);
                 break;
             case 3:
@@ -441,32 +506,19 @@ static void effKumokumoMain(EffectEntry* effect) {
         }
         work->frame++;
     }
-    dispEntry(camera, dispCalcZ(&position), 2, (DispCallback)effKumokumoDisp, effect);
-}
-
-/**
- * Points GX at the given vertex, normal, color and texcoord arrays
- * and calls the four display lists of one cloud model.
- */
-static inline void kkDraw(void* vtx, void* tex0, void* tex1, void* norm, void* clr, void** dl, u8* sz) {
-    u32 i;
-    KK_ARRAYS(vtx, tex0, tex1, norm, clr)
-    for (i = 0; i < 4; i++) {
-        GXCallDisplayList(dl[i], sz[i] << 5);
-    }
+    dispEntry(camera, dispCalcZ(&position), DISP_MODE_XLU, effKumokumoDisp, effect);
 }
 
 /**
  * Draws the main cloud model billboarded with two scrolling textures (type 2 uses the X-shaped model,
  * type 3 five rotated copies), then each active puff as a textured quad sized to its texture.
  */
-static void effKumokumoDisp(CameraId cameraId, EffectEntry* effect) {
+static void effKumokumoDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffKumokumoN64Particle* work;
     s32 alpha;
     s32 type;
     CameraEntry* camera;
-    EffKumokumoN64Particle* p;
-    u32 i;
     s32 k;
     s32 j;
     f32 w;
@@ -540,10 +592,10 @@ static void effKumokumoDisp(CameraId cameraId, EffectEntry* effect) {
     switch (type) {
         case 0:
         case 1:
-            kkDraw(cloud_vertex_tbl, cloud_texcoord0_tbl, cloud_texcoord1_tbl, cloud_normal_tbl, cloud_color0_tbl, cloud_dl_0_tbl, cloud_dl_0_size_tbl);
+            cloud_polygon_0();
             break;
         case 2:
-            kkDraw(batten_vertex_tbl, batten_texcoord0_tbl, batten_texcoord1_tbl, batten_normal_tbl, batten_color0_tbl, batten_dl_0_tbl, batten_dl_0_size_tbl);
+            batten_polygon_0();
             break;
         case 3:
             for (j = 0; j < 5; j++) {
@@ -551,12 +603,12 @@ static void effKumokumoDisp(CameraId cameraId, EffectEntry* effect) {
                 PSMTXConcat(mtx2, rot, rot);
                 GXLoadPosMtxImm(rot, GX_PNMTX0);
                 GXSetCurrentMtx(GX_PNMTX0);
-                kkDraw(cloud_vertex_tbl, cloud_texcoord0_tbl, cloud_texcoord1_tbl, cloud_normal_tbl, cloud_color0_tbl, cloud_dl_0_tbl, cloud_dl_0_size_tbl);
+                cloud_polygon_0();
             }
             break;
         case 4:
         default:
-            kkDraw(cloud_vertex_tbl, cloud_texcoord0_tbl, cloud_texcoord1_tbl, cloud_normal_tbl, cloud_color0_tbl, cloud_dl_0_tbl, cloud_dl_0_size_tbl);
+            cloud_polygon_0();
             break;
     }
     GXSetNumChans(1);

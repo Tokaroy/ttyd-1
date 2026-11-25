@@ -1,19 +1,20 @@
 // las_06 (ラストダンジョン, Palace of Shadow): a connecting hall.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_map.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_npc.h"
+#include "driver/mapdrv.h"
+#include "pmario_sound.h"
 
 #include "stdio.h"
 #include "evt/evt_bero.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_snd.h"
-#include "las.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
 
 #if VERSION >= VERSION_JP
 static char name[8];
@@ -21,7 +22,18 @@ static char name[8];
 
 static USER_FUNC(make_name);
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
 static BeroEntry bero_entry_data[3];
+static EvtWord rousoku_init[46];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_06_init_evt[];
+#else
+EvtWord las_06_init_evt[56];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -116,6 +128,22 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
+/** Script helper: builds the torch map-object name "hi<args[0]>" and returns it in args[1]. */
+static USER_FUNC(make_name) {
+    EvtWord* args = event->args;
+#if VERSION <= VERSION_DEMO_JP
+    char name[8];
+    s32 number;
+
+    number = evtGetValue(event, args[0]);
+    sprintf(name, "hi%d", number);
+#else
+    sprintf(name, "hi%d", evtGetValue(event, args[0]));
+#endif
+    evtSetValue(event, args[1], (EvtWord)name);
+    return EVT_RETURN_DONE;
+}
+
 /**
  * Map-init helper: hides the 18 numbered candle ("rousoku") map objects (names from make_name)
  * and puts a flame effect 7 units below the origin of each one.
@@ -124,7 +152,7 @@ static EVT_BEGIN(rousoku_init)
     SET_VALUE(LW(0), 1)
     LOOP(18)
         CALL(make_name, LW(0), LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mapobj_get_position, LW(1), LW(2), LW(3), LW(4))
         SUBTRACT_FLOAT(LW(3), FLOAT(7.0f))
 #if VERSION <= VERSION_DEMO_JP
@@ -142,15 +170,15 @@ EVT_END()
  * links the two pairs of Bombshell Bill Blasters, and lights the 18 torches.
  */
 EVT_BEGIN(las_06_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_mobj_badgeblk, STRING("mobj00"), -550, 480, 60, ITEM_ULTRA_SHROOM, 0, GSWF(GSWF_LAS06_ULTRA_SHROOM_BLOCK_HIT), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj00"), -550, 480, 60, ITEM_ULTRA_SHROOM, 0, GSWF_LAS_06_ULTRA_SHROOM_BLOCK, 0)
     CALL(evt_npc_check, STRING("スーパーキラー大砲１"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
         CALL(evt_npc_set_link, STRING("スーパーキラー大砲１"), STRING("スーパーキラー大砲２"))
@@ -162,18 +190,3 @@ EVT_BEGIN(las_06_init_evt)
     CALL_CHILD(rousoku_init)
     RETURN
 EVT_END()
-
-/** Script helper: builds the torch map-object name "hi<args[0]>" and returns it in args[1]. */
-static USER_FUNC(make_name) {
-    EvtWord* args = event->args;
-#if VERSION <= VERSION_DEMO_JP
-    // The demo builds the name in a stack buffer, which is gone by the time the script uses the name.
-    char name[8];
-#endif
-    s32 number;
-
-    number = evtGetValue(event, args[0]);
-    sprintf(name, "hi%d", number);
-    evtSetValue(event, args[1], (EvtWord)name);
-    return EVT_RETURN_DONE;
-}

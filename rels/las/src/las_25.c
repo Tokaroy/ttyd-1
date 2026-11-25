@@ -1,24 +1,48 @@
 // las_25 (ラストダンジョン, Palace of Shadow): a junction room.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_window.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "las.h"
 #include "mario/mario_pouch.h"
 #include "evt/evt_hit.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_npc.h"
-#include "evt/evt_pouch.h"
 #include "evt/evt_snd.h"
-#include "evt/evt_window.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "evt/evt_pouch.h"
+#include "driver/mobjdrv.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e1_door_close[22];
+static EvtWord e1_door_open[22];
+static EvtWord e2_door_close[22];
+static EvtWord e2_door_open[22];
 static BeroEntry bero_entry_data[5];
 static BeroEntry w_bero_mapchg[1];
 static s32 key_tbl[2];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord key_check_evt[21];
+#else
+static EvtWord key_check_evt[23];
+#endif
+
+static EvtWord unlock_evt[10];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_25_init_evt[];
+#else
+EvtWord las_25_init_evt[174];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -229,10 +253,10 @@ EVT_END()
 
 /**
  * Event script: the door is unlocked.
- * Sets the story progress to STORY_STG8_14_LOCK and switches the e_bero_2 door on.
+ * Sets the story progress to STG8_14_LOCK and switches the e_bero_2 door on.
  */
 static EVT_BEGIN(unlock_evt)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_14_LOCK)
+    SET_VALUE(GSW_STORY_PROGRESS, STG8_14_LOCK)
     SET_VALUE(LW(0), STRING("e_bero_2"))
     CALL_CHILD(bero_case_switch_on)
     RETURN
@@ -242,22 +266,22 @@ EVT_END()
  * Map init script for las_25, a junction room: music (by story), the doors to las_26 and las_27,
  * the Phantoms (before and after the planets scene), the lock of door e_bero_2 that needs Palace Key 0x30,
  * a blue jump stand, a Life Shroom, a Shooting Star and a save block.
- * After STORY_STG8_06_MOVING_PLANETS it uses the moved layout with an airport harbour exit.
+ * After STG8_06_MOVING_PLANETS it uses the moved layout with a Plane Mode panel.
  */
 EVT_BEGIN(las_25_init_evt)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
     ELSE
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST3"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST3"))
     END_IF
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
         CALL(evt_npc_check_delete, STRING("ファントム３"))
         CALL(evt_npc_check_delete, STRING("ファントム４"))
         CALL(evt_npc_check_delete, STRING("ファントム５"))
@@ -266,13 +290,13 @@ EVT_BEGIN(las_25_init_evt)
         CALL(evt_npc_check_delete, STRING("ファントム１"))
         CALL(evt_npc_check_delete, STRING("ファントム２"))
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_under"), MAPOBJ_FLAG_HIDE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_under"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_under"), 1, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hikou"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hikou"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_hi"), 1, 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_be"), 1, 0)
         CALL(evt_map_entry_airport_harbor, 0, STRING("hikou"), STRING("a_hi"))
         SET_VALUE(LW(0), STRING("w_bero"))
@@ -282,15 +306,15 @@ EVT_BEGIN(las_25_init_evt)
         CALL_CHILD(bero_case_switch_on)
         SPAWN_EVENT(hikari_evt)
     END_IF
-    CALL(evt_mobj_lock, STRING("lock"), ITEM_PALACE_KEY_0x30, 690, -380, 0, -90, PTR(key_check_evt), PTR(unlock_evt), GSWF(GSWF_LAS25_DOOR_UNLOCKED))
-    IF_INT_EQUAL(GSWF(GSWF_LAS25_DOOR_UNLOCKED), 0)
+    CALL(evt_mobj_lock, STRING("lock"), 48, 690, -380, 0, -90, PTR(key_check_evt), PTR(unlock_evt), GSWF_LAS_25_DOOR_UNLOCKED)
+    IF_INT_EQUAL(GSWF_LAS_25_DOOR_UNLOCKED, 0)
         SET_VALUE(LW(0), STRING("e_bero_2"))
         CALL_CHILD(bero_case_switch_off)
     END_IF
     CALL(evt_mobj_jumpstand_blue, 0, STRING("jump"), 720, -675, -600, 75, 0, 0)
-    CALL(evt_mobj_flag_onoff, 0, STRING("jump"), MOBJ_FLAG_FALL)
-    CALL(evt_item_entry, STRING("item02"), ITEM_LIFE_SHROOM, 225, -350, 0, ITEM_ENTRY_FIXED, GSWF(GSWF_LAS25_LIFE_SHROOM_ITEM02), 0)
-    CALL(evt_item_entry, STRING("item03"), ITEM_SHOOTING_STAR, 375, -450, 0, ITEM_ENTRY_FIXED, GSWF(GSWF_LAS25_SHOOTING_STAR_ITEM03), 0)
+    CALL(evt_mobj_flag_onoff, 0, STRING("jump"), MOBJ_FLAG_GRAVITY)
+    CALL(evt_item_entry, STRING("item02"), ITEM_LIFE_SHROOM, 225, -350, 0, ITEM_TYPE_STILL, GSWF_LAS_25_LIFE_SHROOM, 0)
+    CALL(evt_item_entry, STRING("item03"), ITEM_SHOOTING_STAR, 375, -450, 0, ITEM_TYPE_STILL, GSWF_LAS_25_SHOOTING_STAR, 0)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), 600, 60, -75, 0, 0)
     RETURN
 EVT_END()

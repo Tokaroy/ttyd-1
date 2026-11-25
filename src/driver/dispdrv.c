@@ -1,30 +1,32 @@
-// Display driver: queues draw callbacks per camera with a render mode and depth each frame, sorts
-// them and calls them in order.
+/* "dispdrv" - Display Driver
+ * dispEntry queues a draw callback per camera with a sort key (render mode offset +/- order), dispSort orders the
+ * queue and dispDraw calls the callbacks of one camera after setting each render mode's blend, alpha and Z state.
+ */
 
+#include "version.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include "system.h"
 #include <dolphin/mtx.h>
 #include <string.h>
-#include "driver/fadedrv.h"
-#include "version.h"
 
 #define DISP_MAX_ENTRIES 1024
 
 //.sdata
-f32 offset_tbl[] = {
+static f32 offset_tbl[] = {
+
     400000.0f, 400000.0f, 600000.0f, 100000.0f, 100000.0f,
     300000.0f, 900000.0f, 1100000.0f, 1000000.0f, 500000.0f,
 #if VERSION >= VERSION_JP
-    700000.0f //700K new in retail
+    700000.0f // render mode 10
 #endif
 };
 
 //.sbss
-DispEntry* currentWorkPtr;
-s32 entry_n;
-DispEntry** pSortWork;
-DispEntry* pDispWork;
+static DispEntry* currentWorkPtr;
+static s32 entry_n;
+static DispEntry** pSortWork;
+static DispEntry* pDispWork;
 
 // local prototypes
 static s32 _sort(const void* sortA, const void* sortB);
@@ -48,7 +50,7 @@ void dispReInit(void) {
  * renderMode picks the blend, alpha test and depth setup (0 opaque, 1 alpha-tested, 2/5 translucent,
  * 3/4 no depth) and a base depth from offset_tbl;
  * order shifts it within that band (translucent modes draw far to near, the rest near to far).
- * NaN orders are dropped. The JP and later releases add translucent modes 9 and 10.
+ * NaN orders are dropped. In JP and later, modes 9 and 10 are translucent too (mode 10 is new there).
  */
 void dispEntry(CameraId camId, f32 order, s32 renderMode, DispCallback callback, void* param) {
     DispEntry* entry = &pDispWork[entry_n];
@@ -61,11 +63,11 @@ void dispEntry(CameraId camId, f32 order, s32 renderMode, DispCallback callback,
     entry->param = param;
 
     switch (renderMode) {
-        case 2:
-        case 5:
+        case DISP_MODE_XLU:
+        case DISP_MODE_XLU_BEFORE_OPAQUE:
 #if VERSION >= VERSION_JP
-        case 9:
-        case 10:
+        case DISP_MODE_XLU_BEFORE:
+        case DISP_MODE_XLU_AFTER:
 #endif
             entry->order = offset_tbl[renderMode] + order;
             break;
@@ -96,7 +98,7 @@ static s32 _sort(const void* sortA, const void* sortB) {
 
 /** Sorts this frame's draw requests by order before the cameras are drawn. */
 void dispSort(void) {
-    qqsort(pSortWork, entry_n, 4, _sort);
+    qqsort(pSortWork, entry_n, sizeof(DispEntry*), _sort);
 }
 
 /**
@@ -112,51 +114,47 @@ void dispDraw(CameraId camId) {
         if (entry->cameraId == camId) {
             GXSetColorUpdate(GX_TRUE);
             switch (camId) {
-                case 4:
-                case 5:
-                case 7:
+                case CAMERA_3D:
+                case CAMERA_3D_EFFECTA:
+                case CAMERA_3D_EFFECTB:
                     GXSetAlphaUpdate(GX_FALSE);
                     break;
                 default:
-                case 6:
+                case CAMERA_3D_IMAGE:
                     GXSetAlphaUpdate(GX_TRUE);
                     break;
             }
-#if VERSION >= VERSION_US
-            GXSetZScaleOffset(fadeConstOne, 0.0f); // US reads the 1.0f constant defined in fadedrv.c
-#else
             GXSetZScaleOffset(1.0f, 0.0f);
-#endif
             switch (entry->renderMode) {
-                case 0:
+                case DISP_MODE_OPAQUE:
                     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_OR);
                     GXSetZCompLoc(GX_TRUE);
                     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
                     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
                     break;
-                case 3:
+                case DISP_MODE_OPAQUE_NO_Z:
                     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
                     GXSetZCompLoc(GX_TRUE);
                     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
                     GXSetZMode(GX_FALSE, GX_LEQUAL, GX_FALSE);
                     break;
-                case 1:
+                case DISP_MODE_ALPHA_TEST:
                     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
                     GXSetZCompLoc(GX_FALSE);
                     GXSetAlphaCompare(GX_GEQUAL, 0x80, GX_AOP_OR, GX_NEVER, 0);
                     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
                     break;
-                case 4:
+                case DISP_MODE_ALPHA_TEST_NO_Z:
                     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
                     GXSetZCompLoc(GX_FALSE);
                     GXSetAlphaCompare(GX_GEQUAL, 0x80, GX_AOP_OR, GX_NEVER, 0);
                     GXSetZMode(GX_FALSE, GX_LEQUAL, GX_FALSE);
                     break;
-                case 2:
-                case 5:
+                case DISP_MODE_XLU:
+                case DISP_MODE_XLU_BEFORE_OPAQUE:
 #if VERSION >= VERSION_JP
-                case 9:
-                case 10:
+                case DISP_MODE_XLU_BEFORE:
+                case DISP_MODE_XLU_AFTER:
 #endif
                     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
                     GXSetZCompLoc(GX_TRUE);
@@ -195,4 +193,11 @@ f32 dispCalcZ(Vec* input) {
 /** Returns the draw request whose callback is running now, so a callback can read its own render mode. */
 DispEntry* dispGetCurWork(void) {
     return currentWorkPtr;
+}
+
+/** The number of draw requests queued this frame. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it); returns the unit's entry_n
+// counter.
+s32 dispGetEntNum(void) {
+    return entry_n;
 }

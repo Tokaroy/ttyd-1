@@ -1,16 +1,15 @@
 // Machine-gun effect: a shot drawn moving from a point at a given angle, speed and scale.
+
 #include "eff/eff_machinegun.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-
 static void effMachinegunDisp(CameraId cameraId, EffectEntry* effect);
 static void effMachinegunMain(EffectEntry* effect);
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
 
 typedef struct EffMachinegunWork {
     s32 type;     // 0x0
@@ -60,7 +59,7 @@ static void effMachinegunMain(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMachinegunDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effMachinegunDisp, effect);
 }
 
 /** Draws the shot as a rotated sprite (texture 0x89) with a grey tint. */

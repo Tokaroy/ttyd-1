@@ -1,31 +1,34 @@
 // tik_08 (埋没した都市, Rogueport Sewers): the room with the pipe to Twilight Town (usu_00) and the door back to tik_07.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
 #include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_snd.h"
-#include "tik.h"
-#include "evt/evt_story.h"
-#include "driver/camdrv.h"
+#include "party/party_motion.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_mobj.h"
+#include "pmario_sound.h"
 
-extern EvtWord oshimodo_event_sub[];
+static EvtWord oshimodo_event_sub[33];
+static EvtWord oshimodo_event[10];
 static BeroEntry bero_oshimodo[1];
 static BeroEntry bero_entry_data[3];
 static BeroEntry bero_entry_data2[2];
+static EvtWord evt_kanban[16];
+EvtWord tik_08_init_evt[68];
 
 /**
  * Pushes Mario back from the Twilight Town pipe (oshimodo = push back) before it is open:
  * he walks out of the pipe (bero exec), the "no entry" message tik_08_01 is shown and controls return.
  */
-EVT_BEGIN(oshimodo_event_sub)
+static EVT_BEGIN(oshimodo_event_sub)
     CALL(evt_cam_ctrl_onoff, CAMERA_3D, 0)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     WAIT_MS(750)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("tik_08_01"), 0, 0)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_ctrl_onoff, CAMERA_3D, 1)
@@ -34,11 +37,12 @@ EVT_END()
 
 /**
  * Pushes Mario back from the blocked Twilight Town pipe:
- * spawns oshimodo_event_sub, sets GSWF_TIK08_TWILIGHT_PIPE_REACHED and returns 0 in LW(0).
+ * spawns oshimodo_event_sub, sets GSWF_TIK_08_PIPE_REJECTED and returns 0 in LW(0).
  */
+// Run the pipe rejection dialogue asynchronously and record that this pipe was tried.
 static EVT_BEGIN(oshimodo_event)
     SPAWN_EVENT(oshimodo_event_sub)
-    SET_VALUE(GSWF(GSWF_TIK08_TWILIGHT_PIPE_REACHED), 1)
+    SET_VALUE(GSWF_TIK_08_PIPE_REJECTED, 1)
     SET_VALUE(LW(0), 0)
     RETURN
 EVT_END()
@@ -58,7 +62,7 @@ static BeroEntry bero_oshimodo[] = {
         -1, // length
         NULL, // enterEvent
         6, // caseType
-        (s32*)oshimodo_event, // exitEvent
+        oshimodo_event, // exitEvent
         0, // nextMapName
         "dokan", // nextBeroName
         1, // enterAnimeType
@@ -144,26 +148,26 @@ EVT_END()
 /**
  * Map init script of tik_08, the room with the pipe to Twilight Town (usu_00).
  * Starts the sewer music and sets up the exits.
- * Until STORY_STG3_51_FRANKLYS_HOUSE the pipe (dokan) is replaced with the push-back version,
- * and during chapter 3's end (STORY_STG3_52_DARKLY to chapter 4) with a second replacement;
+ * Until STG3_51_FRANKLYS_HOUSE_STG_3 the pipe (dokan) is replaced with the push-back version,
+ * and during chapter 3's end (STG3_52_DARKLY to chapter 4) with a second replacement;
  * adds a signboard (tik_08_02).
  */
 EVT_BEGIN(tik_08_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK1"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_LESS_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_51_FRANKLYS_HOUSE)
+    IF_INT_LESS_OR_EQUAL(GSW_STORY_PROGRESS, STG3_51_FRANKLYS_HOUSE_STG_3)
         SET_VALUE(LW(0), STRING("dokan"))
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_bero_overwrite, STRING("dokan"), PTR(bero_oshimodo))
         SET_VALUE(LW(0), STRING("dokan"))
         CALL_CHILD(bero_case_switch_on)
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_52_DARKLY)
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_00_WELCOME_TO_STAGE_4)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_52_DARKLY)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG4_00_WELCOME_TO_STAGE_4)
             SET_VALUE(LW(0), STRING("dokan"))
             CALL_CHILD(bero_case_switch_off)
             CALL(evt_bero_overwrite, STRING("dokan"), PTR(bero_entry_data2))

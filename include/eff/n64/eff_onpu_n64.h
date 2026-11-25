@@ -1,4 +1,5 @@
 // eff_onpu_n64.c: music-note (onpu) effect entry (effOnpuN64Entry).
+
 #pragma once
 
 #include <dolphin/types.h>

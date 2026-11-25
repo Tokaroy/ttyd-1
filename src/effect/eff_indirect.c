@@ -1,32 +1,39 @@
 // Screen distortion (Indirect): copies the frame buffer and redraws it over a point through a texture; types 0-1.
+
 #include "version.h"
+
 #if VERSION >= VERSION_US
 #include "mario/mariost.h"
 #endif
+
 #include "eff/eff_indirect.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "driver/effdrv.h"
+static void effIndirectDisp(CameraId cameraId, EffectEntry* effect);
+static void effIndirectMain(EffectEntry* effect);
 
 typedef struct EffIndirectWork {
-    s32 type;         // 0x0
-    Vec position;     // 0x4
-    f32 rotX;         // 0x10, only cleared at entry
-    f32 rotY;         // 0x14, only cleared at entry
-    f32 rotZ;         // 0x18
-    f32 scale;        // 0x1C
-    u8 alpha;         // 0x20
-    u8 pad_21[7];     // 0x21
-    s32 timer;        // 0x28, counts down while fading out
-    s32 counter;      // 0x2C, only cleared at entry
-    f32 speed;        // 0x30, set to -0.05 at entry; never read
-    smartEntry* work; // 0x34
+    s32 type;              // 0x0
+    Vec position;          // 0x4
+    f32 rotX;              // 0x10
+    f32 rotY;              // 0x14
+    f32 rotZ;              // 0x18
+    f32 scale;             // 0x1C
+    u8 alpha;              // 0x20
+    u8 field_0x21[7];      // 0x21
+    s32 timer;             // 0x28, counts down while fading out
+    s32 counter;           // 0x2C
+    f32 speed;             // 0x30
+    smartEntry* texBuffer; // 0x34
 } EffIndirectWork;
 
 /**
- * Spawns a screen distortion centred at (x, y, z), allocating a 64x64 IA8 capture buffer; type 0-1.
- * duration is the lifetime in frames (1000 or more is endless). Spawned by scripts (tik, battle items).
+ * Spawns a screen distortion centred at (x, y, z), allocating a 64x64 IA8 buffer (loaded as a third texture only
+ * in the early demos); type 0-1. duration is the lifetime in frames (1000 or more is endless). Spawned by scripts
+ * (tik, battle items, sac_suki) and by eff_queen2.
  */
 EffectEntry* effIndirectEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
@@ -38,14 +45,14 @@ EffectEntry* effIndirectEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffIndirectWork));
     effect->userdata = work;
     effect->callback = effIndirectMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
     work->position.z = z;
     work->scale = 0.0f;
     work->alpha = 255;
-    work->work = smartAlloc(GXGetTexBufferSize(64, 64, GX_TF_IA8, GX_FALSE, 0), 0);
+    work->texBuffer = smartAlloc(GXGetTexBufferSize(64, 64, GX_TF_IA8, GX_FALSE, 0), SMART_GROUP_PERMANENT);
     work->rotX = 0.0f;
     work->rotY = 0.0f;
     work->rotZ = 0.0f;
@@ -65,15 +72,15 @@ static void effIndirectMain(EffectEntry* effect) {
         case 0:
         case 1:
             // soft delete: start fading out
-            if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-                effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+            if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+                effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
                 work->timer = 16;
             }
             if (work->timer < 1000) {
                 work->timer--;
             }
             if (work->timer < 0) {
-                smartFree(work->work);
+                smartFree(work->texBuffer);
                 effDelete(effect);
                 return;
             }
@@ -89,10 +96,13 @@ static void effIndirectMain(EffectEntry* effect) {
 #endif
             break;
     }
-    dispEntry(CAMERA_3D_EFFECTB, dispCalcZ(&position), 2, (DispCallback)effIndirectDisp, effect);
+    dispEntry(CAMERA_3D_EFFECTB, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effIndirectDisp, effect);
 }
 
-/** Copies the frame buffer into a texture and redraws it over the point, offset through an indirect texture. */
+/**
+ * Copies the frame buffer into a texture and redraws it over the point, projected from the quad's position and
+ * masked by the type's texture. No indirect TEV stage is set up (the early demos only load an indirect matrix).
+ */
 static void effIndirectDisp(CameraId cameraId, EffectEntry* effect) {
     EffIndirectWork* work = effect->userdata;
     CameraEntry* camera;
@@ -109,12 +119,11 @@ static void effIndirectDisp(CameraId cameraId, EffectEntry* effect) {
     void* indTex;
     f32 indMtx[2][3];
 #endif
-
     camera = camGetPtr(CAMERA_2D);
     type = work->type;
     alpha = work->alpha;
 #if VERSION <= VERSION_DEMO_JP
-    indTex = work->work->address;
+    indTex = work->texBuffer->address;
 #endif
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
     GXSetZCompLoc(GX_TRUE);
@@ -138,17 +147,15 @@ static void effIndirectDisp(CameraId cameraId, EffectEntry* effect) {
     // copy the framebuffer for the distortion
     GXSetTexCopySrc(0, 0, 608, 480);
     GXSetTexCopyDst(304, 240, GX_TF_RGB565, GX_TRUE);
-    buffer = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB565, GX_FALSE, 0), 3)->address;
+    buffer = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB565, GX_FALSE, 0), SMART_GROUP_TEMP)->address;
     GXCopyTex(buffer, GX_FALSE);
     GXPixModeSync();
     GXInitTexObj(&texObj, buffer, 304, 240, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
     GXLoadTexObj(&texObj, GX_TEXMAP1);
 #if VERSION <= VERSION_DEMO_JP
-    // The demo still bends the screen copy through an indirect texture; retail draws it straight.
     GXInitTexObj(&texObj, indTex, 64, 64, GX_TF_IA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
     GXLoadTexObj(&texObj, GX_TEXMAP2);
 #endif
-
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
     PSMTXScale(scale, work->scale, work->scale, work->scale);
     PSMTXRotRad(rot, 'y', MTXDegToRad(-camera->viewYaw));

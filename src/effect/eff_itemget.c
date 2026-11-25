@@ -1,5 +1,7 @@
 // Item get / use sparkle (ItemGet): sparkles spread around the item position, spawned when Mario obtains or uses an
 // item. Element 0 is the header: types 0, 3 and 9 draw seven sparkles, type 10 (item use in battle) five.
+
+#include "version.h"
 #include "driver/camdrv.h"
 #include "eff/eff_itemget.h"
 #include "driver/dispdrv.h"
@@ -9,45 +11,47 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 static void effItemGetMain(EffectEntry* effect);
-static void effItemGetDisp(CameraId cameraId, EffectEntry* effect);
-static void effItemUseDisp(CameraId cameraId, EffectEntry* effect);
+static void effItemGetDisp(CameraId cameraId, void* payload);
+static void effItemUseDisp(CameraId cameraId, void* payload);
 
 /**
  * Pop-in size of the sparkle burst over its first 12 frames, in percent: it swells from nothing to 121%
  * and settles at 100%. Read by effItemGetMain.
  */
 static u8 scale_data[12] = {0x00, 0x12, 0x26, 0x3B, 0x4E, 0x60, 0x6E, 0x78, 0x79, 0x72, 0x69, 0x64};
-/** Light grey-white used as the sparkles' highlight colour beside the per-type tint; set by both draw functions. */
-GXColor white = {0xE1, 0xE1, 0xE1, 0xFF};
+
+/** Light grey-white used as the sparkles' highlight colour beside the per-type tint; set by effItemGetDisp. */
+static GXColor white = {0xE1, 0xE1, 0xE1, 0xFF};
+
 /**
  * Sparkle tint per effect type 0-9 (gold, green, lime, red, yellow-green, blue, orange, pink, slate
- * blue, gold). Read by effItemGetDisp and effItemUseDisp.
+ * blue, gold). Read by effItemGetDisp (effItemUseDisp draws untinted).
  */
 static GXColor color_tbl[10] = {
     { 0xC8, 0xB2, 0x25, 0xFF }, { 0x26, 0xA3, 0x52, 0xFF }, { 0x5C, 0xCA, 0x10, 0xFF }, { 0xCB, 0x4C, 0x4D, 0xFF },
     { 0x7E, 0xC2, 0x1E, 0xFF }, { 0x30, 0x9C, 0xBF, 0xFF }, { 0xEB, 0x7D, 0x06, 0xFF }, { 0xE8, 0x5B, 0xD0, 0xFF },
     { 0x51, 0x75, 0x9D, 0xFF }, { 0xC8, 0xB2, 0x25, 0xFF },
 };
+
+/** Base size of the sparkles per effect type 0-9, in tenths: 5.0 for types 0-2 down to 1.0. */
 #if VERSION <= VERSION_DEMO_JP
-/** Base size of the sparkles per effect type 0-9, in tenths: 5.0 for types 0-2 down to 1.0. */
-u8 size_tbl[10] = {0x32, 0x32, 0x32, 0x28, 0x14, 0x14, 0x14, 0x0A, 0x0A, 0x0F};
+static u8 size_tbl[10] = {0x32, 0x32, 0x32, 0x28, 0x14, 0x14, 0x14, 0x0A, 0x0A, 0x0F};
 #else
-/** Base size of the sparkles per effect type 0-9, in tenths: 5.0 for types 0-2 down to 1.0. */
-u8 size_tbl[10] = {0x32, 0x32, 0x32, 0x28, 0x0C, 0x0C, 0x0C, 0x0A, 0x0A, 0x0F};
+static u8 size_tbl[10] = {0x32, 0x32, 0x32, 0x28, 0x0C, 0x0C, 0x0C, 0x0A, 0x0A, 0x0F};
 #endif
 
 /**
  * Spawns item sparkles at (x, y, z): types 0, 3 and 9 use seven, type 10 (battle item use) five.
- * Spawned when Mario obtains or uses an item (itemdrv.c, battle_event_cmd.c).
+ * Spawned when Mario obtains or uses an item (itemdrv.c, battle_event_cmd.c), and by evt_sub.c, eff_naniga.c and
+ * event scripts.
  */
 EffectEntry* effItemGetEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     ItemGetWork* work;
-    ItemGetWork* elem;
     s32 i;
     s32 count;
     f32 cv;
@@ -64,7 +68,7 @@ EffectEntry* effItemGetEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(ItemGetWork));
     effect->userdata = work;
     effect->callback = effItemGetMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -73,33 +77,37 @@ EffectEntry* effItemGetEntry(s32 type, f32 x, f32 y, f32 z) {
     work->size = 0.75f * ((f32)size_tbl[work->type] / 10.0f);
     work->timer = 0;
     work->state = 0;
-    work->camera = 4;
+    work->camera = CAMERA_3D;
     work->alpha = 255;
     work->lifetime = 1000;
-    elem = work + 1;
-    for (i = 1; i < effect->count; i++, elem++) {
-        elem->position.x = 0.0f;
-        elem->position.y = 0.0f;
-        elem->position.z = 0.0f;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
         if (type == 10) {
-            elem->angle = 1.0471976f + 6.2831855f * (f32)(i - 1) / 6.0f;
-            elem->velocity.x = 5.0f * (f32)sin(elem->angle);
-            cv = (f32)cos(elem->angle);
-            elem->velocity.y = 5.0f * -cv;
-            elem->velocity.z = 0.0f;
+            work->angle = 1.0471976f + 6.2831855f * (f32)(i - 1) / 6.0f;
+            work->velocity.x = 5.0f * (f32)sin(work->angle);
+
+            cv = (f32)cos(work->angle);
+            work->velocity.y = 5.0f * -cv;
+            work->velocity.z = 0.0f;
         } else {
-            elem->angle = 6.2831855f * (f32)(i - 1) / (f32)(effect->count - 1);
-            elem->velocity.x = (f32)sin(elem->angle);
-            elem->velocity.y = -(f32)cos(elem->angle);
-            elem->velocity.z = 0.0f;
+            work->angle = 6.2831855f * (f32)(i - 1) / (f32)(effect->count - 1);
+            work->velocity.x = (f32)sin(work->angle);
+            work->velocity.y = -(f32)cos(work->angle);
+            work->velocity.z = 0.0f;
         }
-        elem->alpha = 0;
-        elem->timer = 0;
+        work->alpha = 0;
+        work->timer = 0;
     }
     return effect;
 }
 
-/** Pops the sparkle scale in over 12 frames, moves the sparkles, fades out over 16 frames and deletes when done. */
+/**
+ * Pops the sparkle scale in over 12 frames and moves the sparkles while each fades in and out; a soft delete fades
+ * the whole effect out over 16 frames and deletes it. Type 10 is also deleted once all its sparkles have faded.
+ */
 static void effItemGetMain(EffectEntry* effect) {
     ItemGetWork* work = effect->userdata;
     Vec tmp;
@@ -116,8 +124,8 @@ static void effItemGetMain(EffectEntry* effect) {
     tmp = position;
     camera = work->camera;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -131,7 +139,7 @@ static void effItemGetMain(EffectEntry* effect) {
         return;
     }
     work->timer++;
-    if ((u32)work->timer < 12) {
+    if (work->timer < sizeof(scale_data) / sizeof(scale_data[0])) {
         work->scale = (f32)scale_data[work->timer] / 100.0f;
     }
     if (work->timer > 1000) {
@@ -184,14 +192,23 @@ static void effItemGetMain(EffectEntry* effect) {
             effDelete(effect);
             return;
         }
-        dispEntry(camera, dispCalcZ(&tmp), 2, (DispCallback)effItemUseDisp, effect);
+        dispEntry(camera, dispCalcZ(&tmp), DISP_MODE_XLU, effItemUseDisp, effect);
     } else {
-        dispEntry(camera, dispCalcZ(&tmp), 2, (DispCallback)effItemGetDisp, effect);
+        dispEntry(camera, dispCalcZ(&tmp), DISP_MODE_XLU, effItemGetDisp, effect);
     }
 }
 
+/** cos and sin of an angle in degrees. */
+static inline f32 cosd(f32 deg) {
+    return cos(6.2831855f * deg / 360.0f);
+}
+static inline f32 sind(f32 deg) {
+    return sin(6.2831855f * deg / 360.0f);
+}
+
 /** Draws the sparkle sprites for the item get types in two passes (shadow, then main). */
-static void effItemGetDisp(CameraId cameraId, EffectEntry* effect) {
+static void effItemGetDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     ItemGetWork* work = effect->userdata;
     CameraEntry* camera = camGetPtr(cameraId);
     Mtx m19c;
@@ -228,8 +245,9 @@ static void effItemGetDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXScale(m16c, scale, scale, scale);
     PSMTXConcat(m19c, m13c, m19c);
     PSMTXConcat(m19c, m16c, m7c);
-    cs = (0, (f32)cos(6.2831855f * camGetPtr(cameraId)->viewYaw / 360.0f));
-    s = (0, (f32)sin(6.2831855f * camGetPtr(cameraId)->viewYaw / 360.0f));
+
+    cs = cosd(camGetPtr(cameraId)->viewYaw);
+    s = sind(camGetPtr(cameraId)->viewYaw);
     PSMTXTrans(m19c, 2.0f * s, 0.0f, -cs * 2.0f);
     PSMTXConcat(m19c, m7c, m7c);
     GXSetTevColor(GX_TEVREG0, white);
@@ -269,7 +287,6 @@ static void effItemGetDisp(CameraId cameraId, EffectEntry* effect) {
     w = 64.0f;
     sh = alpha * 0x80 / 0xFF;
     al = alpha * 0xFF / 0xFF;
-
     for (i = 0; i < 2; i++) {
         if (i == 0) {
             PSMTXConcat(camera->view, m7c, m19c);
@@ -298,7 +315,6 @@ static void effItemGetDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadTexObj(&texObj, GX_TEXMAP1);
     d = 10.666667f;
     h = 42.666668f;
-
     work++;
     for (i = 1; i < effect->count; i++, work++) {
         for (pass = 0; pass < 2; pass++) {
@@ -343,15 +359,16 @@ static void effItemGetDisp(CameraId cameraId, EffectEntry* effect) {
 }
 
 /** Draws the sparkles for type 10 (item use) as camera-facing quads. */
-static void effItemUseDisp(CameraId cameraId, EffectEntry* effect) {
+static void effItemUseDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     ItemGetWork* work = effect->userdata;
     CameraEntry* camera;
-    Mtx mc8;
-    Mtx m98;
-    Mtx m68;
-    Mtx m38;
+    Mtx mtx;
+    Mtx scale;
+    Mtx rot;
+    Mtx base;
     GXTexObj texObj;
-    f32 d, a, b, h, w;
+    f32 h, w;
     s32 i;
     s32 pass;
 
@@ -360,12 +377,12 @@ static void effItemUseDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
-    PSMTXTrans(mc8, work->position.x, work->position.y, work->position.z);
-    PSMTXRotRad(m68, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
-    PSMTXScale(m98, 0.4f, 0.4f, 0.4f);
-    PSMTXConcat(mc8, m98, m38);
-    PSMTXConcat(m38, m68, m38);
-    PSMTXConcat(camera->view, m38, m38);
+    PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
+    PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
+    PSMTXScale(scale, 0.4f, 0.4f, 0.4f);
+    PSMTXConcat(mtx, scale, base);
+    PSMTXConcat(base, rot, base);
+    PSMTXConcat(camera->view, base, base);
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumTevStages(1);
@@ -385,24 +402,23 @@ static void effItemUseDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     w = 21.333334f;
     h = 42.666668f;
-
     work++;
     for (i = 1; i < effect->count; i++, work++) {
         for (pass = 0; pass < 2; pass++) {
             if (pass == 0) {
-                PSMTXTrans(mc8, 2.0f + work->position.x, work->position.y - 2.0f, work->position.z);
-                PSMTXRotRad(m68, 'z', work->angle);
-                PSMTXConcat(mc8, m68, mc8);
-                PSMTXConcat(m38, mc8, mc8);
+                PSMTXTrans(mtx, 2.0f + work->position.x, work->position.y - 2.0f, work->position.z);
+                PSMTXRotRad(rot, 'z', work->angle);
+                PSMTXConcat(mtx, rot, mtx);
+                PSMTXConcat(base, mtx, mtx);
                 GXSetChanMatColor(GX_COLOR0A0, (GXColor){0, 0, 0, work->alpha * 0x40 / 0xFF});
             } else {
-                PSMTXTrans(mc8, work->position.x, work->position.y, work->position.z);
-                PSMTXRotRad(m68, 'z', work->angle);
-                PSMTXConcat(mc8, m68, mc8);
-                PSMTXConcat(m38, mc8, mc8);
+                PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
+                PSMTXRotRad(rot, 'z', work->angle);
+                PSMTXConcat(mtx, rot, mtx);
+                PSMTXConcat(base, mtx, mtx);
                 GXSetChanMatColor(GX_COLOR0A0, (GXColor){0xFF, 0xFF, 0xFF, work->alpha * 0x80 / 0xFF});
             }
-            GXLoadPosMtxImm(mc8, GX_PNMTX0);
+            GXLoadPosMtxImm(mtx, GX_PNMTX0);
             GXSetCurrentMtx(GX_PNMTX0);
             GXBegin(GX_QUADS, GX_VTXFMT0, 4);
             GXPosition3f32(-w / 2.0f, 0.0f, 0.0f);

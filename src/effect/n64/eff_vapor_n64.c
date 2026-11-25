@@ -1,36 +1,34 @@
 // Paper Mario 64 effect: a soft puff of steam (vapor) that grows and fades; its two colors are set in the work data.
+
 #include "eff/n64/eff_vapor_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
-#define tri2 tri2_proto_hidden
 #include "eff/eff_n64.h"
-#undef tri2
-// FAKE: local prototype: tri2 is declared without parameters (eff_n64.h: eight s32); this file was compiled with it and the header prototype changes the code.
-void tri2();
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 
-/** A table of plus and minus ones that nothing in this effect reads. */
-f32 vaporUnused[16] = {-1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f};
 /**
  * Sideways offset of the steam puff over its first 30 frames, one row of 30 per type (type 1 drifts left).
  */
-static s8 dx_data[] = {
+static s8 dx_data[3][30] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -8, -15, -21, -26, -30, -34, -37, -39, -40, -41, -42, -43, -44, -45, -46, -47, -48, -49, -50, -51, -52, -53, -54, -55, -56, -57, -58, -59, -60, -61, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 };
+
 /** Size of the steam puff in percent over its first 30 frames, one row of 30 per type. */
-static u8 scale_data[] = {
+static u8 scale_data[3][30] = {
     40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 52, 55, 57, 60, 62, 65, 67, 70, 72, 75, 77, 80, 82, 85, 87, 90, 92, 95, 97, 100, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69
 };
+
 /**
  * Position in the smoke animation strip over the puff's first 30 frames, one row of 30 per type;
  * the draw cross-fades between neighbouring frames.
  */
-static u8 seq_data[] = {
+static u8 seq_data[3][30] = {
     0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 190, 195, 210, 208, 211, 214, 217, 220, 223, 226, 229, 232, 235, 238, 241, 244, 247, 250, 253, 255, 0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 190, 195, 210, 208, 211, 214, 217, 220, 223, 226, 229, 232, 235, 238, 241, 244, 247, 250, 253, 255, 0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 190, 195, 210, 208, 211, 214, 217, 220, 223, 226, 229, 232, 235, 238, 241, 244, 247, 250, 253, 255
 };
+
 /**
  * Twist of the steam puff in degrees over its first 30 frames, one row per type:
  * type 1 leans further and further as it drifts, type 2 is turned upside down.
@@ -63,15 +61,19 @@ static effN64Vtx size64x64_tex32x32_vtx[] = {
     {-32, 64, 2, 0, 4096, 120, 120, 0, 255},
 };
 
+// Unused zero object, read by nothing; the original had it too (its storage is in the retail code). Name invented.
 static const GXColor kColor1;
+
+// Unused zero object, read by nothing; the original had it too (its storage is in the retail code). Name invented.
 static const GXColor kColor2;
 
 static void effVaporMain(EffectEntry* effect);
-static void effVaporDisp(CameraId cameraId, EffectEntry* effect);
+static void effVaporDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a steam puff at (x, y, z) of the given scale; a lifetime of 0 or less lasts until soft-deleted.
- * Used by battle damage, the Poison Pokey units (jon, mri), eff_ibuki and event scripts.
+ * Used by battle damage, the unit_dokugassun units (jon, mri, win, tst), the unit_poison_pakkun units
+ * (muj, tst), eff_ibuki and event scripts.
  */
 EffectEntry* effVaporN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -83,7 +85,7 @@ EffectEntry* effVaporN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 s
     work = __memAlloc(HEAP_EFFECT, sizeof(EffVaporN64Work));
     effect->userdata = work;
     effect->callback = effVaporMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -124,8 +126,8 @@ static void effVaporMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -153,7 +155,7 @@ static void effVaporMain(EffectEntry* effect) {
         work->vel = -1.5f;
     }
     work->anim += 1.0f;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effVaporDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effVaporDisp, effect);
 }
 
 /**
@@ -162,9 +164,8 @@ static void effVaporMain(EffectEntry* effect) {
  * cross-fading between frames of the smoke strip (texture 0x69 for types 0/2, 0x6A otherwise)
  * and shaded between the work's two colours.
  */
-static void effVaporDisp(CameraId cameraId, EffectEntry* effect) {
-    GXColor color2;
-    GXColor color;
+static void effVaporDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffVaporN64Work* work;
     s32 frame;
     CameraEntry* camera;
@@ -252,9 +253,10 @@ static void effVaporDisp(CameraId cameraId, EffectEntry* effect) {
     if (n >= 30) {
         n = 29;
     }
-    s = 0.01f * (scale_data + type * 30)[n];
+
+    s = 0.01f * scale_data[type][n];
     f = -(f32)rz_data[type][n];
-    PSMTXTrans(mtx, (f32)(dx_data + type * 30)[n], 0.0f, 0.0f);
+    PSMTXTrans(mtx, (f32)dx_data[type][n], 0.0f, 0.0f);
     PSMTXRotRad(rot, 'z', 0.017453292f * f);
     PSMTXScale(scale, s, s, s);
     PSMTXConcat(mtx, rot, mtx);
@@ -262,7 +264,8 @@ static void effVaporDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(viewMtx, mtx, mtx);
     GXLoadPosMtxImm(mtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
-    f = 5.0f * (seq_data + type * 30)[n];
+
+    f = 5.0f * seq_data[type][n];
     f *= 0.00390625f;
     sub = (s32)f;
     a2 = 256.0f * (f - sub);
@@ -271,6 +274,7 @@ static void effVaporDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(scale, mtx, scale);
     GXLoadTexMtxImm(scale, GX_TEXMTX0, GX_MTX2x4);
     if (sub <= 4) {
+        // sub >= 4 tested inside sub <= 4 (means sub == 4); the retail branch is the >= test
         if (sub >= 4) {
             PSMTXScale(scale, 0.0f, 0.0f, 0.0f);
             GXLoadTexMtxImm(scale, GX_TEXMTX1, GX_MTX2x4);

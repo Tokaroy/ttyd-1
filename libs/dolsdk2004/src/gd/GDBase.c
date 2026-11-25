@@ -1,14 +1,9 @@
 #include <dolphin/gd.h>
 #include <dolphin/os.h>
 
-/** The display list being written by the GD functions, and the callback run when it runs out of room. */
 GDLObj* __GDCurrentDL = NULL;
 static GDOverflowCb overflowcb = NULL;
 
-/**
- * Sets up a display list object over a buffer: start, current write pointer (at the start),
- * end (start + length) and length.
- */
 void GDInitGDLObj(GDLObj* dl, void* start, u32 length) {
     ASSERTMSGLINE(40, !((u32)start & 0x1F), "start must be aligned to 32 bytes");
     ASSERTMSGLINE(41, !((u32)length & 0x1F), "length must be aligned to 32 bytes");
@@ -18,12 +13,11 @@ void GDInitGDLObj(GDLObj* dl, void* start, u32 length) {
     dl->length = length;
 }
 
-/** Flushes the data cache over the current display list (__GDCurrentDL) so the GPU sees what was written. */
 void GDFlushCurrToMem(void) {
     DCFlushRange(__GDCurrentDL->start, __GDCurrentDL->length);
 }
 
-/** Writes zero bytes (GX no-ops) until the current display list's write pointer is 32 byte aligned. */
+/* Pads the display list with zero bytes up to the next 32-byte boundary. */
 void GDPadCurr32(void) {
     u32 n;
 
@@ -35,10 +29,6 @@ void GDPadCurr32(void) {
     }
 }
 
-/**
- * Called when a write runs past the end of the current list;
- * calls the overflow callback if one is set, otherwise does nothing.
- */
 void GDOverflowed(void) {
     if (overflowcb) {
         (*overflowcb)();
@@ -47,12 +37,10 @@ void GDOverflowed(void) {
     }
 }
 
-/** Sets the function GDOverflowed calls. */
 void GDSetOverflowCallback(GDOverflowCb callback) {
     overflowcb = callback;
 }
 
-/** Returns the function set with GDSetOverflowCallback (NULL if none). */
 GDOverflowCb GDGetOverflowCallback(void) {
     return overflowcb;
 }

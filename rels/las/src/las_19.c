@@ -1,10 +1,12 @@
 // las_19 (ラストダンジョン, Palace of Shadow): the passage between the riddle tower and the inner palace.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
+#include "las.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_cloud.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
@@ -12,15 +14,32 @@
 #include "evt/evt_npc.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
-#include "las.h"
-#include "evt/evt_story.h"
 #include "driver/mapdrv.h"
-#include "driver/camdrv.h"
+#include "driver/seqdrv.h"
+#include "pmario_sound.h"
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e1_door_close[22];
+static EvtWord e1_door_open[22];
+static EvtWord e2_door_close[22];
+static EvtWord e2_door_open[22];
 static BeroEntry bero_entry_data[5];
-const char* mapgrp_name_1[18];
-const char* mapgrp_name_2[5];
+static const char* mapgrp_name_1[18];
+static const char* mapgrp_name_2[5];
+static EvtWord cam_shake[8];
+static EvtWord change_map_evt[359];
+static EvtWord switch1_evt[13];
+static EvtWord switch2_evt[13];
+static EvtWord cloud_evt[5];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_19_init_evt[];
+#else
+EvtWord las_19_init_evt[205];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -182,8 +201,7 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
-/** The staircase pieces S_kai_NN of the tower, raised in waves by change_map_evt. */
-const char* mapgrp_name_1[] = {
+static const char* mapgrp_name_1[] = {
     "S_kai_02",
     "S_kai_03",
     "S_kai_04",
@@ -204,8 +222,8 @@ const char* mapgrp_name_1[] = {
     "S_kai_25",
 };
 
-/** The last five staircase pieces, raised after those in mapgrp_name_1. */
-const char* mapgrp_name_2[] = {
+/** The last five staircase pieces (S_kai_20..24); no script reads this table. */
+static const char* mapgrp_name_2[] = {
     "S_kai_20",
     "S_kai_21",
     "S_kai_22",
@@ -220,23 +238,23 @@ static EVT_BEGIN(cam_shake)
 EVT_END()
 
 /**
- * Event script: the Riddle Tower rises into the Palace after the eight keys are used.
- * Mario and the partner are hidden, the camera pans along the staircase pieces S_kai_xx,
- * which are then pushed up in waves with a rumble and camera shake,
- * and the map changes back to las_10 (ret_chgmap_evt).
+ * Staircase scene, spawned when Mario arrives through entrance chgmap_evt: Mario and the partner are hidden, the
+ * camera pans along the raised staircase pieces (S_kai_02 to S_kai_25), which then settle 30 units per wave with
+ * SFX_STG8_MAP_MOVE1 and camera shakes as the camera drops to the foot of the tower; then the map changes to
+ * las_10 (entrance ret_chgmap_evt).
  */
-EVT_BEGIN(change_map_evt)
+static EVT_BEGIN(change_map_evt)
     // Mario and his partner are hidden under the floor and the camera starts at the staircase.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set, 575, 143, 531, 575, 67, -13, 0, 11)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_yuka"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_under"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_cam3d_evt_set, 575, 143, 531, 575, 67, -13, 0, EASING_SINE_IN_OUT)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_yuka"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_under"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_under"), 1, 1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_26"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_26"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_trans, 1, STRING("S_kai_02"), 0, 30, 0)
     CALL(evt_mapobj_trans, 1, STRING("S_kai_03"), 0, 60, 0)
     CALL(evt_mapobj_trans, 1, STRING("S_kai_04"), 0, 90, 0)
@@ -264,22 +282,22 @@ EVT_BEGIN(change_map_evt)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
-        // The camera pans along the staircase pieces S_kai_xx.
-        CALL(evt_cam3d_evt_set, -575, 143, 531, -575, 67, -13, 4000, 0)
+        CALL(evt_cam3d_evt_set, -575, 143, 531, -575, 67, -13, 4000, EASING_LINEAR)
         WAIT_MS(4500)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     LOOP(0)
         IF_INT_NOT_EQUAL(GF(0), 0)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAPOBJ_FLAG_HIDE)
-    // The camera drops to the foot of the tower and follows the pieces as they are pushed up in waves, with a
-    // rumble and shaking.
-    CALL(evt_cam3d_evt_set, -5, -547, 531, -5, -623, -13, 9200, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAP_OBJ_FLAG_HIDDEN)
+
+    // The camera drops to the foot of the tower while the pieces settle down 30 units per wave (each wave leaves
+    // one more piece in place), with a rumble and shaking.
+    CALL(evt_cam3d_evt_set, -5, -547, 531, -5, -623, -13, 9200, EASING_LINEAR)
     WAIT_MS(300)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
@@ -314,66 +332,67 @@ EVT_BEGIN(change_map_evt)
     END_INLINE_EVENT
     WAIT_MS(7600)
     SET_VALUE(GF(0), 1)
-    // Back to the Riddle Tower hub (las_10) with the tower risen.
+
+    // Back to the Riddle Tower hub (las_10, entry ret_chgmap_evt).
     CALL(evt_bero_mapchange, STRING("las_10"), STRING("ret_chgmap_evt"))
     RETURN
 EVT_END()
 
-/** Event script: the first switch of las_19 was hit; toggles GSWF_LAS19_SWITCH1_ON. */
+/** Event script: the first switch of las_19 was hit; toggles GSWF_LAS_19_SWITCH_1_ON. */
 static EVT_BEGIN(switch1_evt)
-    IF_INT_EQUAL(GSWF(GSWF_LAS19_SWITCH1_ON), 0)
-        SET_VALUE(GSWF(GSWF_LAS19_SWITCH1_ON), 1)
+    IF_INT_EQUAL(GSWF_LAS_19_SWITCH_1_ON, 0)
+        SET_VALUE(GSWF_LAS_19_SWITCH_1_ON, 1)
     ELSE
-        SET_VALUE(GSWF(GSWF_LAS19_SWITCH1_ON), 0)
+        SET_VALUE(GSWF_LAS_19_SWITCH_1_ON, 0)
     END_IF
     RETURN
 EVT_END()
 
-/** Event script: the second switch of las_19 was hit; toggles GSWF_LAS19_SWITCH2_ON. */
+/** Event script: the second switch of las_19 was hit; toggles GSWF_LAS_19_SWITCH_2_ON. */
 static EVT_BEGIN(switch2_evt)
-    IF_INT_EQUAL(GSWF(GSWF_LAS19_SWITCH2_ON), 0)
-        SET_VALUE(GSWF(GSWF_LAS19_SWITCH2_ON), 1)
+    IF_INT_EQUAL(GSWF_LAS_19_SWITCH_2_ON, 0)
+        SET_VALUE(GSWF_LAS_19_SWITCH_2_ON, 1)
     ELSE
-        SET_VALUE(GSWF(GSWF_LAS19_SWITCH2_ON), 0)
+        SET_VALUE(GSWF_LAS_19_SWITCH_2_ON, 0)
     END_IF
     RETURN
 EVT_END()
 
-/** Event script: the cloud of las_19 was reached; sets the story progress to STORY_STG8_08_THE_NEW_PATH. */
+/** Event script: the cloud of las_19 was reached; sets the story progress to STG8_08_THE_NEW_PATH. */
 static EVT_BEGIN(cloud_evt)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG8_08_THE_NEW_PATH)
+    SET_VALUE(GSW_STORY_PROGRESS, STG8_08_THE_NEW_PATH)
     RETURN
 EVT_END()
 
 /**
  * Map init script for las_19, the stairs of the Palace of Shadow:
  * music (first or third Palace theme depending on the story),
- * the cloud-covered lid (S_futa) that Flurrie must blow off until STORY_STG8_08_THE_NEW_PATH,
- * the rising- staircase cutscene when entered from las_10, the Wizzerd NPCs,
+ * the cloud-covered lid (S_futa) that Flurrie must blow off until STG8_08_THE_NEW_PATH,
+ * the staircase cutscene when entered from las_10 (chgmap_evt), the Wizzerd NPCs,
  * two float switches and a Thunder Rage block.
  */
 EVT_BEGIN(las_19_init_evt)
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("chgmap_evt"))
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
     ELSE
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
         ELSE
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST3"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST3"))
         END_IF
     END_IF
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_08_THE_NEW_PATH)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_08_THE_NEW_PATH)
         CALL(evt_cloud_init)
         CALL(evt_cloud_ent, 0, STRING("S_futa"), STRING("A_futa"), PTR(cloud_evt))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_futa"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_futa"), 0, 0)
     END_IF
     CALL(evt_bero_get_entername, LW(0))
@@ -383,36 +402,36 @@ EVT_BEGIN(las_19_init_evt)
     ELSE
         CALL_CHILD(evt_bero_info_run)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_under"), MAPOBJ_FLAG_HIDE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_under"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_under"), 1, 0)
         CALL(evt_npc_check_delete, STRING("マホーン２"))
         CALL(evt_npc_check_delete, STRING("マホーン３"))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_be"), 1, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_20"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_21"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_22"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_23"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_24"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_20"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_21"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_22"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_23"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kai_24"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_npc_check_delete, STRING("マホーン１"))
         SPAWN_EVENT(hikari_evt)
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
         CALL(evt_mobj_switch_float_blk, STRING("switch1"), 375, -320, -45, STRING(""), 2, PTR(switch1_evt), 0)
         CALL(evt_mobj_switch_float_blk, STRING("switch2"), 450, -320, -45, STRING(""), 0, PTR(switch2_evt), 0)
-        IF_INT_EQUAL(GSWF(GSWF_LAS19_SWITCH1_ON), 0)
+        IF_INT_EQUAL(GSWF_LAS_19_SWITCH_1_ON, 0)
             CALL(evt_mobj_set_anim, STRING("switch1"), STRING("A_3"))
         ELSE
             CALL(evt_mobj_set_anim, STRING("switch1"), STRING("S_1"))
         END_IF
-        IF_INT_EQUAL(GSWF(GSWF_LAS19_SWITCH2_ON), 0)
+        IF_INT_EQUAL(GSWF_LAS_19_SWITCH_2_ON, 0)
             CALL(evt_mobj_set_anim, STRING("switch2"), STRING("A_3"))
         ELSE
             CALL(evt_mobj_set_anim, STRING("switch2"), STRING("S_1"))
         END_IF
     END_IF
-    CALL(evt_mobj_badgeblk, STRING("mobj_item00"), 30, -440, -40, ITEM_THUNDER_RAGE, 0, GSWF(GSWF_LAS19_THUNDER_RAGE_BLOCK_HIT), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_item00"), 30, -440, -40, ITEM_THUNDER_RAGE, 0, GSWF_LAS_19_THUNDER_RAGE_BLOCK, 0)
     RETURN
 EVT_END()

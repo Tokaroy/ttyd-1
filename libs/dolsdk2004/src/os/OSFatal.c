@@ -2,6 +2,7 @@
 #include <dolphin/os.h>
 #include <dolphin/gx.h>
 #include <dolphin/exi.h>
+#include <dolphin/hw_regs.h>
 
 #include "__os.h"
 
@@ -17,7 +18,6 @@ static OSContext FatalContext;
 // prototypes
 static void Halt();
 
-/** Fills a YUV422 framebuffer with a color; each 4-byte group holds two pixels (Y, Cb, Y, Cr). */
 static void ScreenClear(void* xfb, u16 xfbW, u16 xfbH, GXColor yuv) {
     int i;
     int j;
@@ -34,10 +34,6 @@ static void ScreenClear(void* xfb, u16 xfbW, u16 xfbH, GXColor yuv) {
     }
 }
 
-/**
- * Draws a string into the framebuffer at (x, y) with the ROM font, in 24x24 glyphs,
- * wrapping at the right margin and starting a new line (leading pixels down) at each newline.
- */
 static void ScreenReport(void* xfb, u16 xfbW, u16 xfbH, GXColor yuv, s32 x, s32 y, s32 leading, const char* string) {
     u8* ptr;
     s32 width;
@@ -105,10 +101,6 @@ loop_1:
     }
 }
 
-/**
- * Sets up a 640-wide video mode for the fatal screen according to the TV format (NTSC, PAL or EURGB60,
- * interlaced or progressive) and applies it with VIConfigure.
- */
 static void ConfigureVideo(u16 xfbW, u16 xfbH) {
     GXRenderModeObj mode;
     mode.fbWidth = xfbW;
@@ -119,27 +111,27 @@ static void ConfigureVideo(u16 xfbW, u16 xfbH) {
     mode.viHeight = xfbH;
 
     switch (VIGetTvFormat()) {
-    case 2:
-    case 0:
-        if (__VIRegs[54] & 1) {
-            mode.viTVmode = 2;
+    case VI_MPAL:
+    case VI_NTSC:
+        if (__VIRegs[VI_CLOCK_SEL] & 1) {
+            mode.viTVmode = VI_TVMODE_NTSC_PROG;
             mode.viYOrigin = 0;
-            mode.xFBmode = 0;
+            mode.xFBmode = VI_XFBMODE_SF;
         } else {
-            mode.viTVmode = 0;
+            mode.viTVmode = VI_TVMODE_NTSC_INT;
             mode.viYOrigin = 0;
-            mode.xFBmode = 1;
+            mode.xFBmode = VI_XFBMODE_DF;
         }
         break;
-    case 5:
-        mode.viTVmode = 20;
+    case VI_EURGB60:
+        mode.viTVmode = VI_TVMODE_EURGB60_INT;
         mode.viYOrigin = 0;
-        mode.xFBmode = 1;
+        mode.xFBmode = VI_XFBMODE_DF;
         break;
-    case 1:
-        mode.viTVmode = 4;
+    case VI_PAL:
+        mode.viTVmode = VI_TVMODE_PAL_INT;
         mode.viYOrigin = 47;
-        mode.xFBmode = 1;
+        mode.xFBmode = VI_XFBMODE_DF;
         break;
     }
 
@@ -147,10 +139,8 @@ static void ConfigureVideo(u16 xfbW, u16 xfbH) {
     VIConfigurePan(0, 0, 640, 480);
 }
 
-/**
- * Converts an RGB color to the YCbCr values the framebuffer uses (BT.601), clamped to the legal ranges;
- * returns them in the r, g, b fields.
- */
+// RGB to YCbCr with the ITU-R BT.601 coefficients, Y clamped to 16-235 and Cb/Cr to 16-240.
+// The result keeps Y in .r, Cb in .g and Cr in .b (ScreenClear and ScreenReport read it that way).
 static GXColor RGB2YUV(GXColor rgb) {
     f32 Y;
     f32 Cb;
@@ -169,11 +159,6 @@ static GXColor RGB2YUV(GXColor rgb) {
     return yuv;
 }
 
-/**
- * Fatal error screen: stops the system (interrupts, scheduler, audio, video,
- * reset functions with a one second limit, EXI),
- * then runs Halt on a fresh stack to show msg in the foreground color on the background color. Never returns.
- */
 void OSFatal(GXColor fg, GXColor bg, const char* msg) {
     OSBootInfo* bootInfo;
     u32 count;
@@ -188,7 +173,7 @@ void OSFatal(GXColor fg, GXColor bg, const char* msg) {
     AISetStreamVolLeft(0);
     AISetStreamVolRight(0);
     VIInit();
-    __OSUnmaskInterrupts(0x80);
+    __OSUnmaskInterrupts(OS_INTERRUPTMASK_PI_VI);
     VISetBlack(TRUE);
     VIFlush();
     VISetPreRetraceCallback(NULL);
@@ -213,9 +198,9 @@ void OSFatal(GXColor fg, GXColor bg, const char* msg) {
     }
     EXIUnlock(0);
 
-    do {} while ((__EXIRegs[3] & 1) == 1);
+    do {} while ((__EXIRegs[EXI0_CR] & EXI_CR_TSTART) == EXI_CR_TSTART);
 
-    __OSSetExceptionHandler(8, &OSDefaultExceptionHandler);
+    __OSSetExceptionHandler(__OS_EXCEPTION_DECREMENTER, &OSDefaultExceptionHandler);
     GXAbortFrame();
     OSSetArenaLo((void*)0x81400000);
     OSSetArenaHi(bootInfo->FSTLocation);
@@ -226,10 +211,6 @@ void OSFatal(GXColor fg, GXColor bg, const char* msg) {
     OSSwitchFiber((u32)&Halt, (u32)OSGetArenaHi());
 }
 
-/**
- * Runs on the OSFatal stack: copies the message, loads the ROM font, allocates and clears a 640x480 framebuffer,
- * draws the message at (48, 100), shows it, prints it to the debug console and halts the CPU.
- */
 static void Halt() {
     u32 count;
     OSFontHeader* fontData;
@@ -245,6 +226,7 @@ static void Halt() {
     fontData = OSAllocFromArenaLo(0xA1004, DOLPHIN_ALIGNMENT);
     OSLoadFont(fontData, OSGetArenaLo());
     
+    // 640 x 480 frame buffer, 2 bytes per pixel (YCbCr 4:2:2)
     xfb = OSAllocFromArenaLo(0x96000, DOLPHIN_ALIGNMENT);
     ScreenClear(xfb, 640, 480, RGB2YUV(fp->bg));
     VISetNextFrameBuffer(xfb);

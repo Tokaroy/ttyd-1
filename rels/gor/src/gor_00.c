@@ -2,9 +2,42 @@
 // Exits to gor_01 (central plaza); also the departure for Keelhaul Key (chapter 5).
 
 #include "version.h"
+#include "driver/fadedrv.h"
+#include "evt/evt_story.h"
+#include "evt/evt_urouro.h"
+#include "evt/evt_win.h"
+#include "evt/evt_window.h"
+#include "kpa_act.h"
 #include "eff/eff_funemizu.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "eff/n64/eff_water_damage_n64.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_case.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_img.h"
+#include "evt/evt_item.h"
+#include "evt/evt_light.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_offscreen.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_telop.h"
+#include "mot/mot_ship.h"
+#include "evt/evt_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "driver/npcdrv.h"
 #include "mario/mario_pouch.h"
@@ -31,49 +64,21 @@
 #include "data_tables.h"
 #include "driver/hitdrv.h"
 #include "driver/msgdrv.h"
-#include "driver/itemdrv.h"
-#include "eff/n64/eff_water_damage_n64.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_light.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_offscreen.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_telop.h"
-#include "evt/evt_urouro.h"
-#include "evt/evt_win.h"
-#include "evt/evt_window.h"
-#include "kpa_act.h"
-#include "mot/mot_ship.h"
-#include "cam_kaiten.h"
-#include "libc_decls.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "driver/seqdrv.h"
 
 static void suifu100taikikan_seq01(NanNPC* npc);
 static void suifu100taikikan_seq00(NanNPC* npc);
-
+#include "cam_kaiten.h"
+#include <dolphin/pad.h>
 static u8* _ap;
 static s32* itemsel_table_ram;
 static KaitenParam* ckp0;
 static KaitenParam* ckp1;
 static KaitenParam* ckpw;
-/**
- * Identity helper for f32 values; passing a float through a call keeps the original code's load
- * and store order under MWCC.
- */
+
+/** Returns its f32 argument unchanged. */
+// FAKE: invented identity inline on one of two otherwise identical atan2 lines; written out, the FPR colouring
+// differs (12 forms tried). See FAKES.md.
 static inline f32 fid(f32 x) {
     return x;
 }
@@ -90,6 +95,10 @@ static USER_FUNC(delete_itemsel_table);
 static USER_FUNC(fune_eff);
 static USER_FUNC(fune_yure_func);
 static USER_FUNC(fune_yure_func_init);
+static USER_FUNC(funechange_func);
+static USER_FUNC(funeflag_load);
+static USER_FUNC(funeflag_reset);
+static USER_FUNC(funeflag_save);
 static USER_FUNC(get_yoshi_color);
 static USER_FUNC(gor_ship_puka_func);
 static USER_FUNC(gundan1000tai_areacheck);
@@ -101,46 +110,242 @@ static USER_FUNC(hosei_mario_pos);
 static USER_FUNC(hosei_party_pos);
 static USER_FUNC(make_itemsel_table);
 static USER_FUNC(scale_func);
+static USER_FUNC(suifu100taikikan_away);
+static USER_FUNC(suifu100taikikan_init);
+USER_FUNC(npc_all_delete);
 static void gor_stg4_018_cb(s32 type, smartEntry* smart);
+static f32 accdec_type(s32 step, s32 total, f32 start, f32 end);
 static f32 lineardec_type(s32 step, s32 total, f32 start, f32 end);
+static void alpha_tev(MapTevCallbackInfo* info);
 
-ExtTexInfo nannpc_entry_data[41];
-s16 dai3_run_animtbl[VERSION_PICK(22, 42)];
-static EvtWord sanders_talk[8];
-extern EvtWord tentyou_talk[];
-extern EvtWord tenin_talk[];
-static EvtWord borodo2_talk[13];
-NpcSetupInfo rakganEnt[2];
-extern EvtWord christine_osoware[];
-extern EvtWord gundan1000tai_beforebattle[];
-extern EvtWord gundan1000tai_afterbattle[];
-extern EvtWord mony_peton_after[];
-const char* shukko_npc_list[10];
-extern EvtWord shukko_event[];
-ExtTexInfo nannpc_entry_data01[41];
-Vec suifu100kaidanDOWN[];
-Vec suifu100kaidanUP[];
-#if VERSION >= VERSION_JP
-extern EvtWord mony_run_away[];
-extern EvtWord peton_run_away[];
-extern EvtWord mony_peton_depart[];
+#if VERSION >= VERSION_US
+
+// US/PAL: map save blocks call the save wrapper script
+#define SAVE_EVT evt_memcard_save_wrapper
 #else
-static EvtWord mony_peton_event[251];
+#define SAVE_EVT evt_memcard_save
 #endif
+
+static ExtTexInfo nannpc_entry_data[41];
+static s16 dai3_animtbl[VERSION_PICK(41, 81)];
+static s16 dai3_run_animtbl[VERSION_PICK(21, 41)];
+static EvtWord no00_custom[48];
+static BeroEntry bero_entry_data[2];
+static EvtWord mony_init[18];
+
+#if VERSION >= VERSION_JP
+EvtWord gor_00_mony_regl[VERSION_PICK(9, 11)];
+#endif
+
+static EvtWord mony_peton_talk[286];
+static EvtWord mony_talk[28];
+static EvtWord peton_init[18];
+
+#if VERSION >= VERSION_JP
+EvtWord gor_00_peton_regl[VERSION_PICK(9, 11)];
+#endif
+
+static EvtWord peton_talk[28];
+static EvtWord marco_init[32];
+
+#if VERSION >= VERSION_JP
+EvtWord marco_party_move[120];
+#endif
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord marco_talk[362];
+#else
+static EvtWord marco_talk[364];
+#endif
+
+static EvtWord garawaru_urouro2[25];
+static EvtWord garawaru_init[74];
+static EvtWord garawaru_regl[60];
+static EvtWord garawaru_talk[77];
+static EvtWord megane_init[18];
+static EvtWord megane_regl[2];
+static EvtWord megane_talk[14];
+static EvtWord odoodo_init[61];
+static EvtWord odoodo_regl[29];
+static EvtWord odoodo_talk[108];
+static EvtWord odoodo_ani_urouro[31];
+static EvtWord odoodo_ani_init[17];
+static EvtWord odoodo_ani_regl[9];
+static EvtWord odoodo_ani_talk[37];
+static EvtWord suifu_a_init[36];
+static EvtWord suifu_a_regl[28];
+static EvtWord suifu_a_talk[116];
+static EvtWord suifu_b_init[48];
+static EvtWord suifu_b_regl[29];
+static EvtWord suifu_b_talk[116];
+static EvtWord suifu_d_init[14];
+static EvtWord suifu_d_talk[8];
+static EvtWord suifubomb_a_urouro2[31];
+static EvtWord suifubomb_a_init[53];
+static EvtWord suifubomb_a_regl[30];
+
+#if VERSION == VERSION_DEMO_JP
+static EvtWord suifubomb_a_talk[224];
+#else
+static EvtWord suifubomb_a_talk[VERSION_PICK(226, 218)];
+#endif
+
+static EvtWord suifubomb_b_urouro2[27];
+static EvtWord suifubomb_b_init[39];
+static EvtWord suifubomb_b_regl[60];
+static EvtWord suifubomb_b_talk[116];
+static EvtWord suifubomb_c_init[14];
+static EvtWord suifubomb_c_talk[8];
+static EvtWord sanders_init[42];
+static EvtWord sanders_talk[8];
+static EvtWord korutesu_init[19];
+static EvtWord korutesu_talk[33];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord tentyou_init[];
+#else
+EvtWord tentyou_init[36];
+#endif
+
+static EvtWord tentyou_talk[14];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord tenin_init[];
+#else
+EvtWord tenin_init[36];
+#endif
+
+static EvtWord tenin_talk[14];
+static EvtWord borodo2_init[42];
+static EvtWord borodo2_escape[43];
+static EvtWord borodo2_talk[13];
+static EvtWord mokorim_init[28];
+
+#if VERSION == VERSION_DEMO_JP
+static EvtWord mokorim_talk[521];
+#else
+static EvtWord mokorim_talk[546];
+#endif
+
+static EvtWord baba_init[9];
+static EvtWord luigi_init[18];
+static EvtWord luigi_talk[4];
+static NpcSetupInfo luigiEnt[2];
+static EvtWord luigi_npcEnt[30];
+static EvtWord rakgan_init[12];
+static EvtWord rakgan_talk[8];
+static NpcSetupInfo rakganEnt[2];
+static NpcSetupInfo npcEnt[17];
+static EvtWord ship_a_kaji_animation[51];
+static EvtWord ship_a_wakka_animation[56];
+static EvtWord ship_a_entotsu_animation[56];
+static EvtWord ship_a_neji_animation[56];
+static EvtWord ship_a_yure_animation[56];
+static EvtWord ship_a_animation[132];
+static EvtWord ship_pera[119];
+static EvtWord enter_gorotsuki_town_init[58];
+static EvtWord christine_osoware_setup[82];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord enter_gorotsuki_town[];
+#else
+EvtWord enter_gorotsuki_town[594];
+#endif
+
+static EvtWord christine_osoware[357];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord gundan1000tai_beforebattle[];
+#else
+EvtWord gundan1000tai_beforebattle[524];
+#endif
+
+static EvtWord _kemuri_sub[56];
+static EvtWord gundan1000tai_kemuri[VERSION_PICK(20, 16)];
+static EvtWord gundan1000tai_zaza_se[61];
+static EvtWord gundan1000tai_jump_se[19];
+static EvtWord gundan1000tai_yure[22];
+static EvtWord gundan1000tai_afterbattle[1201];
+static EvtWord mony_peton_after[37];
+static EvtWord shukko_event_move_ship_se00[20];
+static EvtWord shukko_event_move_ship_se01[20];
+static const char* shukko_npc_list[10];
+static EvtWord shukko_event_move_ship[223];
+static EvtWord shukko_event[498];
+static ExtTexInfo nannpc_entry_data01[41];
+static s16 suifu_animtbl[41];
+static s16 suifu_run_animtbl[21];
+static Vec suifu100kaidanDOWN[4];
+static Vec suifu100kaidanUP[4];
+
+#if VERSION >= VERSION_JP
+EvtWord marco_run_away[100];
+#endif
+
+EvtWord gorotsuki_kikan[];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord into_gor_ship[];
+static EvtWord mony_peton_event[251];
+#else
+EvtWord into_gor_ship[265];
+EvtWord mony_run_away[108];
+#endif
+
+#if VERSION >= VERSION_JP
+EvtWord peton_run_away[88];
+static EvtWord mony_peton_event[VERSION_PICK(61, 64)];
+#endif
+
+static EvtWord gor_00_koopa_evt[1095];
+
 #if VERSION >= VERSION_DEMO_EU
 static EvtWord peach_mail[215];
 #else
 static EvtWord peach_mail[209];
 #endif
-f32 gor_ship_puka_data[];
+
+static f32 gor_ship_puka_data[16];
+static EvtWord gor_ship_puka[21];
+static EvtWord gor_muj_ship_sub[53];
 static EvtWord option_ship_mario[139];
-extern EvtWord gor_muj_ship_start[];
+static EvtWord gor_muj_ship_init[42];
+static EvtWord gor_muj_ship_pera[115];
+static EvtWord gor_muj_ship_start[258];
+static EvtWord tsumini[212];
+static HitDamageReturn dmgRetPoint[VERSION_PICK(4, 6)];
+static EvtWord mobj_box00[34];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord epilogue_npc_entry[365];
+#else
+static EvtWord epilogue_npc_entry[340];
+#endif
+
+static EvtWord punio_kinoko[22];
+static EvtWord puniko_kinoko[22];
+static EvtWord epilogue_evt[1520];
+static EvtWord epilogue_npc_entry2[30];
+static EvtWord epilogue_evt2[74];
+static EvtWord return_gorotsuki_town_init[25];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord return_gorotsuki_town[];
+#else
+EvtWord return_gorotsuki_town[625];
+#endif
+
+#if VERSION == VERSION_DEMO_JP
+EvtWord gor_00_init_evt[535];
+#else
+EvtWord gor_00_init_evt[VERSION_PICK(537, 540)];
+#endif
 
 /**
- * Sprite entries for the extra townsfolk of the harbor (evt_nannpc_init): the c_zako_n model with its S_1
- * animation, one entry per animation phase offset.
+ * Sprite entries for the harbor crowd (evt_nannpc_init): the c_zako_n model with its S_1 and R_1
+ * animations, one entry per animation phase offset.
  */
-ExtTexInfo nannpc_entry_data[] = {
+static ExtTexInfo nannpc_entry_data[] = {
     {"c_zako_n", "S_1", 0.0f},
     {"c_zako_n", "S_1", 2.0f},
     {"c_zako_n", "S_1", 4.0f},
@@ -184,9 +389,9 @@ ExtTexInfo nannpc_entry_data[] = {
     {0},
 };
 
-#if VERSION >= VERSION_US
-// US: every frame entry doubled
+// US and later: every frame entry doubled
 static s16 dai3_animtbl[] = {
+#if VERSION >= VERSION_US
     0, 0, 0, 0, 1, 1, 1, 1,
     2, 2, 2, 2, 3, 3, 3, 3,
     4, 4, 4, 4, 5, 5, 5, 5,
@@ -197,57 +402,48 @@ static s16 dai3_animtbl[] = {
     14, 14, 14, 14, 15, 15, 15, 15,
     16, 16, 16, 16, 17, 17, 17, 17,
     18, 18, 18, 18, 19, 19, 19, 19,
-    -1, 0,
-};
 #else
-static s16 dai3_animtbl[] = {
     0, 0, 1, 1, 2, 2, 3, 3,
     4, 4, 5, 5, 6, 6, 7, 7,
     8, 8, 9, 9, 10, 10, 11, 11,
     12, 12, 13, 13, 14, 14, 15, 15,
     16, 16, 17, 17, 18, 18, 19, 19,
-    -1, 0,
-};
 #endif
+    -1,
+};
 
+/** Animation frame table for the harbor crowd while it runs. */
+static s16 dai3_run_animtbl[] = {
 #if VERSION >= VERSION_US
-/** Animation frame table for the harbor crowd while it runs. Version for the earlier releases. */
-s16 dai3_run_animtbl[] = {
     20, 20, 21, 21, 22, 22, 23, 23,
     24, 24, 25, 25, 26, 26, 27, 27,
     28, 28, 29, 29, 30, 30, 31, 31,
     32, 32, 33, 33, 34, 34, 35, 35,
     36, 36, 37, 37, 38, 38, 39, 39,
-    -1, 0,
-};
+    -1,
 #else
-/**
- * Animation frame table for the harbor crowd while it runs (frames 20 to 39, ending with -1). Version for the
- * later releases.
- */
-s16 dai3_run_animtbl[] = {
     20, 21, 22, 23, 24, 25, 26, 27,
     28, 29, 30, 31, 32, 33, 34, 35,
-    36, 37, 38, 39, -1, 0,
-};
+    36, 37, 38, 39, -1,
 #endif
+};
 
 /**
  * Exit event of the "n_bero" door to gor_01.
- * At STORY_STG0_05_1000_X_NAUTS_BEFORE it freezes Mario,
+ * At STG0_05_1000_X_NAUTS_BEFORE it freezes Mario,
  * walks him 80 units back and hides him and his partner before the map change, and returns 1 in LW(0);
  * at any other time it returns 0 and the exit works normally.
  */
-EVT_BEGIN(no00_custom)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG0_05_1000_X_NAUTS_BEFORE)
+static EVT_BEGIN(no00_custom)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG0_05_1000_X_NAUTS_BEFORE)
         CALL(evt_mario_wait_landon)
-        CALL(evt_mario_flag_onoff, 1, 256)
+        CALL(evt_mario_flag_onoff, 1, MARIO_FLAG_FLOORS_DISABLED)
         CALL(evt_mario_key_onoff, 0)
         CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
         ADD(LW(12), -80)
         CALL(evt_mario_mov_pos2, LW(10), LW(12), FLOAT(150.0f))
-        CALL(evt_mario_dispflag_onoff, 1, 1)
-        CALL(evt_party_dispflg_onoff, 1, PARTY_DISP_FLAG_HIDDEN, 1)
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+        CALL(evt_party_dispflg_onoff, 1, PARTY_DISP_FLAG_HIDE, 1)
         SET_VALUE(GF(10), 0)
         SET_VALUE(LW(0), 1)
         RETURN
@@ -267,7 +463,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)no00_custom, // exitEvent
+        no00_custom, // exitEvent
         "gor_01", // nextMapName
         "s_bero", // nextBeroName
         1, // enterAnimeType
@@ -279,7 +475,7 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Map TEV callback for the harbor wake mesh "S_a_hikinami":
- * draws it with a constant alpha read from the byte at _ap, so the wake can fade in and out.
+ * multiplies its previous alpha by the alpha read from the byte at _ap, so the wake can fade in and out.
  */
 static void alpha_tev(MapTevCallbackInfo* info) {
     s32 stage = info->tevStage;
@@ -294,13 +490,26 @@ static void alpha_tev(MapTevCallbackInfo* info) {
     info->tevStage++;
 }
 
+/** Allocates the one-byte alpha value read by alpha_tev and sets it to 255 (opaque). */
+static USER_FUNC(alpha_init_func) {
+    _ap = _mapAlloc(1);
+    *_ap = 255;
+    return EVT_RETURN_DONE;
+}
+
+/** Sets the alpha of the harbor wake mesh to args[0] (0 to 255) by writing the byte at _ap. */
+static USER_FUNC(alpha_set_func) {
+    *_ap = evtGetValue(event, event->args[0]);
+    return EVT_RETURN_DONE;
+}
+
 /**
- * Init event of Francesca (Mony): while Mario is looking for Don Pianta (STORY_STG2_44 to STORY_STG2_45) she
+ * Init event of Francesca (Francesca): while Mario is looking for Don Pianta (STG2_44 to STG2_45) she
  * stands at (130, 15, 250) facing 90 degrees.
  */
 static EVT_BEGIN(mony_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_44_FINDING_DON_PIANTA, STORY_STG2_45_DAUGHTER_LOCATED)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_44_FINDING_DON_PIANTA, STG2_45_DAUGHTER_LOCATED)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), 130, 15, 250)
     END_SWITCH
@@ -309,13 +518,13 @@ EVT_END()
 
 #if VERSION >= VERSION_JP
 /**
- * Regular event of Francesca (Mony).
- * On the Chapter 5 step where Frankie and Francesca arrive (STORY_STG5_64_03_F_AND_F_ARRIVE) it runs
+ * Regular event of Francesca (Francesca).
+ * On the Chapter 5 step where Frankie and Francesca arrive (STG5_64_03_F_F_ARRIVE) it runs
  * mony_run_away; the US and later releases first wait for GF(15).
  */
 EVT_BEGIN(gor_00_mony_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG5_64_03_F_AND_F_ARRIVE)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG5_64_03_F_F_ARRIVE)
 #if VERSION >= VERSION_US
         WAIT_WHILE(GF(15))
 #endif
@@ -326,14 +535,13 @@ EVT_END()
 #endif
 
 /**
- * Shared talk scene for Francesca (Mony) and Frankie (Peton)
- * while Mario is looking for Don Pianta (STORY_STG2_44):
- * they plead their case, Mario answers a yes/no question
- * and GSWF_GOR00_FRANKIE_FRANCESCA_HELPED records the answer.
- * Sets the story to STORY_STG2_45_DAUGHTER_LOCATED and brings the background music back.
+ * Talk scene of Francesca (モニー) and Frankie (ピートン), run from mony_talk at STG2_44_FINDING_DON_PIANTA:
+ * they talk (mac_2_072 to 083) and Mario answers mac_2_083_yesno; the first answer sets
+ * GSWF_GOR_00_RUNAWAYS_SECRET_KEPT, the other clears it. It registers mony_peton_after on A_oku_yuka_01,
+ * sets the story to STG2_45_DAUGHTER_LOCATED and brings the background music back.
  */
-EVT_BEGIN(mony_peton_talk)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_HOLD, 3000)
+static EVT_BEGIN(mony_peton_talk)
+    CALL(evt_snd_bgmoff_f, PSND_PAUSE, 3000)
     CALL(evt_mario_key_onoff, 0)
     WAIT_MS(500)
     CALL(evt_set_dir_to_target, STRING("モニー"), STRING("mario"))
@@ -343,8 +551,8 @@ EVT_BEGIN(mony_peton_talk)
     CALL(evt_mario_set_pose, STRING("M_I_2"))
     WAIT_MS(800)
     CALL(evt_msg_print, 0, STRING("mac_2_073"), 0, STRING("モニー"))
-    CALL(evt_npc_flag_onoff, 1, STRING("モニー"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("ピートン"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("モニー"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("ピートン"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_party_stop, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -358,7 +566,7 @@ EVT_BEGIN(mony_peton_talk)
         CALL(evt_party_move_pos2, 0, 55, 235, FLOAT(120.0f))
         CALL(evt_party_set_dir, 0, 90, 200)
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, 157, 115, 562, 157, 55, 217, 1000, 11)
+    CALL(evt_cam3d_evt_set, 157, 115, 562, 157, 55, 217, 1000, EASING_SINE_IN_OUT)
     CALL(evt_npc_set_ry, STRING("モニー"), 90)
     CALL(evt_npc_set_ry, STRING("ピートン"), 270)
     WAIT_MS(800)
@@ -379,41 +587,39 @@ EVT_BEGIN(mony_peton_talk)
     ELSE
         CALL(evt_npc_get_position, STRING("ピートン"), LW(0), LW(1), LW(2))
     END_IF
-    CALL(evt_cam3d_evt_set, LW(0), 115, 562, LW(0), 55, 217, 300, 11)
+    CALL(evt_cam3d_evt_set, LW(0), 115, 562, LW(0), 55, 217, 300, EASING_SINE_IN_OUT)
     WAIT_MS(600)
     CALL(evt_msg_print, 0, STRING("mac_2_083"), 0, STRING("モニー"))
     CALL(evt_msg_select, 0, STRING("mac_2_083_yesno"))
     IF_INT_EQUAL(LW(0), 0)
         CALL(evt_msg_print_add, 0, STRING("mac_2_084"))
-        SET_VALUE(GSWF(GSWF_GOR00_FRANKIE_FRANCESCA_HELPED), 1)
+        SET_VALUE(GSWF_GOR_00_RUNAWAYS_SECRET_KEPT, 1)
     ELSE
         CALL(evt_msg_print_add, 0, STRING("mac_2_086"))
-        SET_VALUE(GSWF(GSWF_GOR00_FRANKIE_FRANCESCA_HELPED), 0)
+        SET_VALUE(GSWF_GOR_00_RUNAWAYS_SECRET_KEPT, 0)
     END_IF
-    CALL(evt_npc_flag_onoff, 0, STRING("モニー"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 0, STRING("ピートン"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_npc_flag_onoff, 0, STRING("モニー"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 0, STRING("ピートン"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_party_run, 0)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("A_oku_yuka_01"), 0, PTR(mony_peton_after), 0)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_45_DAUGHTER_LOCATED)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("A_oku_yuka_01"), 0, PTR(mony_peton_after), 0)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_45_DAUGHTER_LOCATED)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT | PSND_CH(1), 2000)
-    CALL(evt_snd_bgmon_f, PSND_FADE_RESUME | PSND_FADE_IN, 0, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT | PSND_SLOT(1), 2000)
+    CALL(evt_snd_bgmon_f, PSND_CONTINUE | PSND_FADEIN, 0, 2000)
     RETURN
 EVT_END()
 
 /**
- * Talk event of Francesca (Mony).
- * At STORY_STG2_44_FINDING_DON_PIANTA it runs the shared talk scene mony_peton_talk;
- * at STORY_STG2_45_DAUGHTER_LOCATED she says mac_2_087,
- * or mac_2_085 once Mario has helped her and Frankie (GSWF_GOR00_FRANKIE_FRANCESCA_HELPED).
+ * Talk event of Francesca (モニー): at STG2_44_FINDING_DON_PIANTA it runs mony_peton_talk; at
+ * STG2_45_DAUGHTER_LOCATED she says mac_2_087, or mac_2_085 when GSWF_GOR_00_RUNAWAYS_SECRET_KEPT is set.
  */
 static EVT_BEGIN(mony_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG2_44_FINDING_DON_PIANTA)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG2_44_FINDING_DON_PIANTA)
         CALL_CHILD(mony_peton_talk)
-        CASE_EQUAL(STORY_STG2_45_DAUGHTER_LOCATED)
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_FRANKIE_FRANCESCA_HELPED), 0)
+        CASE_EQUAL(STG2_45_DAUGHTER_LOCATED)
+        IF_INT_EQUAL(GSWF_GOR_00_RUNAWAYS_SECRET_KEPT, 0)
             CALL(evt_msg_print, 0, STRING("mac_2_087"), 0, STRING("me"))
         ELSE
             CALL(evt_msg_print, 0, STRING("mac_2_085"), 0, STRING("me"))
@@ -423,12 +629,12 @@ static EVT_BEGIN(mony_talk)
 EVT_END()
 
 /**
- * Init event of Frankie (Peton): while Mario is looking for Don Pianta (STORY_STG2_44 to STORY_STG2_45) he
+ * Init event of Frankie (Frankie): while Mario is looking for Don Pianta (STG2_44 to STG2_45) he
  * stands at (185, 15, 250) facing 270 degrees, next to Francesca.
  */
 static EVT_BEGIN(peton_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_44_FINDING_DON_PIANTA, STORY_STG2_45_DAUGHTER_LOCATED)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_44_FINDING_DON_PIANTA, STG2_45_DAUGHTER_LOCATED)
         CALL(evt_npc_set_ry, STRING("me"), 270)
         CALL(evt_npc_set_position, STRING("me"), 185, 15, 250)
     END_SWITCH
@@ -437,13 +643,13 @@ EVT_END()
 
 #if VERSION >= VERSION_JP
 /**
- * Regular event of Frankie (Peton).
+ * Regular event of Frankie (Frankie).
  * Same as gor_00_mony_regl: on the Chapter 5 arrival step it runs peton_run_away;
  * the US and later releases first wait for GF(15).
  */
 EVT_BEGIN(gor_00_peton_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG5_64_03_F_AND_F_ARRIVE)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG5_64_03_F_F_ARRIVE)
 #if VERSION >= VERSION_US
         WAIT_WHILE(GF(15))
 #endif
@@ -454,17 +660,17 @@ EVT_END()
 #endif
 
 /**
- * Talk event of Frankie (Peton).
- * At STORY_STG2_44_FINDING_DON_PIANTA it runs the shared talk scene mony_peton_talk;
- * at STORY_STG2_45_DAUGHTER_LOCATED he says mac_2_087_01,
+ * Talk event of Frankie (Frankie).
+ * At STG2_44_FINDING_DON_PIANTA it runs the shared talk scene mony_peton_talk;
+ * at STG2_45_DAUGHTER_LOCATED he says mac_2_087_01,
  * or mac_2_085_01 once Mario has helped him and Francesca.
  */
 static EVT_BEGIN(peton_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG2_44_FINDING_DON_PIANTA)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG2_44_FINDING_DON_PIANTA)
         CALL_CHILD(mony_peton_talk)
-        CASE_EQUAL(STORY_STG2_45_DAUGHTER_LOCATED)
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_FRANKIE_FRANCESCA_HELPED), 0)
+        CASE_EQUAL(STG2_45_DAUGHTER_LOCATED)
+        IF_INT_EQUAL(GSWF_GOR_00_RUNAWAYS_SECRET_KEPT, 0)
             CALL(evt_msg_print, 0, STRING("mac_2_087_01"), 0, STRING("me"))
         ELSE
             CALL(evt_msg_print, 0, STRING("mac_2_085_01"), 0, STRING("me"))
@@ -474,28 +680,28 @@ static EVT_BEGIN(peton_talk)
 EVT_END()
 
 /**
- * Init event of Flavio (Marco) for Chapter 4 (STORY_STG4_32 to STORY_STG4_END_OFF_TO_THE_KEYS):
+ * Init event of Flavio for Chapter 4 (STG4_32 to STG4_END_OFF_TO_THE_KEYS):
  * places him at (77, 51, 110) facing 90 degrees
  * and enters a spare third-force grunt NPC ("c_zako_n", an X-Naut grunt) hidden below the map.
  */
 static EVT_BEGIN(marco_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), 77, 51, 110)
-        CALL(evt_npc_entry, STRING("第三部下"), STRING("c_zako_n"))
+        CALL(evt_npc_entry, STRING("第三部下"), STRING("c_zako_n")) // an X-Naut grunt who reports the ship infiltration
         CALL(evt_npc_set_tribe, STRING("第三部下"), STRING("第三勢力部下"))
         CALL(evt_npc_set_position, STRING("第三部下"), 0, -1000, 0)
     END_SWITCH
     RETURN
 EVT_END()
 
-#if VERSION >= VERSION_JP
 /**
- * Moves Mario's partner out of the way before Marco's (Flavio's) departure talk:
+ * Moves Mario's partner out of the way before Flavio's departure talk:
  * depending on where the partner stands it walks it to the pier,
  * hops it up onto the ledge at (90, 50, 150) and turns it to face left, then lets it follow again.
  */
+#if VERSION >= VERSION_JP
 EVT_BEGIN(marco_party_move)
     CALL(evt_party_stop, 0)
     CALL(evt_party_force_reset_outofscreen, 0)
@@ -545,18 +751,17 @@ EVT_END()
 #endif
 
 /**
- * Talk event of Flavio (Marco) in Chapter 4.
- * At STORY_STG4_32_CHATTING_WITH_FLAVIO the partner is moved aside and Flavio talks with the sailors
- * and shop staff (mac_4_030 to mac_4_044), ending with the story set to STORY_STG4_33_MEET_BOBBERY.
- * Later steps give Flavio's lines on Bobbery (mac_4_045 and variants, by whether Bobbery has declined,
- * GSWF_GOR02_BOBBERY_DENIED).
- * At STORY_STG4_37_TO_THE_PORT the partner is moved by marco_party_move
- * and Flavio asks whether Mario is ready to sail (mac_4_090 yes/no, GSWF_GOR00_FLAVIO_READY_TO_SAIL);
- * a yes starts shukko_event, the departure.
+ * Talk event of Flavio ("me", Marco). At STG4_32_CHATTING_WITH_FLAVIO the partner steps aside and Flavio
+ * talks with the sailors and shop staff (mac_4_030 to 044), then the story becomes STG4_33_MEET_BOBBERY.
+ * At STG4_33 he says mac_4_045, or mac_4_045_01 once GSWF_GOR_BOBBERY_FIRST_DENIAL_HEARD is set; before
+ * STG4_36_BOBBERYS_DECISION mac_4_045_02. At STG4_37_TO_THE_PORT (JP and later also spawn
+ * marco_party_move) he says mac_4_089 and 090 the first time (sets GSWF_GOR_FLAVIO_SET_SAIL_TALK_DONE),
+ * later mac_4_091, and asks mac_4_090_yesno; the first answer starts shukko_event, the departure.
  */
 static EVT_BEGIN(marco_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG4_32_CHATTING_WITH_FLAVIO)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG4_32_CHATTING_WITH_FLAVIO)
+
         // Chapter 4: the partner steps aside while Flavio addresses Mario.
         CALL(evt_party_stop, 0)
         BEGIN_INLINE_EVENT
@@ -567,25 +772,27 @@ static EVT_BEGIN(marco_talk)
             CALL(evt_party_move_pos2, 0, 120, 135, FLOAT(60.0f))
             CALL(evt_party_set_dir, 0, 270, 200)
         END_INLINE_EVENT
+
         // Flavio announces a problem with the crew; a rough sailor offers an idea.
         CALL(evt_msg_print, 0, STRING("mac_4_030"), 0, STRING("me"))
         CALL(evt_mario_set_pose, STRING("M_I_2"))
         WAIT_MS(800)
         CALL(evt_msg_print, 0, STRING("mac_4_031"), 0, STRING("me"))
         CALL(evt_msg_print, 0, STRING("mac_4_032"), 0, STRING("ガラの悪い水夫"))
-        CALL(evt_cam3d_evt_set, 110, 170, 472, 110, 110, 127, 500, 11)
+        CALL(evt_cam3d_evt_set, 110, 170, 472, 110, 110, 127, 500, EASING_SINE_IN_OUT)
         WAIT_MS(800)
         CALL(evt_msg_print, 0, STRING("mac_4_033"), 0, STRING("ガラの悪い水夫"))
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_msg_print, 0, STRING("mac_4_034"), 0, STRING("me"))
-        CALL(evt_cam3d_evt_set, 160, 170, 472, 160, 110, 127, 500, 11)
+        CALL(evt_cam3d_evt_set, 160, 170, 472, 160, 110, 127, 500, EASING_SINE_IN_OUT)
         WAIT_MS(800)
+
         // The sailor suggests a legendary sailor living in Rogueport, and Flavio decides to recruit him.
         CALL(evt_msg_print, 0, STRING("mac_4_035"), 0, STRING("ガラの悪い水夫"))
-        CALL(evt_cam3d_evt_set, 60, 170, 472, 60, 110, 127, 500, 11)
+        CALL(evt_cam3d_evt_set, 60, 170, 472, 60, 110, 127, 500, EASING_SINE_IN_OUT)
         WAIT_MS(800)
         CALL(evt_msg_print, 0, STRING("mac_4_036"), 0, STRING("me"))
-        CALL(evt_cam3d_evt_set, 95, 207, 763, 95, 89, 98, 0, 11)
+        CALL(evt_cam3d_evt_set, 95, 207, 763, 95, 89, 98, 0, EASING_SINE_IN_OUT)
         WAIT_FRAMES(1)
         CALL(evt_npc_set_ry, STRING("me"), 270)
         WAIT_MS(600)
@@ -595,6 +802,7 @@ static EVT_BEGIN(marco_talk)
         WAIT_MS(600)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         WAIT_MS(900)
+
         // Flavio hands the negotiating to Mario while the crew shouts their agreement.
         CALL(evt_msg_print, 0, STRING("mac_4_037"), 0, STRING("me"))
         CALL(evt_npc_set_ry, STRING("me"), 270)
@@ -630,30 +838,33 @@ static EVT_BEGIN(marco_talk)
         WAIT_MS(4500)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         WAIT_MS(300)
+
         // Flavio sends Mario to find Bobbery; the story advances.
         CALL(evt_msg_print, 0, STRING("mac_4_044"), 0, STRING("me"))
-        CALL(evt_cam3d_evt_off, 500, 11)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
         CALL(evt_party_run, 0)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_33_MEET_BOBBERY)
-        // Reminder to bring Bobbery, with an extra line if Bobbery has already refused.
-        CASE_EQUAL(STORY_STG4_33_MEET_BOBBERY)
-        IF_INT_EQUAL(GSWF(GSWF_GOR02_BOBBERY_DENIED), 0)
+        SET_VALUE(GSW_STORY_PROGRESS, STG4_33_MEET_BOBBERY)
+        CASE_EQUAL(STG4_33_MEET_BOBBERY)
+        IF_INT_EQUAL(GSWF_GOR_BOBBERY_FIRST_DENIAL_HEARD, 0)
             CALL(evt_msg_print, 0, STRING("mac_4_045"), 0, STRING("me"))
         ELSE
             CALL(evt_msg_print, 0, STRING("mac_4_045_01"), 0, STRING("me"))
         END_IF
+
         // Flavio nags Mario after Bobbery refused.
-        CASE_LESS(STORY_STG4_36_BOBBERYS_DECISION)
+        CASE_LESS(STG4_36_BOBBERYS_DECISION)
         CALL(evt_msg_print, 0, STRING("mac_4_045_02"), 0, STRING("me"))
+
         // Bobbery is aboard: Flavio announces the voyage.
-        CASE_EQUAL(STORY_STG4_37_TO_THE_PORT)
+        CASE_EQUAL(STG4_37_TO_THE_PORT)
 #if VERSION >= VERSION_JP
         SPAWN_EVENT(marco_party_move)
 #endif
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_FLAVIO_READY_TO_SAIL), 1)
+        IF_INT_EQUAL(GSWF_GOR_FLAVIO_SET_SAIL_TALK_DONE, 1)
             CALL(evt_msg_print, 0, STRING("mac_4_091"), 0, STRING("me"))
             GOTO(100)
         END_IF
+
         // Flavio hails Mario and says the cargo is loaded.
         CALL(evt_msg_print, 0, STRING("mac_4_089"), 0, STRING("me"))
         CALL(evt_npc_reverse_ry, STRING("me"))
@@ -661,16 +872,18 @@ static EVT_BEGIN(marco_talk)
         CALL(evt_npc_reverse_ry, STRING("me"))
         WAIT_MS(500)
         CALL(evt_msg_print, 0, STRING("mac_4_090"), 0, STRING("me"))
-        SET_VALUE(GSWF(GSWF_GOR00_FLAVIO_READY_TO_SAIL), 1)
+        SET_VALUE(GSWF_GOR_FLAVIO_SET_SAIL_TALK_DONE, 1)
         LABEL(100)
+
         // Ask whether Mario is ready to sail.
         CALL(evt_msg_select, 0, STRING("mac_4_090_yesno"))
         IF_INT_EQUAL(LW(0), 1)
             CALL(evt_msg_print_add, 0, STRING("mac_4_092"))
             RETURN
         END_IF
+
         // Mario is ready: the music fades and the departure scene starts.
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
         CALL(evt_msg_continue)
         SPAWN_EVENT(shukko_event)
     END_SWITCH
@@ -681,7 +894,7 @@ EVT_END()
  * Loops forever: the rough sailor (Garawaru) paces between x=450 and x=-200 along the pier,
  * waiting 1.2 seconds at each end.
  */
-EVT_BEGIN(garawaru_urouro2)
+static EVT_BEGIN(garawaru_urouro2)
     LOOP(0)
         CALL(evt_npc_move_position, STRING("me"), 450, -200, 0, FLOAT(40.0f), 0)
         WAIT_MS(1200)
@@ -692,26 +905,26 @@ EVT_BEGIN(garawaru_urouro2)
 EVT_END()
 
 /**
- * Init event of the rough sailor (Garawaru): makes him take part in the regular event
+ * Init event of the rough sailor (Garawaru): enables facing the movement direction
  * and places him by story stage: at (-200, 15, -175) facing 90 before Goombella is assaulted,
- * hidden below the map at the Bowser interlude (STORY_STG4_15_07),
+ * hidden below the map at the Bowser interlude (STG4_15_07),
  * and at another spot during Chapter 4's Flavio scene.
  */
 static EVT_BEGIN(garawaru_init)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_04_GOOMBELLA_ASSAULTED)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_04_GOOMBELLA_ASSAULTED)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), -200, 15, -175)
-        CASE_EQUAL(STORY_STG4_15_07_BOWSER_ACTION_STAGE)
+        CASE_EQUAL(STG4_15_07_BOWSER_ACTION_STAGE)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
         CALL(evt_npc_restart_regular_event, STRING("me"))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_npc_set_ry, STRING("me"), 270)
         CALL(evt_npc_set_position, STRING("me"), 160, 73, 135)
-        CASE_LESS(STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_LESS(STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), -200, 15, -200)
         CASE_DEFAULT
@@ -723,32 +936,32 @@ EVT_END()
 /**
  * Regular event of the rough sailor.
  * Before Goombella joins he paces the pier until the X-Naut ambush has been seen
- * (GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN) and then stands facing right;
+ * (GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED) and then stands facing right;
  * at most other stages he runs garawaru_urouro2, and he stays put during Chapter 4's Flavio scene.
  */
-EVT_BEGIN(garawaru_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN), 1)
+static EVT_BEGIN(garawaru_regl)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
+        IF_INT_EQUAL(GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED, 1)
             RETURN
         END_IF
         LOOP(0)
             CALL(evt_npc_move_position, STRING("me"), 450, -175, 0, FLOAT(40.0f), 0)
             WAIT_MS(1000)
             CALL(evt_npc_move_position, STRING("me"), -200, -175, 0, FLOAT(40.0f), 0)
-            IF_INT_EQUAL(GSWF(GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN), 1)
+            IF_INT_EQUAL(GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED, 1)
                 BREAK_LOOP
             END_IF
             WAIT_MS(1000)
-            IF_INT_EQUAL(GSWF(GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN), 1)
+            IF_INT_EQUAL(GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED, 1)
                 BREAK_LOOP
             END_IF
         END_LOOP
         CALL(evt_npc_set_ry, STRING("me"), 90)
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
         CALL_CHILD(garawaru_urouro2)
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CASE_GREATER(STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CASE_GREATER(STG4_END_OFF_TO_THE_KEYS)
         CALL_CHILD(garawaru_urouro2)
     END_SWITCH
     RETURN
@@ -759,36 +972,36 @@ EVT_END()
  * picked with CASE_LESS on the story progress.
  */
 static EVT_BEGIN(garawaru_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
         CALL(evt_msg_print, 0, STRING("gor_00_06_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("gor_00_06_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
+        CASE_LESS(STG2_25_AFTER_THE_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_06_03"), 0, STRING("me"))
-        CASE_LESS(STORY_STG3_32_BOSS_BATTLE)
+        CASE_LESS(STG3_32_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_06_04"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CASE_LESS(STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
         CALL(evt_msg_print, 0, STRING("gor_00_06_05"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG4_31_FRANKLYS_HOUSE_STG_4)
         CALL(evt_msg_print, 0, STRING("gor_00_06_06"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
         CALL(evt_msg_print, 0, STRING("gor_00_06_07"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_37_TO_THE_PORT)
+        CASE_LESS(STG4_37_TO_THE_PORT)
         CALL(evt_msg_print, 0, STRING("gor_00_06_08"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_LESS(STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_msg_print, 0, STRING("mac_4_025"), 0, STRING("me"))
     END_SWITCH
     RETURN
 EVT_END()
 
 /**
- * Init event of the bespectacled sailor: during Chapter 4's Flavio scene (STORY_STG4_32 to
- * STORY_STG4_END_OFF_TO_THE_KEYS) he stands at (220, 71, 80) facing 270 degrees.
+ * Init event of the bespectacled sailor: during Chapter 4's Flavio scene (STG4_32 to
+ * STG4_END_OFF_TO_THE_KEYS) he stands at (220, 71, 80) facing 270 degrees.
  */
 static EVT_BEGIN(megane_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_npc_set_ry, STRING("me"), 270)
         CALL(evt_npc_set_position, STRING("me"), 220, 71, 80)
     END_SWITCH
@@ -796,14 +1009,14 @@ static EVT_BEGIN(megane_init)
 EVT_END()
 
 /** Regular event of the bespectacled sailor: empty, he stays where his init event put him. */
-EVT_BEGIN(megane_regl)
+static EVT_BEGIN(megane_regl)
     RETURN
 EVT_END()
 
 /** Talk event of the bespectacled sailor: says mac_4_029 during Chapter 4's Flavio scene and nothing otherwise. */
 static EVT_BEGIN(megane_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_msg_print, 0, STRING("mac_4_029"), 0, STRING("me"))
     END_SWITCH
     RETURN
@@ -815,16 +1028,16 @@ EVT_END()
  * restarted, (34, 77, 40) during Chapter 4's Flavio scene.
  */
 static EVT_BEGIN(odoodo_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), -225, 15, -400)
-        CASE_EQUAL(STORY_STG4_15_07_BOWSER_ACTION_STAGE)
+        CASE_EQUAL(STG4_15_07_BOWSER_ACTION_STAGE)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), -208, 15, 192)
         CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
         CALL(evt_npc_restart_regular_event, STRING("me"))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), 34, 77, 40)
         CASE_DEFAULT
@@ -839,11 +1052,11 @@ EVT_END()
  * From Chapter 1 on he wanders around his spot with urouro_main_func (radius 100, speed 30),
  * except during Chapter 4's Flavio scene and at the Chapter 5 departure.
  */
-EVT_BEGIN(odoodo_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CASE_EQUAL(STORY_STG5_58_FAIR_WINDS)
-        CASE_GREATER_OR_EQUAL(STORY_STG1_00_PETAL_MEADOWS)
+static EVT_BEGIN(odoodo_regl)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CASE_EQUAL(STG5_58_FAIR_WINDS)
+        CASE_GREATER_OR_EQUAL(STG1_00_PETAL_MEADOWS)
         CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
         CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
         CALL(urouro_main_func, STRING("me"))
@@ -856,30 +1069,30 @@ EVT_END()
  * picked with CASE_LESS on the story progress.
  */
 static EVT_BEGIN(odoodo_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
         CALL(evt_msg_print, 0, STRING("gor_00_05_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("gor_00_05_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
+        CASE_LESS(STG2_25_AFTER_THE_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_05_03"), 0, STRING("me"))
-        CASE_LESS(STORY_STG3_32_BOSS_BATTLE)
+        CASE_LESS(STG3_32_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_05_04"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CASE_LESS(STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
         CALL(evt_msg_print, 0, STRING("gor_00_05_05"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG4_31_FRANKLYS_HOUSE_STG_4)
         CALL(evt_msg_print, 0, STRING("gor_00_05_06"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
         CALL(evt_msg_print, 0, STRING("gor_00_05_07"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_37_TO_THE_PORT)
+        CASE_LESS(STG4_37_TO_THE_PORT)
         CALL(evt_msg_print, 0, STRING("gor_00_05_08"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_LESS(STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_msg_print, 0, STRING("mac_4_024"), 0, STRING("me"))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+        CASE_LESS(STG6_54_WELCOME_BACK)
         CALL(evt_msg_print, 0, STRING("gor_00_05_09"), 0, STRING("me"))
-        CASE_LESS(STORY_STG7_20_LORD_CRUMP_DEFEATED)
+        CASE_LESS(STG7_20_LORD_CRUMP_DEFEATED)
         CALL(evt_msg_print, 0, STRING("gor_00_05_10"), 0, STRING("me"))
-        CASE_LESS(STORY_STG8_16_SHADOW_QUEEN)
+        CASE_LESS(STG8_16_THE_RETURN_OF_THE_QUEEN)
         CALL(evt_msg_print, 0, STRING("gor_00_05_11"), 0, STRING("me"))
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("gor_00_05_12"), 0, STRING("me"))
@@ -891,7 +1104,7 @@ EVT_END()
  * Loops forever: the nervous sailor's elder brother paces between x=450 and x=-200 along the pier,
  * turning around after a second at each end.
  */
-EVT_BEGIN(odoodo_ani_urouro)
+static EVT_BEGIN(odoodo_ani_urouro)
     LOOP(0)
         CALL(evt_npc_move_position, STRING("me"), 450, -200, 0, FLOAT(40.0f), 0)
         WAIT_MS(1000)
@@ -907,9 +1120,9 @@ EVT_END()
  * Init event of the nervous sailor's elder brother:
  * from the Chapter 5 dock step on he stands at (-200, 15, -200) facing right.
  */
-EVT_BEGIN(odoodo_ani_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG5_59_ROGUEPORT_DOCK)
+static EVT_BEGIN(odoodo_ani_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG5_59_ROGUEPORT_DOCK)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_set_position, STRING("me"), -200, 15, -200)
     END_SWITCH
@@ -920,9 +1133,9 @@ EVT_END()
  * Regular event of the nervous sailor's elder brother:
  * from the Chapter 5 departure on he paces the pier (odoodo_ani_urouro).
  */
-EVT_BEGIN(odoodo_ani_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG5_58_FAIR_WINDS)
+static EVT_BEGIN(odoodo_ani_regl)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG5_58_FAIR_WINDS)
         CALL_CHILD(odoodo_ani_urouro)
     END_SWITCH
     RETURN
@@ -932,27 +1145,27 @@ EVT_END()
  * Talk event of the nervous sailor's elder brother, who only appears after Chapter 5:
  * one line per later story stage (gor_00_07_09 to gor_00_07_12).
  */
-EVT_BEGIN(odoodo_ani_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+static EVT_BEGIN(odoodo_ani_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_54_WELCOME_BACK)
         CALL(evt_msg_print, 0, STRING("gor_00_07_09"), 0, STRING("me"))
-        CASE_LESS(STORY_STG7_20_LORD_CRUMP_DEFEATED)
+        CASE_LESS(STG7_20_LORD_CRUMP_DEFEATED)
         CALL(evt_msg_print, 0, STRING("gor_00_07_10"), 0, STRING("me"))
-        CASE_LESS(STORY_STG8_16_SHADOW_QUEEN)
+        CASE_LESS(STG8_16_THE_RETURN_OF_THE_QUEEN)
         CALL(evt_msg_print, 0, STRING("gor_00_07_11"), 0, STRING("me"))
-        CASE_GREATER_OR_EQUAL(STORY_STG8_16_SHADOW_QUEEN)
+        CASE_GREATER_OR_EQUAL(STG8_16_THE_RETURN_OF_THE_QUEEN)
         CALL(evt_msg_print, 0, STRING("gor_00_07_12"), 0, STRING("me"))
     END_SWITCH
     RETURN
 EVT_END()
 
 /**
- * Init event of sailor A: hidden below the map at the Bowser interlude (STORY_STG4_15_07),
+ * Init event of sailor A: hidden below the map at the Bowser interlude (STG4_15_07),
  * otherwise placed at (-215, 15, 0) facing 90 degrees.
  */
 static EVT_BEGIN(suifu_a_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG4_15_07_BOWSER_ACTION_STAGE)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG4_15_07_BOWSER_ACTION_STAGE)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
@@ -968,10 +1181,10 @@ EVT_END()
  * Regular event of sailor A: wanders around his spot with urouro_main_func (radius 100, speed 30),
  * except during Chapter 4's Flavio scene and at the Chapter 5 departure.
  */
-EVT_BEGIN(suifu_a_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CASE_EQUAL(STORY_STG5_58_FAIR_WINDS)
+static EVT_BEGIN(suifu_a_regl)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CASE_EQUAL(STG5_58_FAIR_WINDS)
         CASE_DEFAULT
         CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
         CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
@@ -985,32 +1198,32 @@ EVT_END()
  * picked with CASE_LESS on the story progress.
  */
 static EVT_BEGIN(suifu_a_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
         CALL(evt_msg_print, 0, STRING("gor_00_03_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("gor_00_03_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
+        CASE_LESS(STG2_25_AFTER_THE_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_03_03"), 0, STRING("me"))
-        CASE_LESS(STORY_STG3_32_BOSS_BATTLE)
+        CASE_LESS(STG3_32_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_03_04"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CASE_LESS(STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
         CALL(evt_msg_print, 0, STRING("gor_00_03_05"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG4_31_FRANKLYS_HOUSE_STG_4)
         CALL(evt_msg_print, 0, STRING("gor_00_03_06"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
         CALL(evt_msg_print, 0, STRING("gor_00_03_07"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_33_MEET_BOBBERY)
+        CASE_LESS(STG4_33_MEET_BOBBERY)
         CALL(evt_msg_print, 0, STRING("gor_00_03_08"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_37_TO_THE_PORT)
+        CASE_LESS(STG4_37_TO_THE_PORT)
         CALL(evt_msg_print, 0, STRING("gor_00_03_08_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_LESS(STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_msg_print, 0, STRING("gor_00_03_08_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+        CASE_LESS(STG6_54_WELCOME_BACK)
         CALL(evt_msg_print, 0, STRING("gor_00_03_09"), 0, STRING("me"))
-        CASE_LESS(STORY_STG7_20_LORD_CRUMP_DEFEATED)
+        CASE_LESS(STG7_20_LORD_CRUMP_DEFEATED)
         CALL(evt_msg_print, 0, STRING("gor_00_03_10"), 0, STRING("me"))
-        CASE_LESS(STORY_STG8_16_SHADOW_QUEEN)
+        CASE_LESS(STG8_16_THE_RETURN_OF_THE_QUEEN)
         CALL(evt_msg_print, 0, STRING("gor_00_03_11"), 0, STRING("me"))
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("gor_00_03_12"), 0, STRING("me"))
@@ -1022,12 +1235,12 @@ EVT_END()
  * Init event of sailor B: hidden below the map before Goombella joins,
  * at (-191, 15, 36) during the Bowser interlude (Chapter 4), otherwise at (0, 15, -300).
  */
-EVT_BEGIN(suifu_b_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
+static EVT_BEGIN(suifu_b_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
         CALL(evt_npc_set_ry, STRING("me"), 270)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CASE_EQUAL(STORY_STG4_15_07_BOWSER_ACTION_STAGE)
+        CASE_EQUAL(STG4_15_07_BOWSER_ACTION_STAGE)
         CALL(evt_npc_set_position, STRING("me"), -191, 15, 36)
         CALL(evt_npc_set_ry, STRING("me"), 90)
         CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
@@ -1043,11 +1256,11 @@ EVT_END()
  * Regular event of sailor B: from Chapter 1 on he wanders around his spot with urouro_main_func,
  * except during Chapter 4's Flavio scene and at the Chapter 5 departure.
  */
-EVT_BEGIN(suifu_b_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CASE_EQUAL(STORY_STG5_58_FAIR_WINDS)
-        CASE_GREATER_OR_EQUAL(STORY_STG1_00_PETAL_MEADOWS)
+static EVT_BEGIN(suifu_b_regl)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CASE_EQUAL(STG5_58_FAIR_WINDS)
+        CASE_GREATER_OR_EQUAL(STG1_00_PETAL_MEADOWS)
         CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
         CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
         CALL(urouro_main_func, STRING("me"))
@@ -1056,33 +1269,33 @@ EVT_BEGIN(suifu_b_regl)
 EVT_END()
 
 /** Talk event of sailor B: one line per story stage (gor_00_04_01 to gor_00_04_12). */
-EVT_BEGIN(suifu_b_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
+static EVT_BEGIN(suifu_b_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
         CALL(evt_msg_print, 0, STRING("gor_00_04_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
         CALL(evt_msg_print, 0, STRING("gor_00_04_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
+        CASE_LESS(STG2_25_AFTER_THE_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_04_03"), 0, STRING("me"))
-        CASE_LESS(STORY_STG3_32_BOSS_BATTLE)
+        CASE_LESS(STG3_32_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_00_04_04"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CASE_LESS(STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
         CALL(evt_msg_print, 0, STRING("gor_00_04_05"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_31_FRANKLYS_HOUSE)
+        CASE_LESS(STG4_31_FRANKLYS_HOUSE_STG_4)
         CALL(evt_msg_print, 0, STRING("gor_00_04_06"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
         CALL(evt_msg_print, 0, STRING("gor_00_04_07"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_33_MEET_BOBBERY)
+        CASE_LESS(STG4_33_MEET_BOBBERY)
         CALL(evt_msg_print, 0, STRING("gor_00_04_08"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_37_TO_THE_PORT)
+        CASE_LESS(STG4_37_TO_THE_PORT)
         CALL(evt_msg_print, 0, STRING("gor_00_04_08_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_END_OFF_TO_THE_KEYS)
+        CASE_LESS(STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_msg_print, 0, STRING("gor_00_04_08_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
+        CASE_LESS(STG6_54_WELCOME_BACK)
         CALL(evt_msg_print, 0, STRING("gor_00_04_09"), 0, STRING("me"))
-        CASE_LESS(STORY_STG7_20_LORD_CRUMP_DEFEATED)
+        CASE_LESS(STG7_20_LORD_CRUMP_DEFEATED)
         CALL(evt_msg_print, 0, STRING("gor_00_04_10"), 0, STRING("me"))
-        CASE_LESS(STORY_STG8_16_SHADOW_QUEEN)
+        CASE_LESS(STG8_16_THE_RETURN_OF_THE_QUEEN)
         CALL(evt_msg_print, 0, STRING("gor_00_04_11"), 0, STRING("me"))
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("gor_00_04_12"), 0, STRING("me"))
@@ -1092,8 +1305,8 @@ EVT_END()
 
 /** Init event of sailor D: only during Chapter 4's Flavio scene, when he stands at (125, 49, 20). */
 static EVT_BEGIN(suifu_d_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
         CALL(evt_npc_set_position, STRING("me"), 125, 49, 20)
     END_SWITCH
     RETURN
@@ -1104,2501 +1317,6 @@ static EVT_BEGIN(suifu_d_talk)
     CALL(evt_msg_print, 0, STRING("mac_4_027"), 0, STRING("me"))
     RETURN
 EVT_END()
-
-/**
- * Loops forever: sailor Bob-omb A walks along x=-215 between z=215 and z=-150,
- * turning around after 0.8 seconds at each end.
- */
-EVT_BEGIN(suifubomb_a_urouro2)
-    LOOP(0)
-        CALL(evt_npc_move_position, STRING("me"), -215, 215, 0, FLOAT(40.0f), 0)
-        WAIT_MS(800)
-        CALL(evt_npc_reverse_ry, STRING("me"))
-        CALL(evt_npc_move_position, STRING("me"), -215, -150, 0, FLOAT(40.0f), 0)
-        WAIT_MS(800)
-        CALL(evt_npc_reverse_ry, STRING("me"))
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Init event of sailor Bob-omb A: places him on the pier by story stage (at (-160, 15, 207) during the Bowser
- * interlude).
- */
-EVT_BEGIN(suifubomb_a_init)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
-        CALL(evt_npc_set_ry, STRING("me"), 90)
-        CALL(evt_npc_set_position, STRING("me"), -215, 15, 175)
-        CASE_EQUAL(STORY_STG4_15_07_BOWSER_ACTION_STAGE)
-        CALL(evt_npc_set_position, STRING("me"), -160, 15, 207)
-        CALL(evt_npc_set_ry, STRING("me"), 90)
-        CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
-        CALL(evt_npc_restart_regular_event, STRING("me"))
-        CASE_DEFAULT
-        CALL(evt_npc_set_ry, STRING("me"), 90)
-        CALL(evt_npc_set_position, STRING("me"), -215, 15, -150)
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/**
- * Regular event of sailor Bob-omb A: before Goombella joins he wanders around his spot,
- * during the Flavio scene he stays put, otherwise he paces the pier (suifubomb_a_urouro2).
- */
-EVT_BEGIN(suifubomb_a_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
-        CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
-        CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
-        CALL(urouro_main_func, STRING("me"))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CASE_DEFAULT
-        CALL_CHILD(suifubomb_a_urouro2)
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/**
- * Talk event of sailor Bob-omb A. While Trouble Center job 6 is active he runs it:
- * the first talk takes the request, later talks let Mario pick an item to hand over for 11 coins,
- * which ends the job (GSWF_TROUBLE_06_SOLVED).
- * Otherwise one line per story stage (gor_00_01_xx),
- * with a short pose scene before the Flavio talk in Chapter 4.
- */
-EVT_BEGIN(suifubomb_a_talk)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 6)
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_BASE), 0)
-            CALL(evt_msg_print, 0, STRING("irai_06_001"), 0, STRING("me"))
-            SET_VALUE(GSWF(GSWF_TROUBLE_WORK_BASE), 1)
-        ELSE
-            CALL(evt_msg_print, 0, STRING("irai_06_002"), 0, STRING("me"))
-            CALL(make_itemsel_table, LW(11))
-            IF_INT_EQUAL(LW(11), 0)
-                CALL(evt_msg_print_add, 0, STRING("irai_06_006"))
-                CALL(delete_itemsel_table)
-                RETURN
-            END_IF
-            CALL(evt_msg_continue)
-#if VERSION <= VERSION_DEMO_JP
-            CALL(evt_win_item_select, LW(10), LW(0))
-#else
-            CALL(evt_win_item_select, 0, LW(10), LW(0), 0)
-#endif
-            CALL(delete_itemsel_table)
-            IF_INT_EQUAL(LW(0), -1)
-                CALL(evt_msg_print, 0, STRING("irai_06_006"), 0, STRING("me"))
-                RETURN
-            END_IF
-            CALL(evt_pouch_remove_item, LW(0), LW(1))
-            CALL(evt_msg_print, 0, STRING("irai_06_003"), 0, STRING("me"))
-            CALL(evt_sub_get_coin, 11)
-            CALL(evt_msg_print, 0, STRING("irai_06_005"), 0, STRING("me"))
-            SET_VALUE(GSW(GSW_TROUBLE_ACTIVE), 0)
-            SET_VALUE(GSWF(GSWF_TROUBLE_06_SOLVED), 1)
-            CALL(evt_msg_print, 0, STRING("sys_request_finish"), 0, 0)
-        END_IF
-        RETURN
-    END_IF
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_03"), 0, STRING("me"))
-        CASE_LESS(STORY_STG3_32_BOSS_BATTLE)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_04"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_05"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_31_FRANKLYS_HOUSE)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_06"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
-#if VERSION <= VERSION_JP
-        CALL(evt_mario_dispflag_onoff, 1, 2)
-#endif
-        CALL(evt_msg_print, 0, STRING("gor_00_01_07"), 0, STRING("me"))
-        CALL(evt_mario_set_pose, STRING("M_I_2"))
-        WAIT_MS(1000)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_07_01"), 0, STRING("me"))
-#if VERSION <= VERSION_JP
-        CALL(evt_mario_dispflag_onoff, 0, 2)
-#endif
-        CASE_LESS(STORY_STG4_33_MEET_BOBBERY)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_08"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_37_TO_THE_PORT)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_08_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_08_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_09"), 0, STRING("me"))
-        CASE_LESS(STORY_STG7_20_LORD_CRUMP_DEFEATED)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_10"), 0, STRING("me"))
-        CASE_LESS(STORY_STG8_16_SHADOW_QUEEN)
-        CALL(evt_msg_print, 0, STRING("gor_00_01_11"), 0, STRING("me"))
-        CASE_DEFAULT
-        CALL(evt_msg_print, 0, STRING("gor_00_01_12"), 0, STRING("me"))
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Loops forever: sailor Bob-omb B walks along z=-350 between x=175 and x=-250, pausing a second at each end. */
-EVT_BEGIN(suifubomb_b_urouro2)
-    LOOP(0)
-        CALL(evt_npc_move_position, STRING("me"), 175, -350, 0, FLOAT(40.0f), 0)
-        WAIT_MS(1000)
-        CALL(evt_npc_move_position, STRING("me"), -250, -350, 0, FLOAT(40.0f), 0)
-        WAIT_MS(1000)
-    END_LOOP
-    WAIT_WHILE(1)
-    RETURN
-EVT_END()
-
-/**
- * Init event of sailor Bob-omb B: places him at (-250, 15, -350) facing right;
- * during the Bowser interlude he is hidden below the map.
- */
-EVT_BEGIN(suifubomb_b_init)
-    CALL(evt_npc_set_position, STRING("me"), -250, 15, -350)
-    CALL(evt_npc_set_ry, STRING("me"), 90)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_07_BOWSER_ACTION_STAGE)
-        CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-        CALL(evt_npc_set_ry, STRING("me"), 90)
-        CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
-        CALL(evt_npc_restart_regular_event, STRING("me"))
-    END_IF
-    RETURN
-EVT_END()
-
-/**
- * Regular event of sailor Bob-omb B: before Goombella joins he paces z=-350
- * until the X-Naut ambush has been seen; at most other stages he keeps pacing (suifubomb_b_urouro2),
- * and he stays put during Chapter 4's Flavio scene.
- */
-EVT_BEGIN(suifubomb_b_regl)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN), 1)
-            RETURN
-        END_IF
-        LOOP(0)
-            CALL(evt_npc_move_position, STRING("me"), 0, -350, 0, FLOAT(40.0f), 0)
-            WAIT_MS(1000)
-            CALL(evt_npc_move_position, STRING("me"), -250, -350, 0, FLOAT(40.0f), 0)
-            IF_INT_EQUAL(GSWF(GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN), 1)
-                BREAK_LOOP
-            END_IF
-            WAIT_MS(1000)
-            IF_INT_EQUAL(GSWF(GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN), 1)
-                BREAK_LOOP
-            END_IF
-        END_LOOP
-        CALL(evt_npc_set_ry, STRING("me"), 90)
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
-        CALL_CHILD(suifubomb_b_urouro2)
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CASE_GREATER(STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL_CHILD(suifubomb_b_urouro2)
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Talk event of sailor Bob-omb B: one line per story stage (gor_00_02_01 to gor_00_02_12). */
-EVT_BEGIN(suifubomb_b_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG0_07_GOOMBELLA_JOINS)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG1_17_FATHER_AND_SON_REUNITED)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG2_25_AFTER_THE_BOSS_BATTLE)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_03"), 0, STRING("me"))
-        CASE_LESS(STORY_STG3_32_BOSS_BATTLE)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_04"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_05"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_31_FRANKLYS_HOUSE)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_06"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_32_CHATTING_WITH_FLAVIO)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_07"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_33_MEET_BOBBERY)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_08"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_37_TO_THE_PORT)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_08_01"), 0, STRING("me"))
-        CASE_LESS(STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_08_02"), 0, STRING("me"))
-        CASE_LESS(STORY_STG6_54_WELCOME_BACK)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_09"), 0, STRING("me"))
-        CASE_LESS(STORY_STG7_20_LORD_CRUMP_DEFEATED)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_10"), 0, STRING("me"))
-        CASE_LESS(STORY_STG8_16_SHADOW_QUEEN)
-        CALL(evt_msg_print, 0, STRING("gor_00_02_11"), 0, STRING("me"))
-        CASE_DEFAULT
-        CALL(evt_msg_print, 0, STRING("gor_00_02_12"), 0, STRING("me"))
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Init event of sailor Bob-omb C: only present during Chapter 4's Flavio scene, standing at (140, 15, 200). */
-EVT_BEGIN(suifubomb_c_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_npc_set_position, STRING("me"), 140, 15, 200)
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Talk event of sailor Bob-omb C during Chapter 4's Flavio scene (mac_4_028). */
-EVT_BEGIN(suifubomb_c_talk)
-    CALL(evt_msg_print, 0, STRING("mac_4_028"), 0, STRING("me"))
-    RETURN
-EVT_END()
-
-/**
- * Init event of Sanders (Bobbery's name in the Japanese game, model "c_bomt_n") for Chapter 4's Flavio scene:
- * enters him with sanders_talk as his talk event;
- * at STORY_STG4_37_TO_THE_PORT he stands at (100, 50, 80), otherwise he waits hidden below the map.
- */
-static EVT_BEGIN(sanders_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_npc_entry, STRING("サンダース"), STRING("c_bomt_n"))
-        CALL(evt_npc_set_tribe, STRING("サンダース"), STRING("サンダース"))
-        CALL(evt_npc_set_ry, STRING("サンダース"), 90)
-        CALL(evt_npc_change_interrupt, STRING("サンダース"), 6, PTR(sanders_talk))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_37_TO_THE_PORT)
-            CALL(evt_npc_set_position, STRING("サンダース"), 100, 50, 80)
-        ELSE
-            CALL(evt_npc_set_position, STRING("サンダース"), 0, -1000, 0)
-        END_IF
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Talk event of Sanders (Bobbery) at the harbor in Chapter 4 (mac_4_088). */
-static EVT_BEGIN(sanders_talk)
-    CALL(evt_msg_print, 0, STRING("mac_4_088"), 0, STRING("me"))
-    RETURN
-EVT_END()
-
-/**
- * Init event of Cortez (korutesu): from STORY_STG5_58_FAIR_WINDS onward (except at the end credits) he stands at
- * (210, 40, 92) facing 270 degrees.
- */
-static EVT_BEGIN(korutesu_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG9_01_END_CREDITS)
-        CASE_GREATER_OR_EQUAL(STORY_STG5_58_FAIR_WINDS)
-        CALL(evt_npc_set_ry, STRING("me"), 270)
-        CALL(evt_npc_set_position, STRING("me"), 210, 40, 92)
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/**
- * Talk event of Cortez at the harbor: asks whether to sail (gor_00_025 yes/no).
- * Yes sets GSWF_GOR00_SAIL_TO_KEELHAUL and GF(13) and starts the Keelhaul Key ship with gor_muj_ship_start;
- * no answers gor_00_026.
- */
-static EVT_BEGIN(korutesu_talk)
-    CALL(evt_msg_print, 0, STRING("gor_00_025"), 0, STRING("me"))
-    CALL(evt_msg_select, 0, STRING("gor_00_025_yesno"))
-    IF_INT_EQUAL(LW(0), 0)
-        CALL(evt_msg_print_add, 0, STRING("gor_00_027"))
-        SET_VALUE(GSWF(GSWF_GOR00_SAIL_TO_KEELHAUL), 1)
-        SET_VALUE(GF(13), 1)
-        CALL_CHILD(gor_muj_ship_start)
-    ELSE
-        CALL(evt_msg_print_add, 0, STRING("gor_00_026"))
-    END_IF
-    RETURN
-EVT_END()
-
-/**
- * Init event of the shop manager: during Chapter 4's Flavio scene it spawns him ("c_gshop_m") at (-12, 128, 40)
- * and sets tentyou_talk as his talk event.
- */
-EVT_BEGIN(tentyou_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_npc_entry, STRING("店長"), STRING("c_gshop_m"))
-        CALL(evt_npc_set_tribe, STRING("店長"), STRING("店員男"))
-        CALL(evt_npc_set_ry, STRING("店長"), 90)
-        CALL(evt_npc_set_position, STRING("店長"), -12, 128, 40)
-        CALL(evt_npc_change_interrupt, STRING("店長"), 6, PTR(tentyou_talk))
-#if VERSION >= VERSION_JP
-        CALL(evt_npc_flag_onoff, 1, STRING("店長"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-#endif
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Talk event of the shop manager during Chapter 4's Flavio scene (mac_4_029_01). */
-EVT_BEGIN(tentyou_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_msg_print, 0, STRING("mac_4_029_01"), 0, STRING("me"))
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/**
- * Init event of the shop clerk: during Chapter 4's Flavio scene it spawns her ("c_gshop_w") at (-30, 128, 120)
- * and sets tenin_talk as her talk event.
- */
-EVT_BEGIN(tenin_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_npc_entry, STRING("店員"), STRING("c_gshop_w"))
-        CALL(evt_npc_set_tribe, STRING("店員"), STRING("店員女"))
-        CALL(evt_npc_set_ry, STRING("店員"), 90)
-        CALL(evt_npc_set_position, STRING("店員"), -30, 128, 120)
-        CALL(evt_npc_change_interrupt, STRING("店員"), 6, PTR(tenin_talk))
-#if VERSION >= VERSION_JP
-        CALL(evt_npc_flag_onoff, 1, STRING("店員"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-#endif
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Talk event of the shop clerk during Chapter 4's Flavio scene (mac_4_029_02). */
-EVT_BEGIN(tenin_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_msg_print, 0, STRING("mac_4_029_02"), 0, STRING("me"))
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/**
- * Init event of the thief Borodo for Trouble Center job 4:
- * if the job is active and its work flags say the harbor stage has not been done (WORK_BASE and WORK_1 set,
- * WORK_2 clear), enters him ("c_borodo_n") at (-168, 15, -540) with borodo2_talk as his talk event.
- */
-static EVT_BEGIN(borodo2_init)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 4)
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_BASE), 1)
-            IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_1), 1)
-                IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_2), 0)
-                    CALL(evt_npc_entry, STRING("ボロドー２"), STRING("c_borodo_n"))
-                    CALL(evt_npc_set_tribe, STRING("ボロドー２"), STRING("盗賊"))
-                    CALL(evt_npc_flag_onoff, 1, STRING("ボロドー２"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-                    CALL(evt_npc_set_position, STRING("ボロドー２"), -168, 15, -540)
-                    CALL(evt_npc_change_interrupt, STRING("ボロドー２"), 6, PTR(borodo2_talk))
-                END_IF
-            END_IF
-        END_IF
-    END_IF
-    RETURN
-EVT_END()
-
-/**
- * Borodo runs away: with Mario's controls locked he becomes intangible,
- * runs to (-168, -420) and then to (60, -420) at speed 240,
- * vanishes below the map and Mario is given control back after 1.5 seconds.
- */
-static EVT_BEGIN(borodo2_escape)
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_set_ry, STRING("me"), 90)
-    BEGIN_INLINE_EVENT
-        CALL(evt_npc_move_position, STRING("me"), -168, -420, 0, FLOAT(240.0f), 0)
-        CALL(evt_npc_move_position, STRING("me"), 60, -420, 0, FLOAT(240.0f), 0)
-        CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
-    END_INLINE_EVENT
-    WAIT_MS(1500)
-    CALL(evt_mario_key_onoff, 1)
-    RETURN
-EVT_END()
-
-/** Talk event of Borodo for Trouble Center job 4 (irai_04_004): sets GSWF_TROUBLE_WORK_2 and starts borodo2_escape. */
-static EVT_BEGIN(borodo2_talk)
-    CALL(evt_msg_print, 0, STRING("irai_04_004"), 0, STRING("me"))
-    SET_VALUE(GSWF(GSWF_TROUBLE_WORK_2), 1)
-    SPAWN_EVENT(borodo2_escape)
-    RETURN
-EVT_END()
-
-/**
- * Init event of Lumpy (Mokorim, the coin investor):
- * from the pedestal step of Chapter 1 to the end of Chapter 3 and again
- * after the Chapter 5 return he stands at (525, 15, -270) facing left.
- */
-EVT_BEGIN(mokorim_init)
-    CALL_CHILD(npc_init_evt)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG0_15_THE_PEDESTAL, STORY_STG3_END_TO_STAGE_4)
-        CALL(evt_npc_set_position, STRING("me"), 525, 15, -270)
-        CASE_GREATER_OR_EQUAL(STORY_STG6_56_ROGUEPORT_STATION)
-        CALL(evt_npc_set_position, STRING("me"), 525, 15, -270)
-    END_SWITCH
-    CALL(evt_npc_set_ry, STRING("me"), 270)
-    RETURN
-EVT_END()
-
-/**
- * Talk event of Lumpy.
- * Before the Chapter 5 return Mario can invest 100 coins per talk,
- * up to three times (counted in GSW_GOR00_LUMPY_INVESTMENTS), with a yes/no choice.
- * After it Lumpy pays back 300, 500 (600 in the US and later releases)
- * or 999 coins depending on the investments, then offers a looping question menu (salari_after_009 to _015).
- * The first talk switches the music to the danger theme.
- */
-EVT_BEGIN(mokorim_talk)
-    SET_VALUE(LF(15), 0)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG0_15_THE_PEDESTAL, STORY_STG3_END_TO_STAGE_4)
-        // Lumpy has already received three investments: he only thanks Mario.
-        IF_INT_EQUAL(GSW(GSW_GOR00_LUMPY_INVESTMENTS), 3)
-            CALL(evt_msg_print, 0, STRING("salari_before_010"), 0, 0)
-            RETURN
-        END_IF
-        // The camera frames Lumpy.
-        CALL(evt_cam3d_evt_set, 500, 120, 90, 500, 55, -280, 800, 11)
-        WAIT_MS(800)
-        // First meeting: Lumpy recognizes Mario, introduces himself and asks for an investment (danger music
-        // plays).
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_LUMPY_FIRST_TALK), 0)
-            SET_VALUE(GSWF(GSWF_GOR00_LUMPY_FIRST_TALK), 1)
-            CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-            CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_EVT_DANGER3"))
-            SET_VALUE(LF(15), 1)
-            CALL(evt_msg_print, 0, STRING("salari_before_000"), 0, 0)
-            CALL(evt_mario_set_pose, STRING("M_N_2"))
-            WAIT_MS(500)
-            CALL(evt_mario_set_pose, STRING("M_S_1"))
-            CALL(evt_msg_print, 0, STRING("salari_before_001"), 0, 0)
-            CALL(evt_mario_set_pose, STRING("M_N_1"))
-            WAIT_MS(500)
-            CALL(evt_msg_print, 0, STRING("salari_before_002"), 0, 0)
-            CALL(evt_mario_set_pose, STRING("M_I_Z"))
-            WAIT_MS(500)
-        ELSE
-            // Later visits: Lumpy repeats his dream of striking oil.
-            CALL(evt_msg_print, 0, STRING("salari_before_003"), 0, 0)
-            CALL(evt_mario_set_pose, STRING("M_I_Z"))
-            WAIT_MS(500)
-        END_IF
-#if VERSION <= VERSION_DEMO_JP
-        // Lumpy asks for an investment of 100 coins or more; Mario chooses to lend or refuse.
-        CALL(evt_unitwin_alloc)
-#else
-        CALL(evt_unitwin_alloc, 0)
-#endif
-        CALL(unitwincoin_disp_onoff, 1)
-        CALL(evt_msg_print, 0, STRING("salari_before_004"), 0, 0)
-        CALL(evt_msg_select, 0, STRING("salari_before_005"))
-        IF_INT_EQUAL(LW(0), 0)
-            // Mario agrees: if he has 100 coins Lumpy jumps for joy, the investment count rises and the coins
-            // are paid.
-            CALL(evt_pouch_get_coin, LW(0))
-            IF_INT_GREATER_OR_EQUAL(LW(0), 100)
-                CALL(evt_msg_continue)
-                CALL(evt_mario_set_pose, STRING("M_I_2"))
-                WAIT_MS(500)
-                CALL(evt_mario_set_pose, STRING("M_S_1"))
-                CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
-                LOOP(2)
-                    CALL(evt_npc_jump_position_nohit, STRING("me"), LW(0), LW(1), LW(2), 200, 10)
-                    WAIT_FRAMES(1)
-                END_LOOP
-                ADD(GSW(GSW_GOR00_LUMPY_INVESTMENTS), 1)
-                IF_INT_EQUAL(GSW(GSW_GOR00_LUMPY_INVESTMENTS), 3)
-                    CALL(evt_msg_print, 0, STRING("salari_before_007"), 0, 0)
-                ELSE
-                    CALL(evt_msg_print, 0, STRING("salari_before_006"), 0, 0)
-                END_IF
-                CALL(evt_pouch_add_coin, -100)
-                CALL(unitwincoin_wait)
-            ELSE
-                // Mario cannot afford it.
-                CALL(evt_mario_set_pose, STRING("M_S_1"))
-                CALL(evt_msg_print_add, 0, STRING("salari_before_009"))
-            END_IF
-        ELSE
-            // Mario refuses.
-            CALL(evt_msg_continue)
-            CALL(evt_mario_set_pose, STRING("M_N_B"))
-            WAIT_MS(500)
-            CALL(evt_mario_set_pose, STRING("M_S_1"))
-            CALL(evt_msg_print, 0, STRING("salari_before_008"), 0, 0)
-        END_IF
-        // Close the coin display and return the camera.
-        CALL(unitwincoin_disp_onoff, 0)
-        CALL(evt_unitwin_free)
-        CALL(evt_cam3d_evt_off, 500, 11)
-        WAIT_MS(500)
-        // After the Rogueport station chapter: Lumpy has returned from the desert.
-        CASE_GREATER_OR_EQUAL(STORY_STG6_56_ROGUEPORT_STATION)
-        // First return visit: Lumpy reveals he struck oil and shares his story.
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_LUMPY_RETURN_TALK), 0)
-            SET_VALUE(GSWF(GSWF_GOR00_LUMPY_RETURN_TALK), 1)
-            CALL(evt_cam3d_evt_set, 500, 120, 90, 500, 55, -280, 800, 11)
-            WAIT_MS(800)
-            CALL(evt_msg_print, 0, STRING("salari_after_000"), 0, 0)
-            CALL(evt_mario_set_pose, STRING("M_N_2"))
-            WAIT_MS(500)
-            CALL(evt_mario_set_pose, STRING("M_S_1"))
-            CALL(evt_cam3d_evt_set, 515, 105, 5, 515, 55, -280, 800, 11)
-            WAIT_MS(800)
-            CALL(evt_msg_print, 0, STRING("salari_after_000_1"), 0, 0)
-            CALL(evt_cam3d_evt_set, 515, 90, -70, 515, 55, -280, 800, 11)
-            WAIT_MS(800)
-            CALL(evt_msg_print, 0, STRING("salari_after_000_2"), 0, 0)
-            CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
-            LOOP(2)
-                CALL(evt_npc_jump_position_nohit, STRING("me"), LW(0), LW(1), LW(2), 200, 10)
-                WAIT_FRAMES(1)
-            END_LOOP
-            CALL(evt_msg_print, 0, STRING("salari_after_001"), 0, 0)
-#if VERSION >= VERSION_JP
-            CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-            CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED1"), LW(0), LW(1), LW(2), 0)
-#endif
-            CALL(evt_mario_set_pose, STRING("M_N_7"))
-            WAIT_MS(500)
-            CALL(evt_mario_set_pose, STRING("M_S_1"))
-            CALL(evt_cam3d_evt_set, 500, 120, 90, 500, 55, -280, 800, 11)
-            WAIT_MS(800)
-            // Mario had invested: Lumpy repays with a bonus (300, 500/600 or 999 coins by number of
-            // investments).
-            IF_INT_GREATER(GSW(GSW_GOR00_LUMPY_INVESTMENTS), 0)
-                CALL(evt_msg_print, 0, STRING("salari_after_002"), 0, 0)
-                SWITCH(GSW(GSW_GOR00_LUMPY_INVESTMENTS))
-                    CASE_EQUAL(1)
-                    SET_VALUE(LW(0), 300)
-                    CASE_EQUAL(2)
-#if VERSION <= VERSION_JP
-                    SET_VALUE(LW(0), 500)
-#else
-                    SET_VALUE(LW(0), 600)
-#endif
-                    CASE_EQUAL(3)
-                    SET_VALUE(LW(0), 999)
-                END_SWITCH
-#if VERSION <= VERSION_DEMO_JP
-                CALL(evt_unitwin_alloc)
-#else
-                CALL(evt_unitwin_alloc, 0)
-#endif
-                CALL(unitwincoin_disp_onoff, 1)
-                CALL(evt_msg_print_insert, 0, STRING("salari_after_003"), 0, 0, LW(0))
-                CALL(evt_pouch_add_coin, LW(0))
-                CALL(unitwincoin_wait)
-                CALL(unitwincoin_disp_onoff, 0)
-                CALL(evt_unitwin_free)
-                CALL(evt_msg_print, 0, STRING("salari_after_004"), 0, 0)
-            ELSE
-                // Mario never invested: Lumpy just tells his story.
-                CALL(evt_msg_print, 0, STRING("salari_after_005"), 0, 0)
-            END_IF
-            CALL(evt_cam3d_evt_off, 500, 11)
-        ELSE
-            // Repeat visits: Lumpy offers to read from his oil-hunt journal.
-            CALL(evt_msg_print, 0, STRING("salari_after_006"), 0, 0)
-            CALL(evt_msg_select, 0, STRING("salari_after_006_1"))
-            IF_INT_EQUAL(LW(0), 0)
-                // Mario picks diary topics, one entry at a time, until he stops listening.
-                LOOP(0)
-                    CALL(evt_msg_print_add, 0, STRING("salari_after_007"))
-                    CALL(evt_msg_select, 0, STRING("salari_after_008"))
-                    CALL(evt_msg_continue)
-#if VERSION >= VERSION_JP
-                    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_ANIM)
-#endif
-                    SWITCH(LW(0))
-                        CASE_EQUAL(0)
-                        CALL(evt_msg_print, 0, STRING("salari_after_009"), 0, 0)
-                        CASE_EQUAL(1)
-                        CALL(evt_msg_print, 0, STRING("salari_after_010"), 0, 0)
-                        CASE_EQUAL(2)
-                        CALL(evt_msg_print, 0, STRING("salari_after_011"), 0, 0)
-                        CASE_EQUAL(3)
-                        CALL(evt_msg_print, 0, STRING("salari_after_012"), 0, 0)
-                        CASE_EQUAL(4)
-                        CALL(evt_msg_print, 0, STRING("salari_after_013"), 0, 0)
-                        CASE_EQUAL(5)
-                        CALL(evt_msg_print, 0, STRING("salari_after_014"), 0, 0)
-                        CASE_EQUAL(6)
-                        CALL(evt_msg_print, 0, STRING("salari_after_015"), 0, 0)
-                    END_SWITCH
-#if VERSION >= VERSION_JP
-                    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_ANIM)
-#endif
-                    CALL(evt_msg_print, 0, STRING("salari_after_016"), 0, 0)
-                    CALL(evt_msg_select, 0, STRING("salari_after_017"))
-                    IF_INT_EQUAL(LW(0), 0)
-                    ELSE
-                        CALL(evt_msg_print_add, 0, STRING("salari_after_018"))
-                        BREAK_LOOP
-                    END_IF
-                END_LOOP
-            ELSE
-                CALL(evt_msg_print_add, 0, STRING("salari_after_018"))
-            END_IF
-        END_IF
-    END_SWITCH
-    // Restore the normal music if the danger music was started.
-    IF_INT_EQUAL(LF(15), 1)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    END_IF
-    RETURN
-EVT_END()
-
-/** Init script of the old woman Puni in Bowser's chapter 3 scene: does the shared NPC init and sets the status icon. */
-static EVT_BEGIN(baba_init)
-    CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
-    RETURN
-EVT_END()
-
-/**
- * Init event of Luigi (the Luigi diary NPC): between STORY_STG5_43_X_NAUTS_RETREAT
- * and STORY_STG6_53_THE_REAL_GARNET_STAR he stands at (420, 15, -210) facing left.
- */
-static EVT_BEGIN(luigi_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG5_43_X_NAUTS_RETREAT, STORY_STG6_53_THE_REAL_GARNET_STAR)
-        CALL(evt_npc_set_position, STRING("me"), 420, 15, -210)
-        CALL(evt_npc_set_ry_lr, STRING("me"), 0)
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Talk event of Luigi: runs the shared first-talk scene luigi_gor_first_talk. */
-static EVT_BEGIN(luigi_talk)
-    CALL_CHILD(luigi_gor_first_talk)
-    RETURN
-EVT_END()
-
-/** NPC setup of Luigi at the harbor. */
-static NpcSetupInfo luigiEnt[] = {
-    {
-        "ルイージ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        luigi_init, // initEvent
-        NULL, // regularEvent
-        luigi_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {0},
-};
-
-/**
- * Enters Luigi ("c_luigi") and his companion Rakugan ("c_lp_pansy") with their NPC setup tables,
- * between STORY_STG5_43_X_NAUTS_RETREAT and STORY_STG6_53_THE_REAL_GARNET_STAR.
- */
-static EVT_BEGIN(luigi_npcEnt)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG5_43_X_NAUTS_RETREAT, STORY_STG6_53_THE_REAL_GARNET_STAR)
-        CALL(evt_npc_entry, STRING("ルイージ"), STRING("c_luigi"))
-        CALL(evt_npc_set_tribe, STRING("ルイージ"), STRING("ルイージ"))
-        CALL(evt_npc_setup, PTR(luigiEnt))
-        CALL(evt_npc_entry, STRING("ラクガン"), STRING("c_lp_pansy"))
-        CALL(evt_npc_set_tribe, STRING("ラクガン"), STRING("ラクガン"))
-        CALL(evt_npc_setup, PTR(rakganEnt))
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/** Init event of the second NPC beside Luigi (model "c_lp_pansy"): places her at (460, 15, -210) facing left. */
-EVT_BEGIN(rakgan_init)
-    CALL(evt_npc_set_position, STRING("me"), 460, 15, -210)
-    CALL(evt_npc_set_ry_lr, STRING("me"), 0)
-    RETURN
-EVT_END()
-
-/** Talk event of the second NPC beside Luigi: a single line (luigi_npc_04). */
-EVT_BEGIN(rakgan_talk)
-    CALL(evt_msg_print, 0, STRING("luigi_npc_04"), 0, STRING("me"))
-    RETURN
-EVT_END()
-
-/** NPC setup of the second figure beside Luigi at the harbor (model c_lp_pansy). */
-NpcSetupInfo rakganEnt[] = {
-    {
-        "ラクガン", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        rakgan_init, // initEvent
-        NULL, // regularEvent
-        rakgan_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {0},
-};
-
-/**
- * NPC setup of the harbor: Monie and Peeton, Marco, Cortez, the sailors and Bob-omb sailors, Mokorim, Baba
- * and the other people of the docks.
- */
-static NpcSetupInfo npcEnt[] = {
-    {
-        "モニー", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        mony_init, // initEvent
-#if VERSION >= VERSION_JP
-        gor_00_mony_regl, // regularEvent
-#else
-        NULL, // regularEvent
-#endif
-        mony_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "ピートン", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        peton_init, // initEvent
-#if VERSION >= VERSION_JP
-        gor_00_peton_regl, // regularEvent
-#else
-        NULL, // regularEvent
-#endif
-        peton_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "マルコ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        marco_init, // initEvent
-        NULL, // regularEvent
-        marco_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "ガラの悪い水夫", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        garawaru_init, // initEvent
-        garawaru_regl, // regularEvent
-        garawaru_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "めがね水夫", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        megane_init, // initEvent
-        megane_regl, // regularEvent
-        megane_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "オドオド水夫", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        odoodo_init, // initEvent
-        odoodo_regl, // regularEvent
-        odoodo_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "オドオド水夫兄", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        odoodo_ani_init, // initEvent
-        odoodo_ani_regl, // regularEvent
-        odoodo_ani_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "水夫Ａ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        suifu_a_init, // initEvent
-        suifu_a_regl, // regularEvent
-        suifu_a_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "水夫Ｂ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        suifu_b_init, // initEvent
-        suifu_b_regl, // regularEvent
-        suifu_b_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "水夫Ｄ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        suifu_d_init, // initEvent
-        NULL, // regularEvent
-        suifu_d_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "水夫ボム兵Ａ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        suifubomb_a_init, // initEvent
-        suifubomb_a_regl, // regularEvent
-        suifubomb_a_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "水夫ボム兵Ｂ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        suifubomb_b_init, // initEvent
-        suifubomb_b_regl, // regularEvent
-        suifubomb_b_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "水夫ボム兵Ｃ", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        suifubomb_c_init, // initEvent
-        NULL, // regularEvent
-        suifubomb_c_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "コルテス", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        korutesu_init, // initEvent
-        NULL, // regularEvent
-        korutesu_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "モコリム", // name
-        NPC_FLAG_SHADOW_NO_COLLISION | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
-        0, // reactionFlags
-        mokorim_init, // initEvent
-        NULL, // regularEvent
-        mokorim_talk, // talkEvent
-        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {
-        "ババ", // name
-        0, 0, // flags..reactionFlags
-        baba_init, // initEvent
-        NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
-        {0}, // territoryBase
-        {0}, // territoryLoiter
-        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
-    },
-    {0},
-};
-
-/**
- * Loops forever, easing the angle in GW(0) between 5 and -5 degrees over 2 seconds each way.
- * ship_a_animation applies it to the ship part "S_f_drin" (guess: the rudder or helm).
- */
-EVT_BEGIN(ship_a_kaji_animation)
-    LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 11, 5, -5, 2000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-            SET_FLOAT_VALUE(GW(0), LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, -5, 5, 2000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-            SET_FLOAT_VALUE(GW(0), LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Loops forever, advancing the angle in GW(1) by a speed that ramps up to 10 degrees per frame
- * while the ship is moving (GF(0)) and ramps down when it stops; GF(4) pauses it.
- * Drives the ship's side wheels "S_f_wa_l" and "S_f_wa_r".
- */
-EVT_BEGIN(ship_a_wakka_animation)
-    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
-    LOOP(0)
-        IF_INT_EQUAL(GF(4), 0)
-            IF_INT_EQUAL(GF(0), 0)
-                ADD_FLOAT(LW(0), FLOAT(0.099609375f))
-                IF_INT_GREATER_OR_EQUAL(LW(0), FLOAT(10.0f))
-                    SET_FLOAT_VALUE(LW(0), FLOAT(10.0f))
-                END_IF
-            ELSE
-                SUBTRACT_FLOAT(LW(0), FLOAT(0.06933594f))
-                IF_INT_LESS_OR_EQUAL(LW(0), FLOAT(0.0f))
-                    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
-                END_IF
-            END_IF
-            IF_INT_GREATER(GW(1), FLOAT(360.0f))
-                SUBTRACT_FLOAT(GW(1), FLOAT(360.0f))
-            END_IF
-            IF_INT_LESS(GW(1), FLOAT(0.0f))
-                ADD_FLOAT(GW(1), FLOAT(360.0f))
-            END_IF
-            ADD_FLOAT(GW(1), LW(0))
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/** Same speed ramp as ship_a_wakka_animation but advancing GW(2); drives the chimney "S_f_en01". */
-EVT_BEGIN(ship_a_entotsu_animation)
-    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
-    LOOP(0)
-        IF_INT_EQUAL(GF(4), 0)
-            IF_INT_EQUAL(GF(0), 0)
-                ADD_FLOAT(LW(0), FLOAT(0.099609375f))
-                IF_INT_GREATER_OR_EQUAL(LW(0), FLOAT(10.0f))
-                    SET_FLOAT_VALUE(LW(0), FLOAT(10.0f))
-                END_IF
-            ELSE
-                SUBTRACT_FLOAT(LW(0), FLOAT(0.06933594f))
-                IF_INT_LESS_OR_EQUAL(LW(0), FLOAT(0.0f))
-                    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
-                END_IF
-            END_IF
-            IF_INT_GREATER(GW(2), FLOAT(360.0f))
-                SUBTRACT_FLOAT(GW(2), FLOAT(360.0f))
-            END_IF
-            IF_INT_LESS(GW(2), FLOAT(0.0f))
-                ADD_FLOAT(GW(2), FLOAT(360.0f))
-            END_IF
-            ADD_FLOAT(GW(2), LW(0))
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/** Same speed ramp as ship_a_wakka_animation but advancing GW(3); drives the screw "S_skr". */
-EVT_BEGIN(ship_a_neji_animation)
-    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
-    LOOP(0)
-        IF_INT_EQUAL(GF(4), 0)
-            IF_INT_EQUAL(GF(0), 0)
-                ADD_FLOAT(LW(0), FLOAT(0.099609375f))
-                IF_INT_GREATER_OR_EQUAL(LW(0), FLOAT(10.0f))
-                    SET_FLOAT_VALUE(LW(0), FLOAT(10.0f))
-                END_IF
-            ELSE
-                SUBTRACT_FLOAT(LW(0), FLOAT(0.06933594f))
-                IF_INT_LESS_OR_EQUAL(LW(0), FLOAT(0.0f))
-                    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
-                END_IF
-            END_IF
-            IF_INT_GREATER(GW(3), FLOAT(360.0f))
-                SUBTRACT_FLOAT(GW(3), FLOAT(360.0f))
-            END_IF
-            IF_INT_LESS(GW(3), FLOAT(0.0f))
-                ADD_FLOAT(GW(3), FLOAT(360.0f))
-            END_IF
-            ADD_FLOAT(GW(3), LW(0))
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Loops forever, rocking the ship: fune_yure_func moves the roll angle GW(5) back
- * and forth around GW(6) in alternating directions, pausing while GF(4) is set.
- */
-EVT_BEGIN(ship_a_yure_animation)
-    CALL(fune_yure_func_init, FLOAT(0.0f))
-    LOOP(0)
-        SET_FLOAT_VALUE(LW(6), GW(6))
-        WAIT_FRAMES(1)
-        LOOP(0)
-            IF_INT_EQUAL(GF(4), 0)
-                CALL(fune_yure_func, 0, LW(6), GW(5), LW(10))
-                IF_INT_EQUAL(LW(10), 1)
-                    BREAK_LOOP
-                END_IF
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        SET_FLOAT_VALUE(LW(6), GW(6))
-        LOOP(0)
-            IF_INT_EQUAL(GF(4), 0)
-                CALL(fune_yure_func, 1, LW(6), GW(5), LW(10))
-                IF_INT_EQUAL(LW(10), 1)
-                    BREAK_LOOP
-                END_IF
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Runs the harbor ship "S_fune_a" for the whole arrival scene:
- * hides its wake mesh, binds the collision "A_fune_a" to it, spawns the rudder, wheel, chimney,
- * screw and rocking animations, then every frame moves and rotates the hull and wake
- * and the moving parts from the GW values.
- */
-EVT_BEGIN(ship_a_animation)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_a"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_a_hikinami"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_hitobj_onoff, STRING("A_fune_a"), 1, 1)
-    CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_a_hikinami"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_a_hikinami"), MAPOBJ_FLAG_DISPLAY_LIST)
-    CALL(evt_hit_bind_mapobj, STRING("A_fune_a"), STRING("S_fune_a"))
-    SPAWN_EVENT_GET_ID(PTR(ship_a_kaji_animation), LW(10))
-    SPAWN_EVENT_GET_ID(PTR(ship_a_wakka_animation), LW(11))
-    SPAWN_EVENT_GET_ID(PTR(ship_a_entotsu_animation), LW(12))
-    SPAWN_EVENT_GET_ID(PTR(ship_a_neji_animation), LW(13))
-    SPAWN_EVENT_GET_ID(PTR(ship_a_yure_animation), LW(14))
-    LOOP(0)
-        CALL(evt_mapobj_trans, 1, STRING("S_fune_a"), GW(4), GW(8), 0)
-        CALL(evt_mapobj_rotate, 1, STRING("S_fune_a"), 0, GW(7), GW(5))
-        IF_INT_EQUAL(GF(5), 1)
-            SET_FLOAT_VALUE(GW(11), GW(4))
-        END_IF
-        CALL(evt_mapobj_trans, 1, STRING("S_a_hikinami"), GW(11), 0, 0)
-        CALL(evt_mapobj_rotate, 1, STRING("S_a_hikinami"), 0, GW(7), 0)
-        CALL(evt_hit_bind_update, STRING("A_fune_a"))
-        CALL(evt_mapobj_rotate, 1, STRING("S_f_drin"), GW(0), 0, 0)
-        CALL(evt_mapobj_rotate, 1, STRING("S_f_wa_l"), 0, 0, GW(1))
-        CALL(evt_mapobj_rotate, 1, STRING("S_f_wa_r"), 0, 0, GW(1))
-        CALL(evt_mapobj_rotate, 1, STRING("S_f_en01"), 0, GW(2), 0)
-        CALL(evt_mapobj_rotate, 1, STRING("S_skr"), GW(3), 0, 0)
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Paper-flip effect for the harbor ship in the arrival scene:
- * captures the ship (S_fune_a) and its wake (S_a_hikinami) into an offscreen paper image (OFF_d_kaiten),
- * plays SFX_OFF_SHIP_REVERSE1 and its animation A_1 so the ship turns over like a sheet of paper,
- * then releases the image.
- */
-static EVT_BEGIN(ship_pera)
-    CALL(evt_img_entry, STRING("capture_img"))
-    CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_kaiten"))
-    CALL(evt_offscreen_entry, STRING("offscreen"))
-    CALL(evt_mapobj_set_offscreen, 1, STRING("S_fune_a"), STRING("offscreen"))
-    CALL(evt_img_alloc_capture, STRING("capture_img"), 0, STRING("offscreen"), 0, 0, 0, 608, 480)
-    CALL(evt_img_alloc_capture, STRING("capture_img"), 1, STRING("offscreen"), 0, 0, 0, 608, 480)
-    CALL(evt_img_onoff, STRING("capture_img"), 0)
-    CALL(evt_img_set_virtual_point, STRING("capture_img"), 0, 0, 375)
-    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("Z_1"))
-    CALL(evt_img_onoff, STRING("capture_img"), 1)
-    CALL(evt_snd_sfxon, STRING("SFX_OFF_SHIP_REVERSE1"), 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
-    CALL(evt_img_wait_animend, STRING("capture_img"))
-    CALL(evt_img_onoff, STRING("capture_img"), 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_a"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_a_hikinami"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_clear_offscreen, 1, STRING("S_fune_a"))
-    SET_VALUE(GW(7), 0)
-    CALL(evt_img_free_capture, STRING("capture_img"), 0)
-    CALL(evt_img_free_capture, STRING("capture_img"), 1)
-    CALL(evt_img_onoff, STRING("capture_img"), 0)
-    CALL(evt_img_release, STRING("capture_img"))
-    CALL(evt_offscreen_delete, STRING("offscreen"))
-    RETURN
-EVT_END()
-
-/**
- * Spawns the four NPCs of the opening ambush (Goombella as "Christine", Lord Crump and two X-Naut grunts)
- * and parks them below the map at y=-1000.
- */
-EVT_BEGIN(enter_gorotsuki_town_init)
-    CALL(evt_npc_entry, STRING("クリスチーヌ"), STRING("c_pkr"))
-    CALL(evt_npc_set_tribe, STRING("クリスチーヌ"), STRING("クリスチーヌ"))
-    CALL(evt_npc_entry, STRING("第三勢力幹部"), STRING("c_kanbu_ibt"))
-    CALL(evt_npc_set_tribe, STRING("第三勢力幹部"), STRING("第三勢力幹部"))
-    CALL(evt_npc_entry, STRING("第三勢力部下Ａ"), STRING("c_zako_n"))
-    CALL(evt_npc_set_tribe, STRING("第三勢力部下Ａ"), STRING("第三勢力部下"))
-    CALL(evt_npc_entry, STRING("第三勢力部下Ｂ"), STRING("c_zako_n"))
-    CALL(evt_npc_set_tribe, STRING("第三勢力部下Ｂ"), STRING("第三勢力部下"))
-    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 0, -1000, 0)
-    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 0, -1000, 0)
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 0, -1000, 0)
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 0, -1000, 0)
-    RETURN
-EVT_END()
-
-/**
- * Puts Goombella (Christine), Lord Crump and the two grunts at their starting spots on the pier for the ambush
- * scene, with wall collision off.
- */
-EVT_BEGIN(christine_osoware_setup)
-    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 175, 15, -300)
-    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 225, 15, -300)
-    CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 255, 15, -330)
-    CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 280, 15, -330)
-    CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    RETURN
-EVT_END()
-
-/**
- * Opening cutscene of Mario's arrival in Rogueport:
- * the ship sails in with wake and engine sounds, Mario lands on the dock (mac_0_014, mac_0_015),
- * the ship flips like paper and sails away, the area title card shows
- * and the story goes to STORY_STG0_03_TO_ROGUEPORT. Ends by spawning christine_osoware.
- */
-EVT_BEGIN(enter_gorotsuki_town)
-    // Set up the opening: controls are off and the ship animation state starts at its offscreen position.
-    CALL(evt_snd_bgm_scope, 0, 1)
-    SET_TYPE(0)
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_mario_cont_onoff, 0)
-    CALL(evt_mario_set_pos, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 0, 11)
-    SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-    SET_VALUE(GF(0), 0)
-    SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
-    SET_VALUE(GF(1), 0)
-    SET_FLOAT_VALUE(GW(2), FLOAT(0.0f))
-    SET_VALUE(GF(2), 0)
-    SET_FLOAT_VALUE(GW(3), FLOAT(0.0f))
-    SET_VALUE(GF(3), 0)
-    SET_FLOAT_VALUE(GW(4), FLOAT(-600.0f))
-    SET_FLOAT_VALUE(GW(11), GW(4))
-    SET_VALUE(GF(4), 0)
-    SET_VALUE(GW(7), 180)
-    SET_VALUE(GF(5), 1)
-    // The ship sails into the harbor with its wake and engine sound, and the screen fades in.
-    SPAWN_EVENT(ship_a_animation)
-    WAIT_MS(3000)
-    SET_VALUE(GF(10), 1)
-    BEGIN_INLINE_EVENT
-        SET_VALUE(GW(6), FLOAT(5.0f))
-        CALL(evt_sub_intpl_msec_init, 0, GW(4), -270, 2000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-            SET_FLOAT_VALUE(GW(4), LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        SET_VALUE(GF(0), 1)
-        SET_VALUE(GF(1), 1)
-        SET_VALUE(GF(2), 1)
-        SET_VALUE(GF(3), 1)
-        SET_VALUE(GW(6), 2)
-        SET_VALUE(GW(6), FLOAT(3.0f))
-        CALL(evt_sub_intpl_msec_init, 4, -270, -75, 2000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-            SET_FLOAT_VALUE(GW(4), LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        SET_VALUE(GF(10), 0)
-        SET_VALUE(GW(6), FLOAT(1.0f))
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_MOVE1"), LW(0), LW(1), LW(2), LW(10))
-        LOOP(0)
-            CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
-            CALL(evt_snd_sfx_pos, LW(10), LW(0), LW(1), LW(2))
-            IF_INT_EQUAL(GF(10), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        CALL(evt_snd_sfxoff, LW(10))
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(3000)
-        CALL(evt_sub_intpl_msec_init, 0, 255, 0, 1000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value)
-            CALL(alpha_set_func, LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    WAIT_MS(500)
-    // The camera moves to the dock; Mario appears and talks about arriving in Rogueport.
-    CALL(evt_cam3d_evt_set, 2, 225, 1015, 2, 50, 243, 3000, 11)
-    WAIT_MS(3000)
-    WAIT_WHILE(GF(10))
-    CALL(evt_mario_cont_onoff, 1)
-    CALL(evt_mario_set_pos, 0, 15, 225)
-    CALL(evt_mario_set_dir, 90, 0, 0)
-    WAIT_MS(1000)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
-    CALL(evt_msg_print, 0, STRING("mac_0_014"), 0, 0)
-    WAIT_MS(2000)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
-    CALL(evt_msg_print, 0, STRING("mac_0_015"), 0, 0)
-    WAIT_MS(1000)
-    // The ship hops over the dock like a paper model, then sails away.
-    SET_VALUE(GF(4), 1)
-    DEBUG_PUT_MSG(STRING("アニメ停止"))
-    SET_VALUE(GF(10), 1)
-    CALL(evt_npc_set_position, STRING("船ダミー"), 0, GW(8), 0)
-    BEGIN_INLINE_EVENT
-        WAIT_MS(400)
-        CALL_CHILD(ship_pera)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        LOOP(0)
-            CALL(evt_npc_get_position, STRING("船ダミー"), LW(0), LW(1), LW(2))
-            SET_FLOAT_VALUE(GW(8), LW(1))
-            IF_INT_EQUAL(GF(10), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_JUMP1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_npc_jump_position_nohit, STRING("船ダミー"), 0, GW(8), 0, 1800, 100)
-    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_LANDING1"), LW(0), LW(1), LW(2), 0)
-    SET_VALUE(GF(10), 0)
-    DEBUG_PUT_MSG(STRING("アニメ開始"))
-    SET_VALUE(GF(4), 0)
-    WAIT_MS(2000)
-    SET_VALUE(GF(0), 0)
-    SET_VALUE(GF(1), 0)
-    SET_VALUE(GF(2), 0)
-    SET_VALUE(GF(3), 0)
-    SET_VALUE(GW(6), FLOAT(3.0f))
-    SET_VALUE(GF(10), 1)
-    WAIT_FRAMES(1)
-    SET_VALUE(GF(5), 0)
-    SET_FLOAT_VALUE(GW(11), GW(4))
-    ADD_FLOAT(GW(11), FLOAT(-400.0f))
-    BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, -75, -270, 2000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-            SET_FLOAT_VALUE(GW(4), LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        SET_VALUE(GW(6), FLOAT(5.0f))
-        CALL(evt_sub_intpl_msec_init, 0, -270, -1260, 6000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-            SET_FLOAT_VALUE(GW(4), LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        SET_VALUE(GF(10), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAPOBJ_FLAG_HIDE)
-    END_INLINE_EVENT
-    CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_MOVE1"), LW(0), LW(1), LW(2), LW(9))
-    BEGIN_INLINE_EVENT
-        LOOP(0)
-            CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
-            CALL(evt_snd_sfx_pos, LW(9), LW(0), LW(1), LW(2))
-            IF_INT_EQUAL(GF(10), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        CALL(evt_snd_sfxoff, LW(9))
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(6000)
-        CALL(evt_sub_intpl_msec_init, 0, 100, 0, 2000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value)
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            CALL(evt_snd_sfx_vol, LW(9), LW(0))
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-#if VERSION <= VERSION_DEMO_JP
-    BEGIN_INLINE_EVENT
-        WAIT_MS(1000)
-        SET_FLOAT_VALUE(LW(0), FLOAT(1.0f))
-        LOOP(14)
-            WAIT_MS(200)
-            CALL(evt_map_set_playrate, STRING("hiki_nami"), LW(0))
-            ADD_FLOAT(LW(0), FLOAT(0.2f))
-        END_LOOP
-    END_INLINE_EVENT
-#else
-    CALL(evt_map_set_playrate, STRING("hiki_nami"), FLOAT(0.25f))
-#endif
-    // The wake slows down and the area title card fades in and out.
-    BEGIN_INLINE_EVENT
-        WAIT_MS(1000)
-        CALL(evt_sub_intpl_msec_init, 0, 0, 255, 1500)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value)
-            CALL(alpha_set_func, LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        WAIT_MS(3500)
-        CALL(evt_sub_intpl_msec_init, 0, 255, 0, 1500)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value)
-            CALL(alpha_set_func, LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    // Story set to the arrival in Rogueport; Mario gets control and the Goombella assault scene starts.
-    WAIT_MS(3000)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    BEGIN_INLINE_EVENT
-        CALL(evt_telop_entry, 0)
-    END_INLINE_EVENT
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_03_TO_ROGUEPORT)
-#if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
-#endif
-    CALL(evt_mario_key_onoff, 1)
-    SET_VALUE(LW(0), 0)
-    CALL(evt_snd_bgm_scope, 0, 0)
-    SPAWN_EVENT(christine_osoware)
-    RETURN
-EVT_END()
-
-/**
- * Cutscene that starts when Mario first walks toward the back of the harbor (z <= -100):
- * Goombella (Christine) is cornered by Lord Crump and two grunts.
- * Sets GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN and STORY_STG0_04_GOOMBELLA_ASSAULTED,
- * creates the crowd of X-Naut extras (1000 in the JP release, 400 later) and spawns gundan1000tai_beforebattle.
- * If LW(0) is 1 on entry it first repositions Mario (the entry used when the event is started directly).
- */
-EVT_BEGIN(christine_osoware)
-    IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mario_key_onoff, 0)
-        CALL(evt_mario_cont_onoff, 0)
-        CALL(evt_mario_set_pos, 0, 15, 250)
-        CALL(evt_mario_set_dir, 90, 0, 0)
-        CALL(evt_seq_wait, 2)
-        CALL(evt_mario_cont_onoff, 1)
-        CALL(evt_mario_key_onoff, 1)
-    END_IF
-    // Wait until Mario walks toward the back of the harbor.
-    LOOP(0)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        IF_INT_LESS_OR_EQUAL(LW(2), -100)
-            BREAK_LOOP
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    // The scene starts: danger music begins and the sailors stop reacting.
-    SET_VALUE(GSWF(GSWF_GOR00_GOOMBELLA_ASSAULTED_SEEN), 1)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_RESUME_ON_LEAVE)
-    CALL(evt_npc_sound_data_set, STRING("ガラの悪い水夫"), 0, 0, 0, 0, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("水夫ボム兵Ｂ"), NPC_FLAG_RESUME_ON_LEAVE)
-    CALL(evt_npc_sound_data_set, STRING("水夫ボム兵Ｂ"), 0, 0, 0, 0, 0)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
-    CALL_CHILD(christine_osoware_setup)
-    // Goombella snaps at Lord Crump and his two grunts as they corner her.
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_msg_print, 0, STRING("mac_0_016"), 0, STRING("クリスチーヌ"))
-    CALL(evt_mario_set_dir, 90, 0, 0)
-    CALL(evt_mario_set_reardir)
-    CALL(evt_cam3d_evt_set, 100, 127, 45, 100, 75, -250, 500, 11)
-    BEGIN_INLINE_EVENT
-        CALL(evt_npc_get_position, STRING("クリスチーヌ"), LW(0), LW(1), LW(2))
-        ADD(LW(0), -100)
-        CALL(evt_npc_move_position, STRING("クリスチーヌ"), LW(0), LW(2), 0, FLOAT(180.0f), 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(300)
-        CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
-        ADD(LW(0), -100)
-        CALL(evt_npc_move_position, STRING("第三勢力幹部"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(350)
-        CALL(evt_npc_get_position, STRING("第三勢力部下Ａ"), LW(0), LW(1), LW(2))
-        ADD(LW(0), -100)
-        CALL(evt_npc_move_position, STRING("第三勢力部下Ａ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(350)
-        CALL(evt_npc_get_position, STRING("第三勢力部下Ｂ"), LW(0), LW(1), LW(2))
-        ADD(LW(0), -100)
-        CALL(evt_npc_move_position, STRING("第三勢力部下Ｂ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
-    END_INLINE_EVENT
-    // Crump demands what Goombella knows about the Crystal Stars.
-    WAIT_MS(1400)
-    CALL(evt_msg_print, 0, STRING("mac_0_017"), 0, STRING("第三勢力幹部"))
-    CALL(evt_msg_print, 0, STRING("mac_0_018"), 0, STRING("クリスチーヌ"))
-    CALL(evt_cam3d_evt_set, 120, 105, -53, 120, 70, -250, 500, 11)
-    WAIT_MS(500)
-    CALL(evt_msg_print, 0, STRING("mac_0_019"), 0, STRING("第三勢力幹部"))
-    CALL(evt_msg_print, 0, STRING("mac_0_020"), 0, STRING("第三勢力部下Ａ"))
-    WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 100, 127, 45, 100, 75, -250, 500, 11)
-    WAIT_MS(1000)
-    // Crump decides to take Goombella to the fortress and a grunt obeys; the X-Nauts close in.
-    BEGIN_INLINE_EVENT
-        CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
-        ADD(LW(0), -20)
-        CALL(evt_npc_move_position, STRING("第三勢力幹部"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(100)
-        CALL(evt_npc_get_position, STRING("第三勢力部下Ａ"), LW(0), LW(1), LW(2))
-        ADD(LW(0), -20)
-        CALL(evt_npc_move_position, STRING("第三勢力部下Ａ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(150)
-        CALL(evt_npc_get_position, STRING("第三勢力部下Ｂ"), LW(0), LW(1), LW(2))
-        ADD(LW(0), -20)
-        CALL(evt_npc_move_position, STRING("第三勢力部下Ｂ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
-    END_INLINE_EVENT
-    WAIT_MS(50)
-    CALL(evt_npc_get_position, STRING("クリスチーヌ"), LW(0), LW(1), LW(2))
-    ADD(LW(0), -20)
-    CALL(evt_npc_move_position, STRING("クリスチーヌ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
-    // Goombella threatens to scream. Story set to the Goombella assault; the crowd of X-Naut extras is created.
-    CALL(evt_msg_print, 0, STRING("mac_0_021"), 0, STRING("クリスチーヌ"))
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_04_GOOMBELLA_ASSAULTED)
-    CALL(evt_mario_key_onoff, 1)
-#if VERSION <= VERSION_JP
-    CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 1000)
-#else
-    CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 400)
-#endif
-    CALL(evt_nannpc_set_subfunc, 1, PTR(nannpc_ext_main_sub_fast))
-    SET_VALUE(LW(0), 0)
-    SPAWN_EVENT(gundan1000tai_beforebattle)
-    RETURN
-EVT_END()
-
-/**
- * Waits for Mario to walk up to the X-Nauts, then Lord Crump spots him
- * and the first fight starts (battle info 2 against Lord Crump;
- * in the non-demo releases Mario's HP is raised to at least 5 first).
- * Afterwards the story becomes STORY_STG0_05_1000_X_NAUTS_BEFORE,
- * the sailors' events are cancelled and moved back, and gundan1000tai_afterbattle runs.
- */
-EVT_BEGIN(gundan1000tai_beforebattle)
-    // If started directly, place Mario and the X-Nauts where they would be.
-    IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mario_key_onoff, 0)
-        CALL(evt_mario_cont_onoff, 0)
-        CALL(evt_mario_set_pos, -220, 15, 90)
-        CALL(evt_mario_set_dir, 90, 0, 0)
-        CALL(evt_mario_cont_onoff, 1)
-        CALL(evt_mario_key_onoff, 1)
-        CALL(evt_npc_set_position, STRING("クリスチーヌ"), 55, 15, -300)
-        CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-        CALL(evt_npc_set_position, STRING("第三勢力幹部"), 105, 15, -300)
-        CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
-        CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 135, 15, -330)
-        CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
-        CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 160, 15, -330)
-        CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
-        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    END_IF
-    // Wait until Mario walks up to the X-Nauts.
-    LOOP(0)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        IF_INT_LESS_OR_EQUAL(LW(2), -100)
-            IF_INT_GREATER_OR_EQUAL(LW(0), -25)
-                BREAK_LOOP
-            END_IF
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    // Mario is stopped and kept inside the scene area; Goombella notices him.
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    SET_VALUE(LF(0), 0)
-    IF_INT_LESS_OR_EQUAL(LW(2), -420)
-        SET_VALUE(LW(2), -420)
-        SET_VALUE(LF(0), 1)
-    END_IF
-    IF_INT_GREATER_OR_EQUAL(LW(2), -220)
-        SET_VALUE(LW(2), -220)
-        SET_VALUE(LF(0), 1)
-    END_IF
-    IF_INT_EQUAL(LF(0), 1)
-        ADD(LW(0), 20)
-        IF_INT_GREATER_OR_EQUAL(LW(0), 10)
-            SET_VALUE(LW(0), 20)
-        END_IF
-        CALL(evt_mario_mov_pos2, LW(0), LW(2), FLOAT(120.0f))
-    END_IF
-    CALL(evt_mario_set_dir, 90, 100, 0)
-    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
-    WAIT_MS(200)
-    // Goombella notices Mario and hurries to his side.
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("クリスチーヌ"), 0, 0, 0, 0, 0, 0, 0, 30)
-    WAIT_MS(500)
-    CALL(evt_mario_set_pose, STRING("M_I_N"))
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    ADD(LW(0), -35)
-    CALL(evt_npc_move_position, STRING("クリスチーヌ"), LW(0), LW(2), 0, FLOAT(180.0f), 0)
-    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-    WAIT_MS(200)
-    CALL(evt_msg_print, 0, STRING("mac_0_022"), 0, STRING("クリスチーヌ"))
-    // Lord Crump notices Mario and brags; Mario is startled.
-    CALL(evt_cam3d_evt_set, 36, 149, 224, 37, 53, -317, 500, 11)
-    WAIT_MS(1000)
-    CALL(evt_msg_print, 0, STRING("mac_0_023"), 0, STRING("第三勢力幹部"))
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_mario_dispflag_onoff, 1, 2)
-    CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_mario_jump_pos, LW(0), LW(1), LW(2), 200, 0, -1000)
-    CALL(evt_mario_dispflag_onoff, 0, 2)
-    WAIT_MS(150)
-    CALL(evt_mario_set_dir, 270, 100, 0)
-    WAIT_MS(150)
-    CALL(evt_mario_set_dir, 90, 100, 0)
-    WAIT_MS(150)
-    CALL(evt_mario_set_dir, 270, 100, 0)
-    WAIT_MS(150)
-    CALL(evt_mario_set_dir, 90, 100, 0)
-    WAIT_MS(150)
-    CALL(evt_msg_print, 0, STRING("mac_0_024"), 0, STRING("第三勢力幹部"))
-    // The grunts and Crump close in on Mario.
-    CALL(evt_cam3d_evt_set, 0, 149, 224, 0, 53, -317, 500, 11)
-    CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2_2"), LW(10), LW(11), LW(12), 0)
-    CALL(evt_mario_set_pose, STRING("M_N_H"))
-    BEGIN_INLINE_EVENT
-        ADD(LW(10), 80)
-        ADD(LW(12), -30)
-        CALL(evt_npc_move_position, STRING("第三勢力部下Ａ"), LW(10), LW(12), 0, FLOAT(180.0f), 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        ADD(LW(10), 105)
-        ADD(LW(12), -30)
-        CALL(evt_npc_move_position, STRING("第三勢力部下Ｂ"), LW(10), LW(12), 0, FLOAT(180.0f), 0)
-    END_INLINE_EVENT
-    ADD(LW(10), 50)
-    CALL(evt_npc_move_position, STRING("第三勢力幹部"), LW(10), LW(12), 0, FLOAT(180.0f), 0)
-    // Top Mario's HP up to 5 before the fight; the demos skip this (their main executables have no HP commands).
-#if VERSION >= VERSION_JP
-    CALL(L_evt_pouch_get_hp, LW(0))
-    IF_INT_LESS(LW(0), 5)
-        CALL(L_evt_pouch_set_hp, 5)
-    END_IF
-#endif
-    // The fight against Lord Crump.
-    CALL(evt_npc_set_battle_info, STRING("第三勢力幹部"), 2)
-    CALL(evt_npc_battle_start, STRING("第三勢力幹部"))
-    CALL(evt_npc_wait_battle_end)
-    // After the fight: everyone is placed for the next scene and the story advances; the sailors return to
-    // their spots.
-    CALL(evt_cam3d_evt_set, 80, 108, -45, 80, 60, -316, 0, 11)
-    CALL(evt_mario_set_pos, -40, 15, -300)
-    CALL(evt_mario_set_dir, 90, 0, 0)
-    CALL(evt_mario_set_pose, STRING("M_S_1"))
-    CALL(evt_npc_set_position, STRING("クリスチーヌ"), -77, 15, -300)
-    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 75, 15, -300)
-    CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 105, 15, -330)
-    CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 130, 15, -330)
-    CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_05_1000_X_NAUTS_BEFORE)
-    CALL(evt_npc_get_reglid, STRING("ガラの悪い水夫"), LW(0))
-    DELETE_EVENT(LW(0))
-    CALL(evt_npc_get_reglid, STRING("水夫ボム兵Ｂ"), LW(0))
-    DELETE_EVENT(LW(0))
-    CALL(evt_npc_set_position, STRING("ガラの悪い水夫"), -200, 15, -175)
-    CALL(evt_npc_set_ry, STRING("ガラの悪い水夫"), 270)
-    CALL(evt_npc_set_position, STRING("水夫ボム兵Ｂ"), -250, 15, -350)
-    CALL(evt_npc_set_ry, STRING("水夫ボム兵Ｂ"), 90)
-    SET_VALUE(LW(0), 0)
-    CALL_CHILD(gundan1000tai_afterbattle)
-    RETURN
-EVT_END()
-
-/**
- * Spawns one smoke puff (kemuri_test effect) at a random spot in the harbor with an explosion-like sound
- * (SFX_STG0_3RD_ATTACK3); gundan1000tai_kemuri starts it repeatedly during the X-Naut army's charge.
- */
-static EVT_BEGIN(_kemuri_sub)
-    CALL(evt_sub_random, 200, LW(0))
-    ADD(LW(0), -50)
-    CALL(evt_sub_random, 100, LW(1))
-    ADD(LW(1), 15)
-    CALL(evt_sub_random, 100, LW(2))
-    ADD(LW(2), -250)
-    CALL(evt_sub_random, 100, LW(3))
-    ADD_FLOAT(LW(3), FLOAT(50.0f))
-    DIVIDE_FLOAT(LW(3), FLOAT(100.0f))
-    CALL(evt_eff, 0, STRING("kemuri_test"), 2, LW(0), LW(1), LW(2), LW(3), 0, 0, 0, 0, 0, 0, 0)
-    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_ATTACK3"), LW(0), LW(1), LW(2), 0)
-    RETURN
-EVT_END()
-
-/**
- * Loops forever, spawning smoke puffs with an explosion-like sound (_kemuri_sub, one per round,
- * three in the JP release) at random spots in the harbor every 200 to 400 ms, for the X-Naut army's charge.
- */
-EVT_BEGIN(gundan1000tai_kemuri)
-    LOOP(0)
-#if VERSION <= VERSION_JP
-        SPAWN_EVENT(_kemuri_sub)
-        SPAWN_EVENT(_kemuri_sub)
-#endif
-        SPAWN_EVENT(_kemuri_sub)
-        CALL(evt_sub_random, 200, LW(0))
-        ADD(LW(0), 200)
-        WAIT_MS(LW(0))
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Plays the rustling sound of the X-Naut army running ("3RD_TOGETHER1", plus left and right variants) from
- * random points in the army's circle, as three parallel bursts.
- */
-EVT_BEGIN(gundan1000tai_zaza_se)
-    BEGIN_INLINE_EVENT
-        LOOP(10)
-            CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
-            CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_TOGETHER1"), LW(0), LW(1), LW(2), 0)
-            WAIT_MS(100)
-        END_LOOP
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        LOOP(20)
-            WAIT_MS(25)
-            CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
-            CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_TOGETHER1L"), LW(0), LW(1), LW(2), 0)
-            WAIT_MS(25)
-        END_LOOP
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        LOOP(20)
-            CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
-            CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_TOGETHER1R"), LW(0), LW(1), LW(2), 0)
-            WAIT_MS(50)
-        END_LOOP
-    END_INLINE_EVENT
-    RETURN
-EVT_END()
-
-/** Loops forever, playing the X-Naut jump attack sound every 200 ms from a random point in the army's circle. */
-EVT_BEGIN(gundan1000tai_jump_se)
-    LOOP(0)
-        CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_ATTACK2"), LW(0), LW(1), LW(2), 0)
-        WAIT_MS(200)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Loops forever, shaking the camera for half a second at random intervals of 0.5 to 5 seconds,
- * for the thudding army.
- */
-EVT_BEGIN(gundan1000tai_yure)
-    LOOP(0)
-        BEGIN_INLINE_EVENT
-            CALL(evt_cam_shake, 4, FLOAT(0.009765625f), FLOAT(0.0f), 500)
-        END_INLINE_EVENT
-        CALL(evt_sub_random, 4500, LW(0))
-        ADD(LW(0), 500)
-        WAIT_MS(LW(0))
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Continues the prologue after the Lord Crump fight:
- * the X-Nauts' extras (1000 in the JP release, 400 later) pour in,
- * the X-Naut leader gloats (mac_0_025 to mac_0_027), the army charges (gundan1000tai_totsugeki) with smoke,
- * shaking and stomping sounds, Goombella (Christine) runs off
- * and comes back to follow Mario (she officially joins in gor_01),
- * and Mario is pushed along the pier by the crowd until it calms down.
- * Lord Crump then dismisses his men, a ring of question marks pops up over the crowd,
- * and the story becomes STORY_STG0_06_1000_X_NAUTS_AFTER before the map changes to gor_01.
- * If LW(0) is 1 on entry it repositions everyone first (used when started directly).
- */
-EVT_BEGIN(gundan1000tai_afterbattle)
-    // If started directly, place Mario and the X-Nauts after the fight.
-    IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mario_key_onoff, 0)
-        CALL(evt_cam3d_evt_set, 80, 108, -45, 80, 60, -316, 0, 11)
-        CALL(evt_mario_set_pos, -40, 15, -300)
-        CALL(evt_mario_set_dir, 90, 0, 0)
-        CALL(evt_mario_set_pose, STRING("M_S_1"))
-        CALL(evt_npc_set_position, STRING("クリスチーヌ"), -77, 15, -300)
-        CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-        CALL(evt_npc_set_position, STRING("第三勢力幹部"), 75, 15, -300)
-        CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
-        CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 105, 15, -330)
-        CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
-        CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 130, 15, -330)
-        CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
-        CALL(evt_seq_wait, 2)
-    END_IF
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    SET_VALUE(LW(0), 0)
-    // Create the crowd of X-Naut extras filling the harbor.
-    LOOP(0)
-        CALL(evt_nannpc_entry, LW(0))
-        CALL(evt_nannpc_set_animtbl, LW(0), PTR(dai3_animtbl))
-        CALL(evt_nannpc_flag_onoff, LW(0), 0, 12)
-        CALL(evt_nannpc_set_size, LW(0), 30, 5)
-        ADD(LW(0), 1)
-#if VERSION <= VERSION_JP
-        IF_INT_EQUAL(LW(0), 1000)
-#else
-        IF_INT_EQUAL(LW(0), 400)
-#endif
-            BREAK_LOOP
-        END_IF
-    END_LOOP
-    WAIT_MS(1000)
-    // Crump calls in the army of 1000 X-Nauts and the camera pulls back; Mario and Goombella are startled.
-    CALL(evt_msg_print, 0, STRING("mac_0_025"), 0, STRING("第三勢力幹部"))
-    CALL(evt_cam3d_evt_set, 30, 325, 334, 30, 65, -316, 500, 11)
-    WAIT_MS(1000)
-    CALL(evt_msg_print, 0, STRING("mac_0_026"), 0, STRING("第三勢力幹部"))
-    BEGIN_INLINE_EVENT_GET_ID(LW(10))
-        WAIT_MS(200)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 30)
-        LOOP(0)
-            WAIT_MS(150)
-            CALL(evt_mario_set_dir, 270, 100, 0)
-            WAIT_MS(150)
-            CALL(evt_mario_set_dir, 90, 100, 0)
-        END_LOOP
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT_GET_ID(LW(11))
-        WAIT_MS(220)
-        CALL(evt_eff_fukidashi, 1, STRING(""), STRING("クリスチーヌ"), 0, 0, 0, 0, 0, 0, 0, 30)
-        LOOP(0)
-            WAIT_MS(500)
-            CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
-            WAIT_MS(500)
-            CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-        END_LOOP
-    END_INLINE_EVENT
-    // The ground shakes as the X-Nauts take their positions.
-    SET_VALUE(GF(10), 0)
-    BEGIN_INLINE_EVENT
-        LOOP(0)
-            CALL(evt_cam_shake, 4, FLOAT(0.0f), FLOAT(0.0048828125f), 300)
-            IF_INT_EQUAL(GF(10), 1)
-                BREAK_LOOP
-            END_IF
-        END_LOOP
-    END_INLINE_EVENT
-    CALL(gundan1000tai_init)
-    CALL(evt_snd_sfxon, STRING("SFX_STG0_3RD_TOGETHER1_2"), 0)
-    LOOP(0)
-        SET_VALUE(LW(0), 0)
-        SET_VALUE(LW(1), 1)
-        LOOP(0)
-            CALL(evt_nannpc_get_work, LW(0), 0, LW(2))
-            ADD(LW(0), 1)
-            IF_INT_EQUAL(LW(2), 0)
-                SET_VALUE(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-#if VERSION <= VERSION_JP
-            IF_INT_EQUAL(LW(0), 1000)
-#else
-            IF_INT_EQUAL(LW(0), 400)
-#endif
-                BREAK_LOOP
-            END_IF
-        END_LOOP
-        IF_INT_EQUAL(LW(1), 1)
-            BREAK_LOOP
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    WAIT_MS(500)
-    DELETE_EVENT(LW(10))
-    DELETE_EVENT(LW(11))
-    SET_VALUE(GF(10), 1)
-    BEGIN_INLINE_EVENT
-        CALL(evt_mario_set_dir, 90, 100, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-    END_INLINE_EVENT
-    // Crump orders the charge; the army rushes Mario and Goombella, kicking up dust.
-    CALL(evt_msg_print, 0, STRING("mac_0_027"), 0, STRING("第三勢力幹部"))
-    CALL(evt_mario_set_pose, STRING("M_N_7"))
-    CALL(gundan1000tai_totsugeki)
-    SPAWN_EVENT_GET_ID(PTR(gundan1000tai_kemuri), LW(10))
-    SPAWN_EVENT_GET_ID(PTR(gundan1000tai_jump_se), LW(11))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_ATTACK1"), 0, 15, -300, LW(12))
-    SPAWN_EVENT_GET_ID(PTR(gundan1000tai_yure), LW(13))
-    WAIT_MS(1500)
-    // Mario and Goombella vanish in the crowd, then reappear and slip away.
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 0, -1000, 0)
-    WAIT_MS(4300)
-    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 85, 15, -190)
-    CALL(evt_npc_move_position, STRING("クリスチーヌ"), 300, -180, 0, FLOAT(120.0f), 0)
-    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
-    DELETE_EVENT(LW(13))
-    CALL(evt_cam3d_evt_set, 285, 117, 50, 285, 25, -315, 500, 11)
-    WAIT_MS(500)
-    // Goombella urges Mario to run; she then joins him as his partner.
-    CALL(evt_msg_print, 0, STRING("mac_0_028"), 0, STRING("クリスチーヌ"))
-    CALL(evt_mario_set_pos, 55, 15, -180)
-    CALL(evt_mario_dispflag_onoff, 0, 1)
-    CALL(evt_cam3d_evt_off, 1000, 11)
-    CALL(evt_mario_mov_pos2, 270, -180, FLOAT(120.0f))
-    CALL(evt_msg_print, 0, STRING("mac_0_029"), 0, STRING("クリスチーヌ"))
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAND_UP1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_mario_set_pose, STRING("M_N_2"))
-    WAIT_MS(1000)
-    CALL(evt_npc_get_position, STRING("クリスチーヌ"), LW(0), LW(1), LW(2))
-    CALL(evt_npc_get_dir, STRING("クリスチーヌ"), LW(3))
-    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 0, -1000, 0)
-    CALL(evt_mario_set_party_pos, 1, 13, LW(0), LW(1), LW(2))
-    CALL(evt_party_set_dir, 1, LW(3), -1)
-    CALL(evt_party_run, 1)
-    CALL(evt_mario_key_onoff, 1)
-    SET_VALUE(GF(10), 1)
-    LOOP(0)
-        CALL(gundan1000tai_areacheck, LW(0), LW(1))
-        IF_INT_NOT_EQUAL(LW(0), 0)
-            CALL(evt_mario_set_hosei_xyz, LW(0), 0, 0)
-        END_IF
-        IF_INT_NOT_EQUAL(LW(1), 0)
-            CALL(evt_party_set_hosei_xyz, 1, LW(1), 0, 0)
-        END_IF
-        IF_INT_EQUAL(GF(10), 0)
-            BREAK_LOOP
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    // Crump discovers they are gone and shouts for the army to stop.
-    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 30, 15, -300)
-    CALL(evt_cam3d_evt_set, 30, 325, 334, 30, 65, -316, 0, 11)
-    WAIT_MS(1000)
-    CALL(evt_msg_print, 0, STRING("mac_0_030"), 0, STRING("第三勢力幹部"))
-    WAIT_MS(1000)
-    CALL(evt_msg_print, 0, STRING("mac_0_031"), 0, STRING("第三勢力幹部"))
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 0, -1000, 0)
-    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 0, -1000, 0)
-    CALL(gundan1000tai_totsuend)
-    DELETE_EVENT(LW(11))
-    CALL(evt_snd_sfxoff, LW(12))
-    BEGIN_INLINE_EVENT
-        WAIT_MS(500)
-        DELETE_EVENT(LW(10))
-    END_INLINE_EVENT
-    // Wait for the crowd to settle, then Crump looks around.
-    LOOP(0)
-        SET_VALUE(LW(0), 0)
-        SET_VALUE(LW(1), 1)
-        LOOP(0)
-            CALL(evt_nannpc_get_work, LW(0), 0, LW(2))
-            ADD(LW(0), 1)
-            IF_INT_EQUAL(LW(2), 0)
-                SET_VALUE(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-#if VERSION <= VERSION_JP
-            IF_INT_EQUAL(LW(0), 1000)
-#else
-            IF_INT_EQUAL(LW(0), 400)
-#endif
-                BREAK_LOOP
-            END_IF
-        END_LOOP
-        IF_INT_EQUAL(LW(1), 1)
-            BREAK_LOOP
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    // Crump searches for them while question marks pop up over the crowd.
-    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
-    WAIT_MS(800)
-    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
-    WAIT_MS(800)
-    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
-    WAIT_MS(800)
-    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
-    WAIT_MS(800)
-    WAIT_MS(1350)
-    CALL(evt_msg_print, 0, STRING("mac_0_032"), 0, STRING("第三勢力幹部"))
-    BEGIN_INLINE_EVENT
-        WAIT_MS(100)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -130, 15, -354, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -98, 15, -370, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -130, 15, -300, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -130, 15, -354, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(140)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -89, 15, -242, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 10, 15, -160, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -120, 15, -315, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -89, 15, -242, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(200)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -71, 15, -369, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -114, 15, -222, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -23, 15, -351, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -71, 15, -369, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(180)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -40, 15, -190, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -15, 15, -165, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -55, 15, -189, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -40, 15, -190, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(150)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -12, 15, -405, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 20, 15, -394, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, -5, 15, -188, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -12, 15, -405, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(220)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 50, 15, -408, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 74, 15, -384, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 0, 15, -420, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 50, 15, -408, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(100)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 68, 15, -201, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 41, 15, -175, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 90, 15, -186, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 68, 15, -201, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(120)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 138, 15, -239, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 162, 15, -216, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 111, 15, -191, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 138, 15, -239, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(180)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 149, 15, -374, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 95, 15, -360, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 173, 15, -316, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 149, 15, -374, 0)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        WAIT_MS(230)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 198, 15, -300, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 187, 15, -268, 30, 0, 60)
-        CALL(evt_eff_fukidashi, 2, STRING(""), 0, 1, 0, 185, 15, -221, 30, 0, 60)
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 198, 15, -300, 0)
-    END_INLINE_EVENT
-    WAIT_MS(1500)
-    // Crump gives up. The story advances and Mario heads on to the next area.
-    CALL(evt_cam3d_evt_set, 30, 133, -25, 30, 60, -316, 500, 11)
-    WAIT_MS(500)
-    CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
-    CALL(evt_npc_jump_position_nohit, STRING("第三勢力幹部"), LW(0), LW(1), LW(2), 225, 30)
-    CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 90)
-    WAIT_MS(700)
-    CALL(evt_msg_print, 0, STRING("mac_0_033"), 0, STRING("第三勢力幹部"))
-    WAIT_MS(1000)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_06_1000_X_NAUTS_AFTER)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
-    CALL(evt_fade_set_mapchange_type, 0, FADE_OUT_IRIS, 500, FADE_IN_IRIS, 500)
-    CALL(evt_bero_mapchange, STRING("gor_01"), STRING("s_bero"))
-    RETURN
-EVT_END()
-
-/**
- * Case event that fires once when Mario stands on "A_oku_yuka_01" after helping Frankie
- * and Francesca (mony_peton_talk registers it):
- * the partner comments (mac_2_088) and GSWF_GOR00_FRANKIE_FRANCESCA_AFTER_SEEN is set.
- */
-EVT_BEGIN(mony_peton_after)
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_mario_normalize)
-    LOOP(0)
-        CALL(evt_mario_party_use_check, LW(0))
-        IF_INT_EQUAL(LW(0), 0)
-            BREAK_LOOP
-        END_IF
-        WAIT_FRAMES(1)
-    END_LOOP
-    CALL(evt_party_stop, 0)
-    CALL(evt_msg_print_party, STRING("mac_2_088"))
-    CALL(evt_party_run, 0)
-    CALL(evt_mario_key_onoff, 1)
-    SET_VALUE(GSWF(GSWF_GOR00_FRANKIE_FRANCESCA_AFTER_SEEN), 1)
-    CALL(evt_exit_case_evt)
-    RETURN
-EVT_END()
-
-/**
- * Plays the ship's engine sound ("SFX_STG4_SHIP_MOVE1") at the departing ship "S_fune_c" every 2 seconds,
- * six times.
- */
-EVT_BEGIN(shukko_event_move_ship_se00)
-    LOOP(6)
-        WAIT_MS(2000)
-        CALL(evt_mapobj_get_position, STRING("S_fune_c"), LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_SHIP_MOVE1"), LW(0), LW(1), LW(2), 0)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Plays the ship's mast creaking sound ("SFX_STG4_SHIP_MAST1") at the departing ship "S_fune_c" every 1.4
- * seconds, eight times.
- */
-EVT_BEGIN(shukko_event_move_ship_se01)
-    LOOP(8)
-        WAIT_MS(1400)
-        CALL(evt_mapobj_get_position, STRING("S_fune_c"), LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_SHIP_MAST1"), LW(0), LW(1), LW(2), 0)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/** Names of the NPCs on the pier that take part in the departure scene (flagged while the ship pulls away). */
-const char* shukko_npc_list[] = {
-    "ガラの悪い水夫",
-    "マルコ",
-    "水夫Ｄ",
-    "めがね水夫",
-    "オドオド水夫",
-    "水夫ボム兵Ｃ",
-    "サンダース",
-    "店長",
-    "店員",
-    NULL,
-};
-
-/**
- * Slides the Chapter 4 ship "S_fune_c" (with its collision,
- * wake and all passengers listed in shukko_npc_list) out of the harbor:
- * first a slow 100 units over 6 seconds, then on to x=600 (700 in the US and later).
- * Mario and the partner are carried along by the movement.
- */
-EVT_BEGIN(shukko_event_move_ship)
-    SPAWN_EVENT(shukko_event_move_ship_se00)
-    SPAWN_EVENT(shukko_event_move_ship_se01)
-    CALL(evt_mapobj_get_position, STRING("S_fune_c"), LW(0), LW(1), LW(2))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_WAVE1"), LW(0), LW(1), LW(2), LW(9))
-    CALL(evt_hit_bind_mapobj, STRING("A_fune_C"), STRING("S_fune_c"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_c_hikinami"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_c_hikinami"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_c_hikinami"), MAPOBJ_FLAG_DISPLAY_LIST)
-    CALL(alpha_set_func, 0)
-    SET_FLOAT_VALUE(LW(3), FLOAT(0.0f))
-    CALL(evt_sub_intpl_msec_init, 1, 0, 100, 6000)
-    LOOP(0)
-        CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-        CALL(evt_mapobj_trans, 1, STRING("S_fune_c"), LW(0), 0, 0)
-        CALL(evt_hit_bind_update, STRING("A_fune_C"))
-        CALL(evt_mapobj_trans, 1, STRING("S_c_hikinami"), LW(0), 0, 0)
-        SET_FLOAT_VALUE(LW(4), LW(0))
-        SUBTRACT_FLOAT(LW(4), LW(3))
-        CALL(hosei_mario_pos, LW(4), 0, 0)
-        CALL(hosei_party_pos, LW(4), 0, 0)
-        SET_INT_READ_ADDR(PTR(&shukko_npc_list))
-        LOOP(0)
-            READ_INT(LW(5))
-            IF_INT_EQUAL(LW(5), 0)
-                BREAK_LOOP
-            END_IF
-            CALL(evt_npc_get_position, LW(5), LW(6), LW(7), LW(8))
-            ADD_FLOAT(LW(6), LW(4))
-            CALL(evt_npc_set_position, LW(5), LW(6), LW(7), LW(8))
-        END_LOOP
-        SET_FLOAT_VALUE(LW(3), LW(0))
-        WAIT_FRAMES(1)
-        IF_INT_EQUAL(LW(1), 0)
-            BREAK_LOOP
-        END_IF
-    END_LOOP
-    SET_FLOAT_VALUE(LW(3), FLOAT(100.0f))
-#if VERSION <= VERSION_JP
-    CALL(evt_sub_intpl_msec_init, 0, 100, 600, 7000)
-#else
-    CALL(evt_sub_intpl_msec_init, 0, 100, 700, 8400)
-#endif
-    LOOP(0)
-        CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
-        CALL(evt_mapobj_trans, 1, STRING("S_fune_c"), LW(0), 0, 0)
-        CALL(evt_hit_bind_update, STRING("A_fune_C"))
-        CALL(evt_mapobj_trans, 1, STRING("S_c_hikinami"), LW(0), 0, 0)
-        SET_FLOAT_VALUE(LW(4), LW(0))
-        SUBTRACT_FLOAT(LW(4), LW(3))
-        CALL(hosei_mario_pos, LW(4), 0, 0)
-        CALL(hosei_party_pos, LW(4), 0, 0)
-        SET_INT_READ_ADDR(PTR(&shukko_npc_list))
-        LOOP(0)
-            READ_INT(LW(5))
-            IF_INT_EQUAL(LW(5), 0)
-                BREAK_LOOP
-            END_IF
-            CALL(evt_npc_get_position, LW(5), LW(6), LW(7), LW(8))
-            ADD_FLOAT(LW(6), LW(4))
-            CALL(evt_npc_set_position, LW(5), LW(6), LW(7), LW(8))
-        END_LOOP
-        SET_FLOAT_VALUE(LW(3), LW(0))
-        WAIT_FRAMES(1)
-        IF_INT_EQUAL(LW(1), 0)
-            BREAK_LOOP
-        END_IF
-    END_LOOP
-    CALL(evt_snd_sfxoff, LW(9))
-    RETURN
-EVT_END()
-
-/**
- * The Chapter 4 departure scene: after Marco (Flavio) is told that Mario is ready, the whole crew boards,
- * the ship leaves Rogueport (with the camera swinging around it), an X-Naut grunt reports (mac_4_095),
- * the story becomes STORY_STG4_END_OFF_TO_THE_KEYS
- * and the game goes on to the Chapter 5 sail ("sys_01"/"stg_5").
- */
-EVT_BEGIN(shukko_event)
-    CALL(evt_mario_key_onoff, 0)
-    CALL(evt_mario_flag_onoff, 1, 1024)
-    CALL(evt_party_flg_onoff, 0, 16777216, 1)
-    // Flavio and the crew line up with Mario and his partner at the pier.
-    CALL(evt_cam3d_evt_set, 85, 142, 398, 85, 90, 102, 1000, 11)
-    BEGIN_INLINE_EVENT
-        CALL(evt_mario_mov_pos, 125, 140, 1000)
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        CALL(evt_party_move_pos, 0, 120, 125, 1000)
-    END_INLINE_EVENT
-    CALL(evt_npc_get_position, STRING("マルコ"), LW(0), LW(1), LW(2))
-    ADD(LW(0), 20)
-    CALL(evt_npc_move_position, STRING("マルコ"), LW(0), LW(2), 1000, 0, 0)
-    WAIT_MS(300)
-    // Flavio gives the order to cast off and the crew cheers.
-    CALL(evt_msg_print, 0, STRING("mac_4_093"), 0, STRING("マルコ"))
-    CALL(evt_cam3d_evt_set, 95, 207, 763, 95, 89, 98, 400, 11)
-    WAIT_MS(400)
-    CALL(evt_msg_print, 0, STRING("mac_4_094"), 0, 0)
-    CALL(evt_npc_move_position, STRING("水夫ボム兵Ｃ"), 90, 200, 0, 120, 0)
-    CALL(evt_npc_jump_position_nohit, STRING("水夫ボム兵Ｃ"), 55, 51, 135, 700, 50)
-    CALL(evt_npc_set_ry, STRING("水夫ボム兵Ｃ"), 90)
-    // The sailing music starts and the ship pulls away from the dock.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_SAILING1"))
-    CALL(evt_cam3d_evt_set, 122, 360, 1112, 122, 180, 90, 2000, 11)
-    WAIT_MS(2000)
-    CALL(evt_snd_sfxon, STRING("SFX_STG5_SHIP_STARTING1"), 0)
-    SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-    SPAWN_EVENT(shukko_event_move_ship)
-    WAIT_MS(2000)
-    // The crew members on deck are set up so they do not flicker while the ship moves.
-    SET_INT_READ_ADDR(PTR(&shukko_npc_list))
-    LOOP(0)
-        READ_INT(LW(5))
-        IF_INT_EQUAL(LW(5), 0)
-            BREAK_LOOP
-        END_IF
-        CALL(evt_npc_flag_onoff, 1, LW(5), NPC_FLAG_NO_SHADOW | NPC_FLAG_INSTANT_TURN)
-    END_LOOP
-    CALL(evt_cam3d_evt_set, 300, 0, 515, 300, 60, 91, 0, 11)
-    WAIT_MS(2000)
-    SET_INT_READ_ADDR(PTR(&shukko_npc_list))
-    LOOP(0)
-        READ_INT(LW(5))
-        IF_INT_EQUAL(LW(5), 0)
-            BREAK_LOOP
-        END_IF
-        CALL(evt_npc_flag_onoff, 0, LW(5), NPC_FLAG_INSTANT_TURN)
-    END_LOOP
-    // The camera circles around the departing ship while the screen fades to black.
-    CALL(cam_kaiten_init, 770, 235, -250, 350, 100, 80, -60, 39, 439, 350, 100, 80)
-    BEGIN_INLINE_EVENT_GET_ID(LW(7))
-        LOOP(0)
-            CALL(cam_kaiten_set_direct)
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LW(0), LF(7))
-        CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LW(1), LF(7))
-        ADD_FLOAT(LW(1), FLOAT(360.0f))
-        CALL(evt_sub_intpl_msec_init, PTR(lineardec_type), LW(0), LW(1), 4500)
-        LOOP(0)
-            CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
-            CALL(evt_sub_intpl_msec_get_value_para, LW(6), LW(9))
-            CALL(cam_kaiten_set_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
-            IF_INT_EQUAL(LW(9), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(0))
-        CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(1))
-        CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 4500)
-        LOOP(0)
-            CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
-            CALL(evt_sub_intpl_msec_get_value_para, LW(7), LW(9))
-            CALL(cam_kaiten_set_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
-            IF_INT_EQUAL(LW(9), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        CALL(cam_kaiten_get_para, 0, LF(0), LW(0), LF(2), LF(3), LF(4), LF(5), LF(6), LF(7))
-        CALL(cam_kaiten_get_para, 1, LF(0), LW(1), LF(2), LF(3), LF(4), LF(5), LF(6), LF(7))
-        CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 4500)
-        LOOP(0)
-            CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
-            CALL(evt_sub_intpl_msec_get_value_para, LW(1), LW(9))
-            CALL(cam_kaiten_set_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
-            IF_INT_EQUAL(LW(9), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, 0, 255, 2000)
-        LOOP(0)
-            CALL(evt_sub_intpl_msec_get_value)
-            CALL(alpha_set_func, LW(0))
-            IF_INT_EQUAL(LW(1), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-    END_INLINE_EVENT
-    WAIT_MS(4500)
-    DELETE_EVENT(LW(7))
-    WAIT_MS(1500)
-    // Cut back to the empty pier, where an X-Naut grunt walks up and reports what he saw.
-    CALL(evt_cam3d_evt_set, 122, 360, 1112, 122, 180, 90, 0, 11)
-    WAIT_MS(4500)
-    CALL(evt_cam3d_evt_set, 0, 99, -302, -130, 64, -452, 0, 11)
-    WAIT_MS(1500)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三部下"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_status_onoff, 1, STRING("第三部下"), 2)
-    CALL(evt_npc_set_position, STRING("第三部下"), -170, 15, -580)
-    CALL(evt_npc_move_position, STRING("第三部下"), -170, -500, 0, FLOAT(180.0f), 0)
-    WAIT_MS(500)
-    CALL(evt_npc_set_ry, STRING("第三部下"), 90)
-    WAIT_MS(300)
-    CALL(evt_msg_print, 0, STRING("mac_4_095"), 0, STRING("第三部下"))
-    // Chapter 4 ends with the trip to the Keys; the game moves on to the sailing map.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_END_OFF_TO_THE_KEYS)
-    CALL(evt_bero_mapchange, STRING("sys_01"), STRING("stg_5"))
-    RETURN
-EVT_END()
-
-/**
- * Sprite entries for the crowd of 100 sailors (evt_nannpc_init): the c_boro_k model with its S_1 animation,
- * one entry per animation phase offset.
- */
-ExtTexInfo nannpc_entry_data01[] = {
-    {"c_boro_k", "S_1", 0.0f},
-    {"c_boro_k", "S_1", 2.0f},
-    {"c_boro_k", "S_1", 4.0f},
-    {"c_boro_k", "S_1", 6.0f},
-    {"c_boro_k", "S_1", 8.0f},
-    {"c_boro_k", "S_1", 10.0f},
-    {"c_boro_k", "S_1", 12.0f},
-    {"c_boro_k", "S_1", 14.0f},
-    {"c_boro_k", "S_1", 16.0f},
-    {"c_boro_k", "S_1", 18.0f},
-    {"c_boro_k", "S_1", 20.0f},
-    {"c_boro_k", "S_1", 22.0f},
-    {"c_boro_k", "S_1", 24.0f},
-    {"c_boro_k", "S_1", 26.0f},
-    {"c_boro_k", "S_1", 28.0f},
-    {"c_boro_k", "S_1", 30.0f},
-    {"c_boro_k", "S_1", 32.0f},
-    {"c_boro_k", "S_1", 34.0f},
-    {"c_boro_k", "S_1", 36.0f},
-    {"c_boro_k", "S_1", 38.0f},
-    {"c_boro_k", "R_1", 0.0f},
-    {"c_boro_k", "R_1", 1.0f},
-    {"c_boro_k", "R_1", 2.0f},
-    {"c_boro_k", "R_1", 3.0f},
-    {"c_boro_k", "R_1", 4.0f},
-    {"c_boro_k", "R_1", 5.0f},
-    {"c_boro_k", "R_1", 6.0f},
-    {"c_boro_k", "R_1", 7.0f},
-    {"c_boro_k", "R_1", 8.0f},
-    {"c_boro_k", "R_1", 9.0f},
-    {"c_boro_k", "R_1", 10.0f},
-    {"c_boro_k", "R_1", 11.0f},
-    {"c_boro_k", "R_1", 12.0f},
-    {"c_boro_k", "R_1", 13.0f},
-    {"c_boro_k", "R_1", 14.0f},
-    {"c_boro_k", "R_1", 15.0f},
-    {"c_boro_k", "R_1", 16.0f},
-    {"c_boro_k", "R_1", 17.0f},
-    {"c_boro_k", "R_1", 18.0f},
-    {"c_boro_k", "R_1", 19.0f},
-    {0},
-};
-
-/**
- * Animation frame table for a sailor of the crowd while it stands or hops about: each frame of the first 21
- * appears twice.
- */
-static s16 suifu_animtbl[] = {
-    0, 0, 1, 1, 2, 2, 3, 3,
-    4, 4, 5, 5, 6, 6, 7, 7,
-    8, 8, 9, 9, 10, 10, 11, 11,
-    12, 12, 13, 13, 14, 14, 15, 15,
-    16, 16, 17, 17, 18, 18, 19, 19,
-    -1, 0,
-};
-
-/** Animation frame table for a sailor of the crowd while it runs (frames 20 to 39, ending with -1). */
-static s16 suifu_run_animtbl[] = {
-    20, 21, 22, 23, 24, 25, 26, 27,
-    28, 29, 30, 31, 32, 33, 34, 35,
-    36, 37, 38, 39, -1, 0,
-};
-
-/** Three points where the crowd sailors walk down the stairs; each picks one at random. */
-Vec suifu100kaidanDOWN[] = {
-    {309.0f, 15.0f, -375.0f},
-    {322.0f, 15.0f, -397.0f},
-    {338.0f, 15.0f, -410.0f},
-    {357.0f, 15.0f, -427.0f},
-};
-
-/** Three points where the crowd sailors walk up the stairs; each picks one at random. */
-Vec suifu100kaidanUP[] = {
-    {143.0f, 115.0f, -514.0f},
-    {167.0f, 115.0f, -534.0f},
-    {189.0f, 115.0f, -553.0f},
-    {201.0f, 115.0f, -562.0f},
-};
-
-/** Allocates the one-byte alpha value read by alpha_tev and sets it to 255 (opaque). */
-static USER_FUNC(alpha_init_func) {
-    _ap = _mapAlloc(1);
-    *_ap = 255;
-    return EVT_RETURN_DONE;
-}
-
-/** Sets the alpha of the harbor wake mesh to args[0] (0 to 255) by writing the byte at _ap. */
-static USER_FUNC(alpha_set_func) {
-    *_ap = evtGetValue(event, event->args[0]);
-    return EVT_RETURN_DONE;
-}
 
 /**
  * Interpolation curve for evt_sub_intpl_msec_init:
@@ -3671,31 +1389,31 @@ static USER_FUNC(make_itemsel_table) {
     s32 count;
     s32 i;
 
-    itemsel_table_ram = _mapAlloc(0x54);
+    itemsel_table_ram = _mapAlloc((MAX_HELD_ITEMS + 1) * sizeof(s32));
     p = itemsel_table_ram;
     count = 0;
-    for (i = 0; i < 20; i++) {
+    for (i = 0; i < MAX_HELD_ITEMS; i++) {
         s32 item = pouch->heldItems[i];
 
-        if (item >= 0xB3 && item < 0xEC) {
+        if (item >= ITEM_SHROOM_FRY && item < ITEM_AUDIENCE_CAN) {
             *p++ = item;
             count++;
         }
-        if (item >= 0x94 && item < 0xA1) {
+        if (item >= ITEM_MUSHROOM && item < ITEM_POINT_SWAP) {
             *p++ = item;
             count++;
         }
         switch (item) {
-            case 0xA6:
-            case 0xA7:
-            case 0xA8:
-            case 0xA9:
-            case 0xAA:
-            case 0xAB:
-            case 0xAD:
-            case 0xAE:
-            case 0xAF:
-            case 0xB0:
+            case ITEM_COCONUT:
+            case ITEM_DRIED_BOUQUET:
+            case ITEM_MYSTIC_EGG:
+            case ITEM_GOLDEN_LEAF:
+            case ITEM_KEEL_MANGO:
+            case ITEM_FRESH_PASTA:
+            case ITEM_HOT_SAUCE:
+            case ITEM_TURTLEY_LEAF:
+            case ITEM_HORSETAIL:
+            case ITEM_PEACHY_PEACH:
                 *p++ = item;
                 count++;
                 break;
@@ -3712,6 +1430,956 @@ static USER_FUNC(delete_itemsel_table) {
     _mapFree(itemsel_table_ram);
     return EVT_RETURN_DONE;
 }
+
+/**
+ * Loops forever: sailor Bob-omb A walks along x=-215 between z=215 and z=-150,
+ * turning around after 0.8 seconds at each end.
+ */
+static EVT_BEGIN(suifubomb_a_urouro2)
+    LOOP(0)
+        CALL(evt_npc_move_position, STRING("me"), -215, 215, 0, FLOAT(40.0f), 0)
+        WAIT_MS(800)
+        CALL(evt_npc_reverse_ry, STRING("me"))
+        CALL(evt_npc_move_position, STRING("me"), -215, -150, 0, FLOAT(40.0f), 0)
+        WAIT_MS(800)
+        CALL(evt_npc_reverse_ry, STRING("me"))
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Init event of sailor Bob-omb A: places him on the pier by story stage (at (-160, 15, 207) during the Bowser
+ * interlude).
+ */
+static EVT_BEGIN(suifubomb_a_init)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
+        CALL(evt_npc_set_ry, STRING("me"), 90)
+        CALL(evt_npc_set_position, STRING("me"), -215, 15, 175)
+        CASE_EQUAL(STG4_15_07_BOWSER_ACTION_STAGE)
+        CALL(evt_npc_set_position, STRING("me"), -160, 15, 207)
+        CALL(evt_npc_set_ry, STRING("me"), 90)
+        CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
+        CALL(evt_npc_restart_regular_event, STRING("me"))
+        CASE_DEFAULT
+        CALL(evt_npc_set_ry, STRING("me"), 90)
+        CALL(evt_npc_set_position, STRING("me"), -215, 15, -150)
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/**
+ * Regular event of sailor Bob-omb A: before Goombella joins he wanders around his spot,
+ * during the Flavio scene he stays put, otherwise he paces the pier (suifubomb_a_urouro2).
+ */
+static EVT_BEGIN(suifubomb_a_regl)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
+        CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
+        CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(100.0f), FLOAT(30.0f), 0)
+        CALL(urouro_main_func, STRING("me"))
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CASE_DEFAULT
+        CALL_CHILD(suifubomb_a_urouro2)
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/**
+ * Talk event of sailor Bob-omb A. While TROUBLE_IM_HUNGRY is the accepted trouble, the first talk takes the
+ * request (GSWF_TROUBLE_WORK(0)) and later talks let Mario pick an item to hand over (make_itemsel_table), for 11
+ * coins, which ends the trouble. Otherwise one line per story stage (gor_00_01_01 on), with a short pose scene
+ * before STG4_32_CHATTING_WITH_FLAVIO.
+ */
+static EVT_BEGIN(suifubomb_a_talk)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_IM_HUNGRY)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(0), 0)
+            CALL(evt_msg_print, 0, STRING("irai_06_001"), 0, STRING("me"))
+            SET_VALUE(GSWF_TROUBLE_WORK(0), 1)
+        ELSE
+            CALL(evt_msg_print, 0, STRING("irai_06_002"), 0, STRING("me"))
+            CALL(make_itemsel_table, LW(11))
+            IF_INT_EQUAL(LW(11), 0)
+                CALL(evt_msg_print_add, 0, STRING("irai_06_006"))
+                CALL(delete_itemsel_table)
+                RETURN
+            END_IF
+            CALL(evt_msg_continue)
+#if VERSION <= VERSION_DEMO_JP
+            CALL(evt_win_item_select, LW(10), LW(0))
+#else
+            CALL(evt_win_item_select, 0, LW(10), LW(0), 0)
+#endif
+            CALL(delete_itemsel_table)
+            IF_INT_EQUAL(LW(0), -1)
+                CALL(evt_msg_print, 0, STRING("irai_06_006"), 0, STRING("me"))
+                RETURN
+            END_IF
+            CALL(evt_pouch_remove_item, LW(0), LW(1))
+            CALL(evt_msg_print, 0, STRING("irai_06_003"), 0, STRING("me"))
+            CALL(evt_sub_get_coin, 11)
+            CALL(evt_msg_print, 0, STRING("irai_06_005"), 0, STRING("me"))
+            SET_VALUE(GSW_TROUBLE_ACCEPTED, TROUBLE_NONE)
+            SET_VALUE(GSWF_TROUBLE_DONE(TROUBLE_IM_HUNGRY), 1)
+            CALL(evt_msg_print, 0, STRING("sys_request_finish"), 0, 0)
+        END_IF
+        RETURN
+    END_IF
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_01"), 0, STRING("me"))
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_02"), 0, STRING("me"))
+        CASE_LESS(STG2_25_AFTER_THE_BOSS_BATTLE)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_03"), 0, STRING("me"))
+        CASE_LESS(STG3_32_BOSS_BATTLE)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_04"), 0, STRING("me"))
+        CASE_LESS(STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_05"), 0, STRING("me"))
+        CASE_LESS(STG4_31_FRANKLYS_HOUSE_STG_4)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_06"), 0, STRING("me"))
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
+#if VERSION < VERSION_US
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
+#endif
+        CALL(evt_msg_print, 0, STRING("gor_00_01_07"), 0, STRING("me"))
+        CALL(evt_mario_set_pose, STRING("M_I_2"))
+        WAIT_MS(1000)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_07_01"), 0, STRING("me"))
+#if VERSION < VERSION_US
+        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
+#endif
+        CASE_LESS(STG4_33_MEET_BOBBERY)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_08"), 0, STRING("me"))
+        CASE_LESS(STG4_37_TO_THE_PORT)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_08_01"), 0, STRING("me"))
+        CASE_LESS(STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_08_02"), 0, STRING("me"))
+        CASE_LESS(STG6_54_WELCOME_BACK)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_09"), 0, STRING("me"))
+        CASE_LESS(STG7_20_LORD_CRUMP_DEFEATED)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_10"), 0, STRING("me"))
+        CASE_LESS(STG8_16_THE_RETURN_OF_THE_QUEEN)
+        CALL(evt_msg_print, 0, STRING("gor_00_01_11"), 0, STRING("me"))
+        CASE_DEFAULT
+        CALL(evt_msg_print, 0, STRING("gor_00_01_12"), 0, STRING("me"))
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Loops forever: sailor Bob-omb B walks along z=-350 between x=175 and x=-250, pausing a second at each end. */
+static EVT_BEGIN(suifubomb_b_urouro2)
+    LOOP(0)
+        CALL(evt_npc_move_position, STRING("me"), 175, -350, 0, FLOAT(40.0f), 0)
+        WAIT_MS(1000)
+        CALL(evt_npc_move_position, STRING("me"), -250, -350, 0, FLOAT(40.0f), 0)
+        WAIT_MS(1000)
+    END_LOOP
+    WAIT_WHILE(1)
+    RETURN
+EVT_END()
+
+/**
+ * Init event of sailor Bob-omb B: places him at (-250, 15, -350) facing right;
+ * during the Bowser interlude he is hidden below the map.
+ */
+static EVT_BEGIN(suifubomb_b_init)
+    CALL(evt_npc_set_position, STRING("me"), -250, 15, -350)
+    CALL(evt_npc_set_ry, STRING("me"), 90)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG4_15_07_BOWSER_ACTION_STAGE)
+        CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
+        CALL(evt_npc_set_ry, STRING("me"), 90)
+        CALL(evt_npc_change_interrupt, STRING("me"), 1, 0)
+        CALL(evt_npc_restart_regular_event, STRING("me"))
+    END_IF
+    RETURN
+EVT_END()
+
+/**
+ * Regular event of sailor Bob-omb B: before Goombella joins he paces z=-350
+ * until the X-Naut ambush has been seen; at most other stages he keeps pacing (suifubomb_b_urouro2),
+ * and he stays put during Chapter 4's Flavio scene.
+ */
+static EVT_BEGIN(suifubomb_b_regl)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
+        IF_INT_EQUAL(GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED, 1)
+            RETURN
+        END_IF
+        LOOP(0)
+            CALL(evt_npc_move_position, STRING("me"), 0, -350, 0, FLOAT(40.0f), 0)
+            WAIT_MS(1000)
+            CALL(evt_npc_move_position, STRING("me"), -250, -350, 0, FLOAT(40.0f), 0)
+            IF_INT_EQUAL(GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED, 1)
+                BREAK_LOOP
+            END_IF
+            WAIT_MS(1000)
+            IF_INT_EQUAL(GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED, 1)
+                BREAK_LOOP
+            END_IF
+        END_LOOP
+        CALL(evt_npc_set_ry, STRING("me"), 90)
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
+        CALL_CHILD(suifubomb_b_urouro2)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CASE_GREATER(STG4_END_OFF_TO_THE_KEYS)
+        CALL_CHILD(suifubomb_b_urouro2)
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Talk event of sailor Bob-omb B: one line per story stage (gor_00_02_01 to gor_00_02_12). */
+static EVT_BEGIN(suifubomb_b_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG0_07_GOOMBELLA_JOINS)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_01"), 0, STRING("me"))
+        CASE_LESS(STG1_17_FATHER_SON_REUNITED)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_02"), 0, STRING("me"))
+        CASE_LESS(STG2_25_AFTER_THE_BOSS_BATTLE)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_03"), 0, STRING("me"))
+        CASE_LESS(STG3_32_BOSS_BATTLE)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_04"), 0, STRING("me"))
+        CASE_LESS(STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_05"), 0, STRING("me"))
+        CASE_LESS(STG4_31_FRANKLYS_HOUSE_STG_4)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_06"), 0, STRING("me"))
+        CASE_LESS(STG4_32_CHATTING_WITH_FLAVIO)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_07"), 0, STRING("me"))
+        CASE_LESS(STG4_33_MEET_BOBBERY)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_08"), 0, STRING("me"))
+        CASE_LESS(STG4_37_TO_THE_PORT)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_08_01"), 0, STRING("me"))
+        CASE_LESS(STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_08_02"), 0, STRING("me"))
+        CASE_LESS(STG6_54_WELCOME_BACK)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_09"), 0, STRING("me"))
+        CASE_LESS(STG7_20_LORD_CRUMP_DEFEATED)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_10"), 0, STRING("me"))
+        CASE_LESS(STG8_16_THE_RETURN_OF_THE_QUEEN)
+        CALL(evt_msg_print, 0, STRING("gor_00_02_11"), 0, STRING("me"))
+        CASE_DEFAULT
+        CALL(evt_msg_print, 0, STRING("gor_00_02_12"), 0, STRING("me"))
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Init event of sailor Bob-omb C: only present during Chapter 4's Flavio scene, standing at (140, 15, 200). */
+static EVT_BEGIN(suifubomb_c_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_npc_set_position, STRING("me"), 140, 15, 200)
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Talk event of sailor Bob-omb C during Chapter 4's Flavio scene (mac_4_028). */
+static EVT_BEGIN(suifubomb_c_talk)
+    CALL(evt_msg_print, 0, STRING("mac_4_028"), 0, STRING("me"))
+    RETURN
+EVT_END()
+
+/**
+ * Init event of Sanders (Bobbery's name in the Japanese game, model "c_bomt_n") for Chapter 4's Flavio scene:
+ * enters him with sanders_talk as his talk event;
+ * at STG4_37_TO_THE_PORT he stands at (100, 50, 80), otherwise he waits hidden below the map.
+ */
+static EVT_BEGIN(sanders_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_npc_entry, STRING("サンダース"), STRING("c_bomt_n")) // Admiral Bobbery
+        CALL(evt_npc_set_tribe, STRING("サンダース"), STRING("サンダース"))
+        CALL(evt_npc_set_ry, STRING("サンダース"), 90)
+        CALL(evt_npc_change_interrupt, STRING("サンダース"), 6, PTR(sanders_talk))
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG4_37_TO_THE_PORT)
+            CALL(evt_npc_set_position, STRING("サンダース"), 100, 50, 80)
+        ELSE
+            CALL(evt_npc_set_position, STRING("サンダース"), 0, -1000, 0)
+        END_IF
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Talk event of Sanders (Bobbery) at the harbor in Chapter 4 (mac_4_088). */
+static EVT_BEGIN(sanders_talk)
+    CALL(evt_msg_print, 0, STRING("mac_4_088"), 0, STRING("me"))
+    RETURN
+EVT_END()
+
+/**
+ * Init event of Cortez (korutesu): from STG5_58_FAIR_WINDS onward (except at the end credits) he stands at
+ * (210, 40, 92) facing 270 degrees.
+ */
+static EVT_BEGIN(korutesu_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG9_01_END_CREDITS)
+        CASE_GREATER_OR_EQUAL(STG5_58_FAIR_WINDS)
+        CALL(evt_npc_set_ry, STRING("me"), 270)
+        CALL(evt_npc_set_position, STRING("me"), 210, 40, 92)
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/**
+ * Talk event of Cortez at the harbor: asks whether to sail (gor_00_025 yes/no).
+ * Yes sets GSWF_GOR_SAILING_TO_KEELHAUL and GF(13) and starts the Keelhaul Key ship with gor_muj_ship_start;
+ * no answers gor_00_026.
+ */
+static EVT_BEGIN(korutesu_talk)
+    CALL(evt_msg_print, 0, STRING("gor_00_025"), 0, STRING("me"))
+    CALL(evt_msg_select, 0, STRING("gor_00_025_yesno"))
+    IF_INT_EQUAL(LW(0), 0)
+        CALL(evt_msg_print_add, 0, STRING("gor_00_027"))
+        SET_VALUE(GSWF_GOR_SAILING_TO_KEELHAUL, 1)
+        SET_VALUE(GF(13), 1)
+        CALL_CHILD(gor_muj_ship_start)
+    ELSE
+        CALL(evt_msg_print_add, 0, STRING("gor_00_026"))
+    END_IF
+    RETURN
+EVT_END()
+
+/**
+ * Init event of the shop manager: during Chapter 4's Flavio scene it spawns him ("c_gshop_m") at (-12, 128, 40)
+ * and sets tentyou_talk as his talk event.
+ */
+EVT_BEGIN(tentyou_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_npc_entry, STRING("店長"), STRING("c_gshop_m")) // Thriff T. (Toad Bros. Bazaar)
+        CALL(evt_npc_set_tribe, STRING("店長"), STRING("店員男"))
+        CALL(evt_npc_set_ry, STRING("店長"), 90)
+        CALL(evt_npc_set_position, STRING("店長"), -12, 128, 40)
+        CALL(evt_npc_change_interrupt, STRING("店長"), 6, PTR(tentyou_talk))
+#if VERSION >= VERSION_JP
+        CALL(evt_npc_flag_onoff, 1, STRING("店長"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+#endif
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Talk event of the shop manager during Chapter 4's Flavio scene (mac_4_029_01). */
+static EVT_BEGIN(tentyou_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_msg_print, 0, STRING("mac_4_029_01"), 0, STRING("me"))
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/**
+ * Init event of the shop clerk: during Chapter 4's Flavio scene it spawns her ("c_gshop_w") at (-30, 128, 120)
+ * and sets tenin_talk as her talk event.
+ */
+EVT_BEGIN(tenin_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_npc_entry, STRING("店員"), STRING("c_gshop_w")) // a Toad of the Keelhaul Key crew
+        CALL(evt_npc_set_tribe, STRING("店員"), STRING("店員女"))
+        CALL(evt_npc_set_ry, STRING("店員"), 90)
+        CALL(evt_npc_set_position, STRING("店員"), -30, 128, 120)
+        CALL(evt_npc_change_interrupt, STRING("店員"), 6, PTR(tenin_talk))
+#if VERSION >= VERSION_JP
+        CALL(evt_npc_flag_onoff, 1, STRING("店員"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+#endif
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Talk event of the shop clerk during Chapter 4's Flavio scene (mac_4_029_02). */
+static EVT_BEGIN(tenin_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_msg_print, 0, STRING("mac_4_029_02"), 0, STRING("me"))
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/**
+ * Init event of the thief NPC for TROUBLE_FIND_THIS_GUY: while it is the accepted trouble with
+ * GSWF_TROUBLE_WORK(0) and (1) set and (2) clear, enters him (c_borodo_n) at (-168, 15, -540) with borodo2_talk as
+ * his talk event.
+ */
+static EVT_BEGIN(borodo2_init)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_FIND_THIS_GUY)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(0), 1)
+            IF_INT_EQUAL(GSWF_TROUBLE_WORK(1), 1)
+                IF_INT_EQUAL(GSWF_TROUBLE_WORK(2), 0)
+                    CALL(evt_npc_entry, STRING("ボロドー２"), STRING("c_borodo_n")) // Larson, the thief from Goomther's request
+                    CALL(evt_npc_set_tribe, STRING("ボロドー２"), STRING("盗賊"))
+                    CALL(evt_npc_flag_onoff, 1, STRING("ボロドー２"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+                    CALL(evt_npc_set_position, STRING("ボロドー２"), -168, 15, -540)
+                    CALL(evt_npc_change_interrupt, STRING("ボロドー２"), 6, PTR(borodo2_talk))
+                END_IF
+            END_IF
+        END_IF
+    END_IF
+    RETURN
+EVT_END()
+
+/**
+ * Borodo runs away: with Mario's controls locked he becomes intangible,
+ * runs to (-168, -420) and then to (60, -420) at speed 240,
+ * vanishes below the map and Mario is given control back after 1.5 seconds.
+ */
+static EVT_BEGIN(borodo2_escape)
+    CALL(evt_mario_key_onoff, 0)
+    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_set_ry, STRING("me"), 90)
+    BEGIN_INLINE_EVENT
+        CALL(evt_npc_move_position, STRING("me"), -168, -420, 0, FLOAT(240.0f), 0)
+        CALL(evt_npc_move_position, STRING("me"), 60, -420, 0, FLOAT(240.0f), 0)
+        CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
+    END_INLINE_EVENT
+    WAIT_MS(1500)
+    CALL(evt_mario_key_onoff, 1)
+    RETURN
+EVT_END()
+
+/** Talk event of Borodo for Trouble Center job 4 (irai_04_004): sets GSWF_TROUBLE_WORK_2 and starts borodo2_escape. */
+static EVT_BEGIN(borodo2_talk)
+    CALL(evt_msg_print, 0, STRING("irai_04_004"), 0, STRING("me"))
+    SET_VALUE(GSWF_TROUBLE_WORK(2), 1)
+    SPAWN_EVENT(borodo2_escape)
+    RETURN
+EVT_END()
+
+/**
+ * Init event of Lumpy (Mokorim, the coin investor):
+ * from the pedestal step of the prologue to the end of Chapter 3 and again
+ * from STG6_56_ROGUEPORT_STATION on he stands at (525, 15, -270) facing left.
+ */
+static EVT_BEGIN(mokorim_init)
+    CALL_CHILD(npc_init_evt)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG0_15_THE_PEDESTAL, STG3_END_TO_STAGE_4)
+        CALL(evt_npc_set_position, STRING("me"), 525, 15, -270)
+        CASE_GREATER_OR_EQUAL(STG6_56_ROGUEPORT_STATION)
+        CALL(evt_npc_set_position, STRING("me"), 525, 15, -270)
+    END_SWITCH
+    CALL(evt_npc_set_ry, STRING("me"), 270)
+    RETURN
+EVT_END()
+
+/**
+ * Talk event of Lumpy. From STG0_15_THE_PEDESTAL to STG3_END_TO_STAGE_4 Mario can invest 100 coins per talk, up to
+ * three times (GSW_GOR_LUMPY_INVESTMENT_COUNT); the first talk (GSWF_GOR_LUMPY_FIRST_TALK_DONE) switches to
+ * BGM_EVT_DANGER3. From STG6_56_ROGUEPORT_STATION on, the first talk pays back 300, 500 (600 from US on) or 999
+ * coins by the count; later talks offer his journal entries (salari_after_009 to salari_after_015).
+ */
+static EVT_BEGIN(mokorim_talk)
+    SET_VALUE(LF(15), 0)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG0_15_THE_PEDESTAL, STG3_END_TO_STAGE_4)
+
+        // Lumpy has already received three investments: he only thanks Mario.
+        IF_INT_EQUAL(GSW_GOR_LUMPY_INVESTMENT_COUNT, 3)
+            CALL(evt_msg_print, 0, STRING("salari_before_010"), 0, 0)
+            RETURN
+        END_IF
+
+        // The camera frames Lumpy.
+        CALL(evt_cam3d_evt_set, 500, 120, 90, 500, 55, -280, 800, EASING_SINE_IN_OUT)
+        WAIT_MS(800)
+
+        // First meeting: Lumpy recognizes Mario, introduces himself and asks for an investment (danger music
+        // plays).
+        IF_INT_EQUAL(GSWF_GOR_LUMPY_FIRST_TALK_DONE, 0)
+            SET_VALUE(GSWF_GOR_LUMPY_FIRST_TALK_DONE, 1)
+            CALL(evt_snd_bgmoff, PSND_PAUSE)
+            CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_EVT_DANGER3"))
+            SET_VALUE(LF(15), 1)
+            CALL(evt_msg_print, 0, STRING("salari_before_000"), 0, 0)
+            CALL(evt_mario_set_pose, STRING("M_N_2"))
+            WAIT_MS(500)
+            CALL(evt_mario_set_pose, STRING("M_S_1"))
+            CALL(evt_msg_print, 0, STRING("salari_before_001"), 0, 0)
+            CALL(evt_mario_set_pose, STRING("M_N_1"))
+            WAIT_MS(500)
+            CALL(evt_msg_print, 0, STRING("salari_before_002"), 0, 0)
+            CALL(evt_mario_set_pose, STRING("M_I_Z"))
+            WAIT_MS(500)
+        ELSE
+
+            // Later visits: Lumpy repeats his dream of striking oil.
+            CALL(evt_msg_print, 0, STRING("salari_before_003"), 0, 0)
+            CALL(evt_mario_set_pose, STRING("M_I_Z"))
+            WAIT_MS(500)
+        END_IF
+#if VERSION <= VERSION_DEMO_JP
+        CALL(evt_unitwin_alloc)
+#else
+        CALL(evt_unitwin_alloc, 0)
+#endif
+        CALL(unitwincoin_disp_onoff, 1)
+        CALL(evt_msg_print, 0, STRING("salari_before_004"), 0, 0)
+        CALL(evt_msg_select, 0, STRING("salari_before_005"))
+        IF_INT_EQUAL(LW(0), 0)
+
+            // Mario agrees: if he has 100 coins Lumpy jumps for joy, the investment count rises and the coins
+            // are paid.
+            CALL(evt_pouch_get_coin, LW(0))
+            IF_INT_GREATER_OR_EQUAL(LW(0), 100)
+                CALL(evt_msg_continue)
+                CALL(evt_mario_set_pose, STRING("M_I_2"))
+                WAIT_MS(500)
+                CALL(evt_mario_set_pose, STRING("M_S_1"))
+                CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
+                LOOP(2)
+                    CALL(evt_npc_jump_position_nohit, STRING("me"), LW(0), LW(1), LW(2), 200, 10)
+                    WAIT_FRAMES(1)
+                END_LOOP
+                ADD(GSW_GOR_LUMPY_INVESTMENT_COUNT, 1)
+                IF_INT_EQUAL(GSW_GOR_LUMPY_INVESTMENT_COUNT, 3)
+                    CALL(evt_msg_print, 0, STRING("salari_before_007"), 0, 0)
+                ELSE
+                    CALL(evt_msg_print, 0, STRING("salari_before_006"), 0, 0)
+                END_IF
+                CALL(evt_pouch_add_coin, -100)
+                CALL(unitwincoin_wait)
+            ELSE
+
+                // Mario cannot afford it.
+                CALL(evt_mario_set_pose, STRING("M_S_1"))
+                CALL(evt_msg_print_add, 0, STRING("salari_before_009"))
+            END_IF
+        ELSE
+
+            // Mario refuses.
+            CALL(evt_msg_continue)
+            CALL(evt_mario_set_pose, STRING("M_N_B"))
+            WAIT_MS(500)
+            CALL(evt_mario_set_pose, STRING("M_S_1"))
+            CALL(evt_msg_print, 0, STRING("salari_before_008"), 0, 0)
+        END_IF
+
+        // Close the coin display and return the camera.
+        CALL(unitwincoin_disp_onoff, 0)
+        CALL(evt_unitwin_free)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+        WAIT_MS(500)
+
+        // After the Rogueport station chapter: Lumpy has returned from the desert.
+        CASE_GREATER_OR_EQUAL(STG6_56_ROGUEPORT_STATION)
+
+        // First return visit: Lumpy reveals he struck oil and shares his story.
+        IF_INT_EQUAL(GSWF_GOR_LUMPY_REPAYMENT_DONE, 0)
+            SET_VALUE(GSWF_GOR_LUMPY_REPAYMENT_DONE, 1)
+            CALL(evt_cam3d_evt_set, 500, 120, 90, 500, 55, -280, 800, EASING_SINE_IN_OUT)
+            WAIT_MS(800)
+            CALL(evt_msg_print, 0, STRING("salari_after_000"), 0, 0)
+            CALL(evt_mario_set_pose, STRING("M_N_2"))
+            WAIT_MS(500)
+            CALL(evt_mario_set_pose, STRING("M_S_1"))
+            CALL(evt_cam3d_evt_set, 515, 105, 5, 515, 55, -280, 800, EASING_SINE_IN_OUT)
+            WAIT_MS(800)
+            CALL(evt_msg_print, 0, STRING("salari_after_000_1"), 0, 0)
+            CALL(evt_cam3d_evt_set, 515, 90, -70, 515, 55, -280, 800, EASING_SINE_IN_OUT)
+            WAIT_MS(800)
+            CALL(evt_msg_print, 0, STRING("salari_after_000_2"), 0, 0)
+            CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
+            LOOP(2)
+                CALL(evt_npc_jump_position_nohit, STRING("me"), LW(0), LW(1), LW(2), 200, 10)
+                WAIT_FRAMES(1)
+            END_LOOP
+            CALL(evt_msg_print, 0, STRING("salari_after_001"), 0, 0)
+#if VERSION >= VERSION_JP
+            CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+            CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED1"), LW(0), LW(1), LW(2), 0)
+#endif
+            CALL(evt_mario_set_pose, STRING("M_N_7"))
+            WAIT_MS(500)
+            CALL(evt_mario_set_pose, STRING("M_S_1"))
+            CALL(evt_cam3d_evt_set, 500, 120, 90, 500, 55, -280, 800, EASING_SINE_IN_OUT)
+            WAIT_MS(800)
+
+            // Mario had invested: Lumpy repays with a bonus (300, 500/600 or 999 coins by number of
+            // investments).
+            IF_INT_GREATER(GSW_GOR_LUMPY_INVESTMENT_COUNT, 0)
+                CALL(evt_msg_print, 0, STRING("salari_after_002"), 0, 0)
+                SWITCH(GSW_GOR_LUMPY_INVESTMENT_COUNT)
+                    CASE_EQUAL(1)
+                    SET_VALUE(LW(0), 300)
+                    CASE_EQUAL(2)
+
+                    // The two-investment payout is 600 coins in US and 500 in JP.
+#if VERSION >= VERSION_US
+                    SET_VALUE(LW(0), 600)
+#else
+                    SET_VALUE(LW(0), 500)
+#endif
+                    CASE_EQUAL(3)
+                    SET_VALUE(LW(0), 999)
+                END_SWITCH
+#if VERSION <= VERSION_DEMO_JP
+                CALL(evt_unitwin_alloc)
+#else
+                CALL(evt_unitwin_alloc, 0)
+#endif
+                CALL(unitwincoin_disp_onoff, 1)
+                CALL(evt_msg_print_insert, 0, STRING("salari_after_003"), 0, 0, LW(0))
+                CALL(evt_pouch_add_coin, LW(0))
+                CALL(unitwincoin_wait)
+                CALL(unitwincoin_disp_onoff, 0)
+                CALL(evt_unitwin_free)
+                CALL(evt_msg_print, 0, STRING("salari_after_004"), 0, 0)
+            ELSE
+
+                // Mario never invested: Lumpy just tells his story.
+                CALL(evt_msg_print, 0, STRING("salari_after_005"), 0, 0)
+            END_IF
+            CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+        ELSE
+
+            // Repeat visits: Lumpy offers to read from his oil-hunt journal.
+            CALL(evt_msg_print, 0, STRING("salari_after_006"), 0, 0)
+            CALL(evt_msg_select, 0, STRING("salari_after_006_1"))
+            IF_INT_EQUAL(LW(0), 0)
+
+                // Mario picks diary topics, one entry at a time, until he stops listening.
+                LOOP(0)
+                    CALL(evt_msg_print_add, 0, STRING("salari_after_007"))
+                    CALL(evt_msg_select, 0, STRING("salari_after_008"))
+                    CALL(evt_msg_continue)
+#if VERSION >= VERSION_JP
+                    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_TALK_POSE)
+#endif
+                    SWITCH(LW(0))
+                        CASE_EQUAL(0)
+                        CALL(evt_msg_print, 0, STRING("salari_after_009"), 0, 0)
+                        CASE_EQUAL(1)
+                        CALL(evt_msg_print, 0, STRING("salari_after_010"), 0, 0)
+                        CASE_EQUAL(2)
+                        CALL(evt_msg_print, 0, STRING("salari_after_011"), 0, 0)
+                        CASE_EQUAL(3)
+                        CALL(evt_msg_print, 0, STRING("salari_after_012"), 0, 0)
+                        CASE_EQUAL(4)
+                        CALL(evt_msg_print, 0, STRING("salari_after_013"), 0, 0)
+                        CASE_EQUAL(5)
+                        CALL(evt_msg_print, 0, STRING("salari_after_014"), 0, 0)
+                        CASE_EQUAL(6)
+                        CALL(evt_msg_print, 0, STRING("salari_after_015"), 0, 0)
+                    END_SWITCH
+#if VERSION >= VERSION_JP
+                    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE)
+#endif
+                    CALL(evt_msg_print, 0, STRING("salari_after_016"), 0, 0)
+                    CALL(evt_msg_select, 0, STRING("salari_after_017"))
+                    IF_INT_EQUAL(LW(0), 0)
+                    ELSE
+                        CALL(evt_msg_print_add, 0, STRING("salari_after_018"))
+                        BREAK_LOOP
+                    END_IF
+                END_LOOP
+            ELSE
+                CALL(evt_msg_print_add, 0, STRING("salari_after_018"))
+            END_IF
+        END_IF
+    END_SWITCH
+
+    // Restore the normal music if the danger music was started.
+    IF_INT_EQUAL(LF(15), 1)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+    END_IF
+    RETURN
+EVT_END()
+
+/** Init script of Kammy Koopa ("ババ") for the Chapter 4 Bowser interlude: does the shared NPC init and enables facing the movement direction. */
+static EVT_BEGIN(baba_init)
+    CALL_CHILD(npc_init_evt)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
+    RETURN
+EVT_END()
+
+/**
+ * Init event of Luigi (the Luigi diary NPC): between STG5_43_X_NAUTS_RETREAT
+ * and STG6_53_THE_REAL_GARNET_STAR he stands at (420, 15, -210) facing left.
+ */
+static EVT_BEGIN(luigi_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG5_43_X_NAUTS_RETREAT, STG6_53_THE_REAL_GARNET_STAR)
+        CALL(evt_npc_set_position, STRING("me"), 420, 15, -210)
+        CALL(evt_npc_set_ry_lr, STRING("me"), 0)
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Talk event of Luigi: runs the shared first-talk scene luigi_gor_first_talk. */
+static EVT_BEGIN(luigi_talk)
+    CALL_CHILD(luigi_gor_first_talk)
+    RETURN
+EVT_END()
+
+/** NPC setup of Luigi at the harbor. */
+static NpcSetupInfo luigiEnt[] = {
+    {
+        "ルイージ", // name (Luigi)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        luigi_init, // initEvent
+        NULL, // regularEvent
+        luigi_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {0},
+};
+
+/**
+ * Enters Luigi ("c_luigi") and his companion Rakugan ("c_lp_pansy") with their NPC setup tables,
+ * between STG5_43_X_NAUTS_RETREAT and STG6_53_THE_REAL_GARNET_STAR.
+ */
+static EVT_BEGIN(luigi_npcEnt)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG5_43_X_NAUTS_RETREAT, STG6_53_THE_REAL_GARNET_STAR)
+        CALL(evt_npc_entry, STRING("ルイージ"), STRING("c_luigi"))
+        CALL(evt_npc_set_tribe, STRING("ルイージ"), STRING("ルイージ"))
+        CALL(evt_npc_setup, PTR(luigiEnt))
+        CALL(evt_npc_entry, STRING("ラクガン"), STRING("c_lp_pansy"))
+        CALL(evt_npc_set_tribe, STRING("ラクガン"), STRING("ラクガン"))
+        CALL(evt_npc_setup, PTR(rakganEnt))
+    END_SWITCH
+    RETURN
+EVT_END()
+
+/** Init event of the second NPC beside Luigi (model "c_lp_pansy"): places her at (460, 15, -210) facing left. */
+static EVT_BEGIN(rakgan_init)
+    CALL(evt_npc_set_position, STRING("me"), 460, 15, -210)
+    CALL(evt_npc_set_ry_lr, STRING("me"), 0)
+    RETURN
+EVT_END()
+
+/** Talk event of the second NPC beside Luigi: a single line (luigi_npc_04). */
+static EVT_BEGIN(rakgan_talk)
+    CALL(evt_msg_print, 0, STRING("luigi_npc_04"), 0, STRING("me"))
+    RETURN
+EVT_END()
+
+/** NPC setup of the second figure beside Luigi at the harbor (model c_lp_pansy). */
+static NpcSetupInfo rakganEnt[] = {
+    {
+        "ラクガン", // name (Hayzee, Luigi's Dayzee friend)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        rakgan_init, // initEvent
+        NULL, // regularEvent
+        rakgan_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {0},
+};
+
+/**
+ * NPC setup of the harbor: Francesca and Frankie, Flavio, Cortez, the sailors and Bob-omb sailors, Mokorim, Baba
+ * and the other people of the docks.
+ */
+static NpcSetupInfo npcEnt[] = {
+    {
+        "モニー", // name (Francesca)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        mony_init, // initEvent
+#if VERSION <= VERSION_DEMO_JP
+        NULL,
+#else
+        gor_00_mony_regl, // regularEvent
+#endif
+        mony_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "ピートン", // name (Frankie)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        peton_init, // initEvent
+#if VERSION <= VERSION_DEMO_JP
+        NULL,
+#else
+        gor_00_peton_regl, // regularEvent
+#endif
+        peton_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "マルコ", // name (Flavio)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        marco_init, // initEvent
+        NULL, // regularEvent
+        marco_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "ガラの悪い水夫", // name (Pa-Patch, a Bob-omb sailor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        garawaru_init, // initEvent
+        garawaru_regl, // regularEvent
+        garawaru_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "めがね水夫", // name (Four-Eyes, a sailor bound for Keelhaul Key)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        megane_init, // initEvent
+        megane_regl, // regularEvent
+        megane_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "オドオド水夫", // name (the timid Toad sailor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        odoodo_init, // initEvent
+        odoodo_regl, // regularEvent
+        odoodo_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "オドオド水夫兄", // name (the nervous sailor's elder brother)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        odoodo_ani_init, // initEvent
+        odoodo_ani_regl, // regularEvent
+        odoodo_ani_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "水夫Ａ", // name (a sailor who has come to hate the sea)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        suifu_a_init, // initEvent
+        suifu_a_regl, // regularEvent
+        suifu_a_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "水夫Ｂ", // name (a Toad sailor at Rogueport Harbor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        suifu_b_init, // initEvent
+        suifu_b_regl, // regularEvent
+        suifu_b_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "水夫Ｄ", // name (a sailor of the Keelhaul Key crew)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        suifu_d_init, // initEvent
+        NULL, // regularEvent
+        suifu_d_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "水夫ボム兵Ａ", // name (Bomberto, a Bob-omb sailor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        suifubomb_a_init, // initEvent
+        suifubomb_a_regl, // regularEvent
+        suifubomb_a_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "水夫ボム兵Ｂ", // name (a Bob-omb sailor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        suifubomb_b_init, // initEvent
+        suifubomb_b_regl, // regularEvent
+        suifubomb_b_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "水夫ボム兵Ｃ", // name (a Bob-omb sailor)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        suifubomb_c_init, // initEvent
+        NULL, // regularEvent
+        suifubomb_c_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "コルテス", // name (Cortez)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
+        0, // reactionFlags
+        korutesu_init, // initEvent
+        NULL, // regularEvent
+        korutesu_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "モコリム", // name (Lumpy)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_SHADOW_NO_FLOOR, // flags
+        0, // reactionFlags
+        mokorim_init, // initEvent
+        NULL, // regularEvent
+        mokorim_talk, // talkEvent
+        NULL, NULL, NULL, NULL, NULL, 0, // deadEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {
+        "ババ", // name (Kammy Koopa (Bowser interlude))
+        0, 0, // flags..reactionFlags
+        baba_init, // initEvent
+        NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
+        {0}, // territoryBase
+        {0}, // territoryLoiter
+        0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
+    },
+    {0},
+};
 
 /** Sets the starting angle (args[0]) of the ship's rocking in LW float 0. */
 static USER_FUNC(fune_yure_func_init) {
@@ -3757,6 +2425,793 @@ static USER_FUNC(fune_yure_func) {
     evtSetValue(event, args[3], done);
     return EVT_RETURN_DONE;
 }
+
+/**
+ * Loops forever, easing the angle in GW(0) between 5 and -5 degrees over 2 seconds each way.
+ * ship_a_animation applies it to the ship part "S_f_drin" (guess: the rudder or helm).
+ */
+static EVT_BEGIN(ship_a_kaji_animation)
+    LOOP(0)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 5, -5, 2000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+            SET_FLOAT_VALUE(GW(0), LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -5, 5, 2000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+            SET_FLOAT_VALUE(GW(0), LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Loops forever, advancing the angle in GW(1) by a speed that ramps up to 10 degrees per frame
+ * while the ship is moving (GF(0) is clear) and ramps down when it stops; GF(4) pauses it.
+ * Drives the ship's side wheels "S_f_wa_l" and "S_f_wa_r".
+ */
+static EVT_BEGIN(ship_a_wakka_animation)
+    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
+    LOOP(0)
+        IF_INT_EQUAL(GF(4), 0)
+            IF_INT_EQUAL(GF(0), 0)
+                ADD_FLOAT(LW(0), FLOAT(0.099609375f))
+                IF_INT_GREATER_OR_EQUAL(LW(0), FLOAT(10.0f))
+                    SET_FLOAT_VALUE(LW(0), FLOAT(10.0f))
+                END_IF
+            ELSE
+                SUBTRACT_FLOAT(LW(0), FLOAT(0.06933594f))
+                IF_INT_LESS_OR_EQUAL(LW(0), FLOAT(0.0f))
+                    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
+                END_IF
+            END_IF
+            IF_INT_GREATER(GW(1), FLOAT(360.0f))
+                SUBTRACT_FLOAT(GW(1), FLOAT(360.0f))
+            END_IF
+            IF_INT_LESS(GW(1), FLOAT(0.0f))
+                ADD_FLOAT(GW(1), FLOAT(360.0f))
+            END_IF
+            ADD_FLOAT(GW(1), LW(0))
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/** Same speed ramp as ship_a_wakka_animation but advancing GW(2); drives the chimney "S_f_en01". */
+static EVT_BEGIN(ship_a_entotsu_animation)
+    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
+    LOOP(0)
+        IF_INT_EQUAL(GF(4), 0)
+            IF_INT_EQUAL(GF(0), 0)
+                ADD_FLOAT(LW(0), FLOAT(0.099609375f))
+                IF_INT_GREATER_OR_EQUAL(LW(0), FLOAT(10.0f))
+                    SET_FLOAT_VALUE(LW(0), FLOAT(10.0f))
+                END_IF
+            ELSE
+                SUBTRACT_FLOAT(LW(0), FLOAT(0.06933594f))
+                IF_INT_LESS_OR_EQUAL(LW(0), FLOAT(0.0f))
+                    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
+                END_IF
+            END_IF
+            IF_INT_GREATER(GW(2), FLOAT(360.0f))
+                SUBTRACT_FLOAT(GW(2), FLOAT(360.0f))
+            END_IF
+            IF_INT_LESS(GW(2), FLOAT(0.0f))
+                ADD_FLOAT(GW(2), FLOAT(360.0f))
+            END_IF
+            ADD_FLOAT(GW(2), LW(0))
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/** Same speed ramp as ship_a_wakka_animation but advancing GW(3); drives the screw "S_skr". */
+static EVT_BEGIN(ship_a_neji_animation)
+    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
+    LOOP(0)
+        IF_INT_EQUAL(GF(4), 0)
+            IF_INT_EQUAL(GF(0), 0)
+                ADD_FLOAT(LW(0), FLOAT(0.099609375f))
+                IF_INT_GREATER_OR_EQUAL(LW(0), FLOAT(10.0f))
+                    SET_FLOAT_VALUE(LW(0), FLOAT(10.0f))
+                END_IF
+            ELSE
+                SUBTRACT_FLOAT(LW(0), FLOAT(0.06933594f))
+                IF_INT_LESS_OR_EQUAL(LW(0), FLOAT(0.0f))
+                    SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
+                END_IF
+            END_IF
+            IF_INT_GREATER(GW(3), FLOAT(360.0f))
+                SUBTRACT_FLOAT(GW(3), FLOAT(360.0f))
+            END_IF
+            IF_INT_LESS(GW(3), FLOAT(0.0f))
+                ADD_FLOAT(GW(3), FLOAT(360.0f))
+            END_IF
+            ADD_FLOAT(GW(3), LW(0))
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Loops forever, rocking the ship: fune_yure_func moves the roll angle GW(5) back
+ * and forth between -GW(6) and +GW(6), pausing while GF(4) is set.
+ */
+static EVT_BEGIN(ship_a_yure_animation)
+    CALL(fune_yure_func_init, FLOAT(0.0f))
+    LOOP(0)
+        SET_FLOAT_VALUE(LW(6), GW(6))
+        WAIT_FRAMES(1)
+        LOOP(0)
+            IF_INT_EQUAL(GF(4), 0)
+                CALL(fune_yure_func, 0, LW(6), GW(5), LW(10))
+                IF_INT_EQUAL(LW(10), 1)
+                    BREAK_LOOP
+                END_IF
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        SET_FLOAT_VALUE(LW(6), GW(6))
+        LOOP(0)
+            IF_INT_EQUAL(GF(4), 0)
+                CALL(fune_yure_func, 1, LW(6), GW(5), LW(10))
+                IF_INT_EQUAL(LW(10), 1)
+                    BREAK_LOOP
+                END_IF
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Runs the harbor ship "S_fune_a" for the whole arrival scene:
+ * shows its wake mesh, binds the collision "A_fune_a" to it, spawns the rudder, wheel, chimney,
+ * screw and rocking animations, then every frame moves and rotates the hull and wake
+ * and the moving parts from the GW values.
+ */
+static EVT_BEGIN(ship_a_animation)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_a"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_a_hikinami"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_hitobj_onoff, STRING("A_fune_a"), 1, 1)
+    CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_a_hikinami"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_a_hikinami"), MAP_OBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_hit_bind_mapobj, STRING("A_fune_a"), STRING("S_fune_a"))
+    SPAWN_EVENT_GET_ID(PTR(ship_a_kaji_animation), LW(10))
+    SPAWN_EVENT_GET_ID(PTR(ship_a_wakka_animation), LW(11))
+    SPAWN_EVENT_GET_ID(PTR(ship_a_entotsu_animation), LW(12))
+    SPAWN_EVENT_GET_ID(PTR(ship_a_neji_animation), LW(13))
+    SPAWN_EVENT_GET_ID(PTR(ship_a_yure_animation), LW(14))
+    LOOP(0)
+        CALL(evt_mapobj_trans, 1, STRING("S_fune_a"), GW(4), GW(8), 0)
+        CALL(evt_mapobj_rotate, 1, STRING("S_fune_a"), 0, GW(7), GW(5))
+        IF_INT_EQUAL(GF(5), 1)
+            SET_FLOAT_VALUE(GW(11), GW(4))
+        END_IF
+        CALL(evt_mapobj_trans, 1, STRING("S_a_hikinami"), GW(11), 0, 0)
+        CALL(evt_mapobj_rotate, 1, STRING("S_a_hikinami"), 0, GW(7), 0)
+        CALL(evt_hit_bind_update, STRING("A_fune_a"))
+        CALL(evt_mapobj_rotate, 1, STRING("S_f_drin"), GW(0), 0, 0)
+        CALL(evt_mapobj_rotate, 1, STRING("S_f_wa_l"), 0, 0, GW(1))
+        CALL(evt_mapobj_rotate, 1, STRING("S_f_wa_r"), 0, 0, GW(1))
+        CALL(evt_mapobj_rotate, 1, STRING("S_f_en01"), 0, GW(2), 0)
+        CALL(evt_mapobj_rotate, 1, STRING("S_skr"), GW(3), 0, 0)
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Paper-flip effect for the harbor ship in the arrival scene:
+ * captures the ship (S_fune_a) and its wake (S_a_hikinami) into an offscreen paper image (OFF_d_kaiten),
+ * plays SFX_OFF_SHIP_REVERSE1 and its animation A_1 so the ship turns over like a sheet of paper,
+ * then releases the image.
+ */
+static EVT_BEGIN(ship_pera)
+    CALL(evt_img_entry, STRING("capture_img"))
+    CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_kaiten"))
+    CALL(evt_offscreen_entry, STRING("offscreen"))
+    CALL(evt_mapobj_set_offscreen, 1, STRING("S_fune_a"), STRING("offscreen"))
+    CALL(evt_img_alloc_capture, STRING("capture_img"), 0, STRING("offscreen"), 0, 0, 0, 608, 480)
+    CALL(evt_img_alloc_capture, STRING("capture_img"), 1, STRING("offscreen"), 0, 0, 0, 608, 480)
+    CALL(evt_img_onoff, STRING("capture_img"), 0)
+    CALL(evt_img_set_virtual_point, STRING("capture_img"), 0, 0, 375)
+    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("Z_1"))
+    CALL(evt_img_onoff, STRING("capture_img"), 1)
+    CALL(evt_snd_sfxon, STRING("SFX_OFF_SHIP_REVERSE1"), 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
+    CALL(evt_img_wait_animend, STRING("capture_img"))
+    CALL(evt_img_onoff, STRING("capture_img"), 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_a"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_a_hikinami"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_clear_offscreen, 1, STRING("S_fune_a"))
+    SET_VALUE(GW(7), 0)
+    CALL(evt_img_free_capture, STRING("capture_img"), 0)
+    CALL(evt_img_free_capture, STRING("capture_img"), 1)
+    CALL(evt_img_onoff, STRING("capture_img"), 0)
+    CALL(evt_img_release, STRING("capture_img"))
+    CALL(evt_offscreen_delete, STRING("offscreen"))
+    RETURN
+EVT_END()
+
+/**
+ * Spawns the four NPCs of the opening ambush (Goombella as "Christine", Lord Crump and two X-Naut grunts)
+ * and parks them below the map at y=-1000.
+ */
+static EVT_BEGIN(enter_gorotsuki_town_init)
+    CALL(evt_npc_entry, STRING("クリスチーヌ"), STRING("c_pkr")) // Goombella
+    CALL(evt_npc_set_tribe, STRING("クリスチーヌ"), STRING("クリスチーヌ"))
+    CALL(evt_npc_entry, STRING("第三勢力幹部"), STRING("c_kanbu_ibt")) // Lord Crump
+    CALL(evt_npc_set_tribe, STRING("第三勢力幹部"), STRING("第三勢力幹部"))
+    CALL(evt_npc_entry, STRING("第三勢力部下Ａ"), STRING("c_zako_n")) // an X-Naut grunt in the opening ambush
+    CALL(evt_npc_set_tribe, STRING("第三勢力部下Ａ"), STRING("第三勢力部下"))
+    CALL(evt_npc_entry, STRING("第三勢力部下Ｂ"), STRING("c_zako_n")) // an X-Naut grunt in the opening ambush
+    CALL(evt_npc_set_tribe, STRING("第三勢力部下Ｂ"), STRING("第三勢力部下"))
+    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 0, -1000, 0)
+    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 0, -1000, 0)
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 0, -1000, 0)
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 0, -1000, 0)
+    RETURN
+EVT_END()
+
+/**
+ * Puts Goombella (Christine), Lord Crump and the two grunts at their starting spots on the pier for the ambush
+ * scene, with wall collision off.
+ */
+static EVT_BEGIN(christine_osoware_setup)
+    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 175, 15, -300)
+    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 225, 15, -300)
+    CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 255, 15, -330)
+    CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 280, 15, -330)
+    CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    RETURN
+EVT_END()
+
+/**
+ * Opening cutscene of Mario's arrival in Rogueport:
+ * the ship sails in with wake and engine sounds, Mario lands on the dock (mac_0_014, mac_0_015),
+ * the ship flips like paper and sails away, the area title card shows
+ * and the story goes to STG0_03_TO_ROGUEPORT. Ends by spawning christine_osoware.
+ */
+EVT_BEGIN(enter_gorotsuki_town)
+    // Set up the opening: controls are off and the ship animation state starts at its offscreen position.
+    CALL(evt_snd_bgm_scope, 0, 1)
+    SET_TYPE(0)
+    CALL(evt_mario_key_onoff, 0)
+    CALL(evt_mario_cont_onoff, 0)
+    CALL(evt_mario_set_pos, 0, -1000, 0)
+    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 0, EASING_SINE_IN_OUT)
+    SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
+    SET_VALUE(GF(0), 0)
+    SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
+    SET_VALUE(GF(1), 0)
+    SET_FLOAT_VALUE(GW(2), FLOAT(0.0f))
+    SET_VALUE(GF(2), 0)
+    SET_FLOAT_VALUE(GW(3), FLOAT(0.0f))
+    SET_VALUE(GF(3), 0)
+    SET_FLOAT_VALUE(GW(4), FLOAT(-600.0f))
+    SET_FLOAT_VALUE(GW(11), GW(4))
+    SET_VALUE(GF(4), 0)
+    SET_VALUE(GW(7), 180)
+    SET_VALUE(GF(5), 1)
+
+    // The ship sails into the harbor with its wake and engine sound, and the wake fades out.
+    SPAWN_EVENT(ship_a_animation)
+    WAIT_MS(3000)
+    SET_VALUE(GF(10), 1)
+    BEGIN_INLINE_EVENT
+        SET_VALUE(GW(6), FLOAT(5.0f))
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, GW(4), -270, 2000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+            SET_FLOAT_VALUE(GW(4), LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        SET_VALUE(GF(0), 1)
+        SET_VALUE(GF(1), 1)
+        SET_VALUE(GF(2), 1)
+        SET_VALUE(GF(3), 1)
+        SET_VALUE(GW(6), 2)
+        SET_VALUE(GW(6), FLOAT(3.0f))
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, -270, -75, 2000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+            SET_FLOAT_VALUE(GW(4), LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        SET_VALUE(GF(10), 0)
+        SET_VALUE(GW(6), FLOAT(1.0f))
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_MOVE1"), LW(0), LW(1), LW(2), LW(10))
+        LOOP(0)
+            CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
+            CALL(evt_snd_sfx_pos, LW(10), LW(0), LW(1), LW(2))
+            IF_INT_EQUAL(GF(10), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        CALL(evt_snd_sfxoff, LW(10))
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(3000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 255, 0, 1000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value)
+            CALL(alpha_set_func, LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+    WAIT_MS(500)
+    CALL(evt_cam3d_evt_set, 2, 225, 1015, 2, 50, 243, 3000, EASING_SINE_IN_OUT)
+    WAIT_MS(3000)
+    WAIT_WHILE(GF(10))
+    CALL(evt_mario_cont_onoff, 1)
+    CALL(evt_mario_set_pos, 0, 15, 225)
+    CALL(evt_mario_set_dir, 90, 0, 0)
+    WAIT_MS(1000)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
+    CALL(evt_msg_print, 0, STRING("mac_0_014"), 0, 0)
+    WAIT_MS(2000)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
+    CALL(evt_msg_print, 0, STRING("mac_0_015"), 0, 0)
+    WAIT_MS(1000)
+
+    // The ship hops over the dock like a paper model, then sails away.
+    SET_VALUE(GF(4), 1)
+    DEBUG_PUT_MSG(STRING("アニメ停止"))
+    SET_VALUE(GF(10), 1)
+    CALL(evt_npc_set_position, STRING("船ダミー"), 0, GW(8), 0)
+    BEGIN_INLINE_EVENT
+        WAIT_MS(400)
+        CALL_CHILD(ship_pera)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        LOOP(0)
+            CALL(evt_npc_get_position, STRING("船ダミー"), LW(0), LW(1), LW(2))
+            SET_FLOAT_VALUE(GW(8), LW(1))
+            IF_INT_EQUAL(GF(10), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+    CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_JUMP1"), LW(0), LW(1), LW(2), 0)
+    CALL(evt_npc_jump_position_nohit, STRING("船ダミー"), 0, GW(8), 0, 1800, 100)
+    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_LANDING1"), LW(0), LW(1), LW(2), 0)
+    SET_VALUE(GF(10), 0)
+    DEBUG_PUT_MSG(STRING("アニメ開始"))
+    SET_VALUE(GF(4), 0)
+    WAIT_MS(2000)
+    SET_VALUE(GF(0), 0)
+    SET_VALUE(GF(1), 0)
+    SET_VALUE(GF(2), 0)
+    SET_VALUE(GF(3), 0)
+    SET_VALUE(GW(6), FLOAT(3.0f))
+    SET_VALUE(GF(10), 1)
+    WAIT_FRAMES(1)
+    SET_VALUE(GF(5), 0)
+    SET_FLOAT_VALUE(GW(11), GW(4))
+    ADD_FLOAT(GW(11), FLOAT(-400.0f))
+    BEGIN_INLINE_EVENT
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, -75, -270, 2000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+            SET_FLOAT_VALUE(GW(4), LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        SET_VALUE(GW(6), FLOAT(5.0f))
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -270, -1260, 6000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+            SET_FLOAT_VALUE(GW(4), LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        SET_VALUE(GF(10), 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAP_OBJ_FLAG_HIDDEN)
+    END_INLINE_EVENT
+    CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_MOVE1"), LW(0), LW(1), LW(2), LW(9))
+    BEGIN_INLINE_EVENT
+        LOOP(0)
+            CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
+            CALL(evt_snd_sfx_pos, LW(9), LW(0), LW(1), LW(2))
+            IF_INT_EQUAL(GF(10), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        CALL(evt_snd_sfxoff, LW(9))
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(6000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 100, 0, 2000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value)
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            CALL(evt_snd_sfx_vol, LW(9), LW(0))
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+#if VERSION <= VERSION_DEMO_JP
+    BEGIN_INLINE_EVENT
+        WAIT_MS(1000)
+        SET_FLOAT_VALUE(LW(0), FLOAT(1.0f))
+        LOOP(14)
+            WAIT_MS(200)
+            CALL(evt_map_set_playrate, STRING("hiki_nami"), LW(0))
+            ADD_FLOAT(LW(0), FLOAT(0.2f))
+        END_LOOP
+    END_INLINE_EVENT
+#else
+    CALL(evt_map_set_playrate, STRING("hiki_nami"), FLOAT(0.25f))
+#endif
+
+    // The wake fades in and out while the ship departs.
+    BEGIN_INLINE_EVENT
+        WAIT_MS(1000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 255, 1500)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value)
+            CALL(alpha_set_func, LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+        WAIT_MS(3500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 255, 0, 1500)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value)
+            CALL(alpha_set_func, LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+
+    // Story set to the arrival in Rogueport; Mario gets control and the Goombella assault scene starts.
+    WAIT_MS(3000)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    BEGIN_INLINE_EVENT
+        CALL(evt_telop_entry, 0)
+    END_INLINE_EVENT
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_03_TO_ROGUEPORT)
+#if VERSION >= VERSION_JP
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+#endif
+    CALL(evt_mario_key_onoff, 1)
+    SET_VALUE(LW(0), 0)
+    CALL(evt_snd_bgm_scope, 0, 0)
+    SPAWN_EVENT(christine_osoware)
+    RETURN
+EVT_END()
+
+/**
+ * Cutscene that starts when Mario first walks toward the back of the harbor (z <= -100):
+ * Goombella (Christine) is cornered by Lord Crump and two grunts.
+ * Sets GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED and STG0_04_GOOMBELLA_ASSAULTED,
+ * creates the crowd of X-Naut extras (1000 in JP and the early demos, 400 in US and later) and spawns gundan1000tai_beforebattle.
+ * If LW(0) is 1 on entry it first repositions Mario (the entry used when the event is started directly).
+ */
+static EVT_BEGIN(christine_osoware)
+    IF_INT_EQUAL(LW(0), 1)
+        CALL(evt_mario_key_onoff, 0)
+        CALL(evt_mario_cont_onoff, 0)
+        CALL(evt_mario_set_pos, 0, 15, 250)
+        CALL(evt_mario_set_dir, 90, 0, 0)
+        CALL(evt_seq_wait, SEQ_GAME)
+        CALL(evt_mario_cont_onoff, 1)
+        CALL(evt_mario_key_onoff, 1)
+    END_IF
+
+    // Wait until Mario walks toward the back of the harbor.
+    LOOP(0)
+        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+        IF_INT_LESS_OR_EQUAL(LW(2), -100)
+            BREAK_LOOP
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+
+    // The scene starts: danger music begins; two sailors resume their regular events after talk-range pauses and lose their movement sounds.
+    SET_VALUE(GSWF_GOR_00_GOOMBELLA_ASSAULT_STARTED, 1)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_RESUME_AFTER_TALK)
+    CALL(evt_npc_sound_data_set, STRING("ガラの悪い水夫"), 0, 0, 0, 0, 0)
+    CALL(evt_npc_flag_onoff, 1, STRING("水夫ボム兵Ｂ"), NPC_FLAG_RESUME_AFTER_TALK)
+    CALL(evt_npc_sound_data_set, STRING("水夫ボム兵Ｂ"), 0, 0, 0, 0, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+    CALL(evt_snd_envoff, PSND_FADEOUT)
+    CALL_CHILD(christine_osoware_setup)
+
+    // Goombella snaps at Lord Crump and his two grunts as they corner her.
+    CALL(evt_mario_key_onoff, 0)
+    CALL(evt_msg_print, 0, STRING("mac_0_016"), 0, STRING("クリスチーヌ"))
+    CALL(evt_mario_set_dir, 90, 0, 0)
+    CALL(evt_mario_set_reardir)
+    CALL(evt_cam3d_evt_set, 100, 127, 45, 100, 75, -250, 500, EASING_SINE_IN_OUT)
+    BEGIN_INLINE_EVENT
+        CALL(evt_npc_get_position, STRING("クリスチーヌ"), LW(0), LW(1), LW(2))
+        ADD(LW(0), -100)
+        CALL(evt_npc_move_position, STRING("クリスチーヌ"), LW(0), LW(2), 0, FLOAT(180.0f), 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(300)
+        CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
+        ADD(LW(0), -100)
+        CALL(evt_npc_move_position, STRING("第三勢力幹部"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(350)
+        CALL(evt_npc_get_position, STRING("第三勢力部下Ａ"), LW(0), LW(1), LW(2))
+        ADD(LW(0), -100)
+        CALL(evt_npc_move_position, STRING("第三勢力部下Ａ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(350)
+        CALL(evt_npc_get_position, STRING("第三勢力部下Ｂ"), LW(0), LW(1), LW(2))
+        ADD(LW(0), -100)
+        CALL(evt_npc_move_position, STRING("第三勢力部下Ｂ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
+    END_INLINE_EVENT
+
+    // Crump demands what Goombella knows about the Crystal Stars.
+    WAIT_MS(1400)
+    CALL(evt_msg_print, 0, STRING("mac_0_017"), 0, STRING("第三勢力幹部"))
+    CALL(evt_msg_print, 0, STRING("mac_0_018"), 0, STRING("クリスチーヌ"))
+    CALL(evt_cam3d_evt_set, 120, 105, -53, 120, 70, -250, 500, EASING_SINE_IN_OUT)
+    WAIT_MS(500)
+    CALL(evt_msg_print, 0, STRING("mac_0_019"), 0, STRING("第三勢力幹部"))
+    CALL(evt_msg_print, 0, STRING("mac_0_020"), 0, STRING("第三勢力部下Ａ"))
+    WAIT_MS(500)
+    CALL(evt_cam3d_evt_set, 100, 127, 45, 100, 75, -250, 500, EASING_SINE_IN_OUT)
+    WAIT_MS(1000)
+
+    // Crump decides to take Goombella to the fortress and a grunt obeys; the X-Nauts close in.
+    BEGIN_INLINE_EVENT
+        CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
+        ADD(LW(0), -20)
+        CALL(evt_npc_move_position, STRING("第三勢力幹部"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(100)
+        CALL(evt_npc_get_position, STRING("第三勢力部下Ａ"), LW(0), LW(1), LW(2))
+        ADD(LW(0), -20)
+        CALL(evt_npc_move_position, STRING("第三勢力部下Ａ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(150)
+        CALL(evt_npc_get_position, STRING("第三勢力部下Ｂ"), LW(0), LW(1), LW(2))
+        ADD(LW(0), -20)
+        CALL(evt_npc_move_position, STRING("第三勢力部下Ｂ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
+    END_INLINE_EVENT
+    WAIT_MS(50)
+    CALL(evt_npc_get_position, STRING("クリスチーヌ"), LW(0), LW(1), LW(2))
+    ADD(LW(0), -20)
+    CALL(evt_npc_move_position, STRING("クリスチーヌ"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
+
+    // Goombella threatens to scream. Story set to the Goombella assault; the crowd of X-Naut extras is created.
+    CALL(evt_msg_print, 0, STRING("mac_0_021"), 0, STRING("クリスチーヌ"))
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_04_GOOMBELLA_ASSAULTED)
+    CALL(evt_mario_key_onoff, 1)
+#if VERSION >= VERSION_US
+    CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 400)
+#else
+    CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 1000)
+#endif
+    CALL(evt_nannpc_set_subfunc, 1, PTR(nannpc_ext_main_sub_fast))
+    SET_VALUE(LW(0), 0)
+    SPAWN_EVENT(gundan1000tai_beforebattle)
+    RETURN
+EVT_END()
+
+/**
+ * Waits for Mario to walk up to the X-Nauts, then Lord Crump spots him
+ * and the first fight starts (battle info 2 against Lord Crump;
+ * in JP and later releases Mario's HP is raised to at least 5 first).
+ * Afterwards the story becomes STG0_05_1000_X_NAUTS_BEFORE,
+ * the sailors' events are cancelled and moved back, and gundan1000tai_afterbattle runs.
+ */
+EVT_BEGIN(gundan1000tai_beforebattle)
+    // If started directly, place Mario and the X-Nauts where they would be.
+    IF_INT_EQUAL(LW(0), 1)
+        CALL(evt_mario_key_onoff, 0)
+        CALL(evt_mario_cont_onoff, 0)
+        CALL(evt_mario_set_pos, -220, 15, 90)
+        CALL(evt_mario_set_dir, 90, 0, 0)
+        CALL(evt_mario_cont_onoff, 1)
+        CALL(evt_mario_key_onoff, 1)
+        CALL(evt_npc_set_position, STRING("クリスチーヌ"), 55, 15, -300)
+        CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
+        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+        CALL(evt_npc_set_position, STRING("第三勢力幹部"), 105, 15, -300)
+        CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
+        CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 135, 15, -330)
+        CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
+        CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 160, 15, -330)
+        CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
+        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+        CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    END_IF
+
+    // Wait until Mario walks up to the X-Nauts.
+    LOOP(0)
+        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+        IF_INT_LESS_OR_EQUAL(LW(2), -100)
+            IF_INT_GREATER_OR_EQUAL(LW(0), -25)
+                BREAK_LOOP
+            END_IF
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+
+    // Mario is stopped and kept inside the scene area; Goombella notices him.
+    CALL(evt_snd_envoff, PSND_FADEOUT)
+    CALL(evt_mario_key_onoff, 0)
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+    SET_VALUE(LF(0), 0)
+    IF_INT_LESS_OR_EQUAL(LW(2), -420)
+        SET_VALUE(LW(2), -420)
+        SET_VALUE(LF(0), 1)
+    END_IF
+    IF_INT_GREATER_OR_EQUAL(LW(2), -220)
+        SET_VALUE(LW(2), -220)
+        SET_VALUE(LF(0), 1)
+    END_IF
+    IF_INT_EQUAL(LF(0), 1)
+        ADD(LW(0), 20)
+        IF_INT_GREATER_OR_EQUAL(LW(0), 10)
+            SET_VALUE(LW(0), 20)
+        END_IF
+        CALL(evt_mario_mov_pos2, LW(0), LW(2), FLOAT(120.0f))
+    END_IF
+    CALL(evt_mario_set_dir, 90, 100, 0)
+    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
+    WAIT_MS(200)
+
+    // Goombella notices Mario and hurries to his side.
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("クリスチーヌ"), 0, 0, 0, 0, 0, 0, 0, 30)
+    WAIT_MS(500)
+    CALL(evt_mario_set_pose, STRING("M_I_N"))
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+    ADD(LW(0), -35)
+    CALL(evt_npc_move_position, STRING("クリスチーヌ"), LW(0), LW(2), 0, FLOAT(180.0f), 0)
+    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
+    WAIT_MS(200)
+    CALL(evt_msg_print, 0, STRING("mac_0_022"), 0, STRING("クリスチーヌ"))
+
+    // Lord Crump notices Mario and brags; Mario is startled.
+    CALL(evt_cam3d_evt_set, 36, 149, 224, 37, 53, -317, 500, EASING_SINE_IN_OUT)
+    WAIT_MS(1000)
+    CALL(evt_msg_print, 0, STRING("mac_0_023"), 0, STRING("第三勢力幹部"))
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
+    CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2_3"), LW(0), LW(1), LW(2), 0)
+    CALL(evt_mario_jump_pos, LW(0), LW(1), LW(2), 200, 0, -1000)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
+    WAIT_MS(150)
+    CALL(evt_mario_set_dir, 270, 100, 0)
+    WAIT_MS(150)
+    CALL(evt_mario_set_dir, 90, 100, 0)
+    WAIT_MS(150)
+    CALL(evt_mario_set_dir, 270, 100, 0)
+    WAIT_MS(150)
+    CALL(evt_mario_set_dir, 90, 100, 0)
+    WAIT_MS(150)
+    CALL(evt_msg_print, 0, STRING("mac_0_024"), 0, STRING("第三勢力幹部"))
+
+    // The grunts and Crump close in on Mario.
+    CALL(evt_cam3d_evt_set, 0, 149, 224, 0, 53, -317, 500, EASING_SINE_IN_OUT)
+    CALL(evt_mario_get_pos, 0, LW(10), LW(11), LW(12))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2_2"), LW(10), LW(11), LW(12), 0)
+    CALL(evt_mario_set_pose, STRING("M_N_H"))
+    BEGIN_INLINE_EVENT
+        ADD(LW(10), 80)
+        ADD(LW(12), -30)
+        CALL(evt_npc_move_position, STRING("第三勢力部下Ａ"), LW(10), LW(12), 0, FLOAT(180.0f), 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        ADD(LW(10), 105)
+        ADD(LW(12), -30)
+        CALL(evt_npc_move_position, STRING("第三勢力部下Ｂ"), LW(10), LW(12), 0, FLOAT(180.0f), 0)
+    END_INLINE_EVENT
+    ADD(LW(10), 50)
+    CALL(evt_npc_move_position, STRING("第三勢力幹部"), LW(10), LW(12), 0, FLOAT(180.0f), 0)
+#if VERSION >= VERSION_JP
+    CALL(evt_pouch_get_hp, LW(0))
+    IF_INT_LESS(LW(0), 5)
+        CALL(evt_pouch_set_hp, 5)
+    END_IF
+#endif
+
+    // The fight against Lord Crump.
+    CALL(evt_npc_set_battle_info, STRING("第三勢力幹部"), 2)
+    CALL(evt_npc_battle_start, STRING("第三勢力幹部"))
+    CALL(evt_npc_wait_battle_end)
+
+    // After the fight: everyone is placed for the next scene and the story advances; the sailors return to
+    // their spots.
+    CALL(evt_cam3d_evt_set, 80, 108, -45, 80, 60, -316, 0, EASING_SINE_IN_OUT)
+    CALL(evt_mario_set_pos, -40, 15, -300)
+    CALL(evt_mario_set_dir, 90, 0, 0)
+    CALL(evt_mario_set_pose, STRING("M_S_1"))
+    CALL(evt_npc_set_position, STRING("クリスチーヌ"), -77, 15, -300)
+    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 75, 15, -300)
+    CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 105, 15, -330)
+    CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 130, 15, -330)
+    CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_05_1000_X_NAUTS_BEFORE)
+    CALL(evt_npc_get_reglid, STRING("ガラの悪い水夫"), LW(0))
+    DELETE_EVENT(LW(0))
+    CALL(evt_npc_get_reglid, STRING("水夫ボム兵Ｂ"), LW(0))
+    DELETE_EVENT(LW(0))
+    CALL(evt_npc_set_position, STRING("ガラの悪い水夫"), -200, 15, -175)
+    CALL(evt_npc_set_ry, STRING("ガラの悪い水夫"), 270)
+    CALL(evt_npc_set_position, STRING("水夫ボム兵Ｂ"), -250, 15, -350)
+    CALL(evt_npc_set_ry, STRING("水夫ボム兵Ｂ"), 90)
+    SET_VALUE(LW(0), 0)
+    CALL_CHILD(gundan1000tai_afterbattle)
+    RETURN
+EVT_END()
 
 /**
  * Picks a random point on the ellipse (x about +/-0.9 * radius, z about -300 +/- 0.5 * radius,
@@ -3970,7 +3425,7 @@ static void gundan1000tai_seq00(NanNPC* npc) {
 /**
  * Per-frame behaviour of one crowd extra during the charge:
  * stands, hops around in random arcs (jumping in place, shuffling left and right),
- * and when recalled runs back to its destination and idles.
+ * and when recalled either runs back to its destination and idles, or idles directly from the shuffle states.
  */
 static void gundan1000tai_seq01(NanNPC* npc) {
     f32 radius;
@@ -4051,8 +3506,8 @@ static void gundan1000tai_seq01(NanNPC* npc) {
             elapsed = OSTicksToMilliseconds((u32)gp->renderTime - (u32)npc->startTime);
             if (elapsed < npc->duration) {
                 t = (f32)elapsed / (f32)npc->duration;
-                npc->pos.x = intplGetValue(0, npc->dest.x, npc->jumpEnd.x, elapsed, npc->duration);
-                npc->pos.z = intplGetValue(0, npc->dest.z, npc->jumpEnd.z, elapsed, npc->duration);
+                npc->pos.x = intplGetValue(EASING_LINEAR, npc->dest.x, npc->jumpEnd.x, elapsed, npc->duration);
+                npc->pos.z = intplGetValue(EASING_LINEAR, npc->dest.z, npc->jumpEnd.z, elapsed, npc->duration);
                 npc->pos.y = npc->dest.y + t * (npc->speed * t + npc->moveDir);
             } else {
                 npc->pos = npc->jumpEnd;
@@ -4139,6 +3594,446 @@ static void gundan1000tai_seq01(NanNPC* npc) {
 }
 
 /**
+ * Spawns one smoke puff (kemuri_test effect) at a random spot in the harbor with an explosion-like sound
+ * (SFX_STG0_3RD_ATTACK3); gundan1000tai_kemuri starts it repeatedly during the X-Naut army's charge.
+ */
+static EVT_BEGIN(_kemuri_sub)
+    CALL(evt_sub_random, 200, LW(0))
+    ADD(LW(0), -50)
+    CALL(evt_sub_random, 100, LW(1))
+    ADD(LW(1), 15)
+    CALL(evt_sub_random, 100, LW(2))
+    ADD(LW(2), -250)
+    CALL(evt_sub_random, 100, LW(3))
+    ADD_FLOAT(LW(3), FLOAT(50.0f))
+    DIVIDE_FLOAT(LW(3), FLOAT(100.0f))
+    CALL(evt_eff, 0, STRING("kemuri_test"), 2, LW(0), LW(1), LW(2), LW(3), 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_ATTACK3"), LW(0), LW(1), LW(2), 0)
+    RETURN
+EVT_END()
+
+/**
+ * Loops forever, spawning smoke puffs with an explosion-like sound (_kemuri_sub, one per round,
+ * three in JP and the early demos) at random spots in the harbor every 200 to 400 ms, for the X-Naut army's charge.
+ */
+static EVT_BEGIN(gundan1000tai_kemuri)
+    LOOP(0)
+        SPAWN_EVENT(_kemuri_sub)
+#if VERSION < VERSION_US
+        SPAWN_EVENT(_kemuri_sub)
+        SPAWN_EVENT(_kemuri_sub)
+#endif
+        CALL(evt_sub_random, 200, LW(0))
+        ADD(LW(0), 200)
+        WAIT_MS(LW(0))
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Plays the X-Naut army sound SFX_STG0_3RD_TOGETHER1 (10 times, every 100 ms) with its L and R variants (20 times
+ * each, every 50 ms) in three parallel inline events, each from a random point on the army's ellipse
+ * (gundan1000tai_circle_pos_func).
+ */
+static EVT_BEGIN(gundan1000tai_zaza_se)
+    BEGIN_INLINE_EVENT
+        LOOP(10)
+            CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
+            CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_TOGETHER1"), LW(0), LW(1), LW(2), 0)
+            WAIT_MS(100)
+        END_LOOP
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        LOOP(20)
+            WAIT_MS(25)
+            CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
+            CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_TOGETHER1L"), LW(0), LW(1), LW(2), 0)
+            WAIT_MS(25)
+        END_LOOP
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        LOOP(20)
+            CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
+            CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_TOGETHER1R"), LW(0), LW(1), LW(2), 0)
+            WAIT_MS(50)
+        END_LOOP
+    END_INLINE_EVENT
+    RETURN
+EVT_END()
+
+/** Loops forever, playing the X-Naut jump attack sound every 200 ms from a random point in the army's circle. */
+static EVT_BEGIN(gundan1000tai_jump_se)
+    LOOP(0)
+        CALL(gundan1000tai_circle_pos_func, LW(0), LW(1), LW(2))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_ATTACK2"), LW(0), LW(1), LW(2), 0)
+        WAIT_MS(200)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Loops forever, shaking the camera for half a second at random intervals of 0.5 to 5 seconds,
+ * for the thudding army.
+ */
+static EVT_BEGIN(gundan1000tai_yure)
+    LOOP(0)
+        BEGIN_INLINE_EVENT
+            CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 500)
+        END_INLINE_EVENT
+        CALL(evt_sub_random, 4500, LW(0))
+        ADD(LW(0), 500)
+        WAIT_MS(LW(0))
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Continues the prologue after the Lord Crump fight:
+ * the X-Nauts' extras (1000 in JP and the early demos, 400 in US and later) pour in,
+ * the X-Naut leader gloats (mac_0_025 to mac_0_027), the army charges (gundan1000tai_totsugeki) with smoke,
+ * shaking and stomping sounds, Goombella (Christine) runs off
+ * and comes back to follow Mario (she officially joins in gor_01),
+ * and Mario is pushed along the pier by the crowd until it calms down.
+ * Lord Crump then dismisses his men, a ring of question marks pops up over the crowd,
+ * and the story becomes STG0_06_1000_X_NAUTS_AFTER before the map changes to gor_01.
+ * If LW(0) is 1 on entry it repositions everyone first (used when started directly).
+ */
+static EVT_BEGIN(gundan1000tai_afterbattle)
+    // If started directly, place Mario and the X-Nauts after the fight.
+    IF_INT_EQUAL(LW(0), 1)
+        CALL(evt_mario_key_onoff, 0)
+        CALL(evt_cam3d_evt_set, 80, 108, -45, 80, 60, -316, 0, EASING_SINE_IN_OUT)
+        CALL(evt_mario_set_pos, -40, 15, -300)
+        CALL(evt_mario_set_dir, 90, 0, 0)
+        CALL(evt_mario_set_pose, STRING("M_S_1"))
+        CALL(evt_npc_set_position, STRING("クリスチーヌ"), -77, 15, -300)
+        CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
+        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+        CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+        CALL(evt_npc_set_position, STRING("第三勢力幹部"), 75, 15, -300)
+        CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
+        CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 105, 15, -330)
+        CALL(evt_npc_set_ry, STRING("第三勢力部下Ａ"), 270)
+        CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 130, 15, -330)
+        CALL(evt_npc_set_ry, STRING("第三勢力部下Ｂ"), 270)
+        CALL(evt_seq_wait, SEQ_GAME)
+    END_IF
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    SET_VALUE(LW(0), 0)
+
+    // Create the crowd of X-Naut extras filling the harbor.
+    LOOP(0)
+        CALL(evt_nannpc_entry, LW(0))
+        CALL(evt_nannpc_set_animtbl, LW(0), PTR(dai3_animtbl))
+        CALL(evt_nannpc_flag_onoff, LW(0), 0, 12)
+        CALL(evt_nannpc_set_size, LW(0), 30, 5)
+        ADD(LW(0), 1)
+#if VERSION >= VERSION_US
+        IF_INT_EQUAL(LW(0), 400)
+#else
+        IF_INT_EQUAL(LW(0), 1000)
+#endif
+            BREAK_LOOP
+        END_IF
+    END_LOOP
+    WAIT_MS(1000)
+
+    // Crump calls in the army of 1000 X-Nauts and the camera pulls back; Mario and Goombella are startled.
+    CALL(evt_msg_print, 0, STRING("mac_0_025"), 0, STRING("第三勢力幹部"))
+    CALL(evt_cam3d_evt_set, 30, 325, 334, 30, 65, -316, 500, EASING_SINE_IN_OUT)
+    WAIT_MS(1000)
+    CALL(evt_msg_print, 0, STRING("mac_0_026"), 0, STRING("第三勢力幹部"))
+    BEGIN_INLINE_EVENT_GET_ID(LW(10))
+        WAIT_MS(200)
+        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED2"), LW(0), LW(1), LW(2), 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 30)
+        LOOP(0)
+            WAIT_MS(150)
+            CALL(evt_mario_set_dir, 270, 100, 0)
+            WAIT_MS(150)
+            CALL(evt_mario_set_dir, 90, 100, 0)
+        END_LOOP
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT_GET_ID(LW(11))
+        WAIT_MS(220)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("クリスチーヌ"), 0, 0, 0, 0, 0, 0, 0, 30)
+        LOOP(0)
+            WAIT_MS(500)
+            CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
+            WAIT_MS(500)
+            CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
+        END_LOOP
+    END_INLINE_EVENT
+
+    // The ground shakes as the X-Nauts take their positions.
+    SET_VALUE(GF(10), 0)
+    BEGIN_INLINE_EVENT
+        LOOP(0)
+            CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.0048828125f), 300)
+            IF_INT_EQUAL(GF(10), 1)
+                BREAK_LOOP
+            END_IF
+        END_LOOP
+    END_INLINE_EVENT
+    CALL(gundan1000tai_init)
+    CALL(evt_snd_sfxon, STRING("SFX_STG0_3RD_TOGETHER1_2"), 0)
+    LOOP(0)
+        SET_VALUE(LW(0), 0)
+        SET_VALUE(LW(1), 1)
+        LOOP(0)
+            CALL(evt_nannpc_get_work, LW(0), 0, LW(2))
+            ADD(LW(0), 1)
+            IF_INT_EQUAL(LW(2), 0)
+                SET_VALUE(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+#if VERSION >= VERSION_US
+            IF_INT_EQUAL(LW(0), 400)
+#else
+            IF_INT_EQUAL(LW(0), 1000)
+#endif
+                BREAK_LOOP
+            END_IF
+        END_LOOP
+        IF_INT_EQUAL(LW(1), 1)
+            BREAK_LOOP
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+    WAIT_MS(500)
+    DELETE_EVENT(LW(10))
+    DELETE_EVENT(LW(11))
+    SET_VALUE(GF(10), 1)
+    BEGIN_INLINE_EVENT
+        CALL(evt_mario_set_dir, 90, 100, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
+    END_INLINE_EVENT
+
+    // Crump orders the charge; the army rushes Mario and Goombella, kicking up dust.
+    CALL(evt_msg_print, 0, STRING("mac_0_027"), 0, STRING("第三勢力幹部"))
+    CALL(evt_mario_set_pose, STRING("M_N_7"))
+    CALL(gundan1000tai_totsugeki)
+    SPAWN_EVENT_GET_ID(PTR(gundan1000tai_kemuri), LW(10))
+    SPAWN_EVENT_GET_ID(PTR(gundan1000tai_jump_se), LW(11))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_ATTACK1"), 0, 15, -300, LW(12))
+    SPAWN_EVENT_GET_ID(PTR(gundan1000tai_yure), LW(13))
+    WAIT_MS(1500)
+
+    // Mario and Goombella vanish in the crowd, then reappear and slip away.
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 0, -1000, 0)
+    WAIT_MS(4300)
+    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 85, 15, -190)
+    CALL(evt_npc_move_position, STRING("クリスチーヌ"), 300, -180, 0, FLOAT(120.0f), 0)
+    CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
+    DELETE_EVENT(LW(13))
+    CALL(evt_cam3d_evt_set, 285, 117, 50, 285, 25, -315, 500, EASING_SINE_IN_OUT)
+    WAIT_MS(500)
+
+    // Goombella urges Mario to run; she then follows him.
+    CALL(evt_msg_print, 0, STRING("mac_0_028"), 0, STRING("クリスチーヌ"))
+    CALL(evt_mario_set_pos, 55, 15, -180)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
+    CALL(evt_mario_mov_pos2, 270, -180, FLOAT(120.0f))
+    CALL(evt_msg_print, 0, STRING("mac_0_029"), 0, STRING("クリスチーヌ"))
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_HAND_UP1_3"), LW(0), LW(1), LW(2), 0)
+    CALL(evt_mario_set_pose, STRING("M_N_2"))
+    WAIT_MS(1000)
+    CALL(evt_npc_get_position, STRING("クリスチーヌ"), LW(0), LW(1), LW(2))
+    CALL(evt_npc_get_dir, STRING("クリスチーヌ"), LW(3))
+    CALL(evt_npc_set_position, STRING("クリスチーヌ"), 0, -1000, 0)
+    CALL(evt_mario_set_party_pos, 1, PARTY_GOOMBELLA_FOLLOWER, LW(0), LW(1), LW(2))
+    CALL(evt_party_set_dir, 1, LW(3), -1)
+    CALL(evt_party_run, 1)
+    CALL(evt_mario_key_onoff, 1)
+    SET_VALUE(GF(10), 1)
+    LOOP(0)
+        CALL(gundan1000tai_areacheck, LW(0), LW(1))
+        IF_INT_NOT_EQUAL(LW(0), 0)
+            CALL(evt_mario_set_hosei_xyz, LW(0), 0, 0)
+        END_IF
+        IF_INT_NOT_EQUAL(LW(1), 0)
+            CALL(evt_party_set_hosei_xyz, 1, LW(1), 0, 0)
+        END_IF
+        IF_INT_EQUAL(GF(10), 0)
+            BREAK_LOOP
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+
+    // Crump discovers they are gone and shouts for the army to stop.
+    CALL(evt_npc_set_position, STRING("第三勢力幹部"), 30, 15, -300)
+    CALL(evt_cam3d_evt_set, 30, 325, 334, 30, 65, -316, 0, EASING_SINE_IN_OUT)
+    WAIT_MS(1000)
+    CALL(evt_msg_print, 0, STRING("mac_0_030"), 0, STRING("第三勢力幹部"))
+    WAIT_MS(1000)
+    CALL(evt_msg_print, 0, STRING("mac_0_031"), 0, STRING("第三勢力幹部"))
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 0, -1000, 0)
+    CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 0, -1000, 0)
+    CALL(gundan1000tai_totsuend)
+    DELETE_EVENT(LW(11))
+    CALL(evt_snd_sfxoff, LW(12))
+    BEGIN_INLINE_EVENT
+        WAIT_MS(500)
+        DELETE_EVENT(LW(10))
+    END_INLINE_EVENT
+
+    // Wait for the crowd to settle, then Crump looks around.
+    LOOP(0)
+        SET_VALUE(LW(0), 0)
+        SET_VALUE(LW(1), 1)
+        LOOP(0)
+            CALL(evt_nannpc_get_work, LW(0), 0, LW(2))
+            ADD(LW(0), 1)
+            IF_INT_EQUAL(LW(2), 0)
+                SET_VALUE(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+#if VERSION >= VERSION_US
+            IF_INT_EQUAL(LW(0), 400)
+#else
+            IF_INT_EQUAL(LW(0), 1000)
+#endif
+                BREAK_LOOP
+            END_IF
+        END_LOOP
+        IF_INT_EQUAL(LW(1), 1)
+            BREAK_LOOP
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+
+    // Crump searches for them while question marks pop up over the crowd.
+    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
+    WAIT_MS(800)
+    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
+    WAIT_MS(800)
+    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
+    WAIT_MS(800)
+    CALL(evt_npc_reverse_ry, STRING("第三勢力幹部"))
+    WAIT_MS(800)
+    WAIT_MS(1350)
+    CALL(evt_msg_print, 0, STRING("mac_0_032"), 0, STRING("第三勢力幹部"))
+    BEGIN_INLINE_EVENT
+        WAIT_MS(100)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -130, 15, -354, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -98, 15, -370, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -130, 15, -300, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -130, 15, -354, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(140)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -89, 15, -242, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 10, 15, -160, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -120, 15, -315, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -89, 15, -242, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(200)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -71, 15, -369, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -114, 15, -222, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -23, 15, -351, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -71, 15, -369, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(180)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -40, 15, -190, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -15, 15, -165, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -55, 15, -189, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -40, 15, -190, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(150)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -12, 15, -405, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 20, 15, -394, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, -5, 15, -188, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), -12, 15, -405, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(220)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 50, 15, -408, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 74, 15, -384, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 0, 15, -420, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 50, 15, -408, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(100)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 68, 15, -201, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 41, 15, -175, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 90, 15, -186, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 68, 15, -201, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(120)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 138, 15, -239, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 162, 15, -216, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 111, 15, -191, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 138, 15, -239, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(180)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 149, 15, -374, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 95, 15, -360, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 173, 15, -316, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 149, 15, -374, 0)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        WAIT_MS(230)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 198, 15, -300, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 187, 15, -268, 30, 0, 60)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_POS, STRING(""), 0, 1, 0, 185, 15, -221, 30, 0, 60)
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_3RD_QUESTION_MARK1"), 198, 15, -300, 0)
+    END_INLINE_EVENT
+    WAIT_MS(1500)
+
+    // Crump gives up. The story advances and Mario heads on to the next area.
+    CALL(evt_cam3d_evt_set, 30, 133, -25, 30, 60, -316, 500, EASING_SINE_IN_OUT)
+    WAIT_MS(500)
+    CALL(evt_npc_get_position, STRING("第三勢力幹部"), LW(0), LW(1), LW(2))
+    CALL(evt_npc_jump_position_nohit, STRING("第三勢力幹部"), LW(0), LW(1), LW(2), 225, 30)
+    CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 90)
+    WAIT_MS(700)
+    CALL(evt_msg_print, 0, STRING("mac_0_033"), 0, STRING("第三勢力幹部"))
+    WAIT_MS(1000)
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_06_1000_X_NAUTS_AFTER)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
+    CALL(evt_fade_set_mapchange_type, 0, FADE_OUT_IRIS, 500, FADE_IN_IRIS, 500)
+    CALL(evt_bero_mapchange, STRING("gor_01"), STRING("s_bero"))
+    RETURN
+EVT_END()
+
+/**
+ * Stand-on case event of A_oku_yuka_01, registered by mony_peton_talk and, at STG2_45_DAUGHTER_LOCATED while
+ * GSWF_GOR_00_RUNAWAYS_REMARK_DONE is clear, by the map init: once no partner action is in use, the partner
+ * speaks mac_2_088; it sets GSWF_GOR_00_RUNAWAYS_REMARK_DONE and removes itself.
+ */
+static EVT_BEGIN(mony_peton_after)
+    CALL(evt_mario_key_onoff, 0)
+    CALL(evt_mario_normalize)
+    LOOP(0)
+        CALL(evt_mario_party_use_check, LW(0))
+        IF_INT_EQUAL(LW(0), 0)
+            BREAK_LOOP
+        END_IF
+        WAIT_FRAMES(1)
+    END_LOOP
+    CALL(evt_party_stop, 0)
+    CALL(evt_msg_print_party, STRING("mac_2_088"))
+    CALL(evt_party_run, 0)
+    CALL(evt_mario_key_onoff, 1)
+    SET_VALUE(GSWF_GOR_00_RUNAWAYS_REMARK_DONE, 1)
+    CALL(evt_exit_case_evt)
+    RETURN
+EVT_END()
+
+/**
  * Sets up the camera swing used in the departure scene:
  * args[0] to args[5] are the start camera position and target, args[6] to args[11] the end position and target.
  * Computes the angle and distance around the target of each and sets the working copy to the start.
@@ -4210,8 +4105,8 @@ static USER_FUNC(cam_kaiten_set_direct) {
     camera->storedAt = ckpw->target;
     camera->startTimeA = gp->renderTime;
     camera->durationA = 0;
-    camera->stateA = 3;
-    camera->curveA = 11;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = EASING_SINE_IN_OUT;
     return EVT_RETURN_DONE;
 }
 
@@ -4277,6 +4172,46 @@ static USER_FUNC(cam_kaiten_set_para) {
     return EVT_RETURN_DONE;
 }
 
+/**
+ * Plays the ship's engine sound ("SFX_STG4_SHIP_MOVE1") at the departing ship "S_fune_c" every 2 seconds,
+ * six times.
+ */
+static EVT_BEGIN(shukko_event_move_ship_se00)
+    LOOP(6)
+        WAIT_MS(2000)
+        CALL(evt_mapobj_get_position, STRING("S_fune_c"), LW(0), LW(1), LW(2))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_SHIP_MOVE1"), LW(0), LW(1), LW(2), 0)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Plays the ship's mast creaking sound ("SFX_STG4_SHIP_MAST1") at the departing ship "S_fune_c" every 1.4
+ * seconds, eight times.
+ */
+static EVT_BEGIN(shukko_event_move_ship_se01)
+    LOOP(8)
+        WAIT_MS(1400)
+        CALL(evt_mapobj_get_position, STRING("S_fune_c"), LW(0), LW(1), LW(2))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_SHIP_MAST1"), LW(0), LW(1), LW(2), 0)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/** Names of the NPCs on the pier that take part in the departure scene (flagged while the ship pulls away). */
+static const char* shukko_npc_list[] = {
+    "ガラの悪い水夫",
+    "マルコ",
+    "水夫Ｄ",
+    "めがね水夫",
+    "オドオド水夫",
+    "水夫ボム兵Ｃ",
+    "サンダース",
+    "店長",
+    "店員",
+    NULL,
+};
+
 /** Moves Mario by (args[0], args[1], args[2]) relative to where he is, so he keeps standing on the moving ship. */
 static USER_FUNC(hosei_mario_pos) {
     EvtWord* args = event->args;
@@ -4311,7 +4246,318 @@ static USER_FUNC(hosei_party_pos) {
     return EVT_RETURN_DONE;
 }
 
-/** Scatters the sailor crowd extras (the 100 waiting sailors) randomly near the right of the plaza at z 190 to 240. */
+/**
+ * Slides the Chapter 4 ship "S_fune_c" (with its collision,
+ * wake and all passengers listed in shukko_npc_list) out of the harbor:
+ * first a slow 100 units over 6 seconds, then on to x=600 (700 in the US and later).
+ * Mario and the partner are carried along by the movement.
+ */
+static EVT_BEGIN(shukko_event_move_ship)
+    SPAWN_EVENT(shukko_event_move_ship_se00)
+    SPAWN_EVENT(shukko_event_move_ship_se01)
+    CALL(evt_mapobj_get_position, STRING("S_fune_c"), LW(0), LW(1), LW(2))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_WAVE1"), LW(0), LW(1), LW(2), LW(9))
+    CALL(evt_hit_bind_mapobj, STRING("A_fune_C"), STRING("S_fune_c"))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_c_hikinami"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_c_hikinami"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_c_hikinami"), MAP_OBJ_FLAG_DISPLAY_LIST)
+    CALL(alpha_set_func, 0)
+    SET_FLOAT_VALUE(LW(3), FLOAT(0.0f))
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 0, 100, 6000)
+    LOOP(0)
+        CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+        CALL(evt_mapobj_trans, 1, STRING("S_fune_c"), LW(0), 0, 0)
+        CALL(evt_hit_bind_update, STRING("A_fune_C"))
+        CALL(evt_mapobj_trans, 1, STRING("S_c_hikinami"), LW(0), 0, 0)
+        SET_FLOAT_VALUE(LW(4), LW(0))
+        SUBTRACT_FLOAT(LW(4), LW(3))
+        CALL(hosei_mario_pos, LW(4), 0, 0)
+        CALL(hosei_party_pos, LW(4), 0, 0)
+        SET_INT_READ_ADDR(PTR(&shukko_npc_list))
+        LOOP(0)
+            READ_INT(LW(5))
+            IF_INT_EQUAL(LW(5), 0)
+                BREAK_LOOP
+            END_IF
+            CALL(evt_npc_get_position, LW(5), LW(6), LW(7), LW(8))
+            ADD_FLOAT(LW(6), LW(4))
+            CALL(evt_npc_set_position, LW(5), LW(6), LW(7), LW(8))
+        END_LOOP
+        SET_FLOAT_VALUE(LW(3), LW(0))
+        WAIT_FRAMES(1)
+        IF_INT_EQUAL(LW(1), 0)
+            BREAK_LOOP
+        END_IF
+    END_LOOP
+    SET_FLOAT_VALUE(LW(3), FLOAT(100.0f))
+#if VERSION >= VERSION_US
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 100, 700, 8400)
+#else
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 100, 600, 7000)
+#endif
+    LOOP(0)
+        CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
+        CALL(evt_mapobj_trans, 1, STRING("S_fune_c"), LW(0), 0, 0)
+        CALL(evt_hit_bind_update, STRING("A_fune_C"))
+        CALL(evt_mapobj_trans, 1, STRING("S_c_hikinami"), LW(0), 0, 0)
+        SET_FLOAT_VALUE(LW(4), LW(0))
+        SUBTRACT_FLOAT(LW(4), LW(3))
+        CALL(hosei_mario_pos, LW(4), 0, 0)
+        CALL(hosei_party_pos, LW(4), 0, 0)
+        SET_INT_READ_ADDR(PTR(&shukko_npc_list))
+        LOOP(0)
+            READ_INT(LW(5))
+            IF_INT_EQUAL(LW(5), 0)
+                BREAK_LOOP
+            END_IF
+            CALL(evt_npc_get_position, LW(5), LW(6), LW(7), LW(8))
+            ADD_FLOAT(LW(6), LW(4))
+            CALL(evt_npc_set_position, LW(5), LW(6), LW(7), LW(8))
+        END_LOOP
+        SET_FLOAT_VALUE(LW(3), LW(0))
+        WAIT_FRAMES(1)
+        IF_INT_EQUAL(LW(1), 0)
+            BREAK_LOOP
+        END_IF
+    END_LOOP
+    CALL(evt_snd_sfxoff, LW(9))
+    RETURN
+EVT_END()
+
+/**
+ * The Chapter 4 departure scene: after Flavio is told that Mario is ready, the whole crew boards,
+ * the ship leaves Rogueport (with the camera swinging around it), an X-Naut grunt reports (mac_4_095),
+ * the story becomes STG4_END_OFF_TO_THE_KEYS
+ * and the game goes on to the Chapter 5 sail ("sys_01"/"stg_5").
+ */
+static EVT_BEGIN(shukko_event)
+    CALL(evt_mario_key_onoff, 0)
+    CALL(evt_mario_flag_onoff, 1, MARIO_FLAG_WALLS_DISABLED)
+    CALL(evt_party_flg_onoff, 0, PARTY_FLAG_DISABLE_FRONT_WALL_CHK, 1)
+
+    // Flavio and the crew line up with Mario and his partner at the pier.
+    CALL(evt_cam3d_evt_set, 85, 142, 398, 85, 90, 102, 1000, EASING_SINE_IN_OUT)
+    BEGIN_INLINE_EVENT
+        CALL(evt_mario_mov_pos, 125, 140, 1000)
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        CALL(evt_party_move_pos, 0, 120, 125, 1000)
+    END_INLINE_EVENT
+    CALL(evt_npc_get_position, STRING("マルコ"), LW(0), LW(1), LW(2))
+    ADD(LW(0), 20)
+    CALL(evt_npc_move_position, STRING("マルコ"), LW(0), LW(2), 1000, 0, 0)
+    WAIT_MS(300)
+
+    // Flavio gives the order to cast off and a sailor calls for them to wait.
+    CALL(evt_msg_print, 0, STRING("mac_4_093"), 0, STRING("マルコ"))
+    CALL(evt_cam3d_evt_set, 95, 207, 763, 95, 89, 98, 400, EASING_SINE_IN_OUT)
+    WAIT_MS(400)
+    CALL(evt_msg_print, 0, STRING("mac_4_094"), 0, 0)
+    CALL(evt_npc_move_position, STRING("水夫ボム兵Ｃ"), 90, 200, 0, 120, 0)
+    CALL(evt_npc_jump_position_nohit, STRING("水夫ボム兵Ｃ"), 55, 51, 135, 700, 50)
+    CALL(evt_npc_set_ry, STRING("水夫ボム兵Ｃ"), 90)
+
+    // The sailing music starts and the ship pulls away from the dock.
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_SAILING1"))
+    CALL(evt_cam3d_evt_set, 122, 360, 1112, 122, 180, 90, 2000, EASING_SINE_IN_OUT)
+    WAIT_MS(2000)
+    CALL(evt_snd_sfxon, STRING("SFX_STG5_SHIP_STARTING1"), 0)
+    SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
+    SPAWN_EVENT(shukko_event_move_ship)
+    WAIT_MS(2000)
+
+    // The crew members on deck turn instantly and cast no shadows while the ship moves.
+    SET_INT_READ_ADDR(PTR(&shukko_npc_list))
+    LOOP(0)
+        READ_INT(LW(5))
+        IF_INT_EQUAL(LW(5), 0)
+            BREAK_LOOP
+        END_IF
+        CALL(evt_npc_flag_onoff, 1, LW(5), NPC_FLAG_INSTANT_TURN | NPC_FLAG_NO_SHADOW)
+    END_LOOP
+    CALL(evt_cam3d_evt_set, 300, 0, 515, 300, 60, 91, 0, EASING_SINE_IN_OUT)
+    WAIT_MS(2000)
+    SET_INT_READ_ADDR(PTR(&shukko_npc_list))
+    LOOP(0)
+        READ_INT(LW(5))
+        IF_INT_EQUAL(LW(5), 0)
+            BREAK_LOOP
+        END_IF
+        CALL(evt_npc_flag_onoff, 0, LW(5), NPC_FLAG_INSTANT_TURN)
+    END_LOOP
+
+    // The camera circles around the departing ship while its wake fades in.
+    CALL(cam_kaiten_init, 770, 235, -250, 350, 100, 80, -60, 39, 439, 350, 100, 80)
+    BEGIN_INLINE_EVENT_GET_ID(LW(7))
+        LOOP(0)
+            CALL(cam_kaiten_set_direct)
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LW(0), LF(7))
+        CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LW(1), LF(7))
+        ADD_FLOAT(LW(1), FLOAT(360.0f))
+        CALL(evt_sub_intpl_msec_init, PTR(lineardec_type), LW(0), LW(1), 4500)
+        LOOP(0)
+            CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
+            CALL(evt_sub_intpl_msec_get_value_para, LW(6), LW(9))
+            CALL(cam_kaiten_set_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
+            IF_INT_EQUAL(LW(9), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(0))
+        CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(1))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 4500)
+        LOOP(0)
+            CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
+            CALL(evt_sub_intpl_msec_get_value_para, LW(7), LW(9))
+            CALL(cam_kaiten_set_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
+            IF_INT_EQUAL(LW(9), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        CALL(cam_kaiten_get_para, 0, LF(0), LW(0), LF(2), LF(3), LF(4), LF(5), LF(6), LF(7))
+        CALL(cam_kaiten_get_para, 1, LF(0), LW(1), LF(2), LF(3), LF(4), LF(5), LF(6), LF(7))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 4500)
+        LOOP(0)
+            CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
+            CALL(evt_sub_intpl_msec_get_value_para, LW(1), LW(9))
+            CALL(cam_kaiten_set_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
+            IF_INT_EQUAL(LW(9), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+    BEGIN_INLINE_EVENT
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 255, 2000)
+        LOOP(0)
+            CALL(evt_sub_intpl_msec_get_value)
+            CALL(alpha_set_func, LW(0))
+            IF_INT_EQUAL(LW(1), 0)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
+    END_INLINE_EVENT
+    WAIT_MS(4500)
+    DELETE_EVENT(LW(7))
+    WAIT_MS(1500)
+
+    // Cut back to the empty pier, where an X-Naut grunt walks up and reports what he saw.
+    CALL(evt_cam3d_evt_set, 122, 360, 1112, 122, 180, 90, 0, EASING_SINE_IN_OUT)
+    WAIT_MS(4500)
+    CALL(evt_cam3d_evt_set, 0, 99, -302, -130, 64, -452, 0, EASING_SINE_IN_OUT)
+    WAIT_MS(1500)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三部下"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_status_onoff, 1, STRING("第三部下"), NPC_STATUS_FACE_MOVE_DIR)
+    CALL(evt_npc_set_position, STRING("第三部下"), -170, 15, -580)
+    CALL(evt_npc_move_position, STRING("第三部下"), -170, -500, 0, FLOAT(180.0f), 0)
+    WAIT_MS(500)
+    CALL(evt_npc_set_ry, STRING("第三部下"), 90)
+    WAIT_MS(300)
+    CALL(evt_msg_print, 0, STRING("mac_4_095"), 0, STRING("第三部下"))
+
+    // Chapter 4 ends with the trip to the Keys; the game moves on to the sailing map.
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_END_OFF_TO_THE_KEYS)
+    CALL(evt_bero_mapchange, STRING("sys_01"), STRING("stg_5"))
+    RETURN
+EVT_END()
+
+/**
+ * Sprite entries for the crowd of 100 sailors (evt_nannpc_init): the c_boro_k model with its S_1 and R_1 animations,
+ * one entry per animation phase offset.
+ */
+static ExtTexInfo nannpc_entry_data01[] = {
+    {"c_boro_k", "S_1", 0.0f},
+    {"c_boro_k", "S_1", 2.0f},
+    {"c_boro_k", "S_1", 4.0f},
+    {"c_boro_k", "S_1", 6.0f},
+    {"c_boro_k", "S_1", 8.0f},
+    {"c_boro_k", "S_1", 10.0f},
+    {"c_boro_k", "S_1", 12.0f},
+    {"c_boro_k", "S_1", 14.0f},
+    {"c_boro_k", "S_1", 16.0f},
+    {"c_boro_k", "S_1", 18.0f},
+    {"c_boro_k", "S_1", 20.0f},
+    {"c_boro_k", "S_1", 22.0f},
+    {"c_boro_k", "S_1", 24.0f},
+    {"c_boro_k", "S_1", 26.0f},
+    {"c_boro_k", "S_1", 28.0f},
+    {"c_boro_k", "S_1", 30.0f},
+    {"c_boro_k", "S_1", 32.0f},
+    {"c_boro_k", "S_1", 34.0f},
+    {"c_boro_k", "S_1", 36.0f},
+    {"c_boro_k", "S_1", 38.0f},
+    {"c_boro_k", "R_1", 0.0f},
+    {"c_boro_k", "R_1", 1.0f},
+    {"c_boro_k", "R_1", 2.0f},
+    {"c_boro_k", "R_1", 3.0f},
+    {"c_boro_k", "R_1", 4.0f},
+    {"c_boro_k", "R_1", 5.0f},
+    {"c_boro_k", "R_1", 6.0f},
+    {"c_boro_k", "R_1", 7.0f},
+    {"c_boro_k", "R_1", 8.0f},
+    {"c_boro_k", "R_1", 9.0f},
+    {"c_boro_k", "R_1", 10.0f},
+    {"c_boro_k", "R_1", 11.0f},
+    {"c_boro_k", "R_1", 12.0f},
+    {"c_boro_k", "R_1", 13.0f},
+    {"c_boro_k", "R_1", 14.0f},
+    {"c_boro_k", "R_1", 15.0f},
+    {"c_boro_k", "R_1", 16.0f},
+    {"c_boro_k", "R_1", 17.0f},
+    {"c_boro_k", "R_1", 18.0f},
+    {"c_boro_k", "R_1", 19.0f},
+    {0},
+};
+
+/**
+ * Animation frame table for a sailor of the crowd while it stands or hops about: each frame of the first 20
+ * appears twice.
+ */
+static s16 suifu_animtbl[] = {
+    0, 0, 1, 1, 2, 2, 3, 3,
+    4, 4, 5, 5, 6, 6, 7, 7,
+    8, 8, 9, 9, 10, 10, 11, 11,
+    12, 12, 13, 13, 14, 14, 15, 15,
+    16, 16, 17, 17, 18, 18, 19, 19,
+    -1,
+};
+
+/** Animation frame table for a sailor of the crowd while it runs (frames 20 to 39, ending with -1). */
+static s16 suifu_run_animtbl[] = {
+    20, 21, 22, 23, 24, 25, 26, 27,
+    28, 29, 30, 31, 32, 33, 34, 35,
+    36, 37, 38, 39, -1,
+};
+
+/** Four points where the crowd sailors walk down the stairs; each picks one of the first three at random. */
+static Vec suifu100kaidanDOWN[] = {
+    {309.0f, 15.0f, -375.0f},
+    {322.0f, 15.0f, -397.0f},
+    {338.0f, 15.0f, -410.0f},
+    {357.0f, 15.0f, -427.0f},
+};
+
+/** Four points where the crowd sailors walk up the stairs; each picks one of the first three at random. */
+static Vec suifu100kaidanUP[] = {
+    {143.0f, 115.0f, -514.0f},
+    {167.0f, 115.0f, -534.0f},
+    {189.0f, 115.0f, -553.0f},
+    {201.0f, 115.0f, -562.0f},
+};
+
+/** Scatters the sailor crowd extras (the 100 waiting sailors) randomly on the pier at x -100 to 34 and z 190 to 240. */
 static USER_FUNC(suifu100taikikan_init) {
     s32 i;
     NanNPC* npc;
@@ -4352,7 +4598,7 @@ static void suifu100taikikan_seq00(NanNPC* npc) {
 }
 
 /**
- * Per-frame behaviour of one sailor extra heading off after Marco's speech:
+ * Per-frame behaviour of one sailor extra heading off after Flavio's speech:
  * walks a fixed route in order (left along the pier, around the back, over to the right, down and up the stairs,
  * back to the center and out of sight), moving in straight lines at a random speed, then hides below the map.
  */
@@ -4438,7 +4684,7 @@ static void suifu100taikikan_seq01(NanNPC* npc) {
 
 #if VERSION >= VERSION_JP
 /**
- * Marco (Flavio) runs off across the harbor and up the stairs and out of the map:
+ * Flavio runs off across the harbor and up the stairs and out of the map:
  * along the pier, then up through a series of jumps at the back, and is hidden below the map at the end.
  * Only in JP and later releases.
  */
@@ -4462,13 +4708,13 @@ EVT_END()
 #endif
 
 /**
- * Cutscene at STORY_STG5_58_FAIR_WINDS, when Mario comes back to the Rogueport harbor
+ * Cutscene at STG5_58_FAIR_WINDS, when Mario comes back to the Rogueport harbor
  * from Keelhaul Key (Flavio hails the return to his hometown, mac_5_000_00, and Cortez offers to sail Mario back
  * to
  * the island whenever he likes, mac_5_000_08).
- * Marco (Flavio), Cortez and a crowd of 100 sailor extras are waiting;
- * Marco makes a speech, the sailors scatter, Marco runs off,
- * and the story becomes STORY_STG5_59_ROGUEPORT_DOCK before the peach_mail event starts.
+ * Flavio, Cortez and a crowd of 100 sailor extras are waiting;
+ * Flavio makes a speech, the sailors scatter, Flavio runs off,
+ * and the story becomes STG5_59_ROGUEPORT_DOCK before the peach_mail event starts.
  */
 EVT_BEGIN(gorotsuki_kikan)
     // Mario, his partner, Flavio, Cortez and the sailors are placed on the pier; the crowd of 100 sailors is
@@ -4495,11 +4741,11 @@ EVT_BEGIN(gorotsuki_kikan)
     CALL(evt_npc_set_ry, STRING("水夫Ｂ"), 90)
     CALL(evt_npc_set_position, STRING("オドオド水夫"), 35, 15, 250)
     CALL(evt_npc_set_ry, STRING("オドオド水夫"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("水夫Ａ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("水夫Ｂ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("水夫Ａ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("水夫Ｂ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_nannpc_init, PTR(nannpc_entry_data01), 0, 0, 0, 100)
     CALL(evt_nannpc_set_subfunc, 1, PTR(nannpc_ext_main_sub_fast))
     SET_VALUE(LW(0), 0)
@@ -4513,17 +4759,19 @@ EVT_BEGIN(gorotsuki_kikan)
         END_IF
     END_LOOP
     CALL(suifu100taikikan_init)
+
     // Flavio announces the return to Rogueport and takes the credit for it.
-    CALL(evt_cam3d_evt_set, 60, 225, 432, 125, 225, 177, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 60, 225, 432, 125, 225, 177, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("mac_5_000_00"), 0, 0)
-    CALL(evt_cam3d_evt_set, 165, 120, 586, 170, 55, 217, 1500, 11)
+    CALL(evt_cam3d_evt_set, 165, 120, 586, 170, 55, 217, 1500, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
     CALL(evt_msg_print, 0, STRING("mac_5_000_01"), 0, STRING("マルコ"))
     CALL(evt_msg_print, 0, STRING("mac_5_000_02"), 0, STRING("水夫Ａ"))
-    CALL(evt_cam3d_evt_set, 90, 165, 759, 90, 70, 217, 500, 11)
+    CALL(evt_cam3d_evt_set, 90, 165, 759, 90, 70, 217, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
+
     // The sailors say goodbye and scatter along the pier. Story set to the Rogueport dock.
     CALL(evt_msg_print, 0, STRING("mac_5_000_03"), 0, STRING("水夫Ａ"))
     CALL(suifu100taikikan_away)
@@ -4536,15 +4784,15 @@ EVT_BEGIN(gorotsuki_kikan)
         END_IF
     END_LOOP
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_59_ROGUEPORT_DOCK)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_59_ROGUEPORT_DOCK)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_set_ry, STRING("水夫Ａ"), 270)
         CALL(evt_npc_move_position, STRING("水夫Ａ"), -146, 218, 0, FLOAT(240.0f), 0)
         CALL(evt_npc_move_position, STRING("水夫Ａ"), -215, 0, 0, FLOAT(240.0f), 0)
         CALL(evt_npc_restart_regular_event, STRING("水夫Ａ"))
-        CALL(evt_npc_flag_onoff, 0, STRING("水夫Ａ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 0, STRING("水夫Ａ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_npc_set_ry, STRING("水夫Ｂ"), 270)
@@ -4553,14 +4801,14 @@ EVT_BEGIN(gorotsuki_kikan)
         CALL(evt_npc_set_ry, STRING("水夫Ｂ"), 90)
         CALL(evt_npc_move_position, STRING("水夫Ｂ"), 0, -300, 0, FLOAT(240.0f), 0)
         CALL(evt_npc_restart_regular_event, STRING("水夫Ｂ"))
-        CALL(evt_npc_flag_onoff, 0, STRING("水夫Ｂ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 0, STRING("水夫Ｂ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_npc_set_ry, STRING("オドオド水夫"), 270)
         CALL(evt_npc_move_position, STRING("オドオド水夫"), -143, 219, 0, FLOAT(240.0f), 0)
         CALL(evt_npc_move_position, STRING("オドオド水夫"), -200, -400, 0, FLOAT(240.0f), 0)
         CALL(evt_npc_restart_regular_event, STRING("オドオド水夫"))
-        CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(4000)
@@ -4569,11 +4817,12 @@ EVT_BEGIN(gorotsuki_kikan)
         CALL(evt_npc_restart_regular_event, STRING("オドオド水夫兄"))
     END_INLINE_EVENT
     WAIT_MS(1000)
+
     // Flavio is stunned that the crew left, then says his farewell to Mario.
     CALL(evt_msg_print, 0, STRING("mac_5_000_04"), 0, STRING("マルコ"))
     CALL(evt_npc_set_ry, STRING("マルコ"), 90)
     WAIT_MS(200)
-    CALL(evt_cam3d_evt_set, 165, 127, 628, 165, 71, 184, 500, 11)
+    CALL(evt_cam3d_evt_set, 165, 127, 628, 165, 71, 184, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("mac_5_000_05"), 0, STRING("マルコ"))
     BEGIN_INLINE_EVENT
@@ -4583,14 +4832,16 @@ EVT_BEGIN(gorotsuki_kikan)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("mac_5_000_06"), 0, STRING("マルコ"))
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
+
     // Cortez offers to take Mario back to Keelhaul Key whenever he wants.
     CALL(evt_msg_print, 0, STRING("mac_5_000_07"), 0, STRING("コルテス"))
-    CALL(evt_cam3d_evt_set, 85, 190, 498, 85, 140, 50, 500, 11)
+    CALL(evt_cam3d_evt_set, 85, 190, 498, 85, 140, 50, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("mac_5_000_08"), 0, STRING("コルテス"))
-    CALL(evt_cam3d_evt_set, 165, 120, 586, 170, 55, 217, 500, 11)
+    CALL(evt_cam3d_evt_set, 165, 120, 586, 170, 55, 217, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
+
     // Flavio dismisses Cortez and runs off; the partner comments on his leaving.
     CALL(evt_msg_print, 0, STRING("mac_5_000_09"), 0, STRING("マルコ"))
     CALL(evt_mario_set_dir, 270, 200, 0)
@@ -4611,13 +4862,16 @@ EVT_BEGIN(gorotsuki_kikan)
         CALL(evt_npc_set_position, STRING("マルコ"), 0, -1000, 0)
     END_INLINE_EVENT
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 205, 127, 628, 205, 71, 184, 500, 11)
+    CALL(evt_cam3d_evt_set, 205, 127, 628, 205, 71, 184, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print_party, STRING("mac_5_000_10"))
-    CALL(evt_cam3d_evt_off, 500, 11)
 #if VERSION >= VERSION_DEMO_EU
+    CALL(evt_cam3d_evt_off, 500, 11)
     CALL(evt_party_run, 0)
+#else
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
 #endif
+
     // Return control and start the Peach mail scene.
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_snd_bgm_scope, 0, 0)
@@ -4626,11 +4880,11 @@ EVT_BEGIN(gorotsuki_kikan)
 EVT_END()
 
 /**
- * Plays when Mario sails into Rogueport on the ship (GSWF_GOR00_SHIP_ARRIVAL_PENDING):
- * Mario, the partners, Cortez and, in the Frankie and Francesca step (STORY_STG5_64_02_F_AND_F_SAIL_OFF),
+ * Plays when Mario sails into Rogueport on the ship (GSWF_MUJ_SAILING_TO_ROGUEPORT):
+ * Mario, the partners, Cortez and, in the Frankie and Francesca step (STG5_64_02_F_F_SAIL_OFF),
  * the couple are placed on the ship, which slides in 600 units from the right with the ghost ship music
  * and arrival sound.
- * At the dock the couple get off (mony_peton_depart),
+ * At the dock the couple get off (mony_peton_event),
  * the music changes back to Rogueport's and Mario gets control.
  */
 EVT_BEGIN(into_gor_ship)
@@ -4644,7 +4898,7 @@ EVT_BEGIN(into_gor_ship)
     CALL(evt_party_set_pos, 1, 0, -1000, 0)
     ADD_FLOAT(GW(13), FLOAT(600.0f))
     SET_FLOAT_VALUE(LW(10), FLOAT(600.0f))
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
     SET_FLOAT_VALUE(LW(0), FLOAT(120.0f))
     ADD_FLOAT(LW(0), LW(10))
     SET_FLOAT_VALUE(LW(1), FLOAT(150.0f))
@@ -4661,7 +4915,7 @@ EVT_BEGIN(into_gor_ship)
     CALL(evt_party_set_dir, 0, 90, 0)
     CALL(evt_party_set_dir, 1, 90, 0)
     CALL(evt_npc_set_ry, STRING("コルテス"), 270)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_64_02_F_AND_F_SAIL_OFF)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_64_02_F_F_SAIL_OFF)
         SET_FLOAT_VALUE(LW(4), FLOAT(145.0f))
         ADD_FLOAT(LW(4), LW(10))
         SET_FLOAT_VALUE(LW(5), FLOAT(185.0f))
@@ -4672,13 +4926,14 @@ EVT_BEGIN(into_gor_ship)
         CALL(evt_npc_set_ry, STRING("ピートン"), 270)
     END_IF
     SPAWN_EVENT_GET_ID(PTR(option_ship_mario), LW(9))
-    // The camera frames the ship; the screen fades in as the ship slides in with its arrival sound.
-    CALL(evt_cam3d_evt_set, 188, 193, 753, 188, 74, 63, 0, 11)
-    CALL(evt_seq_wait, 2)
+
+    // The camera frames the ship; the wake fades out as the ship slides in with its arrival sound.
+    CALL(evt_cam3d_evt_set, 188, 193, 753, 188, 74, 63, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(alpha_set_func, 255)
     BEGIN_INLINE_EVENT
         WAIT_MS(3000)
-        CALL(evt_sub_intpl_msec_init, 11, 255, 0, 3000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 3000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(alpha_set_func, LW(0))
@@ -4692,7 +4947,7 @@ EVT_BEGIN(into_gor_ship)
     SET_FLOAT_VALUE(LW(0), GW(13))
     SET_FLOAT_VALUE(LW(1), GW(13))
     SUBTRACT_FLOAT(LW(1), FLOAT(600.0f))
-    CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 6000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 6000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         SET_FLOAT_VALUE(GW(13), LW(0))
@@ -4701,108 +4956,38 @@ EVT_BEGIN(into_gor_ship)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // The ship docks and Rogueport music takes over.
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     WAIT_MS(1000)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(80))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(7))
     CALL(evt_mario_cont_onoff, 1)
     CALL(evt_party_cont_onoff, 0, 1)
     CALL(evt_party_cont_onoff, 1, 1)
+
     // If the couple is aboard, Frankie and Francesca get off the ship.
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_64_02_F_AND_F_SAIL_OFF)
-#if VERSION >= VERSION_JP
-        CALL_CHILD(mony_peton_depart)
-#else
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_64_02_F_F_SAIL_OFF)
         CALL_CHILD(mony_peton_event)
-#endif
     END_IF
+
     // Control returns to Mario.
     DELETE_EVENT(LW(9))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
-#if VERSION >= VERSION_JP
-/**
- * Francesca (Mony) hops off the ship, runs along the pier, up the back stairs and out of the map,
- * then is hidden below it. JP and later releases.
- */
-EVT_BEGIN(mony_run_away)
-    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 145, 15, 225, 400, 20)
-    CALL(evt_npc_set_ry, STRING("モニー"), 270)
-    CALL(evt_npc_move_position, STRING("モニー"), -130, 200, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_move_position, STRING("モニー"), -230, -170, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_move_position, STRING("モニー"), -230, -400, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_set_ry, STRING("モニー"), 90)
-    CALL(evt_npc_move_position, STRING("モニー"), 250, -330, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_set_ry, STRING("モニー"), 270)
-    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 270, 35, -400, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 260, 55, -450, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 230, 75, -480, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 210, 95, -520, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 150, 115, -530, 400, 20)
-    CALL(evt_npc_move_position, STRING("モニー"), 0, -570, 0, FLOAT(180.0f), 0)
-    CALL(evt_npc_set_position, STRING("モニー"), 0, -1000, 0)
-    RETURN
-EVT_END()
-
-/**
- * Frankie (Peton) runs along the pier, up the back stairs and out of the map, then is hidden below it.
- * JP and later releases.
- */
-EVT_BEGIN(peton_run_away)
-    CALL(evt_npc_move_position, STRING("ピートン"), -230, -170, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_move_position, STRING("ピートン"), -230, -400, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_set_ry, STRING("ピートン"), 90)
-    CALL(evt_npc_move_position, STRING("ピートン"), 250, -330, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_set_ry, STRING("ピートン"), 270)
-    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 270, 35, -400, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 260, 55, -450, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 230, 75, -480, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 210, 95, -520, 400, 20)
-    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 150, 115, -530, 400, 20)
-    CALL(evt_npc_move_position, STRING("ピートン"), 0, -570, 0, FLOAT(180.0f), 0)
-    CALL(evt_npc_set_position, STRING("ピートン"), 0, -1000, 0)
-    RETURN
-EVT_END()
-
-/**
- * Frankie and Francesca's goodbye after the voyage:
- * sets STORY_STG5_64_03_F_AND_F_ARRIVE, they speak (mac_5_038, mac_5_039),
- * and then each jumps off the ship at the dock and runs off in turn.
- * In the US and later releases it also clears GF(15). JP and later releases (earlier ones use mony_peton_event).
- */
-EVT_BEGIN(mony_peton_depart)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_64_03_F_AND_F_ARRIVE)
-#if VERSION >= VERSION_US
-    SET_VALUE(GF(15), 0)
-#endif
-    CALL(evt_msg_print, 0, STRING("mac_5_038"), 0, STRING("モニー"))
-    CALL(evt_msg_print, 0, STRING("mac_5_039"), 0, STRING("ピートン"))
-    CALL(evt_npc_flag_onoff, 1, STRING("モニー"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("ピートン"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_set_ry, STRING("モニー"), 270)
-    WAIT_MS(300)
-    CALL(evt_npc_restart_regular_event, STRING("モニー"))
-    WAIT_MS(60)
-    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 185, 15, 225, 400, 20)
-    CALL(evt_npc_set_ry, STRING("ピートン"), 270)
-    CALL(evt_npc_move_position, STRING("ピートン"), -130, 200, 0, FLOAT(240.0f), 0)
-    CALL(evt_npc_restart_regular_event, STRING("ピートン"))
-    RETURN
-EVT_END()
-#else
-/** Mony and Peton step off the ship and run off into town one after the other */
+#if VERSION <= VERSION_DEMO_JP
+/** Francesca and Frankie step off the ship and run off into town one after the other */
 static EVT_BEGIN(mony_peton_event)
     CALL(evt_msg_print, 0, STRING("mac_5_038"), 0, STRING("モニー"))
     CALL(evt_msg_print, 0, STRING("mac_5_039"), 0, STRING("ピートン"))
-    CALL(evt_npc_flag_onoff, 1, STRING("モニー"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("ピートン"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("モニー"), NPC_FLAG_NO_WALL_COLLISION | NPC_FLAG_NO_HIT)
+    CALL(evt_npc_flag_onoff, 1, STRING("ピートン"), NPC_FLAG_NO_WALL_COLLISION | NPC_FLAG_NO_HIT)
     CALL(evt_npc_set_ry, STRING("モニー"), 270)
     WAIT_MS(300)
     BEGIN_INLINE_EVENT
@@ -4840,34 +5025,123 @@ static EVT_BEGIN(mony_peton_event)
         CALL(evt_npc_move_position, STRING("ピートン"), 0, -570, 0, FLOAT(180.0f), 0)
         CALL(evt_npc_set_position, STRING("ピートン"), 0, -1000, 0)
     END_INLINE_EVENT
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_64_03_F_AND_F_ARRIVE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_64_03_F_F_ARRIVE)
+    RETURN
+EVT_END()
+#else
+/**
+ * Francesca (Francesca) hops off the ship, runs along the pier, up the back stairs and out of the map,
+ * then is hidden below it. JP and later releases.
+ */
+EVT_BEGIN(mony_run_away)
+    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 145, 15, 225, 400, 20)
+    CALL(evt_npc_set_ry, STRING("モニー"), 270)
+    CALL(evt_npc_move_position, STRING("モニー"), -130, 200, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_move_position, STRING("モニー"), -230, -170, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_move_position, STRING("モニー"), -230, -400, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_set_ry, STRING("モニー"), 90)
+    CALL(evt_npc_move_position, STRING("モニー"), 250, -330, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_set_ry, STRING("モニー"), 270)
+    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 270, 35, -400, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 260, 55, -450, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 230, 75, -480, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 210, 95, -520, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("モニー"), 150, 115, -530, 400, 20)
+    CALL(evt_npc_move_position, STRING("モニー"), 0, -570, 0, FLOAT(180.0f), 0)
+    CALL(evt_npc_set_position, STRING("モニー"), 0, -1000, 0)
     RETURN
 EVT_END()
 #endif
 
+#if VERSION >= VERSION_JP
 /**
- * Chapter 4 interlude with Bowser on the Rogueport harbor (STORY_STG4_15_07_BOWSER_ACTION_STAGE):
+ * Frankie (Frankie) runs along the pier, up the back stairs and out of the map, then is hidden below it.
+ * JP and later releases.
+ */
+EVT_BEGIN(peton_run_away)
+    CALL(evt_npc_move_position, STRING("ピートン"), -230, -170, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_move_position, STRING("ピートン"), -230, -400, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_set_ry, STRING("ピートン"), 90)
+    CALL(evt_npc_move_position, STRING("ピートン"), 250, -330, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_set_ry, STRING("ピートン"), 270)
+    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 270, 35, -400, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 260, 55, -450, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 230, 75, -480, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 210, 95, -520, 400, 20)
+    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 150, 115, -530, 400, 20)
+    CALL(evt_npc_move_position, STRING("ピートン"), 0, -570, 0, FLOAT(180.0f), 0)
+    CALL(evt_npc_set_position, STRING("ピートン"), 0, -1000, 0)
+    RETURN
+EVT_END()
+#endif
+
+#if VERSION >= VERSION_JP
+/**
+ * Frankie and Francesca's goodbye after the voyage:
+ * sets STG5_64_03_F_F_ARRIVE, they speak (mac_5_038, mac_5_039),
+ * and then each jumps off the ship at the dock and runs off in turn.
+ * In US and later it also clears GF(15). This is the JP and later form of mony_peton_event: the early demos'
+ * script above (the JP demo map's name, at this place between into_gor_ship and gor_00_koopa_evt) ran both
+ * runs itself; from JP on they are mony_run_away and peton_run_away, restarted as the couple's regular events.
+ */
+static EVT_BEGIN(mony_peton_event)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_64_03_F_F_ARRIVE)
+#if VERSION >= VERSION_US
+    SET_VALUE(GF(15), 0)
+#endif
+    CALL(evt_msg_print, 0, STRING("mac_5_038"), 0, STRING("モニー"))
+    CALL(evt_msg_print, 0, STRING("mac_5_039"), 0, STRING("ピートン"))
+    CALL(evt_npc_flag_onoff, 1, STRING("モニー"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("ピートン"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_set_ry, STRING("モニー"), 270)
+    WAIT_MS(300)
+    CALL(evt_npc_restart_regular_event, STRING("モニー"))
+    WAIT_MS(60)
+    CALL(evt_npc_jump_position_nohit, STRING("ピートン"), 185, 15, 225, 400, 20)
+    CALL(evt_npc_set_ry, STRING("ピートン"), 270)
+    CALL(evt_npc_move_position, STRING("ピートン"), -130, 200, 0, FLOAT(240.0f), 0)
+    CALL(evt_npc_restart_regular_event, STRING("ピートン"))
+    RETURN
+EVT_END()
+#endif
+
+/** Message callback: on type 3 at page 1 it sets LSWF_GOR_00_KOOPA_MSG_CUE. */
+static void gor_stg4_018_cb(s32 type, smartEntry* smart) {
+    MsgWinData* info = smart->address;
+
+    switch (type) {
+        case 3:
+            if (info->curPage == 1) {
+                evtSetValue(NULL, LSWF_GOR_00_KOOPA_MSG_CUE, 1);
+            }
+            break;
+    }
+}
+
+/**
+ * Chapter 4 interlude with Bowser on the Rogueport harbor (STG4_15_07_BOWSER_ACTION_STAGE):
  * he leaps out of the water onto the dock, the sailors panic and run, Kammy Koopa flies in looking for him,
  * he scorches her and her broom, and he orders her to find out about Princess Peach and the Crystal Stars.
- * Ends by setting STORY_STG4_15_08_BOWSER_ROGUEPORT_DOCK, saving, and changing to usu_00.
+ * Ends by setting STG4_15_08_BOWSER_ROGUEPORT_DOCK, saving, and changing to usu_00.
  */
-EVT_BEGIN(gor_00_koopa_evt)
+static EVT_BEGIN(gor_00_koopa_evt)
     // Bowser (controlled through the Mario slot) is set up under the dock, out of sight.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_set_mode, 2)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_mario_set_pos, 250, -100, 285)
     CALL(evt_mario_set_dispdir, 0)
-    CALL(evt_cam3d_evt_set, 167, 195, 920, 167, 68, 227, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 167, 195, 920, 167, 68, 227, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(kpa_chg_pose, STRING("KPA_D_1"))
     WAIT_MS(1000)
     SET_VALUE(GW(0), -100)
     SET_VALUE(GW(1), 285)
+
     // Bowser leaps out of the water onto the dock with a big splash.
     CALL(evt_eff, STRING(""), STRING("splash"), 3, 250, 0, 285, FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 4, -100, 75, 400)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, -100, 75, 400)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(GW(0), LW(0))
@@ -4875,7 +5149,7 @@ EVT_BEGIN(gor_00_koopa_evt)
         IF_INT_EQUAL(LW(1), 1)
             GOTO(0)
         END_IF
-        CALL(evt_sub_intpl_msec_init, 1, 75, 15, 400)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 75, 15, 400)
         LABEL(3)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(GW(0), LW(0))
@@ -4885,7 +5159,7 @@ EVT_BEGIN(gor_00_koopa_evt)
         END_IF
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 285, 235, 900)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 285, 235, 900)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(GW(1), LW(0))
@@ -4896,7 +5170,7 @@ EVT_BEGIN(gor_00_koopa_evt)
     END_INLINE_EVENT
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_WATER_OUT1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 250, 200, 900)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 250, 200, 900)
     LABEL(2)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mario_set_pos, LW(0), GW(0), GW(1))
@@ -4908,17 +5182,18 @@ EVT_BEGIN(gor_00_koopa_evt)
     CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_WATER_IN1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_VEXATIOUS1_2"), LW(0), LW(1), LW(2), 0)
     CALL(kpa_chg_pose, STRING("KPA_D_2"))
-    CALL(evt_cam_shake, 4, FLOAT(0.0048828125f), FLOAT(0.0048828125f), 500)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0048828125f), 500)
     WAIT_MS(1000)
     CALL(evt_mario_cont_onoff, 1)
     WAIT_FRAMES(1)
     CALL(kpa_chg_pose, STRING("KPA_S_2"))
+
     // Bowser sneezes and grumbles; the sailors spot him and run away in terror.
-    CALL(evt_cam3d_evt_set, 167, 161, 737, 167, 68, 227, 800, 11)
+    CALL(evt_cam3d_evt_set, 167, 161, 737, 167, 68, 227, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_2"), STRING("KPA_T_4"))
     CALL(evt_msg_print, 0, STRING("kpa_stg4_011"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, -127, 161, 737, -127, 68, 227, 1000, 11)
+    CALL(evt_cam3d_evt_set, -127, 161, 737, -127, 68, 227, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("kpa_stg4_012"), 0, STRING("水夫ボム兵Ａ"))
     BEGIN_INLINE_EVENT
@@ -4951,8 +5226,9 @@ EVT_BEGIN(gor_00_koopa_evt)
         CALL(evt_npc_move_position, STRING("オドオド水夫"), LW(0), LW(2), 0, FLOAT(120.0f), 0)
     END_INLINE_EVENT
     WAIT_MS(1500)
+
     // Kammy Koopa flies in on her broom and finds Bowser.
-    CALL(evt_cam3d_evt_set, 10, 161, 36, 10, 78, -273, 0, 11)
+    CALL(evt_cam3d_evt_set, 10, 161, 36, 10, 78, -273, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_npc_set_position, STRING("ババ"), 135, 35, -330)
     SET_VALUE(GF(0), 0)
@@ -4968,7 +5244,7 @@ EVT_BEGIN(gor_00_koopa_evt)
     END_INLINE_EVENT
     CALL(evt_npc_kamek_move_position, STRING("ババ"), 10, -330, 10, 0, FLOAT(60.0f), 0)
     SET_VALUE(GF(0), 1)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ババ"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("水夫ボム兵Ａ"), LW(0), LW(1), LW(2))
@@ -4977,7 +5253,7 @@ EVT_BEGIN(gor_00_koopa_evt)
         CALL(evt_npc_set_position, STRING("水夫ボム兵Ａ"), LW(0), LW(1), LW(2))
         ADD(LW(0), 350)
         CALL(evt_npc_move_position, STRING("水夫ボム兵Ａ"), LW(0), LW(2), 0, FLOAT(180.0f), 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("水夫ボム兵Ａ"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("水夫ボム兵Ａ"), NPC_FLAG_NO_DRAW)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("水夫Ｂ"), LW(0), LW(1), LW(2))
@@ -4986,7 +5262,7 @@ EVT_BEGIN(gor_00_koopa_evt)
         CALL(evt_npc_set_position, STRING("水夫Ｂ"), LW(0), LW(1), LW(2))
         ADD(LW(0), 350)
         CALL(evt_npc_move_position, STRING("水夫Ｂ"), LW(0), LW(2), 0, FLOAT(180.0f), 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("水夫Ｂ"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("水夫Ｂ"), NPC_FLAG_NO_DRAW)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("オドオド水夫"), LW(0), LW(1), LW(2))
@@ -4995,14 +5271,15 @@ EVT_BEGIN(gor_00_koopa_evt)
         CALL(evt_npc_set_position, STRING("オドオド水夫"), LW(0), LW(1), LW(2))
         ADD(LW(0), 350)
         CALL(evt_npc_move_position, STRING("オドオド水夫"), LW(0), LW(2), 0, FLOAT(180.0f), 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_DRAW)
     END_INLINE_EVENT
     WAIT_MS(2000)
+
     // Kammy flies over to the dock and asks where Bowser has been; he says he was swimming, and she raves
     // about Glitzville.
     CALL(evt_npc_set_ry, STRING("ババ"), 90)
     WAIT_MS(500)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("ババ"), 1, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("ババ"), 1, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1200)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
@@ -5015,11 +5292,11 @@ EVT_BEGIN(gor_00_koopa_evt)
             WAIT_FRAMES(10)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_kamek_move_position, STRING("ババ"), 20, -120, 10, 0, FLOAT(90.0f), 0)
     SET_VALUE(GF(0), 1)
     CALL(evt_npc_set_position, STRING("ババ"), 80, 35, 125)
-    CALL(evt_cam3d_evt_set, 145, 193, 737, 145, 83, 225, 0, 11)
+    CALL(evt_cam3d_evt_set, 145, 193, 737, 145, 83, 225, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
@@ -5034,29 +5311,30 @@ EVT_BEGIN(gor_00_koopa_evt)
     END_INLINE_EVENT
     CALL(evt_npc_kamek_move_position, STRING("ババ"), 82, 225, 8, 0, FLOAT(90.0f), 0)
     SET_VALUE(GF(0), 1)
-    CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_msg_print, 0, STRING("kpa_stg4_015"), 0, STRING("ババ"))
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_7"), STRING("KPA_T_7"))
     CALL(evt_msg_print, 0, STRING("kpa_stg4_016"), 0, STRING("mario"))
     CALL(evt_npc_set_autotalkpose, STRING("ババ"), STRING("K_2"), STRING("T_12"))
     CALL(evt_msg_print, 0, STRING("kpa_stg4_017"), 0, STRING("ババ"))
+
     // Set up the burning: when Bowser roars (page 1 of kpa_stg4_018, via gor_stg4_018_cb) he breathes fire,
     // Kammy and her broom turn grey, the broom flickers away and Kammy drops to the ground, smoking.
-    SET_VALUE(LSWF(6), 0)
+    SET_VALUE(LSWF_GOR_00_KOOPA_MSG_CUE, 0)
     SET_VALUE(GF(0), 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(6), 0)
+            IF_INT_NOT_EQUAL(LSWF_GOR_00_KOOPA_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
         WAIT_MS(100)
-        CALL(evt_cam_shake, 4, FLOAT(0.0048828125f), FLOAT(0.0048828125f), 800)
+        CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0048828125f), 800)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(6), 0)
+            IF_INT_NOT_EQUAL(LSWF_GOR_00_KOOPA_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -5065,7 +5343,7 @@ EVT_BEGIN(gor_00_koopa_evt)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_ANGRY2_1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_koopa_fire, 1000)
-        CALL(evt_mario_dispflag_onoff, 0, 2)
+        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
         WAIT_MS(100)
         CALL(kpa_chg_pose, STRING("KPA_S_4"))
         CALL(evt_npc_set_color, STRING("ババ"), 128, 128, 128, 255)
@@ -5083,15 +5361,15 @@ EVT_BEGIN(gor_00_koopa_evt)
         SET_VALUE(LW(0), 100)
         LOOP(6)
             WAIT_MS(LW(0))
-            CALL(evt_npc_flag_onoff, 1, STRING("houki"), NPC_FLAG_HIDDEN)
+            CALL(evt_npc_flag_onoff, 1, STRING("houki"), NPC_FLAG_NO_DRAW)
             WAIT_MS(LW(0))
-            CALL(evt_npc_flag_onoff, 0, STRING("houki"), NPC_FLAG_HIDDEN)
+            CALL(evt_npc_flag_onoff, 0, STRING("houki"), NPC_FLAG_NO_DRAW)
             DIVIDE(LW(0), 2)
         END_LOOP
         CALL(evt_npc_set_position, STRING("houki"), 0, -1000, 0)
         CALL(evt_npc_get_position, STRING("ババ"), LW(2), LW(3), LW(4))
         CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_KAMEBABA_FALL1"), LW(2), LW(3), LW(4), 0)
-        CALL(evt_sub_intpl_msec_init, 1, LW(3), 15, 200)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, LW(3), 15, 200)
         LABEL(4)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_npc_set_position, STRING("ババ"), LW(2), LW(0), LW(4))
@@ -5106,13 +5384,13 @@ EVT_BEGIN(gor_00_koopa_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(6), 0)
+            IF_INT_NOT_EQUAL(LSWF_GOR_00_KOOPA_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
         WAIT_MS(300)
-        CALL(evt_mario_dispflag_onoff, 1, 2)
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     END_INLINE_EVENT
     SET_VALUE(GF(1), 0)
     BEGIN_INLINE_EVENT
@@ -5139,6 +5417,7 @@ EVT_BEGIN(gor_00_koopa_evt)
             WAIT_MS(600)
         END_LOOP
     END_INLINE_EVENT
+
     // Bowser stays silent, then roars; Kammy asks from the ground whether that is a "no", and Bowser rants
     // that he swallowed a Blooper and orders her to get information on Peach and the Crystal Stars.
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
@@ -5149,29 +5428,26 @@ EVT_BEGIN(gor_00_koopa_evt)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
-    CALL(evt_cam3d_evt_set, 80, 103, 494, 80, 45, 225, 800, 11)
+    CALL(evt_cam3d_evt_set, 80, 103, 494, 80, 45, 225, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_npc_set_autotalkpose, STRING("ババ"), STRING("D_3"), STRING("T_8"))
     CALL(evt_msg_print, 0, STRING("kpa_stg4_019"), 0, STRING("ババ"))
-    CALL(evt_cam3d_evt_set, 145, 193, 737, 145, 83, 225, 800, 0)
+    CALL(evt_cam3d_evt_set, 145, 193, 737, 145, 83, 225, 800, EASING_LINEAR)
     WAIT_MS(800)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
     CALL(evt_msg_print, 0, STRING("kpa_stg4_020"), 0, STRING("mario"))
+
     // Story advances to Bowser at the Rogueport dock; fade out, save and go to the next Bowser scene.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_08_BOWSER_ROGUEPORT_DOCK)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_15_08_BOWSER_ROGUEPORT_DOCK)
     WAIT_MS(2000)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
     CALL(evt_fade_entry, FADE_OUT_SPOT_3D, 300, 0, 0, 0)
     CALL(evt_fade_end_wait)
     SET_VALUE(GF(1), 1)
     WAIT_MS(2000)
     SET_VALUE(LF(10), 0)
     SET_VALUE(LW(0), 12)
-#if VERSION >= VERSION_US
-    CALL_CHILD(evt_memcard_save_wrapper) // US saves through its wrapper script
-#else
-    CALL_CHILD(evt_memcard_save)
-#endif
+    CALL_CHILD(SAVE_EVT)
     CALL(evt_mario_set_mode, 0)
     CALL(evt_fade_set_mapchange_type, 1, FADE_STORY_BOWSER_A1, 0, FADE_STORY_BOWSER_A3, 0)
     CALL(evt_bero_mapchange, STRING("usu_00"), 0)
@@ -5181,7 +5457,7 @@ EVT_END()
 /**
  * When Mario walks to the Chapter 5 dock spot (z <= 250 and x <= -120) a mail from Peach arrives:
  * Mario's controls are locked, the mail jingle (BGM_FF_MAIL_RECEPTION1) plays with the lines gor_00_mail5_00 to
- * _02, the story moves to STORY_STG5_59_01_A_MAIL_FROM_PEACH and the second ship (S_fune_b, A_fune_b) is shown.
+ * _02, the story moves to STG5_59_01_A_MAIL_FROM_PEACH and mail 4 is received and opened.
  */
 static EVT_BEGIN(peach_mail)
     LOOP(0)
@@ -5199,13 +5475,13 @@ static EVT_BEGIN(peach_mail)
 #if VERSION >= VERSION_DEMO_EU
     CALL(evt_party_stop, 0)
 #endif
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION1"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION1"))
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_2"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
-    CALL(evt_eff_fukidashi, 0, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -5216,20 +5492,20 @@ static EVT_BEGIN(peach_mail)
     CALL(evt_mario_balloon_bikkuri)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_INT_EQUAL(LW(0), 256)
+        IF_INT_EQUAL(LW(0), PAD_BUTTON_A)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MAIL_RECEPTION1"), LW(0), LW(1), LW(2), 0)
     DELETE_EVENT(LW(10))
     WAIT_FRAMES(1)
     CALL(evt_sub_rumble_onoff, 1, 0)
-    CALL(evt_cam3d_evt_set, -110, 109, 512, -110, 57, 217, 1000, 11)
+    CALL(evt_cam3d_evt_set, -110, 109, 512, -110, 57, 217, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_mario_set_pose, STRING("M_N_9"))
     WAIT_MS(500)
@@ -5246,170 +5522,21 @@ static EVT_BEGIN(peach_mail)
 #endif
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_59_01_A_MAIL_FROM_PEACH)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_59_01_A_MAIL_FROM_PEACH)
     CALL(evt_pouch_receive_mail, 4)
     CALL(evt_pouch_open_mail, 4)
     RETURN
 EVT_END()
 
 /** Up-and-down offsets, in 16 steps, that make a ship at the dock bob on the water. */
-f32 gor_ship_puka_data[] = {
+static f32 gor_ship_puka_data[] = {
     -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -2.200000047683716f, -2.5f, -2.700000047683716f, -2.700000047683716f, -2.700000047683716f, -2.5f, -2.200000047683716f, -2.0f, -1.5f, -1.0f, -0.5f,
 };
 
 /**
- * Loops forever, bobbing the ship up and down: samples gor_ship_puka_data with a rising index every 130 ms,
- * scaled by LW(1), and writes it to LW(0) (the ship's height offset).
- */
-EVT_BEGIN(gor_ship_puka)
-    SET_VALUE(LW(10), 0)
-    LOOP(0)
-        CALL(gor_ship_puka_func, LW(10), LW(1), LW(11))
-        SET_FLOAT_INDEXED(LW(0), LW(11))
-        ADD(LW(10), 1)
-        WAIT_MS(130)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Loops forever, copying the ship position (GW(13), GW(14)) and heading (GW(15)) to the ship "S_fune_b",
- * its collision "A_fune_b" and its wake "S_c_hikinami" every frame.
- */
-EVT_BEGIN(gor_muj_ship_sub)
-    LOOP(0)
-        SET_FLOAT_VALUE(LW(0), GW(13))
-        SET_FLOAT_VALUE(LW(1), GW(14))
-        SET_FLOAT_VALUE(LW(2), GW(15))
-        CALL(evt_mapobj_trans, 1, STRING("S_fune_b"), LW(0), LW(1), 0)
-        CALL(evt_mapobj_rotate, 1, STRING("S_fune_b"), 0, LW(2), 0)
-        CALL(evt_hit_bind_update, STRING("A_fune_b"))
-        SET_FLOAT_VALUE(LW(3), LW(2))
-        ADD_FLOAT(LW(3), FLOAT(180.0f))
-        CALL(evt_mapobj_trans, 1, STRING("S_c_hikinami"), LW(0), 0, 0)
-        CALL(evt_mapobj_rotate, 1, STRING("S_c_hikinami"), 0, LW(3), 0)
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Carries Mario and his partners along with the departing ship:
- * each frame it moves them by the change of the ship's position (GW(13) and GW(14)).
- */
-static EVT_BEGIN(option_ship_mario)
-    SET_FLOAT_VALUE(LW(10), GW(13))
-    SET_FLOAT_VALUE(LW(11), GW(14))
-    LOOP(0)
-        SET_FLOAT_VALUE(LW(4), GW(13))
-        SUBTRACT_FLOAT(LW(4), LW(10))
-        SET_FLOAT_VALUE(LW(5), GW(14))
-        SUBTRACT_FLOAT(LW(5), LW(11))
-        CALL(evt_mario_get_pos, 0, LW(1), LW(2), LW(3))
-        ADD_FLOAT(LW(1), LW(4))
-        ADD_FLOAT(LW(2), LW(5))
-        CALL(evt_mario_set_pos, LW(1), LW(2), LW(3))
-        CALL(evt_party_get_pos, 0, LW(1), LW(2), LW(3))
-        ADD_FLOAT(LW(1), LW(4))
-        ADD_FLOAT(LW(2), LW(5))
-        CALL(evt_party_set_pos, 0, LW(1), LW(2), LW(3))
-        CALL(evt_party_get_pos, 1, LW(1), LW(2), LW(3))
-        ADD_FLOAT(LW(1), LW(4))
-        ADD_FLOAT(LW(2), LW(5))
-        CALL(evt_party_set_pos, 1, LW(1), LW(2), LW(3))
-        CALL(evt_npc_get_position, STRING("コルテス"), LW(1), LW(2), LW(3))
-        ADD_FLOAT(LW(1), LW(4))
-        CALL(evt_npc_set_position, STRING("コルテス"), LW(1), LW(2), LW(3))
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_64_02_F_AND_F_SAIL_OFF)
-            CALL(evt_npc_get_position, STRING("モニー"), LW(1), LW(2), LW(3))
-            ADD_FLOAT(LW(1), LW(4))
-            ADD_FLOAT(LW(2), LW(5))
-            CALL(evt_npc_set_position, STRING("モニー"), LW(1), LW(2), LW(3))
-            CALL(evt_npc_get_position, STRING("ピートン"), LW(1), LW(2), LW(3))
-            ADD_FLOAT(LW(1), LW(4))
-            ADD_FLOAT(LW(2), LW(5))
-            CALL(evt_npc_set_position, STRING("ピートン"), LW(1), LW(2), LW(3))
-        END_IF
-        SET_FLOAT_VALUE(LW(10), GW(13))
-        SET_FLOAT_VALUE(LW(11), GW(14))
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Prepares the ship that goes to and comes back from Keelhaul Key ("muj", the deserted island):
- * shows the ship and its collision, sets its position to x=-25,
- * spawns the follow-ship event and the bobbing (gor_ship_puka).
- */
-EVT_BEGIN(gor_muj_ship_init)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_b"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_hitobj_onoff, STRING("A_fune_b"), 1, 1)
-    CALL(evt_hitobj_onoff, STRING("A_b_bero02"), 1, 0)
-    CALL(evt_hit_bind_mapobj, STRING("A_fune_b"), STRING("S_fune_b"))
-    SET_FLOAT_VALUE(GW(13), FLOAT(-25.0f))
-    SET_FLOAT_VALUE(GW(14), FLOAT(0.0f))
-    SET_VALUE(GW(15), 0)
-    SPAWN_EVENT(gor_muj_ship_sub)
-    SET_RAW_VALUE(LW(0), GW(14))
-    SET_FLOAT_VALUE(LW(1), FLOAT(1.5f))
-    SPAWN_EVENT_GET_ID(PTR(gor_ship_puka), GW(10))
-    RETURN
-EVT_END()
-
-/**
- * Flips the Keelhaul ship over like a sheet of paper (the capture/paper-turn effect, "OFF_d_kaiten") with the
- * paper- turn sound, switching its heading to 180 degrees; the ship appears to turn around.
- */
-EVT_BEGIN(gor_muj_ship_pera)
-    CALL(evt_img_entry, STRING("capture_img"))
-    CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_kaiten"))
-    CALL(evt_offscreen_entry, STRING("offscreen"))
-    CALL(evt_offscreen_set_texture_fmt, STRING("offscreen"), 6, 6)
-    CALL(evt_mapobj_set_offscreen, 1, STRING("S_fune_b"), STRING("offscreen"))
-    CALL(evt_img_alloc_capture, STRING("capture_img"), 0, STRING("offscreen"), 0, 0, 0, 608, 480)
-    CALL(evt_img_alloc_capture, STRING("capture_img"), 1, STRING("offscreen"), 0, 0, 0, 608, 480)
-    CALL(evt_img_onoff, STRING("capture_img"), 0)
-    CALL(evt_img_set_virtual_point, STRING("capture_img"), 191, 0, 50)
-    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("Z_1"))
-    CALL(evt_img_onoff, STRING("capture_img"), 1)
-    CALL(evt_snd_sfxon, STRING("SFX_OFF_SHIP_REVERSE1"), 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_b"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
-    CALL(evt_img_wait_animend, STRING("capture_img"))
-    CALL(evt_img_onoff, STRING("capture_img"), 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_b"), MAPOBJ_FLAG_HIDE)
-    SET_VALUE(GW(15), 180)
-    CALL(evt_mapobj_clear_offscreen, 1, STRING("S_fune_b"))
-    CALL(evt_img_free_capture, STRING("capture_img"), 0)
-    CALL(evt_img_free_capture, STRING("capture_img"), 1)
-    CALL(evt_img_onoff, STRING("capture_img"), 0)
-    CALL(evt_img_release, STRING("capture_img"))
-    CALL(evt_offscreen_delete, STRING("offscreen"))
-    CALL(evt_paper_delete, STRING("OFF_d_kaiten"))
-    RETURN
-EVT_END()
-
-/**
- * Message callback for the Bowser line kpa_stg4_018:
- * when the message reaches page 1 it sets the local flag LSWF(6), which makes the scene start Kammy's burning.
- */
-static void gor_stg4_018_cb(s32 type, smartEntry* smart) {
-    MsgWinData* info = smart->address;
-
-    switch (type) {
-        case 3:
-            if (info->curPage == 1) {
-                evtSetValue(NULL, LSWF(6), 1);
-            }
-            break;
-    }
-}
-
-/**
  * Per-frame task for the harbor: keeps two water spray effects (effFunemizuEntry) next to the arriving ship
- * "S_fune_a" and spawns splash effects at its side whenever it moves.
+ * "S_fune_a" and spawns splash effects at its side when movement since the previous call exceeds 1 unit and the retrace count is a multiple of 15.
  */
 static USER_FUNC(fune_eff) {
     EffectEntry* eff1;
@@ -5446,7 +5573,7 @@ static USER_FUNC(fune_eff) {
     ((EffFunemizuWork*)eff1->userdata)->position.x = pos.x + 85.0f * sign;
     ((EffFunemizuWork*)eff1->userdata)->position.y = pos.y - 51.0f;
     ((EffFunemizuWork*)eff1->userdata)->position.z = 30.0f + pos.z;
-    ((EffFunemizuWork*)eff1->userdata)->speed = dist;
+    ((EffFunemizuWork*)eff1->userdata)->size = dist;
     if (angle < 180.0f) {
         ((EffFunemizuWork*)eff1->userdata)->yaw = 135.0f + angle;
     } else {
@@ -5455,7 +5582,7 @@ static USER_FUNC(fune_eff) {
     ((EffFunemizuWork*)eff2->userdata)->position.x = pos.x - 15.0f * sign;
     ((EffFunemizuWork*)eff2->userdata)->position.y = pos.y - 51.0f;
     ((EffFunemizuWork*)eff2->userdata)->position.z = 90.0f + pos.z;
-    ((EffFunemizuWork*)eff2->userdata)->speed = dist;
+    ((EffFunemizuWork*)eff2->userdata)->size = dist;
     ((EffFunemizuWork*)eff2->userdata)->yaw = 90.0f + angle;
     if (dist > 1.0f && gp->retraceCount % 15 == 0) {
         effWaterDamageN64Entry(5, 30, pos.x - 150.0f * sign, pos.y - 50.0f, pos.z, 2.0f);
@@ -5474,6 +5601,139 @@ static USER_FUNC(gor_ship_puka_func) {
     evtSetFloat(event, args[2], f * gor_ship_puka_data[idx & 0xF]);
     return EVT_RETURN_DONE;
 }
+
+/**
+ * Loops forever, bobbing the ship up and down: samples gor_ship_puka_data with a rising index every 130 ms,
+ * scaled by LW(1), and writes it to the variable named by LW(0) (the ship's height offset).
+ */
+static EVT_BEGIN(gor_ship_puka)
+    SET_VALUE(LW(10), 0)
+    LOOP(0)
+        CALL(gor_ship_puka_func, LW(10), LW(1), LW(11))
+        SET_FLOAT_INDEXED(LW(0), LW(11))
+        ADD(LW(10), 1)
+        WAIT_MS(130)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Loops forever, applying the ship position (GW(13), GW(14)) and heading (GW(15)) to "S_fune_b"
+ * and its bound collision "A_fune_b" every frame. The wake "S_c_hikinami" follows x at y=0, with its heading offset by 180 degrees.
+ */
+static EVT_BEGIN(gor_muj_ship_sub)
+    LOOP(0)
+        SET_FLOAT_VALUE(LW(0), GW(13))
+        SET_FLOAT_VALUE(LW(1), GW(14))
+        SET_FLOAT_VALUE(LW(2), GW(15))
+        CALL(evt_mapobj_trans, 1, STRING("S_fune_b"), LW(0), LW(1), 0)
+        CALL(evt_mapobj_rotate, 1, STRING("S_fune_b"), 0, LW(2), 0)
+        CALL(evt_hit_bind_update, STRING("A_fune_b"))
+        SET_FLOAT_VALUE(LW(3), LW(2))
+        ADD_FLOAT(LW(3), FLOAT(180.0f))
+        CALL(evt_mapobj_trans, 1, STRING("S_c_hikinami"), LW(0), 0, 0)
+        CALL(evt_mapobj_rotate, 1, STRING("S_c_hikinami"), 0, LW(3), 0)
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Carries Mario and his partners along with the arriving ship:
+ * each frame it moves them by the change of the ship's position (GW(13) and GW(14)).
+ */
+static EVT_BEGIN(option_ship_mario)
+    SET_FLOAT_VALUE(LW(10), GW(13))
+    SET_FLOAT_VALUE(LW(11), GW(14))
+    LOOP(0)
+        SET_FLOAT_VALUE(LW(4), GW(13))
+        SUBTRACT_FLOAT(LW(4), LW(10))
+        SET_FLOAT_VALUE(LW(5), GW(14))
+        SUBTRACT_FLOAT(LW(5), LW(11))
+        CALL(evt_mario_get_pos, 0, LW(1), LW(2), LW(3))
+        ADD_FLOAT(LW(1), LW(4))
+        ADD_FLOAT(LW(2), LW(5))
+        CALL(evt_mario_set_pos, LW(1), LW(2), LW(3))
+        CALL(evt_party_get_pos, 0, LW(1), LW(2), LW(3))
+        ADD_FLOAT(LW(1), LW(4))
+        ADD_FLOAT(LW(2), LW(5))
+        CALL(evt_party_set_pos, 0, LW(1), LW(2), LW(3))
+        CALL(evt_party_get_pos, 1, LW(1), LW(2), LW(3))
+        ADD_FLOAT(LW(1), LW(4))
+        ADD_FLOAT(LW(2), LW(5))
+        CALL(evt_party_set_pos, 1, LW(1), LW(2), LW(3))
+        CALL(evt_npc_get_position, STRING("コルテス"), LW(1), LW(2), LW(3))
+        ADD_FLOAT(LW(1), LW(4))
+        CALL(evt_npc_set_position, STRING("コルテス"), LW(1), LW(2), LW(3))
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_64_02_F_F_SAIL_OFF)
+            CALL(evt_npc_get_position, STRING("モニー"), LW(1), LW(2), LW(3))
+            ADD_FLOAT(LW(1), LW(4))
+            ADD_FLOAT(LW(2), LW(5))
+            CALL(evt_npc_set_position, STRING("モニー"), LW(1), LW(2), LW(3))
+            CALL(evt_npc_get_position, STRING("ピートン"), LW(1), LW(2), LW(3))
+            ADD_FLOAT(LW(1), LW(4))
+            ADD_FLOAT(LW(2), LW(5))
+            CALL(evt_npc_set_position, STRING("ピートン"), LW(1), LW(2), LW(3))
+        END_IF
+        SET_FLOAT_VALUE(LW(10), GW(13))
+        SET_FLOAT_VALUE(LW(11), GW(14))
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
+ * Prepares the ship that goes to and comes back from Keelhaul Key ("muj", the deserted island):
+ * shows the ship and its collision, sets its position to x=-25,
+ * spawns the follow-ship event and the bobbing (gor_ship_puka).
+ */
+static EVT_BEGIN(gor_muj_ship_init)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_b"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_hitobj_onoff, STRING("A_fune_b"), 1, 1)
+    CALL(evt_hitobj_onoff, STRING("A_b_bero02"), 1, 0)
+    CALL(evt_hit_bind_mapobj, STRING("A_fune_b"), STRING("S_fune_b"))
+    SET_FLOAT_VALUE(GW(13), FLOAT(-25.0f))
+    SET_FLOAT_VALUE(GW(14), FLOAT(0.0f))
+    SET_VALUE(GW(15), 0)
+    SPAWN_EVENT(gor_muj_ship_sub)
+    SET_RAW_VALUE(LW(0), GW(14))
+    SET_FLOAT_VALUE(LW(1), FLOAT(1.5f))
+    SPAWN_EVENT_GET_ID(PTR(gor_ship_puka), GW(10))
+    RETURN
+EVT_END()
+
+/**
+ * Flips the Keelhaul ship over like a sheet of paper (the capture/paper-turn effect, "OFF_d_kaiten") with the
+ * paper- turn sound, switching its heading to 180 degrees; the ship appears to turn around.
+ */
+static EVT_BEGIN(gor_muj_ship_pera)
+    CALL(evt_img_entry, STRING("capture_img"))
+    CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_kaiten"))
+    CALL(evt_offscreen_entry, STRING("offscreen"))
+    CALL(evt_offscreen_set_texture_fmt, STRING("offscreen"), 6, 6)
+    CALL(evt_mapobj_set_offscreen, 1, STRING("S_fune_b"), STRING("offscreen"))
+    CALL(evt_img_alloc_capture, STRING("capture_img"), 0, STRING("offscreen"), 0, 0, 0, 608, 480)
+    CALL(evt_img_alloc_capture, STRING("capture_img"), 1, STRING("offscreen"), 0, 0, 0, 608, 480)
+    CALL(evt_img_onoff, STRING("capture_img"), 0)
+    CALL(evt_img_set_virtual_point, STRING("capture_img"), 191, 0, 50)
+    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("Z_1"))
+    CALL(evt_img_onoff, STRING("capture_img"), 1)
+    CALL(evt_snd_sfxon, STRING("SFX_OFF_SHIP_REVERSE1"), 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_b"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
+    CALL(evt_img_wait_animend, STRING("capture_img"))
+    CALL(evt_img_onoff, STRING("capture_img"), 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_b"), MAP_OBJ_FLAG_HIDDEN)
+    SET_VALUE(GW(15), 180)
+    CALL(evt_mapobj_clear_offscreen, 1, STRING("S_fune_b"))
+    CALL(evt_img_free_capture, STRING("capture_img"), 0)
+    CALL(evt_img_free_capture, STRING("capture_img"), 1)
+    CALL(evt_img_onoff, STRING("capture_img"), 0)
+    CALL(evt_img_release, STRING("capture_img"))
+    CALL(evt_offscreen_delete, STRING("offscreen"))
+    CALL(evt_paper_delete, STRING("OFF_d_kaiten"))
+    RETURN
+EVT_END()
 
 /**
  * Sets the scale of Mario and both partners (if present) to args[0] on all axes;
@@ -5499,83 +5759,27 @@ static USER_FUNC(scale_func) {
 static USER_FUNC(funeflag_save) {
     MapObject* b = mapGetMapObj("S_fune_b");
     MapObject* c = mapGetMapObj("S_fune_c");
-    event->lwData[8] = b->flags & 1;
-    event->lwData[9] = c->flags & 1;
+    event->lwData[8] = b->flags & MAP_OBJ_FLAG_HIDDEN;
+    event->lwData[9] = c->flags & MAP_OBJ_FLAG_HIDDEN;
     return EVT_RETURN_DONE;
 }
-
-/** Hides the ships "S_fune_b" and "S_fune_c" (sets the hide flag on their groups). */
-static USER_FUNC(funeflag_reset) {
-    mapGrpFlagOn("S_fune_b", 1);
-    mapGrpFlagOn("S_fune_c", 1);
-    return EVT_RETURN_DONE;
-}
-
-/** Restores the hide state of the ships "S_fune_b" and "S_fune_c" saved in LW(8) and LW(9) by funeflag_save. */
-static USER_FUNC(funeflag_load) {
-    mapGrpFlagOff("S_fune_b", 1);
-    mapGrpFlagOn("S_fune_b", event->lwData[8]);
-    mapGrpFlagOff("S_fune_c", 1);
-    mapGrpFlagOn("S_fune_c", event->lwData[9]);
-    return EVT_RETURN_DONE;
-}
-
-/** Returns in args[0] whether Mario is currently switching ships (marioShipChanging). */
-static USER_FUNC(funechange_func) {
-    EvtWord* args = event->args;
-    evtSetValue(event, args[0], marioShipChanging());
-    return EVT_RETURN_DONE;
-}
-
-/** Returns in args[0] the color number of Mario's Yoshi partner (pouchGetPartyColor(4)). */
-static USER_FUNC(get_yoshi_color) {
-    EvtWord* args = event->args;
-    evtSetValue(event, args[0], pouchGetPartyColor(4));
-    return EVT_RETURN_DONE;
-}
-
-#if VERSION >= VERSION_JP
-/**
- * Deletes every NPC on the map, cancelling their regular events first. Used to clear the cast for the epilogue.
- * JP and later releases.
- */
-USER_FUNC(npc_all_delete) {
-    NpcWork* wp = npcGetWorkPtr();
-    s32 i;
-    s32 total = wp->total;
-    NpcEntry* npc = wp->entries;
-
-    for (i = 0; i < total; i++, npc++) {
-        if (npc->flags & NPC_FLAG_USED) {
-            if (npc->moveEvent != NULL) {
-                if (npc->regularEvtId != 0) {
-                    evtDeleteID(npc->regularEvtId);
-                }
-                npc->regularEvtId = 0;
-                npc->moveEvent = NULL;
-            }
-            npcDelete(npc);
-        }
-    }
-    return EVT_RETURN_DONE;
-}
-#endif
 
 /**
  * Sets sail for Keelhaul Key after Cortez's talk:
  * shrinks Mario, the partners and Cortez out of sight, flips the ship over like paper, bobs it,
  * fades in its wake and slides it 800 units out of the harbor in 10 seconds before changing to the map muj_20.
  */
-EVT_BEGIN(gor_muj_ship_start)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_c_hikinami"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(gor_muj_ship_start)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_c_hikinami"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_c_hikinami"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_c_hikinami"), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("S_c_hikinami"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("S_c_hikinami"), MAP_OBJ_FLAG_DISPLAY_LIST)
     CALL(alpha_set_func, 0)
     CALL(evt_map_set_playrate, STRING("hiki_nami"), FLOAT(1.0f))
+
     // Mario, the partners and Cortez shrink out of sight as they board.
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, 100, 0, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 100, 0, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -5593,11 +5797,12 @@ EVT_BEGIN(gor_muj_ship_start)
         CALL(evt_party_set_pos, 0, 0, -1000, 0)
         CALL(evt_party_set_pos, 1, 0, -1000, 0)
     END_INLINE_EVENT
+
     // The camera pulls back and the ghost ship music starts as the ship flips over like a paper model.
-    CALL(evt_cam3d_evt_set, 184, 278, 1091, 184, 158, 99, 500, 11)
+    CALL(evt_cam3d_evt_set, 184, 278, 1091, 184, 158, 99, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     DELETE_EVENT(GW(10))
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG5_GHOST_SHIP1"))
     SET_VALUE(GF(10), 1)
     CALL(evt_npc_set_position, STRING("船ダミー"), 0, GW(14), 0)
     BEGIN_INLINE_EVENT
@@ -5625,7 +5830,7 @@ EVT_BEGIN(gor_muj_ship_start)
     SPAWN_EVENT_GET_ID(PTR(gor_ship_puka), GW(10))
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
-        CALL(evt_sub_intpl_msec_init, 11, 0, 255, 5000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 5000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(alpha_set_func, LW(0))
@@ -5635,12 +5840,13 @@ EVT_BEGIN(gor_muj_ship_start)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
+
     // The ship sails out of the harbor; the next scene is the trip to Keelhaul Key.
     CALL(evt_snd_sfxon, STRING("SFX_STG5_SHIP_STARTING1_3"), 0)
     SET_FLOAT_VALUE(LW(0), GW(13))
     SET_FLOAT_VALUE(LW(1), GW(13))
     ADD_FLOAT(LW(1), FLOAT(800.0f))
-    CALL(evt_sub_intpl_msec_init, 1, LW(0), LW(1), 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, LW(0), LW(1), 10000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         SET_FLOAT_VALUE(GW(13), LW(0))
@@ -5653,26 +5859,81 @@ EVT_BEGIN(gor_muj_ship_start)
     RETURN
 EVT_END()
 
+/** Hides the ships "S_fune_b" and "S_fune_c" (sets the hide flag on their groups). */
+static USER_FUNC(funeflag_reset) {
+    mapGrpFlagOn("S_fune_b", MAP_OBJ_FLAG_HIDDEN);
+    mapGrpFlagOn("S_fune_c", MAP_OBJ_FLAG_HIDDEN);
+    return EVT_RETURN_DONE;
+}
+
+/** Restores the hide state of the ships "S_fune_b" and "S_fune_c" saved in LW(8) and LW(9) by funeflag_save. */
+static USER_FUNC(funeflag_load) {
+    mapGrpFlagOff("S_fune_b", MAP_OBJ_FLAG_HIDDEN);
+    mapGrpFlagOn("S_fune_b", event->lwData[8]);
+    mapGrpFlagOff("S_fune_c", MAP_OBJ_FLAG_HIDDEN);
+    mapGrpFlagOn("S_fune_c", event->lwData[9]);
+    return EVT_RETURN_DONE;
+}
+
+/** Returns in args[0] whether Mario is currently switching ships (marioShipChanging). */
+static USER_FUNC(funechange_func) {
+    EvtWord* args = event->args;
+    evtSetValue(event, args[0], marioShipChanging());
+    return EVT_RETURN_DONE;
+}
+
+/** Returns in args[0] the color number of Mario's Yoshi partner (pouchGetPartyColor(PARTY_YOSHI)). */
+static USER_FUNC(get_yoshi_color) {
+    EvtWord* args = event->args;
+    evtSetValue(event, args[0], pouchGetPartyColor(PARTY_YOSHI));
+    return EVT_RETURN_DONE;
+}
+
+// Descriptive name (not in the symbol maps); placeholder unk_gor_000006d8, JP gor .text+0x60C. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
+/**
+ * Deletes every NPC on the map, cancelling their regular events first. Used to clear the cast for the epilogue.
+ * JP and later releases.
+ */
+USER_FUNC(npc_all_delete) {
+    NpcWork* wp = npcGetWorkPtr();
+    s32 i;
+    s32 total = wp->total;
+    NpcEntry* npc = wp->entries;
+
+    for (i = 0; i < total; i++, npc++) {
+        if (npc->flags & NPC_FLAG_IN_USE) {
+            if (npc->moveEvent != NULL) {
+                if (npc->regularEvtId != 0) {
+                    evtDeleteID(npc->regularEvtId);
+                }
+                npc->regularEvtId = 0;
+                npc->moveEvent = NULL;
+            }
+            npcDelete(npc);
+        }
+    }
+    return EVT_RETURN_DONE;
+}
+#endif
+
 /**
  * Background task of the harbor, named after its cargo (tsumini, 積荷): hides the cargo pile that doesn't fit the
- * story stage ("S_ni_03" up to the X-Naut Ph.D. report, "S_ni_01" after).
- * Then every frame, while Mario is outside
- * the dock area (it counts as inside at x >= -100 with z >= -70, or x < -100 with z >= -280; in ship form only
- * once
- * a ship change has set GF(12)), it hides the ships "S_fune_b" and "S_fune_c" and the crew NPCs (Flavio's crew
- * from STORY_STG4_32 to the end of chapter 4, otherwise Cortez), and restores them when he is inside.
- * It ends once
- * GF(13) is set (korutesu_talk, sailing to Keelhaul Key).
+ * story stage ("S_ni_03" up to the X-Naut Ph.D. report, "S_ni_01" after). Then every frame, while Mario is
+ * outside the dock area (it counts as inside at x >= -100 with z >= -70, or x < -100 with z >= -280; in ship form
+ * only once a ship change has set GF(12)), it hides the ships "S_fune_b" and "S_fune_c" and the crew NPCs
+ * (Flavio's crew from STG4_32 to the end of chapter 4, otherwise Cortez), and restores them when he is inside.
+ * It ends once GF(13) is set (korutesu_talk, sailing to Keelhaul Key).
  */
-EVT_BEGIN(tsumini)
-    IF_INT_LESS_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ni_03"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(tsumini)
+    IF_INT_LESS_OR_EQUAL(GSW_STORY_PROGRESS, STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ni_03"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_ni_03"), 1, 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ni_01"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ni_01"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_ni_01"), 1, 0)
     END_IF
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(funeflag_save)
     SET_VALUE(GF(12), 0)
     SET_VALUE(GF(13), 0)
@@ -5699,33 +5960,33 @@ EVT_BEGIN(tsumini)
         END_IF
         IF_INT_EQUAL(LF(0), 0)
             CALL(funeflag_reset)
-            SWITCH(GSW(GSW_STORY_PROGRESS))
-                CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-                CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 1, STRING("サンダース"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 1, STRING("水夫Ｄ"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 1, STRING("店長"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 1, STRING("店員"), NPC_FLAG_HIDDEN)
+            SWITCH(GSW_STORY_PROGRESS)
+                CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+                CALL(evt_npc_flag_onoff, 1, STRING("マルコ"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 1, STRING("ガラの悪い水夫"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 1, STRING("オドオド水夫"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 1, STRING("めがね水夫"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 1, STRING("サンダース"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 1, STRING("水夫Ｄ"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 1, STRING("店長"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 1, STRING("店員"), NPC_FLAG_NO_DRAW)
                 CASE_DEFAULT
-                CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_HIDDEN)
+                CALL(evt_npc_flag_onoff, 1, STRING("コルテス"), NPC_FLAG_NO_DRAW)
             END_SWITCH
         ELSE
             CALL(funeflag_load)
-            SWITCH(GSW(GSW_STORY_PROGRESS))
-                CASE_BETWEEN(STORY_STG4_32_CHATTING_WITH_FLAVIO, STORY_STG4_END_OFF_TO_THE_KEYS)
-                CALL(evt_npc_flag_onoff, 0, STRING("マルコ"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 0, STRING("ガラの悪い水夫"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 0, STRING("めがね水夫"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 0, STRING("サンダース"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 0, STRING("水夫Ｄ"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 0, STRING("店長"), NPC_FLAG_HIDDEN)
-                CALL(evt_npc_flag_onoff, 0, STRING("店員"), NPC_FLAG_HIDDEN)
+            SWITCH(GSW_STORY_PROGRESS)
+                CASE_BETWEEN(STG4_32_CHATTING_WITH_FLAVIO, STG4_END_OFF_TO_THE_KEYS)
+                CALL(evt_npc_flag_onoff, 0, STRING("マルコ"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 0, STRING("ガラの悪い水夫"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 0, STRING("オドオド水夫"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 0, STRING("めがね水夫"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 0, STRING("サンダース"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 0, STRING("水夫Ｄ"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 0, STRING("店長"), NPC_FLAG_NO_DRAW)
+                CALL(evt_npc_flag_onoff, 0, STRING("店員"), NPC_FLAG_NO_DRAW)
                 CASE_DEFAULT
-                CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_HIDDEN)
+                CALL(evt_npc_flag_onoff, 0, STRING("コルテス"), NPC_FLAG_NO_DRAW)
             END_SWITCH
         END_IF
         IF_INT_EQUAL(GF(13), 1)
@@ -5735,6 +5996,8 @@ EVT_BEGIN(tsumini)
     END_LOOP
     RETURN
 EVT_END()
+
+// US and PAL: two more damage-return points
 
 /**
  * Hazard-water floors of this room (map hit names) and the point each puts Mario back at after he is bitten.
@@ -5753,16 +6016,16 @@ static HitDamageReturn dmgRetPoint[] = {
 
 /**
  * Opens the chest mobj_box00 and gives Mario the HP Drain badge (ITEM_HP_DRAIN_BADGE;
- * the US and later releases add ITEM_FLAG_BADGE_RETURN).
+ * JP and later releases add ITEM_FLAG_LOST_BADGE_TO_SHOP).
  */
 static EVT_BEGIN(mobj_box00)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mobj_get_position, STRING("mobj_box00"), LW(0), LW(1), LW(2))
-    CALL(evt_item_entry, STRING("item00"), ITEM_HP_DRAIN_BADGE, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED, -1, 0)
+    CALL(evt_item_entry, STRING("item00"), ITEM_HP_DRAIN_BADGE, LW(0), LW(1), LW(2), ITEM_TYPE_STILL, -1, 0)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET)
 #else
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_BADGE_RETURN | ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET | ITEM_FLAG_LOST_BADGE_TO_SHOP)
 #endif
     CALL(evt_mobj_wait_animation_end, STRING("mobj_box00"))
     CALL(evt_item_get_item, STRING("item00"))
@@ -5771,8 +6034,8 @@ static EVT_BEGIN(mobj_box00)
 EVT_END()
 
 /**
- * Sets up the ending scene at the harbor: deletes the harbor NPCs (Francesca, Frankie, Marco, sailors, Cortez,
- * Baba; every NPC in the US and later releases) and enters the cast who gather there:
+ * Sets up the ending scene at the harbor: deletes the harbor NPCs (Francesca, Frankie, Flavio, sailors, Cortez,
+ * Baba; every NPC in JP and later releases) and enters the cast who gather there:
  * Peach, Toadsworth, Professor Frankly, Goombella, Koops, Flurrie, the Yoshi kid, Vivian, Bobbery (Sanders),
  * Ms. Mowz and Punio and Puniko.
  */
@@ -5790,41 +6053,44 @@ static EVT_BEGIN(epilogue_npc_entry)
 #else
     CALL(npc_all_delete)
 #endif
+
     // Remove the regular harbor NPCs so only the epilogue cast remains.
     // Peach and Toadsworth wait at the right of the pier.
-    CALL(evt_npc_entry, STRING("ピーチ姫"), STRING("c_peach"))
+    CALL(evt_npc_entry, STRING("ピーチ姫"), STRING("c_peach")) // Princess Peach (epilogue)
     CALL(evt_npc_set_tribe, STRING("ピーチ姫"), STRING("ピーチ姫"))
     CALL(evt_npc_set_position, STRING("ピーチ姫"), 125, 15, 235)
     CALL(evt_npc_set_ry, STRING("ピーチ姫"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("ピーチ姫"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ピーチ姫"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_autotalkpose, STRING("ピーチ姫"), STRING("P_S_7"), STRING("P_T_13"))
     CALL(evt_npc_set_anim, STRING("ピーチ姫"), STRING("P_S_7"))
-    CALL(evt_npc_entry, STRING("キノじい"), STRING("c_kino_ji"))
+    CALL(evt_npc_entry, STRING("キノじい"), STRING("c_kino_ji")) // Toadsworth
     CALL(evt_npc_set_tribe, STRING("キノじい"), STRING("キノじい"))
     CALL(evt_npc_set_position, STRING("キノじい"), 165, 15, 205)
     CALL(evt_npc_set_ry, STRING("キノじい"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("キノじい"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("キノじい"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+
     // Professor Frankly, Goombella, Koops and Flurrie line up.
-    CALL(evt_npc_entry, STRING("クリハカセ"), STRING("c_kuri_h"))
+    CALL(evt_npc_entry, STRING("クリハカセ"), STRING("c_kuri_h")) // Professor Frankly
     CALL(evt_npc_set_tribe, STRING("クリハカセ"), STRING("クリハカセ"))
     CALL(evt_npc_set_position, STRING("クリハカセ"), 30, 15, 200)
     CALL(evt_npc_set_ry, STRING("クリハカセ"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリハカセ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリハカセ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_entry, STRING("クリスチーヌ"), STRING("c_pkr"))
     CALL(evt_npc_set_tribe, STRING("クリスチーヌ"), STRING("クリスチーヌ"))
     CALL(evt_npc_set_position, STRING("クリスチーヌ"), 10, 15, 235)
     CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("ノコタロウ"), STRING("c_pnk"))
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_entry, STRING("ノコタロウ"), STRING("c_pnk")) // Koops (epilogue)
     CALL(evt_npc_set_tribe, STRING("ノコタロウ"), STRING("ノコタロウ"))
     CALL(evt_npc_set_position, STRING("ノコタロウ"), -15, 15, 220)
     CALL(evt_npc_set_ry, STRING("ノコタロウ"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("ノコタロウ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("クラウダ"), STRING("c_windy"))
+    CALL(evt_npc_flag_onoff, 1, STRING("ノコタロウ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_entry, STRING("クラウダ"), STRING("c_windy")) // Flurrie (epilogue)
     CALL(evt_npc_set_tribe, STRING("クラウダ"), STRING("クラウダ"))
     CALL(evt_npc_set_position, STRING("クラウダ"), -40, 15, 200)
     CALL(evt_npc_set_ry, STRING("クラウダ"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("クラウダ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("クラウダ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+
     // The baby Yoshi, in the color Mario chose, then Vivian and Bobbery.
     CALL(get_yoshi_color, LW(0))
     SWITCH(LW(0))
@@ -5847,42 +6113,44 @@ static EVT_BEGIN(epilogue_npc_entry)
     CALL(evt_npc_set_tribe, STRING("チビヨッシー"), STRING("ヨッシー"))
     CALL(evt_npc_set_position, STRING("チビヨッシー"), -45, 15, 240)
     CALL(evt_npc_set_ry, STRING("チビヨッシー"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("チビヨッシー"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_entry, STRING("ビビアン"), STRING("c_vivian"))
+    CALL(evt_npc_flag_onoff, 1, STRING("チビヨッシー"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_entry, STRING("ビビアン"), STRING("c_vivian")) // Vivian (epilogue)
     CALL(evt_npc_set_tribe, STRING("ビビアン"), STRING("ビビアン"))
     CALL(evt_npc_set_position, STRING("ビビアン"), -65, 15, 220)
     CALL(evt_npc_set_ry, STRING("ビビアン"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("ビビアン"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ビビアン"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_entry, STRING("サンダース"), STRING("c_bomt_n"))
     CALL(evt_npc_set_tribe, STRING("サンダース"), STRING("サンダース"))
     CALL(evt_npc_set_position, STRING("サンダース"), -90, 15, 205)
     CALL(evt_npc_set_ry, STRING("サンダース"), 90)
-    CALL(evt_npc_flag_onoff, 1, STRING("サンダース"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("サンダース"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+
     // Ms. Mowz joins the line-up only if she became a partner.
-    CALL(evt_mario_chk_join_party, LW(0), 7)
+    CALL(evt_mario_chk_join_party, LW(0), PARTY_MS_MOWZ)
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(evt_npc_entry, STRING("チュチュリーナ"), STRING("c_tyutyu"))
+        CALL(evt_npc_entry, STRING("チュチュリーナ"), STRING("c_tyutyu")) // Ms. Mowz
         CALL(evt_npc_set_tribe, STRING("チュチュリーナ"), STRING("チュチュリーナ"))
         CALL(evt_npc_set_position, STRING("チュチュリーナ"), -95, 15, 235)
         CALL(evt_npc_set_ry, STRING("チュチュリーナ"), 90)
-        CALL(evt_npc_flag_onoff, 1, STRING("チュチュリーナ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("チュチュリーナ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     END_IF
+
     // Punio and Puniko wait offscreen below the map until their entrance.
-    CALL(evt_npc_entry, STRING("プニオ"), STRING("c_pguide"))
+    CALL(evt_npc_entry, STRING("プニオ"), STRING("c_pguide")) // Punio (epilogue)
     CALL(evt_npc_set_tribe, STRING("プニオ"), STRING("ガイド"))
     CALL(evt_npc_set_position, STRING("プニオ"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニオ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_status_onoff, 1, STRING("プニオ"), 2)
-    CALL(evt_npc_entry, STRING("プニコ"), STRING("c_psister"))
+    CALL(evt_npc_flag_onoff, 1, STRING("プニオ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_status_onoff, 1, STRING("プニオ"), NPC_STATUS_FACE_MOVE_DIR)
+    CALL(evt_npc_entry, STRING("プニコ"), STRING("c_psister")) // Petuni, Punio's sister (epilogue)
     CALL(evt_npc_set_tribe, STRING("プニコ"), STRING("ガイド妹"))
     CALL(evt_npc_set_position, STRING("プニコ"), 0, -1000, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニコ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_status_onoff, 1, STRING("プニコ"), 2)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニコ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_status_onoff, 1, STRING("プニコ"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
-/** Loops forever, keeping the mushroom item "punio_kino" 15 units above the Puni elder (Punio) as he walks. */
-EVT_BEGIN(punio_kinoko)
+/** Loops forever, keeping the mushroom item "punio_kino" 15 units above Punio as he walks. */
+static EVT_BEGIN(punio_kinoko)
     LOOP(0)
         CALL(evt_npc_get_position, STRING("プニオ"), LW(0), LW(1), LW(2))
         ADD_FLOAT(LW(1), FLOAT(15.0f))
@@ -5893,7 +6161,7 @@ EVT_BEGIN(punio_kinoko)
 EVT_END()
 
 /** Loops forever, keeping the mushroom item "puniko_kino" 15 units above the Puni sister (Puniko) as she walks. */
-EVT_BEGIN(puniko_kinoko)
+static EVT_BEGIN(puniko_kinoko)
     LOOP(0)
         CALL(evt_npc_get_position, STRING("プニコ"), LW(0), LW(1), LW(2))
         ADD_FLOAT(LW(1), FLOAT(15.0f))
@@ -5914,20 +6182,21 @@ static EVT_BEGIN(epilogue_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_set_pos, 100, 15, 210)
     CALL(evt_mario_set_dir, 270, 0, 0)
-    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 0, 11)
-    CALL(evt_item_entry, STRING("punio_kino"), ITEM_MUSHROOM, 0, -1000, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
-    CALL(evt_item_entry, STRING("puniko_kino"), ITEM_MUSHROOM, 0, -1000, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 0, EASING_SINE_IN_OUT)
+    CALL(evt_item_entry, STRING("punio_kino"), ITEM_MUSHROOM, 0, -1000, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
+    CALL(evt_item_entry, STRING("puniko_kino"), ITEM_MUSHROOM, 0, -1000, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
     CALL(evt_map_set_blend, 0, 216, 208, 255, 255)
     CALL(evt_map_set_blend, 1, 216, 208, 255, 255)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(1500)
+
     // Professor Frankly and Goombella start the farewell chat; the cast answers one by one as the camera pans.
     CALL(evt_msg_print, 0, STRING("ep_01"), 0, STRING("クリハカセ"))
-    CALL(evt_cam3d_evt_set, 65, 102, 513, 65, 50, 217, 0, 11)
+    CALL(evt_cam3d_evt_set, 65, 102, 513, 65, 50, 217, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("ep_02"), 0, STRING("クリハカセ"))
-    CALL(evt_cam3d_evt_set, 60, 164, 836, 60, 55, 220, 0, 11)
+    CALL(evt_cam3d_evt_set, 60, 164, 836, 60, 55, 220, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("ep_03"), 0, STRING("クリスチーヌ"))
@@ -5941,41 +6210,42 @@ static EVT_BEGIN(epilogue_evt)
     CALL(evt_npc_wait_pera, STRING("クリハカセ"))
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("ep_05"), 0, STRING("クリハカセ"))
-    CALL(evt_cam3d_evt_set, 15, 116, 565, 15, 55, 220, 400, 11)
+    CALL(evt_cam3d_evt_set, 15, 116, 565, 15, 55, 220, 400, EASING_SINE_IN_OUT)
     WAIT_MS(900)
     CALL(evt_msg_print, 0, STRING("ep_06"), 0, STRING("クリスチーヌ"))
-    CALL(evt_cam3d_evt_set, -10, 116, 565, -10, 55, 220, 400, 11)
+    CALL(evt_cam3d_evt_set, -10, 116, 565, -10, 55, 220, 400, EASING_SINE_IN_OUT)
     WAIT_MS(900)
     CALL(evt_msg_print, 0, STRING("ep_07"), 0, STRING("ノコタロウ"))
-    CALL(evt_cam3d_evt_set, -35, 116, 565, -35, 55, 220, 400, 11)
+    CALL(evt_cam3d_evt_set, -35, 116, 565, -35, 55, 220, 400, EASING_SINE_IN_OUT)
     WAIT_MS(900)
     CALL(evt_msg_print, 0, STRING("ep_08"), 0, STRING("クラウダ"))
-    CALL(evt_cam3d_evt_set, -40, 116, 565, -40, 55, 220, 400, 11)
+    CALL(evt_cam3d_evt_set, -40, 116, 565, -40, 55, 220, 400, EASING_SINE_IN_OUT)
     WAIT_MS(900)
     CALL(evt_msg_print, 0, STRING("ep_09"), 0, STRING("チビヨッシー"))
-    CALL(evt_cam3d_evt_set, -60, 116, 565, -60, 55, 220, 400, 11)
+    CALL(evt_cam3d_evt_set, -60, 116, 565, -60, 55, 220, 400, EASING_SINE_IN_OUT)
     WAIT_MS(900)
     CALL(evt_msg_print, 0, STRING("ep_10"), 0, STRING("ビビアン"))
-    CALL(evt_cam3d_evt_set, -85, 116, 565, -85, 55, 220, 400, 11)
+    CALL(evt_cam3d_evt_set, -85, 116, 565, -85, 55, 220, 400, EASING_SINE_IN_OUT)
     WAIT_MS(900)
     CALL(evt_msg_print, 0, STRING("ep_11"), 0, STRING("サンダース"))
     CALL(evt_npc_check, STRING("チュチュリーナ"), LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(evt_cam3d_evt_set, -90, 116, 565, -90, 55, 220, 400, 11)
+        CALL(evt_cam3d_evt_set, -90, 116, 565, -90, 55, 220, 400, EASING_SINE_IN_OUT)
         WAIT_MS(900)
         CALL(evt_msg_print, 0, STRING("ep_12"), 0, STRING("チュチュリーナ"))
     END_IF
-    CALL(evt_cam3d_evt_set, 60, 164, 836, 60, 55, 220, 0, 11)
+    CALL(evt_cam3d_evt_set, 60, 164, 836, 60, 55, 220, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
+
     // Toadsworth says the boat is almost here; Punio and Puniko run in across the harbor carrying mushrooms.
     CALL(evt_msg_print, 0, STRING("ep_13"), 0, STRING("キノじい"))
     CALL(evt_msg_print, 0, STRING("ep_14"), 0, 0)
     WAIT_MS(200)
     CALL(evt_npc_set_position, STRING("プニオ"), 20, 115, -660)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニオ"), NPC_FLAG_JUMPING | NPC_FLAG_LAND_ON_FLOOR)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニオ"), NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_GRAVITY)
     CALL(evt_npc_set_position, STRING("プニコ"), -20, 115, -660)
-    CALL(evt_npc_flag_onoff, 1, STRING("プニコ"), NPC_FLAG_JUMPING | NPC_FLAG_LAND_ON_FLOOR)
+    CALL(evt_npc_flag_onoff, 1, STRING("プニコ"), NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_GRAVITY)
     CALL(evt_item_set_position, STRING("punio_kino"), 20, 130, -660)
     CALL(evt_item_set_position, STRING("puniko_kino"), -20, 130, -660)
     SET_VALUE(GF(0), 1)
@@ -6004,14 +6274,15 @@ static EVT_BEGIN(epilogue_evt)
     END_INLINE_EVENT
     WAIT_WHILE(GF(0))
     WAIT_WHILE(GF(1))
+
     // Punio and Puniko talk, then give their mushrooms to Mario and Peach.
     CALL(evt_msg_print, 0, STRING("ep_15"), 0, STRING("プニオ"))
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("ep_16"), 0, STRING("プニコ"))
     CALL(evt_msg_print, 0, STRING("ep_17"), 0, STRING("プニオ"))
     CALL(evt_msg_print, 0, STRING("ep_18"), 0, STRING("プニコ"))
-    CALL(evt_cam3d_evt_set, 95, 116, 565, 95, 55, 220, 500, 11)
-    CALL(evt_npc_status_onoff, 0, STRING("プニオ"), 2)
+    CALL(evt_cam3d_evt_set, 95, 116, 565, 95, 55, 220, 500, EASING_SINE_IN_OUT)
+    CALL(evt_npc_status_onoff, 0, STRING("プニオ"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_move_position, STRING("プニオ"), 75, 215, 0, 40, 0)
     DELETE_EVENT(LW(14))
     WAIT_FRAMES(1)
@@ -6021,11 +6292,11 @@ static EVT_BEGIN(epilogue_evt)
     SUBTRACT(LW(0), 20)
     ADD(LW(1), 20)
     ADD(LW(2), 5)
-    CALL(evt_item_move_3d_position, STRING("punio_kino"), LW(0), LW(1), LW(2), 300, 0)
+    CALL(evt_item_move_3d_position, STRING("punio_kino"), LW(0), LW(1), LW(2), 300, EASING_LINEAR)
     WAIT_MS(500)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL(evt_item_delete, STRING("punio_kino"))
-    CALL(evt_npc_status_onoff, 0, STRING("プニコ"), 2)
+    CALL(evt_npc_status_onoff, 0, STRING("プニコ"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_move_position, STRING("プニコ"), 110, 240, 0, 40, 0)
     DELETE_EVENT(LW(15))
     WAIT_FRAMES(1)
@@ -6035,7 +6306,7 @@ static EVT_BEGIN(epilogue_evt)
     SUBTRACT(LW(0), 5)
     ADD(LW(1), 20)
     ADD(LW(2), 5)
-    CALL(evt_item_move_3d_position, STRING("puniko_kino"), LW(0), LW(1), LW(2), 300, 0)
+    CALL(evt_item_move_3d_position, STRING("puniko_kino"), LW(0), LW(1), LW(2), 300, EASING_LINEAR)
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_move_position, STRING("プニコ"), 55, 240, 0, 40, 0)
@@ -6047,14 +6318,14 @@ static EVT_BEGIN(epilogue_evt)
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_npc_set_autotalkpose, STRING("ピーチ姫"), STRING("P_S_8"), STRING("P_T_14"))
     CALL(evt_msg_print, 0, STRING("ep_20"), 0, STRING("ピーチ姫"))
+#endif
     CALL(evt_npc_set_anim, STRING("ピーチ姫"), STRING("P_S_7"))
     CALL(evt_item_delete, STRING("puniko_kino"))
-#else
-    CALL(evt_npc_set_anim, STRING("ピーチ姫"), STRING("P_S_7"))
-    CALL(evt_item_delete, STRING("puniko_kino"))
+#if VERSION >= VERSION_JP
     CALL(evt_npc_set_autotalkpose, STRING("ピーチ姫"), STRING("P_S_7"), STRING("P_T_13"))
     CALL(evt_msg_print, 0, STRING("ep_20"), 0, STRING("ピーチ姫"))
 #endif
+
     // Everyone turns to Peach as she thanks the party.
     WAIT_MS(500)
     CALL(evt_npc_flag_onoff, 1, STRING("ピーチ姫"), NPC_FLAG_INSTANT_TURN)
@@ -6066,12 +6337,12 @@ static EVT_BEGIN(epilogue_evt)
     CALL(evt_npc_flag_onoff, 1, STRING("チビヨッシー"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 1, STRING("プニオ"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 1, STRING("プニコ"), NPC_FLAG_INSTANT_TURN)
-    CALL(evt_cam3d_evt_set, -200, 120, 505, 75, 60, 220, 0, 11)
+    CALL(evt_cam3d_evt_set, -200, 120, 505, 75, 60, 220, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(1000)
     CALL(evt_npc_set_autotalkpose, STRING("ピーチ姫"), STRING("P_S_7"), STRING("P_T_13"))
     CALL(evt_msg_print, 0, STRING("ep_21"), 0, STRING("ピーチ姫"))
-    CALL(evt_cam3d_evt_set, 30, 88, 466, 33, 45, 220, 0, 11)
+    CALL(evt_cam3d_evt_set, 30, 88, 466, 33, 45, 220, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("ep_22"), 0, STRING("クリハカセ"))
@@ -6084,11 +6355,12 @@ static EVT_BEGIN(epilogue_evt)
     CALL(evt_npc_flag_onoff, 0, STRING("チビヨッシー"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 0, STRING("プニオ"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 0, STRING("プニコ"), NPC_FLAG_INSTANT_TURN)
+
     // Toadsworth spots the ship; Mario nods to Peach.
-    CALL(evt_cam3d_evt_set, 110, 133, 663, 110, 55, 220, 0, 11)
+    CALL(evt_cam3d_evt_set, 110, 133, 663, 110, 55, 220, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(500)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("キノじい"), 0, 0, 0, 0, 0, 0, 0, 48)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("キノじい"), 0, 0, 0, 0, 0, 0, 0, 48)
     WAIT_MS(1500)
     CALL(evt_msg_print, 0, STRING("ep_23"), 0, STRING("キノじい"))
     CALL(evt_mario_set_dir_npc, STRING("ピーチ姫"))
@@ -6101,9 +6373,10 @@ static EVT_BEGIN(epilogue_evt)
     WAIT_MS(600)
     CALL(evt_mario_set_dir, 270, 300, 0)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 2, 225, 1015, 2, 50, 243, 0, 11)
+    CALL(evt_cam3d_evt_set, 2, 225, 1015, 2, 50, 243, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("ep_24"), 0, STRING("ピーチ姫"))
+
     // Peach says her goodbye while the ship sails in to pick them up.
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_VALUE(GF(0), 0)
@@ -6123,7 +6396,7 @@ static EVT_BEGIN(epilogue_evt)
     SET_VALUE(GF(10), 1)
     BEGIN_INLINE_EVENT
         SET_VALUE(GW(6), FLOAT(5.0f))
-        CALL(evt_sub_intpl_msec_init, 0, GW(4), -270, 3000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, GW(4), -270, 3000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6138,7 +6411,7 @@ static EVT_BEGIN(epilogue_evt)
         SET_VALUE(GF(3), 1)
         SET_VALUE(GW(6), 2)
         SET_VALUE(GW(6), FLOAT(3.0f))
-        CALL(evt_sub_intpl_msec_init, 4, -270, -75, 3000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, -270, -75, 3000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6165,7 +6438,7 @@ static EVT_BEGIN(epilogue_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(3000)
-        CALL(evt_sub_intpl_msec_init, 0, 255, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 255, 0, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(alpha_set_func, LW(0))
@@ -6180,18 +6453,19 @@ static EVT_BEGIN(epilogue_evt)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("ピーチ姫"), LW(0), LW(1), LW(2))
         CALL(evt_npc_move_position, STRING("ピーチ姫"), 0, LW(2), 0, 60, 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("ピーチ姫"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("ピーチ姫"), NPC_FLAG_NO_DRAW)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("キノじい"), LW(0), LW(1), LW(2))
         CALL(evt_npc_move_position, STRING("キノじい"), 0, LW(2), 0, 60, 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("キノじい"), NPC_FLAG_HIDDEN)
+        CALL(evt_npc_flag_onoff, 1, STRING("キノじい"), NPC_FLAG_NO_DRAW)
     END_INLINE_EVENT
+
     // Mario follows Peach and Toadsworth aboard; an unnamed speaker apologises for dozing off and promises
     // full steam (Guess: the ship's captain), then the ship hops like a paper model.
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_mario_mov_pos2, 0, LW(2), 60)
-    CALL(evt_mario_dispflag_onoff, 1, 1)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
     WAIT_MS(800)
     CALL(evt_msg_print, 0, STRING("ep_25"), 0, 0)
     WAIT_MS(2000)
@@ -6215,7 +6489,7 @@ static EVT_BEGIN(epilogue_evt)
             WAIT_FRAMES(1)
         END_LOOP
         WAIT_MS(600)
-        CALL(evt_sub_intpl_msec_init, 1, 80, 0, 600)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 80, 0, 600)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_VALUE(GW(8), LW(0))
@@ -6234,6 +6508,7 @@ static EVT_BEGIN(epilogue_evt)
     DEBUG_PUT_MSG(STRING("アニメ開始"))
     SET_VALUE(GF(4), 0)
     WAIT_MS(2000)
+
     // Peach orders a course for the Mushroom Kingdom and the ship sails away, its engine fading.
     SET_VALUE(GF(0), 0)
     SET_VALUE(GF(1), 0)
@@ -6243,7 +6518,7 @@ static EVT_BEGIN(epilogue_evt)
     SET_VALUE(GF(10), 1)
     WAIT_FRAMES(1)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, -75, -270, 3000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, -75, -270, 3000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6253,7 +6528,7 @@ static EVT_BEGIN(epilogue_evt)
             WAIT_FRAMES(1)
         END_LOOP
         SET_VALUE(GW(6), FLOAT(5.0f))
-        CALL(evt_sub_intpl_msec_init, 0, -270, -1260, 6000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -270, -1260, 6000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6263,8 +6538,8 @@ static EVT_BEGIN(epilogue_evt)
             WAIT_FRAMES(1)
         END_LOOP
         SET_VALUE(GF(10), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAP_OBJ_FLAG_HIDDEN)
     END_INLINE_EVENT
     CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_MOVE1"), LW(0), LW(1), LW(2), LW(9))
@@ -6281,7 +6556,7 @@ static EVT_BEGIN(epilogue_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(6000)
-        CALL(evt_sub_intpl_msec_init, 0, 100, 0, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 100, 0, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             IF_INT_EQUAL(LW(1), 0)
@@ -6292,7 +6567,7 @@ static EVT_BEGIN(epilogue_evt)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, 0, 255, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 255, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(alpha_set_func, LW(0))
@@ -6302,7 +6577,8 @@ static EVT_BEGIN(epilogue_evt)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    // The cast turns toward the sea one by one as the ship fades in.
+
+    // The cast turns toward the sea one by one as the wake fades in.
     BEGIN_INLINE_EVENT
         WAIT_MS(500)
         CALL(evt_npc_set_ry, STRING("プニオ"), 270)
@@ -6330,9 +6606,10 @@ static EVT_BEGIN(epilogue_evt)
     END_INLINE_EVENT
     WAIT_MS(3000)
     WAIT_WHILE(GF(10))
+
     // The music fades, the camera pulls back and the game moves on to the credits.
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 4000)
-    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 3500, 11)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 4000)
+    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 3500, EASING_SINE_IN_OUT)
     WAIT_MS(3000)
     CALL(evt_bero_mapchange, STRING("muj_21"), STRING(""))
     RETURN
@@ -6342,27 +6619,26 @@ EVT_END()
  * Spawns Goombella ("Christine") at (0, 15, 220) for the second epilogue scene (arrival from "epilogue2"),
  * with wall collision off.
  */
-EVT_BEGIN(epilogue_npc_entry2)
+static EVT_BEGIN(epilogue_npc_entry2)
     CALL(evt_npc_entry, STRING("クリスチーヌ"), STRING("c_pkr"))
     CALL(evt_npc_set_tribe, STRING("クリスチーヌ"), STRING("クリスチーヌ"))
     CALL(evt_npc_set_position, STRING("クリスチーヌ"), 0, 15, 220)
     CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_status_onoff, 1, STRING("クリスチーヌ"), 2)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_HIT | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_status_onoff, 1, STRING("クリスチーヌ"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
 /**
- * Short second ending scene: the camera frames the dock, ep_46 plays,
- * Goombella walks off and the game changes to the "epilogue2" scene of aaa_00 with STORY_STG9 progress set
- * (STORY_STG9_01_END_CREDITS and then STORY_STG9_02_RETURN_TO_ROGUEPORT).
+ * Short second ending scene: Mario hidden, the camera on the dock, ep_46 printed, Goombella walks off, the music
+ * fades and the map changes to aaa_00 (entrance epilogue2).
  */
 static EVT_BEGIN(epilogue_evt2)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_cam3d_evt_set, 120, 40, 586, -25, 50, 214, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_cam3d_evt_set, 120, 40, 586, -25, 50, 214, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(evt_fade_end_wait)
     WAIT_MS(2000)
     CALL(evt_msg_print, 0, STRING("ep_46"), 0, 0)
@@ -6372,7 +6648,7 @@ static EVT_BEGIN(epilogue_evt2)
         CALL(evt_npc_move_position, STRING("クリスチーヌ"), -245, -250, 0, 40, 0)
     END_INLINE_EVENT
     WAIT_MS(3000)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 6500)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 6500)
     WAIT_MS(1000)
     CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_BLACK, 900, FADE_IN_BLACK, 900)
     CALL(evt_bero_mapchange, STRING("aaa_00"), STRING("epilogue2"))
@@ -6380,20 +6656,20 @@ static EVT_BEGIN(epilogue_evt2)
 EVT_END()
 
 /** Spawns Goombella ("Christine") on the dock at (175, 15, 225), facing left, for the post-credits return scene. */
-EVT_BEGIN(return_gorotsuki_town_init)
+static EVT_BEGIN(return_gorotsuki_town_init)
     CALL(evt_npc_entry, STRING("クリスチーヌ"), STRING("c_pkr"))
     CALL(evt_npc_set_tribe, STRING("クリスチーヌ"), STRING("クリスチーヌ"))
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_set_position, STRING("クリスチーヌ"), 175, 15, 225)
     CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
     RETURN
 EVT_END()
 
 /**
- * Scene after the end credits (STORY_STG9_01_END_CREDITS):
+ * Scene after the end credits (STG9_01_END_CREDITS):
  * a ship sails into Rogueport like in the opening, Goombella (Christine) comes out to greet Mario,
  * the ship flips like paper and sails off, and the partner says a last line (mac_8_02).
- * Sets STORY_STG9_02_RETURN_TO_ROGUEPORT and returns control.
+ * Sets STG9_02_RETURN_TO_ROGUEPORT and returns control.
  */
 EVT_BEGIN(return_gorotsuki_town)
     // Set up the post-credits return: only Mario and Goombella (as partner) are present, and the ship animation
@@ -6404,8 +6680,8 @@ EVT_BEGIN(return_gorotsuki_town)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_mario_kill_party, 0)
-    CALL(evt_mario_set_party, 0, 1)
-    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 0, 11)
+    CALL(evt_mario_set_party, 0, PARTY_GOOMBELLA)
+    CALL(evt_cam3d_evt_set, 0, 700, 1420, 0, -10, 0, 0, EASING_SINE_IN_OUT)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_VALUE(GF(0), 0)
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
@@ -6419,14 +6695,15 @@ EVT_BEGIN(return_gorotsuki_town)
     SET_VALUE(GF(4), 0)
     SET_VALUE(GW(7), 180)
     SET_VALUE(GF(5), 1)
+
     // A ship sails into the harbor with its wake and engine sound.
     SPAWN_EVENT(ship_a_animation)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(3000)
     SET_VALUE(GF(10), 1)
     BEGIN_INLINE_EVENT
         SET_VALUE(GW(6), FLOAT(5.0f))
-        CALL(evt_sub_intpl_msec_init, 0, GW(4), -270, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, GW(4), -270, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6441,7 +6718,7 @@ EVT_BEGIN(return_gorotsuki_town)
         SET_VALUE(GF(3), 1)
         SET_VALUE(GW(6), 2)
         SET_VALUE(GW(6), FLOAT(3.0f))
-        CALL(evt_sub_intpl_msec_init, 4, -270, -75, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, -270, -75, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6468,7 +6745,7 @@ EVT_BEGIN(return_gorotsuki_town)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(3000)
-        CALL(evt_sub_intpl_msec_init, 0, 255, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 255, 0, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(alpha_set_func, LW(0))
@@ -6479,9 +6756,12 @@ EVT_BEGIN(return_gorotsuki_town)
         END_LOOP
     END_INLINE_EVENT
     WAIT_MS(500)
+
     // Goombella notices the ship; the camera moves to the dock and Mario appears.
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("クリスチーヌ"), 0, 0, 0, 0, 0, 0, 0, 48)
-    CALL(evt_cam3d_evt_set, 2, 225, 1015, 2, 50, 243, 3000, 11)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("クリスチーヌ"), 0, 0, 0, 0, 0, 0, 0, 48)
+
+    // The camera moves to the dock and Mario appears.
+    CALL(evt_cam3d_evt_set, 2, 225, 1015, 2, 50, 243, 3000, EASING_SINE_IN_OUT)
     WAIT_MS(3000)
     WAIT_WHILE(GF(10))
     CALL(evt_mario_cont_onoff, 1)
@@ -6493,7 +6773,8 @@ EVT_BEGIN(return_gorotsuki_town)
     WAIT_MS(1000)
     CALL(evt_npc_move_position, STRING("クリスチーヌ"), 20, 225, 0, FLOAT(120.0f), 0)
     CALL(evt_npc_delete, STRING("クリスチーヌ"))
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
+
     // An unnamed speaker on the ship remarks on the cute Goomba waiting for Mario at the dock and says
     // good-bye (Guess: the ship's captain), then the ship hops like a paper model.
     CALL(evt_msg_print, 0, STRING("mac_8_01"), 0, 0)
@@ -6522,6 +6803,7 @@ EVT_BEGIN(return_gorotsuki_town)
     DEBUG_PUT_MSG(STRING("アニメ開始"))
     SET_VALUE(GF(4), 0)
     WAIT_MS(2000)
+
     // The ship sails away.
     SET_VALUE(GF(0), 0)
     SET_VALUE(GF(1), 0)
@@ -6534,7 +6816,7 @@ EVT_BEGIN(return_gorotsuki_town)
     SET_FLOAT_VALUE(GW(11), GW(4))
     ADD_FLOAT(GW(11), FLOAT(-400.0f))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, -75, -270, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, -75, -270, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6544,7 +6826,7 @@ EVT_BEGIN(return_gorotsuki_town)
             WAIT_FRAMES(1)
         END_LOOP
         SET_VALUE(GW(6), FLOAT(5.0f))
-        CALL(evt_sub_intpl_msec_init, 0, -270, -1260, 6000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -270, -1260, 6000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             SET_FLOAT_VALUE(GW(4), LW(0))
@@ -6554,8 +6836,8 @@ EVT_BEGIN(return_gorotsuki_town)
             WAIT_FRAMES(1)
         END_LOOP
         SET_VALUE(GF(10), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAP_OBJ_FLAG_HIDDEN)
     END_INLINE_EVENT
     CALL(evt_mapobj_get_position, STRING("S_fune_a"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_SHIP_MOVE1"), LW(0), LW(1), LW(2), LW(9))
@@ -6572,7 +6854,7 @@ EVT_BEGIN(return_gorotsuki_town)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(6000)
-        CALL(evt_sub_intpl_msec_init, 0, 100, 0, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 100, 0, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             IF_INT_EQUAL(LW(1), 0)
@@ -6597,7 +6879,7 @@ EVT_BEGIN(return_gorotsuki_town)
 #endif
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
-        CALL(evt_sub_intpl_msec_init, 0, 0, 255, 1500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 255, 1500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(alpha_set_func, LW(0))
@@ -6607,7 +6889,7 @@ EVT_BEGIN(return_gorotsuki_town)
             WAIT_FRAMES(1)
         END_LOOP
         WAIT_MS(2000)
-        CALL(evt_sub_intpl_msec_init, 0, 255, 0, 1500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 255, 0, 1500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(alpha_set_func, LW(0))
@@ -6617,14 +6899,15 @@ EVT_BEGIN(return_gorotsuki_town)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
+
     // The partner greets Mario; the story advances to the return to Rogueport and control comes back.
     WAIT_MS(3000)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print, 0, STRING("mac_8_02"), 0, STRING("party"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG9_02_RETURN_TO_ROGUEPORT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG9_02_RETURN_TO_ROGUEPORT)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
@@ -6637,7 +6920,7 @@ EVT_END()
  * Picks the music by story stage, sets up the exit "n_bero" to gor_01, creates the NPCs (including Luigi),
  * the hidden-ship objects, the save block, the star piece and the spin panel,
  * and starts whichever story scene belongs to the current stage:
- * arrival in Rogueport (STORY_STG0_02), Goombella's ambush, the X-Naut army, Bowser's visit,
+ * arrival in Rogueport (STG0_02), Goombella's ambush, the X-Naut army, Bowser's visit,
  * the Flavio departure, the return home, the Peach mail, the epilogue and the post- credits return.
  * Also handles a pending ship arrival.
  */
@@ -6654,56 +6937,60 @@ EVT_BEGIN(gor_00_init_evt)
     BEGIN_INLINE_EVENT
         CALL(evt_light_bind_mapobj, STRING("pointLight4"), STRING("S_fune_b"), 0)
     END_INLINE_EVENT
-    SWITCH(GSW(GSW_STORY_PROGRESS))
+    SWITCH(GSW_STORY_PROGRESS)
+
         // Choose the background music and ambient sound for the current story stage.
-        CASE_BETWEEN(STORY_STG0_00_PROLOGUE, STORY_STG0_03_TO_ROGUEPORT)
-        IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG0_02_MARIOS_HOUSE)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
+        CASE_BETWEEN(STG0_00_PROLOGUE, STG0_03_TO_ROGUEPORT)
+        IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG0_02_MARIOS_HOUSE)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
         ELSE
-            CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG0_GOR1"), 2000)
+            CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG0_GOR1"), 2000)
         END_IF
 #if VERSION >= VERSION_JP
         CALL(evt_snd_bgm_scope, 0, 1)
 #endif
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR0"))
-        CASE_BETWEEN(STORY_STG0_04_GOOMBELLA_ASSAULTED, STORY_STG0_06_1000_X_NAUTS_AFTER)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CASE_EQUAL(STORY_STG4_15_07_BOWSER_ACTION_STAGE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_KUPPA1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR0"))
+        CASE_BETWEEN(STG0_04_GOOMBELLA_ASSAULTED, STG0_06_1000_X_NAUTS_AFTER)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CASE_EQUAL(STG4_15_07_BOWSER_ACTION_STAGE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_KUPPA1"))
         CALL(evt_snd_bgm_scope, 0, 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("ENV_STG0_GOR0"))
-        CASE_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("ENV_STG0_GOR0"))
+        CASE_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("epilogue2"))
-            CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_ENDING2"), 800)
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(90))
-            CALL(evt_snd_envoff, PSND_FADE_OUT)
+            CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_ENDING2"), 800)
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(8))
+            CALL(evt_snd_envoff, PSND_FADEOUT)
         ELSE
-            CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_ENDING2"), 800)
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR0"))
+            CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_ENDING2"), 800)
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR0"))
         END_IF
-        CASE_EQUAL(STORY_STG5_58_FAIR_WINDS)
-        CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG0_GOR1"), 2000)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(80) | PSND_FADE_DIP_FAST)
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR0"))
+        CASE_EQUAL(STG5_58_FAIR_WINDS)
+        CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG0_GOR1"), 2000)
+        CALL(evt_snd_bgmoff, PSND_QUICK | PSND_SILENT | PSND_SILENT_LEVEL(7))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR0"))
         CASE_DEFAULT
-        IF_INT_NOT_EQUAL(GSWF(GSWF_GOR00_SHIP_ARRIVAL_PENDING), 1)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(80))
+        IF_INT_NOT_EQUAL(GSWF_MUJ_SAILING_TO_ROGUEPORT, 1)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(7))
         END_IF
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR0"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR0"))
     END_SWITCH
+
     // Set up the doors, NPCs, ships and the save block.
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
-    CALL_CHILD(evt_bero_info_run)
 #if VERSION >= VERSION_US
+    CALL_CHILD(evt_bero_info_run)
     SET_VALUE(GF(15), 1)
+#else
+    CALL_CHILD(evt_bero_info_run)
 #endif
     CALL_CHILD(luigi_npcEnt)
     CALL(evt_npc_setup, PTR(npcEnt))
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_64_02_F_AND_F_SAIL_OFF)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG5_64_02_F_F_SAIL_OFF)
         CALL(evt_npc_set_tribe, STRING("モニー"), STRING("モニー（指輪）"))
         CALL(evt_npc_set_tribe, STRING("ピートン"), STRING("ピートン（指輪）"))
     END_IF
@@ -6711,90 +6998,96 @@ EVT_BEGIN(gor_00_init_evt)
     CALL_CHILD(sanders_init)
     CALL_CHILD(tentyou_init)
     CALL_CHILD(tenin_init)
-    CALL(evt_npc_entry, STRING("船ダミー"), STRING("c_suifu_b"))
-    CALL(evt_npc_flag_onoff, 1, STRING("船ダミー"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_HIDDEN | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_entry, STRING("船ダミー"), STRING("c_suifu_b")) // invisible stand-in whose motion drives the ship's hop
+    CALL(evt_npc_flag_onoff, 1, STRING("船ダミー"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_DRAW | NPC_FLAG_NO_WALL_COLLISION)
     CALL_CHILD(borodo2_init)
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_07_BOWSER_ACTION_STAGE)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG4_15_07_BOWSER_ACTION_STAGE)
         CALL(evt_mobj_save_blk, STRING("mobj_save"), -275, 75, 100, 0, 0)
     END_IF
-    CALL(evt_map_playanim, STRING("nami"), 1, 0)
-    CALL(evt_map_playanim, STRING("nami_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("hiki_nami"), 1, 0)
+    CALL(evt_map_playanim, STRING("nami"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("nami_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("hiki_nami"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_paper_entry, STRING("OFF_d_kaiten"))
     CALL(evt_hit_damage_return_set, PTR(dmgRetPoint))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_a"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_a_hikinami"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_fune_a"), 1, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_b"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_b"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_fune_b"), 1, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_c"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_c_hikinami"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fune_c"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_c_hikinami"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_fune_C"), 1, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_c"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_c"), MAP_OBJ_FLAG_CLIP)
+
     // Place the spin panel, the item box and the Star Piece.
-    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 110, 15, -440, STRING("S_ground"), 125, GSWF(GSWF_GOR00_STAR_PIECE_PANEL))
-    CALL(evt_mobj_itembox, STRING("mobj_box00"), -500, 15, -200, 0, 0, PTR(mobj_box00), GSWF(GSWF_GOR00_ITEMBOX_00))
-    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, -390, 15, -65, ITEM_ENTRY_FIXED, GSWF(GSWF_GOR00_STAR_PIECE), 0)
+    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 110, 15, -440, STRING("S_ground"), 125, GSWF_STARPIECE_01)
+    CALL(evt_mobj_itembox, STRING("mobj_box00"), -500, 15, -200, MOBJ_ITEMBOX_NORMAL, 0, PTR(mobj_box00), GSWF_GOR_00_HP_DRAIN_CHEST)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, -390, 15, -65, ITEM_TYPE_STILL, GSWF_STARPIECE_00, 0)
+
     // Start the harbor background task, the Peach mail event and the Frankie and Francesca reaction when their
     // stage is reached.
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_END_AFTER_THE_BATTLE)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG8_END_AFTER_THE_BATTLE)
         SPAWN_EVENT(tsumini)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_59_ROGUEPORT_DOCK)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_59_ROGUEPORT_DOCK)
         SPAWN_EVENT(peach_mail)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_45_DAUGHTER_LOCATED)
-        IF_INT_EQUAL(GSWF(GSWF_GOR00_FRANKIE_FRANCESCA_AFTER_SEEN), 0)
-            CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("A_oku_yuka_01"), 0, PTR(mony_peton_after), 0)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_45_DAUGHTER_LOCATED)
+        IF_INT_EQUAL(GSWF_GOR_00_RUNAWAYS_REMARK_DONE, 0)
+            CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("A_oku_yuka_01"), 0, PTR(mony_peton_after), 0)
         END_IF
     END_IF
+
     // Start the story scene that belongs to the current stage.
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG0_02_MARIOS_HOUSE)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG0_02_MARIOS_HOUSE)
         CALL_CHILD(enter_gorotsuki_town_init)
         SPAWN_EVENT(enter_gorotsuki_town)
-        CASE_EQUAL(STORY_STG0_03_TO_ROGUEPORT)
+        CASE_EQUAL(STG0_03_TO_ROGUEPORT)
         CALL_CHILD(enter_gorotsuki_town_init)
         SET_VALUE(LW(0), 1)
         SPAWN_EVENT(christine_osoware)
-        CASE_EQUAL(STORY_STG0_04_GOOMBELLA_ASSAULTED)
+        CASE_EQUAL(STG0_04_GOOMBELLA_ASSAULTED)
         CALL_CHILD(enter_gorotsuki_town_init)
         CALL_CHILD(christine_osoware_setup)
-#if VERSION <= VERSION_JP
-        CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 1000)
-#else
+#if VERSION >= VERSION_US
         CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 400)
+#else
+        CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 1000)
 #endif
         CALL(evt_nannpc_set_subfunc, 1, PTR(nannpc_ext_main_sub_fast))
         SET_VALUE(LW(0), 1)
         SPAWN_EVENT(gundan1000tai_beforebattle)
-        CASE_EQUAL(STORY_STG0_05_1000_X_NAUTS_BEFORE)
+        CASE_EQUAL(STG0_05_1000_X_NAUTS_BEFORE)
         CALL_CHILD(enter_gorotsuki_town_init)
-#if VERSION <= VERSION_JP
-        CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 1000)
-#else
+#if VERSION >= VERSION_US
         CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 400)
+#else
+        CALL(evt_nannpc_init, PTR(nannpc_entry_data), 0, 0, 0, 1000)
 #endif
         CALL(evt_nannpc_set_subfunc, 1, PTR(nannpc_ext_main_sub_fast))
         SET_VALUE(LW(0), 1)
         SPAWN_EVENT(gundan1000tai_afterbattle)
+
         // Chapter 4 Bowser interlude.
-        CASE_EQUAL(STORY_STG4_15_07_BOWSER_ACTION_STAGE)
+        CASE_EQUAL(STG4_15_07_BOWSER_ACTION_STAGE)
         CALL(evt_mario_kill_party, 0)
-        CALL(evt_npc_entry, STRING("houki"), STRING("c_kamek_be"))
+        CALL(evt_npc_entry, STRING("houki"), STRING("c_kamek_be")) // Kammy Koopa's broom
         CALL(evt_npc_set_anim, STRING("houki"), STRING("H_2"))
-        CALL(evt_npc_flag_onoff, 1, STRING("houki"), NPC_FLAG_INTANGIBLE)
-        CALL(evt_npc_flag_onoff, 1, STRING("houki"), NPC_FLAG_ALWAYS_VISIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("houki"), NPC_FLAG_NO_HIT)
+        CALL(evt_npc_flag_onoff, 1, STRING("houki"), NPC_FLAG_NO_CULL)
         CALL(evt_npc_set_position, STRING("houki"), 0, -1000, 0)
         CALL(evt_npc_set_ry, STRING("houki"), 90)
         SPAWN_EVENT(gor_00_koopa_evt)
-        // Between Chapters 3 and 4's departure, the Chapter 4 ship is hidden from the pier.
-        CASE_BETWEEN(STORY_STG3_34_RETURN_TO_ROGUEPORT, STORY_STG4_END_OFF_TO_THE_KEYS)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_c"), MAPOBJ_FLAG_HIDE)
+
+        // Between Chapters 3 and 4's departure, the Chapter 4 ship is shown at the pier.
+        CASE_BETWEEN(STG3_34_RETURN_TO_ROGUEPORT, STG4_END_OFF_TO_THE_KEYS)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fune_c"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_fune_C"), 1, 1)
+
         // The ending: the epilogue on the dock, or its short second scene when arriving from the credits.
-        CASE_EQUAL(STORY_STG8_END_AFTER_THE_BATTLE)
+        CASE_EQUAL(STG8_END_AFTER_THE_BATTLE)
         CALL(evt_mario_kill_party, 0)
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("epilogue2"))
@@ -6804,36 +7097,40 @@ EVT_BEGIN(gor_00_init_evt)
             CALL_CHILD(epilogue_npc_entry)
             SPAWN_EVENT(epilogue_evt)
         END_IF
+
         // Chapter 5: Mario returns from Keelhaul Key.
-        CASE_EQUAL(STORY_STG5_58_FAIR_WINDS)
+        CASE_EQUAL(STG5_58_FAIR_WINDS)
 #if VERSION <= VERSION_DEMO_JP
         CALL_CHILD(gor_muj_ship_init)
 #endif
         SPAWN_EVENT(gorotsuki_kikan)
+
         // After the credits: the return to Rogueport.
-        CASE_EQUAL(STORY_STG9_01_END_CREDITS)
+        CASE_EQUAL(STG9_01_END_CREDITS)
         CALL_CHILD(return_gorotsuki_town_init)
         SPAWN_EVENT(return_gorotsuki_town)
     END_SWITCH
+
     // Late in the game, handle a ship arriving at the dock.
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_END_AFTER_THE_BATTLE)
-        IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG9_01_END_CREDITS)
-            IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_58_FAIR_WINDS)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG8_END_AFTER_THE_BATTLE)
+        IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG9_01_END_CREDITS)
+            IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG5_58_FAIR_WINDS)
                 CALL_CHILD(gor_muj_ship_init)
-                IF_INT_EQUAL(GSWF(GSWF_GOR00_SHIP_ARRIVAL_AT_DOCK), 1)
-                    SET_VALUE(GSWF(GSWF_GOR00_SHIP_ARRIVAL_AT_DOCK), 0)
+                IF_INT_EQUAL(GSWF_GOR_00_PLACE_BY_SHIP, 1)
+                    SET_VALUE(GSWF_GOR_00_PLACE_BY_SHIP, 0)
                     CALL(evt_mario_set_pos, 190, 15, 225)
                     CALL(evt_party_set_pos, 0, 225, 15, 220)
                 ELSE
-                    IF_INT_EQUAL(GSWF(GSWF_GOR00_SHIP_ARRIVAL_PENDING), 1)
-                        SET_VALUE(GSWF(GSWF_GOR00_SHIP_ARRIVAL_PENDING), 0)
-                        SET_VALUE(GSWF(GSWF_SHIP_TRAVEL_ACTIVE), 0)
+                    IF_INT_EQUAL(GSWF_MUJ_SAILING_TO_ROGUEPORT, 1)
+                        SET_VALUE(GSWF_MUJ_SAILING_TO_ROGUEPORT, 0)
+                        SET_VALUE(GSWF_MUJ_ARRIVED_BY_SHIP_UNUSED, 0)
                         SPAWN_EVENT(into_gor_ship)
                     END_IF
                 END_IF
             END_IF
         END_IF
     END_IF
+
     // Register the ship change harbor points.
     CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change01"), STRING("Ship_Change01"))
     CALL(evt_map_entry_airport_harbor, 1, STRING("S_Ship_Change02"), STRING("Ship_Change02"))

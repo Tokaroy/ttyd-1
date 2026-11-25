@@ -2,36 +2,46 @@
 // gra_03.
 
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
+#include "evt/evt_urouro.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_map.h"
+#include "evt/evt_msg.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_item.h"
+#include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "driver/npcdrv.h"
 #include "driver/animdrv.h"
 #include "evt/evt_bero.h"
 #include "gra.h"
 #include "evt/evt_npc.h"
-#include "evt/evt_cloud.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_urouro.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
 
 static USER_FUNC(booboo_main);
 
+static EvtWord shopmaster_pig_init[14];
+static EvtWord shopmaster_talk[33];
+static EvtWord urouro_move[24];
 static NpcSetupInfo npcEnt[2];
+static EvtWord w_bero_2_in[5];
 static BeroEntry bero_entry_data[5];
+static EvtWord gra02_get_key[5];
+static EvtWord gra02_straw_blow_evt[23];
 static const char* booboo_name[1];
+EvtWord gra_02_init_evt[86];
 
 /**
- * Init event of the pig shopkeeper NPC: before the Doopliss battle (STORY_STG4_10_DOOPLISS_BATTLE) he stays
+ * Init event of the pig shopkeeper NPC: before the Doopliss battle (STG4_10_DOOPLISS_BATTLE) he stays
  * where he is; from then on he is moved out of sight to y -2000.
  */
-EVT_BEGIN(shopmaster_pig_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG4_10_DOOPLISS_BATTLE)
+static EVT_BEGIN(shopmaster_pig_init)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG4_10_DOOPLISS_BATTLE)
         CASE_DEFAULT
         CALL(evt_npc_set_position, STRING("ブタお店の主人"), 0, -2000, 0)
     END_SWITCH
@@ -42,9 +52,9 @@ EVT_END()
  * Talk event of the pig shopkeeper (the shop owner Doopliss turned into a pig):
  * before the Doopliss battle he oinks and says stg4_gra_17, afterwards stg4_gra_18.
  */
-EVT_BEGIN(shopmaster_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG4_10_DOOPLISS_BATTLE)
+static EVT_BEGIN(shopmaster_talk)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG4_10_DOOPLISS_BATTLE)
         CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_VOICE_PIG1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_msg_print, 0, STRING("stg4_gra_17"), 0, STRING("me"))
@@ -59,7 +69,7 @@ EVT_END()
  * clears his no-wall-hit flag and makes him wander within a 50-unit radius of his starting spot.
  */
 static EVT_BEGIN(urouro_move)
-    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_NO_WALL_HIT)
+    CALL(evt_npc_flag_onoff, 0, STRING("me"), NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_get_position, STRING("me"), LW(0), LW(1), LW(2))
     CALL(urouro_init_func, STRING("me"), LW(0), LW(2), FLOAT(50.0f), FLOAT(30.0f), 0)
     CALL(urouro_main_func, STRING("me"))
@@ -69,8 +79,8 @@ EVT_END()
 /** NPC of the shed: the shopkeeper who has been turned into a pig, who wanders around and talks to Mario. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "ブタお店の主人", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ブタお店の主人", // name (a Twilighter shopkeeper cursed into a pig)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         shopmaster_pig_init, // initEvent
         urouro_move, // regularEvent
@@ -84,7 +94,7 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /** Enter event of the w_bero_2 door: just returns 0 in LW(0), so the door acts as a plain transition. */
-EVT_BEGIN(w_bero_2_in)
+static EVT_BEGIN(w_bero_2_in)
     SET_VALUE(LW(0), 0)
     RETURN
 EVT_END()
@@ -116,7 +126,7 @@ static BeroEntry bero_entry_data[] = {
         21, // centerPositionY
         -450, // centerPositionZ
         -1, // length
-        (s32*)w_bero_2_in, // enterEvent
+        w_bero_2_in, // enterEvent
         0, NULL, // caseType..exitEvent
         "gra_03", // nextMapName
         "e_bero", // nextBeroName
@@ -159,25 +169,25 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
-/** Pickup callback of the Shop Key lying on the ground: advances the story to STORY_STG4_03_SHOP_KEY. */
-EVT_BEGIN(gra02_get_key)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_03_SHOP_KEY)
+/** Pickup callback of the Shop Key lying on the ground: advances the story to STG4_03_SHOP_KEY. */
+static EVT_BEGIN(gra02_get_key)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_03_SHOP_KEY)
     RETURN
 EVT_END()
 
 /**
  * Callback run when Flurrie's wind has blown the straw off the hut:
- * plays a short success jingle over the music and advances the story to STORY_STG4_05_STRAW_TEPEE.
+ * plays a short success jingle over the music and advances the story to STG4_05_STRAW_TEPEE.
  */
-EVT_BEGIN(gra02_straw_blow_evt)
+static EVT_BEGIN(gra02_straw_blow_evt)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(1000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_05_STRAW_TEPEE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_05_STRAW_TEPEE)
     RETURN
 EVT_END()
 
@@ -188,28 +198,28 @@ static const char* booboo_name[] = {
 
 /**
  * Init script of gra_02, the pig's shed: trail music and ambience, the exits, two Star Pieces,
- * the Shop Key (until the story passes STORY_STG4_03_SHOP_KEY),
- * the straw (S_wara) that Flurrie can blow away (until STORY_STG4_05_STRAW_TEPEE) and the pig NPC's lighting.
+ * the Shop Key (before the story reaches STG4_03_SHOP_KEY),
+ * the straw (S_wara) that Flurrie can blow away (until STG4_05_STRAW_TEPEE) and the pig NPC's lighting.
  */
 EVT_BEGIN(gra_02_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_GRA1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_USU1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_GRA1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_USU1"))
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_item_entry, STRING("item00"), ITEM_STAR_PIECE, -125, 0, -110, ITEM_ENTRY_FIXED, GSWF(GSWF_GRA02_STAR_PIECE_1), 0)
-    CALL(evt_item_entry, STRING("item01"), ITEM_STAR_PIECE, 305, 0, -35, ITEM_ENTRY_FIXED, GSWF(GSWF_GRA02_STAR_PIECE_2), 0)
+    CALL(evt_item_entry, STRING("item00"), ITEM_STAR_PIECE, -125, 0, -110, ITEM_TYPE_STILL, GSWF_STARPIECE_64, 0)
+    CALL(evt_item_entry, STRING("item01"), ITEM_STAR_PIECE, 305, 0, -35, ITEM_TYPE_STILL, GSWF_STARPIECE_65, 0)
     CALL_CHILD(evt_usu_kagemario_party_kill)
     CALL(evt_npc_setup, PTR(npcEnt))
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_03_SHOP_KEY)
-        CALL(evt_item_entry, STRING("key00"), ITEM_SHOP_KEY, -30, 0, 0, ITEM_ENTRY_STAY, -1, PTR(gra02_get_key))
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_03_SHOP_KEY)
+        CALL(evt_item_entry, STRING("key00"), ITEM_SHOP_KEY, -30, 0, 0, ITEM_TYPE_GROUND, -1, PTR(gra02_get_key))
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_05_STRAW_TEPEE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_05_STRAW_TEPEE)
         CALL(evt_cloud_init)
         CALL(evt_cloud_ent, 0, STRING("S_wara"), STRING("polySurface981_q023"), PTR(gra02_straw_blow_evt))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_wara"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_wara"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("polySurface981_q023"), 0, 0)
     END_IF
     BEGIN_INLINE_EVENT
@@ -223,6 +233,6 @@ EVT_END()
  * shopkeeper's model.
  */
 static USER_FUNC(booboo_main) {
-    animPoseSetMaterialLightFlagOn(npcNameToPtr((const char*)booboo_name[0])->poseId, ANIM_MATERIAL_LIGHT_PAPER_NO_AMB);
+    animPoseSetMaterialLightFlagOn(npcNameToPtr(booboo_name[0])->poseId, MATERIAL_LIGHT_PAPER_PLAIN);
     return EVT_RETURN_DONE;
 }

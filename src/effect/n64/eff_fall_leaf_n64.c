@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: falling leaves, four leaves drifting down for the given lifetime; types 0-4.
-#include "eff/n64/eff_fall_leaf_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -10,9 +10,9 @@
 #include <dolphin/mtx.h>
 #include <stdlib.h>
 #include "version.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
+#include "eff/n64/eff_fall_leaf_n64.h"
 
 typedef struct EffFallLeafN64Work {
     s32 type;     // 0x0
@@ -40,12 +40,12 @@ static effN64Vtx size12x12_tex64x64_vtx[] = {
 };
 
 static void effFallLeafMain(EffectEntry* effect);
-static void effFallLeafDisp(CameraId cameraId, EffectEntry* effect);
+static void effFallLeafDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns four leaves that drift down around (x, y, z) for lifetime frames;
  * types 0, 2, 3 and 4 scatter them over a 50-unit square, type 1 clusters them closer.
- * Spawned from event scripts through evt_eff.
+ * Spawned from event scripts through evt_eff64.
  */
 EffectEntry* effFallLeafN64Entry(s32 type, f32 x, f32 y, f32 z, s32 lifetime) {
     EffectEntry* effect;
@@ -96,7 +96,7 @@ EffectEntry* effFallLeafN64Entry(s32 type, f32 x, f32 y, f32 z, s32 lifetime) {
     return effect;
 }
 
-/** Counts the life down, fading the leaves out over the last 10 frames, and moves and spins each leaf. */
+/** Counts the life down, fading the leaves in over the first 10 frames and out over the last 10, and moves and spins each leaf. */
 static void effFallLeafMain(EffectEntry* effect) {
     EffFallLeafN64Work* work = effect->userdata;
     Vec position;
@@ -156,11 +156,15 @@ static void effFallLeafMain(EffectEntry* effect) {
         work->position.x += work->vx;
         work->position.y += work->vy;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effFallLeafDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effFallLeafDisp, effect);
 }
 
-/** Draws each leaf as a camera-facing sprite with texture 0x14; the type picks the leaf tint. */
-static void effFallLeafDisp(CameraId cameraId, EffectEntry* effect) {
+/**
+ * Draws each leaf as a two-sided quad turned by its angles; types 0 and 1 use N64 texture 0x14 coloured by the
+ * vertex colours, types 2-4 use effect texture 0x87 tinted by a per-type colour.
+ */
+static void effFallLeafDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffFallLeafN64Work* work;
     s32 type;

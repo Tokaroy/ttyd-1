@@ -19,6 +19,17 @@ typedef struct SAMPLE_INFO {
   u8 compType;     // offset 0x1C, size 0x1
 } SAMPLE_INFO;
 
+// SAMPLE_INFO.compType: sample format, named from the DSP setup in salBuildCommandList.
+typedef enum {
+  SAMPLE_COMP_ADPCM = 0,         // DSP ADPCM
+  SAMPLE_COMP_ADPCM_PLUS = 1,    // ADPCM with per-block start predictors (DSPADPCMplusInfo)
+  SAMPLE_COMP_PCM16 = 2,         // 16-bit PCM (also SND_STREAM_DEFAULT streams)
+  SAMPLE_COMP_PCM8 = 3,          // 8-bit PCM
+  SAMPLE_COMP_ADPCM_STREAM = 4,  // ADPCM stream (SND_STREAM_ADPCM)
+  SAMPLE_COMP_ADPCM_VIRTUAL = 5, // ADPCM virtual sample (loop buffer from the callback)
+  SAMPLE_COMP_PCM16_VIRTUAL = 6, // 16-bit PCM virtual sample
+} SAMPLE_COMP_TYPE;
+
 typedef struct GROUP_DATA {
   // total size: 0x28
   u32 nextOff;   // offset 0x0, size 0x4
@@ -62,7 +73,7 @@ typedef struct SDIR_DATA {
 } SDIR_DATA;
 
 /*! A direct copy of the above structure to allow us to load in legacy data
- * this must be done via sndConvert32BitSDIRto64BitSDIR via client code,
+ * this must be done via sndConvert32BitSDIRTo64BitSDIR via client code,
  * this is explicit on the part of the programmer.
  * MusyX data built with the new tools will not require this step.
  */
@@ -193,7 +204,7 @@ typedef struct FX_GROUP {
   u16 refCount; // offset 0x4, size 0x2
   u16 reserved; // offset 0x6, size 0x2
 #endif
-  FX_TAB* fxTab; // offset 0x4, size 0x4
+  FX_TAB* fxTab; // Position depends on version.
 } FX_GROUP;
 
 void dataInit(u32, u32); /* extern */
@@ -202,6 +213,15 @@ void dataExit();
 void dataInitStack(unsigned long aramBase, unsigned long aramSize);
 #else
 void dataInitStack(); /* extern */
+#endif
+#if MUSY_VERSION >= MUSY_VERSION_CHECK(2, 0, 2)
+u32 sndStackGetSize();
+u32 sndStackAdd(void* stackWorkMem, u32 aramBase, u32 aramSize);
+u32 sndStackRemove(u32 id);
+bool sndStackSetCurrent(u32 id);
+u32 sndStackGetARAMAddressRange(u32 id, u32* start, u32* end);
+u32 sndStackGetAvailableSampleMemory(unsigned long id);
+ARAMInfo* dataARAMGetInfo();
 #endif
 bool dataInsertSDir(SDIR_DATA* sdir, void* smp_data);
 bool dataRemoveSDir(SDIR_DATA* sdir);

@@ -1,31 +1,41 @@
 // mri_12 (巨木の中, The Great Tree): a junction room with planters and a Puni-ball pad, joining mri_11, mri_17
 // and mri_18.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_snd.h"
-#include "mri_puni.h"
 #include "mri.h"
 #include "data_tables.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_npc.h"
+#include "mri_puni.h"
+#include "evt/evt_case.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "evt/evt_mobj.h"
 #include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "driver/npcdrv.h"
 
 static BeroEntry bero_entry_data[6];
+static EvtWord punipuni_ball00_init[32];
+static EvtWord punipuni_ball00[51];
+static EvtWord evt_f1_ueki_01[20];
 static KusaAccess ueki_access_data[8];
+static EvtWord breakyuka_init[11];
+static EvtWord breakyuka_main[9];
+EvtWord mri_12_init_evt[140];
 
 /**
- * Exits of mri_12: east road e_bero to mri_11 (w_bero); east road e_bero_2 to mri_17 (w_bero); dokan1
- * (scripted pipe); dokan2 (scripted pipe); pipe dokan3 to mri_18 (dokan1).
+ * Exits of mri_12: east road e_bero to mri_11 (w_bero); east road e_bero_2 to mri_17 (w_bero); pipe dokan1
+ * to dokan2 in this room; pipe dokan2 to dokan1 in this room; pipe dokan3 to mri_18 (dokan1).
  */
 static BeroEntry bero_entry_data[] = {
     {
@@ -119,35 +129,35 @@ static BeroEntry bero_entry_data[] = {
  */
 static EVT_BEGIN(punipuni_ball00_init)
     CALL_CHILD(mri_punipuni_setup)
-    IF_INT_EQUAL(GSWF(GSWF_MRI12_ORB_ON_PEDESTAL), 1)
+    IF_INT_EQUAL(GSWF_MRI_12_PUNI_ORB_PLACED, 1)
         CALL(evt_item_set_position, LW(10), 5, 30, -95)
         CALL(evt_target_flag_onoff, LW(11), 0, 3)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     CALL(evt_target_set_position, LW(11), 5, 0, -65)
     RETURN
 EVT_END()
 
 /**
- * Hit/talk script of the orb pedestal: if empty, Mario picks an item to put on it (cancel ends the script),
+ * A-button script of the orb pedestal: if empty, Mario picks an item to put on it (cancel ends the script),
  * the orb appears and the light beam is shown; if full, Mario takes the orb back and the beam is hidden.
  * Mario is frozen during this.
  */
 static EVT_BEGIN(punipuni_ball00)
     CALL(evt_mario_key_onoff, 0)
-    IF_INT_EQUAL(GSWF(GSWF_MRI12_ORB_ON_PEDESTAL), 0)
+    IF_INT_EQUAL(GSWF_MRI_12_PUNI_ORB_PLACED, 0)
         CALL_CHILD(mri_punipuni_itemselect)
         IF_INT_EQUAL(LW(1), 0)
             GOTO(100)
         END_IF
-        SET_VALUE(GSWF(GSWF_MRI12_ORB_ON_PEDESTAL), 1)
+        SET_VALUE(GSWF_MRI_12_PUNI_ORB_PLACED, 1)
         CALL(evt_item_set_position, LW(10), 5, 30, -95)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_sui_hikari"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_sui_hikari"), MAP_OBJ_FLAG_HIDDEN)
         CALL_CHILD(mri_punipuni_itemset)
     ELSE
-        SET_VALUE(GSWF(GSWF_MRI12_ORB_ON_PEDESTAL), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAPOBJ_FLAG_HIDE)
+        SET_VALUE(GSWF_MRI_12_PUNI_ORB_PLACED, 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAP_OBJ_FLAG_HIDDEN)
         CALL_CHILD(mri_punipuni_itemremove)
     END_IF
     LABEL(100)
@@ -155,11 +165,11 @@ static EVT_BEGIN(punipuni_ball00)
     RETURN
 EVT_END()
 
-/** Planter hit script 1: the first time it is hit it launches a coin out of the planter (remembered with a flag). */
+/** Planter search script 1: the first time it is searched it launches a coin out of the planter (remembered with a flag). */
 static EVT_BEGIN(evt_f1_ueki_01)
     CALL(evt_item_delete_check, STRING("item_ueki_01"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ueki_01"), ITEM_COIN, -190, -309, 65, ITEM_ENTRY_LAUNCH, GSWF(GSWF_MRI12_PLANTER_COIN_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_ueki_01"), ITEM_COIN, -190, -309, 65, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_MRI_12_COIN_PLANT, 0)
     END_IF
     RETURN
 EVT_END()
@@ -180,18 +190,18 @@ static KusaAccess ueki_access_data[] = {
 };
 
 /**
- * Init script of the breaking floor: until the floor has fallen (GSWF_MRI12_FLOOR_BROKEN is 0) the lower floor
+ * Init script of the breaking floor: until the floor has fallen (GSWF_MRI_12_BREAKING_FLOOR_BROKEN is 0) the lower floor
  * piece (A_f2_rak_01) has its collision off.
  */
 static EVT_BEGIN(breakyuka_init)
-    IF_INT_EQUAL(GSWF(GSWF_MRI12_FLOOR_BROKEN), 0)
+    IF_INT_EQUAL(GSWF_MRI_12_BREAKING_FLOOR_BROKEN, 0)
         CALL(evt_hitobj_onoff, STRING("A_f2_rak_01"), 1, 0)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Main script when the floor gives way under the Puni weight:
+ * Main script when the breaking floor gives way:
  * turns on the collision of the lower floor piece and makes every Puni that is standing over the hole fall.
  */
 static EVT_BEGIN(breakyuka_main)
@@ -221,26 +231,26 @@ EVT_BEGIN(mri_12_init_evt)
     SPAWN_EVENT(mri_countdown)
     SET_VALUE(LW(0), PTR(ueki_access_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_23_TIME_BOMB_ACTIVATED, STORY_STG2_23_01_X_NAUT_BATTLE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI9"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_23_TIME_BOMB_ACTIVATED, STG2_23_01_X_NAUT_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI9"))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI1"))
     END_SWITCH
-    CALL(evt_map_playanim, STRING("mizu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("mizu_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("sui_hikari"), 1, 0)
+    CALL(evt_map_playanim, STRING("mizu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("sui_hikari"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(breakyuka_init)
-    CALL(evt_mobj_breaking_floor, STRING("mobj_bf00"), -45, 0, -64, 1, PTR(breakyuka_main), GSWF(GSWF_MRI12_FLOOR_BROKEN))
+    CALL(evt_mobj_breaking_floor, STRING("mobj_bf00"), -45, 0, -64, 1, PTR(breakyuka_main), GSWF_MRI_12_BREAKING_FLOOR_BROKEN)
     SET_VALUE(LW(10), STRING("punipuni"))
     SET_VALUE(LW(11), 0)
     SPAWN_EVENT(punipuni_ball00_init)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_dai_mae"), 0, PTR(punipuni_ball00), 0)
-    CALL(evt_npc_change_fbat_mode, 1)
-    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, -175, -310, -85, ITEM_ENTRY_FIXED, GSWF(GSWF_MRI12_STAR_PIECE), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_dai_mae"), 0, PTR(punipuni_ball00), 0)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_STAR_PIECE, -175, -310, -85, ITEM_TYPE_STILL, GSWF_STARPIECE_48, 0)
     RETURN
 EVT_END()

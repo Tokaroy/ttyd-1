@@ -1,10 +1,12 @@
 // Rogueport Sewers (tik, chika: underground): declarations of the area's map init events, battle tables and the plane-
 // mode lecture.
+
 #pragma once
 
 #include "dolphin/types.h"
 #include "driver/npcdrv.h"
 #include "evt/evt_word.h"
+#include "evt/evt_cmd.h"
 
 extern NpcTerritoryInfo btl_tik_setup_no_tbl[];
 extern NpcSetupBattleInfo btlsetup_tik_tbl[];
@@ -46,14 +48,9 @@ extern BattleUnitKind unit_patapata;
 extern BattleUnitKind unit_togekuri;
 extern BattleUnitKind unit_togenoko;
 
-extern EvtWord evt_uranai_cap[];
+USER_FUNC(evt_tik_villager_urouro_check_func);
 
-extern s32 gesso_defence_turn[];
-extern s32 gesso_defence_attr_turn[];
-extern s32 gesso_regist_turn[];
-extern PoseTableEntry gesso_pose_table_turn[];
-extern BattleUnitKind unit_boss_gesso;
-extern BattleUnitKind unit_boss_gesso_left_arm;
-extern BattleUnitKind unit_boss_gesso_right_arm;
-extern EvtWord gesso_arm_dead_event[];
-extern EvtWord gesso_arm_damage_pose_event[];
+// Area-local saved values (TIK; swReInit clears them on every area change), named from the area's
+// scripts
+// passed to evt_mobj_signboard for board and board2 (tik_06_init_evt); mobj_signboard never sets or reads its flag
+#define LSWF_TIK_06_SIGNBOARD_UNUSED LSWF(0)

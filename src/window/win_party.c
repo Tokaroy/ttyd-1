@@ -1,4 +1,5 @@
 // Pause menu: the partner window (choose a partner, partner stats and moves).
+
 #include "version.h"
 #include "win/win_main.h"
 #include "win/win_party.h"
@@ -13,6 +14,7 @@
 #include "manager/fontmgr.h"
 #include "mario/mariost.h"
 #include "sdk/texPalette.h"
+#include "party.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "icon_ids.h"
@@ -23,53 +25,51 @@
 #include "unit/party/unit_party_vivian.h"
 #include "unit/party/unit_party_sanders.h"
 #include "unit/party/unit_party_chuchurina.h"
-#include "win/win_mario.h"
-#include "win/win_root.h"
 #include "libc_decls.h"
 #include <dolphin/pad.h>
 #include <demo/DEMOPad.h>
+#include "sfx_name_word.h"
+#include "win/win_mario.h"
+#include "win/win_root.h"
+#include "driver/mapdrv.h"
 
-/**
- * The four battle moves the party menu lists for each partner, used by party_list below:
- * Goombella, Koops, Flurrie, Yoshi, Vivian, Bobbery and Ms. Mowz.
- */
-BattleWeapon* chri_waza[4] = {
+static BattleWeapon* chri_waza[4] = {
     &partyWeapon_ChristineNormalAttack,
     &partyWeapon_ChristineMonosiri,
     &partyWeapon_ChristineRenzokuAttack,
     &partyWeapon_ChristineKiss,
 };
-BattleWeapon* noko_waza[4] = {
+static BattleWeapon* noko_waza[4] = {
     &partyWeapon_NokotarouKouraAttack,
     &partyWeapon_NokotarouSyubibinKoura,
     &partyWeapon_NokotarouKouraGuard,
     &partyWeapon_NokotarouTsuranukiKoura,
 };
-BattleWeapon* cloud_waza[4] = {
+static BattleWeapon* cloud_waza[4] = {
     &partyWeapon_ClaudaNormalAttack,
     &partyWeapon_ClaudaBreathAttack,
     &partyWeapon_ClaudaPredationAttack,
     &partyWeapon_ClaudaKumogakureAttack,
 };
-BattleWeapon* yoshi_waza[4] = {
+static BattleWeapon* yoshi_waza[4] = {
     &partyWeapon_YoshiNormalAttack,
     &partyWeapon_YoshiNomikomi_Shot,
     &partyWeapon_YoshiEggAttack_Minimini,
     &partyWeapon_YoshiCallGuard,
 };
-BattleWeapon* vivi_waza[4] = {
+static BattleWeapon* vivi_waza[4] = {
     &partyWeapon_VivianNormalAttack,
     &partyWeapon_VivianShadowGuard,
     &partyWeapon_VivianMagicalPowder,
     &partyWeapon_VivianCharmKissAttack,
 };
-BattleWeapon* sand_waza[4] = {
+static BattleWeapon* sand_waza[4] = {
     &partyWeapon_SandersNormalAttack,
     &partyWeapon_SandersTimeBombSet,
     &partyWeapon_SandersCounterSet,
     &partyWeapon_SandersSuperBombAttack,
 };
-BattleWeapon* chu_waza[4] = {
+static BattleWeapon* chu_waza[4] = {
     &partyWeapon_ChuchurinaNormalAttackLeft,
     &partyWeapon_ChuchurinaItemSteal,
     &partyWeapon_ChuchurinaMadowaseAttack,
@@ -82,13 +82,13 @@ BattleWeapon* chu_waza[4] = {
  * The Party screen's setup and drawing read it; Yoshi's name icon is switched to match his colour.
  */
 WindowPartyDt winPartyDt[7] = {
-    {1, ICON_155, "name_party0", "msg_menu_party_kuri", "EFF_m_kuriko", "W_1", "d_mario", "R_2", chri_waza},
-    {2, ICON_156, "name_party1", "msg_menu_party_noko", "EFF_m_noko", "W_1", "d_mario", "R_3", noko_waza},
-    {5, ICON_15F, "name_party4", "msg_menu_party_cloud", "EFF_m_cloud", "W_1", "d_mario", "R_4", cloud_waza},
-    {4, ICON_158, "name_party3", "msg_menu_party_yoshi", "EFF_m_yoshi", "W_1", "d_mario", "R_5", yoshi_waza},
-    {6, ICON_160, "name_party5", "msg_menu_party_vivi", "c_vivian", "PTR_S_1", "d_mario", "R_12", vivi_waza},
-    {3, ICON_157, "name_party2", "msg_menu_party_bom", "EFF_m_bomb", "W_1", "d_mario", "R_13", sand_waza},
-    {7, ICON_161, "name_party6", "msg_menu_party_chu", "EFF_m_chu", "W_1", "d_mario", "R_14", chu_waza},
+    {PARTY_GOOMBELLA, ICON_PARTY_GOOMBELLA, "name_party0", "msg_menu_party_kuri", "EFF_m_kuriko", "W_1", "d_mario", "R_2", chri_waza},
+    {PARTY_KOOPS, ICON_PARTY_KOOPS, "name_party1", "msg_menu_party_noko", "EFF_m_noko", "W_1", "d_mario", "R_3", noko_waza},
+    {PARTY_FLURRIE, ICON_PARTY_FLURRIE, "name_party4", "msg_menu_party_cloud", "EFF_m_cloud", "W_1", "d_mario", "R_4", cloud_waza},
+    {PARTY_YOSHI, ICON_PARTY_YOSHI, "name_party3", "msg_menu_party_yoshi", "EFF_m_yoshi", "W_1", "d_mario", "R_5", yoshi_waza},
+    {PARTY_VIVIAN, ICON_PARTY_VIVIAN, "name_party5", "msg_menu_party_vivi", "c_vivian", "PTR_S_1", "d_mario", "R_12", vivi_waza},
+    {PARTY_BOBBERY, ICON_PARTY_BOBBERY, "name_party2", "msg_menu_party_bom", "EFF_m_bomb", "W_1", "d_mario", "R_13", sand_waza},
+    {PARTY_MS_MOWZ, ICON_PARTY_MS_MOWZ, "name_party6", "msg_menu_party_chu", "EFF_m_chu", "W_1", "d_mario", "R_14", chu_waza},
 };
 
 /**
@@ -107,12 +107,14 @@ void winPartyInit(WindowWork* wp) {
     pouch = pouchGetPtr();
     wp->party.count = 0;
     for (i = 0; i < 7; i++) {
-        for (j = 0; j < 8; j++) {
+        for (j = 0; j < PARTNER_COUNT; j++) {
             if (j == winPartyDt[i].partyId && (pouch->partyData[j].flags & POUCH_PARTY_FLAG_JOINED) &&
                 !(pouch->partyData[j].flags & POUCH_PARTY_FLAG_AWAY)) {
-                if (wp->flags & WIN_FLAG_8BIT_MARIO) {
+                if (wp->flags & WINDOW_FLAG_8BIT) {
                     poseName = winPartyDt[i].poseName2;
-                    switch (pouchGetPartyColor(4)) {
+
+                    // Initialization uses the Yoshi-color animation for every partner; display selects each partner again.
+                    switch (pouchGetPartyColor(PARTY_YOSHI)) {
                         case 0:
                             animName = "R_5";
                             break;
@@ -136,8 +138,8 @@ void winPartyInit(WindowWork* wp) {
                             animName = "R_11";
                             break;
                     }
-                } else if (j == 4) {
-                    switch (pouchGetPartyColor(4)) {
+                } else if (j == PARTY_YOSHI) {
+                    switch (pouchGetPartyColor(PARTY_YOSHI)) {
                         case 0:
                             poseName = "EFF_m_yoshi";
                             break;
@@ -168,7 +170,7 @@ void winPartyInit(WindowWork* wp) {
                 }
                 wp->party.poseIds[wp->party.count] = animPoseEntry(poseName, 0);
                 animPoseSetAnim(wp->party.poseIds[wp->party.count], animName, 1);
-                animPoseSetMaterialFlagOn(wp->party.poseIds[wp->party.count], ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+                animPoseSetMaterialFlagOn(wp->party.poseIds[wp->party.count], (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
                 wp->party.partyIds[wp->party.count] = j;
                 wp->party.count++;
             }
@@ -185,6 +187,7 @@ void winPartyInit(WindowWork* wp) {
         }
     }
 
+    // winPartyDt has 7 rows: a party id that is not in it makes this search read an 8th.
     for (i = 0; i < 8; i++) {
         if (wp->party.partyIds[wp->party.cursor] == winPartyDt[i].partyId) {
             wp->party.dtIdx = i;
@@ -192,32 +195,32 @@ void winPartyInit(WindowWork* wp) {
         }
     }
 
-    wp->party.openCursor = wp->party.cursor;
+    wp->party.startCursor = wp->party.cursor;
     wp->party.angle = wp->party.angleTarget = 360.0f / wp->party.count * wp->party.cursor;
     wp->party.mode = 0;
     wp->party.wazaCount = pouchGetPartyAttackLv(winPartyDt[wp->party.dtIdx].partyId) + 2;
-    switch (pouchGetPartyColor(4)) {
+    switch (pouchGetPartyColor(PARTY_YOSHI)) {
         case 0:
-            winPartyDt[3].nameMsgId = ICON_158;
+            winPartyDt[3].iconId = ICON_PARTY_YOSHI;
             break;
         case 1:
-            winPartyDt[3].nameMsgId = ICON_159;
+            winPartyDt[3].iconId = ICON_PARTY_YOSHI_1;
             break;
         case 2:
-            winPartyDt[3].nameMsgId = ICON_15A;
+            winPartyDt[3].iconId = ICON_PARTY_YOSHI_2;
             break;
         case 3:
-            winPartyDt[3].nameMsgId = ICON_15B;
+            winPartyDt[3].iconId = ICON_PARTY_YOSHI_3;
             break;
         case 4:
-            winPartyDt[3].nameMsgId = ICON_15C;
+            winPartyDt[3].iconId = ICON_PARTY_YOSHI_4;
             break;
         case 5:
-            winPartyDt[3].nameMsgId = ICON_15D;
+            winPartyDt[3].iconId = ICON_PARTY_YOSHI_5;
             break;
         case 6:
         default:
-            winPartyDt[3].nameMsgId = ICON_15E;
+            winPartyDt[3].iconId = ICON_PARTY_YOSHI_6;
             break;
     }
 }
@@ -250,7 +253,7 @@ void winPartyExit(WindowWork* wp) {
  * Left/Right turn the partner carousel; A asks to switch to the selected partner
  * and closes the menu (winMain then swaps partners);
  * X opens the move list, where Up/Down show each move's description.
- * Returns -1 on B or with no partners, -2 to close the menu, else 0.
+ * Returns -1 on B from the carousel or with no partners, -2 to close the menu, else 0.
  */
 s32 winPartyMain(WindowWork* wp) {
     s32 i;
@@ -263,19 +266,19 @@ s32 winPartyMain(WindowWork* wp) {
     switch (wp->party.mode) {
         case 0:
             if (wp->buttonTrg & PAD_BUTTON_A) {
-                wp->party.switchRequested = 1;
+                wp->party.confirmed = 1;
                 return -2;
             }
             if (wp->buttonTrg & PAD_BUTTON_X) {
                 wp->party.mode = 1;
                 wp->party.wazaCursor = 0;
-                psndSFXOn((const char*)0x20012);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
             } else if (wp->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn((const char*)0x20013);
-                wp->party.switchRequested = 0;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
+                wp->party.confirmed = 0;
                 return -1;
             } else if (wp->buttonTrg & PAD_BUTTON_START) {
-                wp->party.switchRequested = 0;
+                wp->party.confirmed = 0;
                 return -2;
             } else if (wp->dirRep & DEMO_STICK_LEFT) {
                 prev = wp->party.cursor;
@@ -288,8 +291,10 @@ s32 winPartyMain(WindowWork* wp) {
                     wp->party.angle += 360.0f;
                 }
                 if (prev != wp->party.cursor) {
-                    psndSFXOn((const char*)0x209D6);
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_BTL_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
                 }
+
+                // winPartyDt has 7 rows: a party id that is not in it makes this search read an 8th.
                 for (i = 0; i < 8; i++) {
                     if (wp->party.partyIds[wp->party.cursor] == winPartyDt[i].partyId) {
                         wp->party.dtIdx = i;
@@ -307,8 +312,10 @@ s32 winPartyMain(WindowWork* wp) {
                     wp->party.angle -= 360.0f;
                 }
                 if (prev != wp->party.cursor) {
-                    psndSFXOn((const char*)0x209D6);
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_BTL_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
                 }
+
+                // winPartyDt has 7 rows: a party id that is not in it makes this search read an 8th.
                 for (i = 0; i < 8; i++) {
                     if (wp->party.partyIds[wp->party.cursor] == winPartyDt[i].partyId) {
                         wp->party.dtIdx = i;
@@ -327,18 +334,18 @@ s32 winPartyMain(WindowWork* wp) {
                 if (wp->party.wazaCursor < 0) {
                     wp->party.wazaCursor = wp->party.wazaCount - 1;
                 }
-                psndSFXOn((const char*)0x20005);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (wp->dirRep & DEMO_STICK_DOWN) {
                 wp->party.wazaCursor++;
                 if (wp->party.wazaCursor >= wp->party.wazaCount) {
                     wp->party.wazaCursor = 0;
                 }
-                psndSFXOn((const char*)0x20005);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (wp->buttonTrg & PAD_BUTTON_B) {
                 wp->party.mode = 0;
-                psndSFXOn((const char*)0x20013);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
             } else if (wp->buttonTrg & PAD_BUTTON_START) {
-                wp->party.switchRequested = 0;
+                wp->party.confirmed = 0;
                 return -2;
             }
             wp->helpTgtX = -10.0f;
@@ -354,30 +361,40 @@ void winPartyMain2(WindowWork* wp) {
     wp->party.angle += (wp->party.angleTarget - wp->party.angle) / 4.0f;
 }
 
-/**
- * White (icons, textures, edged text) and black (HP numbers and plain text) used
- * when drawing the Party screen.
- */
-static const GXColor winPartyWhiteC = {0xFF, 0xFF, 0xFF, 0xFF};
-static const GXColor winPartyBlackC = {0x00, 0x00, 0x00, 0xFF};
+/** Row and column spacing of the Party window (winPartyDisp). */
+enum PartyWindowLayout {
+    PARTY_STAT_ROW_H = 32,  // HP row to Rank row
+    PARTY_RANK_ICON_W = 34, // one rank Shine Sprite to the next
+    PARTY_MOVE_ROW_H = 26,  // one row of the move list (winPartyMain moves the hand cursor by 26 too)
+};
+
 /**
  * Draws the Party window (menu slot idx): the selected partner's HP
  * and rank (one Shine Sprite icon per rank-up), the partner carousel with shadows (others shrunk and grayed),
  * the partner's name, the switch and move-list hints, and the move list with FP costs.
+ *
+ * (x, y) is the window's position (wp->menu[idx]); screen coordinates have the origin at the centre and y
+ * growing upwards. Panels and plates are given by their top-left corner, textures and icons by their
+ * centre, text by its start. Left half: the carousel around (x - 140, y + 20), the name plate under it and
+ * the swap hint; right half: the HP/Rank panel, the move list and the "Check Moves" hint. "Early demos"
+ * below are the US and JP demos (VERSION <= VERSION_DEMO_JP); JP and later share the other branch.
  */
 void winPartyDisp(s32 camId, void* param, s32 idx) {
     WindowWork* wp = param;
+    // white: icons, textures, edged text; black: HP numbers and plain text
+    const GXColor whiteColor = {0xFF, 0xFF, 0xFF, 0xFF};
+    const GXColor blackColor = {0x00, 0x00, 0x00, 0xFF};
     GXColor white2;
     GXColor black2;
-    GXColor red[1];
+
+    GXColor red[1]; // indexed by the row (red[i], first row only): the retail code walks a pointer for it
     GXColor white;
     GXColor black;
-    GXColor white0;
-    GXColor black0;
-    GXColor* kp;
-    f32 scale;
 #if VERSION <= VERSION_DEMO_JP
-    f32 costX; // x of the FP cost column
+    f32 scale;
+    f32 costX;
+#else
+    f32 scale;
 #endif
     f32 tx;
     f32 bx;
@@ -397,12 +414,10 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
     s32 id;
     const char* name;
     PouchPartyData* pd;
-    white0 = winPartyWhiteC;
-    white = winPartyWhiteC;
-    white2 = winPartyWhiteC;
-    black0 = winPartyBlackC;
-    black = winPartyBlackC;
-    black2 = winPartyBlackC;
+    white = whiteColor;
+    white2 = whiteColor;
+    black = blackColor;
+    black2 = blackColor;
     x = wp->menu[idx].x;
     y = wp->menu[idx].y;
     winBgGX(wp, 1, x, y);
@@ -410,6 +425,11 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
         return;
     }
 
+    // HP/Rank panel (240 x 76, top-left (x - 10, y + 136)) for the partner whose stats are shown (party.dtIdx).
+    // Row i's text line is (y + 110) - i * PARTY_STAT_ROW_H. Left: a coloured plate (texture 0xAF, an oval,
+    // used as an alpha mask as in win_mario.c; HP pink as Mario's, Rank green) centred at x + 33, with "HP"
+    // (scale 1) or "Rank" (0.9) centred on x + 35 and, for HP only, the ruby "Heart Pts." above it at half
+    // size in dark red (msgs2[1] repeats the HP ruby but is never drawn).
     pd = &pouchGetPtr()->partyData[winPartyDt[wp->party.dtIdx].partyId];
     fy = 20.0f;
     winKirinukiGX(wp, 0, x - 10.0f, fy + (116.0f + y), 240.0f, 76.0f);
@@ -434,55 +454,79 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
             winTexInit(*wp->res->data);
             GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
             GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
-            winTexSet(0xAF, (Vec){tx, (fy = by - ((f32)(i * 32))) - 4.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, cols[i]);
+            winTexSet(0xAF, (Vec){tx, (fy = by - (f32)(i * PARTY_STAT_ROW_H)) - 4.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                      cols[i]);
             winFontInit();
-            winFontSet((Vec){bx - (w1 / 2.0f), 12.0f + fy, 0.0f}, (Vec){scale, scale, scale}, black2, msgSearch(msgs[i]));
+            winFontSet((Vec){bx - w1 / 2.0f, 12.0f + fy, 0.0f}, (Vec){scale, scale, scale}, black2, msgSearch(msgs[i]));
             if (i < 1) {
-                winFontSet((Vec){bx - (w2 / 2.0f), 21.0f + fy, 0.0f}, (Vec){0.5f, 0.5f, 0.5f}, red[i], msgSearch(msgs2[i]));
+                winFontSet((Vec){bx - w2 / 2.0f, 21.0f + fy, 0.0f}, (Vec){0.5f, 0.5f, 0.5f}, red[i],
+                           msgSearch(msgs2[i]));
             }
         }
     }
 
+    // Right of the plates, from x + 95: the HP icon and "current / maximum" HP (current right-aligned to the
+    // width of "999" (winFontSetR), "/" is texture 0x10); on the Rank row one Shine Sprite icon per rank-up
+    // (wazaCount - 2: a partner has rank + 2 moves, winPartyInit), PARTY_RANK_ICON_W apart.
+    // Early demos: current HP from x + 100, "/" at x + 160, maximum from x + 170.
+    // JP and later: current HP from x + 110, "/" at x + 168, maximum from x + 178.
     winIconInit();
     bx = 60.0f + bx;
 #if VERSION <= VERSION_DEMO_JP
     tx = 4.0f + by;
-    winIconSet(ICON_19F, (Vec){bx, tx, 0.0f}, (Vec){0.82f, 0.82f, 0.82f}, white);
-#else
-    fy = 4.0f + by;
-    winIconSet(ICON_19F, (Vec){bx, fy, 0.0f}, (Vec){0.82f, 0.82f, 0.82f}, white);
-#endif
+    winIconSet(ICON_HP, (Vec){bx, tx, 0.0f}, (Vec){0.82f, 0.82f, 0.82f}, white);
     for (i = 0; i < (wp->party.wazaCount - 2); i++) {
-        winIconSet(itemDataTable[0x57].icon_id, (Vec){bx + ((f32)(i * 34)), iy = 4.0f + (by - 32.0f), 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white2);
+        winIconSet(itemDataTable[ITEM_SHINE_SPRITE].icon_id,
+                   (Vec){bx + ((f32)(i * PARTY_RANK_ICON_W)), iy = 4.0f + (by - 32.0f), 0.0f}, (Vec){0.8f, 0.8f, 0.8f},
+                   white2);
     }
 
     winTexInit(*wp->res->data);
-#if VERSION <= VERSION_DEMO_JP
     winTexSet(0x10, (Vec){170.0f + (x - 10.0f), tx, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
     winFontInit();
-    winFontSetR((Vec){110.0f + (x - 10.0f), fy = 4.0f + (12.0f + by), 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black, "%s", winZenkakuStr(pd->currentHP));
-    winFontSet((Vec){180.0f + (x - 10.0f), fy, 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black, "%s", winZenkakuStr(pd->maximumHP));
+    winFontSetR((Vec){110.0f + (x - 10.0f), fy = 4.0f + (12.0f + by), 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black, "%s",
+                winZenkakuStr(pd->currentHP));
+    winFontSet((Vec){180.0f + (x - 10.0f), fy, 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black, "%s",
+               winZenkakuStr(pd->maximumHP));
 #else
+    fy = 4.0f + by;
+    winIconSet(ICON_HP, (Vec){bx, fy, 0.0f}, (Vec){0.82f, 0.82f, 0.82f}, white);
+    for (i = 0; i < wp->party.wazaCount - 2; i++) {
+        winIconSet(itemDataTable[ITEM_SHINE_SPRITE].icon_id,
+                   (Vec){bx + (f32)(i * PARTY_RANK_ICON_W), 4.0f + (by - 32.0f), 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white2);
+    }
+
+    winTexInit(*wp->res->data);
     winTexSet(0x10, (Vec){8.0f + (170.0f + (x - 10.0f)), fy, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
     winFontInit();
-    winFontSetR((Vec){10.0f + (110.0f + (x - 10.0f)), fy = 4.0f + (12.0f + by), 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black, "%s", winZenkakuStr(pd->currentHP));
-    winFontSet((Vec){8.0f + (180.0f + (x - 10.0f)), fy, 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black, "%s", winZenkakuStr(pd->maximumHP));
+    winFontSetR((Vec){10.0f + (110.0f + (x - 10.0f)), fy = 4.0f + (12.0f + by), 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black,
+                "%s", winZenkakuStr(pd->currentHP));
+    winFontSet((Vec){8.0f + (180.0f + (x - 10.0f)), fy, 0.0f}, (Vec){0.9f, 0.9f, 0.9f}, black, "%s",
+               winZenkakuStr(pd->maximumHP));
 #endif
     winZClear();
 
+    // The carousel: partner i stands on a circle of radius 80 around (x - 140, y + 20), at 360 / count * i
+    // degrees minus party.angle about the y axis, the circle tipped 30 degrees about the x axis. party.angle
+    // eases toward the cursor partner's angle (winPartyMain2), so that partner ends up at angle 0, the
+    // circle's lowest point (40 below its centre). First every partner's round shadow (scale 0.8 for the
+    // cursor partner, 0.6 for the others)...
     for (i = 0; i < wp->party.count; i++) {
         Vec v = {0.0f, 0.0f, 80.0f};
         Mtx rx;
         Mtx ry;
         PSMTXRotRad(rx, 'x', 0.5235988f);
-        PSMTXRotRad(ry, 'y', 0.017453292f * (((360.0f / wp->party.count) * i) - wp->party.angle));
+        PSMTXRotRad(ry, 'y', 0.017453292f * (360.0f / wp->party.count * i - wp->party.angle));
         PSMTXMultVec(ry, &v, &v);
         PSMTXMultVec(rx, &v, &v);
-        kp = &(GXColor){0x00, 0x00, 0x00, 0x80};
-        // FAKE: the colour goes by address with the floats first (the by-value call rebuilds the literal each pass and evaluates the scale first)
-        ((void (*)(WindowWork*, f32, f32, f32, f32, GXColor*))winKageGX)(wp, (x - 140.0f) + v.x, 20.0f + (y + v.y), v.z, (i == wp->party.cursor) ? (0.8f) : (0.6f), kp);
+        winKageGX(wp, (x - 140.0f) + v.x, 20.0f + (y + v.y), v.z, (i == wp->party.cursor) ? 0.8f : 0.6f,
+                  (GXColor){0x00, 0x00, 0x00, 0x80});
     }
 
+    // ...then the models, flipped in z and turned 180 degrees about y: the cursor partner at full size,
+    // untinted (material colour flag off), playing its menu animation (animName; in 8-bit form animName2, or
+    // R_5..R_11 for Yoshi by his colour) on the frame counter; the others at 0.8 size, tinted gray (0x80) and
+    // held at time 0 (8-bit Yoshi: Z_5..Z_11). Vivian's model also gets animPoseVivianMain with her position.
     for (i = 0; i < wp->party.count; i++) {
         Vec v = {0.0f, 0.0f, 80.0f};
         Mtx m;
@@ -491,12 +535,12 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
         Vec vp;
         Mtx ry;
         pose = wp->party.poseIds[i];
-        if (pose == (-1)) {
+        if (pose == -1) {
             continue;
         }
         anim = animPoseGetAnimDataPtr(pose);
         PSMTXRotRad(rx, 'x', 0.5235988f);
-        PSMTXRotRad(ry, 'y', 0.017453292f * (((360.0f / wp->party.count) * i) - wp->party.angle));
+        PSMTXRotRad(ry, 'y', 0.017453292f * (360.0f / wp->party.count * i - wp->party.angle));
         PSMTXMultVec(ry, &v, &v);
         PSMTXMultVec(rx, &v, &v);
         if (i == wp->party.cursor) {
@@ -505,16 +549,16 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
             PSMTXRotRad(ry, 'y', 3.1415927f);
             PSMTXConcat(m, s, m);
             PSMTXConcat(m, ry, m);
-            animPoseSetMaterialFlagOff(pose, ANIM_MATERIAL_FLAG_EVT_COLOR);
+            animPoseSetMaterialFlagOff(pose, MAP_OBJ_FLAG_COLOR);
             for (j = 0; j < 7; j++) {
                 if (wp->party.partyIds[i] == winPartyDt[j].partyId) {
                     break;
                 }
             }
-            if (wp->flags & WIN_FLAG_8BIT_MARIO) {
+            if (wp->flags & WINDOW_FLAG_8BIT) {
                 animName = winPartyDt[j].animName2;
-                if (winPartyDt[j].partyId == 4) {
-                    switch (pouchGetPartyColor(4)) {
+                if (winPartyDt[j].partyId == PARTY_YOSHI) {
+                    switch (pouchGetPartyColor(PARTY_YOSHI)) {
                         case 0:
                             animName = "R_5";
                             break;
@@ -543,24 +587,24 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
                 animName = winPartyDt[j].animName;
             }
             animPoseSetAnim(pose, animName, 0);
-            animPoseSetLocalTime(pose, (f32)(gp->retraceCount % (s32)anim->loopInfo[2]));
+            animPoseSetLocalTime(pose, (f32)(gp->retraceCount % (s32)anim->loopInfo->end));
         } else {
             PSMTXTrans(m, (x - 140.0f) + v.x, 20.0f + (y + v.y), v.z);
             PSMTXScale(s, 0.8f, 0.8f, -0.8f);
             PSMTXRotRad(ry, 'y', 3.1415927f);
             PSMTXConcat(m, s, m);
             PSMTXConcat(m, ry, m);
-            animPoseSetMaterialFlagOn(pose, ANIM_MATERIAL_FLAG_EVT_COLOR);
+            animPoseSetMaterialFlagOn(pose, MAP_OBJ_FLAG_COLOR);
             animPoseSetMaterialEvtColor(pose, (GXColor){0x80, 0x80, 0x80, 0xFF});
             for (j = 0; j < 7; j++) {
                 if (wp->party.partyIds[i] == winPartyDt[j].partyId) {
                     break;
                 }
             }
-            if (wp->flags & WIN_FLAG_8BIT_MARIO) {
+            if (wp->flags & WINDOW_FLAG_8BIT) {
                 animName = winPartyDt[j].animName2;
-                if (winPartyDt[j].partyId == 4) {
-                    switch (pouchGetPartyColor(4)) {
+                if (winPartyDt[j].partyId == PARTY_YOSHI) {
+                    switch (pouchGetPartyColor(PARTY_YOSHI)) {
                         case 0:
                             animName = "Z_5";
                             break;
@@ -592,13 +636,15 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
             animPoseSetLocalTime(pose, 0.0f);
         }
         animPoseMain(pose);
-        if (wp->party.partyIds[i] == 6) {
+        if (wp->party.partyIds[i] == PARTY_VIVIAN) {
             vp = (Vec){(x - 140.0f) + v.x, 20.0f + (y + v.y), v.z};
             animPoseVivianMain(pose, &vp);
         }
         animPoseDrawMtx(pose, m, 2, 0.0f, 5.0f);
     }
 
+    // Name plate (200 wide, top-left (x - 230, y - 40)) with the cursor partner's name (Yoshi: the name the
+    // player gave him) in white outlined text, centred on the plate
     if (wp->party.count != 0) {
         winNameGX(wp, 0, x - 230.0f, (20.0f + (y - 50.0f)) - 10.0f, 200.0f, 32.0f);
         winFontInit();
@@ -606,35 +652,46 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
         for (i = 0; i < 7; i++) {
             id = winPartyDt[i].partyId;
             if (wp->party.partyIds[wp->party.cursor] == id) {
-                if (id != 4) {
+                if (id != PARTY_YOSHI) {
                     name = msgSearch(winPartyDt[i].name);
                 } else {
                     name = pouchGetYoshiName();
                 }
                 w2 = FontGetMessageWidth(name);
-                winFontSetEdge((Vec){((200.0f - w2) / 2.0f) + (x - 230.0f), fy, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white2, name);
+                winFontSetEdge((Vec){((200.0f - w2) / 2.0f) + (x - 230.0f), fy, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white2,
+                               name);
             }
         }
     }
 
+    // With two or more partners: "Swap Partners" (0.8) centred on x - 115 at y - 90 with the A button icon
+    // 30 pixels before it, and two curved arrows (texture 0xC0, the left one mirrored) at x - 200 and
+    // x - 100, y - 16, either side of the carousel
     if (wp->party.count > 1) {
         winFontInit();
         w1 = 0.8f * FontGetMessageWidth(msgSearch("msg_menu_party_henkou"));
         fy = ((-230.0f - w1) / 2.0f) + x;
         winFontSet((Vec){fy, y - 90.0f, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, black, msgSearch("msg_menu_party_henkou"));
         winIconInit();
-        winIconSet(ICON_064, (Vec){fy - 30.0f, y - 100.0f, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white);
+        winIconSet(ICON_BUTTON_A, (Vec){fy - 30.0f, y - 100.0f, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white);
         winTexInit(*wp->res->data);
         winTexSet(0xC0, (Vec){(x - 150.0f) - 50.0f, y - 16.0f, 0.0f}, (Vec){-0.6f, 0.6f, 0.6f}, white);
         winTexSet(0xC0, (Vec){50.0f + (x - 150.0f), y - 16.0f, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
     }
 
+    // "Check Moves" (0.7) ending at x + 250, y - 100, with the X button icon 20 pixels before it
     winFontInit();
     w1 = 0.7f * FontGetMessageWidth(msgSearch("msg_menu_party_waza_kakunin"));
     fy = x + (250.0f - w1);
     winFontSet((Vec){fy, y - 100.0f, 0.0f}, (Vec){0.7f, 0.7f, 0.7f}, black, msgSearch("msg_menu_party_waza_kakunin"));
     winIconInit();
-    winIconSet(ICON_1F5, (Vec){fy - 20.0f, y - 110.0f, 0.0f}, (Vec){0.7f, 0.7f, 0.7f}, white);
+    winIconSet(ICON_BUTTON_X_ALT, (Vec){fy - 20.0f, y - 110.0f, 0.0f}, (Vec){0.7f, 0.7f, 0.7f}, white);
+
+    // The move list: a 260 x 144 panel (early demos 140 high) with top-left (x - 5, y + 50); in its header
+    // strip "Moves" (white, outlined, 0.8) centred in the 200 pixels from x and "FP" at x + 210. Row i (text
+    // line (y + 20) - i * PARTY_MOVE_ROW_H): the move's name from x + 10 (US and later: at most 175 wide);
+    // JP and later: the FP cost centred on x + 216 and a small "FP" at x + 231, 10 lower; early demos: the
+    // cost with "%d" from x + 210 and the small "FP" at x + 227 on the same line.
 #if VERSION <= VERSION_DEMO_JP
     winWazaGX(wp, 0, x - 5.0f, wy = 50.0f + y, 260.0f, 140.0f);
 #else
@@ -643,30 +700,38 @@ void winPartyDisp(s32 camId, void* param, s32 idx) {
     winFontInit();
     w1 = 0.8f * FontGetMessageWidth(msgSearch("msg_menu_party_waza"));
     fy = 45.0f + y;
-    winFontSetEdge((Vec){((200.0f - w1) / 2.0f) + x, fy, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white, msgSearch("msg_menu_party_waza"));
+    winFontSetEdge((Vec){((200.0f - w1) / 2.0f) + x, fy, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white,
+                   msgSearch("msg_menu_party_waza"));
     bx = 230.0f + x;
 #if VERSION <= VERSION_DEMO_JP
-    winFontSetEdge((Vec){costX = bx - 20.0f, fy, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white, VERSION_PICK("\x82\x65\x82\x6F", msgSearch("btl_cost_disp_FP")));
-#else
-    winFontSetEdge((Vec){bx - 20.0f, fy, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white, VERSION_PICK("\x82\x65\x82\x6F", msgSearch("btl_cost_disp_FP")));
-#endif
+    winFontSetEdge((Vec){costX = bx - 20.0f, fy, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white,
+                   VERSION_PICK("ＦＰ", msgSearch("btl_cost_disp_FP")));
     for (i = 0; i < wp->party.wazaCount; i++) {
         char buf[0x40];
-#if VERSION <= VERSION_DEMO_JP
-        // The demo prints the FP cost with %d at a fixed column.
-        winFontSetLabel((Vec){10.0f + x, iy = (wy - ((f32)(i * 26))) - 30.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, black2, winPartyDt[wp->party.dtIdx].waza[i]->name);
-        sprintf(buf, "%d", (u8)winPartyDt[wp->party.dtIdx].waza[i]->baseFpCost);
+
+        winFontSetLabel((Vec){10.0f + x, iy = (wy - ((f32)(i * PARTY_MOVE_ROW_H))) - 30.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                        black2, winPartyDt[wp->party.dtIdx].waza[i]->name);
+        sprintf(buf, "%d", winPartyDt[wp->party.dtIdx].waza[i]->baseFpCost);
         winFontSet((Vec){costX, iy, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, black2, buf);
-        winFontSet((Vec){(17.0f + bx) - 20.0f, iy, 0.0f}, (Vec){0.5f, 0.5f, 0.5f}, black2, VERSION_PICK("\x82\x65\x82\x6F", msgSearch("btl_cost_disp_FP")));
+        winFontSet((Vec){(17.0f + bx) - 20.0f, iy, 0.0f}, (Vec){0.5f, 0.5f, 0.5f}, black2,
+                   VERSION_PICK("ＦＰ", msgSearch("btl_cost_disp_FP")));
 #else
+    winFontSetEdge((Vec){bx - 20.0f, fy, 0.0f}, (Vec){0.8f, 0.8f, 0.8f}, white,
+                   VERSION_PICK("ＦＰ", msgSearch("btl_cost_disp_FP")));
+    for (i = 0; i < wp->party.wazaCount; i++) {
+        char buf[0x40];
 #if VERSION >= VERSION_US
-        winFontSetWidth((Vec){10.0f + x, fy = (wy - ((f32)(i * 26))) - 30.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, black2, 175.0f, msgSearch(winPartyDt[wp->party.dtIdx].waza[i]->name));
+        winFontSetWidth((Vec){10.0f + x, fy = (wy - (f32)(i * PARTY_MOVE_ROW_H)) - 30.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                        black2, 175.0f, msgSearch(winPartyDt[wp->party.dtIdx].waza[i]->name));
 #else
-        winFontSetLabel((Vec){10.0f + x, fy = (wy - ((f32)(i * 26))) - 30.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, black2, winPartyDt[wp->party.dtIdx].waza[i]->name);
+        winFontSetLabel((Vec){10.0f + x, fy = (wy - (f32)(i * PARTY_MOVE_ROW_H)) - 30.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                        black2, winPartyDt[wp->party.dtIdx].waza[i]->name);
 #endif
         sprintf(buf, "%s", winZenkakuStr((u8)winPartyDt[wp->party.dtIdx].waza[i]->baseFpCost));
-        winFontSet((Vec){(((238.0f + x) - 20.0f) - ((f32)(FontGetMessageWidth(buf) / 2))) - 2.0f, fy, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, black2, buf);
-        winFontSet((Vec){2.0f + (2.0f + ((17.0f + bx) - 20.0f)), fy - 10.0f, 0.0f}, (Vec){0.5f, 0.5f, 0.5f}, black2, VERSION_PICK("\x82\x65\x82\x6F", msgSearch("btl_cost_disp_FP")));
+        winFontSet((Vec){(((238.0f + x) - 20.0f) - (f32)(FontGetMessageWidth(buf) / 2)) - 2.0f, fy, 0.0f},
+                   (Vec){1.0f, 1.0f, 1.0f}, black2, buf);
+        winFontSet((Vec){2.0f + (2.0f + ((17.0f + bx) - 20.0f)), fy - 10.0f, 0.0f}, (Vec){0.5f, 0.5f, 0.5f}, black2,
+                   VERSION_PICK("ＦＰ", msgSearch("btl_cost_disp_FP")));
 #endif
     }
 }

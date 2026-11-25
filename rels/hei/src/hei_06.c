@@ -1,22 +1,26 @@
 // hei_06 (平原, Petal Meadows): grassy field between hei_05 and hei_07.
 // Field enemies, a recovery block, a Fire Flower block, an Inn Coupon and coins.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_item.h"
+#include "data_tables.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
-#include "hei.h"
-#include "data_tables.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "driver/npcdrv.h"
 
 static BeroEntry bero_entry_data[3];
 static TreeAccess ki_data[5];
-extern EvtWord evt_kusa_8[];
+static EvtWord evt_kusa_8[20];
 static KusaAccess kusa_data[10];
+EvtWord hei_06_init_evt[63];
 
 /** Doors of this room: the west exit (w_bero) to hei_05 and the east exit (e_bero) to hei_07. */
 static BeroEntry bero_entry_data[] = {
@@ -65,10 +69,10 @@ static TreeAccess ki_data[] = {
 };
 
 /** Reward script for bush 8: if not yet taken, a Coin pops out of the bush when Mario hits it. */
-EVT_BEGIN(evt_kusa_8)
+static EVT_BEGIN(evt_kusa_8)
     CALL(evt_item_delete_check, STRING("item_kusa_8"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_kusa_8"), ITEM_COIN, 200, 75, 60, ITEM_ENTRY_LAUNCH, GSWF(GSWF_HEI06_BUSH_COIN_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_kusa_8"), ITEM_COIN, 200, 75, 60, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_HEI_06_COIN_BUSH, 0)
     END_IF
     RETURN
 EVT_END()
@@ -95,16 +99,16 @@ EVT_BEGIN(hei_06_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI1"))
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI1"))
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     SET_VALUE(LW(0), PTR(ki_data))
     CALL_CHILD(evt_sub_tree_access_entry)
     SET_VALUE(LW(0), PTR(kusa_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
     CALL(evt_mobj_recovery_blk, STRING("mobj_recover"), 5, 375, 160, -75, 0, 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_hatenablk"), -25, 110, -75, ITEM_FIRE_FLOWER, 0, GSWF(GSWF_HEI06_FIRE_FLOWER_BLOCK_HIT), 0)
-    CALL(evt_item_entry, STRING("item_00"), ITEM_INN_COUPON, 50, 50, 105, ITEM_ENTRY_FIXED, GSWF(GSWF_HEI06_INN_COUPON_TAKEN), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_hatenablk"), -25, 110, -75, ITEM_FIRE_FLOWER, 0, GSWF_HEI_06_FIRE_FLOWER_BLOCK, 0)
+    CALL(evt_item_entry, STRING("item_00"), ITEM_INN_COUPON, 50, 50, 105, ITEM_TYPE_STILL, GSWF_HEI_06_INN_COUPON, 0)
     RETURN
 EVT_END()

@@ -1,11 +1,14 @@
 // Script commands for the tutorial (lecture) scenes: system level checks and camera save/load.
+
 #include "evt/evt_lecture.h"
 #include "driver/camdrv.h"
 #include "manager/evtmgr_cmd.h"
 #include "mario/mario.h"
 #include "mario/mario_party.h"
 #include "mario/mariost.h"
+#include "pmario_sound.h"
 #include "party.h"
+#include "system.h"
 
 static Vec stPt;
 static Vec stAt;
@@ -32,11 +35,7 @@ USER_FUNC(lect_set_systemlevel) {
     return EVT_RETURN_DONE;
 }
 
-/**
- * Has no effect: reads the system level with marioStGetSystemLevel and discards the result; no arguments.
- * The lecture scripts of every area (evt_lect_dou, evt_lect_gor, evt_lect_tik ...) still call it.
- * Guess: a leftover debug check.
- */
+/** Calls marioStGetSystemLevel and drops the result; nothing is returned to the script. */
 USER_FUNC(lect_test_systemlevel) {
     marioStGetSystemLevel();
     return EVT_RETURN_DONE;
@@ -99,8 +98,8 @@ USER_FUNC(lect_cam_load) {
     camera->storedAt = stAt;
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 3;
-    camera->curveA = 11;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = EASING_SINE_IN_OUT;
 
     mario->position = stMpos;
     mario->displayDirection = stMdir1;
@@ -124,6 +123,13 @@ USER_FUNC(lect_cam_load) {
     return EVT_RETURN_DONE;
 }
 
+/** Blocks until the music started on channel 1 has begun playing. */
+// Original name and size (0x38) from the JP demo map (UNUSED there: nothing in this file calls it), listed between
+// lect_cam_load and lect_juyoitem_rel_set: evt_sub.c's static bgm_start_wait (0x38), the same name and size.
+static USER_FUNC(bgm_start_wait) {
+    return psndBGMStartCheck(1) ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
+}
+
 /** void* evt */
 USER_FUNC(lect_juyoitem_rel_set) {
     lect_work = (void*)evtGetValue(event, *event->args);
@@ -137,10 +143,14 @@ USER_FUNC(lect_juyoitem_rel_get) {
 }
 
 // clang-format off
+/**
+ * Runs the key-item lecture script that the current map REL stored with lect_juyoitem_rel_set
+ * (all_juyoitem_lecture_rel).
+ */
 EVT_BEGIN(all_juyoitem_lecture)
     CALL(lect_juyoitem_rel_get, LW(0))
     CALL_CHILD(LW(0))
     RETURN
-    END
-EVT_END();
+EVT_END()
+
 // clang-format on

@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: star power: a glowing star sprite (colors set by id) with a fading halo.
-#include "eff/n64/eff_star_power_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -7,34 +7,34 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 
 typedef struct EffStarPowerN64Work {
-    s16 active;    // 0x0, set to 1 at entry; never read
-    s16 id;        // 0x2
-    Vec position;  // 0x4
-    s32 lifetime;  // 0x10
-    s32 frame;     // 0x14
-    s32 r;         // 0x18, TEV colour 0 (alpha: a2 / 2)
-    s32 g;         // 0x1C
-    s32 b;         // 0x20
-    s32 a;         // 0x24, faded with the lifetime but not drawn
-    s32 r2;        // 0x28, TEV colour 1
-    s32 g2;        // 0x2C
-    s32 b2;        // 0x30
-    s32 a2;        // 0x34, drawn alpha (halved for both colours)
-    f32 scale;     // 0x38
-    f32 rotX;      // 0x3C
-    f32 rotY;      // 0x40
-    f32 rotZ;      // 0x44
-    f32 prevRotX;  // 0x48
-    f32 prevRotY;  // 0x4C
-    f32 prevRotZ;  // 0x50
-    f32 prevScale; // 0x54
+    s16 active;     // 0x0
+    s16 id;         // 0x2
+    Vec position;   // 0x4
+    s32 lifetime;   // 0x10
+    s32 frame;      // 0x14
+    s32 r;          // 0x18, red of GX_TEVREG0 colour; pulsed by a sine for id 1
+    s32 g;          // 0x1C, green of GX_TEVREG0 colour; pulsed by a sine for id 1
+    s32 b;          // 0x20, blue of GX_TEVREG0 colour; pulsed by a sine for id 1
+    s32 alpha;      // 0x24, alpha of the main pass (both TEV colours); faded in over 16 frames and out over the last 16
+    s32 r2;         // 0x28, red of GX_TEVREG1 colour; pulsed by a sine for id 1
+    s32 g2;         // 0x2C, green of GX_TEVREG1 colour; pulsed by a sine for id 1
+    s32 b2;         // 0x30, blue of GX_TEVREG1 colour; pulsed by a sine for id 1
+    s32 trailAlpha; // 0x34, alpha of the extra pass drawn with prevRot*/prevScale at half alpha; pass skipped when 0
+    f32 scale;      // 0x38
+    f32 rotX;       // 0x3C
+    f32 rotY;       // 0x40
+    f32 rotZ;       // 0x44
+    f32 prevRotX;   // 0x48
+    f32 prevRotY;   // 0x4C
+    f32 prevRotZ;   // 0x50
+    f32 prevScale;  // 0x54
 } EffStarPowerN64Work;
 
 static void effStarPowerMain(EffectEntry* effect);
-static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect);
+static void effStarPowerDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a star power glow at (x, y, z); `id` selects the colors and a lifetime of 0 or less lasts
@@ -50,7 +50,7 @@ EffectEntry* effStarPowerN64Entry(s32 id, s32 lifetime, f32 x, f32 y, f32 z, f32
     work = __memAlloc(HEAP_EFFECT, sizeof(EffStarPowerN64Work));
     effect->userdata = work;
     effect->callback = effStarPowerMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->active = 1;
     work->id = id;
     work->frame = 0;
@@ -69,8 +69,8 @@ EffectEntry* effStarPowerN64Entry(s32 id, s32 lifetime, f32 x, f32 y, f32 z, f32
     work->r2 = 255;
     work->g2 = 120;
     work->b2 = 0;
-    work->a2 = 255;
-    work->a = 255;
+    work->trailAlpha = 255;
+    work->alpha = 255;
     work->rotX = 0.0f;
     work->rotY = 0.0f;
     work->rotZ = 0.0f;
@@ -79,7 +79,7 @@ EffectEntry* effStarPowerN64Entry(s32 id, s32 lifetime, f32 x, f32 y, f32 z, f32
 
 /**
  * Fades in over the first 16 frames and out over 16 after a delete request (lifetime 1000 means endless).
- * For id 1 the star tumbles on all three axes (4 degrees per frame on X), pulses its size 0.7-1.0,
+ * For id 1 the star tumbles on all three axes (4 degrees per frame on X), pulses its size 0.4-1.0,
  * pulses the glow alpha and drifts both colours on slow sine waves; other ids keep the entry colours.
  * The previous frame's pose is kept for the afterimage. CAMERA_3D, layer 2.
  */
@@ -97,8 +97,8 @@ static void effStarPowerMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     id = work->id;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -113,20 +113,20 @@ static void effStarPowerMain(EffectEntry* effect) {
     frame = work->frame;
     if (life < 16) {
         life = life * 16;
-        if (work->a > life) {
-            work->a = life;
+        if (work->alpha > life) {
+            work->alpha = life;
         }
-        if (work->a2 > life) {
-            work->a2 = life;
+        if (work->trailAlpha > life) {
+            work->trailAlpha = life;
         }
     }
     if (frame < 16) {
         life = frame * 16 + 15;
-        if (work->a < life) {
-            work->a = life;
+        if (work->alpha < life) {
+            work->alpha = life;
         }
-        if (work->a2 < life) {
-            work->a2 = life;
+        if (work->trailAlpha < life) {
+            work->trailAlpha = life;
         }
     }
     work->prevRotX = work->rotX;
@@ -137,9 +137,9 @@ static void effStarPowerMain(EffectEntry* effect) {
         work->rotX = (f32)(frame * 4);
         work->rotY = 0.4953f * (4.0f * (f32)frame);
         work->rotZ = 0.2234f * (4.0f * (f32)frame);
-        work->a = 255;
+        work->alpha = 255;
         sn = (f32)sin(6.2831855f * (7.12343f * (f32)frame) / 360.0f);
-        work->a2 = (s32)(127.0f * sn + 128.0f) & 0xFF;
+        work->trailAlpha = (s32)(127.0f * sn + 128.0f) & 0xFF;
         sn = (f32)sin(6.2831855f * (1.231f * (f32)frame) / 360.0f);
         work->r = (s32)(127.0f * sn + 215.0f) & 0xFF;
         sn = (f32)sin(6.2831855f * (0.531f * (f32)frame) / 360.0f);
@@ -161,14 +161,14 @@ static void effStarPowerMain(EffectEntry* effect) {
         work->prevRotZ = work->rotZ;
         work->prevScale = work->scale;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effStarPowerDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effStarPowerDisp, effect);
 }
 
 /**
  * The star power mesh (akari, "light"): the five-pointed star body first,
  * then from vertex 20 the glow shell around it, each shaded light at the tips and dark inside.
  */
-effN64Vtx testsrc_akari_v[] = {
+static effN64Vtx testsrc_akari_v[] = {
     {147, -202, 0, 0, 0, 255, 255, 255, 255},
     {143, -46, 0, 0, 0, 0, 0, 0, 255},
     {133, -43, 0, 0, 0, 0, 0, 0, 255},
@@ -217,11 +217,12 @@ effN64Vtx testsrc_akari_v[] = {
  * while the glow alpha is nonzero, the textured glow shell (texture 0x49) at the previous frame's pose at half
  * alpha and at the current pose, then the solid star body at the current pose with the main alpha.
  */
-static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
+static void effStarPowerDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     s32 half;
     EffStarPowerN64Work* work;
-    s32 r, g, b, a, r2, g2, b2, a2;
+    s32 r, g, b, alpha, r2, g2, b2, trailAlpha;
     Mtx mtx;
     Mtx scale;
     Mtx rot;
@@ -233,11 +234,11 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
     r = work->r;
     g = work->g;
     b = work->b;
-    a = work->a;
+    alpha = work->alpha;
     r2 = work->r2;
     g2 = work->g2;
     b2 = work->b2;
-    a2 = work->a2;
+    trailAlpha = work->trailAlpha;
     if (r > 255) {
         r = 255;
     }
@@ -247,8 +248,8 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
     if (b > 255) {
         b = 255;
     }
-    if (a > 255) {
-        a = 255;
+    if (alpha > 255) {
+        alpha = 255;
     }
     if (r2 > 255) {
         r2 = 255;
@@ -259,8 +260,8 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
     if (b2 > 255) {
         b2 = 255;
     }
-    if (a2 > 255) {
-        a2 = 255;
+    if (trailAlpha > 255) {
+        trailAlpha = 255;
     }
     if (r < 0) {
         r = 0;
@@ -271,8 +272,8 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
     if (b < 0) {
         b = 0;
     }
-    if (a < 0) {
-        a = 0;
+    if (alpha < 0) {
+        alpha = 0;
     }
     if (r2 < 0) {
         r2 = 0;
@@ -283,8 +284,8 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
     if (b2 < 0) {
         b2 = 0;
     }
-    if (a2 < 0) {
-        a2 = 0;
+    if (trailAlpha < 0) {
+        trailAlpha = 0;
     }
     GXSetNumChans(0);
     GXSetNumTexGens(1);
@@ -294,7 +295,7 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
     effGetTexObjN64(0x49, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
     GXSetCullMode(GX_CULL_NONE);
-    if (a2 != 0) {
+    if (trailAlpha != 0) {
         PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
         PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
         PSMTXScale(scale, 0.4f * work->prevScale, 0.4f * work->prevScale, 0.4f * work->prevScale);
@@ -308,12 +309,12 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(camera->view, mtx, tmp);
         GXLoadPosMtxImm(tmp, GX_PNMTX0);
-        GXSetCurrentMtx(0);
-        half = a2 >> 1;
+        GXSetCurrentMtx(GX_PNMTX0);
+        half = trailAlpha >> 1;
         GXSetTevColor(GX_TEVREG0, (GXColor){r, g, b, half});
         GXSetTevColor(GX_TEVREG1, (GXColor){r2, g2, b2, half});
         GXSetNumChans(1);
-        GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+        GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
         GXSetNumTevStages(1);
         GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
         GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -346,8 +347,8 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx, rot, mtx);
     PSMTXConcat(camera->view, mtx, tmp);
     GXLoadPosMtxImm(tmp, GX_PNMTX0);
-    GXSetCurrentMtx(0);
-    if (a2 != 0) {
+    GXSetCurrentMtx(GX_PNMTX0);
+    if (trailAlpha != 0) {
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 60);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);
         tri2(4, 0, 3, 0, 4, 3, 5, 0);
@@ -360,10 +361,10 @@ static void effStarPowerDisp(CameraId cameraId, EffectEntry* effect) {
         tri2(16, 18, 19, 0, 16, 19, 17, 0);
         tri2(18, 14, 15, 0, 18, 15, 19, 0);
     }
-    GXSetTevColor(GX_TEVREG0, (GXColor){r, g, b, a});
-    GXSetTevColor(GX_TEVREG1, (GXColor){r2, g2, b2, a});
+    GXSetTevColor(GX_TEVREG0, (GXColor){r, g, b, alpha});
+    GXSetTevColor(GX_TEVREG1, (GXColor){r2, g2, b2, alpha});
     GXSetNumChans(1);
-    GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);

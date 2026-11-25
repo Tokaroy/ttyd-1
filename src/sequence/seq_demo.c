@@ -1,4 +1,6 @@
 // Movie sequence: plays the opening THP movie (simple THP player).
+
+#include "version.h"
 #include "seq/seq_demo.h"
 #include "dolphin/ai.h"
 #include "dolphin/dvd.h"
@@ -16,7 +18,6 @@
 #include "dolphin/os.h"
 #include "manager/dvdmgr.h"
 #include "dolphin/thp.h"
-#include "version.h"
 
 typedef struct THPHeader {
     char magic[4];             // 0x0
@@ -110,7 +111,7 @@ typedef struct THPSimple {
 
 // clang-format off
 //.data
-// 32768 * ((vol * vol) / (127 * 127)) 
+// 32768 * ((vol * vol) / (127 * 127))
 static u16 VolumeTable[] = {
         0,     2,     8,    18,    32,    50,    73,    99,
       130,   164,   203,   245,   292,   343,   398,   457,
@@ -129,35 +130,33 @@ static u16 VolumeTable[] = {
     25484, 25941, 26402, 26868, 27337, 27810, 28288, 28769,
     29255, 29744, 30238, 30736, 31238, 31744, 32254, 32768
 };
+
 // clang-format on
 
 //.bss
 #if VERSION <= VERSION_DEMO_JP
 #include "manager/filemgr.h"
-
-// work for the demo's movie sequence (seq_demoInit and on, at the end of the file)
 typedef struct SeqDemoWork {
     BOOL fullScreen; // 0x0, draw the movie once at full size instead of twice at half size
     s32 frame;       // 0x4, frame last drawn (-1 when none)
     FileEntry* tpl;  // 0x8, mariost.tpl
-    u8 pad_C[4];     // 0xC
 } SeqDemoWork;
-
 static SeqDemoWork work;
 #endif
-THPSimple SimpleControl;
-s32 WorkBuffer[16];
-s16 SoundBuffer[2][SAMPLES_PER_AUDIO_FRAME * 2] ATTRIBUTE_ALIGN(32);
+
+static THPSimple SimpleControl;
+static s32 WorkBuffer[16] ATTRIBUTE_ALIGN(32);
+static s16 SoundBuffer[2][SAMPLES_PER_AUDIO_FRAME * 2] ATTRIBUTE_ALIGN(32);
 
 //.sbss
-s32 SoundBufferIndex;
-s16* LastAudioBuffer;
-s16* CurAudioBuffer;
-f32 _vp[GX_VIEWPORT_SZ];
-f32 _pm[GX_PROJECTION_SZ];
-s32 AudioSystem;
-AIDCallback OldAIDCallback;
-BOOL Initialized;
+static s32 SoundBufferIndex;
+static s16* LastAudioBuffer;
+static s16* CurAudioBuffer;
+static f32 _vp[GX_VIEWPORT_SZ];
+static f32 _pm[GX_PROJECTION_SZ];
+static s32 AudioSystem;
+static AIDCallback OldAIDCallback;
+static BOOL Initialized;
 
 // Forward Declarations
 static void __THPSimpleDVDCallback(s32 result, DVDFileInfo* fileInfo);
@@ -175,29 +174,29 @@ void THPGXYuv2RgbDraw(u8* y_data, u8* u_data, u8* v_data, s16 x, s16 y, s16 text
  * FALSE on failure.
  */
 BOOL THPSimpleInit(s32 audioSystem) {
+    BOOL old;
+
     memset(&SimpleControl, 0, sizeof(THPSimple));
     LCEnable();
     if (THPInit() == FALSE) {
         return FALSE;
     }
 
-    {
-        BOOL old = OSDisableInterrupts();
+    old = OSDisableInterrupts();
 
-        AudioSystem = audioSystem;
-        SoundBufferIndex = 0;
-        LastAudioBuffer = NULL;
-        CurAudioBuffer = NULL;
+    AudioSystem = audioSystem;
+    SoundBufferIndex = 0;
+    LastAudioBuffer = NULL;
+    CurAudioBuffer = NULL;
 
-        OldAIDCallback = AIRegisterDMACallback(THPAudioMixCallback);
-        if (OldAIDCallback == NULL && AudioSystem != 0) {
-            AIRegisterDMACallback(NULL);
-            OSRestoreInterrupts(old);
-            return FALSE;
-        }
-
+    OldAIDCallback = AIRegisterDMACallback(THPAudioMixCallback);
+    if (OldAIDCallback == NULL && AudioSystem != 0) {
+        AIRegisterDMACallback(NULL);
         OSRestoreInterrupts(old);
+        return FALSE;
     }
+
+    OSRestoreInterrupts(old);
 
     if (AudioSystem == 0) {
         memset(SoundBuffer, 0, BYTES_PER_AUDIO_FRAME << 1);
@@ -211,14 +210,14 @@ BOOL THPSimpleInit(s32 audioSystem) {
 
 /** Shuts the player down: disables the locked cache and restores the previous AI DMA callback. */
 void THPSimpleQuit(void) {
+    BOOL old;
+
     LCDisable();
-    {
-        BOOL old = OSDisableInterrupts();
-        if (OldAIDCallback) {
-            AIRegisterDMACallback(OldAIDCallback);
-        }
-        OSRestoreInterrupts(old);
+    old = OSDisableInterrupts();
+    if (OldAIDCallback) {
+        AIRegisterDMACallback(OldAIDCallback);
     }
+    OSRestoreInterrupts(old);
     Initialized = FALSE;
 }
 
@@ -408,12 +407,13 @@ BOOL THPSimpleSetBuffer(u8* buffer) {
 void ReadFrameAsync(void) {
     if (!SimpleControl.dvdError && SimpleControl.preFetchState == TRUE) {
         if (SimpleControl.totalReadFrame > SimpleControl.header.numFrames - 1) {
-            if (SimpleControl.loop != 1) {
+            if (SimpleControl.loop == 1) {
+                SimpleControl.totalReadFrame = 0;
+                SimpleControl.curOffset = (s32)SimpleControl.header.movieDataOffsets;
+                SimpleControl.readSize = (s32)SimpleControl.header.firstFrameSize;
+            } else {
                 return;
             }
-            SimpleControl.totalReadFrame = 0;
-            SimpleControl.curOffset = (s32)SimpleControl.header.movieDataOffsets;
-            SimpleControl.readSize = (s32)SimpleControl.header.firstFrameSize;
         }
 
         SimpleControl.readProgress = TRUE;
@@ -436,8 +436,8 @@ static void __THPSimpleDVDCallback(s32 result, DVDFileInfo* fileInfo) {
         SimpleControl.totalReadFrame++;
         SimpleControl.readBuffer[SimpleControl.readIndex].isValid = TRUE;
         SimpleControl.curOffset += SimpleControl.readSize;
-        SimpleControl.readSize = (s32) * (u32*)(SimpleControl.readBuffer[SimpleControl.readIndex].ptr);
-        SimpleControl.readIndex = SimpleControl.readIndex + 1 >= 10 ? 0 : SimpleControl.readIndex + 1;
+        SimpleControl.readSize = (s32) * (u32*)SimpleControl.readBuffer[SimpleControl.readIndex].ptr;
+        SimpleControl.readIndex = SimpleControl.readIndex + 1 >= READ_BUFFER_NUM ? 0 : SimpleControl.readIndex + 1;
         if (!SimpleControl.readBuffer[SimpleControl.readIndex].isValid) {
             ReadFrameAsync();
         }
@@ -480,10 +480,11 @@ BOOL THPSimplePreLoad(s32 loop) {
             SimpleControl.readSize = (s32) * (u32*)SimpleControl.readBuffer[SimpleControl.readIndex].ptr;
             SimpleControl.readBuffer[SimpleControl.readIndex].isValid = TRUE;
             SimpleControl.readBuffer[SimpleControl.readIndex].frameNumber = SimpleControl.totalReadFrame;
-            SimpleControl.readIndex = SimpleControl.readIndex + 1 >= 10 ? 0 : SimpleControl.readIndex + 1;
+            SimpleControl.readIndex = SimpleControl.readIndex + 1 >= READ_BUFFER_NUM ? 0 : SimpleControl.readIndex + 1;
             SimpleControl.totalReadFrame++;
 
             if (SimpleControl.totalReadFrame > SimpleControl.header.numFrames - 1) {
+                // BUG: reads SimpleControl.loop before it is set from loop below, so the wrap uses the previous value.
                 if (SimpleControl.loop == 1) {
                     SimpleControl.totalReadFrame = 0;
                     SimpleControl.curOffset = (s32)SimpleControl.header.movieDataOffsets;
@@ -523,7 +524,7 @@ BOOL THPSimpleLoadStop(void) {
         }
 
         for (i = 0; i < READ_BUFFER_NUM; i++) {
-            SimpleControl.readBuffer[i].isValid = 0;
+            SimpleControl.readBuffer[i].isValid = FALSE;
         }
 
         for (i = 0; i < AUDIO_BUFFER_NUM; i++) {
@@ -555,15 +556,14 @@ BOOL THPSimpleLoadStop(void) {
  * 3 when the audio buffers are full, 4 for a bad track.
  */
 s32 THPSimpleDecode(s32 audioTrack) {
-    BOOL old;
     u32 i;
     u8* ptr;
     u32 *compSizePtr, sample;
+    BOOL old;
 
     if (SimpleControl.readBuffer[SimpleControl.nextDecodeIndex].isValid) {
         compSizePtr = (u32*)(SimpleControl.readBuffer[SimpleControl.nextDecodeIndex].ptr + 8);
-        ptr =
-            SimpleControl.readBuffer[SimpleControl.nextDecodeIndex].ptr + SimpleControl.compInfo.numComponents * 4 + 8;
+        ptr = SimpleControl.readBuffer[SimpleControl.nextDecodeIndex].ptr + SimpleControl.compInfo.numComponents * 4 + 8;
 
         if (SimpleControl.audioExist) {
             if (audioTrack < 0 || audioTrack >= SimpleControl.audioInfo.sndNumTracks) {
@@ -582,15 +582,13 @@ s32 THPSimpleDecode(s32 audioTrack) {
                         case 1:
                             sample = THPAudioDecode(SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].buffer,
                                                     ptr + (*compSizePtr) * audioTrack, 0);
-                            {
-                                BOOL old = OSDisableInterrupts();
+                            old = OSDisableInterrupts();
 
-                                SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].validSample = sample;
-                                SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].curPtr =
-                                    SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].buffer;
+                            SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].validSample = sample;
+                            SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].curPtr =
+                                SimpleControl.audioBuffer[SimpleControl.audioDecodeIndex].buffer;
 
-                                OSRestoreInterrupts(old);
-                            }
+                            OSRestoreInterrupts(old);
                             SimpleControl.audioDecodeIndex++;
                             if (SimpleControl.audioDecodeIndex >= AUDIO_BUFFER_NUM) {
                                 SimpleControl.audioDecodeIndex = 0;
@@ -618,7 +616,7 @@ s32 THPSimpleDecode(s32 audioTrack) {
         }
 
         SimpleControl.readBuffer[SimpleControl.nextDecodeIndex].isValid = FALSE;
-        SimpleControl.nextDecodeIndex = SimpleControl.nextDecodeIndex + 1 >= 10 ? 0 : SimpleControl.nextDecodeIndex + 1;
+        SimpleControl.nextDecodeIndex = SimpleControl.nextDecodeIndex + 1 >= READ_BUFFER_NUM ? 0 : SimpleControl.nextDecodeIndex + 1;
 
         CheckPrefetch();
         return 0;
@@ -647,10 +645,10 @@ s32 THPSimpleDrawCurrentFrame(GXRenderModeObj* rmode, u32 x, u32 y, u32 polygonW
     if (SimpleControl.textureSet.frameNumber >= 0) {
         THPGXYuv2RgbSetup(rmode);
         THPGXYuv2RgbDraw(SimpleControl.textureSet.ytexture, SimpleControl.textureSet.utexture,
-                         SimpleControl.textureSet.vtexture, (s16)x, (s16)y, (s16)SimpleControl.videoInfo.xSize,
-                         (s16)SimpleControl.videoInfo.ySize, (s16)polygonW, (s16)polygonH);
+                         SimpleControl.textureSet.vtexture, x, y, SimpleControl.videoInfo.xSize,
+                         (s16)SimpleControl.videoInfo.ySize, polygonW, polygonH);
         THPGXRestore();
-        return (s32)SimpleControl.textureSet.frameNumber;
+        return SimpleControl.textureSet.frameNumber;
     }
     return -1;
 }
@@ -738,76 +736,74 @@ static void MixAudio(s16* destination, s16* source, u32 sample) {
         } else {
             memcpy(destination, source, sample << 2);
         }
-    } else {
-        if (SimpleControl.open && SimpleControl.audioState == TRUE && SimpleControl.audioExist) {
-            requestSample = sample;
-            dst = destination;
+    } else if (SimpleControl.open && SimpleControl.audioState == TRUE && SimpleControl.audioExist) {
+        requestSample = sample;
+        dst = destination;
 
-            while (1) {
-                if (SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample) {
-                    if (SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample >= requestSample) {
-                        sampleNum = requestSample;
-                    } else {
-                        sampleNum = SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample;
-                    }
-
-                    thpsrc = SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].curPtr;
-                    for (i = 0; i < sampleNum; i++) {
-                        if (SimpleControl.rampCount) {
-                            SimpleControl.rampCount--;
-                            SimpleControl.curVolume += SimpleControl.deltaVolume;
-                        } else {
-                            SimpleControl.curVolume = SimpleControl.targetVolume;
-                        }
-
-                        attenuation = VolumeTable[(s32)SimpleControl.curVolume];
-
-                        mix = (attenuation * (*thpsrc)) >> 15;
-                        if (mix < -32768) {
-                            mix = -32768;
-                        }
-                        if (mix > 32767) {
-                            mix = 32767;
-                        }
-                        *dst = (s16)mix;
-                        dst++;
-                        thpsrc++;
-
-                        mix = (attenuation * (*thpsrc)) >> 15;
-                        if (mix < -32768) {
-                            mix = -32768;
-                        }
-                        if (mix > 32767) {
-                            mix = 32767;
-                        }
-                        *dst = (s16)mix;
-                        dst++;
-                        thpsrc++;
-                    }
-
-                    requestSample -= sampleNum;
-
-                    SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample -= sampleNum;
-                    SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].curPtr = thpsrc;
-
-                    if (SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample == 0) {
-                        SimpleControl.audioOutputIndex++;
-                        if (SimpleControl.audioOutputIndex >= AUDIO_BUFFER_NUM) {
-                            SimpleControl.audioOutputIndex = 0;
-                        }
-                    }
-
-                    if (!requestSample) {
-                        break;
-                    }
+        while (1) {
+            if (SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample) {
+                if (SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample >= requestSample) {
+                    sampleNum = requestSample;
                 } else {
-                    memset(dst, 0, requestSample << 2);
+                    sampleNum = SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample;
+                }
+
+                thpsrc = SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].curPtr;
+                for (i = 0; i < sampleNum; i++) {
+                    if (SimpleControl.rampCount) {
+                        SimpleControl.rampCount--;
+                        SimpleControl.curVolume += SimpleControl.deltaVolume;
+                    } else {
+                        SimpleControl.curVolume = SimpleControl.targetVolume;
+                    }
+
+                    attenuation = VolumeTable[(s32)SimpleControl.curVolume];
+
+                    mix = (attenuation * (*thpsrc)) >> 15;
+                    if (mix < -32768) {
+                        mix = -32768;
+                    }
+                    if (mix > 32767) {
+                        mix = 32767;
+                    }
+                    *dst = (s16)mix;
+                    dst++;
+                    thpsrc++;
+
+                    mix = (attenuation * (*thpsrc)) >> 15;
+                    if (mix < -32768) {
+                        mix = -32768;
+                    }
+                    if (mix > 32767) {
+                        mix = 32767;
+                    }
+                    *dst = (s16)mix;
+                    dst++;
+                    thpsrc++;
+                }
+
+                requestSample -= sampleNum;
+
+                SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample -= sampleNum;
+                SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].curPtr = thpsrc;
+
+                if (SimpleControl.audioBuffer[SimpleControl.audioOutputIndex].validSample == 0) {
+                    SimpleControl.audioOutputIndex++;
+                    if (SimpleControl.audioOutputIndex >= AUDIO_BUFFER_NUM) {
+                        SimpleControl.audioOutputIndex = 0;
+                    }
+                }
+
+                if (!requestSample) {
                     break;
                 }
+            } else {
+                memset(dst, 0, requestSample << 2);
+                break;
             }
-        } else {
-            memset(destination, 0, sample << 2);
         }
+    } else {
+        memset(destination, 0, sample << 2);
     }
 }
 
@@ -851,17 +847,17 @@ u32 THPSimpleGetTotalFrame(void) {
  * buffer).
  */
 static void THPAudioMixCallback(void) {
+    BOOL old;
+
     if (AudioSystem == 0) {
         SoundBufferIndex ^= 1;
         AIInitDMA((u32)SoundBuffer[SoundBufferIndex], BYTES_PER_AUDIO_FRAME);
-        {
-            BOOL old = OSEnableInterrupts();
+        old = OSEnableInterrupts();
 
-            MixAudio(SoundBuffer[SoundBufferIndex], NULL, SAMPLES_PER_AUDIO_FRAME);
-            DCFlushRange(SoundBuffer[SoundBufferIndex], BYTES_PER_AUDIO_FRAME);
+        MixAudio(SoundBuffer[SoundBufferIndex], NULL, SAMPLES_PER_AUDIO_FRAME);
+        DCFlushRange(SoundBuffer[SoundBufferIndex], BYTES_PER_AUDIO_FRAME);
 
-            OSRestoreInterrupts(old);
-        }
+        OSRestoreInterrupts(old);
     } else {
         if (AudioSystem == 1) {
             if (LastAudioBuffer) {
@@ -877,24 +873,22 @@ static void THPAudioMixCallback(void) {
 
         SoundBufferIndex ^= 1;
         AIInitDMA((u32)SoundBuffer[SoundBufferIndex], BYTES_PER_AUDIO_FRAME);
-        {
-            BOOL old = OSEnableInterrupts();
+        old = OSEnableInterrupts();
 
-            if (CurAudioBuffer) {
-                DCInvalidateRange(CurAudioBuffer, BYTES_PER_AUDIO_FRAME);
-            }
-            MixAudio(SoundBuffer[SoundBufferIndex], CurAudioBuffer, SAMPLES_PER_AUDIO_FRAME);
-            DCFlushRange(SoundBuffer[SoundBufferIndex], BYTES_PER_AUDIO_FRAME);
-
-            OSRestoreInterrupts(old);
+        if (CurAudioBuffer) {
+            DCInvalidateRange(CurAudioBuffer, BYTES_PER_AUDIO_FRAME);
         }
+        MixAudio(SoundBuffer[SoundBufferIndex], CurAudioBuffer, SAMPLES_PER_AUDIO_FRAME);
+        DCFlushRange(SoundBuffer[SoundBufferIndex], BYTES_PER_AUDIO_FRAME);
+
+        OSRestoreInterrupts(old);
     }
 }
 
 /** Sets the movie volume (0..127, squared through VolumeTable) with a linear ramp over time ms (max 60 s). */
 BOOL THPSimpleSetVolume(s32 vol, s32 time) {
-    BOOL old;
     s32 samplePerMs;
+    BOOL old;
 
     if (SimpleControl.open && SimpleControl.audioExist) {
         if (AIGetDSPSampleRate() == AI_SAMPLERATE_32KHZ) {
@@ -917,21 +911,19 @@ BOOL THPSimpleSetVolume(s32 vol, s32 time) {
             time = 0;
         }
 
-        {
-            BOOL old = OSDisableInterrupts();
+        old = OSDisableInterrupts();
 
-            SimpleControl.targetVolume = (f32)vol;
-            if (time) {
-                SimpleControl.rampCount = samplePerMs * time;
-                SimpleControl.deltaVolume =
-                    (SimpleControl.targetVolume - SimpleControl.curVolume) / (f32)SimpleControl.rampCount;
-            } else {
-                SimpleControl.rampCount = 0;
-                SimpleControl.curVolume = SimpleControl.targetVolume;
-            }
-
-            OSRestoreInterrupts(old);
+        SimpleControl.targetVolume = (f32)vol;
+        if (time) {
+            SimpleControl.rampCount = samplePerMs * time;
+            SimpleControl.deltaVolume =
+                (SimpleControl.targetVolume - SimpleControl.curVolume) / (f32)SimpleControl.rampCount;
+        } else {
+            SimpleControl.rampCount = 0;
+            SimpleControl.curVolume = SimpleControl.targetVolume;
         }
+
+        OSRestoreInterrupts(old);
 
         return TRUE;
     }
@@ -984,14 +976,14 @@ void THPGXYuv2RgbSetup(GXRenderModeObj* rmode) {
     GXSetViewport(0.0f, 0.0f, (f32)scrWidth, (f32)scrHeight, 0.0f, 1.0f);
     GXSetScissor(0, 0, scrWidth, scrHeight);
     MTXIdentity(mMtx);
-    GXLoadPosMtxImm(mMtx, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(mMtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetZMode(GX_DISABLE, GX_ALWAYS, GX_DISABLE);
     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
     GXSetNumChans(0);
     GXSetNumTexGens(2u);
-    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 60);
-    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, 60);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     GXInvalidateTexAll();
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -1040,18 +1032,18 @@ void THPGXYuv2RgbDraw(u8* y_data, u8* u_data, u8* v_data, s16 x, s16 y, s16 text
                       s16 polygonWidth, s16 polygonHeight) {
     GXTexObj tobj0, tobj1, tobj2;
 
-    GXInitTexObj(&tobj0, y_data, (u16)textureWidth, (u16)textureHeight, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
-    GXInitTexObjLOD(&tobj0, GX_NEAR, GX_NEAR, 0, 0, 0, 0, 0, GX_ANISO_1);
+    GXInitTexObj(&tobj0, y_data, textureWidth, textureHeight, GX_TF_I8, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GXInitTexObjLOD(&tobj0, GX_NEAR, GX_NEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
     GXLoadTexObj(&tobj0, GX_TEXMAP0);
 
     GXInitTexObj(&tobj1, u_data, (u16)(textureWidth >> 1), (u16)(textureHeight >> 1), GX_TF_I8, GX_CLAMP, GX_CLAMP,
                  GX_FALSE);
-    GXInitTexObjLOD(&tobj1, GX_NEAR, GX_NEAR, 0, 0, 0, 0, 0, GX_ANISO_1);
+    GXInitTexObjLOD(&tobj1, GX_NEAR, GX_NEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
     GXLoadTexObj(&tobj1, GX_TEXMAP1);
 
     GXInitTexObj(&tobj2, v_data, (u16)(textureWidth >> 1), (u16)(textureHeight >> 1), GX_TF_I8, GX_CLAMP, GX_CLAMP,
                  GX_FALSE);
-    GXInitTexObjLOD(&tobj2, GX_NEAR, GX_NEAR, 0, 0, 0, 0, 0, GX_ANISO_1);
+    GXInitTexObjLOD(&tobj2, GX_NEAR, GX_NEAR, 0, 0, 0, GX_FALSE, GX_FALSE, GX_ANISO_1);
     GXLoadTexObj(&tobj2, GX_TEXMAP2);
 
     GXBegin(GX_QUADS, GX_VTXFMT7, 4);
@@ -1067,8 +1059,6 @@ void THPGXYuv2RgbDraw(u8* y_data, u8* u_data, u8* v_data, s16 x, s16 y, s16 text
 }
 
 #if VERSION <= VERSION_DEMO_JP
-/* The demo's movie sequence: plays demo.thp, then returns to the title screen. */
-
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/fadedrv.h"
@@ -1082,12 +1072,8 @@ void THPGXYuv2RgbDraw(u8* y_data, u8* u_data, u8* v_data, s16 x, s16 y, s16 text
 #include "system.h"
 #include <stdlib.h>
 #include <string.h>
-
 #include "gxsub.h"
-
-/** Pointer to the demo sequence state (work, above); the demo scenes read and write it through wp. */
 static SeqDemoWork* wp = &work;
-
 static void demoDisp(CameraId cameraId, void* param);
 
 /**
@@ -1099,7 +1085,7 @@ void seq_demoInit(SequenceWork* seq) {
     iconReInit();
     memClear(HEAP_MALLOC);
     memClear(HEAP_EXT);
-    smartAutoFree(1);
+    smartAutoFree(SMART_GROUP_MAP);
     statusWinDispOff();
     wp->frame = 0;
     wp->fullScreen = rand() % 100 <= 50;
@@ -1155,7 +1141,7 @@ void seq_demoMain(SequenceWork* seq) {
             break;
     }
     if (seq->state < 2) {
-        dispEntry(CAMERA_2D, 0.0f, 0, demoDisp, NULL);
+        dispEntry(CAMERA_2D, 0.0f, DISP_MODE_OPAQUE, demoDisp, NULL);
     }
 }
 

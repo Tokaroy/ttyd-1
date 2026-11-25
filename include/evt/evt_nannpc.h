@@ -1,32 +1,26 @@
 // evt_nannpc.c: the crowd NPC system (NanNPC): many simple sprite NPCs drawn through extdrv.
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <dolphin/os.h>
 #include "evt/evt_cmd.h"
-#include "driver/camdrv.h"
 
 struct ExtdrvPose;
 struct HitEntry;
 struct TobiWork;
 
-// NanNPC.flags bits (evt_nannpc_flag_onoff).
-enum NanNPCFlags {
-    NANNPC_FLAG_HIDDEN = 0x2, // the pose is moved 1000 units below the map
-    NANNPC_FLAG_WALK = 0x4,   // walks toward its target, pushed apart from the other walking NPCs
-    NANNPC_FLAG_NO_HIT = 0x8, // nanNPCHitMove moves it without the map collision
-};
-
 // One crowd NPC of the evt_nannpc system. The map rels (gor_00, muj_00, muj_10, muj_20) drive their NPCs through the
 // func callback and keep their own state in the slots evt_nannpc leaves to the user; those slots are
 // unions with the per-user names.
 typedef struct NanNPC {
-    s8 name[0x10];           // 0x0
+    s8 name[0x10];           // 0x0, looked up by nanNPCNameToPtr; empty = free slot
     struct ExtdrvPose* pose; // 0x10, its extdrv pose
-    u16 flags;               // 0x14
-    u16 flags2;              // 0x16, cleared with flags, never read
-    Vec pos;                 // 0x18
+    u16 flags;               // 0x14, NANNPC_FLAG_*
+    u16 flags2;              // 0x16, cleared at entry, never read
+    Vec pos;                 // 0x18, world position, copied to the extdrv pose
     union {
         Vec hosei; // 0x24, display offset (evt_nannpc_set_hosei_position)
         Vec start; // 0x24, muj_00: jump start position
@@ -36,15 +30,15 @@ typedef struct NanNPC {
         Vec target;  // 0x30, move target (y -1000: none)
         Vec basePos; // 0x30, muj_10: base position of the bob; gor_00: walk start / where it stopped
     };
-    Vec move;                     // 0x3C
-    f32 sizeX;                    // 0x48
-    f32 sizeY;                    // 0x4C
-    OSTime startTime;             // 0x50
-    s16* animtbl;                 // 0x58
-    s16 animnum;                  // 0x5C
-    s16 anim;                     // 0x5E
-    f32 dir;                      // 0x60
-    void (*func)(struct NanNPC*); // 0x64
+    Vec move;                     // 0x3C, per-frame step; nanNPCMoveDecel scales it by 0.6
+    f32 sizeX;                    // 0x48, evt_nannpc_set_size first value (32 default); never read
+    f32 sizeY;                    // 0x4C, nanNPCOption: push-apart distance, and 0.8x = target reached
+    OSTime startTime;             // 0x50, gp->renderTime at the start of a timed step (jump, rel states)
+    s16* animtbl;                 // 0x58, texture ids ended by -1; NULL = none
+    s16 animnum;                  // 0x5C, entries in animtbl
+    s16 anim;                     // 0x5E, texture id, -> pose texId
+    f32 dir;                      // 0x60, facing; the pose gets -dir
+    void (*func)(struct NanNPC*); // 0x64, per-frame callback of the map rel
     union {
         s32 ipos[3]; // 0x68, integer start position of evt_nannpc_jump
         struct {
@@ -107,38 +101,53 @@ typedef struct NanNPCSort {
 } NanNPCSort;
 
 typedef struct NanNPCWork {
-    NanNPC* npc;          // 0x0
-    NanNPCSort* sort;     // 0x4
-    s16* tbl;             // 0x8
-    s32 num;              // 0xC
-    u32 flags;            // 0x10
-    void (*func14)(void); // 0x14
-    void (*func18)(void); // 0x18
-    void (*func1c)(void); // 0x1C
+    NanNPC* npc;        // 0x0
+    NanNPCSort* sort;   // 0x4
+    s16* tbl;           // 0x8
+    s32 num;            // 0xC
+    u32 flags;          // 0x10
+    void (*subfunc0)(); // 0x14
+    void (*subfunc1)(); // 0x18
+    void (*subfunc2)(); // 0x1C
 } NanNPCWork;
+
+// NanNPCWork.flags
+#define NANNPC_WORK_DEPTH_SORT 1 // depth-sorted drawing
 
 extern NanNPCWork* nanNPCWork;
 void nanNPCOption(void);
 void evt_nannpc_set_animtbl_sub(NanNPC* npc, s16* tbl);
-void nannpc_ext_main_sub(void);
-void nannpc_ext_main_sub_fast(void);
-
-USER_FUNC(evt_nannpc_entry);
-USER_FUNC(evt_nannpc_init);
-USER_FUNC(evt_nannpc_set_subfunc);
-USER_FUNC(evt_nannpc_set_position);
-USER_FUNC(evt_nannpc_get_position);
-USER_FUNC(evt_nannpc_set_hosei_position);
-USER_FUNC(evt_nannpc_set_size);
-USER_FUNC(evt_nannpc_set_animtbl);
-USER_FUNC(evt_nannpc_set_dir);
-USER_FUNC(evt_nannpc_set_work);
-USER_FUNC(evt_nannpc_get_work);
-USER_FUNC(evt_nannpc_move_position2);
-USER_FUNC(evt_nannpc_jump_position);
+NanNPC* nanNPCNameToPtr(char* name);
+#if VERSION <= VERSION_DEMO_JP
+char* nanNPCMakeString(char* name);
+#endif
+void nannpc_ext_main_sub_fast();
 USER_FUNC(evt_nannpc_flag_onoff);
+USER_FUNC(evt_nannpc_get_flag);
+USER_FUNC(evt_nannpc_get_position);
+USER_FUNC(evt_nannpc_get_work);
+USER_FUNC(evt_nannpc_init);
+USER_FUNC(evt_nannpc_jump_position);
+USER_FUNC(evt_nannpc_move_position2);
 USER_FUNC(evt_nannpc_ppflag_onoff);
-USER_FUNC(evt_nannpc_set_func);
-USER_FUNC(evt_nannpc_set_shadow_position);
+USER_FUNC(evt_nannpc_set_animtbl);
 USER_FUNC(evt_nannpc_set_color);
+USER_FUNC(evt_nannpc_set_texno);
+USER_FUNC(evt_nannpc_set_dir);
+USER_FUNC(evt_nannpc_set_func);
+USER_FUNC(evt_nannpc_reset_func);
+USER_FUNC(evt_nannpc_set_hosei_position);
+USER_FUNC(evt_nannpc_set_position);
+USER_FUNC(evt_nannpc_set_shadow_position);
+USER_FUNC(evt_nannpc_set_size);
+USER_FUNC(evt_nannpc_set_subfunc);
+USER_FUNC(evt_nannpc_set_work);
 USER_FUNC(evt_nannpcwork_flag_onoff);
+USER_FUNC(evt_nannpc_entry);
+
+// Names from LLCOOLT's tree.
+enum {
+    NANNPC_FLAG_HIDDEN = 2,
+    NANNPC_FLAG_WALK = 4,
+    NANNPC_FLAG_NO_HIT = 8,
+};

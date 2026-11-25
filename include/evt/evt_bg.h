@@ -1,4 +1,5 @@
 // evt_bg.c: script commands for the map background (bgdrv).
+
 #pragma once
 
 #include "evt/evt_cmd.h"

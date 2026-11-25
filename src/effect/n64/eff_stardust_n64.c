@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: a burst of colored sparkle stars from a point; setters change color, scale and camera.
-#include "eff/n64/eff_stardust_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,6 +9,7 @@
 #include <dolphin/mtx.h>
 #include <stdlib.h>
 #include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 
 typedef struct EffStardustN64Work {
     s32 type;     // 0x0
@@ -27,7 +28,7 @@ typedef struct EffStardustN64Work {
     s32 camera;   // 0x3c
 } EffStardustN64Work;
 
-/** RGB colours the sparkles cycle through (pinks, purples and blues), three bytes per step. */
+/** RGB colours the sparkles cycle through (12 pastel steps round the colour wheel), three bytes per step. */
 static u8 color_rotation_data[] = {
     0xFE, 0xAC, 0xAC, 0xFE, 0xAC, 0xD5, 0xFE, 0xB4, 0x9A, 0xD5, 0xB4, 0xFE,
     0xB4, 0xB4, 0xFE, 0xB4, 0xDD, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5,
@@ -38,7 +39,7 @@ static u8 color_rotation_data[] = {
 static u8 speed_data[] = {0x1E, 0x3C, 0x50, 0x5F, 0x64, 0x68, 0x6A};
 
 /** Size in percent over a sparkle's 7-frame burst, written as characters ('d' is 100). */
-static u8 scale_data[] = "<Zdhjlm";
+static u8 scale_data[7] = "<Zdhjlm";
 
 /**
  * Eight 16x16 quads, one per 22x22 cell of the sparkle strip, that each sparkle steps through as it twinkles.
@@ -79,22 +80,18 @@ static effN64Vtx size8x8_tex22x22_vtx[] = {
 };
 
 static void effStardustMain(EffectEntry* effect);
-static void effStardustDisp(CameraId cameraId, EffectEntry* effect);
+static void effStardustDisp(CameraId cameraId, void* param);
 
 /**
- * Spawns a burst of sparkle stars at (x, y, z) with size `a`; type selects the colors.
- * Used by the sac_* action command code, eff_break and others.
+ * Spawns a burst of sparkle stars at (x, y, z). type sets the number of sparkles (36, 4, 8, 4, otherwise 8);
+ * types 0-2 use `a` as the radius, the others 8.
+ * Used by the sac_* action command code, eff_break, eff_kiss, eff_starstone and others.
  */
 EffectEntry* effStardustN64Entry(s32 type, f32 x, f32 y, f32 z, f32 a) {
-    s32 lifeA;
-    s32 lifeB;
-    s32 randA;
-    s32 randB;
     EffectEntry* effect;
-    EffStardustN64Work* p;
+    EffStardustN64Work* work;
     s32 count;
     s32 i;
-    EffStardustN64Work* work;
     f32 ay;
     f32 sn;
     f32 radius;
@@ -141,66 +138,65 @@ EffectEntry* effStardustN64Entry(s32 type, f32 x, f32 y, f32 z, f32 a) {
     work->cr = 1.0f;
     work->cg = 1.0f;
     work->cb = 1.0f;
-    work->camera = 4;
+    work->camera = CAMERA_3D;
     work->scale = 1.0f;
-    i = 1;
-    randA = (s32)(a * 1000.0f);
-    randB = (s32)(radius * 1000.0f);
-    p = work + 1;
-    lifeA = 0x20;
-    lifeB = 0x14;
-    for (; i < count + 1; lifeA += 2, lifeB += 2, i++, p++) {
-        fa = (f32)(rand() % randA) / 1000.0f;
-        fb = (f32)(rand() % randB) / 1000.0f;
+
+    work++;
+    for (i = 1; i < count + 1; i++, work++) {
+        fa = (f32)(rand() % (s32)(a * 1000.0f)) / 1000.0f;
+        fb = (f32)(rand() % (s32)(radius * 1000.0f)) / 1000.0f;
         switch (type) {
-            case 0: {
-                p->ay = 0.0f;
+            case 0:
+                work->ay = 0.0f;
                 a1 = 6.2831855f * (1800.0f / (f32)count * (f32)i - 90.0f) / 360.0f;
                 sn = (f32)sin(a1);
                 a2 = 6.2831855f * (360.0f / (f32)count * (f32)i) / 360.0f;
                 angle = (f32)sin(a2);
-                p->vx = (angle * (85.0f - 15.0f * sn - (f32)((i & 1) * 5)) / 100.0f) * a;
+                work->vx = (angle * (85.0f - 15.0f * sn - (f32)((i & 1) * 5)) / 100.0f) * a;
                 sn = (f32)sin(a1);
                 angle = (f32)cos(a2);
-                p->vy = (angle * (85.0f - 15.0f * sn - (f32)((i & 1) * 5)) / 100.0f) * a;
-                p->position.z = 0.0f;
-                p->sub = 0;
+                work->vy = (angle * (85.0f - 15.0f * sn - (f32)((i & 1) * 5)) / 100.0f) * a;
+                work->position.z = 0.0f;
+                work->sub = 0;
                 break;
-            }
             case 1:
             case 2:
                 angle = 360.0f / (f32)count * (f32)i + (f32)(rand() % 360);
                 if (i & 1) {
+                    // BUG: rand() % 50 / 1000 is an integer division and always 0, so ay is always -0.05
                     ay = -(0.05f + (f32)(rand() % 50 / 1000));
                 } else {
                     ay = 0.0f;
                 }
-                p->ay = ay;
-                p->vx = 0.0f;
-                p->vy = 0.0f;
+                work->ay = ay;
+                work->vx = 0.0f;
+                work->vy = 0.0f;
                 angle = 6.2831855f * angle / 360.0f;
-                p->position.x = (f32)sin(angle) * fa;
-                p->position.y = (f32)cos(angle) * fb;
-                p->position.z = 0.0f;
-                p->sub = i % 3;
-                p->scale = 1.0f;
-                p->lifetime = lifeA;
-                p->frame = 0;
+                work->position.x = (f32)sin(angle) * fa;
+                work->position.y = (f32)cos(angle) * fb;
+                work->position.z = 0.0f;
+                work->sub = i % 3;
+                work->scale = 1.0f;
+                work->lifetime = i * 2 + 30;
+                work->frame = 0;
                 break;
             case 3:
             case 4:
             default:
                 angle = 360.0f / (f32)count * (f32)i + (f32)(rand() % 360);
-                p->ay = -(0.05f + (f32)(rand() % 50 / 1000)), angle = 6.2831855f * angle / 360.0f;
-                p->vx = 0.0f;
-                p->vy = 0.0f;
-                p->position.x = (f32)sin(angle) * fa;
-                p->position.y = (f32)cos(angle) * fb;
-                p->position.z = 0.0f;
-                p->sub = i % 3;
-                p->scale = 1.0f;
-                p->lifetime = lifeB;
-                p->frame = 0;
+
+                // BUG: rand() % 50 / 1000 is an integer division and always 0, so ay is always -0.05
+                work->ay = -(0.05f + (f32)(rand() % 50 / 1000));
+                angle = 6.2831855f * angle / 360.0f;
+                work->vx = 0.0f;
+                work->vy = 0.0f;
+                work->position.x = (f32)sin(angle) * fa;
+                work->position.y = (f32)cos(angle) * fb;
+                work->position.z = 0.0f;
+                work->sub = i % 3;
+                work->scale = 1.0f;
+                work->lifetime = i * 2 + 18;
+                work->frame = 0;
                 break;
         }
     }
@@ -209,10 +205,12 @@ EffectEntry* effStardustN64Entry(s32 type, f32 x, f32 y, f32 z, f32 a) {
 
 /**
  * Type 0: each sparkle bursts out along its direction for 7 frames (speed_data, scale_data),
- * then becomes type 10 and drifts off at a table-random angle, slowing 4% per frame, sinking and shrinking;
- * types 0/10 end with the effect lifetime.
+ * then gets a velocity at a table-random angle and its own type set to 10. The switch reads the effect's
+ * type (first work), not the sparkle's, so the type 10 drift case never runs: after frame 7 the sparkles
+ * hold their place until the effect lifetime ends (types 0/10).
  * Other types give each sparkle its own life (shown only in its last 20 frames):
- * it pops in and falls under its gravity, and the effect ends once every sparkle is done.
+ * it pops in and falls under its gravity (types 1/2: odd sparkles only), and the effect ends once every
+ * sparkle is done.
  * Each sparkle cycles through 8 shapes; drawn on the work's camera, layer 2.
  */
 static void effStardustMain(EffectEntry* effect) {
@@ -256,7 +254,7 @@ static void effStardustMain(EffectEntry* effect) {
                     work->position.y = 0.01f * (work->vy * (f32)speed_data[idx]) + work->ay;
                     work->scale = 0.01f * (f32)scale_data[idx];
                 } else {
-                    angle = (f32)(s32)effTblRandN64(0x168, i + 0xb1);
+                    angle = (f32)(s32)effTblRandN64(360, i + 177);
                     mag = 1.0f + 0.5f * (f32)(i & 3);
                     angle = 6.2831855f * angle / 360.0f;
                     work->type = 10;
@@ -276,6 +274,7 @@ static void effStardustMain(EffectEntry* effect) {
             default:
                 work->vx *= 0.9f;
                 work->vy += work->ay;
+
                 vx = work->vx;
                 vy = work->vy;
                 if (work->lifetime < 0) {
@@ -302,16 +301,17 @@ static void effStardustMain(EffectEntry* effect) {
     if (type != 0 && type != 10 && dead >= effect->count - 1) {
         effDelete(effect);
     } else {
-        dispEntry(camera, dispCalcZ(&position), 2, (DispCallback)effStardustDisp, effect);
+        dispEntry(camera, dispCalcZ(&position), DISP_MODE_XLU, effStardustDisp, effect);
     }
 }
 
 /**
- * Draws each visible sparkle as a camera-facing 8x8 quad cut from the 8-frame sparkle strip (texture 0x20),
+ * Draws each visible sparkle as a camera-facing 16x16 quad cut from the 8-frame sparkle strip (texture 0x20),
  * coloured from color_rotation_data scaled by the work's tint (see effStardustN64SetColor),
  * each sparkle one step further on.
  */
-static void effStardustDisp(CameraId cameraId, EffectEntry* effect) {
+static void effStardustDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffStardustN64Work* work;
     s32 i;
     CameraEntry* camera;
@@ -341,7 +341,7 @@ static void effStardustDisp(CameraId cameraId, EffectEntry* effect) {
     work++;
     GXSetNumChans(0);
     GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0 + 0, GX_FALSE, GX_PTIDENTITY + 0x0);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
     PSMTXScale(scaleMtx, 0.0056818184f, 0.045454547f, 0.0f);
     GXLoadTexMtxImm(scaleMtx, GX_TEXMTX0, GX_MTX2x4);
     effGetTexObjN64(0x20, &texObj);

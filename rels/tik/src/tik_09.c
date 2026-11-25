@@ -1,15 +1,19 @@
 // tik_09 (埋没した都市, Rogueport Sewers): a small pipe room between tik_06 and tik_10.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "tik.h"
+#include "system.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[3];
-extern EvtWord evt_tik09_dokan[];
+static EvtWord evt_tik09_dokan[51];
+EvtWord tik_09_init_evt[36];
 
 /** Doors of this room: the pipes to tik_10 and to tik_06. */
 static BeroEntry bero_entry_data[] = {
@@ -54,12 +58,13 @@ static BeroEntry bero_entry_data[] = {
  * Raises the pipe (dokan_1_s) in the room out of the floor:
  * after 1.5 seconds it slides up 30 units over 100 frames, moving its hit area with it.
  */
-EVT_BEGIN(evt_tik09_dokan)
+// Start the pipe at zero offset, then raise it while updating its bound collision each step.
+static EVT_BEGIN(evt_tik09_dokan)
     CALL(evt_hit_bind_mapobj, STRING("a_dokan_1"), STRING("dokan_1_s"))
     CALL(evt_mapobj_trans, 0, STRING("dokan_1_s"), 0, 0, 0)
     CALL(evt_hit_bind_update, STRING("a_dokan_1"))
     WAIT_MS(1500)
-    CALL(evt_sub_intpl_init, 13, 0, 30, 100)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN, 0, 30, 100)
     LOOP(100)
         CALL(evt_sub_intpl_get_value)
         CALL(evt_mapobj_trans, 0, STRING("dokan_1_s"), 0, LW(0), 0)
@@ -73,15 +78,15 @@ EVT_END()
 
 /**
  * Map init script of tik_09.
- * Starts with the pipe sunk 30 units (hit area bound to it), starts the music and ambience,
+ * Starts with the pipe translated 30 units upward (hit area bound to it), starts the music and ambience,
  * sets up the exits and runs evt_tik09_dokan.
  */
 EVT_BEGIN(tik_09_init_evt)
     CALL(evt_hit_bind_mapobj, STRING("a_dokan_1"), STRING("dokan_1_s"))
     CALL(evt_mapobj_trans, 1, STRING("dokan_1_s"), 0, 30, 0)
     CALL(evt_hit_bind_update, STRING("a_dokan_1"))
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK1"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)

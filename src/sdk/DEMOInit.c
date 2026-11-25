@@ -1,7 +1,7 @@
-// DEMOInit: the game's copy of the SDK demo-library init (heap, video and GX setup, frame begin/end),
-// adapted to the game's memory layout.
+// TTYD's own version of the SDK's DEMOInit, set up with the game's memory manager
+#include "version.h"
 #include "sdk/DEMOInit.h"
-#include "memory.h" //functions we hook
+#include "memory.h"
 #include <dolphin/dvd.h>
 #include <dolphin/os.h>
 #include <dolphin/vi.h>
@@ -10,7 +10,6 @@
 #include "system.h"
 #include "sdk_decls.h"
 #include "libc_decls.h"
-#include "version.h"
 
 char __GXErrorMessage[0x400];
 static GXRenderModeObj rmodeobj;
@@ -22,120 +21,25 @@ static GXFifoObj* DefaultFifoObj;
 static GXRenderModeObj* rmode;
 static vu32 FrameCount;
 static u32 FrameMissThreshold;
+
 /** Set by DEMOEnableGPHangWorkaround: DEMOBeforeRender and DEMODoneRender then guard against GPU hangs. */
 static BOOL GPHangWorkaround = FALSE;
+
 /** True until the first frame is shown; DEMOSwapBuffers turns the video output on then (black until then). */
 static GXBool DemoFirstFrame = GX_TRUE;
 
-/** File name and message of the panic DEMOInit raises when the TV format is not one it knows. */
-static const char demo_file[] = "DEMOInit.c";
-static const char demo_msg[] = "DEMOInit: invalid TV format\n";
-
-// internal, inline
-static inline void __DEMOInitRenderMode(GXRenderModeObj* mode);
-static inline void __DEMOInitMem(void);
-static inline void __DEMOInitGX(void);
-static inline void __DEMOInitVI(void);
+static void __DEMOInitRenderMode(GXRenderModeObj* mode);
+static void __DEMOInitMem(void);
+static void __DEMOInitGX(void);
+static void __DEMOInitVI(void);
 static void __NoHangRetraceCallback(u32 count);
 static void __NoHangDoneRender(void);
 static void __DEMODiagnoseHang(void);
-static inline void DEMOSwapBuffers(void);
-static inline void DEMOSetGPHangMetric(GXBool enable);
-void DEMOReInit(GXRenderModeObj* mode);
-
-/** Carves the two external frame buffers off the bottom of the arena, sized for the render mode. */
-static inline void __DEMOInitMem(void) {
-    void *arenaLo, *arenaHi;
-    u32 fbSize;
-
-    arenaLo = OSGetArenaLo();
-    arenaHi = OSGetArenaHi();
-
-    fbSize = (u32)((rmode->fbWidth + 15) & 0xFFF0) * rmode->xfbHeight * (u32)VI_DISPLAY_PIX_SZ;
-    DemoFrameBuffer1 = (void*)OSRoundUp32B((u32)arenaLo);
-    DemoFrameBuffer2 = (void*)OSRoundUp32B((u32)DemoFrameBuffer1 + fbSize);
-    DemoCurrentBuffer = DemoFrameBuffer2;
-
-    arenaLo = (void*)OSRoundUp32B((u32)DemoFrameBuffer2 + fbSize);
-    OSSetArenaLo(arenaLo);
-    // newer SDKs have more stuff here
-}
-
-/** Shows the first frame buffer and waits for a retrace (two in non-interlaced modes). */
-static inline void __DEMOInitVI(void) {
-    VISetNextFrameBuffer(DemoFrameBuffer1);
-    DemoCurrentBuffer = DemoFrameBuffer2;
-    VIFlush();
-    VIWaitForRetrace();
-    if (rmode->viTVmode & 1)
-        VIWaitForRetrace();
-}
-
-/**
- * Sets GX's viewport, scissor, display copy scale and filter and pixel format (RGB565 when anti-aliased),
- * then copies the cleared EFB into the back buffer.
- */
-static inline void __DEMOInitGX(void) {
-    u16 xfbHeight;
-    f32 yScale;
-
-    GXSetViewport(0.0f, 0.0f, (f32)rmode->fbWidth, (f32)rmode->efbHeight, 0.0f, 1.0f);
-    GXSetScissor(0, 0, (u32)rmode->fbWidth, (u32)rmode->efbHeight);
-    yScale = GXGetYScaleFactor(rmode->efbHeight, rmode->xfbHeight);
-    xfbHeight = (u16)GXSetDispCopyYScale(yScale);
-    GXSetDispCopySrc(0, 0, rmode->fbWidth, rmode->efbHeight);
-    GXSetDispCopyDst(rmode->fbWidth, xfbHeight);
-    GXSetCopyFilter(rmode->aa, rmode->sample_pattern, GX_TRUE, rmode->vfilter);
-
-    if (rmode->aa)
-        GXSetPixelFmt(GX_PF_RGB565_Z16, GX_ZC_LINEAR);
-    else
-        GXSetPixelFmt(GX_PF_RGBA6_Z24, GX_ZC_LINEAR);
-
-    GXSetCopyClear((GXColor){0, 0, 0, 0}, 0xFFFFFF); // not in latest
-    GXCopyDisp(DemoCurrentBuffer, GX_TRUE);
-    GXSetDispCopyGamma(GX_GM_1_0);
-}
-
-/**
- * Picks the render mode: a copy of the given one,
- * or the default for the console's TV format (NTSC, PAL, EURGB60, MPAL) adjusted for overscan.
- * Panics on an unknown format.
- */
-static inline void __DEMOInitRenderMode(GXRenderModeObj* mode) {
-    if (mode != NULL) {
-        rmodeobj = *mode; // inline copy
-        rmode = &rmodeobj;
-    } else {
-        switch (VIGetTvFormat()) {
-            case VI_NTSC:
-                rmode = &GXNtsc480IntDf;
-                break;
-            case VI_PAL:
-                rmode = &GXPal528IntDf;
-                break;
-            case VI_EURGB60:
-                rmode = &GXEurgb60Hz480IntDf;
-                break;
-            case VI_MPAL:
-                rmode = &GXMpal480IntDf;
-                break;
-            default:
-#if VERSION <= VERSION_DEMO_JP
-                OSPanic(demo_file, 0x203, demo_msg);
-#else
-                OSPanic(demo_file, 0x206, demo_msg);
-#endif
-                break;
-        }
-        GXAdjustForOverscan(rmode, &rmodeobj, 0, 16);
-        rmode = &rmodeobj;
-    }
-}
+static void DEMOSwapBuffers(void);
 
 /**
  * Boot-time setup: OS, DVD, VI, pads, render mode, frame buffers,
- * the game's heaps (memInit) and GX with its FIFO (0x60000 bytes in the demo, 0x64000 later).
+ * the game's heaps (memInit) and GX with its FIFO (0x60000 bytes in the early demos, 0x64000 in JP and later).
  */
 void DEMOInit(GXRenderModeObj* mode) {
     OSInit();
@@ -155,6 +59,103 @@ void DEMOInit(GXRenderModeObj* mode) {
 #endif
     __DEMOInitGX();
     __DEMOInitVI();
+}
+
+/**
+ * Picks the render mode: a copy of the given one,
+ * or the default for the console's TV format (NTSC, PAL, EURGB60, MPAL) adjusted for overscan.
+ * Panics on an unknown format.
+ */
+static void __DEMOInitRenderMode(GXRenderModeObj* mode) {
+    if (mode != NULL) {
+        rmodeobj = *mode;
+        rmode = &rmodeobj;
+    } else {
+        switch (VIGetTvFormat()) {
+            case VI_NTSC:
+                rmode = &GXNtsc480IntDf;
+                break;
+            case VI_PAL:
+                rmode = &GXPal528IntDf;
+                break;
+            case VI_EURGB60:
+                rmode = &GXEurgb60Hz480IntDf;
+                break;
+            case VI_MPAL:
+                rmode = &GXMpal480IntDf;
+                break;
+            default:
+#if VERSION <= VERSION_DEMO_JP
+                OSPanic("DEMOInit.c", 0x203, "DEMOInit: invalid TV format\n");
+#else
+                OSPanic("DEMOInit.c", 0x206, "DEMOInit: invalid TV format\n");
+#endif
+                break;
+        }
+        GXAdjustForOverscan(rmode, &rmodeobj, 0, 16);
+        rmode = &rmodeobj;
+    }
+}
+
+/** Carves the two external frame buffers off the bottom of the arena, sized for the render mode. */
+static void __DEMOInitMem(void) {
+    void *arenaLo, *arenaHi;
+    u32 fbSize;
+
+    arenaLo = OSGetArenaLo();
+    arenaHi = OSGetArenaHi();
+
+    fbSize = (u32)((rmode->fbWidth + 15) & 0xFFF0) * rmode->xfbHeight * (u32)VI_DISPLAY_PIX_SZ;
+    DemoFrameBuffer1 = (void*)OSRoundUp32B((u32)arenaLo);
+    DemoFrameBuffer2 = (void*)OSRoundUp32B((u32)DemoFrameBuffer1 + fbSize);
+    DemoCurrentBuffer = DemoFrameBuffer2;
+
+    arenaLo = (void*)OSRoundUp32B((u32)DemoFrameBuffer2 + fbSize);
+    OSSetArenaLo(arenaLo);
+}
+
+/**
+ * Sets GX's viewport, scissor, display copy scale and filter and pixel format (RGB565 when anti-aliased),
+ * then copies the cleared EFB into the back buffer.
+ */
+static void __DEMOInitGX(void) {
+    u16 xfbHeight;
+    f32 yScale;
+
+    GXSetViewport(0.0f, 0.0f, (f32)rmode->fbWidth, (f32)rmode->efbHeight, 0.0f, 1.0f);
+    GXSetScissor(0, 0, (u32)rmode->fbWidth, (u32)rmode->efbHeight);
+    yScale = GXGetYScaleFactor(rmode->efbHeight, rmode->xfbHeight);
+    xfbHeight = (u16)GXSetDispCopyYScale(yScale);
+    GXSetDispCopySrc(0, 0, rmode->fbWidth, rmode->efbHeight);
+    GXSetDispCopyDst(rmode->fbWidth, xfbHeight);
+    GXSetCopyFilter(rmode->aa, rmode->sample_pattern, GX_TRUE, rmode->vfilter);
+
+    if (rmode->aa)
+        GXSetPixelFmt(GX_PF_RGB565_Z16, GX_ZC_LINEAR);
+    else
+        GXSetPixelFmt(GX_PF_RGBA6_Z24, GX_ZC_LINEAR);
+
+    GXSetCopyClear((GXColor){0, 0, 0, 0}, GX_MAX_Z24);
+    GXCopyDisp(DemoCurrentBuffer, GX_TRUE);
+    GXSetDispCopyGamma(GX_GM_1_0);
+}
+
+/** Shows the first frame buffer and waits for a retrace (two in non-interlaced modes). */
+static void __DEMOInitVI(void) {
+    VISetNextFrameBuffer(DemoFrameBuffer1);
+    DemoCurrentBuffer = DemoFrameBuffer2;
+    VIFlush();
+    VIWaitForRetrace();
+    if (rmode->viTVmode & 1) {
+        VIWaitForRetrace();
+    }
+}
+
+/** Empty: returns at once. */
+// Original name and size (0x4) from the JP demo map (UNUSED there), between __DEMOInitVI and DEMOBeforeRender:
+// an empty function in the form of the other __DEMOInit helpers. Whether DEMOInit called it (an empty call leaves no
+// code) is not visible in the bytes.
+static void __DEMOInitForEmu(void) {
 }
 
 /**
@@ -198,14 +199,14 @@ void DEMODoneRender(void) {
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
     GXSetColorUpdate(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
-    GXSetAlphaUpdate(1);
+    GXSetAlphaUpdate(GX_TRUE);
     GXCopyDisp(DemoCurrentBuffer, GX_TRUE);
     GXDrawDone();
     DEMOSwapBuffers();
 }
 
 /** Queues the finished buffer for display (unblanking on the first frame), waits for retrace and flips buffers. */
-static inline void DEMOSwapBuffers(void) {
+static void DEMOSwapBuffers(void) {
     VISetNextFrameBuffer(DemoCurrentBuffer);
     if (DemoFirstFrame) {
         VISetBlack(FALSE);
@@ -225,7 +226,7 @@ GXRenderModeObj* DEMOGetRenderModeObj(void) {
 }
 
 /** Returns the frame buffer currently being drawn to. */
-void* L_DEMOGetCurrentBuffer(void) {
+void* DEMOGetCurrentBuffer(void) {
     return DemoCurrentBuffer;
 }
 
@@ -249,6 +250,7 @@ void DEMOEnableGPHangWorkaround(u32 timeoutFrames) {
  * when the FIFO stays over the high watermark without progress for the timeout.
  */
 static void __NoHangRetraceCallback(u32 count) {
+#pragma unused(count)
     static u32 ovFrameCount = 0;
     static u32 lastOvc = 0;
     u32 ovc;
@@ -296,6 +298,35 @@ static void __NoHangDoneRender(void) {
     DEMOSwapBuffers();
 }
 
+/** Enables or disables the raw GP metric registers the hang diagnosis reads. */
+void DEMOSetGPHangMetric(GXBool enable) {
+    if (enable) {
+        GXSetGPMetric(GX_PERF0_NONE, GX_PERF1_NONE);
+
+        GXCmd1u8(GX_LOAD_BP_REG);
+        GXParam1u32(0x2402C004);
+
+        GXCmd1u8(GX_LOAD_BP_REG);
+        GXParam1u32(0x23000020);
+
+        GXCmd1u8(GX_LOAD_XF_REG);
+        GXParam1u16(0x0000);
+        GXParam1u16(0x1006);
+        GXParam1u32(0x00084400);
+    } else {
+        GXCmd1u8(GX_LOAD_BP_REG);
+        GXParam1u32(0x24000000);
+
+        GXCmd1u8(GX_LOAD_BP_REG);
+        GXParam1u32(0x23000000);
+
+        GXCmd1u8(GX_LOAD_XF_REG);
+        GXParam1u16(0x0000);
+        GXParam1u16(0x1006);
+        GXParam1u32(0x00000000);
+    }
+}
+
 /** Reads the GP performance counters twice and writes a guess at the hang's cause into __GXErrorMessage. */
 static void __DEMODiagnoseHang(void) {
     u32 xfTop0, xfBot0, suRdy0, r0Rdy0;
@@ -332,35 +363,6 @@ static void __DEMODiagnoseHang(void) {
         strcat(fullmsg, newmsg);
     }
     strcpy(__GXErrorMessage, newmsg);
-}
-
-/** Enables or disables the raw GP metric registers the hang diagnosis reads. */
-static inline void DEMOSetGPHangMetric(GXBool enable) {
-    if (enable) {
-        GXSetGPMetric(GX_PERF0_NONE, GX_PERF1_NONE);
-
-        GXCmd1u8(GX_LOAD_BP_REG);
-        GXParam1u32(0x2402C004);
-
-        GXCmd1u8(GX_LOAD_BP_REG);
-        GXParam1u32(0x23000020);
-
-        GXCmd1u8(GX_LOAD_XF_REG);
-        GXParam1u16(0x0000);
-        GXParam1u16(0x1006);
-        GXParam1u32(0x00084400);
-    } else {
-        GXCmd1u8(GX_LOAD_BP_REG);
-        GXParam1u32(0x24000000);
-
-        GXCmd1u8(GX_LOAD_BP_REG);
-        GXParam1u32(0x23000000);
-
-        GXCmd1u8(GX_LOAD_XF_REG);
-        GXParam1u16(0x0000);
-        GXParam1u16(0x1006);
-        GXParam1u32(0x00000000);
-    }
 }
 
 /**

@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: a puff of stone-gray smoke that grows and fades over `lifetime` frames.
+
 #include "eff/n64/eff_stone_smoke_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -6,6 +7,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "driver/effdrv.h"
 
 /** 16x16 quad drawn for the smoke puff. */
 static effN64Vtx size16x16_tex32x32_vtx[] = {
@@ -23,7 +25,7 @@ static u8 scale_data[7] = {0, 30, 80, 120, 112, 104, 100};
 static u8 scale_data2[7] = {94, 92, 100, 105, 107, 105, 100};
 
 static void effStoneSmokeMain(EffectEntry* effect);
-static void effStoneSmokeDisp(CameraId cameraId, EffectEntry* effect);
+static void effStoneSmokeDisp(CameraId cameraId, void* payload);
 
 /** Spawns a stone-gray smoke puff at (x, y, z). Spawned by event scripts through evt_eff. */
 EffectEntry* effStoneSmokeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
@@ -36,7 +38,7 @@ EffectEntry* effStoneSmokeN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffStoneSmokeN64Work));
     effect->userdata = work;
     effect->callback = effStoneSmokeMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -73,8 +75,8 @@ static void effStoneSmokeMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -95,14 +97,15 @@ static void effStoneSmokeMain(EffectEntry* effect) {
     } else {
         work->scale = 0.01f * scale_data2[(frame - 7) % 7];
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effStoneSmokeDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effStoneSmokeDisp, effect);
 }
 
 /**
  * Draws the puff as a 16x16 quad of texture 0x5C (not turned to the camera),
  * scaled by base scale x pulse and shaded between the work's two colours.
  */
-static void effStoneSmokeDisp(CameraId cameraId, EffectEntry* effect) {
+static void effStoneSmokeDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffStoneSmokeN64Work* work;
     s32 alpha;

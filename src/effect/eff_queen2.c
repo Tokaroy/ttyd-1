@@ -1,5 +1,6 @@
-// Shadow Queen charge-up (queen2): a dark sphere fades in and grows while a charge light gathers,
+// Shadow Queen charge-up (queen2): a dark sphere fades in and changes size, then a charge light gathers,
 // then two flashes (Boo and indirect effects) as the sphere fades out.
+
 #include "eff/eff_queen2.h"
 #include "eff/eff_indirect.h"
 #include "eff/eff_teresa.h"
@@ -9,7 +10,7 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-
+#include "driver/effdrv.h"
 static void effQueen2Disp(CameraId cameraId, EffectEntry* effect);
 static void effQueen2Main(EffectEntry* effect);
 
@@ -19,7 +20,7 @@ typedef struct EffQueen2Work {
     f32 scale;           // 0x10
     f32 baseScale;       // 0x14
     s32 alpha;           // 0x18
-    s32 reserved_1C;     // 0x1C, never read or written
+    s32 field_0x1C;      // 0x1C
     s32 timer;           // 0x20
     s32 state;           // 0x24
     EffectEntry* charge; // 0x28
@@ -36,7 +37,7 @@ EffectEntry* effQueen2Entry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffQueen2Work) * effect->count);
     effect->userdata = work;
     effect->callback = effQueen2Main;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -57,7 +58,10 @@ EffectEntry* effQueen2Entry(s32 type, f32 x, f32 y, f32 z) {
     return effect;
 }
 
-/** Per frame: fades in and grows the sphere, soft-deletes the charge light, then ends the effect after the flashes. */
+/**
+ * Per frame: fades the sphere in (60 frames), scales it from its start scale to 3 (120 frames), starts the charge
+ * light, then two flashes 30 frames apart; soft-deletes the charge light at the second and ends the next frame.
+ */
 static void effQueen2Main(EffectEntry* effect) {
     EffQueen2Work* work = effect->userdata;
     Vec position;
@@ -65,8 +69,8 @@ static void effQueen2Main(EffectEntry* effect) {
     position = (Vec){work->position.x, work->position.y, work->position.z};
 
     // soft delete
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (work->charge) {
             effDelete(work->charge);
         }
@@ -75,28 +79,25 @@ static void effQueen2Main(EffectEntry* effect) {
     }
     switch (work->state) {
         case 0:
-            work->alpha = intplGetValue(11, 0.0f, 128.0f, work->timer++, 60);
+            work->alpha = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 128.0f, work->timer++, 60);
             if (work->timer > 60) {
                 work->timer = 0;
                 work->state++;
             }
             break;
-        case 1: {
-            f32 base = work->baseScale;
-            s32 t = work->timer++;
-            work->scale = intplGetValue(11, base, 3.0f, t, 120);
-        }
+        case 1:
+            work->scale = intplGetValue(EASING_SINE_IN_OUT, work->baseScale, 3.0f, work->timer++, 120);
             if (work->timer > 120) {
                 work->timer = 0;
                 work->state++;
                 work->charge = effAkariChargeN64Entry(0, 0, work->position.x, work->position.y,
                                                       work->position.z, 1.0f);
-                ((EffAkariChargeN64Work*)work->charge->userdata)->elem[0].r = 0;
-                ((EffAkariChargeN64Work*)work->charge->userdata)->elem[0].g = 0x9A;
-                ((EffAkariChargeN64Work*)work->charge->userdata)->elem[0].b = 0xFF;
-                ((EffAkariChargeN64Work*)work->charge->userdata)->elem[0].r2 = 0xFF;
-                ((EffAkariChargeN64Work*)work->charge->userdata)->elem[0].g2 = 0xFF;
-                ((EffAkariChargeN64Work*)work->charge->userdata)->elem[0].b2 = 0xFF;
+                ((EffAkariChargeN64Work*)work->charge->userdata)->r = 0;
+                ((EffAkariChargeN64Work*)work->charge->userdata)->g = 0x9A;
+                ((EffAkariChargeN64Work*)work->charge->userdata)->b = 0xFF;
+                ((EffAkariChargeN64Work*)work->charge->userdata)->r2 = 0xFF;
+                ((EffAkariChargeN64Work*)work->charge->userdata)->g2 = 0xFF;
+                ((EffAkariChargeN64Work*)work->charge->userdata)->b2 = 0xFF;
             }
             break;
         case 2:
@@ -126,10 +127,10 @@ static void effQueen2Main(EffectEntry* effect) {
             work->alpha = 0;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effQueen2Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effQueen2Disp, effect);
 }
 
-/** Draws the dark sphere scaled by the camera distance so it keeps its apparent size. */
+/** Draws the dark sphere at radius 10 x scale (the scale starts at the spawn-time camera distance / 10). */
 static void effQueen2Disp(CameraId cameraId, EffectEntry* effect) {
     EffQueen2Work* work = effect->userdata;
     CameraEntry* camera;

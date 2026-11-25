@@ -1,14 +1,21 @@
 // File select sequence: the save file menu (new game, copy, delete, sound and rumble settings).
+
 #include "version.h"
-#include "icon_ids.h"
 #include "evt/evt_memcard.h"
+#include "eff/eff_magic1_n64.h"
+#include "evt/evt_story.h"
 #include "evt/evt_sub.h"
 #include "seq/seq_load.h"
 #include "sdk_decls.h"
 #include "win/win_mario.h"
-#include "libc_decls.h"
+#include "sfx_name_word.h"
 #include "nameent.h"
-#include "evt/evt_cmd.h"
+#include "dolphin/gx.h"
+#include "dolphin/mtx.h"
+#include "libc_decls.h"
+#include "sound.h"
+#include "demo/DEMOPad.h"
+
 #include "countdown.h"
 #include "driver/fadedrv.h"
 #include "driver/seqdrv.h"
@@ -24,6 +31,7 @@
 #include "pmario_sound.h"
 #include "system.h"
 #include <dolphin/os.h>
+
 #include "driver/dispdrv.h"
 #include "driver/msgdrv.h"
 #include <string.h>
@@ -34,79 +42,73 @@
 #include "driver/icondrv.h"
 #include "win/win_main.h"
 #include "sdk/texPalette.h"
-#include "evt/evt_story.h"
-#include <dolphin/pad.h>
-#include <demo/DEMOPad.h>
-#include "sound.h"
+#include "icon_ids.h"
+#include "evt/evt_save_flags.h"
+
+#if VERSION < VERSION_US
+#include "evt/evt_cmd.h"
+#endif
+
+static EvtWord evt_continue[11];
+static s32 stone_id[7];
+
+// LoadWork.flags (file select)
+typedef enum LoadWorkFlags {
+    LOAD_FLAG_DIM = (1 << 0),         // 0x1
+    LOAD_FLAG_NO_DELETE = (1 << 4),   // 0x10
+    LOAD_FLAG_NO_COPY = (1 << 5),     // 0x20
+    LOAD_FLAG_HIDE_CURSOR = (1 << 6), // 0x40
+    LOAD_FLAG_RECHECK = (1 << 7),     // 0x80
+} LoadWorkFlags;
 
 typedef struct LoadWork {
-    u16 flags;         // 0x0
-    FileEntry* file;   // 0x4
-    f32 x;             // 0x8
-    f32 y;             // 0xC
-    f32 tx;            // 0x10
-    f32 ty;            // 0x14
-    s32 state;         // 0x18, sequence state
-    s32 cardCode;      // 0x1C, cardGetCode() at the last check
-    s32 slot;          // 0x20
-    s32 soundCursor;   // 0x24, sound menu choice
-    s32 rumbleCursor;  // 0x28, rumble menu choice
-    f32 alpha;         // 0x2C
-    s32 copySrc;       // 0x30, copy: source slot
-    s32 copyDst;       // 0x34, copy: destination slot
-    const char* msg;   // 0x38
-    EventEntry* evt;   // 0x3C
-    s32 soundSetting;  // 0x40, sound mode in effect (restored on cancel)
-    s32 rumbleSetting; // 0x44, rumble setting in effect (restored on cancel)
+    u16 flags;        // 0x0, LoadWorkFlags
+    FileEntry* file;  // 0x4
+    f32 x;            // 0x8
+    f32 y;            // 0xC
+    f32 tx;           // 0x10
+    f32 ty;           // 0x14
+    s32 state;        // 0x18, state machine step
+    s32 cardCode;     // 0x1C, last cardGetCode() result
+    s32 slot;         // 0x20
+    s32 soundModeSel; // 0x24, sound mode being chosen (0 mono, 1 stereo, 2 surround)
+    s32 rumbleOffSel; // 0x28, rumble-off choice being edited
+    f32 alpha;        // 0x2C
+    s32 copyFrom;     // 0x30, copy: source slot
+    s32 copyTo;       // 0x34, copy: destination slot
+    const char* msg;  // 0x38
+    EventEntry* evt;  // 0x3C
+    s32 soundMode;    // 0x40, sound mode in effect
+    s32 rumbleOff;    // 0x44, 1 = rumble disabled
 #if VERSION >= VERSION_JP
-    s32 savedWinId; // 0x48, event printWindowId, restored on exit
+    s32 printWindowId; // 0x48, saved evt->printWindowId
 #endif
 } LoadWork;
-
-// LoadWork.flags bits.
-enum LoadWorkFlags {
-    LOAD_FLAG_OPTION_MENU = 0x1,     // the sound or rumble option menu is open (its overlay fades in)
-    LOAD_FLAG_NO_DELETE = 0x10,      // every slot is blank (none saved or broken): Delete is greyed out and refused
-    LOAD_FLAG_NO_COPY = 0x20,        // no slot holds a good save: Copy is greyed out and refused
-    LOAD_FLAG_EVENT_RUNNING = 0x40,  // a memory card script runs: the cursor is not drawn
-    LOAD_FLAG_RESTORE_WINDOW = 0x80, // JP and later: hand savedWinId back to the next memory card check
-};
 
 typedef struct WinDt {
     f32 x;      // 0x0
     f32 y;      // 0x4
     f32 ofsX;   // 0x8
     f32 ofsY;   // 0xC
-    s32 tex;    // 0x10, icon texture
+    s32 tex;    // 0x10, window texture id (winTexSet)
     s32 tex2;   // 0x14, second texture (winTexSet_x2)
     u8 next[4]; // 0x18
 } WinDt;
-
-// Texture of the highlight bar behind the selected rumble option (the sound options use 0x33 in every version)
-#if VERSION >= VERSION_US
-#define RUMBLE_SEL_TEX 0x20
-#else
-#define RUMBLE_SEL_TEX 0x33
-#endif
-
-// SFX(id): plays a sound effect by its numeric id (psndSFXOn takes a name or an id).
-#define SFX(id) psndSFXOn((const char*)(id))
-// SLOTFLAGS(i): the flags word of save slot i.
-#define SLOTFLAGS(i) (cardGetFilePtr()->saves[(i)].data.flags)
 
 #if VERSION <= VERSION_DEMO_JP
 static BOOL loadMain(SequenceWork* seq);
 #else
 static void loadMain(SequenceWork* seq);
 #endif
+
 static void loadDraw(CameraId camera, void* param);
+static void newGame(void);
 static void continueGame(void);
 
 #if VERSION <= VERSION_DEMO_JP
-/** Icons of the seven Crystal Stars, drawn on a save file's panel for each star that file has collected. */
-s32 stone_id[7] = {ICON_197, ICON_198, ICON_19A, ICON_19C, ICON_19D, ICON_199, ICON_19B};
+static s32 stone_id[7] = {ICON_SAC_DEKA, ICON_SAC_BAKUGAME, ICON_SAC_MUKI, ICON_SAC_SCISSOR, ICON_SAC_GENKI1, ICON_SAC_SUKI, ICON_SAC_ZUBASTAR};
 
-/** Demo: a 150 ms rumble on controller 0, as feedback when rumble is switched on in the file select options. */
+/** Early demos: a 150 ms rumble on controller 0, as feedback when rumble is switched on in the file select options. */
 static EVT_BEGIN(evt_shake)
     CALL(evt_sub_rumble_onoff, 0, 0)
     WAIT_MS(150)
@@ -116,10 +118,10 @@ EVT_END()
 #endif
 
 /**
- * Panels of the file select menu: the four save files, then the copy, delete and back buttons and the sound
+ * Panels of the file select menu: the four save files, then the delete, copy and back buttons and the sound
  * and rumble buttons; each with its position, offsets and the panel the cursor moves to up, down, left, right.
  */
-WinDt win_dt[9] = {
+static WinDt win_dt[9] = {
     {-140.0f, 75.0f, -120.0f, 60.0f, 13, 0, {7, 2, 1, 1}},
     {140.0f, 75.0f, -120.0f, 60.0f, 12, 0, {8, 3, 0, 0}},
     {-140.0f, -65.0f, -120.0f, 60.0f, 11, 0, {0, 4, 3, 3}},
@@ -132,7 +134,7 @@ WinDt win_dt[9] = {
 };
 
 /** Cursor layout while choosing a file to delete or copy from: the four files and the bottom buttons. */
-WinDt win_dt2[7] = {
+static WinDt win_dt2[7] = {
     {-140.0f, 75.0f, -120.0f, 60.0f, 13, 0, {6, 2, 1, 1}},
     {140.0f, 75.0f, -120.0f, 60.0f, 12, 0, {6, 3, 0, 0}},
     {-140.0f, -65.0f, -120.0f, 60.0f, 11, 0, {0, 6, 3, 3}},
@@ -143,7 +145,7 @@ WinDt win_dt2[7] = {
 };
 
 /** Cursor layout while choosing the file to copy to: only the four save files. */
-WinDt win_dt3[4] = {
+static WinDt win_dt3[4] = {
     {-140.0f, 75.0f, -120.0f, 60.0f, 13, 0, {2, 2, 1, 1}},
     {140.0f, 75.0f, -120.0f, 60.0f, 12, 0, {3, 3, 0, 0}},
     {-140.0f, -65.0f, -120.0f, 60.0f, 11, 0, {0, 0, 3, 3}},
@@ -151,24 +153,27 @@ WinDt win_dt3[4] = {
 };
 
 static LoadWork work;
+
 /** Points at the file-select (load) sequence's work. */
 static LoadWork* wp = &work;
+
 #if VERSION >= VERSION_US
+// FAKE: placed in .sdata2; without it the object changes
 __declspec(section ".sdata2") const u32 seq_logo_zero_color[2];
 #endif
 
 static EvtWord evt_shake[12];
 
-/**
- * Called by the memory card scripts after a copy or delete changed the card:
- * resets the fade and keeps the script's message window id
- * so seq_loadMain can hand it to the restarted card check (later versions only).
- */
+// Descriptive name (not in the symbol maps); placeholder unk_800f2398, JP 0x800F2398. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
+/**
+ * Script command (JP and later): resets fade slot 4 and keeps the calling event's print window id in the load
+ * sequence's work.
+ */
 s32 evt_seq_load_keep_msg_window(EventEntry* evt, BOOL isFirstCall) {
     fadeReset(4);
-    wp->savedWinId = evt->printWindowId;
-    return 2;
+    wp->printWindowId = evt->printWindowId;
+    return EVT_RETURN_DONE;
 }
 #endif
 
@@ -177,15 +182,14 @@ void seq_loadInit(SequenceWork* seq) {
     memset(wp, 0, sizeof(LoadWork));
 }
 
+void dvdClose(void);
+
 /** Leaves the file select sequence; frees the menu texture file (name.tpl). */
 void seq_loadExit(SequenceWork* seq) {
-    if (wp->file != NULL) {
-        fileFree(wp->file);
-    }
-    wp->file = NULL;
+    dvdClose();
 }
 
-static inline BOOL loadStart(void);
+BOOL dvdOpen(void);
 
 /**
  * File select sequence: loads name.tpl, runs the memory card check script (back to the title if the card is
@@ -194,61 +198,59 @@ static inline BOOL loadStart(void);
 void seq_loadMain(SequenceWork* seq) {
     switch (seq->state) {
         case 0:
-            if (loadStart()) {
+            if (dvdOpen()) {
                 seq->state++;
             }
             break;
         case 1:
             wp->evt = evtEntryType(evt_memcard_check, 0, 0, 0);
 #if VERSION >= VERSION_JP
-            if (wp->flags & LOAD_FLAG_RESTORE_WINDOW) {
-                wp->flags &= ~LOAD_FLAG_RESTORE_WINDOW;
+            if (wp->flags & LOAD_FLAG_RECHECK) {
+                wp->flags &= ~LOAD_FLAG_RECHECK;
                 wp->evt->lwData[10] = 1;
-                wp->evt->printWindowId = wp->savedWinId;
+                wp->evt->printWindowId = wp->printWindowId;
             }
 #endif
             seq->state++;
             break;
         case 2:
             if (evtCheckID(wp->evt->eventId) == 0) {
-                if (evtGetValue(NULL, (s32)0xFAA2B580) != 1) {
+                if (evtGetValue(NULL, GF(0)) != 1) {
                     seqSetSeq(SEQ_TITLE, NULL, NULL);
                 } else {
                     wp->evt = NULL;
                     seq->state++;
-#if VERSION <= VERSION_DEMO_JP
-                    wp->cardCode = cardGetCode();
-                    if (OSGetSoundMode() == 0) {
-                        SoundSetOutputMode(0);
-                        gp->soundMode = 0;
-                        wp->soundSetting = 0;
-                    } else if (gp->soundMode == 0) {
-                        SoundSetOutputMode(1);
-                        wp->soundSetting = 1;
-                    } else {
-                        SoundSetOutputMode(2);
-                        wp->soundSetting = 2;
-                    }
-#else
+#if VERSION >= VERSION_JP
                     wp->state = 0;
-                    wp->cardCode = cardGetCode();
-                    wp->flags &= ~LOAD_FLAG_EVENT_RUNNING;
-                    if (OSGetSoundMode() == 0) {
-                        SoundSetOutputMode(0);
-                        gp->soundMode = 0;
-                        wp->soundSetting = 0;
-                    } else {
-                        SoundSetOutputMode(1);
-                        if (gp->soundMode == 0) {
-                            wp->soundSetting = 1;
-                        } else {
-                            wp->soundSetting = 2;
-                        }
-                    }
 #endif
-                    wp->rumbleSetting = gp->rumbleEnabled == 0;
-                    wp->soundCursor = wp->soundSetting;
-                    wp->rumbleCursor = wp->rumbleSetting;
+                    wp->cardCode = cardGetCode();
+#if VERSION >= VERSION_JP
+                    wp->flags &= ~LOAD_FLAG_HIDE_CURSOR;
+#endif
+                    if (OSGetSoundMode() == OS_SOUND_MODE_MONO) {
+                        SoundSetOutputMode(SND_OUTPUTMODE_MONO);
+                        gp->soundMode = GW_SOUND_MODE_NO_SURROUND;
+                        wp->soundMode = 0;
+#if VERSION <= VERSION_DEMO_JP
+                    } else if (gp->soundMode == GW_SOUND_MODE_NO_SURROUND) {
+                        SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
+                        wp->soundMode = 1;
+                    } else {
+                        SoundSetOutputMode(SND_OUTPUTMODE_SURROUND);
+                        wp->soundMode = 2;
+#else
+                    } else {
+                        SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
+                        if (gp->soundMode == GW_SOUND_MODE_NO_SURROUND) {
+                            wp->soundMode = 1;
+                        } else {
+                            wp->soundMode = 2;
+                        }
+#endif
+                    }
+                    wp->rumbleOff = gp->rumbleEnabled == 0;
+                    wp->soundModeSel = wp->soundMode;
+                    wp->rumbleOffSel = wp->rumbleOff;
                     wp->slot = gp->lastSlot;
                     wp->x = win_dt[wp->slot].x;
                     wp->y = win_dt[wp->slot].y;
@@ -267,49 +269,41 @@ void seq_loadMain(SequenceWork* seq) {
     }
 }
 
-/** Starts loading the file menu's texture file (name.tpl, per language in US and PAL); TRUE once it is loaded. */
-static inline BOOL loadStart(void) {
+/**
+ * Starts loading the file menu's texture file (name.tpl: from the jp folder before US, per language in US and
+ * later); TRUE once it is loaded.
+ */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+BOOL dvdOpen(void) {
 #if VERSION >= VERSION_US
     const char* lang[] = {"jp", "us", "ge", "fr", "sp", "it"};
-    if (fileAsyncf(4, NULL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]) != NULL) {
-        wp->file = fileAllocf(4, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]);
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]) != NULL) {
+        wp->file = fileAllocf(FILE_TYPE_TPL, "%s/w/%s/name.tpl", getMarioStDvdRoot(), lang[gp->language]);
 #elif VERSION <= VERSION_DEMO_JP
-    if (fileAsyncf(4, NULL, "%s/window/jp/name.tpl", getMarioStDvdRoot()) != NULL) {
-        wp->file = fileAllocf(4, "%s/window/jp/name.tpl", getMarioStDvdRoot());
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/window/jp/name.tpl", getMarioStDvdRoot()) != NULL) {
+        wp->file = fileAllocf(FILE_TYPE_TPL, "%s/window/jp/name.tpl", getMarioStDvdRoot());
 #else
-    if (fileAsyncf(4, NULL, "%s/w/jp/name.tpl", getMarioStDvdRoot()) != NULL) {
-        wp->file = fileAllocf(4, "%s/w/jp/name.tpl", getMarioStDvdRoot());
+    if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/jp/name.tpl", getMarioStDvdRoot()) != NULL) {
+        wp->file = fileAllocf(FILE_TYPE_TPL, "%s/w/jp/name.tpl", getMarioStDvdRoot());
 #endif
         return TRUE;
     }
     return FALSE;
 }
 
-/** New game: reset the story state and the party and set the fades into the prologue map */
-static inline void loadNewGameSetup(void) {
-    stg0_00_init();
-    gp->saveSlot = wp->slot;
-    marioPartyKill();
-    {
-        MarioWork* m = marioGetPtr();
-        m->prevPartyMemberId[0] = 0;
-        m->prevPartyMemberId[1] = 0;
+/** Frees the file menu's texture file (name.tpl), if loaded. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void dvdClose(void) {
+    if (wp->file != NULL) {
+        fileFree(wp->file);
     }
-    gp->areaFadeOutType = FADE_NONE;
-    gp->areaFadeInType = FADE_CURTAIN_SIDES_A2_3D;
-    swInit();
-    swByteSet(GSW_STORY_PROGRESS, STORY_STG0_00_PROLOGUE);
+    wp->file = NULL;
 }
 
-/**
- * File menu state machine: moves the cursor between the four save slots and the copy, delete, back,
- * sound and rumble buttons, starts a new game (name entry, then the prologue on aaa_00) or continues a file,
- * and runs the copy, delete, sound mode and rumble sub-menus. Queues loadDraw. The demos return FALSE.
- */
+/** Later versions: the same menu with no return value. */
 #if VERSION <= VERSION_DEMO_JP
 static BOOL loadMain(SequenceWork* seq) {
 #else
-/** Later versions: the same menu with no return value. */
 static void loadMain(SequenceWork* seq) {
 #endif
     u32 trg;
@@ -334,8 +328,8 @@ static void loadMain(SequenceWork* seq) {
     }
     wp->cardCode = code;
     for (i = 0; i < 4; i++) {
-        flags = SLOTFLAGS(i);
-        if (!(flags & CARD_SAVE_FLAG_EMPTY) || (flags & CARD_SAVE_FLAG_CORRUPT)) {
+        flags = cardGetFilePtr()->saves[i].data.flags;
+        if (!(flags & CARD_SAVE_FLAG_ERASED) || (flags & CARD_SAVE_FLAG_NO_VALID_COPY)) {
             break;
         }
     }
@@ -346,8 +340,8 @@ static void loadMain(SequenceWork* seq) {
     }
     wp->flags &= ~LOAD_FLAG_NO_COPY;
     for (i = 0; i < 4; i++) {
-        flags = SLOTFLAGS(i);
-        if (!(flags & CARD_SAVE_FLAG_EMPTY) && !(flags & CARD_SAVE_FLAG_CORRUPT)) {
+        flags = cardGetFilePtr()->saves[i].data.flags;
+        if (!(flags & CARD_SAVE_FLAG_ERASED) && !(flags & CARD_SAVE_FLAG_NO_VALID_COPY)) {
             break;
         }
     }
@@ -370,81 +364,81 @@ static void loadMain(SequenceWork* seq) {
             } else if (dir & DEMO_STICK_RIGHT) {
                 wp->slot = win_dt[prev].next[3];
             } else if (trg & PAD_BUTTON_A) {
-                flags = SLOTFLAGS(wp->slot);
+                flags = cardGetFilePtr()->saves[wp->slot].data.flags;
                 switch (wp->slot) {
                     case 0:
                     case 1:
                     case 2:
                     case 3:
-                        if (flags & CARD_SAVE_FLAG_CORRUPT) {
-                            SFX(0x13);
-                        } else if (flags & CARD_SAVE_FLAG_EMPTY) {
+                        if (flags & CARD_SAVE_FLAG_NO_VALID_COPY) {
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+                        } else if (flags & CARD_SAVE_FLAG_ERASED) {
                             wp->state = 0x1e;
-                            SFX(0x12);
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
                         } else {
                             wp->state = 0x14;
-                            SFX(0x12);
+                            psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
                         }
                         break;
                     case 4:
                         if (!(wp->flags & LOAD_FLAG_NO_DELETE)) {
                             for (i = 0; i < 4; i++) {
-                                flags = SLOTFLAGS(i);
-                                if (!(flags & CARD_SAVE_FLAG_EMPTY) || (flags & CARD_SAVE_FLAG_CORRUPT)) {
+                                flags = cardGetFilePtr()->saves[i].data.flags;
+                                if (!(flags & CARD_SAVE_FLAG_ERASED) || (flags & CARD_SAVE_FLAG_NO_VALID_COPY)) {
                                     break;
                                 }
                             }
                             if (i < 4) {
-                                SFX(0x12);
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
                                 wp->slot = 0;
                                 wp->state = 0x28;
                             } else {
-                                SFX(0x13);
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
                             }
                         }
                         break;
                     case 5:
                         if (!(wp->flags & LOAD_FLAG_NO_COPY)) {
                             for (i = 0; i < 4; i++) {
-                                flags = SLOTFLAGS(i);
-                                if (!(flags & CARD_SAVE_FLAG_CORRUPT) && !(flags & CARD_SAVE_FLAG_EMPTY)) {
+                                flags = cardGetFilePtr()->saves[i].data.flags;
+                                if (!(flags & CARD_SAVE_FLAG_NO_VALID_COPY) && !(flags & CARD_SAVE_FLAG_ERASED)) {
                                     break;
                                 }
                             }
                             if (i < 4) {
-                                SFX(0x12);
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
                                 wp->slot = 0;
                                 wp->state = 0x32;
                             } else {
-                                SFX(0x13);
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
                             }
                         }
                         break;
                     case 6:
-                        SFX(0x13);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
                         wp->state = 0xa;
                         break;
                     case 7:
-                        SFX(0x12);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
 #if VERSION >= VERSION_JP
-                        psndBGMOff(PSND_FADE_DIP_TO(10));
+                        psndBGMOff(PSND_SILENT);
 #endif
                         wp->state = 0x64;
                         break;
                     case 8:
-                        SFX(0x12);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
                         wp->state = 0xc8;
                         break;
                 }
             } else if (trg & PAD_BUTTON_B) {
-                SFX(0x13);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
                 wp->state = 0xa;
             }
             if (prev != wp->slot) {
                 if (wp->slot < 4) {
-                    SFX(9);
+                    psndSFXOn(SFX_NAME_WORD(9));
                 } else {
-                    SFX(5);
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
                 }
             }
             wp->tx = win_dt[wp->slot].x + win_dt[wp->slot].ofsX;
@@ -460,15 +454,15 @@ static void loadMain(SequenceWork* seq) {
             }
             break;
         case 0x14:
-            wp->flags |= LOAD_FLAG_EVENT_RUNNING;
+            wp->flags |= LOAD_FLAG_HIDE_CURSOR;
             wp->evt = evtEntryType(evt_memcard_start, 0, 0, 0);
             wp->evt->lwData[0] = wp->slot;
             wp->state++;
             break;
         case 0x15:
             if (!evtCheckID(wp->evt->eventId)) {
-                wp->flags &= ~LOAD_FLAG_EVENT_RUNNING;
-                if (evtGetValue(NULL, (s32)0xFD050F80) == 1) {
+                wp->flags &= ~LOAD_FLAG_HIDE_CURSOR;
+                if (evtGetValue(NULL, GW(0)) == 1) {
                     wp->state++;
                 } else {
                     wp->state = 1;
@@ -478,22 +472,22 @@ static void loadMain(SequenceWork* seq) {
         case 0x16:
             fadeEntry(FADE_CURTAIN_SIDES_A1, 0, (GXColor){0, 0, 0, 255});
 #if VERSION <= VERSION_DEMO_JP
-            psndBGMOff_f_d(PSND_FADE_OUT, 3000, 0);
+            psndBGMOff_f_d(PSND_FADEOUT, 3000, 0);
 #else
-            psndBGMOff_f_d(PSND_FADE_OUT, 2000, 0);
+            psndBGMOff_f_d(PSND_FADEOUT, 2000, 0);
 #endif
             wp->state++;
             break;
         case 0x17:
             if (fadeIsFinish()) {
-                wp->flags |= LOAD_FLAG_EVENT_RUNNING;
+                wp->flags |= LOAD_FLAG_HIDE_CURSOR;
                 wp->evt = evtEntryType(evt_continue, 0, 0, 0);
                 wp->state++;
             }
             break;
         case 0x18:
             if (!evtCheckID(wp->evt->eventId)) {
-                wp->flags &= ~LOAD_FLAG_EVENT_RUNNING;
+                wp->flags &= ~LOAD_FLAG_HIDE_CURSOR;
                 continueGame();
             }
             break;
@@ -508,7 +502,7 @@ static void loadMain(SequenceWork* seq) {
             break;
         case 0x20:
             if (nameEntPrepare()) {
-                nameEntOn(0);
+                nameEntOn(NAMEENT_FILE);
                 fadeEntry(FADE_CURTAIN_SIDES_A2, 0, (GXColor){0, 0, 0, 255});
                 wp->state++;
             }
@@ -517,7 +511,7 @@ static void loadMain(SequenceWork* seq) {
             if (fadeIsFinish() && !nameEntWait()) {
                 fadeEntry(FADE_CURTAIN_SIDES_A1_3D, 0, (GXColor){0, 0, 0, 255});
                 if (!nameEntIsCancel()) {
-                    psndBGMOff_f_d(PSND_FADE_OUT, 3000, 0);
+                    psndBGMOff_f_d(PSND_FADEOUT, 3000, 0);
                 }
                 wp->state++;
             }
@@ -538,12 +532,22 @@ static void loadMain(SequenceWork* seq) {
                         wp->evt->lwData[0] = 0x17;
                         wp->state++;
                     } else {
-                        // demo: the new-game setup runs once the name is in, or after the first save
-                        loadNewGameSetup();
-                        seqSetSeq(SEQ_MAP_CHANGE, "aaa_00", "prologue");
+                        // early demos: the new-game setup runs once the name is in, or after the first save
+                        newGame();
                     }
 #else
-                    loadNewGameSetup();
+                    stg0_00_init();
+                    gp->saveSlot = wp->slot;
+                    marioPartyKill();
+                    {
+                        MarioWork* m = marioGetPtr();
+                        m->prevPartyMemberId[0] = 0;
+                        m->prevPartyMemberId[1] = 0;
+                    }
+                    gp->areaFadeOutType = FADE_NONE;
+                    gp->areaFadeInType = FADE_CURTAIN_SIDES_A2_3D;
+                    swInit();
+                    swByteSet(GSW_ID(GSW_STORY_PROGRESS), STG0_00_PROLOGUE);
                     if (code == 0) {
                         gp->saveSlot = wp->slot;
 #if VERSION >= VERSION_US
@@ -563,9 +567,10 @@ static void loadMain(SequenceWork* seq) {
         case 0x23:
             if (!evtCheckID(wp->evt->eventId)) {
 #if VERSION <= VERSION_DEMO_JP
-                loadNewGameSetup();
-#endif
+                newGame();
+#else
                 seqSetSeq(SEQ_MAP_CHANGE, "aaa_00", "prologue");
+#endif
             }
             break;
         case 0x28:
@@ -581,31 +586,31 @@ static void loadMain(SequenceWork* seq) {
                 wp->slot = win_dt2[prev].next[3];
             } else if (trg & PAD_BUTTON_A) {
                 if (prev < 4) {
-                    flags = SLOTFLAGS(wp->slot);
-                    if ((flags & CARD_SAVE_FLAG_CORRUPT) || !(flags & CARD_SAVE_FLAG_EMPTY)) {
-                        SFX(0x12);
+                    flags = cardGetFilePtr()->saves[wp->slot].data.flags;
+                    if ((flags & CARD_SAVE_FLAG_NO_VALID_COPY) || !(flags & CARD_SAVE_FLAG_ERASED)) {
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
                         wp->state++;
                     } else {
-                        SFX(0x13);
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
                     }
                 } else {
                     wp->slot = 4;
                     wp->state = 1;
-                    SFX(0x13);
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
                 }
             } else if (trg & PAD_BUTTON_B) {
                 wp->slot = 4;
                 wp->state = 1;
-                SFX(0x13);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
             }
             if (prev != wp->slot && wp->slot < 4) {
-                SFX(9);
+                psndSFXOn(SFX_NAME_WORD(9));
             }
             wp->tx = win_dt2[wp->slot].x + win_dt2[wp->slot].ofsX;
             wp->ty = win_dt2[wp->slot].y + win_dt2[wp->slot].ofsY;
             break;
         case 0x29:
-            wp->flags |= LOAD_FLAG_EVENT_RUNNING;
+            wp->flags |= LOAD_FLAG_HIDE_CURSOR;
             wp->evt = evtEntryType(evt_memcard_delete, 0, 0, 0);
             wp->evt->lwData[0] = wp->slot;
             wp->state++;
@@ -613,16 +618,16 @@ static void loadMain(SequenceWork* seq) {
         case 0x2a:
             if (!evtCheckID(wp->evt->eventId)) {
 #if VERSION <= VERSION_DEMO_JP
-                wp->flags &= ~LOAD_FLAG_EVENT_RUNNING;
+                wp->flags &= ~LOAD_FLAG_HIDE_CURSOR;
                 wp->slot = 4;
                 wp->state = 1;
 #else
-                if (evtGetValue(NULL, (s32)0xFAA2B580) == 0) {
-                    wp->flags &= ~LOAD_FLAG_EVENT_RUNNING;
+                if (evtGetValue(NULL, GF(0)) == 0) {
+                    wp->flags &= ~LOAD_FLAG_HIDE_CURSOR;
                     wp->slot = 4;
                     wp->state = 1;
                 } else {
-                    wp->flags |= LOAD_FLAG_RESTORE_WINDOW;
+                    wp->flags |= LOAD_FLAG_RECHECK;
                     seq->state = 1;
                     return;
                 }
@@ -642,26 +647,26 @@ static void loadMain(SequenceWork* seq) {
                 wp->slot = win_dt2[prev].next[3];
             } else if (trg & PAD_BUTTON_A) {
                 if (prev < 4) {
-                    flags = SLOTFLAGS(wp->slot);
-                    if (!(flags & CARD_SAVE_FLAG_CORRUPT) && !(flags & CARD_SAVE_FLAG_EMPTY)) {
+                    flags = cardGetFilePtr()->saves[wp->slot].data.flags;
+                    if (!(flags & CARD_SAVE_FLAG_NO_VALID_COPY) && !(flags & CARD_SAVE_FLAG_ERASED)) {
                         wp->state = 0x33;
-                        wp->copySrc = wp->slot;
-                        wp->copyDst = (wp->copySrc + 1) % 4;
-                        wp->slot = wp->copyDst;
-                        SFX(0x12);
+                        wp->copyFrom = wp->slot;
+                        wp->copyTo = (wp->copyFrom + 1) % 4;
+                        wp->slot = wp->copyTo;
+                        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
                     }
                 } else {
                     wp->slot = 5;
                     wp->state = 1;
-                    SFX(0x13);
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
                 }
             } else if (trg & PAD_BUTTON_B) {
                 wp->slot = 5;
                 wp->state = 1;
-                SFX(0x13);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
             }
             if (prev != wp->slot && wp->slot < 4) {
-                SFX(9);
+                psndSFXOn(SFX_NAME_WORD(9));
             }
             wp->tx = win_dt2[wp->slot].x + win_dt2[wp->slot].ofsX;
             wp->ty = win_dt2[wp->slot].y + win_dt2[wp->slot].ofsY;
@@ -672,55 +677,55 @@ static void loadMain(SequenceWork* seq) {
             if (dir & DEMO_STICK_UP) {
                 do {
                     wp->slot = win_dt3[wp->slot].next[0];
-                } while (wp->slot == wp->copySrc);
+                } while (wp->slot == wp->copyFrom);
             } else if (dir & DEMO_STICK_DOWN) {
                 do {
                     wp->slot = win_dt3[wp->slot].next[1];
-                } while (wp->slot == wp->copySrc);
+                } while (wp->slot == wp->copyFrom);
             } else if (dir & DEMO_STICK_LEFT) {
                 do {
                     wp->slot = win_dt3[wp->slot].next[2];
-                } while (wp->slot == wp->copySrc);
+                } while (wp->slot == wp->copyFrom);
             } else if (dir & DEMO_STICK_RIGHT) {
                 do {
                     wp->slot = win_dt3[wp->slot].next[3];
-                } while (wp->slot == wp->copySrc);
+                } while (wp->slot == wp->copyFrom);
             } else if (trg & PAD_BUTTON_A) {
                 wp->state = 0x34;
-                wp->copyDst = wp->slot;
-                SFX(0x12);
+                wp->copyTo = wp->slot;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
             } else if (trg & PAD_BUTTON_B) {
-                wp->slot = wp->copySrc;
+                wp->slot = wp->copyFrom;
                 wp->state = 0x32;
-                SFX(0x13);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
             }
             if (prev != wp->slot && wp->slot < 4) {
-                SFX(9);
+                psndSFXOn(SFX_NAME_WORD(9));
             }
-            wp->copyDst = wp->slot;
+            wp->copyTo = wp->slot;
             wp->tx = win_dt2[wp->slot].x + win_dt2[wp->slot].ofsX;
             wp->ty = win_dt2[wp->slot].y + win_dt2[wp->slot].ofsY;
             break;
         case 0x34:
-            wp->flags |= LOAD_FLAG_EVENT_RUNNING;
+            wp->flags |= LOAD_FLAG_HIDE_CURSOR;
             wp->evt = evtEntryType(evt_memcard_copy, 0, 0, 0);
-            wp->evt->lwData[0] = wp->copySrc;
-            wp->evt->lwData[1] = wp->copyDst;
+            wp->evt->lwData[0] = wp->copyFrom;
+            wp->evt->lwData[1] = wp->copyTo;
             wp->state++;
             break;
         case 0x35:
             if (!evtCheckID(wp->evt->eventId)) {
 #if VERSION <= VERSION_DEMO_JP
-                wp->flags &= ~LOAD_FLAG_EVENT_RUNNING;
+                wp->flags &= ~LOAD_FLAG_HIDE_CURSOR;
                 wp->slot = 5;
                 wp->state = 1;
 #else
-                if (evtGetValue(NULL, (s32)0xFAA2B580) == 0) {
-                    wp->flags &= ~LOAD_FLAG_EVENT_RUNNING;
+                if (evtGetValue(NULL, GF(0)) == 0) {
+                    wp->flags &= ~LOAD_FLAG_HIDE_CURSOR;
                     wp->slot = 5;
                     wp->state = 1;
                 } else {
-                    wp->flags |= LOAD_FLAG_RESTORE_WINDOW;
+                    wp->flags |= LOAD_FLAG_RECHECK;
                     seq->state = 1;
                     return;
                 }
@@ -728,156 +733,143 @@ static void loadMain(SequenceWork* seq) {
             }
             break;
         case 0x64:
+            wp->flags |= LOAD_FLAG_DIM;
 #if VERSION <= VERSION_DEMO_JP
-            wp->flags |= LOAD_FLAG_OPTION_MENU;
             if (dir & DEMO_STICK_UP) {
-                wp->soundCursor--;
-                SFX(5);
+                wp->soundModeSel--;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
             } else if (dir & DEMO_STICK_DOWN) {
-                wp->soundCursor++;
-                SFX(5);
+                wp->soundModeSel++;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
             } else if (trg & PAD_BUTTON_A) {
-                switch (wp->soundCursor) {
+                switch (wp->soundModeSel) {
                     case 0:
-                        OSSetSoundMode(0);
-                        SoundSetOutputMode(0);
-                        gp->soundMode = 0;
-                        break;
-                    case 1:
-                        OSSetSoundMode(1);
-                        SoundSetOutputMode(1);
-                        gp->soundMode = 0;
-                        break;
-                    case 2:
-                        OSSetSoundMode(1);
-                        SoundSetOutputMode(2);
-                        gp->soundMode = 1;
-                        break;
-                }
-                SFX(0x12);
-                wp->soundSetting = wp->soundCursor;
-                wp->flags &= ~LOAD_FLAG_OPTION_MENU;
-                wp->state = 1;
-            } else if (trg & PAD_BUTTON_B) {
-                SFX(0x13);
-                wp->soundCursor = wp->soundSetting;
-                wp->flags &= ~LOAD_FLAG_OPTION_MENU;
-                wp->state = 1;
-            }
-            if (wp->soundCursor >= 3) {
-                wp->soundCursor = 0;
-            }
-            if (wp->soundCursor < 0) {
-                wp->soundCursor = 2;
-            }
-            wp->tx = -74.0f;
-            wp->ty = 4.0f + (50.0f - 50.0f * wp->soundCursor);
-            break;
+                        OSSetSoundMode(OS_SOUND_MODE_MONO);
+                        SoundSetOutputMode(SND_OUTPUTMODE_MONO);
 #else
-            wp->flags |= LOAD_FLAG_OPTION_MENU;
-            sound = wp->soundCursor;
+            sound = wp->soundModeSel;
             if (dir & DEMO_STICK_UP) {
-                wp->soundCursor = wp->soundCursor - 1;
-                SFX(5);
+                wp->soundModeSel = wp->soundModeSel - 1;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
             } else if (dir & DEMO_STICK_DOWN) {
-                wp->soundCursor = wp->soundCursor + 1;
-                SFX(5);
+                wp->soundModeSel = wp->soundModeSel + 1;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
             } else if (trg & PAD_BUTTON_A) {
                 switch (sound) {
                     case 0:
-                        OSSetSoundMode(0);
-                        gp->soundMode = 0;
+                        OSSetSoundMode(OS_SOUND_MODE_MONO);
+#endif
+                        gp->soundMode = GW_SOUND_MODE_NO_SURROUND;
                         break;
                     case 1:
-                        OSSetSoundMode(1);
-                        gp->soundMode = 0;
+                        OSSetSoundMode(OS_SOUND_MODE_STEREO);
+#if VERSION <= VERSION_DEMO_JP
+                        SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
+#endif
+                        gp->soundMode = GW_SOUND_MODE_NO_SURROUND;
                         break;
                     case 2:
-                        OSSetSoundMode(1);
-                        gp->soundMode = 1;
+                        OSSetSoundMode(OS_SOUND_MODE_STEREO);
+#if VERSION <= VERSION_DEMO_JP
+                        SoundSetOutputMode(SND_OUTPUTMODE_SURROUND);
+#endif
+                        gp->soundMode = GW_SOUND_MODE_SURROUND;
                         break;
                 }
-                if (OSGetSoundMode() == 0) {
-                    SoundSetOutputMode(0);
+#if VERSION <= VERSION_DEMO_JP
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+#else
+                if (OSGetSoundMode() == OS_SOUND_MODE_MONO) {
+                    SoundSetOutputMode(SND_OUTPUTMODE_MONO);
                 } else {
-                    SoundSetOutputMode(1);
+                    SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
                 }
-                SFX(0x12);
-                psndBGMOn(PSND_FADE_RESUME | PSND_FADE_UNDIP, NULL);
-                psndENVOff(PSND_FADE_OUT);
-                wp->soundSetting = wp->soundCursor;
-                wp->flags &= ~LOAD_FLAG_OPTION_MENU;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+                psndBGMOn(PSND_CONTINUE | PSND_UNSILENT, NULL);
+                psndENVOff(PSND_FADEOUT);
+#endif
+                wp->soundMode = wp->soundModeSel;
+                wp->flags &= ~LOAD_FLAG_DIM;
                 wp->state = 1;
+#if VERSION <= VERSION_DEMO_JP
+            } else if (trg & PAD_BUTTON_B) {
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+                wp->soundModeSel = wp->soundMode;
+                wp->flags &= ~LOAD_FLAG_DIM;
+                wp->state = 1;
+#else
                 break;
             } else if (trg & PAD_BUTTON_B) {
-                SFX(0x13);
-                psndBGMOn(PSND_FADE_RESUME | PSND_FADE_UNDIP, NULL);
-                psndENVOff(PSND_FADE_OUT);
-                wp->soundCursor = wp->soundSetting;
-                if (OSGetSoundMode() == 0) {
-                    SoundSetOutputMode(0);
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+                psndBGMOn(PSND_CONTINUE | PSND_UNSILENT, NULL);
+                psndENVOff(PSND_FADEOUT);
+                wp->soundModeSel = wp->soundMode;
+                if (OSGetSoundMode() == OS_SOUND_MODE_MONO) {
+                    SoundSetOutputMode(SND_OUTPUTMODE_MONO);
                 } else {
-                    SoundSetOutputMode(1);
+                    SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
                 }
-                wp->flags &= ~LOAD_FLAG_OPTION_MENU;
+                wp->flags &= ~LOAD_FLAG_DIM;
                 wp->state = 1;
                 break;
+#endif
             }
-            if (wp->soundCursor >= 3) {
-                wp->soundCursor = 0;
+            if (wp->soundModeSel >= 3) {
+                wp->soundModeSel = 0;
             }
-            if (wp->soundCursor < 0) {
-                wp->soundCursor = 2;
+            if (wp->soundModeSel < 0) {
+                wp->soundModeSel = 2;
             }
-            if (wp->soundCursor != sound) {
-                switch (wp->soundCursor) {
+#if VERSION >= VERSION_JP
+            if (wp->soundModeSel != sound) {
+                switch (wp->soundModeSel) {
                     case 0:
-                        SoundSetOutputMode(0);
+                        SoundSetOutputMode(SND_OUTPUTMODE_MONO);
                         break;
                     case 1:
-                        SoundSetOutputMode(1);
+                        SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
                         break;
                     case 2:
-                        SoundSetOutputMode(2);
+                        SoundSetOutputMode(SND_OUTPUTMODE_SURROUND);
                         break;
                 }
-                psndENVOn(PSND_FADE_RESTART | PSND_FADE_IN, (const char*)0x75);
+                psndENVOn(PSND_RESTART | PSND_FADEIN, (const char*)PSND_ENV_SYS_FL1);
             }
-            wp->tx = -74.0f;
-            wp->ty = 4.0f + (50.0f - 50.0f * wp->soundCursor);
-            break;
 #endif
+            wp->tx = -74.0f;
+            wp->ty = 4.0f + (50.0f - 50.0f * wp->soundModeSel);
+            break;
         case 0xc8:
-            wp->flags |= LOAD_FLAG_OPTION_MENU;
+            wp->flags |= LOAD_FLAG_DIM;
             if (dir & DEMO_STICK_UP) {
-                wp->rumbleCursor--;
-                SFX(5);
+                wp->rumbleOffSel--;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
             } else if (dir & DEMO_STICK_DOWN) {
-                wp->rumbleCursor++;
-                SFX(5);
+                wp->rumbleOffSel++;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
             } else if (trg & PAD_BUTTON_A) {
-                gp->rumbleEnabled = wp->rumbleCursor == 0;
-                SFX(0x12);
-                wp->rumbleSetting = wp->rumbleCursor;
-                wp->flags &= ~LOAD_FLAG_OPTION_MENU;
+                gp->rumbleEnabled = wp->rumbleOffSel == 0;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1));
+                wp->rumbleOff = wp->rumbleOffSel;
+                wp->flags &= ~LOAD_FLAG_DIM;
                 wp->state = 1;
                 if (gp->rumbleEnabled) {
                     evtEntryType(evt_shake, 0, 0, 0);
                 }
             } else if (trg & PAD_BUTTON_B) {
-                SFX(0x13);
-                wp->rumbleCursor = wp->rumbleSetting;
-                wp->flags &= ~LOAD_FLAG_OPTION_MENU;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
+                wp->rumbleOffSel = wp->rumbleOff;
+                wp->flags &= ~LOAD_FLAG_DIM;
                 wp->state = 1;
             }
-            if (wp->rumbleCursor >= 2) {
-                wp->rumbleCursor = 0;
+            if (wp->rumbleOffSel >= 2) {
+                wp->rumbleOffSel = 0;
             }
-            if (wp->rumbleCursor < 0) {
-                wp->rumbleCursor = 1;
+            if (wp->rumbleOffSel < 0) {
+                wp->rumbleOffSel = 1;
             }
             wp->tx = -74.0f;
-            wp->ty = 4.0f + (30.0f - 50.0f * wp->rumbleCursor);
+            wp->ty = 4.0f + (30.0f - 50.0f * wp->rumbleOffSel);
             break;
     }
     wp->x += (wp->tx - wp->x) / 4.0f;
@@ -887,15 +879,16 @@ static void loadMain(SequenceWork* seq) {
         wp->x += __fabsf(s);
     }
 #if VERSION <= VERSION_DEMO_JP
-    dispEntry(CAMERA_2D, 1000.0f, 0, loadDraw, NULL);
+    dispEntry(CAMERA_2D, 1000.0f, DISP_MODE_OPAQUE, loadDraw, NULL);
     return FALSE;
 #else
-    dispEntry(CAMERA_3D, 1000.0f, 0, loadDraw, NULL);
+    dispEntry(CAMERA_3D, 1000.0f, DISP_MODE_OPAQUE, loadDraw, NULL);
 #endif
 }
 
 /** Draws the texture id from name.tpl stretched over the rectangle (x0, y0)-(x1, y1). */
-static inline void loadDrawBg(u32 id, f32 x0, f32 y0, f32 x1, f32 y1) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void chip(u32 id, f32 x0, f32 y0, f32 x1, f32 y1) {
     GXTexObj obj;
     Mtx m;
     f64 w;
@@ -931,26 +924,38 @@ static void loadDraw(CameraId camera, void* param) {
     GXColor white = {255, 255, 255, 255};
     GXColor gray = {160, 160, 160, 255};
     GXColor dark = {128, 128, 128, 128};
-#if VERSION >= VERSION_JP
-    f32 vp[6];
-    f32 proj[7];
-    CameraEntry saved;
-#endif
+#if VERSION <= VERSION_DEMO_JP
     char buf[0x20];
-#if VERSION >= VERSION_JP
-    char buf2[0x100];
-#endif
     Mtx m;
     Mtx s;
-#if VERSION >= VERSION_JP
-    f32 x;
-#endif
     f32 y;
     f32 w;
     u64 sec;
     WinDt* win1;
     s32 i;
     s32 j;
+#else
+    f32 vp[GX_VIEWPORT_SZ];
+    f32 proj[GX_PROJECTION_SZ];
+    CameraEntry saved;
+    char buf[0x20];
+    char buf2[0x100];
+    Mtx m;
+    Mtx s;
+    f32 x;
+    f32 w;
+    u64 sec;
+#if VERSION >= VERSION_US
+    WinDt* win1[1]; // FAKE: one-element array, so IRO turns win1 into an @ temp: the address of win_dt is computed into
+
+    // win1 itself and loop 1 walks a copy of it (the addi r30 / mr r24,r30 direction of the target)
+    s32 i;
+#else
+    WinDt* win1;
+    s32 i;
+    s32 j;
+#endif
+#endif
     s32 k;
 
     if (wp->state >= 0x20 && wp->state < 0x28) {
@@ -979,25 +984,35 @@ static void loadDraw(CameraId camera, void* param) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
+#if VERSION >= VERSION_US
+    GXLoadPosMtxImm(cam->view, GX_PNMTX0);
+#else
     // FAKE: win1 reused as a cam alias before its win_dt web, so the win_dt web becomes a lifetime-split temp
     // (addi straight into win1's register, loop 1 iterates a copy) as in the target
     win1 = (WinDt*)cam;
     GXLoadPosMtxImm(((CameraEntry*)win1)->view, GX_PNMTX0);
+#endif
     GXSetCurrentMtx(GX_PNMTX0);
-    loadDrawBg(0x35, -304.0f, 240.0f, -272.0f, -240.0f);
-    loadDrawBg(0x34, -272.0f, 240.0f, 272.0f, -240.0f);
-    loadDrawBg(0x36, 272.0f, 240.0f, 304.0f, -240.0f);
+    chip(0x35, -304.0f, 240.0f, -272.0f, -240.0f);
+    chip(0x34, -272.0f, 240.0f, 272.0f, -240.0f);
+    chip(0x36, 272.0f, 240.0f, 304.0f, -240.0f);
 
+#if VERSION >= VERSION_US
+    win1[0] = win_dt;
+#else
     win1 = win_dt;
+#endif
     for (i = 0; i < 9; i++) {
         GXColor col = gray;
         if (i == wp->slot) {
             col = white;
         }
 #if VERSION <= VERSION_DEMO_JP
-        if (wp->state == 0x29 && (i == wp->copySrc || i == wp->copyDst)) {
+        // BUG (early demos): tests state 0x29 (start of delete), not 0x33 (copy target choice), so the copy slots
+        // are never highlighted while choosing, only for the one frame of 0x29 with stale copyFrom/copyTo.
+        if (wp->state == 0x29 && (i == wp->copyFrom || i == wp->copyTo)) {
 #else
-        if (wp->state == 0x33 && (i == wp->copySrc || i == wp->copyDst)) {
+        if (wp->state == 0x33 && (i == wp->copyFrom || i == wp->copyTo)) {
 #endif
             col = white;
         }
@@ -1007,74 +1022,91 @@ static void loadDraw(CameraId camera, void* param) {
         if (i == 5 && (wp->flags & LOAD_FLAG_NO_COPY)) {
             col = dark;
         }
+#if VERSION >= VERSION_US
+        switch (win1[0][i].tex) {
+#else
         switch (win1[i].tex) {
+#endif
             case 10:
             case 11:
             case 12:
-            case 13: {
+            case 13:
                 col.a = 0xfe;
                 winTexInit(*wp->file->data);
+#if VERSION >= VERSION_US
+                winTexSet(0xe, (Vec){win1[0][i].x, win1[0][i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, col);
+                winTexInit(*wp->file->data);
+                winTexSet(win1[0][i].tex, (Vec){win1[0][i].x, 60.0f + win1[0][i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, col);
+#else
                 winTexSet(0xe, (Vec){win1[i].x, win1[i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, col);
                 winTexInit(*wp->file->data);
                 winTexSet(win1[i].tex, (Vec){win1[i].x, 60.0f + win1[i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, col);
+#endif
                 break;
-            }
-            default: {
+            default:
                 winTexInit_x2(*wp->file->data);
+#if VERSION >= VERSION_US
+                winTexSet_x2(win1[0][i].tex, win1[0][i].tex2, (Vec){win1[0][i].x, win1[0][i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, col);
+#else
                 winTexSet_x2(win1[i].tex, win1[i].tex2, (Vec){win1[i].x, win1[i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, col);
+#endif
                 break;
-            }
         }
     }
 
-    windowDispGX_Waku_col(0, (GXColor){255, 255, 255, 255}, -250.0f, 200.0f, 500.0f, 40.0f, 20.0f);
+    windowDispGX_Waku_col(-250.0f, 200.0f, 500.0f, 40.0f, 20.0f, 0, (GXColor){255, 255, 255, 255});
     FontDrawStart();
     {
         const char* msg = wp->msg;
 #if VERSION <= VERSION_DEMO_JP
         FontDrawString(-FontGetMessageWidth(msg) / 2, 192.0f, msg);
-#else
-        FontDrawMessage(-FontGetMessageWidth(msg) / 2, 192, msg);
-#endif
     }
 
     for (i = 0; i < 4; i++, win1++) {
         CardSaveSlot* save = &cardGetFilePtr()->saves[i];
+        u16 flags = save->data.flags;
+        s16 level = save->data.pouch.level;
+        OSTime time = save->data.global.playTime;
+        u16 stars = save->data.pouch.starPowersObtained;
+        s32 gsw0 = save->data.global.gSW0;
+        const char* str;
+        u64 hours;
+        s32 mins;
+        char* name = (char*)save->data.global.playerName;
+#else
+        FontDrawMessage(-FontGetMessageWidth(msg) / 2, 192, msg);
+    }
+
 #if VERSION >= VERSION_US
-        // US declares the slot fields in another order and reads them after the declarations (register order)
+    for (i = 0; i < 4; i++, win1[0]++) {
+        CardSaveSlot* save = &cardGetFilePtr()->saves[i];
         u16 flags;
         OSTime time;
         u16 stars;
         s32 gsw0;
         char* name;
         s16 level;
-        const char* str;
-        s32 hours;
-        s32 mins;
-        flags = save->data.flags;
-        level = save->data.pouch.level;
-        time = save->data.global.playTime;
-        stars = save->data.pouch.starPowersObtained;
-        gsw0 = save->data.global.gsw0;
-        name = (char*)save->data.global.playerName;
 #else
+    for (i = 0; i < 4; i++, win1++) {
+        CardSaveSlot* save = &cardGetFilePtr()->saves[i];
         u16 flags = save->data.flags;
         s16 level = save->data.pouch.level;
         OSTime time = save->data.global.playTime;
         u16 stars = save->data.pouch.starPowersObtained;
-        s32 gsw0 = save->data.global.gsw0;
+        s32 gsw0 = save->data.global.gSW0;
+        char* name = (char*)save->data.global.playerName;
 #endif
-#if VERSION <= VERSION_DEMO_JP
-        // demo: the clamp compares the 64-bit hour count, and name is declared last (register order)
-        const char* str;
-        u64 hours;
-        s32 mins;
-        char* name = (char*)save->data.global.playerName;
-#elif VERSION == VERSION_JP
-        char* name = (char*)save->data.global.playerName;
         const char* str;
         s32 hours;
         s32 mins;
+#if VERSION >= VERSION_US
+        flags = save->data.flags;
+        level = save->data.pouch.level;
+        time = save->data.global.playTime;
+        stars = save->data.pouch.starPowersObtained;
+        gsw0 = save->data.global.gSW0;
+        name = (char*)save->data.global.playerName;
+#endif
 #endif
 
         FontDrawStart();
@@ -1084,69 +1116,42 @@ static void loadDraw(CameraId camera, void* param) {
         }
         FontDrawScale(0.6f);
         FontDrawEdge();
-#if VERSION >= VERSION_US
-        if ((u32)gp->language == 0) {
+#if VERSION <= VERSION_DEMO_JP
+        sprintf(buf, "データ%d", i + 1);
+        FontDrawString(win1->x - 100.0f, 84.0f + win1->y, buf);
+#elif VERSION >= VERSION_US
+        if (gp->language == LANGUAGE_JP) {
             str = "データ";
         } else {
             str = msgSearch("msg_mcard_file");
         }
         sprintf(buf, "%s%s", str, winZenkakuStr(i + 1));
-#elif VERSION <= VERSION_DEMO_JP
-        sprintf(buf, "データ%d", i + 1);
+        FontDrawString(win1[0]->x - 100.0f, 84.0f + win1[0]->y, buf);
 #else
-    sprintf(buf, "データ%s", winZenkakuStr(i + 1));
-#endif
+        sprintf(buf, "データ%s", winZenkakuStr(i + 1));
         FontDrawString(win1->x - 100.0f, 84.0f + win1->y, buf);
+#endif
         FontDrawEdgeOff();
         FontDrawScale(1.0f);
         FontDrawColor((GXColor){32, 32, 32, 255});
         if (i == wp->slot) {
             FontDrawColor((GXColor){0, 0, 0, 255});
         }
-        if (flags & CARD_SAVE_FLAG_CORRUPT) {
-#if VERSION >= VERSION_US
-            if ((u32)gp->language == 0) {
-                str = "こわれています";
-            } else {
-                str = msgSearch("msg_mcard_kowareteru");
-            }
-            w = FontGetMessageWidth(str);
-            FontDrawStart();
-            FontDrawMessage(win1->x - w / 2.0f, 28.0f + win1->y, str);
-            str = msgSearch("msg_mcard_kowaretitle");
-            FontDrawString(win1->x - FontGetMessageWidth(str) / 2, 70.0f + win1->y, str);
-#else
+        if (flags & CARD_SAVE_FLAG_NO_VALID_COPY) {
+#if VERSION <= VERSION_DEMO_JP
             str = "こわれています";
             FontDrawString(win1->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1->y, str);
-#endif
-        } else if (flags & CARD_SAVE_FLAG_EMPTY) {
-#if VERSION >= VERSION_US
-            if ((u32)gp->language == 0) {
-                str = "ニューゲーム";
-            } else {
-                str = msgSearch("msg_mcard_new_game");
-            }
-#else
+        } else if (flags & CARD_SAVE_FLAG_ERASED) {
             str = "ニューゲーム";
-#endif
             FontDrawString(win1->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1->y, str);
         } else if (gsw0 == 0) {
-#if VERSION >= VERSION_US
-            if ((u32)gp->language == 0) {
-                str = "はじめから";
-            } else {
-                str = msgSearch("msg_mcard_hajimekara");
-            }
-#else
             str = "はじめから";
-#endif
             FontDrawString(win1->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1->y, str);
             if (strlen(name) != 0) {
                 FontDrawString(win1->x - FontGetMessageWidth(name) / 2, 70.0f + win1->y, name);
             }
         } else {
-#if VERSION <= VERSION_DEMO_JP
-            w = FontGetMessageWidth("\x82\x57\x82\x57");
+            w = FontGetMessageWidth("８８");
             sec = OSTicksToSeconds(time);
             hours = (u64)sec / 3600;
             mins = ((u64)sec % 3600) / 60;
@@ -1168,21 +1173,60 @@ static void loadDraw(CameraId camera, void* param) {
             y = FontGetMessageWidth(buf);
             FontDrawString(60.0f + win1->x + (w - y), win1->y, buf);
             PSMTXTrans(m, 58.0f + win1->x, win1->y - 20.0f, 0.0f);
-            iconDispGxCol(m, 4, ICON_201, (GXColor){0, 0, 0, 255});
+            iconDispGxCol(m, ICON_FLAG_2D, ICON_COUNTER_COLON, (GXColor){0, 0, 0, 255});
+
             // FAKE: y read through a byte offset so the loop-invariant &win1->y becomes a hoisted @ temp (target pop order)
             for (k = 0; k < 7; k++) {
                 if (stars & (1 << (k + 1))) {
                     PSMTXTrans(m, (win1->x - 106.0f) + k * 32, *(f32*)((u8*)win1 + offsetof(WinDt, y)) - 52.0f, 0.0f);
                     PSMTXScale(s, 0.7f, 0.7f, 0.7f);
                     PSMTXConcat(m, s, m);
-                    iconDispGxCol(m, 4, (u16)stone_id[k], i == wp->slot ? white : gray);
-                }
-            }
+                    iconDispGxCol(m, ICON_FLAG_2D, (u16)stone_id[k], i == wp->slot ? white : gray);
 #else
 #if VERSION >= VERSION_US
-            FontGetMessageWidth((u32)gp->language != 0 ? "88" : "\x82\x57\x82\x57");
+            if (gp->language == LANGUAGE_JP) {
+                str = "こわれています";
+            } else {
+                str = msgSearch("msg_mcard_kowareteru");
+            }
+            w = FontGetMessageWidth(str);
+            FontDrawStart();
+            FontDrawMessage(win1[0]->x - w / 2.0f, 28.0f + win1[0]->y, str);
+            str = msgSearch("msg_mcard_kowaretitle");
+            FontDrawString(win1[0]->x - FontGetMessageWidth(str) / 2, 70.0f + win1[0]->y, str);
+        } else if (flags & CARD_SAVE_FLAG_ERASED) {
+            if (gp->language == LANGUAGE_JP) {
+                str = "ニューゲーム";
+            } else {
+                str = msgSearch("msg_mcard_new_game");
+            }
+            FontDrawString(win1[0]->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1[0]->y, str);
+        } else if (gsw0 == 0) {
+            if (gp->language == LANGUAGE_JP) {
+                str = "はじめから";
+            } else {
+                str = msgSearch("msg_mcard_hajimekara");
+            }
+            FontDrawString(win1[0]->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1[0]->y, str);
+            if (strlen(name) != 0) {
+                FontDrawString(win1[0]->x - FontGetMessageWidth(name) / 2, 70.0f + win1[0]->y, name);
+            }
+        } else {
+            FontGetMessageWidth(gp->language != LANGUAGE_JP ? "88" : "８８");
 #else
-            FontGetMessageWidth("\x82\x57\x82\x57");
+            str = "こわれています";
+            FontDrawString(win1->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1->y, str);
+        } else if (flags & CARD_SAVE_FLAG_ERASED) {
+            str = "ニューゲーム";
+            FontDrawString(win1->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1->y, str);
+        } else if (gsw0 == 0) {
+            str = "はじめから";
+            FontDrawString(win1->x - FontGetMessageWidth(str) / 2.0f, 12.0f + win1->y, str);
+            if (strlen(name) != 0) {
+                FontDrawString(win1->x - FontGetMessageWidth(name) / 2, 70.0f + win1->y, name);
+            }
+        } else {
+            FontGetMessageWidth("８８");
 #endif
             sec = OSTicksToSeconds(time);
             if (sec > 359999) {
@@ -1193,25 +1237,32 @@ static void loadDraw(CameraId camera, void* param) {
                 mins = ((u64)sec % 3600) / 60;
             }
             if (strlen(name) != 0) {
+#if VERSION >= VERSION_US
+                FontDrawString(win1[0]->x - FontGetMessageWidth(name) / 2, 70.0f + win1[0]->y, name);
+            }
+            sprintf(buf2, gp->language != LANGUAGE_JP ? "%s %s" : "%s　%s", msgSearch("msg_menu_mario_level"), winZenkakuStr(level));
+            FontDrawString(win1[0]->x - FontGetMessageWidth(buf2) / 2.0f, 30.0f + win1[0]->y, buf2);
+            sprintf(buf2, gp->language != LANGUAGE_JP ? "%s " : "%s　", msgSearch("msg_menu_mario_num_playtime"));
+#else
                 FontDrawString(win1->x - FontGetMessageWidth(name) / 2, 70.0f + win1->y, name);
             }
-#if VERSION >= VERSION_US
-            // US: localised labels; a play time wider than 200 is squeezed to fit
-            sprintf(buf2, (u32)gp->language != 0 ? "%s %s" : "%s　%s", msgSearch("msg_menu_mario_level"), winZenkakuStr(level));
+            sprintf(buf2, "レベル　%s", winZenkakuStr(level));
             FontDrawString(win1->x - FontGetMessageWidth(buf2) / 2.0f, 30.0f + win1->y, buf2);
-            sprintf(buf2, (u32)gp->language != 0 ? "%s " : "%s　", msgSearch("msg_menu_mario_num_playtime"));
+            strcpy(buf2, "プレイじかん　");
+#endif
             strcat(buf2, winZenkakuStrPad(hours, 2));
             strcat(buf2, " ");
             strcat(buf2, winZenkakuStrPad(mins, 2));
             w = FontGetMessageWidth(buf2);
+#if VERSION >= VERSION_US
             if (w > 200.0f) {
                 FontDrawScaleVec((Vec){200.0f / w, 1.0f, 1.0f});
                 w = 200.0f;
             }
-            FontDrawString(win1->x - w / 2.0f, win1->y, buf2);
+            FontDrawString(win1[0]->x - w / 2.0f, win1[0]->y, buf2);
             FontDrawScaleVec((Vec){1.0f, 1.0f, 1.0f});
             w = FontGetMessageWidth(buf2);
-            sprintf(buf2, (u32)gp->language != 0 ? "%s " : "%s　", msgSearch("msg_menu_mario_num_playtime"));
+            sprintf(buf2, gp->language != LANGUAGE_JP ? "%s " : "%s　", msgSearch("msg_menu_mario_num_playtime"));
             strcat(buf2, winZenkakuStrPad(hours, 2));
             x = FontGetMessageWidth(buf2);
             if (w > 200.0f) {
@@ -1221,15 +1272,8 @@ static void loadDraw(CameraId camera, void* param) {
             } else {
                 x += 8.0f;
             }
-            PSMTXTrans(m, x + (win1->x - w / 2.0f), 1.0f + (win1->y - 22.0f), 0.0f);
+            PSMTXTrans(m, x + (win1[0]->x - w / 2.0f), 1.0f + (win1[0]->y - 22.0f), 0.0f);
 #else
-            sprintf(buf2, "レベル　%s", winZenkakuStr(level));
-            FontDrawString(win1->x - FontGetMessageWidth(buf2) / 2.0f, 30.0f + win1->y, buf2);
-            strcpy(buf2, "プレイじかん　");
-            strcat(buf2, winZenkakuStrPad(hours, 2));
-            strcat(buf2, " ");
-            strcat(buf2, winZenkakuStrPad(mins, 2));
-            w = FontGetMessageWidth(buf2);
             FontDrawString(win1->x - w / 2.0f, win1->y, buf2);
             strcpy(buf2, "プレイじかん　");
             strcat(buf2, winZenkakuStrPad(hours, 2));
@@ -1238,19 +1282,25 @@ static void loadDraw(CameraId camera, void* param) {
 #endif
             PSMTXScale(s, 1.5f, 1.5f, 1.5f);
             PSMTXConcat(m, s, m);
-            iconDispGxCol(m, 0, ICON_201, (GXColor){0, 0, 0, 255});
+            iconDispGxCol(m, 0, ICON_COUNTER_COLON, (GXColor){0, 0, 0, 255});
+#if VERSION >= VERSION_US
+            for (k = 0; k < 7; k++) {
+                if (stars & (1 << (k + 1))) {
+                    PSMTXTrans(m, (win1[0]->x - 106.0f) + k * 32, *(f32*)((u8*)win1[0] + offsetof(WinDt, y)) /* FAKE: win1->y read through a byte offset (same load) keeps &win1->y a late loop temp, as in the target's numbering */ - 52.0f, 0.0f);
+#else
             // FAKE: y read through a byte offset so the loop-invariant &win1->y becomes a hoisted @ temp (target pop order)
             for (k = 0; k < 7; k++) {
                 if (stars & (1 << (k + 1))) {
                     PSMTXTrans(m, (win1->x - 106.0f) + k * 32, *(f32*)((u8*)win1 + offsetof(WinDt, y)) - 52.0f, 0.0f);
+#endif
                     iconDispGxCol(m, 0, (u16)stone_id[k], i == wp->slot ? white : gray);
+#endif
                 }
             }
-#endif
         }
     }
 
-    if (wp->flags & LOAD_FLAG_OPTION_MENU) {
+    if (wp->flags & LOAD_FLAG_DIM) {
         wp->alpha += 0.05f;
     } else {
         wp->alpha -= 0.05f;
@@ -1269,7 +1319,7 @@ static void loadDraw(CameraId camera, void* param) {
         winTexInit_x2(*wp->file->data);
         winTexSet_x2(0x13, 0x1f, (Vec){0.0f, 100.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
         for (i = 0; i < 3; i++) {
-            if (i == wp->soundCursor) {
+            if (i == wp->soundModeSel) {
                 winTexInit(*wp->file->data);
                 winTexSet(0x33, (Vec){0.0f, 50 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0, 0, 0, 64});
                 winTexInit_x2(*wp->file->data);
@@ -1287,19 +1337,28 @@ static void loadDraw(CameraId camera, void* param) {
         winTexInit_x2(*wp->file->data);
         winTexSet_x2(0x14, 0x1f, (Vec){0.0f, 100.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
         for (i = 0; i < 2; i++) {
-            if (i == wp->rumbleCursor) {
+            if (i == wp->rumbleOffSel) {
                 winTexInit(*wp->file->data);
-                winTexSet(RUMBLE_SEL_TEX, (Vec){0.0f, 30 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0, 0, 0, 64});
+#if VERSION >= VERSION_US
+                winTexSet(0x20, (Vec){0.0f, 30 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0, 0, 0, 64});
                 winTexInit_x2(*wp->file->data);
-                winTexSet_x2(i + 0x18, RUMBLE_SEL_TEX, (Vec){-4.0f, 34 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
+                winTexSet_x2(i + 0x18, 0x20, (Vec){-4.0f, 34 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
             } else {
                 winTexInit_x2(*wp->file->data);
-                winTexSet_x2(i + 0x18, RUMBLE_SEL_TEX, (Vec){0.0f, 30 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
+                winTexSet_x2(i + 0x18, 0x20, (Vec){0.0f, 30 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
+#else
+                winTexSet(0x33, (Vec){0.0f, 30 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0, 0, 0, 64});
+                winTexInit_x2(*wp->file->data);
+                winTexSet_x2(i + 0x18, 0x33, (Vec){-4.0f, 34 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
+            } else {
+                winTexInit_x2(*wp->file->data);
+                winTexSet_x2(i + 0x18, 0x33, (Vec){0.0f, 30 - i * 50, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){255, 255, 255, 255});
+#endif
             }
         }
     }
 
-    if (wp->state == 0x33 && wp->copyDst < 4) {
+    if (wp->state == 0x33 && wp->copyTo < 4) {
         f32 angle[4][4] = {
             {0.0f, -90.0f, -180.0f, -135.0f},
             {90.0f, 0.0f, 135.0f, 180.0f},
@@ -1308,10 +1367,10 @@ static void loadDraw(CameraId camera, void* param) {
         };
         f32 cx;
         f32 cy;
-        if (!(f32)fmod(angle[wp->copySrc][wp->copyDst], 90.0)) {
-            f32 c0 = wp->copySrc % 2;
-            f32 r0 = wp->copySrc / 2;
-            f32 r1 = wp->copyDst / 2;
+        if (!(f32)fmod(angle[wp->copyFrom][wp->copyTo], 90.0)) {
+            f32 c0 = wp->copyFrom % 2;
+            f32 r0 = wp->copyFrom / 2;
+            f32 r1 = wp->copyTo / 2;
             if (r0 == r1) {
                 cx = 0.0f;
                 cy = 120.0f - 140.0f * r0;
@@ -1325,16 +1384,15 @@ static void loadDraw(CameraId camera, void* param) {
         }
         cy -= 40.0f;
         winTexInit(*wp->file->data);
-        winTexSetRot(0x1d, (Vec){2.0f + cx, cy - 2.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0, 0, 0, 128}, angle[wp->copySrc][wp->copyDst]);
-        winTexSetRot(0x1d, (Vec){cx, cy, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, angle[wp->copySrc][wp->copyDst]);
+        winTexSetRot(0x1d, (Vec){2.0f + cx, cy - 2.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0, 0, 0, 128}, angle[wp->copyFrom][wp->copyTo]);
+        winTexSetRot(0x1d, (Vec){cx, cy, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white, angle[wp->copyFrom][wp->copyTo]);
     }
 
-    if (!(wp->flags & LOAD_FLAG_EVENT_RUNNING)) {
+    if (!(wp->flags & LOAD_FLAG_HIDE_CURSOR)) {
         winTexInit(*wp->file->data);
         winTexSet(0, (Vec){2.0f + wp->x, wp->y - 2.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0, 0, 0, 128});
         winTexSet(0, (Vec){wp->x, wp->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
     }
-
 #if VERSION >= VERSION_JP
     GXSetViewport(vp[0], vp[1], vp[2], vp[3], vp[4], vp[5]);
     GXSetProjectionv(proj);
@@ -1342,10 +1400,36 @@ static void loadDraw(CameraId camera, void* param) {
 #endif
 }
 
-#if VERSION >= VERSION_JP
-/** Icons of the seven Crystal Stars, drawn on a save file's panel for each star that file has collected. */
-s32 stone_id[7] = {ICON_197, ICON_198, ICON_19A, ICON_19C, ICON_19D, ICON_199, ICON_19B};
+/**
+ * Starts a new file: the prologue's initial state (stg0_00_init, empty party, reset switches, story progress at the
+ * prologue) and the map change to aaa_00.
+ */
+// Original name and size (0x80) from the JP demo map (UNUSED there: every call is inlined).
+static void newGame(void) {
+    MarioWork* m;
 
+    stg0_00_init();
+    gp->saveSlot = wp->slot;
+    marioPartyKill();
+    m = marioGetPtr();
+    m->prevPartyMemberId[0] = 0;
+    m->prevPartyMemberId[1] = 0;
+    gp->areaFadeOutType = FADE_NONE;
+    gp->areaFadeInType = FADE_CURTAIN_SIDES_A2_3D;
+    swInit();
+    swByteSet(GSW_ID(GSW_STORY_PROGRESS), STG0_00_PROLOGUE);
+    seqSetSeq(SEQ_MAP_CHANGE, "aaa_00", "prologue");
+}
+
+/** Icons of the seven Crystal Stars, drawn on a save file's panel for each star that file has collected. */
+#if VERSION >= VERSION_JP
+static s32 stone_id[7] = {
+    ICON_SAC_DEKA, ICON_SAC_BAKUGAME, ICON_SAC_MUKI, ICON_SAC_SCISSOR,
+    ICON_SAC_GENKI1, ICON_SAC_SUKI, ICON_SAC_ZUBASTAR
+};
+#endif
+
+#if VERSION >= VERSION_JP
 /** A 150 ms rumble on controller 0, as feedback when rumble is switched on in the file select options. */
 static EVT_BEGIN(evt_shake)
     CALL(evt_sub_rumble_onoff, 0, 0)
@@ -1356,18 +1440,16 @@ EVT_END()
 #endif
 
 /** Preloads the Mario, Bowser and Peach story-transition animations before a saved file is continued. */
-EVT_BEGIN(evt_continue)
+static EVT_BEGIN(evt_continue)
     CALL(evt_sub_animgroup_async, STRING("OFF_f_in_out_mario"))
     CALL(evt_sub_animgroup_async, STRING("OFF_f_in_out_kuppa"))
     CALL(evt_sub_animgroup_async, STRING("OFF_f_in_out_peach"))
     RETURN
 EVT_END()
-#pragma defer_codegen off
+
 /**
- * Loads the chosen save slot into the game state, rebuilds the party,
- * restarts any countdown and starts the map change:
- * to the saved map, or for a save made at a chapter break to the Peach/Bowser interlude
- * or next chapter start chosen by GSW_SAVE_RESUME_KIND (23 starts a new game).
+ * Loads the chosen save slot into the game, brings back the two saved partners, restarts the saved countdown and starts
+ * the map change GSW_SAVE_RESUME_POINT picks (0 the saved map; the others fixed maps, most with the story-book fades).
  */
 static void continueGame(void) {
     cardCopy2Main(wp->slot);
@@ -1379,13 +1461,13 @@ static void continueGame(void) {
         m->prevPartyMemberId[0] = 0;
         m->prevPartyMemberId[1] = 0;
     }
-    psndSetFlag(PSND_FLAG_SFX_OFF);
+    psndSetFlag(PSND_FLAG_NO_SFX);
     marioPartyEntry(gp->savePartyId[0]);
     marioPartyEntry(gp->savePartyId[1]);
-    psndClearFlag(PSND_FLAG_SFX_OFF);
+    psndClearFlag(PSND_FLAG_NO_SFX);
     countDownSaveReStart();
-    gp->flags |= GLOBAL_FLAG_LOADED;
-    switch (swByteGet(GSW_SAVE_RESUME_KIND)) {
+    gp->flags |= GW_FLAG_SAVE_LOADED;
+    switch (swByteGet(GSW_ID(GSW_SAVE_RESUME_POINT))) {
         case 0:
             gp->areaFadeOutType = FADE_NONE;
             gp->areaFadeInType = FADE_CURTAIN_SIDES_A2;
@@ -1522,8 +1604,7 @@ static void continueGame(void) {
             seqSetSeq(SEQ_MAP_CHANGE, "jin_04", 0);
             break;
         case 23:
-            loadNewGameSetup();
-            seqSetSeq(SEQ_MAP_CHANGE, "aaa_00", "prologue");
+            newGame();
             break;
         case 24:
             gp->areaFadeOutType = FADE_STORY_PEACH_A2;
@@ -1532,4 +1613,3 @@ static void continueGame(void) {
             break;
     }
 }
-#pragma defer_codegen reset

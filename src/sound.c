@@ -1,55 +1,76 @@
 // sound.c: the sound driver over MusyX (Sound*): sound effects with 3D emitters, songs, ADPCM streams read from the
 // DVD, reverb, output mode, and loading the sound project data into ARAM.
-#define _MATH_H_ // skip math.h (its sqrtf statics are not in this TU)
+
+#include "version.h"
 #include "sound.h"
 #include <dolphin/os.h>
 #include "manager/dvdmgr.h"
 #include "memory.h"
 #include "musyx/musyx.h"
-#include "libc_decls.h"
 #include "system.h"
-#include "version.h"
+#include "libc_decls.h"
 #include <string.h>
+#include "eff/eff_magic1_n64.h"
+
 #if VERSION >= VERSION_US
 #include "mario/mariost.h"
 #endif
 
 //.bss
 #if VERSION <= VERSION_DEMO_JP
-// the demo defines the ARAM block table first, so it ends up last in .bss
-u32 aramMemArray[8];
+static u32 aramMemArray[8];
 #endif
-SND_AUX_REVERBHI revH;
-SND_AUX_REVERBSTD revS;
-SND_AUX_CHORUS cho;
-SND_AUX_DELAY dly;
+
+static SND_AUX_REVERBHI revH;
+static SND_AUX_REVERBSTD revS;
+static SND_AUX_CHORUS cho;
+static SND_AUX_DELAY dly;
 #define SS_LOAD_BUFFER_SIZE 0x8000 // bytes in each stream load buffer, the size of one DVD/ARAM read
 
 SoundWork sound;
 
-#if VERSION >= VERSION_JP
 //.sbss
-u32 aramMemArray[8];
-#endif
+static u32 aramMemArray[8];
 
 /** Returns the shared 256-byte buffer the loaders build file paths in. */
 static inline char* _ssGetStr(void) {
     static char str[0x100];
     return str;
 }
-#define str _ssGetStr()
 
 // local prototypes
-void* sndMalloc(size_t size);
-void sndFree(void* ptr);
-static void* loadDVD_callback(u32 offset, u32 length);
 static void SoundEfxMain(void);
+inline void SoundEfxMuteCh(u32 chan);
 static void SoundDVDMain(void);
+static void SoundDVDStopCh(u32 chan);
+static void SoundDVDSetPanCh(u32 chan, u8 pan);
+static void SoundDVDFadeoutCh(u32 chan);
+static void SoundDVDFademuteCh(u32 chan);
+static void SoundDVDFadeinCh(u32 chan);
 
 static void SoundSSMainInt(void);
 static void SoundSSMain(void);
 
 static void SoundAIDMACallback(void);
+
+/** Undoes one sndDisableIRQ, restoring interrupts at the outermost level. */
+// Original name and size (0x48) from the JP demo map (UNUSED there: every call is inlined).
+void sndEnableIRQ(void) {
+    if (sound.interruptDepth) {
+        if (!--sound.interruptDepth) {
+            OSRestoreInterrupts(sound.interrupts);
+        }
+    }
+}
+
+/** Disables interrupts for stream bookkeeping; nests. */
+// Original name and size (0x54) from the JP demo map (UNUSED there: every call is inlined).
+void sndDisableIRQ(void) {
+    if (!sound.interruptDepth) {
+        sound.interrupts = OSDisableInterrupts();
+    }
+    sound.interruptDepth++;
+}
 
 /** MusyX allocation hook: allocates from the default heap. */
 void* sndMalloc(size_t size) {
@@ -59,6 +80,65 @@ void* sndMalloc(size_t size) {
 /** MusyX free hook: frees to the default heap. */
 void sndFree(void* ptr) {
     __memFree(HEAP_DEFAULT, ptr);
+}
+
+/** Builds "<DVD root>/<path><ext>" in the shared string buffer and returns it. */
+// Original name and size (0x64) from the JP demo map (UNUSED there: every call is inlined).
+char* makeFilename(const char* path, const char* ext) {
+    sprintf(_ssGetStr(), "%s/%s%s", getMarioStDvdRoot(), path, ext);
+    return _ssGetStr();
+}
+
+/**
+ * Reads the whole file name into a new default-heap buffer (size rounded up to 32 bytes) and returns it, or NULL
+ * when the file is missing or empty, the allocation fails or the read fails.
+ */
+// Original name and size (0xc4) from the JP demo map (UNUSED there: every call is inlined).
+void* ReadMusyXData(const char* name) {
+    DVDEntry* entry;
+    u32 size;
+    u32 length;
+    void* pointer;
+
+    entry = DVDMgrOpen(name, 2, 0);
+    if (entry == NULL) {
+        return NULL;
+    }
+    size = DVDMgrGetLength(entry);
+    if (size == 0) {
+        return NULL;
+    }
+    length = OSRoundUp32B(size);
+    pointer = __memAlloc(HEAP_DEFAULT, length);
+
+    // BUG: DVDMgrClose runs only after a good read: an empty file, a failed allocation or a failed read leaves the
+    // entry open.
+    if (pointer == NULL) {
+        return NULL;
+    }
+    if (DVDMgrRead(entry, pointer, length, 0) <= 0) {
+        __memFree(HEAP_DEFAULT, pointer);
+        return NULL;
+    }
+    DVDMgrClose(entry);
+    return pointer;
+}
+
+/** Returns the song library group with index, or NULL. */
+// Original name and size (0x38) from the JP demo map (UNUSED there: every call is inlined).
+SoundGroup* searchSongPtr(u8 groupIndex) {
+    u16 index = groupIndex;
+    SoundGroup* group;
+
+    for (group = sound.groups;; group = group->next) {
+        if (group == NULL) {
+            return NULL;
+        }
+        if (group->index == index) {
+            break;
+        }
+    }
+    return group;
 }
 
 /**
@@ -119,64 +199,46 @@ void SoundInit(void) {
     sndAuxCallbackPrepareDelay(&dly);
     sndSetAuxProcessingCallbacks(0, sndAuxCallbackReverbHI, &revH, 0xFF, 0, sndAuxCallbackChorus, &cho, 0xFF, 0);
     sndVolume(0x7F, 0, 0xFF);
-#if VERSION <= VERSION_DEMO_JP
-    sound.outputMode = SND_OUTPUTMODE_STEREO;
-    sndOutputMode(SND_OUTPUTMODE_STEREO);
-#else
-    if (sound.outputMode != SND_OUTPUTMODE_STEREO) {
-        sound.outputMode = SND_OUTPUTMODE_STEREO;
-        sndOutputMode(SND_OUTPUTMODE_STEREO);
-    }
-#endif
-    sound.callback = AIRegisterDMACallback(SoundAIDMACallback);
-#if VERSION >= VERSION_US
-    sound.dmaAddress = (u8*)(AIGetDMAStartAddr() | 0x80000000);
-    sound.dmaLength = AIGetDMALength();
-    if (sound.dmaLength > 0x280) {
-        while (1)
-            ;
-    }
-#endif
-    sound.sampleBank = 0;
-    sound.sampleIndex = 0;
+    SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
+    SoundInitAI();
     sound.fadeIn = 10;
     sound.fadeOut = 500;
     sound.dataId = 0;
     sound.slibId = 0;
-    sound.coverState = 0;
+    sound.coverState = SOUND_COVER_CLOSED;
     sound.slotCount = 0;
     sound.nextGroupId = 0;
 
     data = sndMalloc(0x20000);
     sound.filedata = data;
-    if (data == 0) {
+    if (data == NULL) {
         while (1)
             ;
-    } // infinite loop
-
-    sound.groups = 0;
-
-    // force register
-    tempsong = (sound.songs = sndMalloc(sizeof(SoundSong) * 4));
-    songs = tempsong;
-    if (songs == 0) {
-        while (1)
-            ;
-    } // infinite loop
-
-    for (i = 0; i < 4; i++, songs++) {
-        songs->seqId = -1;
-        songs->group = NULL;
     }
 
-    effects = sndMalloc(sizeof(SoundEffect) * 40);
-    sound.effects = effects;
-    if (effects == 0) {
+    sound.groups = NULL;
+
+    songs = sndMalloc(sizeof(SoundSong) * SOUND_SONG_MAX);
+    sound.songs = songs;
+    if (songs == NULL) {
         while (1)
             ;
-    } // infinite loop
+    }
 
-    for (i = 0; i < 40; i++, effects++) {
+    tempsong = songs;
+    for (i = 0; i < SOUND_SONG_MAX; i++, tempsong++) {
+        tempsong->seqId = -1;
+        tempsong->group = NULL;
+    }
+
+    effects = sndMalloc(sizeof(SoundEffect) * SOUND_EFFECT_MAX);
+    sound.effects = effects;
+    if (effects == NULL) {
+        while (1)
+            ;
+    }
+
+    for (i = 0; i < SOUND_EFFECT_MAX; i++, effects++) {
         effects->flags = 0;
         effects->voiceId = -1;
         effects->priority = 0;
@@ -184,71 +246,71 @@ void SoundInit(void) {
         effects->pan = 0x40;
     }
 
-    // force register
-    tempdvd = (sound.dvds = sndMalloc(sizeof(SoundDVD) * 2));
-    dvds = tempdvd;
-    if (dvds == 0) {
+    dvds = sndMalloc(sizeof(SoundDVD) * SOUND_DVD_MAX);
+    sound.dvds = dvds;
+    if (dvds == NULL) {
         while (1)
             ;
-    } // infinite loop
-
-    for (i = 0; i < 2; i++, dvds++) {
-        dvds->flags = 0;
     }
 
-    streams = sndMalloc(sizeof(SoundStream) * 3);
+    tempdvd = dvds;
+    for (i = 0; i < SOUND_DVD_MAX; i++, tempdvd++) {
+        tempdvd->flags = 0;
+    }
+
+    streams = sndMalloc(sizeof(SoundStream) * SOUND_STREAM_MAX);
     sound.streams = streams;
-    if (streams == 0) {
+    if (streams == NULL) {
         while (1)
             ;
-    } // infinite loop
+    }
 
     temp = streams;
-    for (i = 0; i < 3; i++, temp++) {
+    for (i = 0; i < SOUND_STREAM_MAX; i++, temp++) {
         temp->flags = 0;
 
         ptr = sndMalloc(SS_LOAD_BUFFER_SIZE);
-        if (ptr == 0) {
+        if (ptr == NULL) {
             while (1)
                 ;
-        } // infinite loop
+        }
         temp->entries[0].loadBuffer[0] = ptr;
 
         ptr = sndMalloc(SS_LOAD_BUFFER_SIZE);
-        if (ptr == 0) {
+        if (ptr == NULL) {
             while (1)
                 ;
-        } // infinite loop
+        }
         temp->entries[0].loadBuffer[1] = ptr;
 
         size = sndStreamAllocLength(0xE00, 0);
         ptr = sndMalloc(size);
-        if (ptr == 0) {
+        if (ptr == NULL) {
             while (1)
                 ;
-        } // infinite loop
+        }
         temp->entries[0].buffer = ptr;
 
         ptr = sndMalloc(SS_LOAD_BUFFER_SIZE);
-        if (ptr == 0) {
+        if (ptr == NULL) {
             while (1)
                 ;
-        } // infinite loop
+        }
         temp->entries[1].loadBuffer[0] = ptr;
 
         ptr = sndMalloc(SS_LOAD_BUFFER_SIZE);
-        if (ptr == 0) {
+        if (ptr == NULL) {
             while (1)
                 ;
-        } // infinite loop
+        }
         temp->entries[1].loadBuffer[1] = ptr;
 
         size = sndStreamAllocLength(0xE00, 0);
         ptr = sndMalloc(size);
-        if (ptr == 0) {
+        if (ptr == NULL) {
             while (1)
                 ;
-        } // infinite loop
+        }
         temp->entries[1].buffer = ptr;
     }
 
@@ -265,21 +327,9 @@ void SoundInit(void) {
     slot->seqId = 0;
 }
 
-/**
- * Per-frame sound update: notices songs that ended on their own (marks their group and frees the channel),
- * then runs the effect, DVD-audio and stream updates.
- */
+/** Per-frame sound update: runs the song, effect, DVD-audio and stream updates. */
 void SoundMain(void) {
-    int i;
-    SoundSong* song;
-
-    for (i = 0, song = sound.songs; i < 4; i++, song++) {
-        if (song->group && song->seqId != SND_ID_ERROR && sndSeqGetValid(song->seqId) != TRUE) {
-            song->group->flags |= SOUND_GROUP_FLAG_SONG_ENDED;
-            sndSeqStop(song->seqId);
-            song->seqId = -1;
-        }
-    }
+    SoundSongMain();
     SoundEfxMain();
     SoundDVDMain();
     SoundSSMain();
@@ -316,112 +366,50 @@ static void* loadDVD_callback(u32 offset, u32 bytes) {
 /**
  * Loads a MusyX project from the disc: path + ".pool", ".proj" and ".sdir" into memory,
  * and registers the ".samp" file for sample upload through loadDVD_callback.
- * Up to 8 projects; returns FALSE when full or a file fails.
+ * Stores them in project slot dataId, which nothing increments, so every call uses slot 0;
+ * returns FALSE when a file fails.
  */
 BOOL SoundLoadDVD2(const char* path) {
-    DVDEntry* entry;
 #if VERSION <= VERSION_DEMO_JP
     const char* root;
 #endif
-    u32 length;
     void* pointer;
 
     if (sound.dataId >= 8) {
-        return 0;
+        return FALSE;
     }
-
 #if VERSION <= VERSION_DEMO_JP
     root = getMarioStDvdRoot();
-    sprintf(str, "%s/%s%s", root, path, ".pool");
+    sprintf(_ssGetStr(), "%s/%s%s", root, path, ".pool");
+    pointer = ReadMusyXData(_ssGetStr());
 #else
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), path, ".pool");
+    pointer = ReadMusyXData(makeFilename(path, ".pool"));
 #endif
-    entry = DVDMgrOpen(str, 2, 0);
-    length = entry == NULL; // fixes regalloc
-    if (entry == NULL) {
-        pointer = NULL;
-    } else {
-        length = DVDMgrGetLength(entry);
-        if (length == 0) {
-            pointer = NULL;
-        } else {
-            length = OSRoundUp32B(length);
-            pointer = __memAlloc(HEAP_DEFAULT, length);
-            if (pointer == NULL) {
-                pointer = NULL;
-            } else if (DVDMgrRead(entry, pointer, length, 0) <= 0) {
-                __memFree(HEAP_DEFAULT, pointer);
-                pointer = NULL;
-            } else {
-                DVDMgrClose(entry);
-            }
-        }
-    }
     if (pointer == NULL) {
         return FALSE;
     }
     sound.poolData[sound.dataId] = pointer;
 
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), path, ".proj");
-    entry = DVDMgrOpen(str, 2, 0);
-    if (entry == NULL) {
-        pointer = NULL;
-    } else {
-        length = DVDMgrGetLength(entry);
-        if (length == 0) {
-            pointer = NULL;
-        } else {
-            length = OSRoundUp32B(length);
-            pointer = __memAlloc(HEAP_DEFAULT, length);
-            if (pointer == NULL) {
-                pointer = NULL;
-            } else if (DVDMgrRead(entry, pointer, length, 0) <= 0) {
-                __memFree(HEAP_DEFAULT, pointer);
-                pointer = NULL;
-            } else {
-                DVDMgrClose(entry);
-            }
-        }
-    }
+    pointer = ReadMusyXData(makeFilename(path, ".proj"));
     if (pointer == NULL) {
         return FALSE;
     }
     sound.projData[sound.dataId] = pointer;
 
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), path, ".sdir");
-    entry = DVDMgrOpen(str, 2, 0);
-    if (entry == NULL) {
-        pointer = NULL;
-    } else {
-        length = DVDMgrGetLength(entry);
-        if (length == 0) {
-            pointer = NULL;
-        } else {
-            length = OSRoundUp32B(length);
-            pointer = __memAlloc(HEAP_DEFAULT, length);
-            if (pointer == NULL) {
-                pointer = NULL;
-            } else if (DVDMgrRead(entry, pointer, length, 0) <= 0) {
-                __memFree(HEAP_DEFAULT, pointer);
-                pointer = NULL;
-            } else {
-                DVDMgrClose(entry);
-            }
-        }
-    }
+    pointer = ReadMusyXData(makeFilename(path, ".sdir"));
     if (pointer == NULL) {
         return FALSE;
     }
     sound.sdirData[sound.dataId] = pointer;
 
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), path, ".samp");
-    strcpy(sound.filepath, str);
+    strcpy(sound.filepath, makeFilename(path, ".samp"));
     sndSetSampleDataUploadCallback(loadDVD_callback, 0x20000);
     return TRUE;
 }
 
 /**
- * Pushes the sound groups listed in groupIds (0xFF-terminated) of the last loaded project into MusyX,
+ * Pushes the sound groups listed in groupIds (0xFF-terminated; NULL = every group from nextGroupId on until a push
+ * fails) of the project in slot dataId (slot 0) into MusyX,
  * uploading their samples to ARAM, and counts them for SoundDropData.
  */
 BOOL SoundLoadDVD2PushGroup(u8* groupIds) {
@@ -429,7 +417,7 @@ BOOL SoundLoadDVD2PushGroup(u8* groupIds) {
     s32 temp;
 
     if (sound.dataId >= 8) {
-        return 0;
+        return FALSE;
     }
     sound.groupCount[sound.dataId] = 0;
     if (groupIds) {
@@ -439,7 +427,7 @@ BOOL SoundLoadDVD2PushGroup(u8* groupIds) {
                          sound.poolData[sound.dataId]);
             sound.groupCount[sound.dataId]++;
             groupIds++;
-        };
+        }
     } else {
         temp = sound.nextGroupId;
         while (temp < 0xFF) {
@@ -469,15 +457,11 @@ void SoundLoadDVD2Free(void) {
  */
 BOOL SoundSLibLoadDVD(const char* path) {
     SoundGroup* groupsHead;
-    u32 length2;
-    u32 length3;
     SoundGroup* iter;
     SoundGroup* group;
-    u32 blockSize;
     u32* cursor;
+    u32 blockSize;
     u16 id;
-    DVDEntry* entry;
-    u32 length;
     void* pointer;
     void* pointer2;
     void* pointer3;
@@ -486,27 +470,7 @@ BOOL SoundSLibLoadDVD(const char* path) {
         return FALSE;
     }
 
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), path, ".slib");
-    entry = DVDMgrOpen(str, 2, 0);
-    if (entry == NULL) {
-        pointer = NULL;
-    } else {
-        length = DVDMgrGetLength(entry);
-        if (length == 0) {
-            pointer = NULL;
-        } else {
-            length = OSRoundUp32B(length);
-            pointer = __memAlloc(HEAP_DEFAULT, length);
-            if (pointer == NULL) {
-                pointer = NULL;
-            } else if (DVDMgrRead(entry, pointer, length, 0) <= 0) {
-                __memFree(HEAP_DEFAULT, pointer);
-                pointer = NULL;
-            } else {
-                DVDMgrClose(entry);
-            }
-        }
-    }
+    pointer = ReadMusyXData(makeFilename(path, ".slib"));
     if ((cursor = pointer) == NULL) {
         return FALSE;
     }
@@ -517,7 +481,7 @@ BOOL SoundSLibLoadDVD(const char* path) {
         if (*cursor == 0xFFFFFFFF) {
             break;
         }
-        group = __memAlloc(HEAP_DEFAULT, 0x10);
+        group = __memAlloc(HEAP_DEFAULT, sizeof(SoundGroup));
         if (group == NULL) {
             while (1)
                 ;
@@ -535,62 +499,22 @@ BOOL SoundSLibLoadDVD(const char* path) {
             }
             iter->next = group;
         }
-        group->flags = SOUND_GROUP_FLAG_IN_DATA;
+        group->flags = SOUND_GROUP_IN_SLIB;
         group->index = id;
         group->groupId = 0;
         group->songId = 0;
         group->arrfile = cursor + 8;
-        group->next = 0;
+        group->next = NULL;
         cursor = (u32*)((u8*)cursor + blockSize);
     }
 
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), path, ".stbl");
-    entry = DVDMgrOpen(str, 2, 0);
-    if (entry == NULL) {
-        pointer2 = NULL;
-    } else {
-        length2 = DVDMgrGetLength(entry);
-        if (length2 == 0) {
-            pointer2 = NULL;
-        } else {
-            length2 = OSRoundUp32B(length2);
-            pointer2 = __memAlloc(HEAP_DEFAULT, length2);
-            if (pointer2 == NULL) {
-                pointer2 = NULL;
-            } else if (DVDMgrRead(entry, pointer2, length2, 0) <= 0) {
-                __memFree(HEAP_DEFAULT, pointer2);
-                pointer2 = NULL;
-            } else {
-                DVDMgrClose(entry);
-            }
-        }
-    }
+    pointer2 = ReadMusyXData(makeFilename(path, ".stbl"));
     if (pointer2 == NULL) {
         return FALSE;
     }
     sound.stblData[sound.slibId] = pointer2;
 
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), path, ".etbl");
-    entry = DVDMgrOpen(str, 2, 0);
-    if (entry == NULL) {
-        pointer3 = NULL;
-    } else {
-        length3 = DVDMgrGetLength(entry);
-        if (length3 == 0) {
-            pointer3 = NULL;
-        } else {
-            length3 = OSRoundUp32B(length3);
-            pointer3 = __memAlloc(HEAP_DEFAULT, length3);
-            if (pointer3 == NULL) {
-                pointer3 = NULL;
-            } else if (DVDMgrRead(entry, pointer3, length3, 0) <= 0) {
-                __memFree(HEAP_DEFAULT, pointer3);
-                pointer3 = NULL;
-            } else {
-                DVDMgrClose(entry);
-            }
-        }
-    }
+    pointer3 = ReadMusyXData(makeFilename(path, ".etbl"));
     if (pointer3 == NULL) {
         return FALSE;
     }
@@ -599,86 +523,10 @@ BOOL SoundSLibLoadDVD(const char* path) {
     return TRUE;
 }
 
-/** Stops every song, effect, DVD-audio track and stream before sound data is dropped. */
-static inline void _ssDropStop(void) {
-    u32 i;
-
-    for (i = 0; i < 4; i++) {
-        SoundSong* song = &sound.songs[i];
-        if (sndSeqGetValid(song->seqId)) {
-            sndSeqStop(song->seqId);
-            song->seqId = (SND_SEQID)-1;
-        }
-    }
-    for (i = 0; i < 40; i++) {
-        SoundEffect* effect = &sound.effects[i];
-        if (effect->flags) {
-            sndFXKeyOff(effect->voiceId);
-            if (effect->flags & SOUND_EFX_FLAG_EMITTER) {
-                sndRemoveEmitter(&effect->emitter);
-            }
-            effect->flags = 0;
-        }
-    }
-
-    for (i = 0; i < 2; i++) {
-        SoundDVD* dvd = &sound.dvds[i];
-        if (dvd->flags & (SOUND_DVD_FLAG_PLAYING | SOUND_DVD_FLAG_PAUSED)) {
-            AISetStreamPlayState(0);
-            dvd->flags = 0;
-            sound.dvdChannel = -1;
-            DVDCancelStream(&dvd->info.cb);
-            DVDClose(&dvd->info);
-        }
-    }
-
-    for (i = 0; i < 3; i++) {
-        SoundStream* stream;
-        if (sound.streams[i].flags) {
-            stream = &sound.streams[i];
-#if VERSION <= VERSION_DEMO_JP
-            // as in the demo's SoundSSStopCh
-            if (!(stream->flags & SOUND_SS_FLAG_ACTIVE)) {
-                stream->flags |= SOUND_SS_FLAG_STOP_REQ;
-                continue;
-            }
-            if (stream->flags & SOUND_SS_FLAG_ARAM) {
-                sound.slotUsed[stream->slot] = 0;
-            }
-            stream->flags = 0;
-            if (!sound.interruptDepth) {
-                sound.interrupts = OSDisableInterrupts();
-            }
-            sound.interruptDepth++;
-#else
-            if (!sound.interruptDepth) {
-                sound.interrupts = OSDisableInterrupts();
-            }
-            sound.interruptDepth++;
-            if (stream->flags & SOUND_SS_FLAG_ARAM) {
-                sound.slotUsed[stream->slot] = 0;
-            }
-            stream->flags = 0;
-#endif
-            DVDMgrClose(stream->entries[0].dvd);
-            DVDMgrClose(stream->entries[1].dvd);
-            sndStreamFree(stream->entries[0].streamId);
-            if (stream->count == 2) {
-                sndStreamFree(stream->entries[1].streamId);
-            }
-            if (sound.interruptDepth) {
-                if (!--sound.interruptDepth) {
-                    OSRestoreInterrupts(sound.interrupts);
-                }
-            }
-            sound.streamChannel = -1;
-        }
-    }
-}
-
 /**
- * Unloads all sound data: stops everything, pops the pushed groups and frees the project, song library,
- * stream and group memory. Returns TRUE.
+ * Unloads all sound data: stops everything, frees the song library and group memory. The loops that pop the
+ * pushed groups and free the project files run up to dataId, which is never incremented (0), so they do nothing.
+ * Returns TRUE.
  */
 BOOL SoundDropData(void) {
     SoundGroup* group;
@@ -686,80 +534,32 @@ BOOL SoundDropData(void) {
     u32 i;
 
     group = sound.groups;
-    _ssDropStop();
+    SoundStopAll();
     sndSilence();
-    for (i = 0; i < 4; i++) {
+
+    // a second stop pass: the song loop written out, effects, DVD audio and streams through their channel stops; a
+    // second SoundStopAll() call, or SoundSongStopCh for the song loop, changes the loops' register order
+    for (i = 0; i < SOUND_SONG_MAX; i++) {
         SoundSong* song = &sound.songs[i];
         if (sndSeqGetValid(song->seqId)) {
             sndSeqStop(song->seqId);
             song->seqId = (SND_SEQID)(-1);
         }
     }
-    for (i = 0; i < 40; i++) {
-        SoundEffect* effect = (0, &sound.effects[i]);
-        if (effect->flags) {
-            sndFXKeyOff(effect->voiceId);
-            if (effect->flags & SOUND_EFX_FLAG_EMITTER) {
-                sndRemoveEmitter(&effect->emitter);
-            }
-            effect->flags = 0;
-        }
+    for (i = 0; i < SOUND_EFFECT_MAX; i++) {
+        SoundEfxMuteCh(i);
     }
 
-    for (i = 0; i < 2; i++) {
-        SoundDVD* dvd = (0, &sound.dvds[i]);
-        if (dvd->flags & (SOUND_DVD_FLAG_PLAYING | SOUND_DVD_FLAG_PAUSED)) {
-            AISetStreamPlayState(0);
-            dvd->flags = 0;
-            sound.dvdChannel = -1;
-            DVDCancelStream(&dvd->info.cb);
-            DVDClose(&dvd->info);
-        }
+    for (i = 0; i < SOUND_DVD_MAX; i++) {
+        SoundDVDStopCh(i);
     }
 
-    for (i = 0; i < 3; i++) {
-        SoundStream* stream;
-        if (sound.streams[i].flags) {
-            stream = &sound.streams[i];
-#if VERSION <= VERSION_DEMO_JP
-            // as in the demo's SoundSSStopCh
-            if (!(stream->flags & SOUND_SS_FLAG_ACTIVE)) {
-                stream->flags |= SOUND_SS_FLAG_STOP_REQ;
-                continue;
-            }
-            if (stream->flags & SOUND_SS_FLAG_ARAM) {
-                sound.slotUsed[stream->slot] = 0;
-            }
-            stream->flags = 0;
-            if (!sound.interruptDepth) {
-                sound.interrupts = OSDisableInterrupts();
-            }
-            sound.interruptDepth++;
-#else
-            if (!sound.interruptDepth) {
-                sound.interrupts = OSDisableInterrupts();
-            }
-            sound.interruptDepth++;
-            if (stream->flags & SOUND_SS_FLAG_ARAM) {
-                sound.slotUsed[stream->slot] = 0;
-            }
-            stream->flags = 0;
-#endif
-            DVDMgrClose(stream->entries[0].dvd);
-            DVDMgrClose(stream->entries[1].dvd);
-            sndStreamFree(stream->entries[0].streamId);
-            if (stream->count == 2) {
-                sndStreamFree(stream->entries[1].streamId);
-            }
-            if (sound.interruptDepth) {
-                if (!(--sound.interruptDepth)) {
-                    OSRestoreInterrupts(sound.interrupts);
-                }
-            }
-            sound.streamChannel = -1;
-        }
+    for (i = 0; i < SOUND_STREAM_MAX; i++) {
+        SoundSSStopCh(i);
     }
 
+    // BUG: SoundLoadDVD2 stores into slot dataId but never increments it, so dataId is 0 here and none of these
+    // loops runs: the groups stay pushed and the slot 0 project buffers are not freed.
     for (i = 0; i < sound.dataId; i++) {
         while (sound.groupCount[i]) {
             sndPopGroup();
@@ -794,34 +594,71 @@ BOOL SoundDropData(void) {
             break;
         }
         temp = group->next;
-        if (!(group->flags & SOUND_GROUP_FLAG_IN_DATA)) {
+        if (!(group->flags & SOUND_GROUP_IN_SLIB)) {
             __memFree(HEAP_DEFAULT, group->arrfile);
         }
         __memFree(HEAP_DEFAULT, group);
         group = temp;
     }
-    sound.groups = 0;
+    sound.groups = NULL;
 
     return TRUE;
 }
 
-/** Switches MusyX between mono, stereo and surround output (US and PAL only when it changes). */
+/**
+ * Stops every song, effect, DVD-audio track and stream. Only SoundDropData calls it (inlined); the JP demo map
+ * lists its out-of-line copy as stripped (SoundStopAll, 0x208 bytes, which this body compiles to there).
+ */
+// The effect, DVD and stream loops call their channel stops (inlined: the same code as writing them out); with
+// them the body has 23 statements, so as a plain function it is auto-inlined into SoundDropData and its own copy
+// is emitted at the map size.
+void SoundStopAll(void) {
+    u32 i;
+
+    for (i = 0; i < SOUND_SONG_MAX; i++) {
+        SoundSong* song = &sound.songs[i];
+        if (sndSeqGetValid(song->seqId)) {
+            sndSeqStop(song->seqId);
+            song->seqId = (SND_SEQID)-1;
+        }
+    }
+    for (i = 0; i < SOUND_EFFECT_MAX; i++) {
+        SoundEfxMuteCh(i);
+    }
+
+    for (i = 0; i < SOUND_DVD_MAX; i++) {
+        SoundDVDStopCh(i);
+    }
+
+    for (i = 0; i < SOUND_STREAM_MAX; i++) {
+        SoundSSStopCh(i);
+    }
+}
+
+/** Switches MusyX between mono, stereo and surround output (JP and later only when it changes). */
 void SoundSetOutputMode(SND_OUTPUTMODE mode) {
-#if VERSION <= VERSION_DEMO_JP
-    sound.outputMode = mode;
-    sndOutputMode(mode);
-#else
+#if VERSION >= VERSION_JP
     if (sound.outputMode != mode) {
         sound.outputMode = mode;
         sndOutputMode(mode);
     }
+#else
+    sound.outputMode = mode;
+    sndOutputMode(mode);
 #endif
+}
+
+/** Returns the output mode last set. */
+// Original name and size (0x10) from the JP demo map (UNUSED there: nothing calls it); the getter of
+// SoundSetOutputMode's field.
+SND_OUTPUTMODE SoundGetOutputMode(void) {
+    return sound.outputMode;
 }
 
 /** Called when the disc cover opens: mutes sound until it is closed. */
 void SoundOpenCover(void) {
     if (!sound.coverState) {
-        sound.coverState = 1;
+        sound.coverState = SOUND_COVER_OPEN;
     }
 }
 
@@ -834,67 +671,78 @@ void SoundCloseCover(void) {
     BOOL close;
     int i;
 
-    if (sndIsInstalled() && sound.coverState == 1) {
+    if (sndIsInstalled() && sound.coverState == SOUND_COVER_OPEN) {
         close = FALSE;
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < SOUND_STREAM_MAX; i++) {
             stream = &sound.streams[i];
-            if (stream->flags & SOUND_SS_FLAG_ACTIVE && !(stream->flags & SOUND_SS_FLAG_ARAM) && !(stream->flags & SOUND_SS_FLAG_PAUSED)) {
-                if (stream->flags & SOUND_SS_FLAG_READING_0) {
+            if (stream->flags & SOUND_STREAM_FLAG_STARTED && !(stream->flags & SOUND_STREAM_FLAG_ARAM) && !(stream->flags & SOUND_STREAM_FLAG_MUTE)) {
+                if (stream->flags & SOUND_STREAM_FLAG_READ_L) {
                     close = TRUE;
                 }
-                if (stream->count == 2 && stream->flags & SOUND_SS_FLAG_READING_1) {
+                if (stream->count == 2 && stream->flags & SOUND_STREAM_FLAG_READ_R) {
                     close = TRUE;
                 }
             }
         }
         if (close) {
-            sound.coverState = 2;
+            sound.coverState = SOUND_COVER_RELOADING;
         } else {
-            sound.coverState = 0;
+            sound.coverState = SOUND_COVER_CLOSED;
         }
     }
 }
 
-/** Returns the song library group with index, or NULL. */
-inline SoundGroup* SoundSongGetGroup(u8 index) {
-    u16 key = index;
-    SoundGroup* group;
-
-    for (group = sound.groups;; group = group->next) {
-        if (group == 0) {
-            return 0;
-        }
-        if (group->index == key) {
-            break;
-        }
-    }
-    return group;
+/** SoundSongPlayCh for song channel 0. */
+// The channel-0 forms (SoundSongPlay, SoundSongContinue, SoundSongStop, SoundSongFadeout, SoundSongFadein,
+// SoundSongSetVol, SoundDVDStop, SoundDVDSetPan, SoundSSPlay, SoundSSStop, SoundSSFadeout, SoundSSFademute,
+// SoundSSContinue, SoundSSSetPan, SoundSSSetVol, SoundSSSetSrndPan, SoundSSSetPlayFreq):
+// original names and sizes from the JP demo map (UNUSED there: nothing calls them). The map lists each right before
+// its ...Ch function, and each size is the ...Ch body inlined for channel 0 (0x100 here).
+void SoundSongPlay(u32 groupInfo) {
+    SoundSongPlayCh(0, groupInfo);
 }
 
 /**
- * Starts song songId (low byte: library index, bits 16-23: MusyX group id) on song channel chan at full volume,
+ * Starts the song in groupInfo (low byte: library index, bits 8-15: song id, bits 16-23: MusyX group id) on song
+ * channel chan at full volume,
  * stopping what played there.
  */
-void SoundSongPlayCh(s32 chan, u32 songId) {
+void SoundSongPlayCh(s32 chan, u32 groupInfo) {
     SoundSong* song;
     SoundGroup* group;
 
     song = &sound.songs[chan];
-    if (sndSeqGetValid(song->seqId) == 1) {
+    if (sndSeqGetValid(song->seqId) == TRUE) {
         sndSeqStop(song->seqId);
     }
     song->vol = 127;
-    group = SoundSongGetGroup((u8)songId);
+    group = searchSongPtr(groupInfo);
     if (group) {
         song->group = group;
-        group->groupId = (SND_GROUPID)((songId >> 16) & 0xFF);
-        group->songId = (SND_SONGID)((songId >> 8) & 0xFF);
+        group->groupId = (SND_GROUPID)((groupInfo >> 16) & 0xFF);
+        group->songId = (SND_SONGID)((groupInfo >> 8) & 0xFF);
         song->mask = 0xFFFFFFFF;
         song->seqId = sndSeqPlayEx(group->groupId, group->songId, group->arrfile, 0, 0);
-        sndSeqVolume((u8)song->vol, 0, song->seqId, 0);
+        sndSeqVolume(song->vol, 0, song->seqId, SND_SEQVOL_CONTINUE);
         sndSeqContinue(song->seqId);
         sndSeqMute(song->seqId, song->mask, 0);
     }
+}
+
+#if VERSION <= VERSION_DEMO_JP
+// FAKE: stand-in for a dead-stripped song loader; nothing calls it. It only places ".song" (JP demo map @3563) in the
+// pool. Its number lies between SoundEfxMain's constants and SoundSLibLoadDVD's strings, and the map lists
+// SoundSongLoadPlay (0x2c) and SoundSongLoadPlayCh (0x258) UNUSED here, after SoundSongPlayCh: loading a song file
+// fits SoundSongLoadPlayCh. Body not known.
+const char* SoundSongStrippedName(void) {
+    return ".song";
+}
+#endif
+
+/** SoundSongContinueCh for song channel 0. */
+// Original name and size (0x60) from the JP demo map (see SoundSongPlay).
+void SoundSongContinue(void) {
+    SoundSongContinueCh(0);
 }
 
 /** Resumes a paused song on chan at its volume. */
@@ -903,8 +751,14 @@ void SoundSongContinueCh(s32 chan) {
 
     if (sndSeqGetValid(song->seqId)) {
         sndSeqContinue(song->seqId);
-        sndSeqVolume((u8)song->vol, 0, song->seqId, SND_SEQVOL_CONTINUE);
+        sndSeqVolume(song->vol, 0, song->seqId, SND_SEQVOL_CONTINUE);
     }
+}
+
+/** SoundSongStopCh for song channel 0. */
+// Original name and size (0x50) from the JP demo map (see SoundSongPlay).
+void SoundSongStop(void) {
+    SoundSongStopCh(0);
 }
 
 /** Stops the song on chan at once. */
@@ -917,6 +771,12 @@ void SoundSongStopCh(s32 chan) {
     }
 }
 
+/** SoundSongFadeoutCh for song channel 0. */
+// Original name and size (0x64) from the JP demo map (see SoundSongPlay).
+void SoundSongFadeout(void) {
+    SoundSongFadeoutCh(0);
+}
+
 /** Fades the song on chan out over the fade-out time and releases the channel. */
 void SoundSongFadeoutCh(s32 chan) {
     SoundSong* song = &sound.songs[chan];
@@ -927,13 +787,42 @@ void SoundSongFadeoutCh(s32 chan) {
     }
 }
 
+/** SoundSongFademuteCh for song channel 0. */
+// Original name and size (0x5c) from the JP demo map (see SoundSongPlay).
+void SoundSongFademute(void) {
+    SoundSongFademuteCh(0);
+}
+
+/** Fades the song on chan out over the fade-out time and pauses it there (SoundSongContinueCh resumes it). */
+// Original name and size (0x68) from the JP demo map (UNUSED there: nothing calls it); SoundSongFadeoutCh with
+// MusyX's SND_SEQVOL_PAUSE and the channel kept (SoundSSFademuteCh is the stream form).
+void SoundSongFademuteCh(s32 chan) {
+    SoundSong* song = &sound.songs[chan];
+
+    if (sndSeqGetValid(song->seqId)) {
+        sndSeqVolume(0, sound.fadeOut, song->seqId, SND_SEQVOL_PAUSE);
+    }
+}
+
+/** SoundSongFadeinCh for song channel 0. */
+// Original name and size (0x60) from the JP demo map (see SoundSongPlay).
+void SoundSongFadein(void) {
+    SoundSongFadeinCh(0);
+}
+
 /** Fades the song on chan in to its volume over the fade-in time. */
 void SoundSongFadeinCh(s32 chan) {
     SoundSong* song = &sound.songs[chan];
 
     if (sndSeqGetValid(song->seqId)) {
-        sndSeqVolume((u8)song->vol, sound.fadeIn, song->seqId, SND_SEQVOL_CONTINUE);
+        sndSeqVolume(song->vol, sound.fadeIn, song->seqId, SND_SEQVOL_CONTINUE);
     }
+}
+
+/** SoundSongSetVolCh for song channel 0. */
+// Original name and size (0x7c) from the JP demo map (see SoundSongPlay).
+void SoundSongSetVol(u8 vol) {
+    SoundSongSetVolCh(0, vol);
 }
 
 /** Sets the volume (0-127) of the song on chan. */
@@ -945,7 +834,7 @@ void SoundSongSetVolCh(s32 chan, u8 vol) {
             vol = 127;
         }
         song->vol = vol;
-        sndSeqVolume((u8)song->vol, 0, song->seqId, SND_SEQVOL_CONTINUE);
+        sndSeqVolume(song->vol, 0, song->seqId, SND_SEQVOL_CONTINUE);
     }
 }
 
@@ -959,27 +848,180 @@ u8 SoundSongGetVolCh(s32 chan) {
     return (u8)song->vol;
 }
 
+// The track-mute and MIDI-controller functions below: original names and sizes from the JP demo map (UNUSED there:
+// nothing calls them; the map lists them between SoundSongGetVolCh and SoundSongMain). song->mask is the
+// sndSeqMute track mask SoundSongPlayCh starts at 0xFFFFFFFF; MusyX plays a track while its bit is set (seq.c), so
+// muting a track clears its bit. The track parameter is u8 (MusyX's track id type); s8, or s32 with `track & 31`,
+// give the same sizes.
+
+/** SoundSongMuteTrackOnCh for song channel 0. */
+// Size 0x74.
+void SoundSongMuteTrackOn(u8 track) {
+    SoundSongMuteTrackOnCh(0, track);
+}
+
+/** Mutes one track of the song on chan. */
+// Size 0x7c.
+void SoundSongMuteTrackOnCh(s32 chan, u8 track) {
+    SoundSong* song = &sound.songs[chan];
+
+    if (sndSeqGetValid(song->seqId)) {
+        song->mask &= ~(1 << track);
+        sndSeqMute(song->seqId, song->mask, 0);
+    }
+}
+
+/** SoundSongMuteTrackOffCh for song channel 0. */
+// Size 0x74.
+void SoundSongMuteTrackOff(u8 track) {
+    SoundSongMuteTrackOffCh(0, track);
+}
+
+/** Unmutes one track of the song on chan. */
+// Size 0x7c.
+void SoundSongMuteTrackOffCh(s32 chan, u8 track) {
+    SoundSong* song = &sound.songs[chan];
+
+    if (sndSeqGetValid(song->seqId)) {
+        song->mask |= (1 << track);
+        sndSeqMute(song->seqId, song->mask, 0);
+    }
+}
+
+/** SoundSongSetMuteTrackCh for song channel 0. */
+// Size 0x60.
+void SoundSongSetMuteTrack(u32 mask) {
+    SoundSongSetMuteTrackCh(0, mask);
+}
+
+/** Sets the whole track mask (bit set: track plays) of the song on chan. */
+// Size 0x68.
+void SoundSongSetMuteTrackCh(s32 chan, u32 mask) {
+    SoundSong* song = &sound.songs[chan];
+
+    if (sndSeqGetValid(song->seqId)) {
+        song->mask = mask;
+        sndSeqMute(song->seqId, song->mask, 0);
+    }
+}
+
 /** Returns whether a song is playing on chan. */
 u32 SoundSongCheck(s32 chan) {
     return sndSeqGetValid(sound.songs[chan].seqId) != 0;
 }
 
-/** the live voice of an effect channel (its emitter's voice for 3D effects), or -1 */
-inline SND_VOICEID SoundEfxGetVoiceID(s32 chan) {
-    SoundEffect* sfx = &sound.effects[chan];
-    if (sfx->flags & SOUND_EFX_FLAG_EMITTER) {
-        return sndFXCheck(sndEmitterVoiceID(&sfx->emitter));
-    } else {
-        return sndFXCheck(sfx->voiceId);
+/** SoundSongGetMIDICtrlCh for song channel 0. */
+// Original name and size (0x70) from the JP demo map, like the MIDI-controller functions below.
+u8 SoundSongGetMIDICtrl(u8 channel, u8 ctrl) {
+    return SoundSongGetMIDICtrlCh(0, channel, ctrl);
+}
+
+/** Returns MIDI controller ctrl of MIDI channel channel in the song on chan, 0 when none plays. */
+// Size 0x7c.
+u8 SoundSongGetMIDICtrlCh(s32 chan, u8 channel, u8 ctrl) {
+    SoundSong* song = &sound.songs[chan];
+
+    if (sndSeqGetValid(song->seqId)) {
+        return sndSeqGetMidiCtrl(song->seqId, channel, ctrl);
+    }
+    return 0;
+}
+
+/** SoundSongSetMIDICtrlCh for song channel 0. */
+// Size 0x80: it passes the result on (a void form is 0x78).
+BOOL SoundSongSetMIDICtrl(u8 channel, u8 ctrl, u8 value) {
+    return SoundSongSetMIDICtrlCh(0, channel, ctrl, value);
+}
+
+/** Sets MIDI controller ctrl of MIDI channel channel in the song on chan; returns sndSeqSetMidiCtrl's result. */
+// Size 0x6c: it returns sndSeqSetMidiCtrl's result, FALSE when no song plays (a void form is 0x64). BOOL is a
+// choice: the bytes do not fix the return type's name.
+BOOL SoundSongSetMIDICtrlCh(s32 chan, u8 channel, u8 ctrl, u8 value) {
+    SoundSong* song = &sound.songs[chan];
+
+    if (sndSeqGetValid(song->seqId)) {
+        return sndSeqSetMidiCtrl(song->seqId, channel, ctrl, value);
+    }
+    return FALSE;
+}
+
+/** Per-frame song update: notices songs that ended on their own (marks their group and frees the channel). */
+// Original name and size (0x9c) from the JP demo map (UNUSED there: its one call, in SoundMain, is inlined).
+void SoundSongMain(void) {
+    SoundSong* song;
+    int i;
+
+    for (i = 0, song = sound.songs; i < SOUND_SONG_MAX; i++, song++) {
+        if (song->group && song->seqId != -1 && sndSeqGetValid(song->seqId) != TRUE) {
+            song->group->flags |= SOUND_GROUP_SONG_ENDED_UNUSED;
+            sndSeqStop(song->seqId);
+            song->seqId = -1;
+        }
     }
 }
 
+// sndMovePos, calcVectEmitter and calcVectListener: original names and sizes (0x98, 0x4c, 0xf8) from the JP demo map
+// (UNUSED there: their calls, all in SoundEfxMain, are inlined), listed in this order between SoundSongMain and
+// SoundEfxSetListener. Their bodies are the parts of SoundEfxMain they are named after; each out-of-line copy is
+// exactly the map size, and SoundEfxMain builds the same.
+
+/**
+ * Moves the point (*x, *z) by dist in direction dir (degrees): system.c's movePos form (the JP demo map also
+ * lists a stripped pmario_sound.c movePos of this size, 0x98).
+ */
+// The parameter types and order follow movePos. movePos's own form (sin and cos in two locals) is 0x10 larger;
+// its sums written out (`*x = dist * s + *x`) are the same size but change the copy inlined in SoundEfxMain.
+void sndMovePos(f32* x, f32* z, f32 dist, f32 dir) {
+    f32 angle = TWO_PI * dir / 360.0f;
+
+    *x += dist * (f32)sin(angle);
+    *z -= dist * (f32)cos(angle);
+}
+
+/** Updates the 3D emitter of effect: its velocity (pos - prevPos) and prevPos. */
+// The SoundEffect* parameter is a choice: three vector pointers build the same size.
+void calcVectEmitter(SoundEffect* effect) {
+    effect->dir.x = effect->pos.x - effect->prevPos.x;
+    effect->dir.y = effect->pos.y - effect->prevPos.y;
+    effect->dir.z = effect->pos.z - effect->prevPos.z;
+    effect->prevPos.x = effect->pos.x;
+    effect->prevPos.y = effect->pos.y;
+    effect->prevPos.z = effect->pos.z;
+}
+
+/**
+ * Updates the listener vectors for sndUpdateListener: velocity (pos - prevPos), heading from
+ * listenerDir (sndMovePos from the origin by 1), and up (0, 1, 0).
+ */
+// headingX is declared before headingZ: the inlined copy in SoundEfxMain numbers them in declaration order.
+void calcVectListener(void) {
+    f32 headingX;
+    f32 headingZ;
+
+    headingZ = headingX = 0.0f;
+    sound.dir.x = sound.pos.x - sound.prevPos.x;
+    sound.dir.y = sound.pos.y - sound.prevPos.y;
+    sound.dir.z = sound.pos.z - sound.prevPos.z;
+    sound.prevPos.x = sound.pos.x;
+    sound.prevPos.y = sound.pos.y;
+    sound.prevPos.z = sound.pos.z;
+    sndMovePos(&headingX, &headingZ, 1.0f, sound.listenerDir);
+    sound.heading.x = headingX;
+    sound.heading.y = 0.0f;
+    sound.heading.z = headingZ;
+    sound.up.x = 0.0f;
+    sound.up.y = 1.0f;
+    sound.up.z = 0.0f;
+}
+
 /** Stops the sound effect on effect channel chan and frees the channel (and its 3D emitter). */
-inline void SoundEfxMuteCh(s32 chan) {
+// SoundEfxStop's body with an unsigned channel: calling SoundEfxStop (s32) from the u32 loops of SoundDropData,
+// SoundStopAll and SoundEfxMain changes their code, so those callers use this copy.
+inline void SoundEfxMuteCh(u32 chan) {
     SoundEffect* sfx = &sound.effects[chan];
     if (sfx->flags) {
         sndFXKeyOff(sfx->voiceId);
-        if (sfx->flags & SOUND_EFX_FLAG_EMITTER) {
+        if (sfx->flags & SOUND_EFX_FLAG_EMITTER_UNUSED) {
             sndRemoveEmitter(&sfx->emitter);
         }
         sfx->flags = 0;
@@ -987,46 +1029,7 @@ inline void SoundEfxMuteCh(s32 chan) {
 }
 
 /**
- * Frees the first effect channel whose priority is at most priority and returns it (40 when none qualifies);
- * used to make room for a new effect.
- */
-inline s32 SoundEfxStopAll(u8 priority) {
-    s32 chan;
-    SoundEffect* sfx = sound.effects;
-
-    for (chan = 0; chan < 40; chan++, sfx++) {
-        if (sfx->priority <= priority) {
-            SoundEfxMuteCh(chan);
-            return chan;
-        }
-    }
-    return chan;
-}
-
-/** Returns whether the effect on chan is still sounding, freeing the channel when it has ended. */
-inline u32 SoundEfxCheckPlay(s32 chan) {
-    SoundEffect* sfx = &sound.effects[chan];
-    SND_VOICEID vid;
-    if (!sfx->flags) {
-        return FALSE;
-    }
-    if (!(sfx->flags & SOUND_EFX_FLAG_EMITTER)) {
-        if (sfx->flags & SOUND_EFX_FLAG_EMITTER) {
-            vid = sndFXCheck(sndEmitterVoiceID(&sfx->emitter));
-        } else {
-            vid = sndFXCheck(sfx->voiceId);
-        }
-        if (sndFXCheck(vid) == SND_ID_ERROR) {
-            return FALSE;
-        }
-    } else if (!sndCheckEmitter(&sfx->emitter)) {
-        return FALSE;
-    }
-    return TRUE;
-}
-
-/**
- * Plays MusyX effect fid on a free effect channel (or takes one from a lower-priority effect) with volume
+ * Plays MusyX effect fid on a free effect channel (or takes one from an effect of lower or equal priority) with volume
  * and pan; returns the channel, or -1 when none is available.
  */
 s32 SoundEfxPlayEx(SND_FXID fid, u8 priority, u8 vol, u8 pan) {
@@ -1034,37 +1037,32 @@ s32 SoundEfxPlayEx(SND_FXID fid, u8 priority, u8 vol, u8 pan) {
     s32 chan;
 
     sfx = sound.effects;
-    for (chan = 0; chan < 40; chan++, sfx++) {
+    for (chan = 0; chan < SOUND_EFFECT_MAX; chan++, sfx++) {
         if (!sfx->flags) {
             break;
         }
     }
-    if ((u32)chan >= 40) {
+    if (chan >= 40u) {
         sfx = sound.effects;
-        for (chan = 0; chan < 40; chan++, sfx++) {
+        for (chan = 0; chan < SOUND_EFFECT_MAX; chan++, sfx++) {
             if (sfx->priority <= priority) {
-                SoundEfxMuteCh(chan);
+                SoundEfxStop(chan);
                 break;
             }
         }
-        if ((u32)chan >= 40) {
+        if (chan >= 40u) {
             return -1;
         }
     }
     sfx->flags = 0;
-    if (!sound.interruptDepth) {
-        sound.interrupts = OSDisableInterrupts();
-    }
-    ++sound.interruptDepth;
+    sndDisableIRQ();
     sfx->voiceId = sndFXStart(fid, 127, pan);
     sndFXVolume(sfx->voiceId, vol);
-    if (sound.interruptDepth && !--sound.interruptDepth) {
-        OSRestoreInterrupts(sound.interrupts);
-    }
-    if (sfx->voiceId == SND_ID_ERROR) {
+    sndEnableIRQ();
+    if (sfx->voiceId == -1) {
         return -1;
     }
-    sfx->flags = SOUND_EFX_FLAG_USED;
+    sfx->flags = SOUND_EFX_FLAG_PLAY;
     sfx->priority = priority;
     sfx->vol = vol;
     sfx->pan = pan;
@@ -1073,10 +1071,29 @@ s32 SoundEfxPlayEx(SND_FXID fid, u8 priority, u8 vol, u8 pan) {
     if (sound.coverState) {
         sndFXVolume(sfx->voiceId, 0);
     }
-    if (!SoundEfxCheckPlay(chan)) {
+    if (!SoundEfxCheck(chan)) {
         chan = -1;
     }
     return chan;
+}
+
+/** Sets the listener position and facing (degrees) that SoundEfxMain hands to MusyX each frame. */
+// Original name and size (0x28) from the JP demo map (UNUSED there: nothing calls it; listed between the stripped
+// SoundEfxPlayEmitter and SoundEfxSetPosEmitter). pmario_sound's psndSetPosDirListener form on the sound.pos and
+// sound.listenerDir fields SoundEfxMain reads (nothing else writes them). The SND_FVECTOR* parameter type is a
+// choice (a Vec* with field copies is the same size).
+void SoundEfxSetPosDirListener(SND_FVECTOR* pos, f32 dir) {
+    sound.pos = *pos;
+    sound.listenerDir = dir;
+}
+
+/** Sets the 3D position of the emitter effect on chan. */
+// Original name and size (0x34) from the JP demo map (UNUSED there: nothing calls it; listed right before
+// SoundEfxStop). The listener setter's form for the SoundEffect.pos field (a Vec* parameter is the same size).
+void SoundEfxSetPosEmitter(s32 chan, SND_FVECTOR* pos) {
+    SoundEffect* effect = &sound.effects[chan];
+
+    effect->pos = *pos;
 }
 
 /** Stops the effect on chan and frees the channel. */
@@ -1086,11 +1103,43 @@ void SoundEfxStop(s32 chan) {
     sfx = &sound.effects[chan];
     if (sfx->flags) {
         sndFXKeyOff(sfx->voiceId);
-        if (sfx->flags & SOUND_EFX_FLAG_EMITTER) {
+        if (sfx->flags & SOUND_EFX_FLAG_EMITTER_UNUSED) {
             sndRemoveEmitter(&sfx->emitter);
         }
         sfx->flags = 0;
     }
+}
+
+/**
+ * Stops the effects on all effect channels and frees the channels (unused; the JP demo map lists it stripped,
+ * 0x7c bytes, which this loop compiles to).
+ */
+static void SoundEfxStopAll(void) {
+    s32 chan;
+
+    for (chan = 0; chan < SOUND_EFFECT_MAX; chan++) {
+        SoundEfxStop(chan);
+    }
+}
+
+/** Returns the MusyX voice of the effect on chan (through its emitter for emitter effects). */
+// Original name and size (0x54) from the JP demo map (UNUSED there: every call is inlined).
+SND_VOICEID SoundEfxGetVoiceID(s32 chan) {
+    SoundEffect* sfx = &sound.effects[chan];
+
+    if (sfx->flags & SOUND_EFX_FLAG_EMITTER_UNUSED) {
+        return sndFXCheck(sndEmitterVoiceID(&sfx->emitter));
+    }
+    return sndFXCheck(sfx->voiceId);
+}
+
+/** Returns the MusyX effect id playing on chan. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it); returns the id
+// SoundEfxPlayEx stores, like SoundEfxGetVolume.
+SND_FXID SoundEfxGetFXID(s32 chan) {
+    SoundEffect* sfx = &sound.effects[chan];
+
+    return sfx->fid;
 }
 
 /** Bends the pitch of the effect on chan (0 = unchanged; 0x2000 is MusyX's centre). */
@@ -1098,8 +1147,20 @@ void SoundEfxSetPitch(s32 chan, s16 pitch) {
     SND_VOICEID vid;
 
     vid = SoundEfxGetVoiceID(chan);
-    if (vid != SND_ID_ERROR) {
+    if (vid != -1) {
         sndFXPitchBend(vid, (u16)(pitch + 0x2000));
+    }
+}
+
+/** Sets the MusyX pitch bend value of the effect on chan as it is (0x2000 = unchanged). */
+// Original name and size (0x78) from the JP demo map (UNUSED there: nothing calls it); SoundEfxSetPitch without
+// the 0x2000 centre.
+void SoundEfxSetPitchDirect(s32 chan, u16 pitch) {
+    SND_VOICEID vid;
+
+    vid = SoundEfxGetVoiceID(chan);
+    if (vid != -1) {
+        sndFXPitchBend(vid, pitch);
     }
 }
 
@@ -1110,7 +1171,7 @@ void SoundEfxSetVolume(s32 chan, u8 vol) {
 
     sfx = &sound.effects[chan];
     vid = SoundEfxGetVoiceID(chan);
-    if (vid != SND_ID_ERROR) {
+    if (vid != -1) {
         sfx->vol = vol;
         sndFXVolume(vid, vol);
         if (sound.coverState) {
@@ -1122,6 +1183,7 @@ void SoundEfxSetVolume(s32 chan, u8 vol) {
 /** Returns the volume last set for the effect on chan. */
 u8 SoundEfxGetVolume(s32 chan) {
     SoundEffect* sfx = &sound.effects[chan];
+
     return sfx->vol;
 }
 
@@ -1130,8 +1192,20 @@ void SoundEfxSetAux1(s32 chan, u8 reverb) {
     SND_VOICEID vid;
 
     vid = SoundEfxGetVoiceID(chan);
-    if (vid != SND_ID_ERROR) {
+    if (vid != -1) {
         sndFXReverb(vid, reverb);
+    }
+}
+
+/** Sets the chorus send of the effect on chan. */
+// Original name and size (0x78) from the JP demo map (UNUSED there: nothing calls it); SoundEfxSetAux1 for the
+// second of the two MusyX effect sends (SoundInit puts the reverb on aux A and the chorus on aux B).
+void SoundEfxSetAux2(s32 chan, u8 chorus) {
+    SND_VOICEID vid;
+
+    vid = SoundEfxGetVoiceID(chan);
+    if (vid != -1) {
+        sndFXChorus(vid, chorus);
     }
 }
 
@@ -1143,7 +1217,7 @@ void SoundEfxSetPan(s32 chan, u8 pan) {
     sfx = &sound.effects[chan];
     sfx->pan = pan;
     vid = SoundEfxGetVoiceID(chan);
-    if (vid != SND_ID_ERROR) {
+    if (vid != -1) {
         sndFXPanning(vid, pan);
     }
 }
@@ -1160,7 +1234,7 @@ void SoundEfxSetSrndPan(s32 chan, u8 span) {
     sfx = &sound.effects[chan];
     sfx->span = span;
     vid = SoundEfxGetVoiceID(chan);
-    if (vid != SND_ID_ERROR) {
+    if (vid != -1) {
         sndFXSurroundPanning(vid, span);
         if (span == 0) {
             doppler = 0x2000;
@@ -1175,16 +1249,10 @@ void SoundEfxSetSrndPan(s32 chan, u8 span) {
 
 /** Applies a low-pass filter at freq to the effect on chan; 0 removes it. */
 void SoundEfxSetLPF(s32 chan, s16 freq) {
-    SoundEffect* sfx;
     u32 voiceId;
 
-    sfx = &sound.effects[chan];
-    if (sfx->flags & SOUND_EFX_FLAG_EMITTER) {
-        voiceId = sndFXCheck(sndEmitterVoiceID(&sfx->emitter));
-    } else {
-        voiceId = sndFXCheck(sfx->voiceId);
-    }
-    if (voiceId != SND_ID_ERROR) {
+    voiceId = SoundEfxGetVoiceID(chan);
+    if (voiceId != -1) {
         if (!freq) {
             sndFXSetFilter(voiceId, SND_FILTER_NONE, 0);
         } else if (freq >= 16000) {
@@ -1196,8 +1264,8 @@ void SoundEfxSetLPF(s32 chan, s16 freq) {
 }
 
 /**
- * Returns whether the effect on chan is still sounding (3D emitters count as sounding while they exist),
- * freeing the channel when it has ended.
+ * Returns whether the effect on chan is still sounding (3D emitters count as sounding while they exist);
+ * it does not free the channel.
  */
 u32 SoundEfxCheck(s32 chan) {
     SoundEffect* sfx;
@@ -1206,93 +1274,53 @@ u32 SoundEfxCheck(s32 chan) {
     if (!sfx->flags) {
         return FALSE;
     }
-    if (!(sfx->flags & SOUND_EFX_FLAG_EMITTER)) {
-        SND_VOICEID vid;
-        if (sfx->flags & SOUND_EFX_FLAG_EMITTER) {
-            vid = sndFXCheck(sndEmitterVoiceID(&sfx->emitter));
-        } else {
-            vid = sndFXCheck(sfx->voiceId);
-        }
-        if (sndFXCheck(vid) == SND_ID_ERROR) {
+    if (!(sfx->flags & SOUND_EFX_FLAG_EMITTER_UNUSED)) {
+        SND_VOICEID vid = SoundEfxGetVoiceID(chan);
+
+        if (sndFXCheck(vid) == -1) {
             return FALSE;
         }
-    } else {
-        if (!sndCheckEmitter(&sfx->emitter)) {
-            return FALSE;
-        }
+    } else if (!sndCheckEmitter(&sfx->emitter)) {
+        return FALSE;
     }
     return TRUE;
 }
 
 /** Frees the effect channel chan if its voice has ended. */
-inline void SoundEfxCheckCh(s32 chan) {
+inline void SoundEfxCheckCh(u32 chan) {
     SND_VOICEID vid;
 
     vid = SoundEfxGetVoiceID(chan);
-    if (sndFXCheck(vid) == SND_ID_ERROR) {
+    if (sndFXCheck(vid) == -1) {
         SoundEfxMuteCh(chan);
     }
 }
 
-// FAKE: opt_strength_reduction off for this function only. With it on, the second loop's chan*sizeof offset becomes an
-// induction temp created before the loop's split temps and gets the highest register; the target has the effect
-// pointer (second web of the reused `effect`) r30, i r29, the offset r28.
-#pragma opt_strength_reduction off
 /**
  * Per-frame effect update: moves the MusyX listener to sound.pos
  * and heading (velocity from the last frame's move), updates every 3D emitter's position and volume,
  * and frees channels whose sound has ended.
  */
 static void SoundEfxMain(void) {
-    SND_FVECTOR* dir;
     SoundEffect* effect;
     int i;
-    f32 v10;
-    f32 v9;
-    f32 r = 1.0f;
-    f32 v6;
-    f32 x, y, z;
 
-    v10 = v9 = 0.0f;
-    x = sound.pos.x - sound.prevPos.x;
-    y = sound.pos.y - sound.prevPos.y;
-    z = sound.pos.z - sound.prevPos.z;
-    v6 = (TWO_PI * sound.listenerDir / 360.0f);
-    sound.prevPos.x = sound.pos.x;
-    sound.prevPos.y = sound.pos.y;
-    sound.prevPos.z = sound.pos.z;
-    dir = &sound.dir;
-    dir->x = x;
-    dir->y = y;
-    dir->z = z;
-    v9 += r * (f32)sin(v6);
-    v10 -= r * (f32)cos(v6);
-    sound.heading.x = v9;
-    sound.heading.y = 0.0f;
-    sound.heading.z = v10;
-    sound.up.x = 0.0f;
-    sound.up.y = 1.0f;
-    sound.up.z = 0.0f;
-    sndUpdateListener(&sound.listener, &sound.pos, dir, &sound.heading, &sound.up, (u8)sound.listenerVol, NULL);
+    calcVectListener();
+    sndUpdateListener(&sound.listener, &sound.pos, &sound.dir, &sound.heading, &sound.up, sound.listenerVol, NULL);
 
     effect = sound.effects;
-    for (i = 0; i < 40; i++, effect++) {
+    for (i = 0; i < SOUND_EFFECT_MAX; i++, effect++) {
         if (effect->flags) {
-            if (effect->flags & SOUND_EFX_FLAG_EMITTER) {
-                effect->dir.x = effect->pos.x - effect->prevPos.x;
-                effect->dir.y = effect->pos.y - effect->prevPos.y;
-                effect->dir.z = effect->pos.z - effect->prevPos.z;
-                effect->prevPos.x = effect->pos.x;
-                effect->prevPos.y = effect->pos.y;
-                effect->prevPos.z = effect->pos.z;
-                sndUpdateEmitter(&effect->emitter, &effect->pos, &effect->dir, (u8)effect->vol, NULL);
+            if (effect->flags & SOUND_EFX_FLAG_EMITTER_UNUSED) {
+                calcVectEmitter(effect);
+                sndUpdateEmitter(&effect->emitter, &effect->pos, &effect->dir, effect->vol, NULL);
             }
         }
     }
 
-    for (effect = sound.effects, i = 0; i < 40; i++, effect++) {
+    for (effect = sound.effects, i = 0; i < SOUND_EFFECT_MAX; i++, effect++) {
         if (effect->flags) {
-            if (!(effect->flags & SOUND_EFX_FLAG_EMITTER)) {
+            if (!(effect->flags & SOUND_EFX_FLAG_EMITTER_UNUSED)) {
                 SoundEfxCheckCh(i);
             } else {
                 if (!sndCheckEmitter(&effect->emitter)) {
@@ -1307,12 +1335,26 @@ static void SoundEfxMain(void) {
         }
     }
 }
-#pragma opt_strength_reduction reset
+
+#if VERSION <= VERSION_DEMO_JP
+// FAKE: stand-in for the dead-stripped DVD stream starters; nothing calls it. It only places their ".adp" (JP demo
+// map @3067) in the pool. The map lists _dvdcallback, SoundDVDPlay (0x204) and SoundDVDPlayCh (0x1f8) UNUSED at this
+// place (after SoundEfxMain); the extension of the disc's ADP stream files fits them. Bodies not known.
+const char* SoundDVDStrippedName(void) {
+    return ".adp";
+}
+#endif
+
+/** SoundDVDStopCh for DVD audio channel 0. */
+// Original name and size (0x6c) from the JP demo map (see SoundSongPlay).
+void SoundDVDStop(void) {
+    SoundDVDStopCh(0);
+}
 
 /** Stops the DVD audio stream (the disc's streamed music) on chan and closes its file. */
-inline void SoundDVDStopCh(s32 chan) {
+static void SoundDVDStopCh(u32 chan) {
     SoundDVD* dvd = &sound.dvds[chan];
-    if (dvd->flags & (SOUND_DVD_FLAG_PLAYING | SOUND_DVD_FLAG_PAUSED)) {
+    if (dvd->flags & (SOUND_DVD_FLAG_PLAY | SOUND_DVD_FLAG_MUTE)) {
         AISetStreamPlayState(0);
         dvd->flags = 0;
         sound.dvdChannel = -1;
@@ -1321,8 +1363,28 @@ inline void SoundDVDStopCh(s32 chan) {
     }
 }
 
+#if VERSION <= VERSION_DEMO_JP
+// FAKE: stand-in for a dead-stripped DVD audio function; nothing calls it. It only places the doubles 3.5 and 4.0
+// (JP demo map @3005/@3006, after the stripped .sdata2 float @3004) in the pool. The unit's JP demo @N numbering
+// puts their owner here, where the map lists the UNUSED SoundDVDContinue (0x1f8) and SoundDVDContinueCh (0x208)
+// between SoundDVDStopCh and SoundDVDSetPan: at this slot the numbers before the doubles (from SoundSSPlayChEx's
+// ".stm") and after them (to ".adp") both fall short of the map only by absent stripped functions. Which of the
+// two, and their bodies, are not known. Removing it changes the object.
+f64 SoundDemoStrippedRate(f64 t) {
+    f64 a = t * 3.5;
+    f64 b = t * 4.0;
+    return a + b;
+}
+#endif
+
+/** SoundDVDSetPanCh for DVD audio channel 0. */
+// Original name and size (0xd8) from the JP demo map (see SoundSongPlay).
+void SoundDVDSetPan(u8 pan) {
+    SoundDVDSetPanCh(0, pan);
+}
+
 /** Applies pan and the current volume of DVD audio channel chan to the hardware stream volume. */
-inline void SoundDVDSetPanCh(s32 chan, u8 pan) { // I think this is the correct func name
+static void SoundDVDSetPanCh(u32 chan, u8 pan) {
     f32 left, right;
     SoundDVD* dvd;
 
@@ -1333,11 +1395,109 @@ inline void SoundDVDSetPanCh(s32 chan, u8 pan) { // I think this is the correct 
     if (pan < 64) {
         right = (((f32)pan * dvd->vol) / 63.0f);
     }
+
+    // sign-bit test for pan >= 64 (the subtract and the shift are in the retail code)
     if (!((u32)(pan - 64) >> 31)) {
         left = (((f32)(127 - pan) * dvd->vol) / 63.0f);
     }
-    AISetStreamVolLeft((u8)left);
-    AISetStreamVolRight((u8)right);
+    AISetStreamVolLeft(left);
+    AISetStreamVolRight(right);
+}
+
+// The DVD audio volume and fade setters below: original names and sizes from the JP demo map (UNUSED there:
+// nothing calls them; the map lists them in this order between SoundDVDSetPanCh and SoundDVDMain). With
+// SoundDVDSetVolCh they are the stream forms (SoundSSSetVolCh, SoundSSFadeoutCh, SoundSSFademuteCh) on the SoundDVD
+// fields SoundDVDMain fades, without the stream forms' in-use test, like SoundDVDSetPanCh (with it each is 0xc
+// larger). The fades use SoundSSFadeoutCh's frame time in each version (only the JP demo sizes are known).
+
+/** SoundDVDSetVolCh for DVD audio channel 0. */
+// Size 0xf8.
+void SoundDVDSetVol(u8 vol) {
+    SoundDVDSetVolCh(0, vol);
+}
+
+/** Sets the volume of DVD audio channel chan (also the fade-in target) and applies it with the current pan. */
+// Original name and size (0x104) from the JP demo map (UNUSED there: nothing calls it), after SoundDVDSetPanCh.
+// Body: SoundSSSetVolCh's form for the DVD channel (target and current volume set together, then the pan update);
+// the size fits exactly. The order of the two stores in the chained assignment is not fixed by the size.
+void SoundDVDSetVolCh(u32 chan, u8 vol) {
+    SoundDVD* dvd = &sound.dvds[chan];
+    dvd->volTarget = dvd->vol = vol;
+    SoundDVDSetPanCh(chan, dvd->pan);
+}
+
+/** SoundDVDFadeoutCh for DVD audio channel 0. */
+// Size 0x68.
+void SoundDVDFadeout(void) {
+    SoundDVDFadeoutCh(0);
+}
+
+/** Fades DVD audio channel chan out over the fade-out time (SoundDVDMain stops it at silence). */
+// Size 0x70.
+static void SoundDVDFadeoutCh(u32 chan) {
+    SoundDVD* dvd = &sound.dvds[chan];
+    f32 frames;
+
+#if VERSION >= VERSION_US
+    frames = sound.fadeOut / (1000.0f / gp->framerate);
+#else
+    frames = sound.fadeOut / 16.666666f;
+#endif
+    if (frames < 1.0f) {
+        frames = 1.0f;
+    }
+    dvd->volStep = dvd->vol / frames;
+    dvd->flags |= SOUND_DVD_FLAG_FADEOUT;
+}
+
+/** SoundDVDFademuteCh for DVD audio channel 0. */
+// Size 0x68.
+void SoundDVDFademute(void) {
+    SoundDVDFademuteCh(0);
+}
+
+/** Fades DVD audio channel chan out over the fade-out time and pauses it there (SoundDVDMain). */
+// Size 0x70.
+static void SoundDVDFademuteCh(u32 chan) {
+    SoundDVD* dvd = &sound.dvds[chan];
+    f32 frames;
+
+#if VERSION >= VERSION_US
+    frames = sound.fadeOut / (1000.0f / gp->framerate);
+#else
+    frames = sound.fadeOut / 16.666666f;
+#endif
+    if (frames < 1.0f) {
+        frames = 1.0f;
+    }
+    dvd->volStep = dvd->vol / frames;
+    dvd->flags |= SOUND_DVD_FLAG_FADEMUTE;
+}
+
+/** SoundDVDFadeinCh for DVD audio channel 0. */
+// Size 0x70.
+void SoundDVDFadein(void) {
+    SoundDVDFadeinCh(0);
+}
+
+/** Fades DVD audio channel chan in from silence to its volume over the fade-in time. */
+// Size 0x78: the fade-out form plus one store; starting from silence (vol = 0) is the store that fits
+// SoundDVDMain's fade-in, where it is placed is a choice.
+static void SoundDVDFadeinCh(u32 chan) {
+    SoundDVD* dvd = &sound.dvds[chan];
+    f32 frames;
+
+#if VERSION >= VERSION_US
+    frames = sound.fadeIn / (1000.0f / gp->framerate);
+#else
+    frames = sound.fadeIn / 16.666666f;
+#endif
+    if (frames < 1.0f) {
+        frames = 1.0f;
+    }
+    dvd->vol = 0.0f;
+    dvd->volStep = dvd->volTarget / frames;
+    dvd->flags |= SOUND_DVD_FLAG_FADEIN;
 }
 
 /**
@@ -1345,28 +1505,28 @@ inline void SoundDVDSetPanCh(s32 chan, u8 pan) { // I think this is the correct 
  * and fade-ins.
  */
 static void SoundDVDMain(void) {
-    u32 i;
+    s32 i;
 
-    for (i = 0; (int)i < 2; i++) {
+    for (i = 0; i < SOUND_DVD_MAX; i++) {
         SoundDVD* dvd = &sound.dvds[i];
-        if (!(dvd->flags & SOUND_DVD_FLAG_PAUSED)) {
-            if (dvd->flags & SOUND_DVD_FLAG_FADE_TO_PAUSE) {
+        if (!(dvd->flags & SOUND_DVD_FLAG_MUTE)) {
+            if (dvd->flags & SOUND_DVD_FLAG_FADEMUTE) {
                 if (dvd->vol == 0.0f) {
                     dvd->samples = AIGetStreamSampleCount();
                     SoundDVDStopCh(i);
-                    dvd->flags |= SOUND_DVD_FLAG_PAUSED;
-                    dvd->flags &= ~SOUND_DVD_FLAG_FADE_TO_PAUSE;
+                    dvd->flags |= SOUND_DVD_FLAG_MUTE;
+                    dvd->flags &= ~SOUND_DVD_FLAG_FADEMUTE;
                     continue;
                 }
                 dvd->vol -= dvd->volStep;
                 if (dvd->vol <= 0.0f) {
                     dvd->vol = 0.0f;
                 }
-                SoundDVDSetPanCh(i, (u8)dvd->pan);
+                SoundDVDSetPanCh(i, dvd->pan);
             }
-            if (dvd->flags & SOUND_DVD_FLAG_FADE_OUT) {
+            if (dvd->flags & SOUND_DVD_FLAG_FADEOUT) {
                 if (dvd->vol == 0.0f) {
-                    dvd->flags &= ~SOUND_DVD_FLAG_FADE_OUT;
+                    dvd->flags &= ~SOUND_DVD_FLAG_FADEOUT;
                     SoundDVDStopCh(i);
                     continue;
                 }
@@ -1374,16 +1534,16 @@ static void SoundDVDMain(void) {
                 if (dvd->vol <= 0.0f) {
                     dvd->vol = 0.0f;
                 }
-                SoundDVDSetPanCh(i, (u8)dvd->pan);
+                SoundDVDSetPanCh(i, dvd->pan);
             }
-            if (dvd->flags & SOUND_DVD_FLAG_FADE_IN) {
+            if (dvd->flags & SOUND_DVD_FLAG_FADEIN) {
                 dvd->vol += dvd->volStep;
                 if (dvd->vol >= dvd->volTarget) {
                     dvd->vol = dvd->volTarget;
                     dvd->volStep = 0.0f;
-                    dvd->flags &= ~SOUND_DVD_FLAG_FADE_IN;
+                    dvd->flags &= ~SOUND_DVD_FLAG_FADEIN;
                 }
-                SoundDVDSetPanCh(i, (u8)dvd->pan);
+                SoundDVDSetPanCh(i, dvd->pan);
             }
         }
     }
@@ -1391,28 +1551,11 @@ static void SoundDVDMain(void) {
 
 static void _ssDVDReadAsync_activeChk(s32 result, DVDFileInfo* fileInfo);
 static void cache_flush(u32 pointerToARQRequest);
-static void _ssDVDReadAsync_cache_aram(u32 pointerToARQRequest);
 static void _ssDVDReadAsync_cache_next(s32 result, DVDFileInfo* fileInfo);
 static void SoundSSPlayChEx_main(s32 result, DVDFileInfo* fileInfo);
 
-/** Disables interrupts for stream bookkeeping; nests. */
-inline void SoundIntOff(void) {
-    if (!sound.interruptDepth) {
-        sound.interrupts = OSDisableInterrupts();
-    }
-    sound.interruptDepth++;
-}
-
-/** Undoes one SoundIntOff, restoring interrupts at the outermost level. */
-inline void SoundIntOn(void) {
-    if (sound.interruptDepth) {
-        if (!--sound.interruptDepth) {
-            OSRestoreInterrupts(sound.interrupts);
-        }
-    }
-}
-
 /** Rounds x up to a multiple of 32 bytes (DVD and DMA alignment). */
+// FAKE: invented one-use inline helper (no map name); writing it out changes the code (FAKES.md)
 static inline u32 _ssAlign32(u32 x) {
     return (x + 0x1F) & ~0x1F;
 }
@@ -1423,19 +1566,15 @@ static inline u32 _ssAlign32(u32 x) {
  */
 static inline u32 _ssCalcLen(SoundStreamEntry* entry) {
     u32 len;
-#if VERSION >= VERSION_JP
     int i;
-#endif
     len = SS_LOAD_BUFFER_SIZE;
     if (entry->offset + SS_LOAD_BUFFER_SIZE > entry->size) {
         len = entry->size - entry->offset;
     } else {
 #if VERSION <= VERSION_DEMO_JP
-        // The demo only shortens the read when the stream ends within the next buffer.
         if (entry->offset + 2 * SS_LOAD_BUFFER_SIZE > entry->size) {
             len -= (SS_LOAD_BUFFER_SIZE - (entry->size - (entry->offset + SS_LOAD_BUFFER_SIZE))) / 2;
             len += 0x20 - (len % 0x20);
-        }
 #else
         for (i = 2; i < 6; i++) {
             if (entry->offset + i * SS_LOAD_BUFFER_SIZE > entry->size) {
@@ -1443,30 +1582,29 @@ static inline u32 _ssCalcLen(SoundStreamEntry* entry) {
                 len += 0x20 - (len % 0x20);
                 break;
             }
-        }
 #endif
+        }
     }
     return len;
 }
 
+// _ssDVDReadAsync_sub, _ssDVDReadAsync_l and _ssDVDReadAsync_r: original names, sizes (0x174, 0x16c, 0x180) and order
+// from the JP demo map (all UNUSED there: every call is inlined), between cache_flush and _ssDVDReadAsync_cache_aram.
+// _l and _r call _sub for the first and second channel (as the READ_L / READ_R flags name them); this form compiles to
+// exactly the three map sizes and leaves every caller unchanged (plain functions: every call is auto-inlined and the
+// copies are emitted, which also fits the unit's JP demo @N numbering). Not fixed by the bytes: the order of _sub's
+// parameters (all four orders tried build the same) and the order of its locals.
+
 /**
- * Starts the asynchronous disc read of the next chunk of stream channel ch (0 or 1,
- * the second channel's data follows the first's) into its load buffer.
+ * Starts the asynchronous disc read of the next chunk of one stream channel (entry), whose data starts extra bytes
+ * into the stream's data.
  */
-inline void _ssDVDReadAsync(SoundStream* stream, int ch) {
-    SoundStreamEntry* entry;
-    u32 extra;
+void _ssDVDReadAsync_sub(SoundStream* stream, SoundStreamEntry* entry, u32 extra) {
     u32 len;
     u32 aligned;
     u32 addr;
 
-    entry = &stream->entries[ch];
-    extra = 0;
-    if (ch) {
-        extra = entry->size + (0x20 - (entry->size % 0x20));
-    }
 #if VERSION <= VERSION_DEMO_JP
-    // The demo always reads at least a whole buffer.
     aligned = len = _ssCalcLen(entry);
     if (len < SS_LOAD_BUFFER_SIZE) {
         aligned = SS_LOAD_BUFFER_SIZE;
@@ -1475,7 +1613,7 @@ inline void _ssDVDReadAsync(SoundStream* stream, int ch) {
 #else
     aligned = _ssAlign32(len = _ssCalcLen(entry));
 #endif
-    if (!(stream->flags & SOUND_SS_FLAG_ARAM)) {
+    if (!(stream->flags & SOUND_STREAM_FLAG_ARAM)) {
         DVDMgrReadAsync(entry->dvd, entry->loadBuffer[1 - entry->curBuf], aligned,
                         stream->dataOffset + entry->offset + extra, _ssDVDReadAsync_activeChk);
     } else {
@@ -1485,6 +1623,20 @@ inline void _ssDVDReadAsync(SoundStream* stream, int ch) {
                        cache_flush);
     }
     entry->requestLength = len;
+}
+
+/** Starts the asynchronous disc read of the next chunk of the stream's first (left) channel into its load buffer. */
+void _ssDVDReadAsync_l(SoundStream* stream) {
+    SoundStreamEntry* entry = &stream->entries[0];
+
+    _ssDVDReadAsync_sub(stream, entry, 0);
+}
+
+/** The same for the second (right) channel, whose data follows the first's in the stream. */
+void _ssDVDReadAsync_r(SoundStream* stream) {
+    SoundStreamEntry* entry = &stream->entries[1];
+
+    _ssDVDReadAsync_sub(stream, entry, entry->size + (0x20 - (entry->size % 0x20)));
 }
 
 /** Rewinds both channels of a stream to the start of their data. */
@@ -1512,19 +1664,27 @@ inline void _ssResetEntries(SoundStream* stream) {
 /**
  * Marks the stream entry whose DVD read finished as loaded,
  * then starts the first stream whose entries are all ready.
- * The demo masks interrupts only around the updates, the later versions around the whole search.
+ * The early demos mask interrupts only around the updates, JP and later around the whole search.
  */
 static void _ssDVDReadAsync_activeChk(s32 result, DVDFileInfo* fileInfo) {
+#if VERSION <= VERSION_DEMO_JP
+#else
+    int i;
+#endif
     SoundStream* stream;
     SoundStreamEntry* entry;
+#if VERSION <= VERSION_DEMO_JP
     int i;
-    int ch;
-
-#if VERSION >= VERSION_JP
-    SoundIntOff();
 #endif
-    for (i = 0; i < 3; i++) {
+    int ch;
+#if VERSION <= VERSION_DEMO_JP
+    for (i = 0; i < SOUND_STREAM_MAX; i++) {
         stream = &sound.streams[i];
+#else
+    sndDisableIRQ();
+    stream = sound.streams;
+    for (i = 0; i < SOUND_STREAM_MAX; i++, stream++) {
+#endif
         if (stream->flags) {
             entry = NULL;
             ch = 0;
@@ -1537,56 +1697,60 @@ static void _ssDVDReadAsync_activeChk(s32 result, DVDFileInfo* fileInfo) {
                 ch = 1;
             }
             if (entry) {
-                if (result >= 0) {
 #if VERSION <= VERSION_DEMO_JP
-                    SoundIntOff();
+                if (result >= 0) {
+                    sndDisableIRQ();
+#else
+                if (result < 0) {
+                    goto end;
+                }
 #endif
                     entry->offset += entry->requestLength;
                     entry->loadedLen[1 - entry->curBuf] = entry->requestLength;
                     entry->loaded = 1;
                     if (entry->offset >= entry->size) {
                         entry->offset = entry->loopStart;
-                        if (stream->flags & SOUND_SS_FLAG_LOOP) {
+                        if (stream->flags & SOUND_STREAM_FLAG_LOOP) {
                             if (ch == 0) {
-                                stream->flags &= ~SOUND_SS_FLAG_READING_0;
+                                stream->flags &= ~SOUND_STREAM_FLAG_READ_L;
                             } else {
-                                stream->flags &= ~SOUND_SS_FLAG_READING_1;
+                                stream->flags &= ~SOUND_STREAM_FLAG_READ_R;
                             }
                         } else {
-                            stream->flags |= SOUND_SS_FLAG_END_LOADED;
+                            stream->flags |= SOUND_STREAM_FLAG_READ_END;
                         }
                     } else if (ch == 0) {
-                        stream->flags &= ~SOUND_SS_FLAG_READING_0;
+                        stream->flags &= ~SOUND_STREAM_FLAG_READ_L;
                     } else {
-                        stream->flags &= ~SOUND_SS_FLAG_READING_1;
+                        stream->flags &= ~SOUND_STREAM_FLAG_READ_R;
                     }
 #if VERSION <= VERSION_DEMO_JP
-                    SoundIntOn();
+                    sndEnableIRQ();
 #endif
                     if (stream->count == 2) {
-                        if (sound.coverState == 2 && stream->entries[0].loaded == 1 && stream->entries[1].loaded == 1) {
-                            sound.coverState = 0;
+                        if (sound.coverState == SOUND_COVER_RELOADING && stream->entries[0].loaded == 1 && stream->entries[1].loaded == 1) {
+                            sound.coverState = SOUND_COVER_CLOSED;
                         }
-                    } else if (sound.coverState == 2 && stream->entries[0].loaded == 1) {
-                        sound.coverState = 0;
+                    } else if (sound.coverState == SOUND_COVER_RELOADING && stream->entries[0].loaded == 1) {
+                        sound.coverState = SOUND_COVER_CLOSED;
                     }
 #if VERSION <= VERSION_DEMO_JP
-                    continue; // the demo keeps searching the other streams
-#else
-                    break;
-#endif
+                    continue;
                 }
-#if VERSION <= VERSION_DEMO_JP
                 return;
 #else
-                goto end;
+                break;
 #endif
             }
         }
     }
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < SOUND_STREAM_MAX; i++) {
+#if VERSION <= VERSION_DEMO_JP
         stream = &sound.streams[i];
-        if (stream->flags && !(stream->flags & SOUND_SS_FLAG_ACTIVE)) {
+#else
+        SoundStream* stream = &sound.streams[i];
+#endif
+        if (stream->flags && !(stream->flags & SOUND_STREAM_FLAG_STARTED)) {
             if (&stream->entries[0].dvd->info == fileInfo) {
                 stream->entries[0].ready = 1;
             }
@@ -1605,13 +1769,13 @@ static void _ssDVDReadAsync_activeChk(s32 result, DVDFileInfo* fileInfo) {
             stream->entries[0].loaded = 0;
             stream->entries[1].loaded = 0;
 #if VERSION <= VERSION_DEMO_JP
-            if (stream->flags & SOUND_SS_FLAG_ADPCM) {
+            if (stream->flags & SOUND_STREAM_FLAG_ADPCM) {
                 stream->entries[0].srcPos = 0;
                 stream->entries[0].pos = 0;
                 stream->entries[1].srcPos = 0;
                 stream->entries[1].pos = 0;
             }
-            SoundIntOff();
+            sndDisableIRQ();
 #endif
             sndStreamActivate(stream->entries[0].streamId);
             if (stream->count == 2) {
@@ -1619,19 +1783,22 @@ static void _ssDVDReadAsync_activeChk(s32 result, DVDFileInfo* fileInfo) {
             }
             SoundSSSetPanCh(i, stream->pan);
 #if VERSION <= VERSION_DEMO_JP
-            SoundIntOn();
+            sndEnableIRQ();
 #endif
-            stream->flags |= SOUND_SS_FLAG_ACTIVE;
+            stream->flags |= SOUND_STREAM_FLAG_STARTED;
             break;
         }
     }
 #if VERSION >= VERSION_JP
 end:
-    SoundIntOn();
+    sndEnableIRQ();
 #endif
 }
 
-/** ARQ callback after a stream chunk reached ARAM: continues the disc read loop for that stream. */
+/**
+ * ARQ callback after a chunk of an ARAM-cached stream was copied from ARAM into its load buffer:
+ * finishes it like a disc read (_ssDVDReadAsync_activeChk).
+ */
 static void cache_flush(u32 pointerToARQRequest) {
     _ssDVDReadAsync_activeChk(0, &((SoundStreamEntry*)((ARQRequest*)pointerToARQRequest)->owner)->dvd->info);
 }
@@ -1651,10 +1818,10 @@ static void _ssDVDReadAsync_cache_aram(u32 pointerToARQRequest) {
         stream->entries[1].offset = 0;
         stream->entries[1].pos = 0;
         stream->entries[0].curBuf = 1;
-        _ssDVDReadAsync(stream, 0);
+        _ssDVDReadAsync_l(stream);
         if (stream->count == 2) {
             stream->entries[1].curBuf = 1;
-            _ssDVDReadAsync(stream, 1);
+            _ssDVDReadAsync_r(stream);
         }
     } else {
         len = DVDMgrGetLength(stream->entries[0].dvd);
@@ -1680,7 +1847,7 @@ static void _ssDVDReadAsync_cache_next(s32 result, DVDFileInfo* fileInfo) {
     int i;
 
     stream = sound.streams;
-    for (i = 0; i < 3; stream++, i++) {
+    for (i = 0; i < SOUND_STREAM_MAX; stream++, i++) {
         if (stream->flags && &stream->entries[0].dvd->info == fileInfo) {
             if (result >= 0) {
                 stream->entries[0].offset += stream->entries[0].requestLength;
@@ -1696,8 +1863,8 @@ static void _ssDVDReadAsync_cache_next(s32 result, DVDFileInfo* fileInfo) {
 }
 
 /** Step sizes of the streamed-music DPCM decoder (ssDecodeDPCM): each 4-bit delta is scaled by one of them. */
-s16 dtbl[16] = { 0x0001, 0x0007, 0x0018, 0x003B, 0x0053, 0x006F, 0x00EC, 0x022B,
-                 0x02E6, 0x0375, 0x041C, 0x08AD, 0x0CD5, 0x1150, 0x1B32, 0x2454 };
+static s16 dtbl[16] = {0x0001, 0x0007, 0x0018, 0x003B, 0x0053, 0x006F, 0x00EC, 0x022B,
+                0x02E6, 0x0375, 0x041C, 0x08AD, 0x0CD5, 0x1150, 0x1B32, 0x2454};
 
 /**
  * Decodes count samples of the game's 4-bit DPCM stream format from src into out, with run-length scale changes,
@@ -1705,7 +1872,7 @@ s16 dtbl[16] = { 0x0001, 0x0007, 0x0018, 0x003B, 0x0053, 0x006F, 0x00EC, 0x022B,
  */
 static u8* ssDecodeDPCM(SoundStream* stream, SoundStreamEntry* entry, s16* out, u32 count, u8* src) {
     s8 delta;
-    u32 b;
+    int b;
     u32 scale;
     s32 sample;
 
@@ -1732,7 +1899,8 @@ static u8* ssDecodeDPCM(SoundStream* stream, SoundStreamEntry* entry, s16* out, 
         } else {
             src++;
             entry->srcPos++;
-            if ((s32)(b & 0xF) == 8) {
+
+            if ((b & 0xF) == 8) {
                 entry->runCount = ((b >> 4) & 0xF) + 4;
                 entry->nibble = 0;
                 continue;
@@ -1755,7 +1923,7 @@ static u8* ssDecodeDPCM(SoundStream* stream, SoundStreamEntry* entry, s16* out, 
         *out++ = sample;
         stream->samplePos++;
         if (entry->srcPos >= entry->loadedLen[entry->curBuf]) {
-            if (entry->loaded == 0 && !(stream->flags & SOUND_SS_FLAG_END_LOADED)) {
+            if (entry->loaded == 0 && !(stream->flags & SOUND_STREAM_FLAG_READ_END)) {
                 entry->pos -= entry->srcPos;
                 entry->srcPos = 0;
                 src = entry->loadBuffer[entry->curBuf];
@@ -1770,25 +1938,57 @@ static u8* ssDecodeDPCM(SoundStream* stream, SoundStreamEntry* entry, s16* out, 
         if (entry->pos >= stream->loopEnd) {
             entry->pos = stream->loopStart;
             entry->hist = entry->loopHist;
-            if (!(stream->flags & SOUND_SS_FLAG_LOOP)) {
-                stream->flags |= SOUND_SS_FLAG_STOP_REQ;
+            if (!(stream->flags & SOUND_STREAM_FLAG_LOOP)) {
+                stream->flags |= SOUND_STREAM_FLAG_END;
                 break;
             }
         }
     }
     return src;
 }
+
 /**
- * MusyX stream callback: fills the requested sample buffer(s) of stream user from its loaded data (16-bit PCM
- * copied, DPCM decoded, ADPCM passed through), wrapping at the loop point and ending non-looping streams.
- * The US and PAL version computes len1 itself.
+ * Copies count 16-bit PCM samples from src into out, wrapping through the stream's load buffers and its loop,
+ * keeping the position in entry; returns the new source pointer.
  */
-#if VERSION >= VERSION_US
+// Original name and size (0x100) from the JP demo map (UNUSED there: both calls in _sscallback are inlined, so the
+// linker strips it), between ssDecodeDPCM and _sscallback: _sscallback's PCM loop, in ssDecodeDPCM's form.
+static s16* ssDecodePCM(SoundStream* stream, SoundStreamEntry* entry, s16* out, u32 count, s16* src) {
+    while (count != 0) {
+        *(out++) = *(src++);
+        count--;
+        stream->samplePos++;
+        entry->srcPos += 2;
+        if (entry->srcPos >= entry->loadedLen[entry->curBuf]) {
+            if (entry->loaded == 0 && !(stream->flags & SOUND_STREAM_FLAG_READ_END)) {
+                entry->pos -= entry->srcPos;
+                entry->srcPos = 0;
+                src = (s16*)entry->loadBuffer[entry->curBuf];
+                continue;
+            }
+            entry->loaded = 0;
+            entry->srcPos = 0;
+            entry->curBuf = 1 - entry->curBuf;
+            src = (s16*)entry->loadBuffer[entry->curBuf];
+        }
+        entry->pos += 2;
+        if (entry->pos >= stream->loopEnd) {
+            entry->pos = stream->loopStart;
+            if (!(stream->flags & SOUND_STREAM_FLAG_LOOP)) {
+                stream->flags |= SOUND_STREAM_FLAG_END;
+                break;
+            }
+        }
+    }
+    return src;
+}
+
+/** Early-demo and JP signature of _sscallback: the first buffer's length arrives as len1. */
+#if VERSION < VERSION_US
+static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
+#else
 static u32 _sscallback(void* p_b1, u32 p_l1, void* p_b2, u32 p_l2, u32 user) {
     u32 len1;
-#else
-/** JP and demo signature of _sscallback: the first buffer's length arrives as len1. */
-static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
 #endif
     s16* dst;
     SoundStream* stream;
@@ -1796,13 +1996,16 @@ static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
     unsigned int len2;
     s16* buffer1;
     s16* buffer2;
-    s16* src16;
-    u32 i;
     u32 n;
     s32 j;
     u8* src8;
     u8* src8b;
-
+#if VERSION <= VERSION_DEMO_JP
+    len2 = p_l2;
+    buffer1 = p_b1;
+    buffer2 = p_b2;
+    stream = &sound.streams[(u8)user];
+#else
     // FAKE: len2/buffer1/buffer2 are copied from the params into locals of a different type (unsigned int, s16*) so
     // IRO cannot propagate the copies; the params then coalesce into r3/r5/r6 and these statement copies give the
     // target order len1 (param web, after the stream add) < len2 < buffer1 < buffer2 (buffer1 lands in r6).
@@ -1822,9 +2025,10 @@ static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
     buffer2 = p_b2;
     stream = &sound.streams[(u8)user];
 #endif
+#endif
     stream->samplePos = 0;
-    if ((stream->flags & (SOUND_SS_FLAG_PAUSED | SOUND_SS_FLAG_STOP_REQ | SOUND_SS_FLAG_SILENT)) || sound.coverState) {
-        if (!(stream->flags & SOUND_SS_FLAG_ADPCM)) {
+    if ((stream->flags & (SOUND_STREAM_FLAG_MUTE | SOUND_STREAM_FLAG_END | SOUND_STREAM_FLAG_PAUSE)) || sound.coverState) {
+        if (!(stream->flags & SOUND_STREAM_FLAG_ADPCM)) {
             for (; len1 != 0; len1--) {
                 *(buffer1++) = 0;
                 stream->samplePos++;
@@ -1853,33 +2057,36 @@ static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
     } else {
         entry = &stream->entries[0];
     }
-    if (stream->flags & SOUND_SS_FLAG_DPCM) {
+    if (stream->flags & SOUND_STREAM_FLAG_DPCM) {
         ssDecodeDPCM(stream, entry, buffer2, len2,
                      ssDecodeDPCM(stream, entry, buffer1, len1, entry->loadBuffer[entry->curBuf] + entry->srcPos));
-    } else if (stream->flags & SOUND_SS_FLAG_ADPCM) {
+    } else if (stream->flags & SOUND_STREAM_FLAG_ADPCM) {
         dst = buffer1; // FAKE: dst (not a u8* dst8) for the byte copies, so dst's split webs number above i/n
         src8 = entry->loadBuffer[entry->curBuf];
         src8 = src8 + entry->srcPos;
         n = ((len1 + 13) / 14) * 8;
         while (n != 0) {
 #if VERSION <= VERSION_DEMO_JP
-            // The demo writes silence once the stream is stopping.
-            if (stream->flags & SOUND_SS_FLAG_STOP_REQ) {
+            if (stream->flags & SOUND_STREAM_FLAG_END) {
                 *(u8*)dst = 0;
                 dst = (s16*)((u8*)dst + 1);
                 n--;
                 continue;
             }
-#endif
             *(u8*)dst = *(src8++);
             dst = (s16*)((u8*)dst + 1);
+            n--;
+            entry->srcPos++;
+#else
+            *(((u8*)dst)++) = *(src8++);
             n--;
             entry->srcPos++;
 #if VERSION >= VERSION_US
             entry->pos++;
 #endif
+#endif
             if (entry->srcPos >= entry->loadedLen[entry->curBuf]) {
-                if (entry->loaded == 0 && !(stream->flags & SOUND_SS_FLAG_END_LOADED)) {
+                if (entry->loaded == 0 && !(stream->flags & SOUND_STREAM_FLAG_READ_END)) {
                     entry->pos -= entry->srcPos;
                     entry->srcPos = 0;
                     src8 = entry->loadBuffer[entry->curBuf];
@@ -1890,17 +2097,18 @@ static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
                 entry->curBuf = 1 - entry->curBuf;
                 src8 = entry->loadBuffer[entry->curBuf];
             }
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
             entry->pos++;
 #endif
             if (entry->pos >= stream->loopEnd) {
                 entry->pos = stream->loopStart;
-                if (!(stream->flags & SOUND_SS_FLAG_LOOP)) {
-                    stream->flags |= SOUND_SS_FLAG_STOP_REQ;
+                if (!(stream->flags & SOUND_STREAM_FLAG_LOOP)) {
+                    stream->flags |= SOUND_STREAM_FLAG_END;
                     break;
                 }
             }
         }
+
         // FAKE: loop 2 reads through its own copy of src8; the copy takes the pre-RA scheduler's cycle-1 slot so `mr dst,buffer2`
         // issues after mulhwu (magic constant and dst then share r3, as in the target); the copy itself colours to a self-move (FAKES.md)
         src8b = src8;
@@ -1908,23 +2116,26 @@ static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
         n = ((len2 + 13) / 14) * 8;
         while (n != 0) {
 #if VERSION <= VERSION_DEMO_JP
-            // The demo writes silence once the stream is stopping.
-            if (stream->flags & SOUND_SS_FLAG_STOP_REQ) {
+            if (stream->flags & SOUND_STREAM_FLAG_END) {
                 *(u8*)dst = 0;
                 dst = (s16*)((u8*)dst + 1);
                 n--;
                 continue;
             }
-#endif
             *(u8*)dst = *(src8b++);
             dst = (s16*)((u8*)dst + 1);
+            n--;
+            entry->srcPos++;
+#else
+            *(((u8*)dst)++) = *(src8b++);
             n--;
             entry->srcPos++;
 #if VERSION >= VERSION_US
             entry->pos++;
 #endif
+#endif
             if (entry->srcPos >= entry->loadedLen[entry->curBuf]) {
-                if (entry->loaded == 0 && !(stream->flags & SOUND_SS_FLAG_END_LOADED)) {
+                if (entry->loaded == 0 && !(stream->flags & SOUND_STREAM_FLAG_READ_END)) {
                     entry->pos -= entry->srcPos;
                     entry->srcPos = 0;
                     src8b = entry->loadBuffer[entry->curBuf];
@@ -1935,98 +2146,33 @@ static u32 _sscallback(void* p_b1, u32 len1, void* p_b2, u32 p_l2, u32 user) {
                 entry->curBuf = 1 - entry->curBuf;
                 src8b = entry->loadBuffer[entry->curBuf];
             }
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
             entry->pos++;
 #endif
             if (entry->pos >= stream->loopEnd) {
                 entry->pos = stream->loopStart;
-                if (!(stream->flags & SOUND_SS_FLAG_LOOP)) {
-                    stream->flags |= SOUND_SS_FLAG_STOP_REQ;
+                if (!(stream->flags & SOUND_STREAM_FLAG_LOOP)) {
+                    stream->flags |= SOUND_STREAM_FLAG_END;
                     break;
                 }
             }
         }
         stream->samplePos = len1 + len2;
     } else {
-        i = len1;
-        dst = buffer1;
-        src16 = (s16*)(entry->loadBuffer[entry->curBuf] + (entry->srcPos & (~1)));
-        while (i != 0) {
-            *(dst++) = *(src16++);
-            i--;
-            stream->samplePos++;
-            entry->srcPos += 2;
-            if (entry->srcPos >= entry->loadedLen[entry->curBuf]) {
-                if (entry->loaded == 0 && !(stream->flags & SOUND_SS_FLAG_END_LOADED)) {
-                    entry->pos -= entry->srcPos;
-                    entry->srcPos = 0;
-                    src16 = (s16*)entry->loadBuffer[entry->curBuf];
-                    continue;
-                }
-                entry->loaded = 0;
-                entry->srcPos = 0;
-                entry->curBuf = 1 - entry->curBuf;
-                src16 = (s16*)entry->loadBuffer[entry->curBuf];
-            }
-            entry->pos += 2;
-            if (entry->pos >= stream->loopEnd) {
-                entry->pos = stream->loopStart;
-                if (!(stream->flags & SOUND_SS_FLAG_LOOP)) {
-                    stream->flags |= SOUND_SS_FLAG_STOP_REQ;
-                    break;
-                }
-            }
-        }
-        i = len2;
-        dst = buffer2;
-        while (i != 0) {
-            *(dst++) = *(src16++);
-            i--;
-            stream->samplePos++;
-            entry->srcPos += 2;
-            if (entry->srcPos >= entry->loadedLen[entry->curBuf]) {
-                if (entry->loaded == 0 && !(stream->flags & SOUND_SS_FLAG_END_LOADED)) {
-                    entry->pos -= entry->srcPos;
-                    entry->srcPos = 0;
-                    src16 = (s16*)entry->loadBuffer[entry->curBuf];
-                    continue;
-                }
-                entry->loaded = 0;
-                entry->srcPos = 0;
-                entry->curBuf = 1 - entry->curBuf;
-                src16 = (s16*)entry->loadBuffer[entry->curBuf];
-            }
-            entry->pos += 2;
-            if (entry->pos >= stream->loopEnd) {
-                entry->pos = stream->loopStart;
-                if (!(stream->flags & SOUND_SS_FLAG_LOOP)) {
-                    stream->flags |= SOUND_SS_FLAG_STOP_REQ;
-                    break;
-                }
-            }
-        }
+        ssDecodePCM(stream, entry, buffer2, len2,
+                    ssDecodePCM(stream, entry, buffer1, len1,
+                                (s16*)(entry->loadBuffer[entry->curBuf] + (entry->srcPos & (~1)))));
     }
     return stream->samplePos;
 }
 
-#if VERSION <= VERSION_DEMO_JP
-// FAKE: the demo had a function here that nothing called, so the linker dropped its code
-// from main.dol; its constants (3.5, 4.0, ".adp", ".song") stayed in .rodata. The original
-// body is unknown; this stand-in only recreates those constants and is dead-stripped the same way.
-f64 SoundDemoStrippedRate(const char* ext, f64 t) {
-    f64 adp = t * 3.5;
-    f64 song = t * 4.0;
-    if (strcmp(ext, ".adp") == 0) {
-        return adp;
-    }
-    if (strcmp(ext, ".song") == 0) {
-        return song;
-    }
-    return t;
-}
-#endif
-
 void SoundSSPlayChEx(s32 chan, const char* name, s32 aram);
+
+/** SoundSSPlayCh for stream channel 0. */
+// Original name and size (0x2c) from the JP demo map (see SoundSongPlay).
+void SoundSSPlay(const char* name) {
+    SoundSSPlayCh(0, name);
+}
 
 /** Plays stream name on stream channel chan from the disc (see SoundSSPlayChEx). */
 void SoundSSPlayCh(s32 chan, const char* name) {
@@ -2042,10 +2188,6 @@ void SoundSSPlayChEx(s32 chan, const char* name, s32 aram) {
     SoundStream* stream;
     int i;
     const char* path;
-#if VERSION <= VERSION_DEMO_JP
-    const char* paths[1];
-#endif
-
     stream = &sound.streams[chan];
     if (stream->flags) {
         SoundSSStopCh(chan);
@@ -2068,25 +2210,18 @@ void SoundSSPlayChEx(s32 chan, const char* name, s32 aram) {
     stream->span = 0;
     stream->curVol = 0.0f;
     stream->vol = 127.0f;
-    stream->flags = SOUND_SS_FLAG_USED;
+    stream->flags = SOUND_STREAM_FLAG_PLAY;
     if (aram) {
-        stream->flags |= SOUND_SS_FLAG_ARAM;
+        stream->flags |= SOUND_STREAM_FLAG_ARAM;
     }
 #if VERSION <= VERSION_DEMO_JP
-    sprintf(str, "%s/%s%s", getMarioStDvdRoot(), name, ".stm");
+    path = makeFilename(name, ".stm");
+    if (!(stream->entries[0].dvd = DVDMgrOpen(path, 0, 0))) {
 #else
     path = getMarioStDvdRoot();
-    sprintf(str, "%s/%s%s", path, name, ".stm");
+    sprintf(_ssGetStr(), "%s/%s%s", path, name, ".stm");
+    if (!(stream->entries[0].dvd = DVDMgrOpen(path = _ssGetStr(), 0, 0))) {
 #endif
-#if VERSION <= VERSION_DEMO_JP
-    // FAKE: the stream path goes through a one-element temporary so the address of str is built in the
-    // saved register first, as in the demo (behaviour-identical; see docs/FAKES.md)
-    paths[0] = str;
-    path = paths[0];
-#else
-    path = str;
-#endif
-    if (!(stream->entries[0].dvd = DVDMgrOpen(path, 0, 0))) {
         stream->flags = 0;
         return;
     }
@@ -2115,7 +2250,7 @@ static void SoundSSPlayChEx_main(s32 result, DVDFileInfo* fileInfo) {
     int j;
 
     if (result >= 0) {
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < SOUND_STREAM_MAX; i++) {
             stream = &sound.streams[i];
             if (stream->flags && &stream->entries[0].dvd->info == fileInfo) {
                 break;
@@ -2135,27 +2270,27 @@ static void SoundSSPlayChEx_main(s32 result, DVDFileInfo* fileInfo) {
         stream->entries[1].initHist = header->initHist1;
         stream->entries[0].loopHist = header->loopHist0;
         stream->entries[1].loopHist = header->loopHist1;
-        if (stream->loopStart != 0xFFFFFFFF) {
-            stream->flags |= SOUND_SS_FLAG_LOOP;
+        if (stream->loopStart != -1) {
+            stream->flags |= SOUND_STREAM_FLAG_LOOP;
         } else {
             stream->loopStart = 0;
         }
         switch (type) {
-            case 0:
+            case SOUND_STREAM_TYPE_RAW:
                 stream->entries[0].size = stream->loopEnd;
                 stream->entries[1].size = stream->loopEnd;
                 stream->entries[0].loopStart = stream->loopStart;
                 stream->entries[1].loopStart = stream->loopStart;
                 stream->dataOffset = 0x40;
                 break;
-            case 1:
-                stream->flags |= SOUND_SS_FLAG_DPCM;
+            case SOUND_STREAM_TYPE_DPCM:
+                stream->flags |= SOUND_STREAM_FLAG_DPCM;
                 stream->entries[0].hist = stream->entries[0].initHist;
                 stream->entries[1].hist = stream->entries[1].initHist;
                 stream->dataOffset = 0x40;
                 break;
-            case 2:
-                stream->flags |= SOUND_SS_FLAG_ADPCM;
+            case SOUND_STREAM_TYPE_ADPCM:
+                stream->flags |= SOUND_STREAM_FLAG_ADPCM;
                 src = (u8*)&header->coef0;
                 dst = (u8*)&stream->entries[0].info;
                 for (j = 32; j != 0; j--) {
@@ -2172,17 +2307,17 @@ static void SoundSSPlayChEx_main(s32 result, DVDFileInfo* fileInfo) {
                 break;
         }
         _ssResetEntries(stream);
-        if (!(stream->flags & SOUND_SS_FLAG_ARAM)) {
+        if (!(stream->flags & SOUND_STREAM_FLAG_ARAM)) {
             stream->entries[0].curBuf = 1;
-            _ssDVDReadAsync(stream, 0);
+            _ssDVDReadAsync_l(stream);
 #if VERSION >= VERSION_JP
-            stream->flags |= SOUND_SS_FLAG_READING_0;
+            stream->flags |= SOUND_STREAM_FLAG_READ_L;
 #endif
             if (stream->count == 2) {
                 stream->entries[1].curBuf = 1;
-                _ssDVDReadAsync(stream, 1);
+                _ssDVDReadAsync_r(stream);
 #if VERSION >= VERSION_JP
-                stream->flags |= SOUND_SS_FLAG_READING_1;
+                stream->flags |= SOUND_STREAM_FLAG_READ_R;
 #endif
             }
         }
@@ -2195,26 +2330,24 @@ static void SoundSSPlayChEx_main(s32 result, DVDFileInfo* fileInfo) {
             }
         }
         if (stream->count == 2) {
-            {
-                u8* p = (u8*)stream->entries[1].buffer;
-                u32 n;
-                for (n = size; n != 0; n--) {
-                    *p++ = 0;
-                }
+            u8* p = (u8*)stream->entries[1].buffer;
+            u32 n;
+            for (n = size; n != 0; n--) {
+                *p++ = 0;
             }
         }
         pan = 0;
         if (stream->count == 1) {
             pan = 0x40;
         }
-        if (!(stream->flags & SOUND_SS_FLAG_ADPCM)) {
+        if (!(stream->flags & SOUND_STREAM_FLAG_ADPCM)) {
             stream->entries[0].streamId = sndStreamAllocEx(0xFF, stream->entries[0].buffer, 0xE00, stream->freq, 0, pan,
                                                            0, 0, 0, 0, 0x10000, _sscallback, i, NULL);
             if (stream->count == 2) {
                 stream->entries[1].streamId = sndStreamAllocEx(0xFF, stream->entries[1].buffer, 0xE00, stream->freq, 0,
                                                                0x7F, 0, 0, 0, 0, 0x10000, _sscallback, i | 0x100, NULL);
             }
-            stream->flags |= SOUND_SS_FLAG_ACTIVE;
+            stream->flags |= SOUND_STREAM_FLAG_STARTED;
         } else {
             stream->entries[0].streamId =
                 sndStreamAllocEx(0xFF, stream->entries[0].buffer, 0xE00, stream->freq, 0, pan, 0, 0, 0, 0, 0x10001,
@@ -2227,14 +2360,13 @@ static void SoundSSPlayChEx_main(s32 result, DVDFileInfo* fileInfo) {
         }
 #if VERSION <= VERSION_DEMO_JP
         SoundSSSetPanCh(i, stream->pan);
+#endif
         stream->fadeStep = stream->vol;
-        stream->flags |= SOUND_SS_FLAG_FADE_IN;
-#else
-        stream->fadeStep = stream->vol;
-        stream->flags |= SOUND_SS_FLAG_FADE_IN;
+        stream->flags |= SOUND_STREAM_FLAG_FADEIN;
+#if VERSION >= VERSION_JP
         SoundSSSetPanCh(i, stream->pan);
 #endif
-        if (stream->flags & SOUND_SS_FLAG_ARAM) {
+        if (stream->flags & SOUND_STREAM_FLAG_ARAM) {
             len = DVDMgrGetLength(stream->entries[0].dvd);
             if (stream->entries[0].offset + SS_LOAD_BUFFER_SIZE >= len) {
                 size = len - stream->entries[0].offset;
@@ -2248,29 +2380,35 @@ static void SoundSSPlayChEx_main(s32 result, DVDFileInfo* fileInfo) {
     }
 }
 
+/** SoundSSStopCh for stream channel 0. */
+// Original name and size (0x114) from the JP demo map (see SoundSongPlay).
+void SoundSSStop(void) {
+    SoundSSStopCh(0);
+}
+
 /**
  * Stops stream chan and frees its MusyX streams and files;
- * the demo defers the stop when the stream has not started.
+ * the early demos defer the stop when the stream has not started.
  */
-void SoundSSStopCh(s32 chan) {
+void SoundSSStopCh(u32 chan) {
     SoundStream* stream;
 
     if (sound.streams[chan].flags) {
         stream = &sound.streams[chan];
 #if VERSION <= VERSION_DEMO_JP
-        if (!(stream->flags & SOUND_SS_FLAG_ACTIVE)) {
-            stream->flags |= SOUND_SS_FLAG_STOP_REQ;
+        if (!(stream->flags & SOUND_STREAM_FLAG_STARTED)) {
+            stream->flags |= SOUND_STREAM_FLAG_END;
             return;
         }
 #else
-        SoundIntOff();
+        sndDisableIRQ();
 #endif
-        if (stream->flags & SOUND_SS_FLAG_ARAM) {
+        if (stream->flags & SOUND_STREAM_FLAG_ARAM) {
             sound.slotUsed[stream->slot] = 0;
         }
         stream->flags = 0;
 #if VERSION <= VERSION_DEMO_JP
-        SoundIntOff();
+        sndDisableIRQ();
 #endif
         DVDMgrClose(stream->entries[0].dvd);
         DVDMgrClose(stream->entries[1].dvd);
@@ -2278,12 +2416,18 @@ void SoundSSStopCh(s32 chan) {
         if (stream->count == 2) {
             sndStreamFree(stream->entries[1].streamId);
         }
-        SoundIntOn();
+        sndEnableIRQ();
         sound.streamChannel = -1;
     }
 }
 
-/** Fades stream chan out over the fade-out time (converted to frames at the current frame rate in US and PAL). */
+/** SoundSSFadeoutCh for stream channel 0. */
+// Original name and size (0x74) from the JP demo map (see SoundSongPlay).
+void SoundSSFadeout(void) {
+    SoundSSFadeoutCh(0);
+}
+
+/** Fades stream chan out over the fade-out time (converted to frames at the current frame rate in US and later). */
 void SoundSSFadeoutCh(s32 chan) {
     SoundStream* stream = &sound.streams[chan];
     f32 frames;
@@ -2298,8 +2442,79 @@ void SoundSSFadeoutCh(s32 chan) {
             frames = 1.0f;
         }
         stream->fadeStep = stream->curVol / frames;
-        stream->flags |= SOUND_SS_FLAG_FADE_OUT;
+        stream->flags |= SOUND_STREAM_FLAG_FADEOUT;
     }
+}
+
+/** SoundSSFademuteCh for stream channel 0. */
+// Original name and size (0x74) from the JP demo map (see SoundSongPlay).
+void SoundSSFademute(void) {
+    SoundSSFademuteCh(0);
+}
+
+/** Fades stream chan out over the fade-out time and pauses it at silence (SoundSSMain sets the mute flag). */
+// Original name and size (0x7c) from the JP demo map (UNUSED there: nothing calls it); SoundSSFadeoutCh for
+// SOUND_STREAM_FLAG_FADEMUTE, the fade SoundSSMain runs on the same fadeStep.
+void SoundSSFademuteCh(s32 chan) {
+    SoundStream* stream = &sound.streams[chan];
+    f32 frames;
+
+    if (stream->flags) {
+#if VERSION >= VERSION_US
+        frames = sound.fadeOut / (1000.0f / gp->framerate);
+#else
+        frames = sound.fadeOut / 16.666666f;
+#endif
+        if (frames < 1.0f) {
+            frames = 1.0f;
+        }
+        stream->fadeStep = stream->curVol / frames;
+        stream->flags |= SOUND_STREAM_FLAG_FADEMUTE;
+    }
+}
+
+/** SoundSSFadeinCh for stream channel 0. */
+// Original name and size (0x80) from the JP demo map, like SoundSSFadeinCh (0x88) and SoundSSFadeinChEx (0x84)
+// (UNUSED there: nothing calls them; the map lists them in this order between SoundSSFademuteCh and
+// SoundSSContinue).
+void SoundSSFadein(void) {
+    SoundSSFadeinCh(0);
+}
+
+/** SoundSSFadeinChEx with the fade-in time. */
+void SoundSSFadeinCh(s32 chan) {
+    SoundSSFadeinChEx(chan, sound.fadeIn);
+}
+
+/**
+ * Fades stream chan in from silence to its volume over time milliseconds (SoundSSMain adds fadeStep per frame).
+ * SoundSSFadeoutCh's form for SOUND_STREAM_FLAG_FADEIN with the time as a parameter. The sizes fix an s32 time
+ * (u16 makes SoundSSFadeinCh 0x84) and one more store: the silent start (curVol = 0) that SoundSSMain's fade-in
+ * needs; where it is placed is a choice.
+ */
+void SoundSSFadeinChEx(s32 chan, s32 time) {
+    SoundStream* stream = &sound.streams[chan];
+    f32 frames;
+
+    if (stream->flags) {
+#if VERSION >= VERSION_US
+        frames = time / (1000.0f / gp->framerate);
+#else
+        frames = time / 16.666666f;
+#endif
+        if (frames < 1.0f) {
+            frames = 1.0f;
+        }
+        stream->curVol = 0.0f;
+        stream->fadeStep = stream->vol / frames;
+        stream->flags |= SOUND_STREAM_FLAG_FADEIN;
+    }
+}
+
+/** SoundSSContinueCh for stream channel 0. */
+// Original name and size (0x38) from the JP demo map (see SoundSongPlay).
+void SoundSSContinue(void) {
+    SoundSSContinueCh(0);
 }
 
 /** Resumes a paused stream on chan and fades it back in to its volume. */
@@ -2307,24 +2522,30 @@ void SoundSSContinueCh(s32 chan) {
     SoundStream* stream = &sound.streams[chan];
 
     if (stream->flags) {
-        stream->flags &= ~SOUND_SS_FLAG_PAUSED;
+        stream->flags &= ~SOUND_STREAM_FLAG_MUTE;
         stream->fadeStep = stream->vol;
-        stream->flags |= SOUND_SS_FLAG_FADE_IN;
+        stream->flags |= SOUND_STREAM_FLAG_FADEIN;
     }
+}
+
+/** SoundSSSetPanCh for stream channel 0. */
+// Original name and size (0x158) from the JP demo map (see SoundSongPlay).
+void SoundSSSetPan(u8 pan) {
+    SoundSSSetPanCh(0, pan);
 }
 
 /**
  * Sets the pan of stream chan; a stereo stream keeps its two channels panned left
  * and right with the balance applied.
  */
-void SoundSSSetPanCh(s32 chan, u8 pan) {
+void SoundSSSetPanCh(u32 chan, u8 pan) {
     SoundStream* stream;
     f32 left, right;
 
     if (sound.streams[chan].flags) {
         stream = &sound.streams[chan];
         stream->pan = pan;
-        if (stream->flags & SOUND_SS_FLAG_ACTIVE) {
+        if (stream->flags & SOUND_STREAM_FLAG_STARTED) {
             if (stream->count == 1) {
                 sndStreamMixParameter(stream->entries[0].streamId, stream->curVol, pan, stream->span, 0);
             } else {
@@ -2332,8 +2553,7 @@ void SoundSSSetPanCh(s32 chan, u8 pan) {
                 right = left;
                 if (pan < 64) {
                     right = (((f32)pan * stream->curVol) / 63.0f);
-                }
-                if (!((u32)(pan - 64) >> 31)) {
+                } else {
                     left = (((f32)(127 - pan) * stream->curVol) / 63.0f);
                 }
                 sndStreamMixParameter(stream->entries[0].streamId, left, 0, stream->span, 0);
@@ -2343,41 +2563,59 @@ void SoundSSSetPanCh(s32 chan, u8 pan) {
     }
 }
 
+/** SoundSSSetVolCh for stream channel 0. */
+// Original name and size (0x18c) from the JP demo map (see SoundSongPlay).
+void SoundSSSetVol(u8 vol) {
+    SoundSSSetVolCh(0, vol);
+}
+
 /** Sets the volume of stream chan. */
-void SoundSSSetVolCh(s32 chan, u8 vol) {
+void SoundSSSetVolCh(u32 chan, u8 vol) {
     SoundStream* stream;
 
     if (sound.streams[chan].flags) {
         stream = &sound.streams[chan];
         stream->vol = stream->curVol = vol;
-        if (stream->flags & SOUND_SS_FLAG_ACTIVE) {
+        if (stream->flags & SOUND_STREAM_FLAG_STARTED) {
             SoundSSSetPanCh(chan, stream->pan);
         }
     }
 }
 
 /** Returns the volume of stream chan, 0 when none plays. */
-s32 SoundSSGetVolCh(s32 chan) {
+u8 SoundSSGetVolCh(s32 chan) {
     SoundStream* stream;
 
     stream = &sound.streams[chan];
     if (stream->flags) {
-        return (s32)stream->vol;
+        return stream->vol;
     } else {
         return 0;
     }
 }
 
+/** SoundSSSetSrndPanCh for stream channel 0. */
+// Original name and size (0x178) from the JP demo map (see SoundSongPlay).
+void SoundSSSetSrndPan(u8 span) {
+    SoundSSSetSrndPanCh(0, span);
+}
+
 /** Sets the surround (front-back) pan of stream chan. */
-void SoundSSSetSrndPanCh(s32 chan, u8 span) {
+void SoundSSSetSrndPanCh(u32 chan, u8 span) {
     SoundStream* stream = &sound.streams[chan];
 
     if (stream->flags) {
         stream->span = span;
-        if (stream->flags & SOUND_SS_FLAG_ACTIVE) {
+        if (stream->flags & SOUND_STREAM_FLAG_STARTED) {
             SoundSSSetPanCh(chan, stream->pan);
         }
     }
+}
+
+/** SoundSSSetPlayFreqCh for stream channel 0. */
+// Original name and size (0xcc) from the JP demo map (see SoundSongPlay).
+void SoundSSSetPlayFreq(u16 freq) {
+    SoundSSSetPlayFreqCh(0, freq);
 }
 
 /** Sets the playback sample rate of stream chan (both channels of a stereo stream). */
@@ -2386,13 +2624,13 @@ void SoundSSSetPlayFreqCh(s32 chan, u16 freq) {
 
     if (stream->flags) {
         stream->freq = freq;
-        if (stream->flags & SOUND_SS_FLAG_ACTIVE) {
-            SoundIntOff();
+        if (stream->flags & SOUND_STREAM_FLAG_STARTED) {
+            sndDisableIRQ();
             sndStreamFrq(stream->entries[0].streamId, stream->freq);
             if (stream->count == 2) {
                 sndStreamFrq(stream->entries[1].streamId, stream->freq);
             }
-            SoundIntOn();
+            sndEnableIRQ();
         }
     }
 }
@@ -2405,14 +2643,14 @@ u32 SoundSSCheck(s32 chan) {
 /** Pauses stream chan: while flagged it gets no fades or disc reads. */
 void SoundSSMuteOn(s32 chan) {
     if (sound.streams[chan].flags) {
-        sound.streams[chan].flags |= SOUND_SS_FLAG_PAUSED;
+        sound.streams[chan].flags |= SOUND_STREAM_FLAG_MUTE;
     }
 }
 
 /** Lifts the pause flag of stream chan without the fade-in of SoundSSContinueCh. */
 void SoundSSMuteOff(s32 chan) {
     if (sound.streams[chan].flags) {
-        sound.streams[chan].flags &= ~SOUND_SS_FLAG_PAUSED;
+        sound.streams[chan].flags &= ~SOUND_STREAM_FLAG_MUTE;
     }
 }
 
@@ -2421,21 +2659,21 @@ void SoundSSMuteOff(s32 chan) {
  * fade-to-pause, fade-out (stopping at silence) and fade-in.
  */
 static void SoundSSMain(void) {
-    u32 i;
+    s32 i;
     SoundStream* stream;
 
-    for (i = 0; (int)i < 3; i++) {
+    for (i = 0; i < SOUND_STREAM_MAX; i++) {
         stream = &sound.streams[i];
-        if ((stream->flags & SOUND_SS_FLAG_ACTIVE) && !(stream->flags & SOUND_SS_FLAG_PAUSED)) {
-            if (stream->flags & SOUND_SS_FLAG_STOP_REQ) {
-                stream->flags &= ~SOUND_SS_FLAG_STOP_REQ;
+        if ((stream->flags & SOUND_STREAM_FLAG_STARTED) && !(stream->flags & SOUND_STREAM_FLAG_MUTE)) {
+            if (stream->flags & SOUND_STREAM_FLAG_END) {
+                stream->flags &= ~SOUND_STREAM_FLAG_END;
                 SoundSSStopCh(i);
                 continue;
             }
-            if (stream->flags & SOUND_SS_FLAG_FADE_TO_PAUSE) {
+            if (stream->flags & SOUND_STREAM_FLAG_FADEMUTE) {
                 if (stream->curVol == 0.0f) {
-                    stream->flags |= SOUND_SS_FLAG_PAUSED;
-                    stream->flags &= ~SOUND_SS_FLAG_FADE_TO_PAUSE;
+                    stream->flags |= SOUND_STREAM_FLAG_MUTE;
+                    stream->flags &= ~SOUND_STREAM_FLAG_FADEMUTE;
                     continue;
                 }
                 stream->curVol -= stream->fadeStep;
@@ -2444,9 +2682,9 @@ static void SoundSSMain(void) {
                 }
                 SoundSSSetPanCh(i, stream->pan);
             }
-            if (stream->flags & SOUND_SS_FLAG_FADE_OUT) {
+            if (stream->flags & SOUND_STREAM_FLAG_FADEOUT) {
                 if (stream->curVol == 0.0f) {
-                    stream->flags &= ~SOUND_SS_FLAG_FADE_OUT;
+                    stream->flags &= ~SOUND_STREAM_FLAG_FADEOUT;
                     SoundSSStopCh(i);
                     continue;
                 }
@@ -2456,12 +2694,12 @@ static void SoundSSMain(void) {
                 }
                 SoundSSSetPanCh(i, stream->pan);
             }
-            if (stream->flags & SOUND_SS_FLAG_FADE_IN) {
+            if (stream->flags & SOUND_STREAM_FLAG_FADEIN) {
                 stream->curVol += stream->fadeStep;
                 if (stream->curVol >= stream->vol) {
                     stream->curVol = stream->vol;
                     stream->fadeStep = 0.0f;
-                    stream->flags &= ~SOUND_SS_FLAG_FADE_IN;
+                    stream->flags &= ~SOUND_STREAM_FLAG_FADEIN;
                 }
                 SoundSSSetPanCh(i, stream->pan);
             }
@@ -2477,23 +2715,23 @@ static void SoundSSMainInt(void) {
     int i;
     SoundStream* stream;
 
-    for (i = 0; i < 3; i++) {
+    for (i = 0; i < SOUND_STREAM_MAX; i++) {
         stream = &sound.streams[i];
 #if VERSION >= VERSION_US
-        if ((stream->flags & SOUND_SS_FLAG_ACTIVE) && !(stream->flags & SOUND_SS_FLAG_PAUSED)) {
-            if (stream->flags & SOUND_SS_FLAG_USED) {
-                if (stream->entries[0].srcPos != 0 && stream->entries[0].loaded == 0 && !(stream->flags & SOUND_SS_FLAG_READING_0)) {
-                    _ssDVDReadAsync(stream, 0);
-                    stream->flags |= SOUND_SS_FLAG_READING_0;
-                    if (stream->flags & SOUND_SS_FLAG_ARAM) {
+        if ((stream->flags & SOUND_STREAM_FLAG_STARTED) && !(stream->flags & SOUND_STREAM_FLAG_MUTE)) {
+            if (stream->flags & SOUND_STREAM_FLAG_PLAY) {
+                if (stream->entries[0].srcPos != 0 && stream->entries[0].loaded == 0 && !(stream->flags & SOUND_STREAM_FLAG_READ_L)) {
+                    _ssDVDReadAsync_l(stream);
+                    stream->flags |= SOUND_STREAM_FLAG_READ_L;
+                    if (stream->flags & SOUND_STREAM_FLAG_ARAM) {
                         stream->entries[0].loaded = 1;
                     }
                 }
                 if (stream->count == 2 && stream->entries[1].srcPos != 0 && stream->entries[1].loaded == 0 &&
-                    !(stream->flags & SOUND_SS_FLAG_READING_1)) {
-                    _ssDVDReadAsync(stream, 1);
-                    stream->flags |= SOUND_SS_FLAG_READING_1;
-                    if (stream->flags & SOUND_SS_FLAG_ARAM) {
+                    !(stream->flags & SOUND_STREAM_FLAG_READ_R)) {
+                    _ssDVDReadAsync_r(stream);
+                    stream->flags |= SOUND_STREAM_FLAG_READ_R;
+                    if (stream->flags & SOUND_STREAM_FLAG_ARAM) {
                         stream->entries[1].loaded = 1;
                     }
                 }
@@ -2506,33 +2744,50 @@ static void SoundSSMainInt(void) {
                 stream->entries[1].offset = stream->entries[0].offset;
             }
             if (stream->count == 2) {
-                if (sound.coverState == 2 && stream->entries[0].loaded == 1 && stream->entries[1].loaded == 1) {
-                    sound.coverState = 0;
+                if (sound.coverState == SOUND_COVER_RELOADING && stream->entries[0].loaded == 1 && stream->entries[1].loaded == 1) {
+                    sound.coverState = SOUND_COVER_CLOSED;
                 }
-            } else if (sound.coverState == 2 && stream->entries[0].loaded == 1) {
-                sound.coverState = 0;
-            }
-        }
+            } else if (sound.coverState == SOUND_COVER_RELOADING && stream->entries[0].loaded == 1) {
+                sound.coverState = SOUND_COVER_CLOSED;
 #else
-        if ((stream->flags & SOUND_SS_FLAG_ACTIVE) && !(stream->flags & SOUND_SS_FLAG_PAUSED) && (stream->flags & SOUND_SS_FLAG_USED)) {
-            if (stream->entries[0].srcPos != 0 && stream->entries[0].loaded == 0 && !(stream->flags & SOUND_SS_FLAG_READING_0)) {
-                _ssDVDReadAsync(stream, 0);
-                stream->flags |= SOUND_SS_FLAG_READING_0;
-                if (stream->flags & SOUND_SS_FLAG_ARAM) {
+        if ((stream->flags & SOUND_STREAM_FLAG_STARTED) && !(stream->flags & SOUND_STREAM_FLAG_MUTE) && (stream->flags & SOUND_STREAM_FLAG_PLAY)) {
+            if (stream->entries[0].srcPos != 0 && stream->entries[0].loaded == 0 && !(stream->flags & SOUND_STREAM_FLAG_READ_L)) {
+                _ssDVDReadAsync_l(stream);
+                stream->flags |= SOUND_STREAM_FLAG_READ_L;
+                if (stream->flags & SOUND_STREAM_FLAG_ARAM) {
                     stream->entries[0].loaded = 1;
                 }
             }
             if (stream->count == 2 && stream->entries[1].srcPos != 0 && stream->entries[1].loaded == 0 &&
-                !(stream->flags & SOUND_SS_FLAG_READING_1)) {
-                _ssDVDReadAsync(stream, 1);
-                stream->flags |= SOUND_SS_FLAG_READING_1;
-                if (stream->flags & SOUND_SS_FLAG_ARAM) {
+                !(stream->flags & SOUND_STREAM_FLAG_READ_R)) {
+                _ssDVDReadAsync_r(stream);
+                stream->flags |= SOUND_STREAM_FLAG_READ_R;
+                if (stream->flags & SOUND_STREAM_FLAG_ARAM) {
                     stream->entries[1].loaded = 1;
                 }
+#endif
             }
         }
-#endif
     }
+}
+
+/**
+ * Hooks the audio DMA interrupt (keeping the previous callback for SoundAIDMACallback to chain to) and restarts
+ * the sample record; US and later also note the DMA buffer and hang if it is longer than 0x280 bytes.
+ */
+// Original name and size (0x40) from the JP demo map (UNUSED there: its one call, in SoundInit, is inlined).
+void SoundInitAI(void) {
+    sound.callback = AIRegisterDMACallback(SoundAIDMACallback);
+#if VERSION >= VERSION_US
+    sound.dmaAddress = (u8*)(AIGetDMAStartAddr() | 0x80000000);
+    sound.dmaLength = AIGetDMALength();
+    if (sound.dmaLength > 0x280) {
+        while (1)
+            ;
+    }
+#endif
+    sound.sampleBank = 0;
+    sound.sampleIndex = 0;
 }
 
 /**
@@ -2548,13 +2803,7 @@ static void SoundAIDMACallback(void) {
     s32 n;
     s16* out;
     s16* src;
-#else
-    s16* src;
-    s32 n;
-    s16* out;
-#endif
 
-#if VERSION >= VERSION_US
     if (sound.callback != NULL) {
         sound.callback();
     }
@@ -2562,6 +2811,10 @@ static void SoundAIDMACallback(void) {
     address = sound.dmaAddress;
     length = sound.dmaLength;
 #else
+    s16* src;
+    s32 n;
+    s16* out;
+
     sound.callback();
     sound.dmaAddress = (u8*)(AIGetDMAStartAddr() | 0x80000000);
     sound.dmaLength = length = AIGetDMALength();

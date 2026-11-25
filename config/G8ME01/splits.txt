@@ -79,17 +79,17 @@ driver/camdrv.c:
 driver/dispdrv.c:
 	.text       start:0x80010864 end:0x80010CD4
 	.data       start:0x80304460 end:0x803044A0
-	.sdata      start:0x80414FD8 end:0x80415020
+	.sdata      start:0x80414FD8 end:0x80415004
 	.sbss       start:0x8041E610 end:0x8041E620
-	.sdata2     start:0x8041F760 end:0x8041F770
+	.sdata2     start:0x8041F760 end:0x8041F778
 
 driver/fadedrv.c:
 	.text       start:0x80010CD4 end:0x80013CEC
 	.rodata     start:0x802BF668 end:0x802BF7B8
 	.data       start:0x803044A0 end:0x803048A0
-	.sdata      start:0x80415020 end:0x80415040
+	.sdata      start:0x80415020 end:0x80415040 align:32
 	.sbss       start:0x8041E620 end:0x8041E628
-	.sdata2     start:0x8041F770 end:0x8041F838
+	.sdata2     start:0x8041F778 end:0x8041F838
 	.sbss2      start:0x80429518 end:0x80429520
 
 driver/hitdrv.c:
@@ -209,7 +209,7 @@ driver/npcdrv.c:
 
 event/evt_npc.c:
 	.text       start:0x8004CF88 end:0x80053764
-	.rodata     start:0x802C1470 end:0x802C1540
+	.rodata     start:0x802C1470 end:0x802C1548
 	.data       start:0x80306A00 end:0x80306A60
 	.sdata      start:0x80415E18 end:0x80415E38
 	.sbss       start:0x8041E8E0 end:0x8041E8E8
@@ -218,7 +218,7 @@ event/evt_npc.c:
 
 event/evt_sub.c:
 	.text       start:0x80053764 end:0x800561B8
-	.rodata     start:0x802C1540 end:0x802C18A0
+	.rodata     start:0x802C1548 end:0x802C18A0
 	.data       start:0x80306A60 end:0x80309748
 	.sdata      start:0x80415E38 end:0x80415EB0
 	.sbss       start:0x8041E8E8 end:0x8041E8F0
@@ -1144,7 +1144,7 @@ party/party_vivian.c:
 	.rodata     start:0x802F8948 end:0x802F89C0
 	.data       start:0x8038E868 end:0x8038E8B8
 	.sbss       start:0x8041EC50 end:0x8041EC58
-	.sdata2     start:0x80424270 end:0x804242E0
+	.sdata2     start:0x80424270 end:0x804242DC
 
 party/party_cloud.c:
 	.text       start:0x801868F0 end:0x80188260
@@ -2679,11 +2679,11 @@ effect/eff_queen2.c:
 effect/eff_gonbaba_breath.c:
 	.text       start:0x8025AC70 end:0x8025C0B8
 	.rodata     start:0x80302B78 end:0x80302BA0
-	.sdata      start:0x8041DFF8 end:0x8041E0C0
+	.sdata      start:0x8041DFF8 end:0x8041E0A4
 	.sdata2     start:0x80428A90 end:0x80428B10
 
 gxsub.c:
-	.sdata      start:0x8041E0C0 end:0x8041E0E0
+	.sdata      start:0x8041E0C0 end:0x8041E0E0 align:32
 
 event/evt_memcard.c:
 	.text       start:0x8025C0B8 end:0x8025C4C0

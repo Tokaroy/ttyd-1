@@ -1,4 +1,5 @@
 // offscreendrv.c: the offscreen driver (OffscreenEntry): named screen regions copied into textures each frame.
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -6,11 +7,14 @@
 #include "memory.h"
 
 // OffscreenEntry.flags
-#define OFFSCREEN_FLAG_USED 0x1     // entry allocated (offscreenEntry)
-#define OFFSCREEN_FLAG_HAS_AREA 0x2 // something drew into it this frame: the current bounding box is valid
-#define OFFSCREEN_FLAG_CAPTURED 0x4 // offscreenDisp copied the area to texObj this frame
+typedef enum OffscreenFlags {
+    OFFSCREEN_FLAG_ACTIVE = (1 << 0), // 0x1, slot in use
+    OFFSCREEN_FLAG_BOX = (1 << 1),    // 0x2, a bounding box was added this frame
+    OFFSCREEN_FLAG_COPIED = (1 << 2), // 0x4, the texture was copied this frame
+} OffscreenFlags;
+
 typedef struct OffscreenEntry {
-    s32 flags;          // 0x0
+    s32 flags;          // 0x0, OffscreenFlags
     char name[16];      // 0x4
     u16 currLeft;       // 0x14
     u16 currTop;        // 0x16
@@ -35,6 +39,7 @@ void offscreenInit(void);
 void offscreenReset(BOOL inBattle);
 s32 offscreenEntry(const char* name);
 s32 offscreenNameToId(const char* name);
+const char* offscreenIdToName(s32 id);
 OffscreenEntry* offscreenNameToPtr(const char* name);
 void offscreenDelete(const char* name);
 BOOL offscreenGetBoundingBox_BeforeFrame(s32 id, u16* left, u16* top, u16* right, u16* bottom);

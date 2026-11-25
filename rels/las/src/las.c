@@ -1,22 +1,35 @@
 // las (ラストダンジョン, Palace of Shadow; las is the "last" dungeon): shared code and data of the area: the map-object
-// helpers, item boxes, torches and the battle setup tables.
+// helpers, item boxes, torches and the registration of the battle setup tables (battle_database_las.c).
 
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mobj.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_sub.h"
+#include "driver/mapdrv.h"
+#include "system.h"
 
 #include "data/mapdata.h"
 #include "driver/mobjdrv.h"
 #include "driver/animdrv.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
 #include "las.h"
-#include "rel_module.h"
-#include "driver/mapdrv.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
+
+EvtWord box_syutugen[177];
+EvtWord move_dai[130];
+EvtWord hikari_evt[54];
 
 /**
  * REL entry point: runs the static constructors,
@@ -89,7 +102,7 @@ static USER_FUNC(mobj_set_color) {
     MapObjectEntry* mobj = mobjNameToPtr(name);
 
     animPoseSetMaterialEvtColor(mobj->poseId, (GXColor){r, g, b, 255});
-    animPoseSetMaterialFlagOn(mobj->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(mobj->poseId, MAP_OBJ_FLAG_COLOR);
     return EVT_RETURN_DONE;
 }
 
@@ -97,7 +110,7 @@ static USER_FUNC(mobj_set_color) {
 static USER_FUNC(mobj_color_off) {
     MapObjectEntry* mobj = mobjNameToPtr((const char*)evtGetValue(event, event->args[0]));
 
-    animPoseSetMaterialFlagOff(mobj->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOff(mobj->poseId, MAP_OBJ_FLAG_COLOR);
     return EVT_RETURN_DONE;
 }
 
@@ -134,7 +147,7 @@ EVT_BEGIN(box_syutugen)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_TBOX_APPEAR2"), LW(3), LW(4), LW(5), 0)
     END_INLINE_EVENT
     CALL(mobj_set_color, LW(2), 0, 0, 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 1000, 3000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1000, 3000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -152,7 +165,7 @@ EVT_BEGIN(box_syutugen)
     CALL(evt_eff_softdelete, STRING("mist"))
     WAIT_MS(1000)
     CALL(evt_snd_sfxoff, LW(8))
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 1000)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(mobj_set_color, LW(2), LW(0), LW(0), LW(0))
@@ -175,11 +188,11 @@ EVT_BEGIN(move_dai)
     SET_VALUE(LW(8), LW(1))
     SET_VALUE(LW(9), LW(2))
     CALL(evt_mapobj_trans, 1, LW(7), 0, 0, -100)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(7), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(7), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, LW(8), 0, 1)
     CALL(evt_mapobj_get_position, LW(7), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_FLOOR_MOVE1"), LW(0), LW(1), LW(2), LW(6))
-    CALL(evt_sub_intpl_msec_init, 11, -100, 0, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -100, 0, 1000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, LW(7), 0, 0, LW(0))
@@ -192,7 +205,7 @@ EVT_BEGIN(move_dai)
     WAIT_MS(LW(9))
     CALL(evt_mapobj_get_position, LW(7), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG8_FLOOR_MOVE1"), LW(0), LW(1), LW(2), LW(6))
-    CALL(evt_sub_intpl_msec_init, 11, 0, -100, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -100, 1000)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, LW(7), 0, 0, LW(0))
@@ -202,14 +215,14 @@ EVT_BEGIN(move_dai)
         GOTO(1)
     END_IF
     CALL(evt_snd_sfxoff, LW(6))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(7), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(7), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, LW(8), 0, 0)
     RETURN
 EVT_END()
 
 /**
- * Event script: forever picks one of the six "hikari_0x" light animations of the map at random and plays it,
- * waiting for each to finish.
+ * Plays one of the six map animations hikari_01 to hikari_06 at random (evt_sub_random 5), waits for it to finish,
+ * and repeats forever.
  */
 EVT_BEGIN(hikari_evt)
     LOOP(0)
@@ -228,7 +241,7 @@ EVT_BEGIN(hikari_evt)
             CASE_EQUAL(5)
             SET_VALUE(LW(1), STRING("hikari_06"))
         END_SWITCH
-        CALL(evt_map_playanim, LW(1), 0, 0)
+        CALL(evt_map_playanim, LW(1), MAP_ANIM_PLAY_ONCE, 0)
         CALL(evt_map_checkanim, LW(1), LW(2), LW(3))
         WAIT_MS(LW(3))
     END_LOOP

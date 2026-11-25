@@ -1,20 +1,21 @@
 // Paper Mario 64 effect: timestamp: ten digit sprites that fade in with staggered delays around a point.
-#include "eff/n64/eff_timestamp_n64.h"
+
 #include "driver/camdrv.h"
+#include "eff/eff_magic1_n64.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "eff/eff_n64.h"
-#include "libc_decls.h"
+#include "eff/n64/eff_timestamp_n64.h"
 
 typedef struct EffTimestampN64Work {
     s32 type;           // 0x0
     Vec position;       // 0x4
     s32 lifetime;       // 0x10
     s32 frame;          // 0x14
-    s32 r;              // 0x18, color set at entry; never read
+    s32 r;              // 0x18
     s32 g;              // 0x1C
     s32 b;              // 0x20
     s32 bright;         // 0x24
@@ -31,15 +32,11 @@ typedef struct EffTimestampN64Work {
     s32 delay[10];      // 0x14C
 } EffTimestampN64Work;
 
-/** Size in percent of the ten pieces, repeating every four pieces. */
-static u8 scale_data[4] = {120, 80, 40, 60};
-/**
- * Red, green and blue of each piece: the pieces run through the rainbow from red through green
- * and blue back to red (only the first ten entries are used).
- */
+#if VERSION <= VERSION_DEMO_JP
 static u8 colr[17] = {255, 255, 255, 198, 138, 130, 130, 130, 130, 130, 175, 215, 250, 255, 255, 255, 255};
 static u8 colg[17] = {130, 130, 130, 130, 130, 165, 213, 255, 255, 255, 255, 255, 255, 225, 198, 159, 130};
 static u8 colb[17] = {130, 196, 255, 255, 255, 255, 255, 255, 202, 144, 130, 130, 130, 130, 130, 130, 130};
+#endif
 
 /**
  * Layout of the ten pieces, three numbers each: X and Y offset from the centre
@@ -50,8 +47,21 @@ static s32 pos_data[30] = {
     120, -30, 50, 10, 50,  30, 100, 30, 15,  40,  100, 40,  140, 90,  25,
 };
 
+/** Size in percent of the ten pieces, repeating every four pieces. */
+static u8 scale_data[4] = {120, 80, 40, 60};
+
+/**
+ * Red, green and blue of each piece: the table runs round the colour wheel from red through magenta, blue,
+ * cyan, green and yellow back to red (only the first ten entries, red to green, are used).
+ */
+#if VERSION >= VERSION_JP
+static u8 colr[17] = {255, 255, 255, 198, 138, 130, 130, 130, 130, 130, 175, 215, 250, 255, 255, 255, 255};
+static u8 colg[17] = {130, 130, 130, 130, 130, 165, 213, 255, 255, 255, 255, 255, 255, 225, 198, 159, 130};
+static u8 colb[17] = {130, 196, 255, 255, 255, 255, 255, 255, 202, 144, 130, 130, 130, 130, 130, 130, 130};
+#endif
+
 static void effTimestampMain(EffectEntry* effect);
-static void effTimestampDisp(CameraId cameraId, EffectEntry* effect);
+static void effTimestampDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns ten digit sprites around (x, y, z) that fade in with staggered delays;
@@ -60,7 +70,6 @@ static void effTimestampDisp(CameraId cameraId, EffectEntry* effect);
 EffectEntry* effTimestampN64Entry(s32 type, f32 x, f32 y, f32 z, f32 scale, s32 lifetime) {
     EffectEntry* effect;
     EffTimestampN64Work* work;
-    s32* p;
     s32 i;
 
     effect = effEntry();
@@ -69,7 +78,7 @@ EffectEntry* effTimestampN64Entry(s32 type, f32 x, f32 y, f32 z, f32 scale, s32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffTimestampN64Work));
     effect->userdata = work;
     effect->callback = effTimestampMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -87,7 +96,6 @@ EffectEntry* effTimestampN64Entry(s32 type, f32 x, f32 y, f32 z, f32 scale, s32 
     work->b = 120;
     work->alpha = 0;
     work->scale2 = 1.0f;
-    p = pos_data;
     for (i = 0; i < 10; i++) {
         work->posX[i] = pos_data[i * 3];
         work->posY[i] = pos_data[i * 3 + 1];
@@ -97,7 +105,6 @@ EffectEntry* effTimestampN64Entry(s32 type, f32 x, f32 y, f32 z, f32 scale, s32 
         work->rotZ[i] = 0.0f;
         work->digitAlpha[i] = 0;
         work->delay[i] = pos_data[i * 3 + 2];
-        p += 3;
     }
     return effect;
 }
@@ -120,8 +127,8 @@ static void effTimestampMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 64;
     }
     if (work->lifetime < 1000) {
@@ -154,14 +161,18 @@ static void effTimestampMain(EffectEntry* effect) {
         work->bright = (frame << 4) + 15;
     }
     for (i = 0; i < 10; i++) {
-        if (work->delay[i] == 0 || (work->delay[i] -= 1, work->delay[i] == 0)) {
-            work->digitAlpha[i] += 8;
-            if (work->digitAlpha[i] > 255) {
-                work->digitAlpha[i] = 255;
+        if (work->delay[i] != 0) {
+            work->delay[i] -= 1;
+            if (work->delay[i] != 0) {
+                continue;
             }
         }
+        work->digitAlpha[i] += 8;
+        if (work->digitAlpha[i] > 255) {
+            work->digitAlpha[i] = 255;
+        }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effTimestampDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effTimestampDisp, effect);
 }
 
 /**
@@ -169,7 +180,8 @@ static void effTimestampMain(EffectEntry* effect) {
  * and draws the ten pieces on it at their pos_data offsets with textures 0x5A/0x5B,
  * each in its own colour and size, turned to face the camera.
  */
-static void effTimestampDisp(CameraId cameraId, EffectEntry* effect) {
+static void effTimestampDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffTimestampN64Work* work;
     GXTexObj texObj;
@@ -220,7 +232,7 @@ static void effTimestampDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXScale(scale, 0.015625f, 0.015625f, 0.0f);
     GXLoadTexMtxImm(scale, GX_TEXMTX0, GX_MTX2x4);
     GXSetTevColor(GX_TEVREG1, (GXColor){0, 0, 0, work->alpha});
-    vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, 3)->address;
+    vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, SMART_GROUP_TEMP)->address;
     for (i = 0; i < 16; i++) {
         p = &vtx[i * 2];
         sc = work->scale2;
@@ -263,7 +275,8 @@ static void effTimestampDisp(CameraId cameraId, EffectEntry* effect) {
         GXLoadPosMtxImm(trans, GX_PNMTX0);
         GXSetCurrentMtx(GX_PNMTX0);
         GXSetTevColor(GX_TEVREG0, (GXColor){colr[i], colg[i], colb[i], bright * work->digitAlpha[i] / 255});
-        for (n = 0, k = 0; n < 15; n++, k += 2) {
+        for (n = 0; n < 15; n++) {
+            k = n * 2;
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(k, k + 2, k + 1, k, k + 1, k + 2, k + 3, k);
         }

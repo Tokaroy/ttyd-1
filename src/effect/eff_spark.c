@@ -1,12 +1,14 @@
 // Spark: five electric sparks burst outward in a ring around a point, repeating; type 0/1 set the sequence length.
 // Used for the electrified status in battle.
+
 #include "eff/eff_spark.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-
+#include "driver/effdrv.h"
 static void effSparkDisp(CameraId cameraId, EffectEntry* effect);
 static void effSparkMain(EffectEntry* effect);
 
@@ -27,17 +29,19 @@ typedef struct EffSparkParticle {
     f32 scale;   // 0x34
 } EffSparkParticle;
 
+// Six EffSparkParticle entries (effect->count): effSparkMain and effSparkDisp read element 0 as the header
+// (position, life, counter, alpha, scale) and loop over the five sparks after it
 typedef struct EffSparkWork {
     s32 type;                 // 0x0
     f32 x;                    // 0x4
     f32 y;                    // 0x8
     f32 z;                    // 0xC
-    f32 velX;                 // 0x10, header mirrors EffSparkParticle
-    f32 velY;                 // 0x14
-    f32 destX;                // 0x18
-    f32 destY;                // 0x1C
-    s32 seq;                  // 0x20
-    f32 angle;                // 0x24
+    f32 unk10;                // 0x10, EffSparkParticle velX; the header element never uses it
+    f32 unk14;                // 0x14, EffSparkParticle velY; the header element never uses it
+    f32 unk18;                // 0x18, EffSparkParticle destX; the header element never uses it
+    f32 unk1C;                // 0x1C, EffSparkParticle destY; the header element never uses it
+    s32 unk20;                // 0x20, EffSparkParticle seq; the header element never uses it
+    f32 unk24;                // 0x24, EffSparkParticle angle; the header element never uses it
     s32 life;                 // 0x28
     s32 counter;              // 0x2C
     s32 alpha;                // 0x30
@@ -47,16 +51,19 @@ typedef struct EffSparkWork {
 
 /** Length in frames of one spark cycle: 24 for type 0, 12 for type 1. */
 static s32 max_seq_num[2] = {24, 12};
+
 /** Spark size per frame of a type 0 cycle: full size briefly, then shrinking away. */
 static f32 scale_data[24] = {
     0.9f, 1.0f, 1.0f, 0.9f, 0.85f, 0.8f, 0.75f, 0.7f, 0.65f, 0.6f, 0.55f, 0.5f,
     0.45f, 0.4f, 0.35f, 0.3f, 0.25f, 0.2f, 0.15f, 0.1f, 0.05f, 0.03f, 0.02f, 0.01f,
 };
+
 /** Spark alpha per frame of a type 0 cycle, fully opaque after the first frame. */
 static u8 a_data[24] = { 0xFA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
                          0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF };
 /** Spark size per frame of the shorter type 1 cycle. */
 static f32 scale_data2[12] = {0.9f, 1.0f, 1.0f, 0.9f, 0.8f, 0.7f, 0.6f, 0.5f, 0.4f, 0.3f, 0.2f, 0.1f};
+
 /** Spark alpha per frame of the type 1 cycle. */
 static u8 a_data2[12] = {0xFA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
@@ -65,19 +72,20 @@ static u8 a_data2[12] = {0xFA, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0
  * `type` 0 or 1 picks the sequence length (24 or 12 frames);
  * the five sparks start with staggered sequence counters. The battle status code shows it for electrified units.
  */
-EffectEntry* effSparkEntry(s32 type, f32 x, f32 y, f32 z) {
+EffectEntry* effSparkEntry(s32 type, s32 unused1, f32 x, f32 y, f32 z, f32 unused2) {
     EffectEntry* effect;
     EffSparkWork* work;
     s32 i;
     f32 f;
+    EffSparkParticle* p;
 
     effect = effEntry();
     effect->type = "Spark";
     effect->count = 6;
-    work = __memAlloc(HEAP_EFFECT, 0x150);
+    work = __memAlloc(HEAP_EFFECT, sizeof(EffSparkWork));
     effect->userdata = work;
     effect->callback = effSparkMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->counter = 0;
     work->life = 1000;
@@ -86,12 +94,10 @@ EffectEntry* effSparkEntry(s32 type, f32 x, f32 y, f32 z) {
     work->y = y;
     work->z = z;
     work->scale = 0.9f;
-    {
-        EffSparkParticle* p = work->part;
-        f = max_seq_num[type] / 2.0f;
-        for (i = 1; i < 6; i++, p++) {
-            p->seq = -1.0f - f * (i & 1);
-        }
+    p = work->part;
+    f = max_seq_num[type] / 2.0f;
+    for (i = 1; i < 6; i++, p++) {
+        p->seq = -1.0f - f * (i & 1);
     }
     return effect;
 }
@@ -113,8 +119,8 @@ static void effSparkMain(EffectEntry* effect) {
     position = (Vec){p->x, p->y, p->z};
     type = p->type;
     alpha = p->alpha;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         p->life = 16;
     }
     if (p->life < 1000) {
@@ -180,9 +186,9 @@ static void effSparkMain(EffectEntry* effect) {
         p->velX += b * (p->destX - p->velX);
         p->velY += b * (p->destY - p->velY);
     }
-    prio = 1;
+    prio = DISP_MODE_ALPHA_TEST;
     if (alpha != 255) {
-        prio = 2;
+        prio = DISP_MODE_XLU;
     }
     dispEntry(CAMERA_3D, dispCalcZ(&position), prio, (DispCallback)effSparkDisp, effect);
 }

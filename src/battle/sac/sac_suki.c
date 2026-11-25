@@ -1,6 +1,6 @@
 // Star-power special move Showstopper (sac_suki): the button-sequence game that can defeat enemies outright.
-#pragma optimize_for_size on
-#include <dolphin/pad.h>
+
+#include "version.h"
 #include "eff/n64/eff_crystal_n64.h"
 #include "eff/eff_starstone.h"
 #include "battle/battle.h"
@@ -26,63 +26,52 @@
 #include "battle/sac/sac_suki.h"
 #include "battle/battle_database_common.h"
 #include "pmario_sound.h"
-#include "battle/battle_sub.h"
-#include "battle/battle_disp.h"
+#include <dolphin/pad.h>
 #include "eff/n64/eff_stardust_n64.h"
 #include "evt/evt_batstage.h"
+#include "evt/evt_map.h"
+#include "battle/battle_camera.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_img.h"
-#include "evt/evt_map.h"
 #include "evt/evt_paper.h"
-#include "evt/evt_snd.h"
-#include "version.h"
+#include "party/party_motion.h"
+#include "battle/battle_disp.h"
+#include "battle/battle_sub.h"
+#include "battle/battle_stage.h"
+
+static EvtWord flash_evt[182];
+static EvtWord flash_main_evt[52];
+static EvtWord flash_cancel_evt[194];
 
 typedef struct SukiBtn {
     s32 state;  // 0x0
-    s32 timer;  // 0x4, never used
+    s32 pad4;   // 0x4, never accessed
     s32 button; // 0x8
     Vec pos;    // 0xC
 } SukiBtn;
 
 typedef struct SukiWork {
-    s32 state;                      // 0x0
-    s32 timer;                      // 0x4
-    s32 unitId;                     // 0x8
-    s32 round;                      // 0xC
-    s32 cur;                        // 0x10
-    s32 prev;                       // 0x14
-    s32 need;                       // 0x18
-    s32 time;                       // 0x1C
-    u8 flash;                       // 0x20
-    f32 offsetY;                    // 0x24
-    Vec starPos[6];                 // 0x28
-    char names[6][16];              // 0x70
-    Vec pos;                        // 0xD0
-    SukiBtn btn[7];                 // 0xDC
-    SukiBtn btn2[7];                // 0x184
-    s32 starState;                  // 0x22C
-    s32 starTimer;                  // 0x230
-    Vec spos;                       // 0x234
-    Vec from;                       // 0x240
-    Vec to;                         // 0x24C
-    u8 reserved_258[0xC];           // 0x258, never accessed
-    Vec scale;                      // 0x264
-    Vec rot;                        // 0x270
-    EffectEntry* eff;               // 0x27C
-    s32 effMode;                    // 0x280
-    BattleWeapon weapon;            // 0x284, copy of the attack with the per-level OHKO rate
-    u8 reserved_344[0x4C8 - 0x344]; // 0x344, never accessed (only cleared)
+    s32 state;           // 0x0
+    s32 timer;           // 0x4
+    s32 unitId;          // 0x8
+    s32 round;           // 0xC
+    s32 cur;             // 0x10
+    s32 prev;            // 0x14
+    s32 need;            // 0x18
+    s32 time;            // 0x1C
+    u8 flash;            // 0x20
+    f32 offsetY;         // 0x24
+    Vec starPos[6];      // 0x28
+    char names[6][16];   // 0x70
+    Vec pos;             // 0xD0
+    SukiBtn btn[7];      // 0xDC
+    SukiBtn btn2[7];     // 0x184
+    SacStarStone star;   // 0x22C
+    s32 effCamera;       // 0x280
+    BattleWeapon weapon; // 0x284
+    u8 pad344[0x4C8 - 0x344];
 } SukiWork;
 
-extern s32 tou_gamen_screen_tev[];
-
-static USER_FUNC(main_suki);
-static void set_tev(MapTevCallbackInfo* info);
-static USER_FUNC(set_weapon);
-static USER_FUNC(star_stone_attack);
-static USER_FUNC(star_stone_appear);
-static USER_FUNC(wait_game_end);
-static USER_FUNC(start_game);
 static void disp_3D_alpha(CameraId cam, void* param);
 static void disp_3D(CameraId cam, void* param);
 static void disp_2D(CameraId cam, void* param);
@@ -90,15 +79,11 @@ static SukiWork* get_ptr(void);
 static void main_star(void);
 static void main_base(void);
 static void main_button(s32 idx);
-void N__disp_2D(s32 side, s32 idx);
+void _disp_2D(s32 side, s32 idx);
 
-/**
- * Showstopper's weapon template (2 SP): picks the targets, and set_weapon copies it with the
- * instant-KO chance the stars earned (the template's own chance, 100%, is 0 in the demos).
- */
 static BattleWeapon weapon = {
     "btl_wn_sac_sukkari_sukkiri", // name
-    ICON_199, // icon
+    ICON_SAC_SUKI, // icon
     {0}, // pad_06
     0, // itemId
     "msg_sukkari_sukkiri", // description
@@ -115,20 +100,20 @@ static BattleWeapon weapon = {
     {0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     "msg_sac_7", // acHelpMsg
-    SPECIAL_ALWAYS_HITS | SPECIAL_UNGUARDABLE, // special
+    SPECIAL_CANNOT_MISS | SPECIAL_UNGUARDABLE, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     0, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
     0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
     0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
     0, 0, 0, 0, 0, 0, 0, // atkChangeTime..allergicTime
 #if VERSION <= VERSION_DEMO_JP
-    0, // ohkoChance
+    0,
 #else
     100, // ohkoChance
 #endif
@@ -149,10 +134,9 @@ static EVT_BEGIN(nice_event)
 EVT_END()
 
 /**
- * Runs the Showstopper minigame every frame for the length of the move (started as a sibling script;
- * args[0] is the partner's unit id).
- * The first call clears the work and sets the six star positions and capture image names;
- * every call updates the panel, buttons and star and queues the draw callbacks. Never finishes on its own.
+ * Script: the per-frame driver of Showstopper. The first call clears the work, takes the unit args[0] and sets up the
+ * star positions and the sac_suki_img0-5 names; each call steps the base, seven buttons and the star, and queues the 2D
+ * and 3D draws. Always blocks.
  */
 static USER_FUNC(main_suki) {
     SukiWork* w = get_ptr();
@@ -196,9 +180,9 @@ static USER_FUNC(main_suki) {
         main_button(i);
     }
     main_star();
-    dispEntry(CAMERA_2D, 901.0f, 1, disp_2D, 0);
-    dispEntry(CAMERA_3D, 0.0f, 1, disp_3D, 0);
-    dispEntry(CAMERA_3D, 0.0f, 2, disp_3D_alpha, 0);
+    dispEntry(CAMERA_2D, 901.0f, DISP_MODE_ALPHA_TEST, disp_2D, 0);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, disp_3D, 0);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, disp_3D_alpha, 0);
     return 0;
 }
 
@@ -220,11 +204,11 @@ static void main_base(void) {
         case 2:
             if (w->round == 0) {
                 Vec v = {0.0f, -45.0f, 0.0f};
-                v.x = intplGetValue(4, -1000.0f, 0.0f, w->timer, 15);
+                v.x = intplGetValue(EASING_QUADRATIC_OUT, -1000.0f, 0.0f, w->timer, 15);
                 w->pos = v;
             }
             if (w->timer == 0) {
-                if (w->starState != 4) {
+                if (w->star.state != 4) {
                     break;
                 }
                 memcpy(w->btn2, w->btn, sizeof(w->btn));
@@ -247,13 +231,13 @@ static void main_base(void) {
                     }
                 }
             }
-            w->offsetY = intplGetValue(0, -80.0f, 0.0f, w->timer, 15);
+            w->offsetY = intplGetValue(EASING_LINEAR, -80.0f, 0.0f, w->timer, 15);
             w->timer++;
             if (w->timer >= 15) {
                 if (w->round >= 5) {
                     w->state = 5;
                     w->timer = 0;
-                    w->starState = 8;
+                    w->star.state = 8;
                 } else {
                     w->state = 4;
                 }
@@ -262,7 +246,7 @@ static void main_base(void) {
             break;
         case 3:
             if (w->timer == 0) {
-                if (w->starState != 4) {
+                if (w->star.state != 4) {
                     break;
                 }
                 psndSFXOn("SFX_BTL_SAC_SUKKIRI2");
@@ -272,12 +256,12 @@ static void main_base(void) {
                     w->btn[i].state = 0;
                 }
             }
-            w->offsetY = intplGetValue(0, -60.0f, 0.0f, w->timer, 15);
+            w->offsetY = intplGetValue(EASING_LINEAR, -60.0f, 0.0f, w->timer, 15);
             w->timer++;
             if (w->timer >= 15) {
                 w->state = 5;
                 w->timer = 0;
-                w->starState = 8;
+                w->star.state = 8;
             }
             break;
         case 4:
@@ -300,8 +284,8 @@ static void main_base(void) {
                     w->state = 2;
                     w->timer = 0;
                     w->round++;
-                    w->starState = 5;
-                    e = evtEntry(nice_event, 0, EVENT_START_NOW);
+                    w->star.state = 5;
+                    e = evtEntry(nice_event, 0, EVENT_START_IMMEDIATE);
                     n = w->round + 1;
                     e->lwData[0] = n < 6 ? n : 6;
                     if (num >= 1 && num <= 49) {
@@ -329,20 +313,18 @@ static void main_base(void) {
             w->timer++;
             if (w->timer <= 30) {
                 Vec v = {0.0f, -45.0f, 0.0f};
-                v.x = intplGetValue(4, 0.0f, -1000.0f, w->timer, 30);
+                v.x = intplGetValue(EASING_QUADRATIC_OUT, 0.0f, -1000.0f, w->timer, 30);
                 w->pos = v;
             }
             break;
     }
 }
 
-// FAKE: inlining off (FAKES.md); without it main_button is inlined into main_suki (93 -> 147 instructions)
-#pragma dont_inline on
 /** Deals button idx of a new round: places it in the row and picks A, B, X or Y at random. */
 static void main_button(s32 idx) {
     SukiWork* w = get_ptr();
     SukiBtn* b = &w->btn[idx];
-    s32 tbl[4] = {0x100, 0x200, 0x400, 0x800};
+    s32 tbl[4] = {PAD_BUTTON_A, PAD_BUTTON_B, PAD_BUTTON_X, PAD_BUTTON_Y};
 
     switch (b->state) {
         case 0:
@@ -360,7 +342,6 @@ static void main_button(s32 idx) {
             break;
     }
 }
-#pragma dont_inline reset
 
 /**
  * Moves the star (star stone effect type 5): rises from Mario and spins up to the top of the screen,
@@ -371,129 +352,129 @@ static void main_star(void) {
     SukiWork* w = get_ptr();
     BattleUnit* mario = BattleGetMarioPtr(_battleWorkPointer);
 
-    switch (w->starState) {
+    switch (w->star.state) {
         case 1:
-            w->starState = 2;
-            w->starTimer = 0;
-            w->eff = effStarStoneEntry(5, 0.0f, -1000.0f, 0.0f, 1.0f);
-            BtlUnit_GetPos(mario, &w->spos.x, &w->spos.y, &w->spos.z);
-            w->spos.y += mario->sizeMultiplier * (f32)mario->height + 37.0f;
-            w->from = w->spos;
-            w->to = w->spos;
-            w->to.y += 50.0f;
-            w->to.z += -1.0f;
-            w->scale = (Vec){0.0f, 0.0f, 0.0f};
-            w->rot = (Vec){0.0f, 0.0f, 0.0f};
-            w->effMode = 4;
+            w->star.state = 2;
+            w->star.timer = 0;
+            w->star.eff = effStarStoneEntry(5, 0.0f, -1000.0f, 0.0f, 1.0f);
+            BtlUnit_GetPos(mario, &w->star.pos.x, &w->star.pos.y, &w->star.pos.z);
+            w->star.pos.y += mario->sizeMultiplier * (f32)mario->height + 37.0f;
+            w->star.from = w->star.pos;
+            w->star.to = w->star.pos;
+            w->star.to.y += 50.0f;
+            w->star.to.z += -1.0f;
+            w->star.scale = (Vec){0.0f, 0.0f, 0.0f};
+            w->star.rot = (Vec){0.0f, 0.0f, 0.0f};
+            w->effCamera = CAMERA_3D;
         case 2:
-            w->starTimer++;
-            if (w->starTimer <= 100) {
-                w->spos.x = intplGetValue(0, w->from.x, w->to.x, w->starTimer, 100);
-                w->spos.y = intplGetValue(0, w->from.y, w->to.y, w->starTimer, 100);
-                w->spos.z = intplGetValue(0, w->from.z, w->to.z, w->starTimer, 100);
-                w->scale.x = w->scale.y = w->scale.z = intplGetValue(0, 0.0f, 2.0f, w->starTimer, 100);
+            w->star.timer++;
+            if (w->star.timer <= 100) {
+                w->star.pos.x = intplGetValue(EASING_LINEAR, w->star.from.x, w->star.to.x, w->star.timer, 100);
+                w->star.pos.y = intplGetValue(EASING_LINEAR, w->star.from.y, w->star.to.y, w->star.timer, 100);
+                w->star.pos.z = intplGetValue(EASING_LINEAR, w->star.from.z, w->star.to.z, w->star.timer, 100);
+                w->star.scale.x = w->star.scale.y = w->star.scale.z = intplGetValue(EASING_LINEAR, 0.0f, 2.0f, w->star.timer, 100);
             } else {
-                w->spos.x = w->to.x;
-                w->spos.y = w->to.y;
-                w->spos.z = w->to.z;
-                w->scale.x = w->scale.y = w->scale.z = 2.0f;
+                w->star.pos.x = w->star.to.x;
+                w->star.pos.y = w->star.to.y;
+                w->star.pos.z = w->star.to.z;
+                w->star.scale.x = w->star.scale.y = w->star.scale.z = 2.0f;
             }
-            w->rot.y = intplGetValue(4, 0.0f, 2160.0f, w->starTimer, 120);
-            if (w->starTimer >= 120) {
-                w->starState = 3;
-                w->starTimer = 0;
-                w->from = w->spos;
-                w->to.y = 300.0f;
+            w->star.rot.y = intplGetValue(EASING_QUADRATIC_OUT, 0.0f, 2160.0f, w->star.timer, 120);
+            if (w->star.timer >= 120) {
+                w->star.state = 3;
+                w->star.timer = 0;
+                w->star.from = w->star.pos;
+                w->star.to.y = 300.0f;
             }
             break;
         case 3:
-            w->starTimer++;
-            w->spos.y = intplGetValue(1, w->from.y, w->to.y, w->starTimer, 60);
-            if (w->starTimer >= 60) {
-                w->starState = 4;
-                w->starTimer = 0;
-                w->spos = (Vec){0.0f, 300.0f, 0.0f};
-                w->scale = (Vec){2.0f, 2.0f, 2.0f};
-                w->rot = (Vec){0.0f, 0.0f, 0.0f};
+            w->star.timer++;
+            w->star.pos.y = intplGetValue(EASING_QUADRATIC_IN, w->star.from.y, w->star.to.y, w->star.timer, 60);
+            if (w->star.timer >= 60) {
+                w->star.state = 4;
+                w->star.timer = 0;
+                w->star.pos = (Vec){0.0f, 300.0f, 0.0f};
+                w->star.scale = (Vec){2.0f, 2.0f, 2.0f};
+                w->star.rot = (Vec){0.0f, 0.0f, 0.0f};
             }
             break;
         case 5:
-            w->starState = 6;
-            w->starTimer = 0;
-            BtlUnit_GetPos(mario, &w->spos.x, &w->spos.y, &w->spos.z);
-            w->spos.y += 100.0f;
-            w->scale = (Vec){1.5f, 1.5f, 1.5f};
-            w->rot = (Vec){0.0f, 0.0f, 0.0f};
-            w->from.y = w->spos.y;
-            w->to.y = 300.0f;
-            effStardustN64Entry(0, w->spos.x, w->spos.y, w->spos.z, 32.0f);
+            w->star.state = 6;
+            w->star.timer = 0;
+            BtlUnit_GetPos(mario, &w->star.pos.x, &w->star.pos.y, &w->star.pos.z);
+            w->star.pos.y += 100.0f;
+            w->star.scale = (Vec){1.5f, 1.5f, 1.5f};
+            w->star.rot = (Vec){0.0f, 0.0f, 0.0f};
+            w->star.from.y = w->star.pos.y;
+            w->star.to.y = 300.0f;
+            effStardustN64Entry(0, w->star.pos.x, w->star.pos.y, w->star.pos.z, 32.0f);
             break;
         case 6:
-            w->starTimer++;
-            w->rot.y = intplGetValue(0, 0.0f, 1440.0f, w->starTimer, 40);
-            if (w->starTimer >= 40) {
-                w->starState = 7;
-                w->starTimer = 0;
-                effStardustN64Entry(4, w->spos.x, w->spos.y - 5.0f, w->spos.z, 40.0f);
-                effStardustN64Entry(4, 30.0f + w->spos.x, w->spos.y, w->spos.z, 40.0f);
-                effStardustN64Entry(4, w->spos.x - 30.0f, w->spos.y, w->spos.z, 40.0f);
+            w->star.timer++;
+            w->star.rot.y = intplGetValue(EASING_LINEAR, 0.0f, 1440.0f, w->star.timer, 40);
+            if (w->star.timer >= 40) {
+                w->star.state = 7;
+                w->star.timer = 0;
+                effStardustN64Entry(4, w->star.pos.x, w->star.pos.y - 5.0f, w->star.pos.z, 40.0f);
+                effStardustN64Entry(4, 30.0f + w->star.pos.x, w->star.pos.y, w->star.pos.z, 40.0f);
+                effStardustN64Entry(4, w->star.pos.x - 30.0f, w->star.pos.y, w->star.pos.z, 40.0f);
                 psndSFXOn("SFX_BTL_SAC_SUKKIRI3");
             }
             break;
         case 7:
-            w->starTimer++;
-            w->spos.y = intplGetValue(4, w->from.y, w->to.y, w->starTimer, 30);
-            if (w->starTimer >= 30) {
-                w->starState = 4;
-                w->starTimer = 0;
-                w->spos = (Vec){0.0f, 300.0f, 0.0f};
-                w->scale = (Vec){2.0f, 2.0f, 2.0f};
-                w->rot = (Vec){0.0f, 0.0f, 0.0f};
+            w->star.timer++;
+            w->star.pos.y = intplGetValue(EASING_QUADRATIC_OUT, w->star.from.y, w->star.to.y, w->star.timer, 30);
+            if (w->star.timer >= 30) {
+                w->star.state = 4;
+                w->star.timer = 0;
+                w->star.pos = (Vec){0.0f, 300.0f, 0.0f};
+                w->star.scale = (Vec){2.0f, 2.0f, 2.0f};
+                w->star.rot = (Vec){0.0f, 0.0f, 0.0f};
             }
             break;
         case 8:
-            w->effMode = 4;
+            w->effCamera = CAMERA_3D;
             break;
         case 9:
-            w->starTimer++;
-            w->spos.x = intplGetValue(0, w->from.x, w->to.x, w->starTimer, 20);
-            w->spos.y = intplGetValue(1, w->from.y, w->to.y, w->starTimer, 20);
-            w->spos.z = intplGetValue(0, w->from.z, w->to.z, w->starTimer, 20);
-            w->effMode = 7;
-            if (w->starTimer >= 20) {
-                w->starState = 8;
-                w->starTimer = 0;
+            w->star.timer++;
+            w->star.pos.x = intplGetValue(EASING_LINEAR, w->star.from.x, w->star.to.x, w->star.timer, 20);
+            w->star.pos.y = intplGetValue(EASING_QUADRATIC_IN, w->star.from.y, w->star.to.y, w->star.timer, 20);
+            w->star.pos.z = intplGetValue(EASING_LINEAR, w->star.from.z, w->star.to.z, w->star.timer, 20);
+            w->effCamera = CAMERA_3D_EFFECTB;
+            if (w->star.timer >= 20) {
+                w->star.state = 8;
+                w->star.timer = 0;
             }
             break;
         case 0:
         case 10:
             break;
     }
-    if (w->eff) {
-        EffStarStoneWork* e = w->eff->userdata;
-        e->position.x = w->spos.x;
-        e->position.y = w->spos.y;
-        e->position.z = w->spos.z;
-        e->spinY = w->rot.x;
-        e->rotY = w->rot.y;
-        e->tiltZ = w->rot.z;
-        e->scale = 1.5f * w->scale.x;
-        e->cam = w->effMode;
+    if (w->star.eff) {
+        EffStarStoneWork* e = (EffStarStoneWork*)w->star.eff->userdata;
+        e->position.x = w->star.pos.x;
+        e->position.y = w->star.pos.y;
+        e->position.z = w->star.pos.z;
+        e->rot.x = w->star.rot.x;
+        e->rot.y = w->star.rot.y;
+        e->rot.z = w->star.rot.z;
+        e->scale = 1.5f * w->star.scale.x;
+        e->cam = w->effCamera;
     }
 }
 
 /** Deletes the star effect and its stardust at the end of the move. */
 static USER_FUNC(end_suki) {
     SukiWork* w = get_ptr();
-    effDelete(((EffStarStoneWork*)w->eff->userdata)->dust);
-    effDelete(w->eff);
+    effDelete(((EffStarStoneWork*)w->star.eff->userdata)->dust);
+    effDelete(w->star.eff);
     return 2;
 }
 
 /**
  * Draws the 2D panel: the frame, the remaining-time bar
  * and the button row (the last round's buttons sliding out above the current ones),
- * clipped to the panel's strip of screen. The JP and later releases draw the buttons through N__disp_2D.
+ * clipped to the panel's strip of screen. JP and later draw the buttons through _disp_2D.
  */
 static void disp_2D(CameraId cam, void* param) {
     Mtx m;
@@ -502,48 +483,48 @@ static void disp_2D(CameraId cam, void* param) {
 
     PSMTXScale(m, 26.0f, 1.0f, 1.0f);
     PSMTXTransApply(m, m, w->pos.x, 60.0f + w->pos.y, w->pos.z);
-    iconDispGx2(m, ICON_DISP_2D, ICON_08E);
+    iconDispGx2(m, ICON_FLAG_2D, ICON_AC_BAR_MIDDLE);
     {
         Vec a = {0.0f, 0.0f, 0.0f};
         a.x = 215.0f + w->pos.x;
         a.y = 60.0f + w->pos.y;
         a.z = w->pos.z;
-        iconDispGx(&a, ICON_DISP_2D, ICON_090, 1.0f);
+        iconDispGx(&a, ICON_FLAG_2D, 1.0f, ICON_AC_BAR_RIGHT);
     }
     {
         Vec b = {0.0f, 0.0f, 0.0f};
         b.x = w->pos.x - 215.0f;
         b.y = 60.0f + w->pos.y;
         b.z = w->pos.z;
-        iconDispGx(&b, ICON_DISP_2D, ICON_08F, 1.0f);
+        iconDispGx(&b, ICON_FLAG_2D, 1.0f, ICON_AC_BAR_LEFT);
     }
     GXSetScissor(0, 0x91, gp->fbWidth, 0x50);
-#if VERSION <= VERSION_DEMO_JP
     for (i = 0; i < 7; i++) {
+#if VERSION <= VERSION_DEMO_JP
         u16 icon;
         if (w->btn2[i].state != 0) {
             if (i < w->prev) {
                 switch (w->btn2[i].button) {
                     case 0x100:
-                        icon = ICON_065;
+                        icon = ICON_BUTTON_A_PRESSED;
                         break;
                     case 0x200:
-                        icon = ICON_067;
+                        icon = ICON_BUTTON_B_PRESSED;
                         break;
                     case 0x400:
-                        icon = ICON_069;
+                        icon = ICON_BUTTON_X_PRESSED;
                         break;
                     case 0x800:
-                        icon = ICON_06B;
+                        icon = ICON_BUTTON_Y_PRESSED;
                         break;
                     case 0x40:
-                        icon = ICON_07F;
+                        icon = ICON_TRIGGER_L_PRESSED;
                         break;
                     case 0x20:
-                        icon = ICON_081;
+                        icon = ICON_TRIGGER_R_PRESSED;
                         break;
                     case 0x10:
-                        icon = ICON_083;
+                        icon = ICON_TRIGGER_Z_PRESSED;
                         break;
                     default:
                         icon = 0;
@@ -552,25 +533,25 @@ static void disp_2D(CameraId cam, void* param) {
             } else {
                 switch (w->btn2[i].button) {
                     case 0x100:
-                        icon = ICON_064;
+                        icon = ICON_BUTTON_A;
                         break;
                     case 0x200:
-                        icon = ICON_066;
+                        icon = ICON_BUTTON_B;
                         break;
                     case 0x400:
-                        icon = ICON_068;
+                        icon = ICON_BUTTON_X;
                         break;
                     case 0x800:
-                        icon = ICON_06A;
+                        icon = ICON_BUTTON_Y;
                         break;
                     case 0x40:
-                        icon = ICON_07E;
+                        icon = ICON_TRIGGER_L;
                         break;
                     case 0x20:
-                        icon = ICON_080;
+                        icon = ICON_TRIGGER_R;
                         break;
                     case 0x10:
-                        icon = ICON_082;
+                        icon = ICON_TRIGGER_Z;
                         break;
                     default:
                         icon = 0;
@@ -582,32 +563,32 @@ static void disp_2D(CameraId cam, void* param) {
                 pos.x = w->btn2[i].pos.x;
                 pos.y = 60.0f + ((80.0f + w->btn2[i].pos.y) + w->offsetY);
                 pos.z = w->btn2[i].pos.z;
-                iconDispGx(&pos, ICON_DISP_2D, icon, 1.0f);
+                iconDispGx(&pos, ICON_FLAG_2D, 1.0f, icon);
             }
         }
         if (w->btn[i].state == 2) {
             if (i < w->cur) {
                 switch (w->btn[i].button) {
                     case 0x100:
-                        icon = ICON_065;
+                        icon = ICON_BUTTON_A_PRESSED;
                         break;
                     case 0x200:
-                        icon = ICON_067;
+                        icon = ICON_BUTTON_B_PRESSED;
                         break;
                     case 0x400:
-                        icon = ICON_069;
+                        icon = ICON_BUTTON_X_PRESSED;
                         break;
                     case 0x800:
-                        icon = ICON_06B;
+                        icon = ICON_BUTTON_Y_PRESSED;
                         break;
                     case 0x40:
-                        icon = ICON_07F;
+                        icon = ICON_TRIGGER_L_PRESSED;
                         break;
                     case 0x20:
-                        icon = ICON_081;
+                        icon = ICON_TRIGGER_R_PRESSED;
                         break;
                     case 0x10:
-                        icon = ICON_083;
+                        icon = ICON_TRIGGER_Z_PRESSED;
                         break;
                     default:
                         icon = 0;
@@ -616,25 +597,25 @@ static void disp_2D(CameraId cam, void* param) {
             } else {
                 switch (w->btn[i].button) {
                     case 0x100:
-                        icon = ICON_064;
+                        icon = ICON_BUTTON_A;
                         break;
                     case 0x200:
-                        icon = ICON_066;
+                        icon = ICON_BUTTON_B;
                         break;
                     case 0x400:
-                        icon = ICON_068;
+                        icon = ICON_BUTTON_X;
                         break;
                     case 0x800:
-                        icon = ICON_06A;
+                        icon = ICON_BUTTON_Y;
                         break;
                     case 0x40:
-                        icon = ICON_07E;
+                        icon = ICON_TRIGGER_L;
                         break;
                     case 0x20:
-                        icon = ICON_080;
+                        icon = ICON_TRIGGER_R;
                         break;
                     case 0x10:
-                        icon = ICON_082;
+                        icon = ICON_TRIGGER_Z;
                         break;
                     default:
                         icon = 0;
@@ -646,25 +627,24 @@ static void disp_2D(CameraId cam, void* param) {
                 pos.x = w->btn[i].pos.x;
                 pos.y = 60.0f + (w->btn[i].pos.y + w->offsetY);
                 pos.z = w->btn[i].pos.z;
-                iconDispGx(&pos, ICON_DISP_2D, icon, 1.0f);
+                iconDispGx(&pos, ICON_FLAG_2D, 1.0f, icon);
             }
         }
-    }
 #else
-    for (i = 0; i < 7; i++) {
-        N__disp_2D(0, i);
-        N__disp_2D(1, i);
-    }
+        _disp_2D(0, i);
+        _disp_2D(1, i);
 #endif
+    }
     GXSetScissor(0, 0, gp->fbWidth, gp->efbHeight);
 }
 
-#if VERSION >= VERSION_JP
 /**
  * Draws button idx of the previous round's row (side 0, 80 pixels higher) or the current row (side 1),
  * with the pressed icon for buttons already entered.
+ * Descriptive name (not in the symbol maps).
  */
-void N__disp_2D(s32 side, s32 idx) {
+#if VERSION >= VERSION_JP
+void _disp_2D(s32 side, s32 idx) {
     SukiWork* w = get_ptr();
     SukiBtn* b;
     s32 cur;
@@ -687,53 +667,54 @@ void N__disp_2D(s32 side, s32 idx) {
     if (side == 1 && b->state != 2) {
         return;
     }
+
     switch (b->button) {
-        case 0x100:
-            t = ICON_064;
+        case PAD_BUTTON_A:
+            t = ICON_BUTTON_A;
             if (idx < cur) {
-                t = ICON_065;
+                t = ICON_BUTTON_A_PRESSED;
             }
             icon = t;
             break;
-        case 0x200:
-            t = ICON_066;
+        case PAD_BUTTON_B:
+            t = ICON_BUTTON_B;
             if (idx < cur) {
-                t = ICON_067;
+                t = ICON_BUTTON_B_PRESSED;
             }
             icon = t;
             break;
-        case 0x400:
-            t = ICON_068;
+        case PAD_BUTTON_X:
+            t = ICON_BUTTON_X;
             if (idx < cur) {
-                t = ICON_069;
+                t = ICON_BUTTON_X_PRESSED;
             }
             icon = t;
             break;
-        case 0x800:
-            t = ICON_06A;
+        case PAD_BUTTON_Y:
+            t = ICON_BUTTON_Y;
             if (idx < cur) {
-                t = ICON_06B;
+                t = ICON_BUTTON_Y_PRESSED;
             }
             icon = t;
             break;
-        case 0x40:
-            t = ICON_07E;
+        case PAD_TRIGGER_L:
+            t = ICON_TRIGGER_L;
             if (idx < cur) {
-                t = ICON_07F;
+                t = ICON_TRIGGER_L_PRESSED;
             }
             icon = t;
             break;
-        case 0x20:
-            t = ICON_080;
+        case PAD_TRIGGER_R:
+            t = ICON_TRIGGER_R;
             if (idx < cur) {
-                t = ICON_081;
+                t = ICON_TRIGGER_R_PRESSED;
             }
             icon = t;
             break;
-        case 0x10:
-            t = ICON_082;
+        case PAD_TRIGGER_Z:
+            t = ICON_TRIGGER_Z;
             if (idx < cur) {
-                t = ICON_083;
+                t = ICON_TRIGGER_Z_PRESSED;
             }
             icon = t;
             break;
@@ -743,12 +724,12 @@ void N__disp_2D(s32 side, s32 idx) {
         pos.x = b->pos.x;
         pos.y = 60.0f + (w->offsetY + (b->pos.y + yoff));
         pos.z = b->pos.z;
-        iconDispGx(&pos, ICON_DISP_2D, icon, 1.0f);
+        iconDispGx(&pos, ICON_FLAG_2D, 1.0f, icon);
     }
 }
 #endif
 
-/** 3D draw callback; draws nothing (the demo only fetches the work). */
+/** 3D draw callback; draws nothing (the early demos only fetch the work). */
 static void disp_3D(CameraId cam, void* param) {
 #if VERSION <= VERSION_DEMO_JP
     get_ptr();
@@ -759,13 +740,10 @@ static void disp_3D(CameraId cam, void* param) {
 static void disp_3D_alpha(CameraId cam, void* param) {
 }
 
-// FAKE: inlining off (FAKES.md); without it get_ptr is inlined into its callers (16 shrink, e.g. star_stone_appear 11 -> 5 instructions)
-#pragma dont_inline on
 /** Returns the Showstopper work, which lives in the battle's action command work area. */
 static SukiWork* get_ptr(void) {
     return (SukiWork*)_battleWorkPointer->actionCommands.work;
 }
-#pragma dont_inline reset
 
 /** Starts the button game once the star is in place. */
 static USER_FUNC(start_game) {
@@ -791,13 +769,13 @@ static USER_FUNC(wait_game_end) {
 /** Starts the star's appearance over Mario. */
 static USER_FUNC(star_stone_appear) {
     SukiWork* w = get_ptr();
-    w->starState = 1;
+    w->star.state = 1;
     return 2;
 }
 
 /** Waits until the star has reached its place at the top of the screen. */
 static USER_FUNC(wait_star_stone_up_end) {
-    return get_ptr()->starState == 4 ? 2 : 0;
+    return get_ptr()->star.state == 4 ? 2 : 0;
 }
 
 /** Returns in args[1..3] the battle-space position of star args[0] (0..5), where its shot starts. */
@@ -815,29 +793,20 @@ static USER_FUNC(star_stone_get_attack_point) {
 static USER_FUNC(star_stone_attack) {
     SukiWork* w = get_ptr();
     s32 i = evtGetValue(event, event->args[0]);
-    u8* cam;
-    w->starState = 9;
-    w->starTimer = 0;
-    w->from = w->starPos[i];
-    w->spos = w->from;
-    cam = (u8*)camGetPtr(CAMERA_3D);
-    w->to = *(Vec*)(cam + 0xC);
-    w->to.y += 20.0f;
-    w->to.z += 10.0f;
+    w->star.state = 9;
+    w->star.timer = 0;
+    w->star.from = w->starPos[i];
+    w->star.pos = w->star.from;
+    w->star.to = camGetPtr(CAMERA_3D)->cameraPos;
+    w->star.to.y += 20.0f;
+    w->star.to.z += 10.0f;
     return 2;
 }
 
 /** Waits until the current star shot has finished. */
 static USER_FUNC(wait_star_stone_attack_end) {
-    return get_ptr()->starState == 8 ? 2 : 0;
+    return get_ptr()->star.state == 8 ? 2 : 0;
 }
-
-typedef struct OhkoRateTbl {
-    u8 rate[6];
-} OhkoRateTbl;
-
-/** Showstopper's instant-KO chance (%) for 1 to 6 stars earned, read by set_weapon. */
-const OhkoRateTbl N_ohko_rate_tbl = {{50, 60, 70, 80, 90, 100}};
 
 /**
  * Returns in args[1] a copy of Showstopper's weapon whose instant-KO chance depends on the stars earned in
@@ -847,9 +816,9 @@ static USER_FUNC(set_weapon) {
     EvtWord* args = event->args;
     s32 idx = evtGetValue(event, args[0]);
     SukiWork* w = get_ptr();
-    OhkoRateTbl tbl = N_ohko_rate_tbl;
+    u8 rate[6] = {50, 60, 70, 80, 90, 100};
     memcpy(&w->weapon, &weapon, sizeof(BattleWeapon));
-    w->weapon.ohkoChance = tbl.rate[idx - 1];
+    w->weapon.ohkoChance = rate[idx - 1];
     evtSetValue(event, args[1], (EvtWord)&w->weapon);
     return 2;
 }
@@ -859,9 +828,9 @@ static USER_FUNC(aud_set_draw) {
     EvtWord* args = event->args;
     BattleAudience* a = BattleAudienceBaseGetPtr();
     if (evtGetValue(event, args[0]) == 0) {
-        a->flags |= AUDIENCE_FLAG_HIDDEN;
+        a->flags |= AUDIENCE_FLAG_NO_DISP;
     } else {
-        a->flags &= ~AUDIENCE_FLAG_HIDDEN;
+        a->flags &= ~AUDIENCE_FLAG_NO_DISP;
     }
     return 2;
 }
@@ -903,7 +872,7 @@ static USER_FUNC(eff_crystal) {
     f32 x = evtGetFloat(event, args[0]);
     f32 y = evtGetFloat(event, args[1]);
     EffectEntry* e = effCrystalN64Entry(6, 60, x, y, 30.0f, 1.0f);
-    ((EffCrystalN64Work*)e->userdata)->camera = 7;
+    ((EffCrystalN64Work*)e->userdata)->camera = CAMERA_3D_EFFECTB;
     return 2;
 }
 
@@ -916,78 +885,76 @@ static USER_FUNC(get_img_name) {
     return 2;
 }
 
-/** A grey colour of brightness v, fully opaque. */
-static inline GXColor mk_suki(u8 v) {
-    GXColor c = {0, 0, 0, 255};
-    c.r = v;
-    c.g = v;
-    c.b = v;
-    return c;
-}
 /** Map TEV callback for the flash: draws the stage as a flat grey of the current flash brightness. */
 static void set_tev(MapTevCallbackInfo* info) {
     u8 v = get_ptr()->flash;
-    GXSetTevOrder(0, 0xFF, 0xFF, 4);
-    GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 15, 15, 15, 2);
-    GXSetTevAlphaIn(0, 7, 7, 7, 1);
-    GXSetTevColor(1, mk_suki(v));
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_A0);
+    GXSetTevColor(GX_TEVREG0, (GXColor){v, v, v, 255});
     info->tevStage = 1;
-    info->texMap = 0;
     info->texCoord = 0;
+    info->texMap = 0;
 }
 
 /**
  * Showstopper, the Garnet Star's special move (star stone effect type 5):
  * Mario raises the star, the player presses the shown buttons over up to five rounds,
  * then each earned star flies out with a paper flourish and a crystal shine,
- * the stage flashes and every enemy not evasive is checked against the instant-KO chance the stars bought.
+ * the stage flashes and every enemy that is not a clone is checked against the instant-KO chance the stars bought.
  */
 EVT_BEGIN(marioAttackEvent_Suki)
     // A knocked-out partner is left out; with no enemy to target the move ends at once.
-    CALL(btlevtcmd_GetUnitId, BTL_UNIT_PARTNER, LW(14))
+    CALL(btlevtcmd_GetUnitId, UNIT_ID_PARTNER, LW(14))
     CALL(btlevtcmd_GetBodyId, LW(14), LW(15))
-    CALL(btlevtcmd_CheckStatus, LW(14), STATUS_INSTANT_KILL, LW(0))
+    CALL(btlevtcmd_CheckStatus, LW(14), STATUS_DEAD, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         SET_VALUE(LW(14), -1)
     END_IF
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon), LW(3), LW(4))
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
+        // BUG: this script has no LABEL(99): evtSearchLabel returns the GOTO's own argument word, which then runs
+        // as a command (opcode 99, SET_TYPE), and the script goes on with LW(3) = -1.
         GOTO(99)
     END_IF
+
     // Mario declares the attack, pays the Star Power and Showstopper's work starts.
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_CommandPayWeaponCost, BTL_UNIT_SELF)
-    CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_CommandPayWeaponCost, UNIT_ID_SELF)
+    CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_WeaponAftereffect, LW(0))
     CALL(btlevtcmd_reset_move_color_lv_all)
     BEGIN_SIBLING_EVENT
         CALL(main_suki, LW(14))
     END_SIBLING_EVENT
+
     // Crystal Star opening: Mario holds up the star item and the Crystal Star appears in stardust.
     CALL_CHILD(sac_start_camera_evt)
     WAIT_MS(500)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL_CHILD(sac_mario_item_on_evt)
     WAIT_MS(500)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START2"), EVT_NULLPTR, 0, LW(11))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START2"), EVT_NULLPTR, 0, LW(11))
     CALL(star_stone_appear)
     BEGIN_SIBLING_EVENT
         CALL_CHILD(sac_start_stardust)
     END_SIBLING_EVENT
     WAIT_FRAMES(100)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START3"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START3"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(evt_snd_sfxoff, LW(11))
     WAIT_FRAMES(40)
+
     // Mario puts the item away, returns home and waits for the star to rise.
     CALL_CHILD(sac_mario_item_on_end_evt)
     CALL_CHILD(sac_mario_back_home)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("M_I_Y"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("M_I_Y"))
     CALL(wait_star_stone_up_end)
     WAIT_MS(100)
+
     // The button game runs with the help shown and the crowd cheering; the stars earned set the KO chance.
     BEGIN_SIBLING_EVENT
         CALL(sac_cheer, 0)
@@ -999,10 +966,12 @@ EVT_BEGIN(marioAttackEvent_Suki)
     CALL(sac_cheer_end)
     CALL(set_weapon, LW(0), LW(9))
     WAIT_MS(500)
+
     // The camera pulls back to show the whole stage.
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     WAIT_MS(1000)
+
     // Each star earned flies out with a paper flourish, a crystal shine and a screen shake.
     SET_VALUE(LW(10), 0)
     SET_VALUE(LW(11), LW(0))
@@ -1030,17 +999,17 @@ EVT_BEGIN(marioAttackEvent_Suki)
         CALL(evt_snd_sfxon, STRING("SFX_BTL_SAC_SUKKIRI4_2"), 0)
         IF_INT_EQUAL(LW(10), 0)
             // With the first star, every enemy that can be hurt flinches.
-            CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(1))
-            CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(1), PTR(&weapon))
+            CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(1))
+            CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(1), PTR(&weapon))
             CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon), LW(3), LW(4))
             CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
             LABEL(5)
             IF_INT_EQUAL(LW(3), -1)
                 GOTO(8)
             END_IF
-            CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), PART_ATTR_IMMUNE_TO_DAMAGE_OR_STATUS, LW(1))
+            CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), kImmuneToDamageAndStatus, LW(1))
             IF_INT_EQUAL(LW(1), 0)
-                CALL(btlevtcmd_AnimeChangePoseType, LW(3), LW(4), BTL_POSE_DAMAGE)
+                CALL(btlevtcmd_AnimeChangePoseType, LW(3), LW(4), POSE_TYPE_DAMAGE)
             END_IF
             CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
             GOTO(5)
@@ -1050,6 +1019,7 @@ EVT_BEGIN(marioAttackEvent_Suki)
         CALL(wait_star_stone_attack_end)
         ADD(LW(10), 1)
     END_LOOP
+
     // The paper flourishes are cleared away.
     CALL(evt_paper_delete, STRING("OFF_d_yabu_small"))
     SET_VALUE(LW(10), 0)
@@ -1059,6 +1029,7 @@ EVT_BEGIN(marioAttackEvent_Suki)
         CALL(evt_img_release, LW(13))
         ADD(LW(10), 1)
     END_LOOP
+
     // The stage flashes white four times.
     CALL_CHILD(flash_evt)
     SET_VALUE(LW(10), 3)
@@ -1078,27 +1049,29 @@ EVT_BEGIN(marioAttackEvent_Suki)
         END_LOOP
     END_LOOP
     CALL_CHILD(flash_cancel_evt)
-    // Every enemy that is not evasive is checked against the instant-KO chance.
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon))
+
+    // Every enemy that is not a clone is checked against the instant-KO chance.
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon), LW(3), LW(4))
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     LABEL(10)
     IF_INT_EQUAL(LW(3), -1)
         GOTO(20)
     END_IF
-    CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), PART_ATTR_EVASIVE, LW(0))
+    CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), kClone, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     END_IF
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
     GOTO(10)
     LABEL(20)
+
     // The camera resets and the move's work is freed.
     WAIT_FRAMES(30)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(end_suki)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -1106,39 +1079,39 @@ EVT_END()
  * Darkens the battle for the finishing flash: hooks the flash TEV callback onto the stage objects, hides Mario,
  * the partner and the audience, blacks out the enemies and darkens the stage.
  */
-EVT_BEGIN(flash_evt)
+static EVT_BEGIN(flash_evt)
     CALL(evt_map_set_tevcallback, 1, PTR(set_tev))
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("bti_S"), 16777216)
-    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("bti_S"), 256)
+    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("bti_S"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("bti_S"), MAP_OBJ_FLAG_DISPLAY_LIST)
     CALL(exist_map, STRING("A1"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A1"), 251658240)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A1"), 16777216)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A1"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A1"), MAP_OBJ_TEV_CALLBACK_MASK)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A1"), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A1"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     CALL(exist_map, STRING("A2"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A2"), 16777216)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A2"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A2"), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A2"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     CALL(exist_map, STRING("B"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("B"), 16777216)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("B"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("B"), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("B"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     CALL(exist_map, STRING("C"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("C"), 16777216)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("C"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("C"), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("C"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
-    CALL(btlevtcmd_SetAlpha, BTL_UNIT_SELF, 1, 0)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_SetAlpha, UNIT_ID_SELF, 1, 0)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
     IF_INT_NOT_EQUAL(LW(14), -1)
         CALL(btlevtcmd_SetAlpha, LW(14), LW(15), 0)
-        CALL(btlevtcmd_OnPartsAttribute, LW(14), LW(15), PART_ATTR_NO_SHADOW)
+        CALL(btlevtcmd_OnPartsAttribute, LW(14), LW(15), kNoShadow)
     END_IF
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon), LW(3), LW(4))
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     LABEL(5)
@@ -1156,12 +1129,12 @@ EVT_BEGIN(flash_evt)
 EVT_END()
 
 /** One step of the flash: sets the stage brightness to LW(10) and tints every enemy the opposite way (255 - LW(10)). */
-EVT_BEGIN(flash_main_evt)
+static EVT_BEGIN(flash_main_evt)
     SET_VALUE(LW(11), 255)
     SUBTRACT(LW(11), LW(10))
     CALL(flash_update, LW(10))
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon), LW(3), LW(4))
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     LABEL(5)
@@ -1179,43 +1152,43 @@ EVT_END()
  * Undoes flash_evt: restores the stage objects (and the "gamen" screen's TEV callback where the stage has one),
  * shows Mario, the partner and the audience again, resets the enemies' colour and the stage darkness.
  */
-EVT_BEGIN(flash_cancel_evt)
-    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("bti_S"), 251658240)
-    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("bti_S"), 256)
+static EVT_BEGIN(flash_cancel_evt)
+    CALL(evt_mapobj_flag_onoff, 1, 0, STRING("bti_S"), MAP_OBJ_TEV_CALLBACK_MASK)
+    CALL(evt_mapobj_flag_onoff, 1, 1, STRING("bti_S"), MAP_OBJ_FLAG_DISPLAY_LIST)
     CALL(exist_map, STRING("A1"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A1"), 251658240)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A1"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A1"), MAP_OBJ_TEV_CALLBACK_MASK)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A1"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     CALL(exist_map, STRING("A2"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A2"), 251658240)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A2"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("A2"), MAP_OBJ_TEV_CALLBACK_MASK)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("A2"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     CALL(exist_map, STRING("B"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("B"), 251658240)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("B"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("B"), MAP_OBJ_TEV_CALLBACK_MASK)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("B"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     CALL(exist_map, STRING("C"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("C"), 251658240)
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("C"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("C"), MAP_OBJ_TEV_CALLBACK_MASK)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("C"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     CALL(exist_map, STRING("gamen"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
         CALL(evt_map_set_tevcallback, 8, PTR(tou_gamen_screen_tev))
-        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("gamen"), 134217728)
-        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("gamen"), 256)
+        CALL(evt_mapobj_flag_onoff, 1, 1, STRING("gamen"), MAP_OBJ_TEV_CALLBACK(8))
+        CALL(evt_mapobj_flag_onoff, 1, 0, STRING("gamen"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
-    CALL(btlevtcmd_SetAlpha, BTL_UNIT_SELF, 1, 255)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_SetAlpha, UNIT_ID_SELF, 1, 255)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
     IF_INT_NOT_EQUAL(LW(14), -1)
         CALL(btlevtcmd_SetAlpha, LW(14), LW(15), 255)
-        CALL(btlevtcmd_OffPartsAttribute, LW(14), LW(15), PART_ATTR_NO_SHADOW)
+        CALL(btlevtcmd_OffPartsAttribute, LW(14), LW(15), kNoShadow)
     END_IF
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon), LW(3), LW(4))
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     LABEL(5)

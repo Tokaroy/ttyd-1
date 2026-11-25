@@ -1,5 +1,7 @@
 // Script commands that control NPCs: entry, position, movement, jumps, animations, flags and
 // battle setup (npcdrv).
+
+#include "version.h"
 #include "evt/evt_npc.h"
 #include "party.h"
 #include "mario/mario_party.h"
@@ -18,32 +20,28 @@
 #include "system.h"
 #include <string.h>
 #include "eff/n64/eff_kemuri10_n64.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include <math.h>
-#include "version.h"
-
+#include "sfx_name_word.h"
+#include "driver/mapdrv.h"
 static f32 _intplGetFloat(s32 mode, f32 t);
-
-#pragma optimize_for_size on
-
-#ifdef __MWERKS__
-#define fabs(x) __fabs(x)
-#define fabsf(x) __fabsf(x)
-#else
-double fabs(double x);
-float fabsf(float x);
-#endif
 
 // clang-format off
 // .sdata
+/**
+ * Shared NPC init script: sets NPC_FLAG_TALK_POSE and NPC_FLAG_AUTO_MOVE_ANIM on the running NPC ("me"). Map NPC init
+ * scripts run it with CALL_CHILD.
+ */
 EVT_BEGIN(npc_init_evt)
-    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
     RETURN
     END
-EVT_END();
+EVT_END()
+
 // clang-format on
 
-/** const char* npcDesc, const char* npcName */
+/** Blocks until the animation group args[1] has loaded, then creates the NPC named args[0] with it. */
 USER_FUNC(evt_npc_entry) {
     EvtWord* args = event->args;
     const char *desc, *name;
@@ -83,7 +81,7 @@ USER_FUNC(evt_npc_slave_entry) {
     strcat(slaveName, ident);
     npcEntry(slaveName, animName);
     slave = npcNameToPtr(slaveName);
-    slave->flags |= NPC_FLAG_NO_AUTO_UPDATE | NPC_FLAG_JUMPING | NPC_FLAG_ENEMY | NPC_FLAG_LAND_ON_FLOOR;
+    slave->flags |= NPC_FLAG_ENEMY | NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_GRAVITY | NPC_FLAG_UPDATE_BY_EVENT;
     slave->deadEvent = deadEvent;
     slave->battleInfo = npc->battleInfo;
     npcSetSlave(npc, slave, id);
@@ -91,13 +89,11 @@ USER_FUNC(evt_npc_slave_entry) {
     return EVT_RETURN_DONE;
 }
 
-#if VERSION <= VERSION_DEMO_JP
-// FAKE: the demo's .rodata keeps an orphan "%f%f%f" just before "_s%d"; an unreferenced static that prints an NPC position
-// leaves the string where the original's stripped code did
+// FAKE: stand-in for evt_npc_set_position_xls (0xb4), which the JP demo map lists UNUSED after
+// evt_npc_set_position; it only keeps its "%f%f%f" (map @2521) at the end of .rodata (all versions).
 static void npc_report_pos(NpcEntry* npc) {
     OSReport("%f%f%f", npc->position.x, npc->position.y, npc->position.z);
 }
-#endif
 
 /** const char* lookupName */
 USER_FUNC(evt_npc_delete) {
@@ -159,7 +155,7 @@ USER_FUNC(evt_npc_setup) {
                         evtDeleteID(evtId);
                     }
                     newEvt = evtEntry(setup->initEvent, 0, 0);
-                    newEvt->wNpcEventType = 0;
+                    newEvt->wNpcEventType = NPC_EVENT_INIT;
                     newEvt->ownerNPC = npc;
                     npc->initEvtId = newEvt->eventId;
                 } else {
@@ -190,11 +186,11 @@ USER_FUNC(evt_npc_setup) {
                 }
                 if (tribe->initialAnim) {
                     strcpy(npc->currentAnim, tribe->initialAnim);
-                    animPoseSetAnim(npc->poseId, npc->currentAnim, 1);
+                    animPoseSetAnim(npc->poseId, npc->currentAnim, TRUE);
                 }
             }
         }
-        fbatChangeMode(1);
+        fbatChangeMode(FBAT_MODE_FIELD);
         return EVT_RETURN_BLOCK; // call this function again
     } else {
         for (setup = setuplist; setup->name; setup++) {
@@ -210,8 +206,8 @@ USER_FUNC(evt_npc_setup) {
                 if (evtId) {
                     evtDeleteID(evtId);
                 }
-                newEvt = evtEntry(npc->moveEvent, 0, 0x20);
-                newEvt->wNpcEventType = 1;
+                newEvt = evtEntry(npc->moveEvent, 0, EVENT_START_IMMEDIATE);
+                newEvt->wNpcEventType = NPC_EVENT_MOVE;
                 newEvt->ownerNPC = npc;
                 npc->regularEvtId = newEvt->eventId;
             }
@@ -251,7 +247,7 @@ USER_FUNC(evt_npc_set_width) {
     return EVT_RETURN_DONE;
 }
 
-/** const char* lookupName, f32 width */
+/** const char* lookupName, f32 height */
 USER_FUNC(evt_npc_set_height) {
     EvtWord* args = event->args;
     const char* name;
@@ -292,6 +288,26 @@ USER_FUNC(evt_npc_set_scale) {
     npc->scale.x = x;
     npc->scale.y = y;
     npc->scale.z = z;
+    return EVT_RETURN_DONE;
+}
+
+/** const char* lookupName, f32 x, f32 y, f32 z */
+// Original name and size (0xcc) from the JP demo map (UNUSED there: no script uses it); evt_npc_set_scale adding
+// to the scale.
+USER_FUNC(evt_npc_add_scale) {
+    EvtWord* args = event->args;
+    const char* name;
+    NpcEntry* npc;
+    f32 x, y, z;
+
+    name = (const char*)evtGetValue(event, args[0]);
+    x = evtGetFloat(event, args[1]);
+    y = evtGetFloat(event, args[2]);
+    z = evtGetFloat(event, args[3]);
+    npc = evtNpcNameToPtr(event, name);
+    npc->scale.x += x;
+    npc->scale.y += y;
+    npc->scale.z += z;
     return EVT_RETURN_DONE;
 }
 
@@ -349,9 +365,8 @@ USER_FUNC(evt_npc_get_home_position) {
     return EVT_RETURN_DONE;
 }
 
-/**
- * devs forgot to change s32 to f32 when copypasting, fix in rewrite const char* lookupName, f32 x, f32 y, f32 z
- */
+/** const char* lookupName, f32 x, f32 y, f32 z */
+// BUG: the coordinates pass through s32 locals, so their fractions are lost.
 USER_FUNC(evt_npc_set_home_position) {
     EvtWord* args = event->args;
     const char* name;
@@ -388,7 +403,8 @@ USER_FUNC(evt_npc_get_rotate) {
 }
 
 /**
- * devs forgot to use evtGetFloat when copypasting, fix in rewrite const char* lookupName, f32 x, f32 y, f32 z
+ * const char* lookupName, f32 x, f32 y, f32 z: sets the NPC's rotation.
+ * BUG: reads the angles with evtGetValue (as integers) instead of evtGetFloat.
  */
 USER_FUNC(evt_npc_set_rotate) {
     EvtWord* args = event->args;
@@ -406,7 +422,8 @@ USER_FUNC(evt_npc_set_rotate) {
 }
 
 /**
- * devs forgot to use evtGetFloat when copypasting, fix in rewrite const char* lookupName, f32 x, f32 y, f32 z
+ * const char* lookupName, f32 x, f32 y, f32 z: adds to the NPC's rotation.
+ * BUG: reads the angles with evtGetValue (as integers) instead of evtGetFloat.
  */
 USER_FUNC(evt_npc_add_rotate) {
     EvtWord* args = event->args;
@@ -425,8 +442,29 @@ USER_FUNC(evt_npc_add_rotate) {
     return EVT_RETURN_DONE;
 }
 
+/** const char* lookupName, s32 xStoreIndex, s32 yStoreIndex, s32 zStoreIndex */
+// Original name and size (0x84) from the JP demo map (UNUSED there: no script uses it); evt_npc_get_rotate for
+// evt_npc_set_rotate_offset's field.
+USER_FUNC(evt_npc_get_rotate_offset) {
+    EvtWord* args = event->args;
+    const char* name;
+    NpcEntry* npc;
+    s32 x, y, z;
+
+    name = (const char*)evtGetValue(event, args[0]);
+    x = args[1];
+    y = args[2];
+    z = args[3];
+    npc = evtNpcNameToPtr(event, name);
+    evtSetFloat(event, x, npc->rotationOffset.x);
+    evtSetFloat(event, y, npc->rotationOffset.y);
+    evtSetFloat(event, z, npc->rotationOffset.z);
+    return EVT_RETURN_DONE;
+}
+
 /**
- * devs forgot to use evtGetFloat when copypasting, fix in rewrite const char* lookupName, f32 x, f32 y, f32 z
+ * const char* lookupName, f32 x, f32 y, f32 z: sets the NPC's rotationOffset.
+ * BUG: reads the offsets with evtGetValue (as integers) instead of evtGetFloat.
  */
 USER_FUNC(evt_npc_set_rotate_offset) {
     EvtWord* args = event->args;
@@ -444,10 +482,10 @@ USER_FUNC(evt_npc_set_rotate_offset) {
 }
 
 /**
- * Walks an NPC to x = args[1], z = args[2], in args[3] milliseconds
- * or at args[4] units per second (time alone derives the speed; neither gives speed 1),
- * playing its footstep sounds; blocks until it arrives.
- * args[5] flags: 0x2 sets NPC_STATUS_NO_FIND_EVENT, 0x4 gives up after 5 frames against a wall.
+ * Moves the NPC args[0] on the x-z plane towards (args[1], args[2]) and blocks until the move ends: at speed args[4]
+ * until it arrives or, when a time args[3] (ms) is given too, until that time has run; with only a time the speed
+ * comes from the distance, with neither it is 1. The literal args[5] holds NPC_MOVE_POSITION_FLAG_* bits. Plays the
+ * NPC's footstep sounds on the way.
  */
 USER_FUNC(evt_npc_move_position) {
     EvtWord* args = event->args;
@@ -465,9 +503,9 @@ USER_FUNC(evt_npc_move_position) {
     f32 step;
     s32 sfxFlag;
 
-    npc->jumpFlags |= NPC_STATUS_CLOCK_RUNNING;
-    if (moveFlags & 0x2) {
-        npc->jumpFlags |= NPC_STATUS_NO_FIND_EVENT;
+    npc->statusFlags |= NPC_STATUS_UPDATE;
+    if (moveFlags & NPC_MOVE_POSITION_FLAG_NO_FIND) {
+        npc->statusFlags |= NPC_STATUS_NO_FIND_ONCE;
     }
 
     if (isFirstCall) {
@@ -491,6 +529,7 @@ USER_FUNC(evt_npc_move_position) {
         if (npc->moveSpeed <= 0.1f && npc->moveTime == 0.0f) {
             npc->moveSpeed = 1.0f;
         }
+
         // Time given but no speed -> derive speed, then run as speed-mode
         if (npc->moveSpeed <= 0.1f) {
             npc->moveSpeed = dist / npc->moveTime;
@@ -504,8 +543,8 @@ USER_FUNC(evt_npc_move_position) {
 
     event->userdata[0]++;
 
-    // flag 0x4: bail if blocked and stuck > 5 frames
-    if ((moveFlags & 0x4) && npc->wallHit && event->userdata[0] > 5) {
+    // NPC_MOVE_POSITION_FLAG_WALL_STOP: bail if blocked more than 5 frames after the move started
+    if ((moveFlags & NPC_MOVE_POSITION_FLAG_WALL_STOP) && npc->wallHit && event->userdata[0] > 5) {
         return EVT_RETURN_DONE;
     }
 
@@ -520,7 +559,7 @@ USER_FUNC(evt_npc_move_position) {
             return EVT_RETURN_DONE;
         }
     } else {
-        // speed move: snap when within a step (or essentially on top of target)
+        // speed move: stop when within a step (or essentially on top of target)
         if (!npc->moveTime && dist <= step) {
             npc->moveSpeed = 0.0f;
             return EVT_RETURN_DONE;
@@ -531,23 +570,25 @@ USER_FUNC(evt_npc_move_position) {
         }
     }
 
-    // Re-aim at the target each frame unless direction is locked
-    if ((npc->flags & NPC_FLAG_USED) && !(npc->jumpFlags & NPC_STATUS_AIRBORNE)) {
+    // Re-aim at the target unless airborne
+    if ((npc->flags & NPC_FLAG_IN_USE) && !(npc->statusFlags & NPC_STATUS_AIRBORNE)) {
         npc->moveDir = angleABf(0.0f, 0.0f, diff.x, diff.z);
     }
 
-    // Turn the body toward travel (unless mid battle-transition states 5/6)
-    if ((npc->jumpFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed > 0.1f) {
-        if (npc != fbatGetPointer()->target || (fbatGetPointer()->mode != 5 && fbatGetPointer()->mode != 6)) {
+    // Face the move direction (not the field-battle target while the fbat mode is 5 or 6)
+    if ((npc->statusFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed > 0.1f) {
+        if (npc != fbatGetPointer()->target || (fbatGetPointer()->mode != FBAT_MODE_BATTLE && fbatGetPointer()->mode != 6)) {
             npcTuningRy(npc, npc->moveDir);
         }
     }
-
-    // Integrate move offset along heading (NPC_STATUS_FROZEN freezes it; the demo has no freeze flag)
-#if VERSION >= VERSION_JP
-    if (!(npc->jumpFlags & NPC_STATUS_FROZEN))
-#endif
+    // In the early demos the offset also grows while the NPC is stopped; see the BUG in slit_majin_lecture_init
+    // (rels/gon/src/event/evt_lect_gon.c).
+#if VERSION <= VERSION_DEMO_JP
     {
+#else
+    // Advance the move offset along the heading (not while NPC_STATUS_STOPPED)
+    if (!(npc->statusFlags & NPC_STATUS_STOPPED)) {
+#endif
         f32 temp = (f32)sin(npc->moveDir * 6.2831855f / 360.0f);
         npc->moveOffset.x += npc->moveDt * (npc->moveSpeed * temp);
         temp = (f32)cos(npc->moveDir * 6.2831855f / 360.0f);
@@ -556,9 +597,9 @@ USER_FUNC(evt_npc_move_position) {
 
     // Footstep SFX
     sfxFlag = 0;
-    if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX) {
-        if (!(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-            sfxFlag = 0x10000;
+    if (psndGetFlag() & PSND_FLAG_DOOR_IN) {
+        if (!(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+            sfxFlag = PSND_SFX_DOOR_MUTE;
         }
     }
 
@@ -567,10 +608,8 @@ USER_FUNC(evt_npc_move_position) {
             if (npc->footstepSfxA != 0) {
                 psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxA)), &npc->position, 0xff, 0xff, 0, 8);
             }
-        } else {
-            if (npc->footstepSfxB != 0) {
-                psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
-            }
+        } else if (npc->footstepSfxB != 0) {
+            psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
         }
         npc->footstepAccum = 0.0f;
         npc->footstepToggle = (s8)(1 - npc->footstepToggle); // alternate L/R
@@ -586,7 +625,8 @@ USER_FUNC(evt_npc_move_position) {
 /**
  * Jumps an NPC to (args[1], args[2], args[3]) with jump and landing sounds, blocking until it lands.
  * args[4] time in ms, args[5] speed, args[6] arc height (0 = just drop, only for downward jumps),
- * args[7] mode (0 = speed decides the duration, 1 = the time does).
+ * args[7] mode (with an arc: 0 = speed decides the duration when above 0.1, 1 = the time does;
+ * without an arc only mode 0 fits the fall, to the time when given, else to speed).
  * The arc is driven by the NPC's own jump physics in npcdrv.
  */
 USER_FUNC(evt_npc_jump_position) {
@@ -611,8 +651,8 @@ USER_FUNC(evt_npc_jump_position) {
     s32 sfxFlag;
     f32 temp;
 
-    npc->jumpFlags |= NPC_STATUS_CLOCK_RUNNING;
-    npc->jumpFlags |= NPC_STATUS_NO_FIND_EVENT;
+    npc->statusFlags |= NPC_STATUS_UPDATE;
+    npc->statusFlags |= NPC_STATUS_NO_FIND_ONCE;
 
     if (isFirstCall) {
         npc->moveTicks = 0;
@@ -633,8 +673,8 @@ USER_FUNC(evt_npc_jump_position) {
         npc->moveOffset.y = 0.0f;
 
         sfxFlag = 0;
-        if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX && !(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-            sfxFlag = 0x10000;
+        if (psndGetFlag() & PSND_FLAG_DOOR_IN && !(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+            sfxFlag = PSND_SFX_DOOR_MUTE;
         }
         if (npc->jumpSfx != 0) {
             psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->jumpSfx)), &npc->position, 0xff, 0xff, 0, 8);
@@ -722,18 +762,21 @@ USER_FUNC(evt_npc_jump_position) {
     }
 
     // ---- per-frame ----
-    if ((npc->jumpFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed > 0.1f) {
-        if (npc != fbatGetPointer()->target || (fbatGetPointer()->mode != 5 && fbatGetPointer()->mode != 6)) {
+    if ((npc->statusFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed > 0.1f) {
+        if (npc != fbatGetPointer()->target || (fbatGetPointer()->mode != FBAT_MODE_BATTLE && fbatGetPointer()->mode != 6)) {
             npcTuningRy(npc, npc->moveDir);
         }
     }
 
+    // No NPC_STATUS_STOPPED check (evt_npc_move_position has one from JP on): while the NPC is stopped in the air,
+    // npcMain applies no movement and the jump never lands, so moveOffset grows every frame; see the BUG in
+    // slit_majin_lecture_init (rels/gon/src/event/evt_lect_gon.c).
     temp = (f32)sin(npc->moveDir * 6.2831855f / 360.0f);
     npc->moveOffset.x += npc->moveDt * (npc->moveSpeed * temp);
     temp = (f32)cos(npc->moveDir * 6.2831855f / 360.0f);
     npc->moveOffset.z += npc->moveDt * (npc->moveSpeed * -temp);
 
-    if (npc->jumpFlags & NPC_STATUS_AIRBORNE) {
+    if (npc->statusFlags & NPC_STATUS_AIRBORNE) {
         return EVT_RETURN_BLOCK; // still airborne
     }
 
@@ -744,9 +787,9 @@ USER_FUNC(evt_npc_jump_position) {
     npc->jumpGravity = 1.0f;
 
     sfxFlag = 0;
-    if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX) {
-        if (!(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-            sfxFlag = 0x10000;
+    if (psndGetFlag() & PSND_FLAG_DOOR_IN) {
+        if (!(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+            sfxFlag = PSND_SFX_DOOR_MUTE;
         }
     }
     if (npc->landSfx != 0) {
@@ -771,7 +814,7 @@ USER_FUNC(evt_npc_jump_position_nohit) {
     s32 duration = evtGetValue(event, *args++);
     f32 arcHeight = (f32)evtGetValue(event, *args++);
     s32 sfxFlag;
-    s32 elapsed;
+    int elapsed;
     f32 t;
 
     if (isFirstCall) {
@@ -781,12 +824,12 @@ USER_FUNC(evt_npc_jump_position_nohit) {
 
         event->userdataf[1] = -4.0f * arcHeight;
         event->userdataf[2] = (targetY - npc->jumpStartPos.y) - event->userdataf[1];
-        event->userdata3 = npc->flags & NPC_FLAG_SHADOW_NO_COLLISION;
-        npc->flags &= ~NPC_FLAG_SHADOW_NO_COLLISION;
+        event->userdata3 = npc->flags & NPC_FLAG_SHADOW_NO_FLOOR;
+        npc->flags &= ~NPC_FLAG_SHADOW_NO_FLOOR;
 
-        if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX) {
-            if (!(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-                sfxFlag = 0x10000;
+        if (psndGetFlag() & PSND_FLAG_DOOR_IN) {
+            if (!(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+                sfxFlag = PSND_SFX_DOOR_MUTE;
             }
         }
         if (npc->jumpSfx != 0) {
@@ -794,12 +837,13 @@ USER_FUNC(evt_npc_jump_position_nohit) {
         }
     }
 
-    elapsed = (s32)OSTicksToMilliseconds((OSTick)event->lifetime - (OSTick)event->savedTime);
+    elapsed = OSTicksToMilliseconds((OSTick)event->lifetime - (OSTick)event->savedTime);
 
     if (elapsed < duration) {
         t = (f32)elapsed / (f32)duration;
-        npc->position.x = intplGetValue(0, npc->jumpStartPos.x, targetX, (s32)elapsed, duration);
-        npc->position.z = intplGetValue(0, npc->jumpStartPos.z, targetZ, (s32)elapsed, duration);
+
+        npc->position.x = intplGetValue(EASING_LINEAR, npc->jumpStartPos.x, targetX, elapsed, duration);
+        npc->position.z = intplGetValue(EASING_LINEAR, npc->jumpStartPos.z, targetZ, elapsed, duration);
         npc->position.y = npc->jumpStartPos.y + t * ((event->userdataf[1] * t) + event->userdataf[2]);
         return EVT_RETURN_BLOCK;
     }
@@ -808,9 +852,9 @@ USER_FUNC(evt_npc_jump_position_nohit) {
     npc->flags |= event->userdata3;
 
     sfxFlag = 0;
-    if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX) {
-        if (!(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-            sfxFlag = 0x10000;
+    if (psndGetFlag() & PSND_FLAG_DOOR_IN) {
+        if (!(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+            sfxFlag = PSND_SFX_DOOR_MUTE;
         }
     }
     if (npc->landSfx != 0) {
@@ -821,7 +865,8 @@ USER_FUNC(evt_npc_jump_position_nohit) {
 }
 
 /**
- * const char* lookupName, f32 x, f32 y, f32 z, s32 msec, f32 speed, f32 arcHeight, s32 intplMode, s32 flags
+ * const char* lookupName, f32 x, f32 y, f32 z, s32 msec, f32 speed, f32 arcHeight, s32 intplMode,
+ * NpcGlidePositionFlags flags (a plain word, not evaluated)
  */
 USER_FUNC(evt_npc_glide_position) {
     EvtWord* args = event->args;
@@ -844,9 +889,9 @@ USER_FUNC(evt_npc_glide_position) {
     BOOL finished;
     s32 sfxFlag;
 
-    npc->jumpFlags |= NPC_STATUS_CLOCK_RUNNING;
-    if (!(moveFlags & 0x2)) {
-        npc->jumpFlags |= NPC_STATUS_NO_FIND_EVENT;
+    npc->statusFlags |= NPC_STATUS_UPDATE;
+    if (!(moveFlags & NPC_GLIDE_POSITION_FLAG_FIND)) {
+        npc->statusFlags |= NPC_STATUS_NO_FIND_ONCE;
     }
 
     if (isFirstCall) {
@@ -881,8 +926,8 @@ USER_FUNC(evt_npc_glide_position) {
         return EVT_RETURN_BLOCK;
     }
 
-    // flag 0x1: bail if blocked
-    if ((moveFlags & 0x1) && npc->wallHit) {
+    // NPC_GLIDE_POSITION_FLAG_WALL_STOP: bail if blocked
+    if ((moveFlags & NPC_GLIDE_POSITION_FLAG_WALL_STOP) && npc->wallHit) {
         return EVT_RETURN_DONE;
     }
 
@@ -909,12 +954,12 @@ USER_FUNC(evt_npc_glide_position) {
     npc->moveOffset.x += dx * delta;
     npc->moveOffset.z += dz * delta;
 
-    // Turn the body toward travel (unless mid battle-transition states 5/6)
-    if (npc->jumpFlags & NPC_STATUS_FACE_MOVE_DIR) {
+    // Face the move direction (not the field-battle target while the fbat mode is 5 or 6)
+    if (npc->statusFlags & NPC_STATUS_FACE_MOVE_DIR) {
         if (dx || dz) {
             if (npc != fbatGetPointer()->target ||
-                (fbatGetPointer()->mode != 5 && fbatGetPointer()->mode != 6)) {
-                // BUG: angleABf gets (dx, dx); (dx, dz) was meant
+                (fbatGetPointer()->mode != FBAT_MODE_BATTLE && fbatGetPointer()->mode != 6)) {
+                // BUG: passes dx as both components (dz is ignored)
                 npcTuningRy(npc, angleABf(0.0f, 0.0f, dx, dx));
             }
         }
@@ -929,9 +974,9 @@ USER_FUNC(evt_npc_glide_position) {
 
     // Footstep SFX
     sfxFlag = 0;
-    if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX) {
-        if (!(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-            sfxFlag = 0x10000;
+    if (psndGetFlag() & PSND_FLAG_DOOR_IN) {
+        if (!(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+            sfxFlag = PSND_SFX_DOOR_MUTE;
         }
     }
 
@@ -940,10 +985,8 @@ USER_FUNC(evt_npc_glide_position) {
             if (npc->footstepSfxA != 0) {
                 psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxA)), &npc->position, 0xff, 0xff, 0, 8);
             }
-        } else {
-            if (npc->footstepSfxB != 0) {
-                psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
-            }
+        } else if (npc->footstepSfxB != 0) {
+            psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
         }
         npc->footstepAccum = 0.0f;
         npc->footstepToggle = (s8)(1 - npc->footstepToggle);
@@ -972,7 +1015,8 @@ USER_FUNC(evt_npc_return_interrupt) {
 }
 
 /**
- * const char* lookupName, const char* targetName, s32 msec, f32 speed, f32 stopDistance, f32 turnRate, s32 flags
+ * const char* lookupName, const char* targetName, s32 msec, f32 speed, f32 stopDistance, f32 turnRate,
+ * NpcHomingTargetFlags flags (a plain word, not evaluated)
  */
 USER_FUNC(evt_npc_homing_target) {
     EvtWord* args = event->args;
@@ -991,7 +1035,7 @@ USER_FUNC(evt_npc_homing_target) {
     BOOL finished;
     s32 sfxFlag;
 
-    npc->jumpFlags |= NPC_STATUS_CLOCK_RUNNING;
+    npc->statusFlags |= NPC_STATUS_UPDATE;
 
     if (isFirstCall) {
         npc->moveTicks = 0;
@@ -1019,10 +1063,10 @@ USER_FUNC(evt_npc_homing_target) {
         }
         npc->moveTime = moveTime;
 
-        // Turn the body toward travel (unless mid battle-transition states 5/6)
-        if ((npc->jumpFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed) {
+        // Face the move direction (not the field-battle target while the fbat mode is 5 or 6)
+        if ((npc->statusFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed) {
             if (npc != fbatGetPointer()->target ||
-                (fbatGetPointer()->mode != 5 && fbatGetPointer()->mode != 6)) {
+                (fbatGetPointer()->mode != FBAT_MODE_BATTLE && fbatGetPointer()->mode != 6)) {
                 npcTuningRy(npc, npc->moveDir);
             }
         }
@@ -1033,7 +1077,7 @@ USER_FUNC(evt_npc_homing_target) {
     }
 
     dist = 1000.0f;
-    if (!(npc->jumpFlags & NPC_STATUS_AIRBORNE)) {
+    if (!(npc->statusFlags & NPC_STATUS_AIRBORNE)) {
         // track the target's current position
         if (event->userdata[0] == 0) {
             MarioWork* mario = event->userdatap[1];
@@ -1054,7 +1098,7 @@ USER_FUNC(evt_npc_homing_target) {
 
         // turn toward the target, limited by turnRate
         delta = compAngle(npc->moveDir, angle);
-        if (fabsf(delta) <= 60.0f * turnRate * npc->moveDt) {
+        if (__fabsf(delta) <= 60.0f * turnRate * npc->moveDt) {
             npc->moveDir = angle;
         } else {
             if (delta > 0.0f) {
@@ -1065,9 +1109,9 @@ USER_FUNC(evt_npc_homing_target) {
             npc->moveDir = reviseAngle(npc->moveDir);
         }
 
-        if ((npc->jumpFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed) {
+        if ((npc->statusFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed) {
             if (npc != fbatGetPointer()->target ||
-                (fbatGetPointer()->mode != 5 && fbatGetPointer()->mode != 6)) {
+                (fbatGetPointer()->mode != FBAT_MODE_BATTLE && fbatGetPointer()->mode != 6)) {
                 npcTuningRy(npc, npc->moveDir);
             }
         }
@@ -1075,13 +1119,15 @@ USER_FUNC(evt_npc_homing_target) {
 
     finished = FALSE;
     PSVECSubtract(&npc->jumpTargetPos, &npc->position, &diff);
+
+    // the distance is computed and discarded (the retail code computes it)
     sqrtf((diff.x * diff.x) + (diff.z * diff.z));
 
     if (npc->moveTime && npc->moveTime <= npc->moveElapsed) {
         finished = TRUE;
     } else if (stopDistance > 0.0f && dist < stopDistance) {
         finished = TRUE;
-    } else if ((moveFlags & 0x4) && npc->wallHit) {
+    } else if ((moveFlags & NPC_HOMING_TARGET_FLAG_WALL_STOP) && npc->wallHit) {
         finished = TRUE;
     }
     if (finished) {
@@ -1089,6 +1135,9 @@ USER_FUNC(evt_npc_homing_target) {
         return EVT_RETURN_YIELD;
     }
 
+    // No NPC_STATUS_STOPPED check: a stopped NPC does not move and its moveTicks stands still, so the homing
+    // move never meets its end test and moveOffset grows every frame; see the BUG in slit_majin_lecture_init
+    // (rels/gon/src/event/evt_lect_gon.c).
     temp = (f32)sin(6.2831855f * npc->moveDir / 360.0f);
     npc->moveOffset.x += npc->moveDt * (npc->moveSpeed * temp);
     temp = (f32)cos(6.2831855f * npc->moveDir / 360.0f);
@@ -1096,9 +1145,9 @@ USER_FUNC(evt_npc_homing_target) {
 
     // Footstep SFX
     sfxFlag = 0;
-    if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX) {
-        if (!(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-            sfxFlag = 0x10000;
+    if (psndGetFlag() & PSND_FLAG_DOOR_IN) {
+        if (!(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+            sfxFlag = PSND_SFX_DOOR_MUTE;
         }
     }
 
@@ -1107,10 +1156,8 @@ USER_FUNC(evt_npc_homing_target) {
             if (npc->footstepSfxA != 0) {
                 psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxA)), &npc->position, 0xff, 0xff, 0, 8);
             }
-        } else {
-            if (npc->footstepSfxB != 0) {
-                psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
-            }
+        } else if (npc->footstepSfxB != 0) {
+            psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
         }
         npc->footstepAccum = 0.0f;
         npc->footstepToggle = (s8)(1 - npc->footstepToggle);
@@ -1132,34 +1179,34 @@ static f32 _intplGetFloat(s32 mode, f32 t) {
         t = 1.0f;
     }
     switch (mode) {
-        case 0:
+        case EASING_LINEAR:
             return t;
-        case 1:
+        case EASING_QUADRATIC_IN:
             return t * t;
-        case 2:
+        case EASING_CUBIC_IN:
             return t * (t * t);
-        case 3:
+        case EASING_QUARTIC_IN:
             return t * (t * (t * t));
-        case 7:
+        case EASING_WAVE_SHRINKING:
             c = (f32)cos(4.0f * (t / 3.1415927f));
             u = 1.0f - t;
             v = u * (u * c);
             return 1.0f - v;
-        case 8:
+        case EASING_WAVE_SHRINKING_FASTER:
             c = (f32)cos((4.0f * ((t * t) / 3.1415927f)) / 15.0f);
             u = 1.0f - t;
             v = u * (u * c);
             return 1.0f - v;
-        case 4:
+        case EASING_QUADRATIC_OUT:
             u = 1.0f - t;
             return 1.0f - u * u;
-        case 5:
+        case EASING_CUBIC_OUT:
             u = 1.0f - t;
             return 1.0f - u * (u * u);
-        case 6:
+        case EASING_QUARTIC_OUT:
             u = 1.0f - t;
             return 1.0f - u * (u * (u * u));
-        case 10:
+        case EASING_BOUNCE_SHRINKING:
             c = (f32)cos((4.0f * ((t * t) / 3.1415927f)) / 40.0f);
             u = 1.0f - t;
             v = u * (u * c);
@@ -1167,16 +1214,16 @@ static f32 _intplGetFloat(s32 mode, f32 t) {
                 v = -v;
             }
             return 1.0f - v;
-        case 11:
+        case EASING_SINE_IN_OUT:
             c = (f32)cos(3.1415927f * t);
             v = 0.5f;
             u = 1.0f - c;
             return u * v;
-        case 12:
+        case EASING_SINE_OUT:
             c = (f32)sin(1.5707964f * t);
             r = c;
             break;
-        case 13:
+        case EASING_SINE_IN:
             return 1.0f - (f32)cos(1.5707964f * t);
         default:
             r = 0.0f;
@@ -1253,7 +1300,7 @@ USER_FUNC(evt_npc_set_anim) {
     name = (const char*)evtGetValue(event, args[0]);
     anim = (const char*)evtGetValue(event, args[1]);
     npc = evtNpcNameToPtr(event, name);
-    if (event->wNpcEventType == 1) {
+    if (event->wNpcEventType == NPC_EVENT_MOVE) {
         strcpy(npc->currentAnim, anim);
     }
     animPoseSetAnim(npc->poseId, anim, TRUE);
@@ -1270,7 +1317,7 @@ USER_FUNC(evt_npc_set_anim) {
         name = (const char*)evtGetValue(event, args[0]); \
         npc = evtNpcNameToPtr(event, name);              \
         anim = npc->tribe->field;                        \
-        if (event->wNpcEventType == 1) {                 \
+        if (event->wNpcEventType == NPC_EVENT_MOVE) {    \
             strcpy(npc->currentAnim, anim);              \
         }                                                \
         animPoseSetAnim(npc->poseId, anim, TRUE);        \
@@ -1286,7 +1333,7 @@ NPC_SET_TRIBE_ANIM(evt_npc_set_talk_anim, talkAnim)
 NPC_SET_TRIBE_ANIM(evt_npc_set_walk_anim, walkAnimation)
 NPC_SET_TRIBE_ANIM(evt_npc_set_run_anim, runAnimation)
 
-/** const char* lookupName, const char* paperGroup */
+/** Gives the NPC args[0] the paper animation group args[1] and switches its paper pose on (animPosePaperPeraOn). */
 USER_FUNC(evt_npc_set_paper) {
     EvtWord* args = event->args;
     const char* name;
@@ -1371,7 +1418,8 @@ USER_FUNC(evt_npc_wait_anim) {
 /** s32 type (off/on), const char* npcName, s32 mask */
 USER_FUNC(evt_npc_flag_onoff) {
     EvtWord* args = event->args;
-    s32 type, mask;
+    s32 type;
+    int mask;
     const char* name;
     NpcEntry* npc;
 
@@ -1381,7 +1429,7 @@ USER_FUNC(evt_npc_flag_onoff) {
     npc = evtNpcNameToPtr(event, name);
     switch (type) {
         case 0:
-            npc->flags &= (u32)~mask;
+            npc->flags &= ~mask;
             break;
         case 1:
             npc->flags |= mask;
@@ -1427,7 +1475,8 @@ USER_FUNC(evt_npc_reaction_flag_onoff) {
 /** s32 type (off/on), const char* npcName, s32 mask */
 USER_FUNC(evt_npc_status_onoff) {
     EvtWord* args = event->args;
-    s32 type, mask;
+    s32 type;
+    u32 mask;
     const char* name;
     NpcEntry* npc;
 
@@ -1437,10 +1486,10 @@ USER_FUNC(evt_npc_status_onoff) {
     npc = evtNpcNameToPtr(event, name);
     switch (type) {
         case 0:
-            npc->jumpFlags &= ~(u32)mask;
+            npc->statusFlags &= ~mask;
             break;
         case 1:
-            npc->jumpFlags |= mask;
+            npc->statusFlags |= mask;
     }
     return EVT_RETURN_DONE;
 }
@@ -1455,7 +1504,7 @@ USER_FUNC(evt_npc_status_check) {
     name = (const char*)evtGetValue(event, args[0]);
     mask = evtGetValue(event, args[1]);
     npc = evtNpcNameToPtr(event, name);
-    evtSetValue(event, args[2], npc->jumpFlags & mask);
+    evtSetValue(event, args[2], npc->statusFlags & mask);
     return EVT_RETURN_DONE;
 }
 
@@ -1491,8 +1540,20 @@ USER_FUNC(evt_npc_set_camid) {
     return EVT_RETURN_DONE;
 }
 
-// FAKE: keeps the following function(s) out of line as in the target; removing it changes the code
-#pragma dont_inline on
+/** const char* lookupName, s32 storeIndex */
+// Original name and size (0x58) from the JP demo map (UNUSED there: no script uses it); the getter of
+// evt_npc_set_camid's field in the form of evt_npc_get_reglid.
+USER_FUNC(evt_npc_get_camid) {
+    EvtWord* args = event->args;
+    const char* name;
+    NpcEntry* npc;
+
+    name = (const char*)evtGetValue(event, args[0]);
+    npc = evtNpcNameToPtr(event, name);
+    evtSetValue(event, args[1], npc->cameraId);
+    return EVT_RETURN_DONE;
+}
+
 /** Angle in degrees from the NPC to the target named targetName ("mario" or any name evtNpcNameToPtr accepts). */
 static f32 _get_target_dir(EventEntry* event, NpcEntry* npc, const char* targetName) {
     Vec target, position, diff;
@@ -1512,9 +1573,8 @@ static f32 _get_target_dir(EventEntry* event, NpcEntry* npc, const char* targetN
     PSVECSubtract(&target, &position, &diff);
     return angleABf(0.0f, 0.0f, diff.x, diff.z);
 }
-#pragma dont_inline reset
 
-/** const char* lookupName, const char* targetName, f32 dirStoreIndex */
+/** const char* lookupName, const char* targetName, s32 dirStoreIndex (f32 out) */
 USER_FUNC(evt_get_target_dir) {
     EvtWord* args = event->args;
     const char* name;
@@ -1580,7 +1640,7 @@ USER_FUNC(evt_npc_add_dirdist) {
     return EVT_RETURN_DONE;
 }
 
-/** f32 dir (in/out), f32 min, f32 max */
+/** Turns the angle in args[0] (in/out) by a random amount from args[1] (min) towards args[2] (max), wrapped to 0..360. */
 USER_FUNC(evt_npc_get_loiter_dir) {
     EvtWord* args = event->args;
     s32 index;
@@ -1594,6 +1654,8 @@ USER_FUNC(evt_npc_get_loiter_dir) {
     if (range <= 0.0f) {
         dir = dir + min;
     } else {
+        // BUG: rand() / range instead of a value scaled into the range: the turn is min plus 0 to 32767 / range
+        // degrees, so it can pass max (by far when the range is small).
         dir = dir + (min + rand() / range);
     }
     evtSetFloat(event, index, reviseAngle(dir));
@@ -1682,19 +1744,15 @@ USER_FUNC(evt_npc_facedirection_add) {
         } else {
             sign = -1.0f;
         }
+    } else if (90.0f == npcTransRytoFaceDir(evtNpcNameToPtr(event, name))) {
+        sign = 1.0f;
     } else {
-        if (90.0f == npcTransRytoFaceDir(evtNpcNameToPtr(event, name))) {
-            sign = 1.0f;
-        } else {
-            sign = -1.0f;
-        }
+        sign = -1.0f;
     }
     evtSetValue(event, event->args[1], (s32)(base + amount * sign));
     return EVT_RETURN_DONE;
 }
 
-// FAKE: keeps the following function(s) out of line as in the target; removing it changes the code
-#pragma dont_inline on
 /**
  * Resolves an NPC name from a script: "me" (the script's owner NPC),
  * "master" and "slave_0".."slave_3" relative to the owner, or a map NPC name.
@@ -1706,16 +1764,16 @@ NpcEntry* evtNpcNameToPtr(EventEntry* event, const char* name) {
         return event->ownerNPC;
     }
     if (!strcmp(name, "party")) {
-        return (NpcEntry*)-1;
+        return EVT_NPC_PTR_PARTY;
     }
     if (!strcmp(name, "(^x^)party")) {
-        return (NpcEntry*)-1;
+        return EVT_NPC_PTR_PARTY;
     }
     if (!strcmp(name, "extparty")) {
-        return (NpcEntry*)-2;
+        return EVT_NPC_PTR_EXTPARTY;
     }
     if (!strcmp(name, "mario")) {
-        return (NpcEntry*)-3;
+        return EVT_NPC_PTR_MARIO;
     }
     if (!strcmp(name, "master")) {
         return event->ownerNPC->master;
@@ -1741,16 +1799,16 @@ NpcEntry* evtNpcNameToPtr_NoAssert(EventEntry* event, const char* name) {
         return event->ownerNPC;
     }
     if (!strcmp(name, "party")) {
-        return (NpcEntry*)-1;
+        return EVT_NPC_PTR_PARTY;
     }
     if (!strcmp(name, "(^x^)party")) {
-        return (NpcEntry*)-1;
+        return EVT_NPC_PTR_PARTY;
     }
     if (!strcmp(name, "extparty")) {
-        return (NpcEntry*)-2;
+        return EVT_NPC_PTR_EXTPARTY;
     }
     if (!strcmp(name, "mario")) {
-        return (NpcEntry*)-3;
+        return EVT_NPC_PTR_MARIO;
     }
     if (!strcmp(name, "master")) {
         return event->ownerNPC->master;
@@ -1769,10 +1827,9 @@ NpcEntry* evtNpcNameToPtr_NoAssert(EventEntry* event, const char* name) {
     }
     return npcNameToPtr_NoAssert(name);
 }
-#pragma dont_inline reset
 
 /**
- * Freezes every enemy NPC (those with battle info) for a cutscene:
+ * Freezes every ready NPC flagged NPC_FLAG_STOP_FOR_EVENT for a cutscene:
  * stops their regular (wander) scripts and their animations.
  */
 USER_FUNC(evt_npc_stop_for_event) {
@@ -1780,7 +1837,7 @@ USER_FUNC(evt_npc_stop_for_event) {
     return EVT_RETURN_DONE;
 }
 
-/** Unfreezes all the enemy NPCs evt_npc_stop_for_event froze. */
+/** Unfreezes all the NPCs evt_npc_stop_for_event froze. */
 USER_FUNC(evt_npc_start_for_event) {
     npcStartForEvent();
     return EVT_RETURN_DONE;
@@ -1951,8 +2008,8 @@ USER_FUNC(evt_npc_battle_start) {
         if (party) {
             partyCtrlOff();
         }
-        BattleInformationSetResult(info, 0);
-        psndSetFlag(PSND_FLAG_SFX_WITH_BGM);
+        BattleInformationSetResult(info, BATTLE_RESULT_NONE);
+        psndSetFlag(PSND_FLAG_BATTLE_START);
         seqSetSeq(SEQ_BATTLE, NULL, NULL);
         return EVT_RETURN_BLOCK;
     }
@@ -1962,7 +2019,7 @@ USER_FUNC(evt_npc_battle_start) {
 /**
  * Blocks until a field battle has ended and the game is back in the field sequence with a result,
  * then gives control back to Mario and the partner and stops the battle music handling.
- * The US release also runs marioFBattlePost.
+ * US, PAL and the September demos also run marioFBattlePost.
  */
 USER_FUNC(evt_npc_wait_battle_end) {
     FieldBattleInfo* info = &fbatGetPointer()->info;
@@ -1971,7 +2028,7 @@ USER_FUNC(evt_npc_wait_battle_end) {
     if (seqGetSeq() != SEQ_GAME) {
         return EVT_RETURN_BLOCK;
     }
-    if (BattleInformationGetResult(info) == 0) {
+    if (BattleInformationGetResult(info) == BATTLE_RESULT_NONE) {
         return EVT_RETURN_BLOCK;
     }
     marioCtrlOn();
@@ -1980,12 +2037,12 @@ USER_FUNC(evt_npc_wait_battle_end) {
         partyCtrlOn();
     }
 #if VERSION <= VERSION_DEMO_JP
-    psndClearFlag(PSND_FLAG_SFX_WITH_BGM);
+    psndClearFlag(PSND_FLAG_BATTLE_START);
 #else
     L_psndBGM_stop();
-#endif
 #if VERSION >= VERSION_US
     marioFBattlePost();
+#endif
 #endif
     return EVT_RETURN_DONE;
 }
@@ -2003,7 +2060,7 @@ USER_FUNC(evt_npc_get_battle_result) {
 USER_FUNC(evt_npc_check_escape_battle) {
     EvtWord* args = event->args;
 
-    if (evtGetValue(event, args[0]) == 4) {
+    if (evtGetValue(event, args[0]) == BATTLE_RESULT_ESCAPE) {
         marioSetMutekiTime(3000);
     }
     return EVT_RETURN_DONE;
@@ -2050,6 +2107,27 @@ USER_FUNC(evt_npc_set_btlsetup_work) {
     return EVT_RETURN_DONE;
 }
 
+/** const char* lookupName, const char* slaveName, s32 slot: makes the second NPC slave slot (0-3) of the first */
+// Original name and size (0x94) from the JP demo map (UNUSED there: no script uses it), between
+// evt_npc_set_btlsetup_work and evt_npc_set_link: evt_npc_set_link's form for npcSetSlave with its slot argument
+// (read with the names: 0x94; read inside the call: 0x90).
+USER_FUNC(evt_npc_set_slave) {
+    EvtWord* args = event->args;
+    const char* name;
+    const char* slaveName;
+    NpcEntry* npc;
+    NpcEntry* slave;
+    s32 id;
+
+    name = (const char*)evtGetValue(event, args[0]);
+    slaveName = (const char*)evtGetValue(event, args[1]);
+    id = evtGetValue(event, args[2]);
+    npc = evtNpcNameToPtr(event, name);
+    slave = evtNpcNameToPtr(event, slaveName);
+    npcSetSlave(npc, slave, id);
+    return EVT_RETURN_DONE;
+}
+
 /** const char* lookupName, const char* otherName */
 USER_FUNC(evt_npc_set_link) {
     EvtWord* args = event->args;
@@ -2080,7 +2158,7 @@ USER_FUNC(evt_npc_get_drop_fixitem) {
 
 /**
  * Writes the item the defeated enemy NPC args[0] drops to args[1] (0 if its battle flags forbid drops).
- * All four demos always write 0.
+ * The demo releases always write 0.
  */
 USER_FUNC(evt_npc_get_drop_item) {
     EvtWord* args = event->args;
@@ -2088,11 +2166,11 @@ USER_FUNC(evt_npc_get_drop_item) {
     NpcEntry* npc = evtNpcNameToPtr(event, npcName);
     s32 index = *args++;
 
-    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_ITEM) {
+    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_ITEM_DROP) {
         evtSetValue(event, index, 0);
     } else {
 #if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
-        evtSetValue(event, index, 0); // all four demos: no item drops
+        evtSetValue(event, index, 0); // every demo: no item drops
 #else
         evtSetValue(event, index, npc->battleInfo.itemDropped);
 #endif
@@ -2111,7 +2189,7 @@ USER_FUNC(evt_npc_get_drop_heart) {
     NpcEntry* npc = evtNpcNameToPtr(event, npcName);
     s32 index = *args++;
 
-    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_HEARTS) {
+    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_HEART_DROP) {
         evtSetValue(event, index, 0);
     } else {
         s32 count = pouchEquipCheckBadge(ITEM_HEART_FINDER);
@@ -2141,7 +2219,7 @@ USER_FUNC(evt_npc_get_drop_flower) {
     NpcEntry* npc = evtNpcNameToPtr(event, npcName);
     s32 index = *args++;
 
-    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_FLOWERS) {
+    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_FLOWER_DROP) {
         evtSetValue(event, index, 0);
     } else {
         s32 count = pouchEquipCheckBadge(ITEM_FLOWER_FINDER);
@@ -2160,8 +2238,6 @@ USER_FUNC(evt_npc_get_drop_flower) {
     return EVT_RETURN_DONE;
 }
 
-// FAKE: keeps the following function(s) out of line as in the target; removing it changes the code
-#pragma dont_inline on
 /** Adds the NPC's battle coin drop count to *value. */
 static void _npc_check_coin(NpcEntry* npc, s32* value) {
     *value += npc->btlCoinDropCount;
@@ -2183,7 +2259,6 @@ static void _npc_check_coin_group(NpcEntry* npc, s32* value) {
     }
     _npc_check_coin(npc, value);
 }
-#pragma dont_inline reset
 
 /**
  * Writes the total coins the defeated enemy group led by NPC args[0] drops to args[1] (0 if its battle flags
@@ -2195,7 +2270,7 @@ USER_FUNC(evt_npc_get_drop_coin) {
     NpcEntry* npc = evtNpcNameToPtr(event, npcName);
     s32 index = *args++;
     s32 value = 0;
-    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_COINS) {
+    if (npc->battleInfo.battleFlags & NPC_BATTLE_NO_COIN_DROP) {
         evtSetValue(event, index, 0);
         return EVT_RETURN_DONE;
     } else {
@@ -2237,17 +2312,20 @@ USER_FUNC(evt_npc_set_unitwork) {
 }
 
 /**
- * Blocks for args[1] milliseconds while marking NPC args[0] busy with a script move (NPC_STATUS_CLOCK_RUNNING),
- * e.g. between steps of a scripted walk.
+ * Waits args[1] ms of event time while keeping the NPC args[0] updated (NPC_STATUS_UPDATE each frame); ends at once
+ * for 0.
  */
 USER_FUNC(evt_npc_wait_msec) {
     EvtWord* args = event->args;
     const char* npcName = (const char*)evtGetValue(event, args[0]);
     NpcEntry* npc = evtNpcNameToPtr(event, npcName);
 
-    s32 temp;
+    s32 duration;
     OSTime lifetime = event->lifetime;
-    npc->jumpFlags |= NPC_STATUS_CLOCK_RUNNING;
+    s32 now;
+    u64 elapsed;
+    s32 ms;
+    npc->statusFlags |= NPC_STATUS_UPDATE;
 
     if (isFirstCall) {
         event->userdata[0] = evtGetValue(event, args[1]);
@@ -2255,17 +2333,15 @@ USER_FUNC(evt_npc_wait_msec) {
         event->userdata[2] = lifetime & 0xFFFFFFFF;
     }
 
-    temp = event->userdata[0];
-    if (!temp) {
+    duration = event->userdata[0];
+    if (!duration) {
         return EVT_RETURN_DONE;
     }
 
-    {
-        s32 now = lifetime;
-        u64 elapsed = now - event->userdata[2];
-        s32 ms = OSTicksToMilliseconds(elapsed);
-        return temp <= ms;
-    }
+    now = lifetime;
+    elapsed = now - event->userdata[2];
+    ms = OSTicksToMilliseconds(elapsed);
+    return duration <= ms;
 }
 
 /** Sets the speech balloon type of NPC args[0] to args[1]. */
@@ -2312,8 +2388,8 @@ USER_FUNC(evt_npc_set_tribe) {
 }
 
 /**
- * Sets the stand and talk animations (args[1], args[2]; NULL keeps the current one) that NPC args[0] switches
- * between while it speaks; for "mario" it sets Mario's.
+ * Sets the stand and talk animations (args[1], args[2]; for an NPC, NULL keeps the current one) that NPC args[0]
+ * switches between while it speaks; for "mario" it sets Mario's.
  */
 USER_FUNC(evt_npc_set_autotalkpose) {
     EvtWord* args = event->args;
@@ -2321,7 +2397,7 @@ USER_FUNC(evt_npc_set_autotalkpose) {
     const char* stayAnim = (const char*)evtGetValue(event, *args++);
     const char* talkAnim = (const char*)evtGetValue(event, *args++);
     NpcEntry* npc = evtNpcNameToPtr(event, npcName);
-    if (npc == (NpcEntry*)-3) {
+    if (npc == EVT_NPC_PTR_MARIO) {
         npcSetMarioAutoTalkPose(stayAnim, talkAnim);
         return EVT_RETURN_YIELD;
     } else {
@@ -2347,7 +2423,7 @@ USER_FUNC(evt_npc_majo_disp_on) {
     f32 prevX = evtGetFloat(event, *args++);
     f32 prevY = evtGetFloat(event, *args++);
     f32 prevZ = evtGetFloat(event, *args++);
-    BOOL loadOnly = evtGetValue(event, *args++); // nonzero: load the effect group, then keep blocking
+    BOOL toggle = evtGetValue(event, *args++);
     s32 group = gp->inBattle != 0;
     NpcEntry* npc = evtNpcNameToPtr(event, npcName);
 
@@ -2360,19 +2436,19 @@ USER_FUNC(evt_npc_majo_disp_on) {
         return EVT_RETURN_BLOCK;
     }
 
-    if (loadOnly) {
+    if (toggle) {
         return EVT_RETURN_BLOCK;
     }
 
     switch (event->userdata[0]) {
         case -1:
             npc->position = npc->prevPosition = (Vec){prevX, prevY, prevZ};
-            animPoseSetEffect(npc->poseId, "p_bibi", 1);
+            animPoseSetEffect(npc->poseId, "p_bibi", TRUE);
             animPoseSetEffectAnim(npc->poseId, "PM_B_2", TRUE);
             animPosePaperPeraOn(npc->poseId);
             animPoseSetLocalTime(npc->poseId, 0.0f);
             event->userdata[0]++;
-            psndSFXOn_3D((char*)0x275, &npc->position);
+            psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_EVT_WITCH_SHADOW_SPREAD1), &npc->position);
             break;
 
         default:
@@ -2389,13 +2465,13 @@ USER_FUNC(evt_npc_majo_disp_on) {
                     case 0:
                         break;
                     case 1:
-                        psndSFXOn_3D((char*)0x937, &npc->position);
+                        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_VIVIAN_SHADOW2), &npc->position);
                         break;
                     case 2:
-                        psndSFXOn_3D((char*)0x27B, &npc->position);
+                        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_EVT_MARI_SHADOW2), &npc->position);
                         break;
                     case 3:
-                        psndSFXOn_3D((char*)0x278, &npc->position);
+                        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_EVT_MAJO_SHADOW2), &npc->position);
                         break;
                 }
             }
@@ -2405,7 +2481,7 @@ USER_FUNC(evt_npc_majo_disp_on) {
 #if VERSION >= VERSION_DEMO_EU
             animPoseSetLocalTime(npc->poseId, 0.0f);
 #else
-            animPoseSetEffect(npc->poseId, "p_bibi", 1);
+            animPoseSetEffect(npc->poseId, "p_bibi", TRUE);
             animPoseSetEffectAnim(npc->poseId, "PM_B_2", TRUE);
             animPosePaperPeraOn(npc->poseId);
 #endif
@@ -2442,7 +2518,7 @@ USER_FUNC(evt_npc_majo_disp_off) {
     if (isFirstCall) {
         event->userdata[0] = 0;
         event->userdata[1] = 0;
-        psndSFXOn_3D((char*)0x275, &npc->position);
+        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_EVT_WITCH_SHADOW_SPREAD1), &npc->position);
     }
 
     if (!animGroupBaseAsync("p_bibi", group, NULL)) {
@@ -2460,13 +2536,13 @@ USER_FUNC(evt_npc_majo_disp_off) {
                     case 0:
                         break;
                     case 1:
-                        psndSFXOn_3D((char*)0x936, &npc->position);
+                        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_PARTY_VIVIAN_SHADOW1), &npc->position);
                         break;
                     case 2:
-                        psndSFXOn_3D((char*)0x27A, &npc->position);
+                        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_EVT_MARI_SHADOW1), &npc->position);
                         break;
                     case 3:
-                        psndSFXOn_3D((char*)0x277, &npc->position);
+                        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_EVT_MAJO_SHADOW1), &npc->position);
                         break;
                 }
             }
@@ -2476,7 +2552,7 @@ USER_FUNC(evt_npc_majo_disp_off) {
             break;
 
         case 1:
-            animPoseSetEffect(npc->poseId, "p_bibi", 1);
+            animPoseSetEffect(npc->poseId, "p_bibi", TRUE);
             animPoseSetEffectAnim(npc->poseId, "PM_B_1", TRUE);
             animPosePaperPeraOn(npc->poseId);
             animPoseSetLocalTime(animPoseGetAnimPosePtr(npc->poseId)->paperId, 8.0f);
@@ -2503,7 +2579,7 @@ USER_FUNC(evt_npc_majo_disp_off) {
 
 /**
  * Writes how enemy NPC args[0] was defeated (koopaEncounterType, set by _npcDead) to args[1];
- * Bowser's side-scrolling levels score by it.
+ * npc_event's defeat script picks the death animation by it.
  */
 USER_FUNC(evt_npc_get_kpencount_type) {
     EvtWord* args = event->args;
@@ -2516,7 +2592,7 @@ USER_FUNC(evt_npc_get_kpencount_type) {
 
 /**
  * Awards the score for defeating NPC args[0] in Bowser's side-scrolling levels (npcCalcScore):
- * 300 or 400 points, more while invincible, multiplied by the stomp combo.
+ * 300 or 400 points (none for magma), more while invincible, multiplied by the fire-breath combo.
  */
 USER_FUNC(evt_npc_calc_score) {
     const char* npcName = (const char*)evtGetValue(event, *event->args);
@@ -2525,16 +2601,14 @@ USER_FUNC(evt_npc_calc_score) {
     return EVT_RETURN_DONE;
 }
 
-// FAKE: keeps the following function(s) out of line as in the target; removing it changes the code
-#pragma dont_inline on
 /**
  * Puffs broom smoke (kemuri) behind Kamek's broom every 8
  * or 16 frames depending on the animation state (3 or 2), sized by the NPC's scale.
- * On kpa_01 the smoke is drawn on camera 7 (not in the JP demo).
+ * On kpa_01 the smoke is drawn on camera 7 (not in the early demos).
  */
 static void _kamek_houki_kemuri(NpcEntry* npc, s32 animState) {
     static u8 cnt;
-    f32 a2, a5;
+    f32 x, dirX;
     u8 mask;
     EffectEntry* effect;
 
@@ -2552,39 +2626,41 @@ static void _kamek_houki_kemuri(NpcEntry* npc, s32 animState) {
 
     if (!(cnt & mask)) {
         if ((0.0f < npc->direction) && (npc->direction < 180.0f)) {
-            a5 = 1.0f;
-            a2 = -((36.0f * npc->scale.x) - npc->position.x);
+            dirX = 1.0f;
+            x = -((36.0f * npc->scale.x) - npc->position.x);
         } else {
-            a5 = -1.0f;
-            a2 = (36.0f * npc->scale.x) + npc->position.x;
+            dirX = -1.0f;
+            x = (36.0f * npc->scale.x) + npc->position.x;
         }
-        effect = effKemuri10N64Entry(0, a2, (18.0f * npc->scale.x) + npc->position.y, npc->position.z, a5, 0.0f, 0.0f,
+        effect = effKemuri10N64Entry(0, x, (18.0f * npc->scale.x) + npc->position.y, npc->position.z, dirX, 0.0f, 0.0f,
                                      npc->scale.x);
 #if VERSION >= VERSION_JP
         if (!strcmp(gp->currentMapName, "kpa_01")) {
-            ((EffKemuri10N64Work*)effect->userdata)->camera = 7;
+            ((EffKemuri10N64Work*)effect->userdata)->camera = CAMERA_3D_EFFECTB;
         }
-#endif
     }
+#else
+    }
+#endif
 }
-#pragma dont_inline reset
 
 /**
  * Flies Kamek on his broom to x = args[1], z = args[2] like evt_npc_move_position,
- * bobbing up and down by args[3] units over the trip and leaving broom smoke (unless args[6] has 0x8).
- * args[4] time in ms, args[5] speed, args[6] flags:
- * 0x1 re-aims each frame, 0x2 and 0x4 as in evt_npc_move_position.
+ * bobbing up and down by args[3] units over the trip and leaving broom smoke (unless args[6] has
+ * NPC_KAMEK_MOVE_POSITION_FLAG_NO_SMOKE). args[4] time in ms, args[5] speed, args[6] NpcKamekMovePositionFlags
+ * (AIM re-aims each frame, NO_FIND as in evt_npc_move_position, WALL_STOP stops on a wall at once, with no 5-frame
+ * grace).
  */
 USER_FUNC(evt_npc_kamek_move_position) {
     EvtWord* args = event->args;
 
     const char* npcName = (const char*)evtGetValue(event, *args++);
-    f32 temp1;
-    f32 temp2;
+    f32 sinCurr;
+    f32 sinPrev;
     f32 delta;
     f32 targetX = evtGetFloat(event, *args++);
     f32 targetZ = evtGetFloat(event, *args++);
-    f32 moveOffset = evtGetFloat(event, *args++);
+    f32 arcHeight = evtGetFloat(event, *args++);
     f32 moveTime = (f32)evtGetValue(event, *args++) / 1000.0f;
     f32 moveSpeed = evtGetFloat(event, *args++);
     s32 moveFlags = *args++;
@@ -2594,10 +2670,11 @@ USER_FUNC(evt_npc_kamek_move_position) {
     f32 dist;
     f32 dist1, dist2;
     f32 step;
+    f32 temp;
 
-    npc->jumpFlags |= NPC_STATUS_CLOCK_RUNNING;
-    if (moveFlags & 0x2) {
-        npc->jumpFlags |= NPC_STATUS_NO_FIND_EVENT;
+    npc->statusFlags |= NPC_STATUS_UPDATE;
+    if (moveFlags & NPC_KAMEK_MOVE_POSITION_FLAG_NO_FIND) {
+        npc->statusFlags |= NPC_STATUS_NO_FIND_ONCE;
     }
 
     if (isFirstCall) {
@@ -2621,6 +2698,7 @@ USER_FUNC(evt_npc_kamek_move_position) {
         if (npc->moveSpeed <= 0.1f && npc->moveTime == 0.0f) {
             npc->moveSpeed = 1.0f;
         }
+
         // Time given but no speed -> derive speed, then run as speed-mode
         if (npc->moveSpeed <= 0.1f) {
             npc->moveSpeed = dist / npc->moveTime;
@@ -2628,8 +2706,8 @@ USER_FUNC(evt_npc_kamek_move_position) {
         }
     }
 
-    // flag 0x4: bail if blocked
-    if ((moveFlags & 0x4) && npc->wallHit) {
+    // NPC_KAMEK_MOVE_POSITION_FLAG_WALL_STOP: bail if blocked
+    if ((moveFlags & NPC_KAMEK_MOVE_POSITION_FLAG_WALL_STOP) && npc->wallHit) {
         return EVT_RETURN_DONE;
     }
 
@@ -2648,7 +2726,7 @@ USER_FUNC(evt_npc_kamek_move_position) {
             return EVT_RETURN_DONE;
         }
     } else {
-        // speed move: snap when within a step (or essentially on top of target)
+        // speed move: snap when within a step
         if (!npc->moveTime && dist2 <= step) {
             npc->prevPosition = npc->jumpTargetPos;
             npc->position = npc->prevPosition;
@@ -2657,34 +2735,29 @@ USER_FUNC(evt_npc_kamek_move_position) {
         }
     }
 
-    // Re-aim at the target each frame unless direction is locked
-    if ((moveFlags & 0x1) && !(npc->jumpFlags & NPC_STATUS_AIRBORNE)) {
+    // NPC_KAMEK_MOVE_POSITION_FLAG_AIM: re-aim at the target unless airborne
+    if ((moveFlags & NPC_KAMEK_MOVE_POSITION_FLAG_AIM) && !(npc->statusFlags & NPC_STATUS_AIRBORNE)) {
         npc->moveDir = angleABf(0.0f, 0.0f, diff.x, diff.z);
     }
 
-    // Turn the body toward travel (unless mid battle-transition states 5/6)
-    if ((npc->jumpFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed > 0.1f) {
-        if (npc != fbatGetPointer()->target || (fbatGetPointer()->mode != 5 && fbatGetPointer()->mode != 6)) {
+    // Face the move direction (not the field-battle target while the fbat mode is 5 or 6)
+    if ((npc->statusFlags & NPC_STATUS_FACE_MOVE_DIR) && npc->moveSpeed > 0.1f) {
+        if (npc != fbatGetPointer()->target || (fbatGetPointer()->mode != FBAT_MODE_BATTLE && fbatGetPointer()->mode != 6)) {
             npcTuningRy(npc, npc->moveDir);
         }
     }
 
-    {
-        f32 temp;
-        temp = (f32)sin(((6.2831855f * npc->moveDir) / 360.0f));
-        npc->moveOffset.x += npc->moveDt * (npc->moveSpeed * temp);
-        temp = (f32)cos(((6.2831855f * npc->moveDir) / 360.0f));
-        npc->moveOffset.z += npc->moveDt * (npc->moveSpeed * -temp);
-    }
-    {
-        delta = dist1 - dist2;
+    temp = (f32)sin(((6.2831855f * npc->moveDir) / 360.0f));
+    npc->moveOffset.x += npc->moveDt * (npc->moveSpeed * temp);
+    temp = (f32)cos(((6.2831855f * npc->moveDir) / 360.0f));
+    npc->moveOffset.z += npc->moveDt * (npc->moveSpeed * -temp);
+    delta = dist1 - dist2;
 
-        temp2 = (f32)sin(3.1415927f * (2.0f * ((delta) / dist1)));
-        temp1 = (f32)sin(3.1415927f * (2.0f * (((npc->moveSpeed * npc->moveDt) + delta) / dist1)));
-        npc->moveOffset.y += (moveOffset * temp1) - (moveOffset * temp2);
-    }
+    sinPrev = (f32)sin(3.1415927f * (2.0f * ((delta) / dist1)));
+    sinCurr = (f32)sin(3.1415927f * (2.0f * (((npc->moveSpeed * npc->moveDt) + delta) / dist1)));
+    npc->moveOffset.y += (arcHeight * sinCurr) - (arcHeight * sinPrev);
 
-    if ((moveFlags & 8) == 0) {
+    if ((moveFlags & NPC_KAMEK_MOVE_POSITION_FLAG_NO_SMOKE) == 0) {
         _kamek_houki_kemuri(npc, npc->moveAnimState);
     }
 
@@ -2705,14 +2778,11 @@ USER_FUNC(evt_npc_kamek_kemuri1) {
             _kamek_houki_kemuri(npc, npc->moveAnimState);
             return EVT_RETURN_BLOCK;
         }
-        goto block_7;
-    }
-
-    if (npc->moveSpeed > 0.0f) {
+    } else if (npc->moveSpeed > 0.0f) {
         _kamek_houki_kemuri(npc, npc->moveAnimState);
         return EVT_RETURN_BLOCK;
     }
-block_7:
+
     return EVT_RETURN_DONE;
 }
 
@@ -2722,7 +2792,7 @@ USER_FUNC(evt_npc_kamek_kemuri2) {
 
     const char* npcName = (const char*)evtGetValue(event, *args++);
     f32 moveTime = (f32)evtGetValue(event, *args++) / 1000.0f;
-    s32 animSet = evtGetValue(event, *args++);
+    s32 frequent = evtGetValue(event, *args++);
     NpcEntry* npc = npcNameToPtr(npcName);
 
     if (isFirstCall) {
@@ -2739,7 +2809,7 @@ USER_FUNC(evt_npc_kamek_kemuri2) {
         return EVT_RETURN_DONE;
     }
 
-    _kamek_houki_kemuri(npc, (animSet != 0) + 2);
+    _kamek_houki_kemuri(npc, (frequent != 0) + 2);
     return EVT_RETURN_BLOCK;
 }
 
@@ -2765,7 +2835,7 @@ USER_FUNC(evt_fbat_trans_floor_position) {
 
     distance = evtGetFloat(event, *args++);
 
-    if (hitCheckFilter(0, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ, x, 1.0f + y, z, 0.0f, -1.0f, 0.0f)) {
+    if (hitCheckFilter(0, x, 1.0f + y, z, 0.0f, -1.0f, 0.0f, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ)) {
         y = (hitY + floor);
     }
 
@@ -2776,7 +2846,7 @@ USER_FUNC(evt_fbat_trans_floor_position) {
 }
 
 #if VERSION >= VERSION_US
-/** US-only: like evt_fbat_trans_floor_position, but also probes at x +/- width/2 and keeps the highest floor */
+/** US, PAL and September demos: like evt_fbat_trans_floor_position, but also probes at x +/- width/2 and keeps the highest floor */
 USER_FUNC(evt_fbat_trans_floor_position_wide) {
     EvtWord* args = event->args;
 
@@ -2799,17 +2869,17 @@ USER_FUNC(evt_fbat_trans_floor_position_wide) {
     distance = dist;
 
     y = 1.0f + y;
-    if (hitCheckFilter(0, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ, x, y, z, 0.0f, -1.0f, 0.0f)) {
+    if (hitCheckFilter(0, x, y, z, 0.0f, -1.0f, 0.0f, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ)) {
         y2 = (hitY + floor);
     }
     half = width * 0.5f;
-    if (hitCheckFilter(0, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ, x + half, y, z, 0.0f, -1.0f, 0.0f)) {
+    if (hitCheckFilter(0, x + half, y, z, 0.0f, -1.0f, 0.0f, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ)) {
         h = hitY + floor;
         if (h > y2) {
             y2 = h;
         }
     }
-    if (hitCheckFilter(0, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ, x - half, y, z, 0.0f, -1.0f, 0.0f)) {
+    if (hitCheckFilter(0, x - half, y, z, 0.0f, -1.0f, 0.0f, &hitX, &hitY, &hitZ, &distance, &hitNX, &hitNY, &hitNZ)) {
         h = hitY + floor;
         if (h > y2) {
             y2 = h;
@@ -2834,7 +2904,7 @@ USER_FUNC(evt_npc_sound_data_reset) {
         npc->jumpSfx = tribe->jumpSfx;
         npc->landSfx = tribe->landSfx;
         npc->footstepStride = tribe->footstepStride;
-        npc->footstepToggle = 1;
+        npc->footstepToggle = TRUE;
         npc->footstepAccum = 0.0f;
     }
     return EVT_RETURN_DONE;
@@ -2882,17 +2952,14 @@ USER_FUNC(evt_npc_sound_data_set) {
     return EVT_RETURN_DONE;
 }
 
-/** Sets (args[0] nonzero) or clears NPC_WORK_RELEASE_FIELD: with it set, the next battle start (seq_battle)
- * saves the field NPCs' models and animations and frees their poses (npcReleaseFiledNpc);
- * npcRecoveryFiledNpc rebuilds them after. Set before scripted boss battles (las_29, mri_01, muj_00, muj_01).
- * Guess: to free animation memory. */
+/** Sets (args[0] nonzero) or clears NPC_WORK_FIELD_RELEASED, which lets npcReleaseFiledNpc free field NPC models. */
 USER_FUNC(evt_npc_release_filednpc) {
     BOOL set = evtGetValue(event, *event->args);
     NpcWork* wp = npcGetWorkPtr();
     if (set) {
-        wp->flags |= NPC_WORK_RELEASE_FIELD;
+        wp->flags |= NPC_WORK_FIELD_RELEASED;
     } else {
-        wp->flags &= ~NPC_WORK_RELEASE_FIELD;
+        wp->flags &= ~NPC_WORK_FIELD_RELEASED;
     }
     return EVT_RETURN_DONE;
 }

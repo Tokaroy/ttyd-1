@@ -1,4 +1,6 @@
-// Game sequence: the sequence that runs while Mario is in the field.
+/* "seq_game" - Main Game Sequence
+ * The sequence running when on the overworld.
+ */
 
 #include "seq/seq_game.h"
 #include "driver/fadedrv.h"
@@ -10,17 +12,31 @@
 //.sbss
 static OSTime none_key;
 
-/** .sdata */
-EVT_BEGIN(maku_spread)
+//.sdata
+/**
+ * After 2 s, opens the title-screen curtain (TITLE_SCREEN_CURTAIN_LEAVE_GRADUAL2); started by seq_gameMain when
+ * GW_FLAG_CURTAIN_OPEN is set.
+ */
+static EVT_BEGIN(maku_spread)
     WAIT_MS(2000)
-    CALL(evt_fade_entry, FADE_CURTAIN_LEAVE, 0, 0, 0, 0)
+    CALL(evt_fade_entry, TITLE_SCREEN_CURTAIN_LEAVE_GRADUAL2, 0, 0, 0, 0)
     RETURN
 EVT_END()
 
-/** Enters the field sequence: records the time (none_key, otherwise unused here) and clears system level flag 0x10. */
+/** The time seq_gameInit recorded in none_key. */
+// Original name and size (0xc) from the JP demo map (UNUSED there: nothing calls it), before seq_gameInit: the getter
+// of this file's one static, none_key (two loads of the OSTime and the return).
+OSTime e3GetNoneKeyTime(void) {
+    return none_key;
+}
+
+/**
+ * Field sequence entry: records the time in this file's static none_key (not mariost's idle timer; read only by the
+ * stripped e3GetNoneKeyTime) and clears SYSTEM_LEVEL_NO_FIELD_BATTLE.
+ */
 void seq_gameInit(SequenceWork* wp) {
     none_key = OSGetTime();
-    gp->systemLevelFlags &= ~SYSTEM_LEVEL_FLAG_NO_BATTLE;
+    gp->systemLevelFlags &= ~SYSTEM_LEVEL_NO_FIELD_BATTLE;
 }
 
 /**
@@ -36,10 +52,10 @@ void seq_gameMain(SequenceWork* wp) {
 
     switch (wp->state) {
         case 0:
-            if ((gp->flags & GLOBAL_FLAG_CURTAIN_OPEN) != 0) {
-                fadeEntry(FADE_IN_WHITE_2D, 900, (GXColor){0, 0, 0, 0xFF});
+            if ((gp->flags & GW_FLAG_CURTAIN_OPEN) != 0) {
+                fadeEntry(FADE_IN_WHITE2, 900, (GXColor){0, 0, 0, 0xFF});
                 evtEntryType(maku_spread, 0, 0, 0);
-                gp->flags &= ~GLOBAL_FLAG_CURTAIN_OPEN;
+                gp->flags &= ~GW_FLAG_CURTAIN_OPEN;
             } else if (!gp->didAreaChange) {
                 fadeEntry(gp->mapFadeInType, gp->mapFadeInDuration, (GXColor){0, 0, 0, 0xFF});
             } else {
@@ -53,8 +69,8 @@ void seq_gameMain(SequenceWork* wp) {
             break;
 
         case 1:
-            if (gp->flags & GLOBAL_FLAG_KIOSK && gp->flags & GLOBAL_FLAG_KIOSK_TIMEOUT && fadeIsFinish() && !seqCheckSeq()) {
-                gp->flags &= ~GLOBAL_FLAG_KIOSK_TIMEOUT;
+            if (gp->flags & GW_FLAG_E3 && gp->flags & GW_FLAG_E3_TIMEOUT && fadeIsFinish() && seqCheckSeq() == SEQ_LOGO) {
+                gp->flags &= ~GW_FLAG_E3_TIMEOUT;
                 seqSetSeq(SEQ_GAME_OVER, NULL, NULL);
             }
             marioGetPtr(); // unused
@@ -66,7 +82,7 @@ void seq_gameMain(SequenceWork* wp) {
     }
 }
 
-/** Leaves the field sequence; clears GLOBAL_FLAG_SKIP_MAP_EVENTS so the next map runs its events. */
+/** Exit function of the game sequence: clears GW_FLAG_NO_ENTRANCE. */
 void seq_gameExit(SequenceWork* wp) {
-    gp->flags &= ~GLOBAL_FLAG_SKIP_MAP_EVENTS;
+    gp->flags &= ~GW_FLAG_NO_ENTRANCE;
 }

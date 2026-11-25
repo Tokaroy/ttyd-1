@@ -1,15 +1,44 @@
 // tik_05 (埋没した都市, Rogueport Sewers): the Thousand-Year Door room: the pedestal for the Crystal Stars (starstone, the
 // mahojin circle), the door opening scenes, and the shattering (tiz_broken) and crystal effects.
+
+#include "version.h"
 #include "eff/eff_starstone.h"
+#include "evt/evt_pouch.h"
 #include "eff/n64/eff_crystal_n64.h"
 #include "eff/n64/eff_pokopi_pcharge_n64.h"
 #include "eff/eff_mist2.h"
 #include "eff/eff_mahojin.h"
 #include "eff/eff_treasure_map.h"
 #include "eff/eff_itemget.h"
-#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_env.h"
+#include "evt/evt_case.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_img.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_sub.h"
+#include "dolphin/exi.h"
+#include "eff/n64/eff_stardust2_n64.h"
+#include "eff/n64/eff_stardust_n64.h"
+#include "poly_trig.h"
+#include "driver/npcdrv.h"
+#include "mario/mario_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "party.h"
 
 #include "driver/effdrv.h"
 #include "driver/mapdrv.h"
@@ -32,42 +61,18 @@
 #include "libc_decls.h"
 #include "evt/evt_npc.h"
 #include "mario/mario_cam.h"
-#include "eff/n64/eff_stardust2_n64.h"
-#include "eff/n64/eff_stardust_n64.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_env.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "party.h"
-#include "evt/evt_sub.h"
-#include "tik.h"
 #include <math.h>
-#include "cam_kaiten.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
-#include "evt/evt_pouch.h"
-#include <dolphin/exi.h>
+#include "driver/seqdrv.h"
 
 /**
  * Identity function on a float (returns x).
- * Used in the camera-angle math so the compiler loads the value the same way as the original.
  */
+// FAKE: invented identity inline on one of two otherwise identical atan2 lines; written out, the FPR colouring
+// differs (12 forms tried). See FAKES.md.
 static inline f32 fid(f32 x) {
     return x;
 }
-
+#include "cam_kaiten.h"
 typedef struct BrokenPiece {
     s32 state;
     s32 delay;
@@ -88,83 +93,8 @@ static u8* _ap;
 static KaitenParam* ckp0;
 static KaitenParam* ckp1;
 static KaitenParam* ckpw;
-BrokenWork broken_work;
-s32 select;
-/**
- * Sine of x radians (0 to 2 pi) by a short odd polynomial (x - 0.166 x^3 + 0.0076 x^5),
- * folding the other quadrants onto the first.
- * Used by the screen-shatter effect (tiz_broken) in place of the library sin.
- */
-static inline f32 tb_sin(f32 x) {
-    f32 a = 0.00761f;
-    f32 b = 0.16605f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-    if (x <= 3.1415927f) {
-        if (x <= 1.5707964f) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        } else {
-            y = 1.5707964f - (x - 1.5707964f);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * y;
-        }
-    } else if (x < 4.712389f) {
-        y = x - 3.1415927f;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    } else {
-        y = 1.5707964f - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    }
-    return a;
-}
-/** Cosine of x radians (0 to 2 pi) by an even polynomial, folding the quadrants. Companion of tb_sin for tiz_broken. */
-static inline f32 tb_cos(f32 x) {
-    f32 a = 0.03705f;
-    f32 b = 0.4967f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-    if (x <= 3.1415927f) {
-        if (x <= 1.5707964f) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-        } else {
-            y = 1.5707964f - (x - 1.5707964f);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = -a;
-        }
-    } else if (x < 4.712389f) {
-        y = x - 3.1415927f;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = -a;
-    } else {
-        y = 1.5707964f - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-    }
-    return a;
-}
-static void tiz_broken_draw(CameraId cameraId, void* param);
+static BrokenWork broken_work;
+static s32 select;
 
 static USER_FUNC(alpha_init_func);
 static USER_FUNC(alpha_set_func);
@@ -172,50 +102,76 @@ static USER_FUNC(cam_kaiten_get_para);
 static USER_FUNC(cam_kaiten_init);
 static USER_FUNC(cam_kaiten_set_direct);
 static USER_FUNC(cam_kaiten_set_para);
+USER_FUNC(cam_mahojin_kaiten_main);
+static USER_FUNC(crystal_bgmode);
 static USER_FUNC(disp_lighteffect_func);
 static USER_FUNC(disp_treasure_map_func);
+static USER_FUNC(eff_starstone_sound_off);
+static USER_FUNC(effect_position);
 static USER_FUNC(evtflash);
+static USER_FUNC(img_alpha);
+static USER_FUNC(is_dol_viewer);
+static USER_FUNC(kemuri_set_color);
+static USER_FUNC(kemuri_set_position);
+static USER_FUNC(mahojin_effect_alpha);
+static USER_FUNC(map_bgmode);
+static USER_FUNC(map_bgmode_end);
+static USER_FUNC(pcharge_set_position);
+static USER_FUNC(stardust_setting);
+static USER_FUNC(starstone_circle_link_func);
+static USER_FUNC(starstone_get_position);
+static USER_FUNC(starstone_set_alpha);
+static USER_FUNC(starstone_set_position);
 static USER_FUNC(starstone_set_ry);
-static void tiz_broken_draw(CameraId cameraId, void* param);
+static USER_FUNC(starstone_setting);
+USER_FUNC(tiz_broken);
+static USER_FUNC(tiz_stone);
+USER_FUNC(map_disp_onoff);
 static void alpha_tev(MapTevCallbackInfo* info);
+static USER_FUNC(starstone_set_scale);
 
+static EvtWord n_door_close[22];
+static EvtWord n_door_open[22];
 static BeroEntry bero_entry_data[4];
+static EvtWord kurihakase_init[27];
+static EvtWord kurihakase_talk[23];
 static NpcSetupInfo npcEnt[2];
-extern EvtWord mahojin_alpha[];
-extern EvtWord mahojin_alpha_up[];
-extern EvtWord mahojin_alpha_down[];
-extern EvtWord large_door_stg0_init[];
-extern EvtWord large_door_stg0[];
-extern EvtWord look_large_door[];
-extern EvtWord kaidan_event[];
-extern EvtWord evt_mahojin_move[];
-extern EvtWord evt_mahojin_move2[];
-extern EvtWord evt_fogset[];
-extern EvtWord evt_fogreset[];
-extern EvtWord mahojin_se_event[];
-extern EvtWord mahojin_se_event_end[];
-extern EvtWord disp_lighteffect[];
-extern EvtWord disp_treasure_map[];
-BrokenWork* broken_wp;
-f32 param_tbl[5];
-f32 add_tbl[5];
+static EvtWord mahojin_alpha[70];
+static EvtWord mahojin_alpha_up[5];
+static EvtWord mahojin_alpha_down[5];
+static EvtWord large_door_stg0_init[17];
+static EvtWord large_door_stg0[129];
+static EvtWord look_large_door[25];
+static EvtWord kaidan_event[69];
+static EvtWord evt_mahojin_move[51];
+static EvtWord evt_mahojin_move2[24];
+static EvtWord evt_fogset[42];
+static EvtWord evt_fogreset[82];
+static EvtWord mahojin_se_event[6];
+static EvtWord mahojin_se_event_end[2];
+static EvtWord disp_lighteffect[20];
+static EvtWord disp_treasure_map[21];
+static BrokenWork* broken_wp;
+static f32 param_tbl[5];
+static f32 add_tbl[5];
 static const char* name_tbl[5];
-extern EvtWord evt_mapwrite[];
-extern EvtWord fake_fade[];
-extern EvtWord evt_starstone_up[];
-extern EvtWord evt_starstone_set[];
-extern EvtWord mahojin_event[];
-extern EvtWord mahojin_event1[];
-extern EvtWord mahojin_event2[];
-extern EvtWord mahojin_event3[];
-extern EvtWord mahojin_event4[];
-extern EvtWord mahojin_event5[];
-extern EvtWord mahojin_event6[];
-extern EvtWord starstone_circle_link[];
-extern EvtWord lastdungeon_anim_init[];
-extern EvtWord lastdungeon_init[];
-extern EvtWord lastdungeon[];
-extern EvtWord mahojin_event7[];
+EvtWord evt_mapwrite[];
+static EvtWord fake_fade[30];
+static EvtWord evt_starstone_up[127];
+static EvtWord evt_starstone_set[106];
+static EvtWord mahojin_event[363];
+static EvtWord mahojin_event1[110];
+static EvtWord mahojin_event2[105];
+static EvtWord mahojin_event3[102];
+static EvtWord mahojin_event4[102];
+static EvtWord mahojin_event5[102];
+static EvtWord mahojin_event6[102];
+static EvtWord starstone_circle_link[70];
+static EvtWord lastdungeon_anim_init[52];
+static EvtWord lastdungeon_init[36];
+static EvtWord lastdungeon[103];
+static EvtWord mahojin_event7[VERSION_PICK(2537, 2541)];
+EvtWord tik_05_init_evt[VERSION_PICK(289, 287)];
 
 /**
  * Door callback of the Thousand-Year Door (bero n_bero):
@@ -270,7 +226,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)look_large_door, // enterEvent
+        look_large_door, // enterEvent
         -1, // caseType
         NULL, // exitEvent
         "tik_04", // nextMapName
@@ -302,16 +258,16 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Init script of Professor Frankly (クリハカセ) in the Thousand-Year Door room.
- * Places him at (-30, 23, -190) facing the pedestal from STORY_STG7_50_A_WAITING_PROF_FRANKLY to
- * STORY_STG7_51_THOUSAND_YEAR_DOOR, and at (-30, 23, -170) from STORY_STG7_52_THE_PEDESTAL to
- * STORY_STG8_03_THE_PALACE_GARDEN.
+ * Places him at (-30, 23, -190) facing the pedestal from STG7_50_A_WAITING_PROF_FRANKLY to
+ * STG7_51_THOUSAND_YEAR_DOOR, and at (-30, 23, -170) from STG7_52_THE_PEDESTAL to
+ * STG8_03_THE_PALACE_GARDEN.
  */
 static EVT_BEGIN(kurihakase_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG7_50_A_WAITING_PROF_FRANKLY, STORY_STG7_51_THOUSAND_YEAR_DOOR)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG7_50_A_WAITING_PROF_FRANKLY, STG7_51_THOUSAND_YEAR_DOOR)
         CALL(evt_npc_set_position, STRING("me"), -30, 23, -190)
         CALL(evt_npc_set_ry, STRING("me"), 90)
-        CASE_BETWEEN(STORY_STG7_52_THE_PEDESTAL, STORY_STG8_03_THE_PALACE_GARDEN)
+        CASE_BETWEEN(STG7_52_THE_PEDESTAL, STG8_03_THE_PALACE_GARDEN)
         CALL(evt_npc_set_position, STRING("me"), -30, 23, -170)
     END_SWITCH
     RETURN
@@ -319,13 +275,13 @@ EVT_END()
 
 /**
  * Talk script of Professor Frankly: says mac_7_008 while the Door waits (chapter 7 steps 50 to 51)
- * and mac_7_014 from STORY_STG7_52_THE_PEDESTAL on.
+ * and mac_7_014 from STG7_52_THE_PEDESTAL through STG8_03_THE_PALACE_GARDEN.
  */
 static EVT_BEGIN(kurihakase_talk)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG7_50_A_WAITING_PROF_FRANKLY, STORY_STG7_51_THOUSAND_YEAR_DOOR)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG7_50_A_WAITING_PROF_FRANKLY, STG7_51_THOUSAND_YEAR_DOOR)
         CALL(evt_msg_print, 0, STRING("mac_7_008"), 0, STRING("me"))
-        CASE_BETWEEN(STORY_STG7_52_THE_PEDESTAL, STORY_STG8_03_THE_PALACE_GARDEN)
+        CASE_BETWEEN(STG7_52_THE_PEDESTAL, STG8_03_THE_PALACE_GARDEN)
         CALL(evt_msg_print, 0, STRING("mac_7_014"), 0, STRING("me"))
     END_SWITCH
     RETURN
@@ -334,8 +290,8 @@ EVT_END()
 /** NPCs of this room: Professor Frankly, who waits by the pedestal in chapter 7. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "クリハカセ", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "クリハカセ", // name (Professor Frankly)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         kurihakase_init, // initEvent
         NULL, // regularEvent
@@ -377,14 +333,15 @@ static USER_FUNC(starstone_get_position) {
     return EVT_RETURN_DONE;
 }
 
-/** Script helper. Sets the named Crystal Star effect's Y rotation to args[1] degrees, wrapped to 0..360. */
+/** Script helper. Sets the named Crystal Star effect's Y rotation to args[1] degrees with whole turns removed by truncation toward zero. */
 static USER_FUNC(starstone_set_ry) {
     EvtWord* args = event->args;
     const char* name = (const char*)evtGetValue(event, args[0]);
     f32 ry = evtGetFloat(event, args[1]);
     EffectEntry* eff = effNameToPtr(name);
 
-    ((EffStarStoneWork*)eff->userdata)->rotY = ry - 360.0f * ((s32)ry / 360);
+    // Remove whole turns using truncation toward zero, leaving negative angles negative.
+    ((EffStarStoneWork*)eff->userdata)->rot.y = ry - 360.0f * ((s32)ry / 360);
     return EVT_RETURN_DONE;
 }
 
@@ -439,9 +396,10 @@ static USER_FUNC(starstone_circle_link_func) {
     return EVT_RETURN_DONE;
 }
 
-/** Script helper. Clears the sound flag (bit 2) of the named Crystal Star effect so it stays silent. */
+/** Script helper. Clears the shine-sound flag (bit 2) of the named Crystal Star effect to stop its shine sound. */
 static USER_FUNC(eff_starstone_sound_off) {
-    ((EffStarStoneWork*)effNameToPtr((const char*)evtGetValue(event, event->args[0]))->userdata)->flags &= ~4;
+    ((EffStarStoneWork*)effNameToPtr((const char*)evtGetValue(event, event->args[0]))->userdata)->flags &=
+        ~STAR_STONE_FLAG_SHINE_SFX;
     return EVT_RETURN_DONE;
 }
 
@@ -467,16 +425,29 @@ static void alpha_tev(MapTevCallbackInfo* info) {
     info->tevStage++;
 }
 
+/** Script helper. Allocates the one-byte alpha used by alpha_tev and sets it to 255. */
+static USER_FUNC(alpha_init_func) {
+    _ap = _mapAlloc(1);
+    *_ap = 255;
+    return EVT_RETURN_DONE;
+}
+
+/** Script helper. Sets the pedestal star's alpha byte to args[0]. */
+static USER_FUNC(alpha_set_func) {
+    *_ap = evtGetValue(event, event->args[0]);
+    return EVT_RETURN_DONE;
+}
+
 /**
  * Runs the fade of the glowing star (hosi_2) on the pedestal.
  * Every frame it adds the speed in GW(1) to an alpha clamped to 0..255 and stores it;
  * stops when GF(10) is set, then removes the callback after a second.
  * mahojin_alpha_up and mahojin_alpha_down set GW(1) when Mario steps on or off the pedestal (a_dai).
  */
-EVT_BEGIN(mahojin_alpha)
+static EVT_BEGIN(mahojin_alpha)
     CALL(evt_map_set_tevcallback, 1, PTR(alpha_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hosi_2"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("hosi_2"), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hosi_2"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("hosi_2"), MAP_OBJ_FLAG_DISPLAY_LIST)
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
     LOOP(0)
@@ -495,8 +466,8 @@ EVT_BEGIN(mahojin_alpha)
     END_LOOP
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("hosi_2"), MAPOBJ_FLAG_TEV_CALLBACK_MASK)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hosi_2"), MAPOBJ_FLAG_DISPLAY_LIST)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("hosi_2"), MAP_OBJ_TEV_CALLBACK_MASK)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("hosi_2"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_INLINE_EVENT
     RETURN
 EVT_END()
@@ -505,42 +476,42 @@ EVT_END()
  * Case trigger for stepping onto the pedestal; sets the fade speed GW(1) to +6 per frame
  * so the star glows brighter.
  */
-EVT_BEGIN(mahojin_alpha_up)
+static EVT_BEGIN(mahojin_alpha_up)
     SET_VALUE(GW(1), FLOAT(6.0f))
     RETURN
 EVT_END()
 
 /** Case trigger for stepping off the pedestal; sets the fade speed GW(1) to -6 per frame so the glow dims. */
-EVT_BEGIN(mahojin_alpha_down)
+static EVT_BEGIN(mahojin_alpha_down)
     SET_VALUE(GW(1), FLOAT(-6.0f))
     RETURN
 EVT_END()
 
 /**
- * Map-init part for the prologue (STORY_STG0_12_02_PAPER_MAGE_1):
+ * Map-init part for the prologue (STG0_12_02_PAPER_MAGE_1):
  * takes control from Mario and holds the camera on the huge Thousand-Year Door high above.
  */
-EVT_BEGIN(large_door_stg0_init)
+static EVT_BEGIN(large_door_stg0_init)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
-    CALL(evt_cam3d_evt_set, -300, 700, 1135, -300, 250, 23, 0, 11)
+    CALL(evt_cam3d_evt_set, -300, 700, 1135, -300, 250, 23, 0, EASING_SINE_IN_OUT)
     RETURN
 EVT_END()
 
 /**
  * Prologue scene where Mario and his partners first see the Thousand-Year Door (look_large_door starts it).
- * The camera pans down from the door over six seconds, the partners comment (mac_0_095_kur, mac_0_096_kur),
- * and story progress becomes STORY_STG0_13_FIRST_FLIGHT.
+ * The camera pans along X over six seconds, Professor Frankly (extparty) comments (mac_0_095_kur, mac_0_096_kur),
+ * and story progress becomes STG0_13_FIRST_FLIGHT.
  */
-EVT_BEGIN(large_door_stg0)
+static EVT_BEGIN(large_door_stg0)
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_party_stop, 0)
     CALL(evt_party_stop, 1)
     CALL(evt_mario_set_pos, 620, 81, 40)
     CALL(evt_party_set_pos, 0, 640, 81, 40)
     CALL(evt_party_set_pos, 1, 660, 81, 40)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_cam3d_evt_set, 300, 700, 1135, 300, 250, 23, 6000, 0)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_cam3d_evt_set, 300, 700, 1135, 300, 250, 23, 6000, EASING_LINEAR)
     WAIT_MS(6500)
     BEGIN_INLINE_EVENT
         CALL(evt_party_move_pos2, 1, 450, 30, FLOAT(120.0f))
@@ -549,38 +520,38 @@ EVT_BEGIN(large_door_stg0)
         CALL(evt_party_move_pos2, 0, 520, 30, FLOAT(120.0f))
     END_INLINE_EVENT
     CALL(evt_mario_mov_pos2, 490, 30, FLOAT(120.0f))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("mac_0_095_kur"), 0, STRING("extparty"))
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 390, 260, 11, 44, 147, -528, 1000, 11)
+    CALL(evt_cam3d_evt_set, 390, 260, 11, 44, 147, -528, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1800)
-    CALL(evt_cam3d_evt_set, 523, 154, 254, 448, 108, 22, 0, 11)
+    CALL(evt_cam3d_evt_set, 523, 154, 254, 448, 108, 22, 0, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_msg_print, 0, STRING("mac_0_096_kur"), 0, STRING("extparty"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_party_run, 0)
     CALL(evt_party_run, 1)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_13_FIRST_FLIGHT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_13_FIRST_FLIGHT)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_snd_bgm_scope, 0, 0)
     RETURN
 EVT_END()
 
 /**
- * Case trigger for looking at the big door.
- * At STORY_STG0_12_02_PAPER_MAGE_1 it starts large_door_stg0 and returns 1 in LW(0);
- * at STORY_STG7_50_A_WAITING_PROF_FRANKLY it advances to STORY_STG7_51_THOUSAND_YEAR_DOOR and returns 0;
+ * Enter event of the east door (e_bero), for looking at the big door.
+ * At STG0_12_02_PAPER_MAGE_1 it starts large_door_stg0 and returns 1 in LW(0);
+ * at STG7_50_A_WAITING_PROF_FRANKLY it advances to STG7_51_THOUSAND_YEAR_DOOR and returns 0;
  * otherwise returns 0.
  */
-EVT_BEGIN(look_large_door)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG0_12_02_PAPER_MAGE_1)
+static EVT_BEGIN(look_large_door)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG0_12_02_PAPER_MAGE_1)
         SPAWN_EVENT(large_door_stg0)
         SET_VALUE(LW(0), 1)
         RETURN
-        CASE_EQUAL(STORY_STG7_50_A_WAITING_PROF_FRANKLY)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_51_THOUSAND_YEAR_DOOR)
+        CASE_EQUAL(STG7_50_A_WAITING_PROF_FRANKLY)
+        SET_VALUE(GSW_STORY_PROGRESS, STG7_51_THOUSAND_YEAR_DOOR)
         SET_VALUE(LW(0), 0)
         RETURN
     END_SWITCH
@@ -590,9 +561,9 @@ EVT_END()
 
 /**
  * Waits until Mario walks up the stairs in front of the pedestal (|X| < 130, Z < 0),
- * then stops him and the partner says mac_0_097. Sets story progress STORY_STG0_14_FRONT_OF_THE_PEDESTAL.
+ * then stops him and the partner says mac_0_097. Sets story progress STG0_14_FRONT_OF_THE_PEDESTAL.
  */
-EVT_BEGIN(kaidan_event)
+static EVT_BEGIN(kaidan_event)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         IF_INT_GREATER(LW(0), -130)
@@ -616,7 +587,7 @@ EVT_BEGIN(kaidan_event)
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_party_run, 0)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_14_FRONT_OF_THE_PEDESTAL)
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_14_FRONT_OF_THE_PEDESTAL)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
@@ -625,7 +596,7 @@ EVT_END()
  * Moves Mario to (-250 Z) facing right and his first partner to (30, -190) facing left,
  * so both stand at the pedestal; waits until both have arrived. Sets GF(10) so the pedestal glow fade stops.
  */
-EVT_BEGIN(evt_mahojin_move)
+static EVT_BEGIN(evt_mahojin_move)
     SET_VALUE(GF(10), 1)
     SET_VALUE(GF(0), 1)
     SET_VALUE(GF(1), 1)
@@ -650,7 +621,7 @@ EVT_END()
  * Puts the two partners at fixed spots beside the pedestal:
  * (30, 19, -190) facing left and (-30, 19, -190) facing right.
  */
-EVT_BEGIN(evt_mahojin_move2)
+static EVT_BEGIN(evt_mahojin_move2)
     CALL(evt_party_set_pos, 0, 30, 19, -190)
     CALL(evt_party_set_dir, 0, 270, 0)
     CALL(evt_party_set_pos, 1, -30, 19, -190)
@@ -659,12 +630,12 @@ EVT_BEGIN(evt_mahojin_move2)
 EVT_END()
 
 /**
- * Pushes the map fog's end distance out by 600 to 1000 units over four seconds,
- * so the room opens up during the Crystal Star scenes.
+ * Pushes the map fog's start distance out by 600 to 1000 units over four seconds,
+ * with its end distance fixed at 2000, so the room opens up during the Crystal Star scenes.
  */
-EVT_BEGIN(evt_fogset)
+static EVT_BEGIN(evt_fogset)
     CALL(evt_map_get_fog, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9))
-    CALL(evt_sub_intpl_msec_init, 11, 600, 1000, 4000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 600, 1000, 4000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(LW(2), LW(5))
@@ -678,13 +649,13 @@ EVT_BEGIN(evt_fogset)
     RETURN
 EVT_END()
 
-/** Pulls the fog back to near 300 and far 1500 over two seconds, then holds it for three seconds. */
-EVT_BEGIN(evt_fogreset)
+/** Pulls the fog back to near 300 and far 1500 over two seconds, updating it for three seconds in total. */
+static EVT_BEGIN(evt_fogreset)
     CALL(evt_map_get_fog, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9))
     SET_VALUE(GW(2), LW(5))
     SET_VALUE(GW(3), LW(6))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, LW(5), 300, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(5), 300, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(GW(2), LW(0))
@@ -695,7 +666,7 @@ EVT_BEGIN(evt_fogreset)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, LW(6), 1500, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(6), 1500, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(GW(3), LW(0))
@@ -717,59 +688,20 @@ EVT_BEGIN(evt_fogreset)
 EVT_END()
 
 /**
- * Sound-effect timing script spawned when each magic circle appears (mahojin_event1 to 7).
+ * Sound-effect timing script spawned when each magic circle appears (mahojin_event to mahojin_event7).
  * In every version it only
  * waits 3.5 s and then 1.6 s and returns, playing nothing. Guess: its sound calls were cut, leaving the waits.
  */
-EVT_BEGIN(mahojin_se_event)
+static EVT_BEGIN(mahojin_se_event)
     WAIT_MS(3500)
     WAIT_MS(1600)
     RETURN
 EVT_END()
 
 /** Sound-effect script that ends the circle sounds; only returns. */
-EVT_BEGIN(mahojin_se_event_end)
+static EVT_BEGIN(mahojin_se_event_end)
     RETURN
 EVT_END()
-
-/**
- * Loop that keeps the glowing orb (map_ball) of the map scene on the Crystal Star item00,
- * calling disp_lighteffect_func with the item's position each frame.
- */
-EVT_BEGIN(disp_lighteffect)
-    LOOP(0)
-        CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
-        CALL(disp_lighteffect_func, STRING("map_ball"), LW(0), LW(1), LW(2), GW(10))
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/**
- * Loop that keeps the treasure-map picture (map_map) of the map scene on item00,
- * calling disp_treasure_map_func each frame.
- */
-EVT_BEGIN(disp_treasure_map)
-    LOOP(0)
-        CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
-        CALL(disp_treasure_map_func, STRING("map_map"), LW(0), LW(1), LW(2), GW(10), GW(11))
-        WAIT_FRAMES(1)
-    END_LOOP
-    RETURN
-EVT_END()
-
-/** Script helper. Allocates the one-byte alpha used by alpha_tev and sets it to 255. */
-static USER_FUNC(alpha_init_func) {
-    _ap = _mapAlloc(1);
-    *_ap = 255;
-    return EVT_RETURN_DONE;
-}
-
-/** Script helper. Sets the pedestal star's alpha byte to args[0]. */
-static USER_FUNC(alpha_set_func) {
-    *_ap = evtGetValue(event, event->args[0]);
-    return EVT_RETURN_DONE;
-}
 
 /**
  * Script helper that prepares the rotating camera of the map scene.
@@ -789,6 +721,8 @@ static USER_FUNC(cam_kaiten_init) {
     ckp1 = _mapAlloc(sizeof(KaitenParam));
     memset(ckp1, 0, sizeof(KaitenParam));
     ckpw = _mapAlloc(sizeof(KaitenParam));
+
+    // BUG: ckp1 is cleared again instead of clearing the newly allocated ckpw.
     memset(ckp1, 0, sizeof(KaitenParam));
     ckp0->pos.x = evtGetFloat(event, args[0]);
     ckp0->pos.y = evtGetFloat(event, args[1]);
@@ -840,8 +774,8 @@ static USER_FUNC(cam_kaiten_set_direct) {
     camera->storedAt = ckpw->target;
     camera->startTimeA = gp->renderTime;
     camera->durationA = 0;
-    camera->stateA = 3;
-    camera->curveA = 11;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = EASING_SINE_IN_OUT;
     return EVT_RETURN_DONE;
 }
 
@@ -934,6 +868,19 @@ static USER_FUNC(disp_lighteffect_func) {
 }
 
 /**
+ * Loop that keeps the glowing orb (map_ball) of the map scene on the Crystal Star item00,
+ * calling disp_lighteffect_func with the item's position each frame.
+ */
+static EVT_BEGIN(disp_lighteffect)
+    LOOP(0)
+        CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
+        CALL(disp_lighteffect_func, STRING("map_ball"), LW(0), LW(1), LW(2), GW(10))
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
+/**
  * Script helper.
  * Places the treasure map effect args[0] at (args[1], args[2], args[3]) with rotation 180 + args[4]
  * and the alpha args[5].
@@ -956,6 +903,19 @@ static USER_FUNC(disp_treasure_map_func) {
     return EVT_RETURN_DONE;
 }
 
+/**
+ * Loop that keeps the treasure-map picture (map_map) of the map scene on item00,
+ * calling disp_treasure_map_func each frame.
+ */
+static EVT_BEGIN(disp_treasure_map)
+    LOOP(0)
+        CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
+        CALL(disp_treasure_map_func, STRING("map_map"), LW(0), LW(1), LW(2), GW(10), GW(11))
+        WAIT_FRAMES(1)
+    END_LOOP
+    RETURN
+EVT_END()
+
 /** Script helper. Sets the alpha (args[1]) of the named magic-circle effect. */
 static USER_FUNC(mahojin_effect_alpha) {
     EvtWord* args = event->args;
@@ -967,7 +927,7 @@ static USER_FUNC(mahojin_effect_alpha) {
 }
 
 /**
- * Script helper that keeps the map, orb and wave effects in front of the item (item00) as the camera turns,
+ * Script helper that keeps the wave, map and orb effects in front of the item (item00) as the camera turns,
  * by offsetting them 5, 10 and 15 units along the camera's view direction.
  * Returns EVT_RETURN_BLOCK so it runs every frame.
  */
@@ -994,7 +954,7 @@ static USER_FUNC(effect_position) {
         ((EffTreasureMapWork*)eff->userdata)->position.y = item->position.y;
         ((EffTreasureMapWork*)eff->userdata)->position.z = item->position.z + z;
         ((EffTreasureMapWork*)eff->userdata)->rotY = 180.0f - camGetPtr(CAMERA_3D)->viewYaw;
-        ((EffTreasureMapWork*)eff->userdata)->alpha = evtGetValue(event, (s32)0xFD050F8B);
+        ((EffTreasureMapWork*)eff->userdata)->alpha = evtGetValue(event, GW(11));
         ((EffTreasureMapWork*)eff->userdata)->scale = 0.9f;
     }
     x = 15.0f * (f32)sin(angle);
@@ -1020,7 +980,7 @@ static USER_FUNC(img_alpha) {
     s32 alpha = evtGetValue(event, event->args[0]);
     ImageEntry* img = imgNameToPtr("img", gp->inBattle != 0);
 
-    animPoseSetMaterialFlagOn(img->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(img->poseId, MAP_OBJ_FLAG_COLOR);
     animPoseSetMaterialEvtColor(img->poseId, (GXColor){0xFF, 0xFF, 0xFF, alpha});
     PSMTXTrans(trans, 0.0f, 1.5f, 0.0f);
     PSMTXScale(scale, 0.9f, 0.9f, 0.9f);
@@ -1042,17 +1002,17 @@ static USER_FUNC(tiz_stone) {
     t /= 10000.0f;
     eff = effNameToPtr("tiz_dust");
     if (eff != NULL) {
-        effStardustN64SetDrawCam(eff, 7);
+        effStardustN64SetDrawCam(eff, CAMERA_3D_EFFECTB);
     }
     eff = effNameToPtr("tiz_stone");
     if (eff != NULL) {
-        ((EffStarStoneWork*)eff->userdata)->cam = 7;
+        ((EffStarStoneWork*)eff->userdata)->cam = CAMERA_3D_EFFECTB;
         ((EffStarStoneWork*)eff->userdata)->a = 255.0f * t;
-        ((EffStarStoneWork*)eff->userdata)->rotY = 5.0f * (360.0f * t);
+        ((EffStarStoneWork*)eff->userdata)->rot.y = 5.0f * (360.0f * t);
     }
     eff = effNameToPtr("tiz_dust2");
     if (eff != NULL) {
-        effStardust2N64SetDrawCam(eff, 7);
+        effStardust2N64SetDrawCam(eff, CAMERA_3D_EFFECTB);
     }
     return EVT_RETURN_DONE;
 }
@@ -1062,27 +1022,27 @@ static USER_FUNC(tiz_stone) {
  * On the first call it copies the frame to a texture, then draws it as a 38 by 30 grid of 16 pixel tiles;
  * each tile whose delay is over is drawn flying off with its own rotation and velocity.
  */
+#if VERSION <= VERSION_DEMO_JP
 static void tiz_broken_draw(CameraId cameraId, void* param) {
+#else
+void tiz_broken_draw(CameraId cameraId, void* param) {
+#endif
+
     GXTexObj tex;
     Mtx mtx;
     Mtx scale;
     Mtx rot;
-#if VERSION >= VERSION_JP
     Mtx ident;
-#endif
     CameraEntry* cam = camGetPtr(cameraId);
     s32 x;
     s32 y;
     BrokenPiece* p;
-    s32 yo;
-    s32 xo;
     f32 py;
     f32 rz;
 
     if (broken_wp->copied == 0) {
         GXSetTexCopySrc(0, 0, 608, 480);
 #if VERSION <= VERSION_DEMO_JP
-        // the demo copies the screen at full size
         GXSetTexCopyDst(608, 480, GX_TF_RGBA8, GX_FALSE);
 #else
         GXSetTexCopyDst(304, 240, GX_TF_RGB5A3, GX_TRUE);
@@ -1113,20 +1073,21 @@ static void tiz_broken_draw(CameraId cameraId, void* param) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    GXSetCurrentMtx(0);
+    GXSetCurrentMtx(GX_PNMTX0);
 #if VERSION >= VERSION_JP
     PSMTXIdentity(ident);
 #endif
+    // Each row has thirty-eight drawn pieces followed by one skipped entry.
     p = broken_wp->pieces->address;
-    for (y = 0, yo = 0; y < 30; y++, yo += 16, p++) {
-        py = 232.0f - yo;
-        for (x = 0, xo = 0; x < 38; x++, xo += 16, p++) {
+    for (y = 0; y < 30; y++, p++) {
+        py = 232.0f - y * 16;
+        for (x = 0; x < 38; x++, p++) {
             if (p->delay == 0) {
                 PSMTXScale(scale, 1.0f / 38.0f, 1.0f / 30.0f, 1.0f);
                 PSMTXTrans(mtx, x, y, 0.0f);
                 PSMTXConcat(scale, mtx, mtx);
                 GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
-                PSMTXTrans(mtx, -296.0f + xo, py, 0.0f);
+                PSMTXTrans(mtx, -296.0f + x * 16, py, 0.0f);
                 switch (p->dir) {
                     case 0:
                         rz = -45.0f;
@@ -1165,21 +1126,26 @@ static void tiz_broken_draw(CameraId cameraId, void* param) {
     }
 }
 
-// FAKE: built with copy propagation and lifetime analysis off: the plain build allocates registers differently (checked by
-// removing them).
+// Kept (pattern): propagation and lifetimes off for the extdrv, npc_jump and depthDisp functions of bom_01, eki_00,
+// gor_10, hei_10, rsh_05, rsh_06, tik_05 and tou_02 (one half is a -opt file flag where configure.py sets it); the
+// target needs it and no natural form was found (cleanup_notes/mweppc_pilot.md, pragma review rels).
 #pragma opt_propagation off
 #pragma opt_lifetimes off
+
 /**
  * Blocking script helper for evt_mapwrite: shatters the screen into the item-get view. On the first call it sets
  * up a 38 by 30 grid of tiles, each flying outward from the centre after a delay proportional to its distance
  * (param_tbl); every frame it moves the tiles and queues tiz_broken_draw on camera 8, and it returns once every
  * tile has left the screen (|x| over 340 or |y| over 260), freeing its buffers.
- * Parts of it are written with hand-expanded math to keep the original code.
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(tiz_broken) {
+#else
+USER_FUNC(tiz_broken) {
 #if VERSION >= VERSION_US
-    f32 sq; // FAKE: tb_sqrtf expanded by hand (see below)
+    f32 sq; // FAKE: sqrtf expanded by hand (see below)
     f64 guess;
+#endif
 #endif
     s32 x;
     s32 y;
@@ -1199,11 +1165,11 @@ static USER_FUNC(tiz_broken) {
     if (isFirstCall) {
         memset(broken_wp, 0, sizeof(BrokenWork));
 #if VERSION <= VERSION_DEMO_JP
-        broken_wp->tex = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_RGBA8, GX_FALSE, 0), 1);
+        broken_wp->tex = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_RGBA8, GX_FALSE, 0), SMART_GROUP_MAP);
 #else
-        broken_wp->tex = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB5A3, GX_FALSE, 0), 1);
+        broken_wp->tex = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB5A3, GX_FALSE, 0), SMART_GROUP_MAP);
 #endif
-        broken_wp->pieces = smartAlloc(sizeof(BrokenPiece) * 31 * 39, 1);
+        broken_wp->pieces = smartAlloc(sizeof(BrokenPiece) * 31 * 39, SMART_GROUP_MAP);
         broken_wp->copied = 0;
         p = broken_wp->pieces->address;
         for (y = 0; y < 30; y++) {
@@ -1216,12 +1182,10 @@ static USER_FUNC(tiz_broken) {
                     } else {
                         p->dir = 1;
                     }
+                } else if (dx < 0.0f) {
+                    p->dir = 2;
                 } else {
-                    if (dx < 0.0f) {
-                        p->dir = 2;
-                    } else {
-                        p->dir = 3;
-                    }
+                    p->dir = 3;
                 }
                 if (dx || dy) {
 #if VERSION >= VERSION_US
@@ -1267,8 +1231,8 @@ static USER_FUNC(tiz_broken) {
 #endif
                 angle = 6.2831855f * angleABf(0.0f, 0.0f, dx, dy) / 360.0f;
                 power = param_tbl[3];
-                p->gx = power * tb_sin(angle);
-                p->gy = power * -tb_cos(angle);
+                p->gx = power * polySinf(angle);
+                p->gy = power * -polyCosf(angle);
 #if VERSION >= VERSION_US
                 p->gx *= 60.0f / gp->framerate;
                 p->gy *= 60.0f / gp->framerate;
@@ -1314,25 +1278,25 @@ static USER_FUNC(tiz_broken) {
         smartFree(broken_wp->pieces);
         return EVT_RETURN_DONE;
     }
-    dispEntry((CameraId)8, 0.0f, 0, tiz_broken_draw, NULL);
+    dispEntry(CAMERA_2D, 0.0f, DISP_MODE_OPAQUE, tiz_broken_draw, NULL);
     return EVT_RETURN_BLOCK;
 }
 #pragma opt_propagation reset
 #pragma opt_lifetimes reset
 
 /** The work area tiz_broken uses for the shattering screen. */
-BrokenWork* broken_wp = &broken_work;
+static BrokenWork* broken_wp = &broken_work;
 
 /**
  * Tuning values of the shattering screen (tiz_broken), named in name_tbl: the delay per unit of distance
  * from the centre, the starting speed, the speed factor, the outward pull and the spin added each frame.
  */
-f32 param_tbl[] = {
+static f32 param_tbl[] = {
     90.0f, 23.0f, 0.98f, 19.4f, 2.0f,
 };
 
 /** Guess: step sizes for adjusting each param_tbl value in a debug menu; nothing in the game reads them. */
-f32 add_tbl[] = {
+static f32 add_tbl[] = {
     1.0f, 0.1f, 0.01f, 0.1f, 1.0f,
 };
 
@@ -1396,16 +1360,18 @@ static USER_FUNC(evtflash) {
     return EVT_RETURN_DONE;
 }
 
+// Descriptive name (not in the symbol maps); placeholder unk_tik_0000247c, JP tik .text+0x23B8. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
+
 /**
  * Script helper (JP and later).
- * With a nonzero args[0] shows the map display (N_mapDispOn), otherwise hides it (N_mapDispOff).
+ * With a nonzero args[0] shows the map display (mapDispOn), otherwise hides it (mapDispOff).
  */
-static USER_FUNC(map_disp_onoff) {
+USER_FUNC(map_disp_onoff) {
     if (evtGetValue(event, event->args[0])) {
-        N_mapDispOn();
+        mapDispOn();
     } else {
-        N_mapDispOff();
+        mapDispOff();
     }
     return EVT_RETURN_DONE;
 }
@@ -1415,7 +1381,7 @@ static USER_FUNC(map_disp_onoff) {
 static USER_FUNC(crystal_bgmode) {
     EffectEntry* eff = effNameToPtr((const char*)evtGetValue(event, event->args[0]));
 
-    ((EffCrystalN64Work*)eff->userdata)->camera = 5;
+    ((EffCrystalN64Work*)eff->userdata)->camera = CAMERA_3D_EFFECTA;
     return EVT_RETURN_DONE;
 }
 
@@ -1431,11 +1397,11 @@ static USER_FUNC(map_bgmode) {
     const char* name2 = (const char*)evtGetValue(event, args[1]);
     EffectEntry* eff = effNameToPtr(name1);
 
-    ((ItemGetWork*)eff->userdata)->camera = 5;
+    ((ItemGetWork*)eff->userdata)->camera = CAMERA_3D_EFFECTA;
     ((ItemGetWork*)eff->userdata)->size = 4.3f;
     eff = effNameToPtr(name2);
-    ((EffTreasureMapWork*)eff->userdata)->cameraId = 5;
-    marioSetCamId(5);
+    ((EffTreasureMapWork*)eff->userdata)->cameraId = CAMERA_3D_EFFECTA;
+    marioSetCamId(CAMERA_3D_EFFECTA);
     return EVT_RETURN_DONE;
 }
 
@@ -1447,10 +1413,10 @@ static USER_FUNC(map_bgmode_end) {
     EffectEntry* eff;
 
     eff = effNameToPtr(name1);
-    ((ItemGetWork*)eff->userdata)->camera = 4;
+    ((ItemGetWork*)eff->userdata)->camera = CAMERA_3D;
     eff = effNameToPtr(name2);
-    ((EffTreasureMapWork*)eff->userdata)->cameraId = 4;
-    marioSetCamId(4);
+    ((EffTreasureMapWork*)eff->userdata)->cameraId = CAMERA_3D;
+    marioSetCamId(CAMERA_3D);
     return EVT_RETURN_DONE;
 }
 
@@ -1460,7 +1426,11 @@ static USER_FUNC(map_bgmode_end) {
  * [4] receives 1 while still turning and 0 when done.
  * The speed ramps up over the first 20 percent of the time and down over the last 20 percent.
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(cam_mahojin_kaiten_main) {
+#else
+USER_FUNC(cam_mahojin_kaiten_main) {
+#endif
     s32 frames;
     s32 msec;
     EvtWord* args = event->args;
@@ -1468,8 +1438,13 @@ static USER_FUNC(cam_mahojin_kaiten_main) {
     f32 end = evtGetFloat(event, args[1]);
     s32 cont;
     f32 cur;
+#if VERSION <= VERSION_DEMO_JP
     f32 speed;
     f32 total;
+#else
+    f32 total;
+    f32 speed;
+#endif
     s32 elapsed;
     s32 i;
 
@@ -1499,17 +1474,18 @@ static USER_FUNC(cam_mahojin_kaiten_main) {
             if (i == event->lwData[14]) {
                 cur = total;
             }
+#if VERSION >= VERSION_JP
         }
     }
-#if VERSION <= VERSION_DEMO_JP
-    // the demo counts frames instead of timing the rotation
-    event->lwData[14]++;
-#else
     elapsed = OSTicksToMilliseconds((u32)gp->renderTime - (u32)event->savedTime);
     if (elapsed > msec) {
         elapsed = msec;
     }
     event->lwData[14] = sysMsec2Frame(elapsed);
+#else
+        }
+    }
+    event->lwData[14]++;
 #endif
     if (frames == event->lwData[14]) {
         cont = 0;
@@ -1532,9 +1508,9 @@ static USER_FUNC(starstone_setting) {
     EffectEntry* eff = effNameToPtr(name);
     EffectEntry* mahojin = effNameToPtr("mahojin");
 
-    ((EffStarStoneWork*)eff->userdata)->flags |= STARSTONE_FLAG_NO_DRAW;
+    ((EffStarStoneWork*)eff->userdata)->flags |= STAR_STONE_FLAG_EXTERNAL_DRAW;
     ((EffMahojinWork*)mahojin->userdata)[idx + 2].arg = eff;
-    ((EffMahojinWork*)mahojin->userdata)[idx + 2].func = effStarStoneDraw;
+    ((EffMahojinWork*)mahojin->userdata)[idx + 2].func = (DispCallback)effStarStoneDraw;
     return EVT_RETURN_DONE;
 }
 
@@ -1596,12 +1572,13 @@ static USER_FUNC(stardust_setting) {
     EffectEntry* eff1 = effNameToPtr(name1);
     EffectEntry* eff2 = effNameToPtr(name2);
 
-    effStardustN64SetDrawCam(eff1, 5);
-    effStardustN64SetDrawCam(eff2, 5);
+    effStardustN64SetDrawCam(eff1, CAMERA_3D_EFFECTA);
+    effStardustN64SetDrawCam(eff2, CAMERA_3D_EFFECTA);
     return EVT_RETURN_DONE;
 }
 
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
+
 /**
  * Script helper (JP and earlier).
  * Checks whether an EXI device of ID 0x05070000 is attached to channel 0;
@@ -1633,20 +1610,17 @@ static USER_FUNC(is_dol_viewer) {
 #endif
 
 /**
- * The treasure-map scene of the pedestal events (GW(15) = 0 for the prologue, else the Crystal Star number).
- * The Magical Map item rises over Mario with wave, orb and map effects; in the prologue the partner speaks
- * (mac_0_098) and the camera circles the pedestal (cam_kaiten helpers), otherwise the camera moves straight in.
- * A laser and white flashes follow, the next star's spot is drawn on the map with star dust (tiz_stone,
- * tiz_obj),
- * the screen fades in from white and shatters into the item-get view (tiz_broken),
- * and the message says the Crystal Star's location was recorded on the Magical Map (mac_0_099, which also
- * teaches a move, or mac_N_00x_01).
+ * Magical Map scene of the pedestal (GW(15) = 0 in the prologue, else the Crystal Star whose place is shown): the
+ * map rises over Mario with wave, orb and map effects; in the prologue the partner speaks mac_0_098 and the camera
+ * circles the pedestal (cam_kaiten helpers). A laser and white flashes follow, the star's place appears on the map
+ * with star dust (TIZ_stg_N, tiz_stone), the screen fades in from white and shatters into the item-get view, and
+ * the message for that star follows (mac_0_099, mac_1_001_01, ...); at the end the fog closes in again.
  */
 EVT_BEGIN(evt_mapwrite)
     // The camera moves in: in the prologue Goombella calls out to Frankly; later Mario just raises his hands.
     WAIT_MS(800)
     IF_INT_EQUAL(GW(15), 0)
-        CALL(evt_cam3d_evt_set, 0, 65, 40, 0, 65, -250, 1000, 11)
+        CALL(evt_cam3d_evt_set, 0, 65, 40, 0, 65, -250, 1000, EASING_SINE_IN_OUT)
         WAIT_MS(1000)
         CALL(evt_msg_print_party, STRING("mac_0_098"))
         WAIT_MS(1000)
@@ -1656,12 +1630,13 @@ EVT_BEGIN(evt_mapwrite)
         END_INLINE_EVENT
     ELSE
         CALL(evt_mario_set_pose, STRING("M_I_N"))
-        CALL(evt_cam3d_evt_set, 0, 102, 300, 0, 110, -250, 2000, 11)
+        CALL(evt_cam3d_evt_set, 0, 102, 300, 0, 110, -250, 2000, EASING_SINE_IN_OUT)
     END_IF
+
     // The Magical Map appears over Mario's head with the wave, orb and map effects.
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     ADD(LW(1), 15)
-    CALL(evt_item_entry, STRING("item00"), ITEM_MAGICAL_MAP_LARGE, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+    CALL(evt_item_entry, STRING("item00"), ITEM_MAGICAL_MAP_LARGE, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
     CALL(evt_item_set_scale, STRING("item00"), FLOAT(0.0f))
     SET_VALUE(GW(11), 0)
     BEGIN_INLINE_EVENT
@@ -1678,6 +1653,7 @@ EVT_BEGIN(evt_mapwrite)
     WAIT_MS(200)
     CALL(evt_eff, STRING("map_map"), STRING("treasure_map"), 0, 0, -1000, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
+
     // In the prologue the camera slowly circles the pedestal while the Thousand-Year Door flickers in and out.
     IF_INT_EQUAL(GW(15), 0)
         CALL(cam_kaiten_init, 0, 65, 40, 0, 65, -250, -24, 102, -800, 0, 110, -250)
@@ -1707,7 +1683,7 @@ EVT_BEGIN(evt_mapwrite)
         BEGIN_INLINE_EVENT
             CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(0))
             CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(1))
-            CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 14000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 14000)
             LOOP(0)
                 CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
                 CALL(evt_sub_intpl_msec_get_value_para, LW(7), LW(9))
@@ -1721,7 +1697,7 @@ EVT_BEGIN(evt_mapwrite)
         BEGIN_INLINE_EVENT
             CALL(cam_kaiten_get_para, 0, LF(0), LW(0), LF(2), LF(3), LF(4), LF(5), LF(6), LF(7))
             CALL(cam_kaiten_get_para, 1, LF(0), LW(1), LF(2), LF(3), LF(4), LF(5), LF(6), LF(8))
-            CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 14000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 14000)
             LOOP(0)
                 CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
                 CALL(evt_sub_intpl_msec_get_value_para, LW(1), LW(9))
@@ -1735,7 +1711,7 @@ EVT_BEGIN(evt_mapwrite)
         BEGIN_INLINE_EVENT
             CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LW(0), LF(5), LF(6), LF(7))
             CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LW(1), LF(5), LF(6), LF(8))
-            CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 14000)
+            CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 14000)
             LOOP(0)
                 CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
                 CALL(evt_sub_intpl_msec_get_value_para, LW(4), LW(9))
@@ -1748,21 +1724,22 @@ EVT_BEGIN(evt_mapwrite)
         END_INLINE_EVENT
         BEGIN_INLINE_EVENT
             WAIT_MS(2000)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
             WAIT_MS(3250)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
             WAIT_MS(3500)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
             WAIT_MS(2700)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAPOBJ_FLAG_HIDE)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
         END_INLINE_EVENT
     END_IF
+
     // The effects brighten and the map rises; a laser shoots from it and the screen flashes white.
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 4000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 4000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         SET_VALUE(GW(11), LW(0))
@@ -1773,9 +1750,9 @@ EVT_BEGIN(evt_mapwrite)
     END_LOOP
     CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
     IF_INT_EQUAL(GW(15), 0)
-        CALL(evt_item_move_3d_position, STRING("item00"), LW(0), 115, LW(2), 14000, 11)
+        CALL(evt_item_move_3d_position, STRING("item00"), LW(0), 115, LW(2), 14000, EASING_SINE_IN_OUT)
     ELSE
-        CALL(evt_item_move_3d_position, STRING("item00"), LW(0), 115, LW(2), 9333, 11)
+        CALL(evt_item_move_3d_position, STRING("item00"), LW(0), 115, LW(2), 9333, EASING_SINE_IN_OUT)
     END_IF
     CALL(evt_item_get_position, STRING("item00"), LW(0), LW(1), LW(2))
     BEGIN_INLINE_EVENT
@@ -1797,6 +1774,7 @@ EVT_BEGIN(evt_mapwrite)
     CALL(map_disp_onoff, 0)
     WAIT_FRAMES(1)
 #endif
+
     // The Magical Map fills the screen and its paper animation for this Crystal Star plays.
     CALL(evt_paper_entry, STRING("OFF_d_tizu_tex"))
     CALL(evt_img_entry, STRING("img"))
@@ -1804,7 +1782,7 @@ EVT_BEGIN(evt_mapwrite)
     CALL(evt_img_alloc_capture, STRING("img"), 0, 0, 1, 0, 0, 608, 480)
     CALL(evt_img_clear_virtual_point, STRING("img"))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, 255, 4600)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 4600)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(img_alpha, LW(0))
@@ -1849,6 +1827,7 @@ EVT_BEGIN(evt_mapwrite)
     CALL(evt_img_wait_animend, STRING("img"))
     WAIT_MS(1000)
     WAIT_MS(1000)
+
     // The next Crystal Star's place appears on the map: star dust, the place picture (TIZ_stg_N) and its sound.
     SWITCH(GW(15))
         CASE_EQUAL(0)
@@ -1906,24 +1885,28 @@ EVT_BEGIN(evt_mapwrite)
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_MAP_NEXT_APPEAR1"), LW(5), LW(6), LW(7), 0)
     CALL(evt_eff64, STRING("tiz_dust2"), STRING("stardust2_n64"), 5, LW(5), LW(6), LW(7), 50, 50, 30, 600, 0, 0, 0, 0)
     CALL(tiz_stone, LW(0))
+    WAIT_MS(500)
+    CALL(evt_npc_entry, STRING("tiz_obj"), LW(8))
 #else
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_MAP_NEXT_APPEAR1"), LW(5), LW(6), LW(7), LW(4))
     CALL(evt_snd_sfx_pit, LW(4), 1365)
     CALL(evt_eff64, STRING("tiz_dust2"), STRING("stardust2_n64"), 5, LW(5), LW(6), LW(7), 50, 50, 30, 600, 0, 0, 0, 0)
     CALL(tiz_stone, 0)
-#endif
     WAIT_MS(500)
     CALL(evt_npc_entry, STRING("tiz_obj"), LW(8))
 #if VERSION >= VERSION_DEMO_EU
     CALL(evt_npc_pera_onoff, STRING("tiz_obj"), 0)
     CALL(evt_npc_set_ry, STRING("tiz_obj"), 0)
 #endif
+#endif
     ADD(LW(6), 10)
     CALL(evt_npc_set_position, STRING("tiz_obj"), LW(5), LW(6), LW(7))
     CALL(evt_npc_set_scale, STRING("tiz_obj"), FLOAT(1.5f), FLOAT(1.5f), FLOAT(1.5f))
     CALL(evt_npc_set_camid, STRING("tiz_obj"), 7)
-#if VERSION < VERSION_DEMO_EU
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 1000)
+#if VERSION >= VERSION_DEMO_EU
+    CALL(evt_npc_set_anim, STRING("tiz_obj"), STRING("A_1"))
+#else
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_npc_set_color, STRING("tiz_obj"), 255, 255, 255, LW(0))
@@ -1933,24 +1916,22 @@ EVT_BEGIN(evt_mapwrite)
             BREAK_LOOP
         END_IF
     END_LOOP
-#else
-    CALL(evt_npc_set_anim, STRING("tiz_obj"), STRING("A_1"))
 #endif
     CALL(evt_snd_sfxon__, LW(9), 0)
     CALL(evt_npc_wait_anim, STRING("tiz_obj"), FLOAT(1.0f))
     ADD(LW(6), 10)
     ADD(LW(7), 20)
     WAIT_MS(500)
-#if VERSION >= VERSION_JP
-    CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_MAP_NEXT_APPEAR1"), LW(5), LW(6), LW(7), 0)
-#endif
+#if VERSION <= VERSION_DEMO_JP
     CALL(evt_eff64, STRING("tiz_dust"), STRING("stardust_n64"), 0, LW(5), LW(6), LW(7), FLOAT(15.0f), 0, 0, 0, 0, 0, 0, 0)
-#if VERSION >= VERSION_JP
+#else
+    CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_MAP_NEXT_APPEAR1"), LW(5), LW(6), LW(7), 0)
+    CALL(evt_eff64, STRING("tiz_dust"), STRING("stardust_n64"), 0, LW(5), LW(6), LW(7), FLOAT(15.0f), 0, 0, 0, 0, 0, 0, 0)
     CALL(tiz_stone, 0)
 #endif
     WAIT_MS(500)
     CALL(evt_eff, STRING("tiz_stone"), STRING("starstone"), GW(15), LW(5), LW(6), LW(7), FLOAT(0.69921875f), 0, 0, 0, 0, 0, 0, 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 10000, 3000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 10000, 3000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(tiz_stone, LW(0))
@@ -1960,6 +1941,7 @@ EVT_BEGIN(evt_mapwrite)
         END_IF
     END_LOOP
     WAIT_MS(2000)
+
     // The map closes, the screen fades back in from white and a light falls on Mario.
     CALL(evt_img_release, STRING("img"))
     CALL(evt_eff_softdelete, STRING("tiz_stone"))
@@ -1985,6 +1967,7 @@ EVT_BEGIN(evt_mapwrite)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_eff, 0, STRING("indirect"), 0, LW(0), LW(1), LW(2), 120, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(1000)
+
     // The screen shatters into the item-get view and the message says the location was recorded on the map.
     CALL(tiz_broken)
     CALL(evt_eff_softdelete, STRING("map_wave"))
@@ -2017,13 +2000,14 @@ EVT_BEGIN(evt_mapwrite)
     END_SWITCH
     CALL(map_bgmode_end, STRING("map_itemget"), STRING("map_map"))
     CALL(evt_eff_softdelete, STRING("map_itemget"))
-    // The magic circle ends, the fog clears and the map drops back into Mario's hands.
+
+    // The magic circle ends, the fog closes in again (evt_fogreset) and the map drops back into Mario's hands.
     SET_VALUE(GF(11), 1)
     CALL(evt_eff_softdelete, STRING("mahojin"))
     SPAWN_EVENT(mahojin_se_event_end)
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
-        CALL(evt_sub_intpl_msec_init, 11, 255, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(GW(11), LW(0))
@@ -2035,14 +2019,14 @@ EVT_BEGIN(evt_mapwrite)
     END_INLINE_EVENT
     SPAWN_EVENT(evt_fogreset)
     IF_INT_NOT_EQUAL(GW(15), 0)
-        CALL(evt_cam3d_evt_set, 0, 75, 50, 0, 80, -250, 1000, 11)
+        CALL(evt_cam3d_evt_set, 0, 75, 50, 0, 80, -250, 1000, EASING_SINE_IN_OUT)
     END_IF
     BEGIN_INLINE_EVENT
         WAIT_MS(1700)
         CALL(evt_mario_set_pose, STRING("M_L_3"))
     END_INLINE_EVENT
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_item_move_3d_position, STRING("item00"), LW(0), LW(1), LW(2), 2000, 11)
+    CALL(evt_item_move_3d_position, STRING("item00"), LW(0), LW(1), LW(2), 2000, EASING_SINE_IN_OUT)
     CALL(evt_item_delete, STRING("item00"))
     CALL(evt_eff_delete, STRING("map_map"))
     WAIT_MS(500)
@@ -2058,8 +2042,8 @@ EVT_END()
  * 0, 100, -270), irises out after 1.2 s, then sets the next map change to an instant black fade-out and a 500 ms
  * iris-in, so the change continues the iris it has already done.
  */
-EVT_BEGIN(fake_fade)
-    CALL(evt_cam3d_evt_set, 0, 225, 469, 0, 100, -270, 2000, 11)
+static EVT_BEGIN(fake_fade)
+    CALL(evt_cam3d_evt_set, 0, 225, 469, 0, 100, -270, 2000, EASING_SINE_IN_OUT)
     WAIT_MS(1200)
     CALL(evt_fade_entry, FADE_OUT_IRIS, 500, 0, 0, 0)
     CALL(evt_fade_end_wait)
@@ -2072,7 +2056,7 @@ EVT_END()
  * Plays the item-get light, the star stone effect (LW(0) = star number) and star dust,
  * then removes the effects and returns Mario to his idle pose.
  */
-EVT_BEGIN(evt_starstone_up)
+static EVT_BEGIN(evt_starstone_up)
     WAIT_MS(500)
     CALL(evt_mario_get_pos, 0, LW(4), LW(5), LW(6))
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_MAP_KAKAGERU1"), LW(4), LW(5), LW(6), 0)
@@ -2101,7 +2085,7 @@ EVT_END()
  * Places the seven-star ring one star: spawns the star stone effect, sets its alpha and number,
  * fades it in and then spins it until GF(11) is set, removing it at the end.
  */
-EVT_BEGIN(evt_starstone_set)
+static EVT_BEGIN(evt_starstone_set)
     WAIT_MS(7000)
     SET_VALUE(LW(0), GW(15))
     SUBTRACT(LW(0), 1)
@@ -2112,7 +2096,7 @@ EVT_BEGIN(evt_starstone_set)
     CALL(starstone_circle_link_func, STRING("stone"), GW(15), LW(0), 50, LW(2), 0, FLOAT(140.0f))
     CALL(starstone_set_alpha, STRING("stone"), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, 255, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(starstone_set_alpha, STRING("stone"), LW(0))
@@ -2139,12 +2123,12 @@ EVT_BEGIN(evt_starstone_set)
 EVT_END()
 
 /**
- * First pedestal scene (STORY_STG0_14_FRONT_OF_THE_PEDESTAL):
+ * First pedestal scene (STG0_14_FRONT_OF_THE_PEDESTAL):
  * Mario steps on the pedestal, the magic circle appears with a flash,
  * the map is written (evt_mapwrite) and the partner and Professor Frankly react (mac_0_100, mac_0_101).
- * Sets story progress STORY_STG0_15_THE_PEDESTAL.
+ * Sets story progress STG0_15_THE_PEDESTAL.
  */
-EVT_BEGIN(mahojin_event)
+static EVT_BEGIN(mahojin_event)
     // Mario walks onto the pedestal, the music stops and he is startled as the magic circle flashes into being.
     SET_VALUE(GW(15), 0)
     CALL(evt_mario_key_onoff, 0)
@@ -2155,7 +2139,7 @@ EVT_BEGIN(mahojin_event)
     CALL(evt_mario_mov_pos2, 0, -250, FLOAT(120.0f))
     CALL(evt_mario_set_dir, 90, 0, 0)
     WAIT_MS(500)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_N_7"))
@@ -2165,8 +2149,9 @@ EVT_BEGIN(mahojin_event)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_MAP_KAKAGERU2"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(2000)
-    // Seen from above, Mario, Goombella and Frankly look around in confusion while fog fills the room.
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+
+    // Seen from above, Mario, Goombella and Frankly look around in confusion while the fog is pushed back (evt_fogset).
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL(evt_mario_set_pose, STRING("M_I_N"))
     CALL(evt_party_set_pos, 1, -30, 19, -190)
     CALL(evt_party_set_pos, 0, 30, 19, -190)
@@ -2208,6 +2193,7 @@ EVT_BEGIN(mahojin_event)
     END_INLINE_EVENT
     SPAWN_EVENT(evt_fogset)
     WAIT_MS(6000)
+
     // Goombella and Frankly face the pedestal and the Magical Map scene plays.
     DELETE_EVENT(LW(11))
     DELETE_EVENT(LW(12))
@@ -2218,17 +2204,19 @@ EVT_BEGIN(mahojin_event)
         CALL(evt_party_set_dir, 1, 90, -1)
     END_INLINE_EVENT
     CALL_CHILD(evt_mapwrite)
+
     // They jump onto the pedestal; Goombella asks about the map and the lights, and Frankly thinks it over.
     BEGIN_INLINE_EVENT
         CALL(evt_party_jump_pos, 0, 30, 28, -250, 300, 0, -1000)
     END_INLINE_EVENT
     CALL(evt_party_jump_pos, 1, -30, 28, -250, 300, 0, -1000)
-    CALL(evt_cam3d_evt_set, 0, 100, -2, 0, 65, -250, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 100, -2, 0, 65, -250, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_msg_print_party, STRING("mac_0_100"))
     CALL(evt_msg_print, 0, STRING("mac_0_101"), 0, STRING("extparty"))
-    CALL(evt_cam3d_evt_set, 0, 60, 447, 0, 120, -250, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 60, 447, 0, 120, -250, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
+
     // Frankly suggests going back to his place to study the map, and Mario nods.
     CALL(evt_msg_print, 0, STRING("mac_0_101_04"), 0, STRING("extparty"))
     CALL(evt_mario_set_pose, STRING("M_Z_1"))
@@ -2241,24 +2229,25 @@ EVT_BEGIN(mahojin_event)
     END_INLINE_EVENT
     CALL(evt_mario_set_pose, STRING("M_N_2"))
     WAIT_MS(1000)
+
     // Mario receives the star power of the map (Sweet Treat), the room irises out and he returns to Rogueport.
     CALL(evt_pouch_get_starstone, 0)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 1000)
     CALL(evt_fade_entry, FADE_OUT_IRIS, 500, 0, 0, 0)
     CALL(evt_fade_end_wait)
     CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_BLACK, 0, FADE_IN_IRIS, 500)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_15_THE_PEDESTAL)
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_15_THE_PEDESTAL)
     CALL(evt_bero_mapchange, STRING("gor_02"), 0)
     RETURN
 EVT_END()
 
 /**
- * Pedestal scene after the first Crystal Star (STORY_STG1_21_A_MAIL_FROM_PEACH).
+ * Pedestal scene after the first Crystal Star (STG1_21_A_MAIL_FROM_PEACH).
  * The star rises, the circle and map appear (evt_mapwrite),
- * the partner reacts (mac_1_001 to mac_1_003) and story progress becomes STORY_STG1_30_ZESS_T.
+ * the partner reacts (mac_1_001 to mac_1_003) and story progress becomes STG1_30_ZESS_T.
  */
-EVT_BEGIN(mahojin_event1)
+static EVT_BEGIN(mahojin_event1)
     SET_VALUE(GW(15), 1)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
@@ -2266,13 +2255,13 @@ EVT_BEGIN(mahojin_event1)
     CALL_CHILD(evt_mahojin_move)
     CALL(evt_msg_print_party, STRING("mac_1_001"))
     CALL_CHILD(evt_starstone_up)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_eff, STRING("mahojin"), STRING("mahojin"), 1, 0, 28, -250, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT(mahojin_se_event)
     SET_VALUE(GF(11), 0)
     SPAWN_EVENT(evt_starstone_set)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL_CHILD(evt_mahojin_move2)
     SPAWN_EVENT(evt_fogset)
     WAIT_MS(6000)
@@ -2284,20 +2273,20 @@ EVT_BEGIN(mahojin_event1)
     CALL(evt_mario_set_pose, STRING("M_I_2"))
     WAIT_MS(1200)
     CALL(evt_msg_print_party, STRING("mac_1_003"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_30_ZESS_T)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_30_ZESS_T)
     CALL_CHILD(fake_fade)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 1000)
     CALL(evt_bero_mapchange, STRING("gor_02"), 0)
     RETURN
 EVT_END()
 
 /**
- * Pedestal scene after the second Crystal Star (STORY_STG2_27_A_MAIL_FROM_PEACH).
+ * Pedestal scene after the second Crystal Star (STG2_27_A_MAIL_FROM_PEACH).
  * The same sequence as mahojin_event1 with the second star (mac_2_001, mac_2_002);
- * sets STORY_STG2_40_THOUSAND_YEAR_DOOR.
+ * sets STG2_40_THOUSAND_YEAR_DOOR.
  */
-EVT_BEGIN(mahojin_event2)
+static EVT_BEGIN(mahojin_event2)
     SET_VALUE(GW(15), 2)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
@@ -2305,13 +2294,13 @@ EVT_BEGIN(mahojin_event2)
     CALL_CHILD(evt_mahojin_move)
     CALL(evt_msg_print_party, STRING("mac_2_001"))
     CALL_CHILD(evt_starstone_up)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_eff, STRING("mahojin"), STRING("mahojin"), 2, 0, 28, -250, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT(mahojin_se_event)
     SET_VALUE(GF(11), 0)
     SPAWN_EVENT(evt_starstone_set)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL_CHILD(evt_mahojin_move2)
     SPAWN_EVENT(evt_fogset)
     WAIT_MS(6000)
@@ -2321,32 +2310,32 @@ EVT_BEGIN(mahojin_event2)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_THINK1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_I_Z"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_40_THOUSAND_YEAR_DOOR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_40_THOUSAND_YEAR_DOOR)
     CALL_CHILD(fake_fade)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 1000)
     CALL(evt_bero_mapchange, STRING("gor_02"), 0)
     RETURN
 EVT_END()
 
 /**
- * Pedestal scene after the third Crystal Star (STORY_STG3_35_A_MAIL_FROM_PEACH); the same sequence (mac_3_001);
- * sets STORY_STG3_50_THOUSAND_YEAR_DOOR.
+ * Pedestal scene after the third Crystal Star (STG3_35_A_MAIL_FROM_PEACH); the same sequence (mac_3_001);
+ * sets STG3_50_THOUSAND_YEAR_DOOR.
  */
-EVT_BEGIN(mahojin_event3)
+static EVT_BEGIN(mahojin_event3)
     SET_VALUE(GW(15), 3)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_party_stop, 0)
     CALL_CHILD(evt_mahojin_move)
     CALL_CHILD(evt_starstone_up)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_eff, STRING("mahojin"), STRING("mahojin"), 3, 0, 28, -250, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT(mahojin_se_event)
     SET_VALUE(GF(11), 0)
     SPAWN_EVENT(evt_starstone_set)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL_CHILD(evt_mahojin_move2)
     SPAWN_EVENT(evt_fogset)
     WAIT_MS(6000)
@@ -2356,32 +2345,32 @@ EVT_BEGIN(mahojin_event3)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_NOD1_4"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_50_THOUSAND_YEAR_DOOR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_50_THOUSAND_YEAR_DOOR)
     CALL_CHILD(fake_fade)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 1000)
     CALL(evt_bero_mapchange, STRING("gor_02"), 0)
     RETURN
 EVT_END()
 
 /**
- * Pedestal scene after the fourth Crystal Star (STORY_STG4_17_A_MAIL_FROM_PEACH); the same sequence (mac_4_001);
- * sets STORY_STG4_30_THOUSAND_YEAR_DOOR.
+ * Pedestal scene after the fourth Crystal Star (STG4_17_A_MAIL_FROM_PEACH); the same sequence (mac_4_001);
+ * sets STG4_30_THOUSAND_YEAR_DOOR.
  */
-EVT_BEGIN(mahojin_event4)
+static EVT_BEGIN(mahojin_event4)
     SET_VALUE(GW(15), 4)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_party_stop, 0)
     CALL_CHILD(evt_mahojin_move)
     CALL_CHILD(evt_starstone_up)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_eff, STRING("mahojin"), STRING("mahojin"), 4, 0, 28, -250, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT(mahojin_se_event)
     SET_VALUE(GF(11), 0)
     SPAWN_EVENT(evt_starstone_set)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL_CHILD(evt_mahojin_move2)
     SPAWN_EVENT(evt_fogset)
     WAIT_MS(6000)
@@ -2391,32 +2380,32 @@ EVT_BEGIN(mahojin_event4)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_NOD1_4"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_30_THOUSAND_YEAR_DOOR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_30_THOUSAND_YEAR_DOOR)
     CALL_CHILD(fake_fade)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 1000)
     CALL(evt_bero_mapchange, STRING("gor_02"), 0)
     RETURN
 EVT_END()
 
 /**
- * Pedestal scene after the fifth Crystal Star (STORY_STG5_59_01_A_MAIL_FROM_PEACH);
- * the same sequence (mac_5_001); sets STORY_STG5_60_RETURN_TO_KEELHAUL.
+ * Pedestal scene after the fifth Crystal Star (STG5_59_01_A_MAIL_FROM_PEACH);
+ * the same sequence (mac_5_001); sets STG5_60_RETURN_TO_KEELHAUL.
  */
-EVT_BEGIN(mahojin_event5)
+static EVT_BEGIN(mahojin_event5)
     SET_VALUE(GW(15), 5)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_party_stop, 0)
     CALL_CHILD(evt_mahojin_move)
     CALL_CHILD(evt_starstone_up)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_eff, STRING("mahojin"), STRING("mahojin"), 5, 0, 28, -250, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT(mahojin_se_event)
     SET_VALUE(GF(11), 0)
     SPAWN_EVENT(evt_starstone_set)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL_CHILD(evt_mahojin_move2)
     SPAWN_EVENT(evt_fogset)
     WAIT_MS(6000)
@@ -2426,33 +2415,33 @@ EVT_BEGIN(mahojin_event5)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_NOD1_4"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_60_RETURN_TO_KEELHAUL)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_60_RETURN_TO_KEELHAUL)
     CALL_CHILD(fake_fade)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 1000)
     CALL(evt_bero_mapchange, STRING("gor_02"), 0)
     RETURN
 EVT_END()
 
 /**
- * Pedestal scene after the sixth Crystal Star (STORY_STG6_57_A_MAIL_FROM_PEACH).
- * The same sequence (mac_6_001) with a longer wait;
- * sets STORY_STG6_70_THOUSAND_YEAR_DOOR and sends Mario back to Rogueport (gor_02).
+ * Pedestal scene after the sixth Crystal Star (STG6_57_A_MAIL_FROM_PEACH).
+ * The same sequence (mac_6_001);
+ * sets STG6_70_THOUSAND_YEAR_DOOR and sends Mario back to Rogueport (gor_02).
  */
-EVT_BEGIN(mahojin_event6)
+static EVT_BEGIN(mahojin_event6)
     SET_VALUE(GW(15), 6)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_party_stop, 0)
     CALL_CHILD(evt_mahojin_move)
     CALL_CHILD(evt_starstone_up)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_eff, STRING("mahojin"), STRING("mahojin"), 6, 0, 28, -250, 0, 0, 0, 0, 0, 0, 0, 0)
     SPAWN_EVENT(mahojin_se_event)
     SET_VALUE(GF(11), 0)
     SPAWN_EVENT(evt_starstone_set)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL_CHILD(evt_mahojin_move2)
     SPAWN_EVENT(evt_fogset)
     WAIT_MS(6000)
@@ -2462,20 +2451,20 @@ EVT_BEGIN(mahojin_event6)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_THINK1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_70_THOUSAND_YEAR_DOOR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_70_THOUSAND_YEAR_DOOR)
     CALL_CHILD(fake_fade)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 1000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 1000)
     CALL(evt_bero_mapchange, STRING("gor_02"), 0)
     RETURN
 EVT_END()
 
 /**
  * Loop that keeps the seven Crystal Stars (stone01 to stone07) on a ring around the pedestal,
- * calling starstone_circle_link_func each frame with the centre and radius held in GW(10) to GW(12)
- * and the rotation in LW(0).
+ * calling starstone_circle_link_func each frame with centre X and Z in LW(0) and LW(2),
+ * height in GW(10), rotation in GW(11) and radius in GW(12).
  */
-EVT_BEGIN(starstone_circle_link)
+static EVT_BEGIN(starstone_circle_link)
     LOOP(0)
         CALL(starstone_circle_link_func, STRING("stone01"), 1, LW(0), GW(10), LW(2), GW(11), GW(12))
         CALL(starstone_circle_link_func, STRING("stone02"), 2, LW(0), GW(10), LW(2), GW(11), GW(12))
@@ -2490,20 +2479,20 @@ EVT_BEGIN(starstone_circle_link)
 EVT_END()
 
 /**
- * Starts the looping map animations of the final door room:
- * the cracks (anm_hibi), the seven stars (anm_hosi_1 to 7) and the door (anm_tobira).
+ * Sets the cracks (anm_hibi) and seven stars (anm_hosi_1 to 7) to their final animation frames
+ * and starts the looping door animation (anm_tobira) in the final door room.
  */
-EVT_BEGIN(lastdungeon_anim_init)
-    CALL(evt_map_playanim, STRING("anm_hibi"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_1"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_2"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_3"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_4"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_5"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_6"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_7"), 2, 0)
-    CALL(evt_map_playanim, STRING("anm_tobira"), 1, 0)
-    CALL(evt_map_playanim, STRING("anm_hibi"), 2, 0)
+static EVT_BEGIN(lastdungeon_anim_init)
+    CALL(evt_map_playanim, STRING("anm_hibi"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_1"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_2"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_3"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_4"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_5"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_6"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_7"), MAP_ANIM_PLAY_AT_END, 0)
+    CALL(evt_map_playanim, STRING("anm_tobira"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("anm_hibi"), MAP_ANIM_PLAY_AT_END, 0)
     RETURN
 EVT_END()
 
@@ -2511,7 +2500,7 @@ EVT_END()
  * Puts the Thousand-Year Door's two leaves (door_a, door_b) at 120 degrees (door_a at -120)
  * and updates their hit areas; lastdungeon swings them from that pose.
  */
-EVT_BEGIN(lastdungeon_init)
+static EVT_BEGIN(lastdungeon_init)
     CALL(evt_hit_bind_mapobj, STRING("a_door_a"), STRING("door_a"))
     CALL(evt_hit_bind_mapobj, STRING("a_door_b"), STRING("door_b"))
     CALL(evt_mapobj_rotate, 0, STRING("door_b"), 0, 120, 0)
@@ -2524,20 +2513,20 @@ EVT_END()
 
 /**
  * Entry into the final dungeon through the Thousand-Year Door: the push case event of n_bero that the map init
- * registers at STORY_STG7_52_THE_PEDESTAL.
+ * registers at STG7_52_THE_PEDESTAL.
  * Mario walks in and is hidden, the camera shakes,
  * the door leaves swing from 120 degrees to 0 over five seconds,
  * and the game moves on to the chapter 8 title (sys_01, stg_8).
  */
-EVT_BEGIN(lastdungeon)
+static EVT_BEGIN(lastdungeon)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_cam_ctrl_onoff, CAMERA_3D, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         ADD(LW(2), -50)
         CALL(evt_mario_mov_pos2, LW(0), LW(2), FLOAT(120.0f))
-        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDDEN)
-        CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+        CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
     END_INLINE_EVENT
     CALL(evt_snd_sfxon, STRING("SFX_EVT_MAP_KAKAGERU3_3"), 0)
     BEGIN_INLINE_EVENT
@@ -2546,7 +2535,7 @@ EVT_BEGIN(lastdungeon)
         WAIT_MS(200)
         CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 200)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 0, 120, 0, 5000)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 120, 0, 5000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         CALL(evt_mapobj_rotate, 0, STRING("door_b"), 0, LW(0), 0)
@@ -2563,15 +2552,15 @@ EVT_BEGIN(lastdungeon)
 EVT_END()
 
 /**
- * The last pedestal scene, registered on a_dai from STORY_STG7_50_A_WAITING_PROF_FRANKLY to STORY_STG7_51.
+ * The last pedestal scene, registered on a_dai from STG7_50_A_WAITING_PROF_FRANKLY to STG7_51.
  * Professor Frankly urges Mario to hold up the last Crystal Star (mac_7_009) and the eighth magic circle forms
- * (effect type 8, 7 in the demos) with a crystal wave;
+ * (effect type 8, 7 in the early demos) with a crystal wave;
  * the seven Crystal Stars fade in around Mario and the camera
  * circles while the charge rises; the partner cries out at the door (mac_7_010), the seven star marks
  * (anm_hosi_1 to 7) and the door (anm_tobira) animate, Frankly and the partner speak (mac_7_011, mac_7_013)
- * and the story becomes STORY_STG7_52_THE_PEDESTAL.
+ * and the story becomes STG7_52_THE_PEDESTAL.
  */
-EVT_BEGIN(mahojin_event7)
+static EVT_BEGIN(mahojin_event7)
     // Mario walks onto the pedestal and Frankly tells him to hold up the last Crystal Star.
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_mario_key_onoff, 0)
@@ -2589,8 +2578,9 @@ EVT_BEGIN(mahojin_event7)
     CALL(evt_mario_set_pose, STRING("M_N_2"))
     WAIT_MS(500)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
+
     // The music stops and the magic circle forms; seen from above, a crystal wave rises around Mario.
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     CALL(evt_snd_sfxon, STRING("SFX_EVT_MAP_KAKAGERU3_1"), 0)
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_eff, STRING("mahojin"), STRING("mahojin"), 7, 0, 28, -250, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -2599,7 +2589,7 @@ EVT_BEGIN(mahojin_event7)
 #endif
     SPAWN_EVENT(mahojin_se_event)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL(evt_party_set_pos, 0, 30, 25, -190)
     CALL(evt_party_set_dir, 0, 270, 0)
     WAIT_MS(2000)
@@ -2607,10 +2597,11 @@ EVT_BEGIN(mahojin_event7)
     CALL(evt_eff64, STRING("map_wave"), STRING("crystal_n64"), 6, LW(0), LW(1), LW(2), FLOAT(1.0f), 60, 0, 0, 0, 0, 0, 0)
     CALL(crystal_bgmode, STRING("map_wave"))
     WAIT_MS(2000)
+
     // The seven Crystal Stars are placed on a ring around Mario, invisible at first.
-    CALL(evt_cam3d_evt_set, 0, 65, 40, 0, 65, -250, 1000, 11)
+    CALL(evt_cam3d_evt_set, 0, 65, 40, 0, 65, -250, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
-    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_FRONT_POSE)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_NO_REAR_POSE)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_eff64, STRING("charge"), STRING("pokopi_pcharge_n64"), 8, LW(0), LW(1), LW(2), FLOAT(1.5f), 0, 0, 0, 0, 0, 0, 0)
     CALL(evt_eff, STRING("stone01"), STRING("starstone"), 0, 0, 50, -390, FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
@@ -2638,6 +2629,7 @@ EVT_BEGIN(mahojin_event7)
     CALL(starstone_set_alpha, STRING("stone05"), 0)
     CALL(starstone_set_alpha, STRING("stone06"), 0)
     CALL(starstone_set_alpha, STRING("stone07"), 0)
+
     // The stars spin and fade in as Mario raises his hands, and the camera circles the pedestal.
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
@@ -2656,7 +2648,7 @@ EVT_BEGIN(mahojin_event7)
     BEGIN_INLINE_EVENT
         WAIT_MS(5500)
         SET_VALUE(LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 11, 0, 255, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             IF_INT_GREATER_OR_EQUAL(LW(0), 128)
@@ -2689,7 +2681,7 @@ EVT_BEGIN(mahojin_event7)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(4), LW(5), LW(6))
-        CALL(evt_sub_intpl_msec_init, 11, 45, 115, 14000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 45, 115, 14000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, GW(10), LW(1))
             CALL(pcharge_set_position, STRING("charge"), LW(4), GW(10), LW(6))
@@ -2702,7 +2694,7 @@ EVT_BEGIN(mahojin_event7)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(7500)
-        CALL(evt_sub_intpl_msec_init, 11, 40, 140, 4500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 40, 140, 4500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, GW(12), LW(1))
             IF_INT_EQUAL(LW(1), 0)
@@ -2736,7 +2728,7 @@ EVT_BEGIN(mahojin_event7)
     BEGIN_INLINE_EVENT
         CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(0))
         CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LF(4), LF(5), LF(6), LW(1))
-        CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 14000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 14000)
         LOOP(0)
             CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
             CALL(evt_sub_intpl_msec_get_value_para, LW(7), LW(9))
@@ -2750,7 +2742,7 @@ EVT_BEGIN(mahojin_event7)
     BEGIN_INLINE_EVENT
         CALL(cam_kaiten_get_para, 0, LF(0), LW(0), LF(2), LF(3), LF(4), LF(5), LF(6), LF(7))
         CALL(cam_kaiten_get_para, 1, LF(0), LW(1), LF(2), LF(3), LF(4), LF(5), LF(6), LF(8))
-        CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 14000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 14000)
         LOOP(0)
             CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
             CALL(evt_sub_intpl_msec_get_value_para, LW(1), LW(9))
@@ -2764,7 +2756,7 @@ EVT_BEGIN(mahojin_event7)
     BEGIN_INLINE_EVENT
         CALL(cam_kaiten_get_para, 0, LF(0), LF(1), LF(2), LF(3), LW(0), LF(5), LF(6), LF(7))
         CALL(cam_kaiten_get_para, 1, LF(0), LF(1), LF(2), LF(3), LW(1), LF(5), LF(6), LF(8))
-        CALL(evt_sub_intpl_msec_init, 11, LW(0), LW(1), 14000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(0), LW(1), 14000)
         LOOP(0)
             CALL(cam_kaiten_get_para, 2, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7))
             CALL(evt_sub_intpl_msec_get_value_para, LW(4), LW(9))
@@ -2777,21 +2769,22 @@ EVT_BEGIN(mahojin_event7)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(3250)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(3500)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(2700)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("door"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_yuka1"), MAP_OBJ_FLAG_HIDDEN)
     END_INLINE_EVENT
+
     // The stars vanish one by one in bursts of star dust.
     WAIT_MS(14000)
-    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_FRONT_POSE)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_NO_REAR_POSE)
     DELETE_EVENT(LW(7))
     DELETE_EVENT(LW(8))
     WAIT_MS(1000)
@@ -2837,6 +2830,7 @@ EVT_BEGIN(mahojin_event7)
     CALL(evt_eff64, STRING(""), STRING("stardust_n64"), 0, LW(0), LW(1), LW(2), FLOAT(20.0f), 0, 0, 0, 0, 0, 0, 0)
     CALL(evt_eff64, STRING(""), STRING("stardust_n64"), 2, LW(0), LW(1), LW(2), FLOAT(30.0f), 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(1300)
+
     // Seen from above, the stars reappear one by one on a ring around Mario.
     CALL(starstone_setting, STRING("stone01"), 0)
     CALL(starstone_setting, STRING("stone02"), 1)
@@ -2845,7 +2839,7 @@ EVT_BEGIN(mahojin_event7)
     CALL(starstone_setting, STRING("stone05"), 4)
     CALL(starstone_setting, STRING("stone06"), 5)
     CALL(starstone_setting, STRING("stone07"), 6)
-    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 634, 421, 0, 58, -270, 0, EASING_SINE_IN_OUT)
     CALL(evt_mario_set_pose, STRING("M_I_1"))
     CALL(evt_mario_get_pos, 0, LW(0), GW(10), LW(2))
     SET_FLOAT_VALUE(GW(10), FLOAT(50.0f))
@@ -2894,62 +2888,64 @@ EVT_BEGIN(mahojin_event7)
     CALL(evt_eff64, STRING("sd_7_2"), STRING("stardust_n64"), 2, LW(0), LW(1), LW(2), FLOAT(30.0f), 0, 0, 0, 0, 0, 0, 0)
     CALL(stardust_setting, STRING("sd_7_1"), STRING("sd_7_2"))
     WAIT_MS(1000)
+
     // The room shakes, the partner cries out, and the seven star marks on the Door light up one after another.
-    CALL(evt_cam3d_evt_set, 0, 65, 40, 0, 65, -250, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 65, 40, 0, 65, -250, 0, EASING_SINE_IN_OUT)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     WAIT_MS(1000)
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.0146484375f), 130)
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.0146484375f), 130)
     CALL(evt_msg_print_party, STRING("mac_7_010"))
-    CALL(evt_cam3d_evt_set, -55, 62, -375, -55, 56, -575, 500, 11)
+    CALL(evt_cam3d_evt_set, -55, 62, -375, -55, 56, -575, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_snd_sfxon, STRING("SFX_EVT_MAP_KAKAGERU3_2"), 0)
-    CALL(evt_map_playanim, STRING("anm_hosi_1"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_1"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_hosi_1"), LW(0), LW(1))
     WAIT_MS(LW(1))
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -55, 115, -375, -55, 118, -575, 250, 11)
+    CALL(evt_cam3d_evt_set, -55, 115, -375, -55, 118, -575, 250, EASING_SINE_IN_OUT)
     WAIT_MS(250)
-    CALL(evt_map_playanim, STRING("anm_hosi_2"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_2"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_hosi_2"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_cam3d_evt_set, -43, 166, -375, -43, 169, -575, 250, 11)
+    CALL(evt_cam3d_evt_set, -43, 166, -375, -43, 169, -575, 250, EASING_SINE_IN_OUT)
     WAIT_MS(250)
-    CALL(evt_map_playanim, STRING("anm_hosi_3"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_3"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_hosi_3"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_cam3d_evt_set, 0, 191, -375, 0, 194, -575, 250, 11)
+    CALL(evt_cam3d_evt_set, 0, 191, -375, 0, 194, -575, 250, EASING_SINE_IN_OUT)
     WAIT_MS(250)
-    CALL(evt_map_playanim, STRING("anm_hosi_4"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_4"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_hosi_4"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_cam3d_evt_set, 43, 166, -375, 43, 169, -575, 250, 11)
+    CALL(evt_cam3d_evt_set, 43, 166, -375, 43, 169, -575, 250, EASING_SINE_IN_OUT)
     WAIT_MS(250)
-    CALL(evt_map_playanim, STRING("anm_hosi_5"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_5"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_hosi_5"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_cam3d_evt_set, 55, 115, -375, 55, 118, -575, 250, 11)
+    CALL(evt_cam3d_evt_set, 55, 115, -375, 55, 118, -575, 250, EASING_SINE_IN_OUT)
     WAIT_MS(250)
-    CALL(evt_map_playanim, STRING("anm_hosi_6"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_6"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_hosi_6"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_cam3d_evt_set, 55, 62, -375, 55, 65, -575, 250, 11)
+    CALL(evt_cam3d_evt_set, 55, 62, -375, 55, 65, -575, 250, EASING_SINE_IN_OUT)
     WAIT_MS(250)
-    CALL(evt_map_playanim, STRING("anm_hosi_7"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hosi_7"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_hosi_7"), LW(0), LW(1))
     WAIT_MS(LW(1))
+
     // The Door glows and pulses, then cracks spread over it as Mario turns to watch.
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, 0, 125, 0, 0, 130, -400, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 125, 0, 0, 130, -400, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 0, 125, 0, 0, 130, -400, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 125, 0, 0, 130, -400, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
-    CALL(evt_map_playanim, STRING("anm_tobira"), 1, 0)
+    CALL(evt_map_playanim, STRING("anm_tobira"), MAP_ANIM_PLAY_LOOP, 0)
     BEGIN_INLINE_EVENT
         LOOP(2)
-            CALL(evt_cam3d_evt_set, 0, 123, 99, 0, 130, -400, 100, 11)
+            CALL(evt_cam3d_evt_set, 0, 123, 99, 0, 130, -400, 100, EASING_SINE_IN_OUT)
             WAIT_MS(100)
-            CALL(evt_cam3d_evt_set, 0, 125, 0, 0, 130, -400, 100, 11)
+            CALL(evt_cam3d_evt_set, 0, 125, 0, 0, 130, -400, 100, EASING_SINE_IN_OUT)
             WAIT_MS(1983)
         END_LOOP
     END_INLINE_EVENT
@@ -2960,21 +2956,22 @@ EVT_BEGIN(mahojin_event7)
         WAIT_MS(1683)
     END_INLINE_EVENT
     WAIT_MS(4166)
-    CALL(evt_cam3d_evt_set, 0, 75, 50, 0, 80, -250, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 75, 50, 0, 80, -250, 500, EASING_SINE_IN_OUT)
     CALL(evt_mario_set_reardir)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT
         CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.0146484375f), 333)
     END_INLINE_EVENT
-    CALL(evt_map_playanim, STRING("anm_hibi"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_hibi"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_MS(1500)
+
     // Purple smoke pours out and the Thousand-Year Door swings open; the magic circle and the stars fade away.
     BEGIN_INLINE_EVENT
         CALL(evt_eff, STRING("kemuri00"), STRING("mist2"), 0, 50, 40, -580, 20, 10, 0, 0, 0, 0, 0, 0)
         CALL(evt_eff, STRING("kemuri01"), STRING("mist2"), 0, -50, 40, -580, 20, 10, 0, 0, 0, 0, 0, 0)
         CALL(kemuri_set_color, STRING("kemuri00"), 70, 0, 50)
         CALL(kemuri_set_color, STRING("kemuri01"), 70, 0, 50)
-        CALL(evt_sub_intpl_msec_init, 0, -580, -520, 3500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -580, -520, 3500)
         WAIT_MS(500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
@@ -2993,7 +2990,7 @@ EVT_BEGIN(mahojin_event7)
         CALL(evt_eff, STRING("kemuri03"), STRING("mist2"), 0, -90, 40, -580, 20, 10, 0, 0, 0, 0, 0, 0)
         CALL(kemuri_set_color, STRING("kemuri02"), 70, 0, 50)
         CALL(kemuri_set_color, STRING("kemuri03"), 70, 0, 50)
-        CALL(evt_sub_intpl_msec_init, 0, -580, -560, 3500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -580, -560, 3500)
         WAIT_MS(500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
@@ -3020,7 +3017,7 @@ EVT_BEGIN(mahojin_event7)
     WAIT_MS(500)
     CALL(evt_eff, STRING("las_mon"), STRING("las_mon"), 0, 0, 20, -560, 0, 0, 0, 0, 0, 0, 0, 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, 0, 120, 8000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 120, 8000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_mapobj_rotate, 0, STRING("door_b"), 0, LW(0), 0)
@@ -3040,7 +3037,7 @@ EVT_BEGIN(mahojin_event7)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         WAIT_MS(8000)
-        CALL(evt_sub_intpl_msec_init, 0, 255, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 255, 0, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(mahojin_effect_alpha, STRING("mahojin"), LW(0))
@@ -3056,7 +3053,7 @@ EVT_BEGIN(mahojin_event7)
     BEGIN_INLINE_EVENT
         WAIT_MS(8000)
         SET_VALUE(LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 11, 255, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 1000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(starstone_set_alpha, STRING("stone01"), LW(0))
@@ -3080,45 +3077,47 @@ EVT_BEGIN(mahojin_event7)
         CALL(starstone_set_position, STRING("stone06"), 0, -1000, 0)
         CALL(starstone_set_position, STRING("stone07"), 0, -1000, 0)
     END_INLINE_EVENT
+
     // Views of the open Door, then Frankly tells Mario to rescue the princess and the partner urges him on.
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, -625, 550, 370, 0, 90, -545, 0, 11)
-    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_FRONT_POSE)
+    CALL(evt_cam3d_evt_set, -625, 550, 370, 0, 90, -545, 0, EASING_SINE_IN_OUT)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_NO_REAR_POSE)
     CALL(evt_mario_set_dir, 270, 0, 0)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 465, -5, -150, 18, 135, -525, 0, 11)
+    CALL(evt_cam3d_evt_set, 465, -5, -150, 18, 135, -525, 0, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 0, 102, 300, 0, 110, -250, 0, 11)
+    CALL(evt_cam3d_evt_set, 0, 102, 300, 0, 110, -250, 0, EASING_SINE_IN_OUT)
     WAIT_MS(4100)
-    CALL(evt_cam3d_evt_set, 0, 60, 75, 0, 65, -250, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 60, 75, 0, 65, -250, 500, EASING_SINE_IN_OUT)
     WAIT_MS(1500)
     CALL(evt_msg_print, 0, STRING("mac_7_011"), 0, STRING("クリハカセ"))
     CALL(evt_mario_set_pose, STRING("M_N_2"))
     WAIT_MS(800)
-    CALL(evt_cam3d_evt_set, 0, 73, 75, 0, 78, -250, 500, 11)
+    CALL(evt_cam3d_evt_set, 0, 73, 75, 0, 78, -250, 500, EASING_SINE_IN_OUT)
     CALL(evt_party_jump_pos, 0, 30, 40, -230, 300, 0, -1000)
     CALL(evt_mario_set_dir, 90, 200, 0)
     CALL(evt_msg_print_party, STRING("mac_7_013"))
     BEGIN_INLINE_EVENT
         WAIT_MS(150)
-        CALL(evt_cam3d_evt_off, 500, 11)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
+
     // Mario jumps down, the open Door becomes the way to the Palace of Shadow, and the music returns.
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_mario_jump_pos, LW(0), LW(1), LW(2), 300, 0, -1000)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_52_THE_PEDESTAL)
+    SET_VALUE(GSW_STORY_PROGRESS, STG7_52_THE_PEDESTAL)
     CALL(evt_party_run, 0)
-    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_FRONT_POSE)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_NO_REAR_POSE)
     CALL(evt_mario_adjust_dir)
     CALL(evt_mario_key_onoff, 1)
     SPAWN_EVENT(lastdungeon_init)
-    CALL(evt_run_case_evt, CASE_COND_PUSH, 1, STRING("n_bero"), 0, PTR(lastdungeon), 0)
+    CALL(evt_run_case_evt, CASE_PUSH, 1, STRING("n_bero"), 0, PTR(lastdungeon), 0)
     SET_VALUE(GF(10), 0)
     SPAWN_EVENT(mahojin_alpha)
     CALL(evt_exit_case_evt)
     BEGIN_INLINE_EVENT
         WAIT_MS(2000)
-        CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG0_TIK2"), 3000)
+        CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG0_TIK2"), 3000)
     END_INLINE_EVENT
     RETURN
 EVT_END()
@@ -3135,60 +3134,60 @@ EVT_BEGIN(tik_05_init_evt)
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL(evt_npc_setup, PTR(npcEnt))
-    CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG0_TIK2"), 3000)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK1"))
+    CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG0_TIK2"), 3000)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK1"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_mapobj_trans, 1, STRING("hosi_1"), 0, -5, 0)
     CALL(alpha_init_func)
     SET_VALUE(GF(10), 0)
     SPAWN_EVENT(mahojin_alpha)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_alpha_up), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_alpha_down), 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_doa_l"), MAPOBJ_FLAG_BBOX_CULL)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG0_12_02_PAPER_MAGE_1, STORY_STG0_14_FRONT_OF_THE_PEDESTAL)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_alpha_up), 0)
+    CALL(evt_run_case_evt, CASE_NOT_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_alpha_down), 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_doa_l"), MAP_OBJ_FLAG_CLIP)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG0_12_02_PAPER_MAGE_1, STG0_14_FRONT_OF_THE_PEDESTAL)
         SPAWN_EVENT(kaidan_event)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event), 0)
-        CASE_EQUAL(STORY_STG1_21_A_MAIL_FROM_PEACH)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event1), 0)
-        CASE_EQUAL(STORY_STG2_27_A_MAIL_FROM_PEACH)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event2), 0)
-        CASE_EQUAL(STORY_STG3_35_A_MAIL_FROM_PEACH)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event3), 0)
-        CASE_EQUAL(STORY_STG4_17_A_MAIL_FROM_PEACH)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event4), 0)
-        CASE_EQUAL(STORY_STG5_59_01_A_MAIL_FROM_PEACH)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event5), 0)
-        CASE_EQUAL(STORY_STG6_57_A_MAIL_FROM_PEACH)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event6), 0)
-        CASE_BETWEEN(STORY_STG7_50_A_WAITING_PROF_FRANKLY, STORY_STG7_51_THOUSAND_YEAR_DOOR)
-        CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event7), 0)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event), 0)
+        CASE_EQUAL(STG1_21_A_MAIL_FROM_PEACH)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event1), 0)
+        CASE_EQUAL(STG2_27_A_MAIL_FROM_PEACH)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event2), 0)
+        CASE_EQUAL(STG3_35_A_MAIL_FROM_PEACH)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event3), 0)
+        CASE_EQUAL(STG4_17_A_MAIL_FROM_PEACH)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event4), 0)
+        CASE_EQUAL(STG5_59_01_A_MAIL_FROM_PEACH)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event5), 0)
+        CASE_EQUAL(STG6_57_A_MAIL_FROM_PEACH)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event6), 0)
+        CASE_BETWEEN(STG7_50_A_WAITING_PROF_FRANKLY, STG7_51_THOUSAND_YEAR_DOOR)
+        CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a_dai"), 0, PTR(mahojin_event7), 0)
     END_SWITCH
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG0_12_02_PAPER_MAGE_1)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG0_12_02_PAPER_MAGE_1)
         SET_VALUE(LW(0), STRING("n_bero"))
         CALL_CHILD(bero_case_switch_off)
         CALL_CHILD(large_door_stg0_init)
-        CASE_LESS(STORY_STG7_52_THE_PEDESTAL)
+        CASE_LESS(STG7_52_THE_PEDESTAL)
         SET_VALUE(LW(0), STRING("n_bero"))
         CALL_CHILD(bero_case_switch_off)
-        CASE_EQUAL(STORY_STG7_52_THE_PEDESTAL)
+        CASE_EQUAL(STG7_52_THE_PEDESTAL)
         SET_VALUE(LW(0), STRING("n_bero"))
         CALL_CHILD(bero_case_switch_off)
         SPAWN_EVENT(lastdungeon_anim_init)
         SPAWN_EVENT(lastdungeon_init)
-        CALL(evt_run_case_evt, CASE_COND_PUSH, 1, STRING("n_bero"), 0, PTR(lastdungeon), 0)
-        CASE_GREATER(STORY_STG7_52_THE_PEDESTAL)
+        CALL(evt_run_case_evt, CASE_PUSH, 1, STRING("n_bero"), 0, PTR(lastdungeon), 0)
+        CASE_GREATER(STG7_52_THE_PEDESTAL)
         SPAWN_EVENT(lastdungeon_anim_init)
     END_SWITCH
     CALL(evt_map_entry_airport_harbor, 0, STRING("hikou1"), STRING("hikou1_a"))
     CALL(evt_map_entry_airport_harbor, 0, STRING("hikou2"), STRING("hikou2_a"))
-    CALL(evt_mobj_powerupblk, STRING("pblk00"), -580, 380, -225, 0, GSWF(GSWF_TIK05_SHINE_SPRITE), 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk00"), -580, 380, -225, 0, GSWF_SHINE_07, 0)
     CALL(evt_mobj_jumpstand_blue, 0, STRING("mobj_jump00"), 250, 550, 80, -125, 0, 0)
     CALL(evt_mobj_jumpstand_blue, 0, STRING("mobj_jump01"), 250, -550, 80, -125, 0, 0)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -350, 60, 175, 0, 0)
-    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 0, 0, 400, STRING("jimen"), 125, GSWF(GSWF_TIK05_STAR_PIECE_PANEL))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hasira"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mobj_kururing_floor, STRING("kururin1"), 0, 0, 400, STRING("jimen"), 125, GSWF_STARPIECE_25)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hasira"), MAP_OBJ_FLAG_CLIP)
     CALL(evt_sub_animgroup_async, STRING("MOBJ_EFF_las_mon"))
     CALL(evt_sub_animgroup_async, STRING("EFF_treasure_map"))
     CALL(evt_sub_animgroup_async, STRING("MOBJ_EFF_mahojin"))
@@ -3201,7 +3200,7 @@ EVT_BEGIN(tik_05_init_evt)
     CALL(evt_sub_animgroup_async, STRING("TIZ_stg_5"))
     CALL(evt_sub_animgroup_async, STRING("TIZ_stg_6"))
     CALL(evt_sub_animgroup_async, STRING("TIZ_stg_7"))
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
     CALL(is_dol_viewer)
 #endif
     RETURN

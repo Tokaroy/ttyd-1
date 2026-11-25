@@ -1,4 +1,5 @@
 // Riverside Station (eki) battle database: stages, backgrounds and enemy groups of Goombas, Dark Puffs, Spiky Parabuzzies and Pokey Mummies per room.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "battle/battle_weapon_power.h"
@@ -8,57 +9,57 @@
 #include "battle/battle_stage_object.h"
 #include "driver/npcdrv.h"
 
-BattleStageObjectData eki_btlobject_data[24];
-BattleStageData eki_btlstage_data[4];
-BattleUnitSetup btlparty_eki_eki_06_01_off_1[3];
-BattleGroupSetup btlgrp_eki_eki_06_01_off_1;
-BattleUnitSetup btlparty_eki_eki_02_01_off_1[2];
-BattleGroupSetup btlgrp_eki_eki_02_01_off_1;
-BattleUnitSetup btlparty_eki_eki_02_02_off_1[3];
-BattleGroupSetup btlgrp_eki_eki_02_02_off_1;
-BattleUnitSetup btlparty_eki_eki_02_03_off_1[2];
-BattleGroupSetup btlgrp_eki_eki_02_03_off_1;
-BattleUnitSetup btlparty_eki_eki_03_01_off_1[2];
-BattleGroupSetup btlgrp_eki_eki_03_01_off_1;
-BattleUnitSetup btlparty_eki_eki_03_02_off_1[3];
-BattleGroupSetup btlgrp_eki_eki_03_02_off_1;
-BattleUnitSetup btlparty_eki_eki_03_03_off_1[3];
-BattleGroupSetup btlgrp_eki_eki_03_03_off_1;
-BattleUnitSetup btlparty_eki_eki_03_05_off_1[2];
-BattleGroupSetup btlgrp_eki_eki_03_05_off_1;
-BattleUnitSetup btlparty_eki_eki_03_07_off_1[4];
-BattleGroupSetup btlgrp_eki_eki_03_07_off_1;
-BattleUnitSetup btlparty_eki_eki_04_01_off_1[3];
-BattleGroupSetup btlgrp_eki_eki_04_01_off_1;
-BattleUnitSetup btlparty_eki_eki_04_02_off_1[3];
-BattleGroupSetup btlgrp_eki_eki_04_02_off_1;
-BattleUnitSetup btlparty_eki_eki_04_06_off_1[2];
-BattleGroupSetup btlgrp_eki_eki_04_06_off_1;
-BattleUnitSetup btlparty_eki_eki_04_03_off_1[2];
-BattleGroupSetup btlgrp_eki_eki_04_03_off_1;
-BattleUnitSetup btlparty_eki_eki_04_04_off_1[4];
-BattleGroupSetup btlgrp_eki_eki_04_04_off_1;
-BattleUnitSetup btlparty_eki_eki_04_05_off_1[2];
-BattleGroupSetup btlgrp_eki_eki_04_05_off_1;
-NpcBattleSelect btlgrpsel_eki_btlno_eki_test1_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_test2_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_test3_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_06_01_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_06_02_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_02_01_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_02_02_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_02_03_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_01_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_02_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_03_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_06_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_08_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_01_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_02_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_06_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_03_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_04_off[2];
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_05_off[2];
+static BattleStageObjectData eki_btlobject_data[24];
+static BattleStageData eki_btlstage_data[4];
+static BattleUnitSetup btlparty_eki_eki_06_01_off_1[3];
+static BattleGroupSetup btlgrp_eki_eki_06_01_off_1;
+static BattleUnitSetup btlparty_eki_eki_02_01_off_1[2];
+static BattleGroupSetup btlgrp_eki_eki_02_01_off_1;
+static BattleUnitSetup btlparty_eki_eki_02_02_off_1[3];
+static BattleGroupSetup btlgrp_eki_eki_02_02_off_1;
+static BattleUnitSetup btlparty_eki_eki_02_03_off_1[2];
+static BattleGroupSetup btlgrp_eki_eki_02_03_off_1;
+static BattleUnitSetup btlparty_eki_eki_03_01_off_1[2];
+static BattleGroupSetup btlgrp_eki_eki_03_01_off_1;
+static BattleUnitSetup btlparty_eki_eki_03_02_off_1[3];
+static BattleGroupSetup btlgrp_eki_eki_03_02_off_1;
+static BattleUnitSetup btlparty_eki_eki_03_03_off_1[3];
+static BattleGroupSetup btlgrp_eki_eki_03_03_off_1;
+static BattleUnitSetup btlparty_eki_eki_03_05_off_1[2];
+static BattleGroupSetup btlgrp_eki_eki_03_05_off_1;
+static BattleUnitSetup btlparty_eki_eki_03_07_off_1[4];
+static BattleGroupSetup btlgrp_eki_eki_03_07_off_1;
+static BattleUnitSetup btlparty_eki_eki_04_01_off_1[3];
+static BattleGroupSetup btlgrp_eki_eki_04_01_off_1;
+static BattleUnitSetup btlparty_eki_eki_04_02_off_1[3];
+static BattleGroupSetup btlgrp_eki_eki_04_02_off_1;
+static BattleUnitSetup btlparty_eki_eki_04_06_off_1[2];
+static BattleGroupSetup btlgrp_eki_eki_04_06_off_1;
+static BattleUnitSetup btlparty_eki_eki_04_03_off_1[2];
+static BattleGroupSetup btlgrp_eki_eki_04_03_off_1;
+static BattleUnitSetup btlparty_eki_eki_04_04_off_1[4];
+static BattleGroupSetup btlgrp_eki_eki_04_04_off_1;
+static BattleUnitSetup btlparty_eki_eki_04_05_off_1[2];
+static BattleGroupSetup btlgrp_eki_eki_04_05_off_1;
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_test1_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_test2_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_test3_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_06_01_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_06_02_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_02_01_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_02_02_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_02_03_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_01_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_02_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_03_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_06_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_08_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_01_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_02_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_06_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_03_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_04_off[2];
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_05_off[2];
 NpcSetupBattleInfo btlsetup_eki_tbl[20];
 NpcTerritoryInfo btl_eki_setup_no_tbl[20];
 
@@ -66,38 +67,38 @@ NpcTerritoryInfo btl_eki_setup_no_tbl[20];
  * Props of the Riverside Station battle stage: each entry names a model of the backdrop and where it stands,
  * the last entries being the background layers.
  */
-BattleStageObjectData eki_btlobject_data[] = {
-    {"lamp_01", 2, 0, {-116.0f, 0.0f, -59.0f}, 0, 60, {0}},
-    {"lamp_02", 2, 0, {116.0f, 0.0f, -59.0f}, 10, 50, {0}},
-    {"lamp_03", 2, 0, {0.0f, 0.0f, -59.0f}, 20, 40, {0}},
-    {"gomibako_01", 2, 1, {-178.0f, 0.0f, 49.0f}, 0, 60, {0}},
-    {"gomibako_02", 2, 1, {178.0f, 0.0f, 49.0f}, 10, 50, {0}},
-    {"saku", 2, 1, {0.0f, 0.0f, 69.0f}, 20, 40, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"gomibako_01", 2, 1, {-178.0f, 0.0f, 49.0f}, 0, 60, {0}},
-    {"gomibako_02", 2, 1, {178.0f, 0.0f, 49.0f}, 10, 50, {0}},
-    {"saku", 2, 1, {0.0f, 0.0f, 69.0f}, 20, 40, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"A1", 2, 0, {0.0f, 0.0f, 3.0f}, 0, 60, {0}},
-    {"A2", 2, 1, {0.0f, 0.0f, -30.0f}, 0, 60, {0}},
-    {"B", 2, 2, {0.0f, 0.0f, 5.0f}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"saku_01", 2, 1, {-114.0f, 0.0f, -23.0f}, 0, 60, {0}},
-    {"saku_02", 2, 1, {130.0f, 0.0f, -25.0f}, 10, 50, {0}},
-    {"sikake_01", 2, 0, {-118.0f, 0.0f, -41.0f}, 0, 60, {0}},
-    {"sikake_02", 2, 0, {-42.0f, 0.0f, -59.0f}, 10, 50, {0}},
-    {"sikake_03", 2, 0, {132.0f, 0.0f, -38.0f}, 20, 40, {0}},
-    {"sikake_04", 2, 0, {36.0f, 0.0f, -48.0f}, 30, 30, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
+static BattleStageObjectData eki_btlobject_data[] = {
+    {"lamp_01", 2, STAGE_LAYER_A1, {-116.0f, 0.0f, -59.0f}, 0, 60, {0}},
+    {"lamp_02", 2, STAGE_LAYER_A1, {116.0f, 0.0f, -59.0f}, 10, 50, {0}},
+    {"lamp_03", 2, STAGE_LAYER_A1, {0.0f, 0.0f, -59.0f}, 20, 40, {0}},
+    {"gomibako_01", 2, STAGE_LAYER_A2, {-178.0f, 0.0f, 49.0f}, 0, 60, {0}},
+    {"gomibako_02", 2, STAGE_LAYER_A2, {178.0f, 0.0f, 49.0f}, 10, 50, {0}},
+    {"saku", 2, STAGE_LAYER_A2, {0.0f, 0.0f, 69.0f}, 20, 40, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gomibako_01", 2, STAGE_LAYER_A2, {-178.0f, 0.0f, 49.0f}, 0, 60, {0}},
+    {"gomibako_02", 2, STAGE_LAYER_A2, {178.0f, 0.0f, 49.0f}, 10, 50, {0}},
+    {"saku", 2, STAGE_LAYER_A2, {0.0f, 0.0f, 69.0f}, 20, 40, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"A1", 2, STAGE_LAYER_A1, {0.0f, 0.0f, 3.0f}, 0, 60, {0}},
+    {"A2", 2, STAGE_LAYER_A2, {0.0f, 0.0f, -30.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0.0f, 0.0f, 5.0f}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"saku_01", 2, STAGE_LAYER_A2, {-114.0f, 0.0f, -23.0f}, 0, 60, {0}},
+    {"saku_02", 2, STAGE_LAYER_A2, {130.0f, 0.0f, -25.0f}, 10, 50, {0}},
+    {"sikake_01", 2, STAGE_LAYER_A1, {-118.0f, 0.0f, -41.0f}, 0, 60, {0}},
+    {"sikake_02", 2, STAGE_LAYER_A1, {-42.0f, 0.0f, -59.0f}, 10, 50, {0}},
+    {"sikake_03", 2, STAGE_LAYER_A1, {132.0f, 0.0f, -38.0f}, 20, 40, {0}},
+    {"sikake_04", 2, STAGE_LAYER_A1, {36.0f, 0.0f, -48.0f}, 30, 30, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
 };
 
 /**
  * Battle stage of Riverside Station: the stage model directories, the props above, the backdrop weapons and
  * the background event that runs during the fight.
  */
-BattleStageData eki_btlstage_data[] = {
+static BattleStageData eki_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_06_1", // specificStageDataDir
@@ -146,14 +147,10 @@ BattleStageData eki_btlstage_data[] = {
     },
 };
 
-/**
- * Enemy party of battle eki_06_01 in Riverside Station: 3 x Goomba (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_eki_eki_06_01_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_06_01_off_1[] = {
     {
         &unit_kuriboo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -163,7 +160,7 @@ BattleUnitSetup btlparty_eki_eki_06_01_off_1[] = {
     },
     {
         &unit_kuriboo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -173,7 +170,7 @@ BattleUnitSetup btlparty_eki_eki_06_01_off_1[] = {
     },
     {
         &unit_kuriboo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -183,11 +180,7 @@ BattleUnitSetup btlparty_eki_eki_06_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_06_01 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_06_01_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_06_01_off_1 = {
     3, // numEnemies
     btlparty_eki_eki_06_01_off_1, // enemyData
     25, // heldItemWeight
@@ -198,14 +191,10 @@ BattleGroupSetup btlgrp_eki_eki_06_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_02_01 in Riverside Station: 2 x Ruff Puff (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_eki_eki_02_01_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_02_01_off_1[] = {
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -215,7 +204,7 @@ BattleUnitSetup btlparty_eki_eki_02_01_off_1[] = {
     },
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -225,11 +214,7 @@ BattleUnitSetup btlparty_eki_eki_02_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_02_01 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_02_01_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_02_01_off_1 = {
     2, // numEnemies
     btlparty_eki_eki_02_01_off_1, // enemyData
     25, // heldItemWeight
@@ -240,14 +225,10 @@ BattleGroupSetup btlgrp_eki_eki_02_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_02_02 in Riverside Station: 3 x Ruff Puff (start positions and item drop tables
- * included).
- */
-BattleUnitSetup btlparty_eki_eki_02_02_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_02_02_off_1[] = {
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -257,7 +238,7 @@ BattleUnitSetup btlparty_eki_eki_02_02_off_1[] = {
     },
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -267,7 +248,7 @@ BattleUnitSetup btlparty_eki_eki_02_02_off_1[] = {
     },
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -277,11 +258,7 @@ BattleUnitSetup btlparty_eki_eki_02_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_02_02 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_02_02_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_02_02_off_1 = {
     3, // numEnemies
     btlparty_eki_eki_02_02_off_1, // enemyData
     25, // heldItemWeight
@@ -292,14 +269,10 @@ BattleGroupSetup btlgrp_eki_eki_02_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_02_03 in Riverside Station: 2 x S. Parabuzzy (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_eki_eki_02_03_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_02_03_off_1[] = {
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -309,7 +282,7 @@ BattleUnitSetup btlparty_eki_eki_02_03_off_1[] = {
     },
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -319,11 +292,7 @@ BattleUnitSetup btlparty_eki_eki_02_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_02_03 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_02_03_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_02_03_off_1 = {
     2, // numEnemies
     btlparty_eki_eki_02_03_off_1, // enemyData
     25, // heldItemWeight
@@ -334,14 +303,10 @@ BattleGroupSetup btlgrp_eki_eki_02_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_03_01 in Riverside Station: 2 x Poison Pokey (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_eki_eki_03_01_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_03_01_off_1[] = {
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -351,7 +316,7 @@ BattleUnitSetup btlparty_eki_eki_03_01_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -361,11 +326,7 @@ BattleUnitSetup btlparty_eki_eki_03_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_03_01 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_03_01_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_03_01_off_1 = {
     2, // numEnemies
     btlparty_eki_eki_03_01_off_1, // enemyData
     25, // heldItemWeight
@@ -376,14 +337,10 @@ BattleGroupSetup btlgrp_eki_eki_03_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_03_02 in Riverside Station: 3 x Poison Pokey (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_eki_eki_03_02_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_03_02_off_1[] = {
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -393,7 +350,7 @@ BattleUnitSetup btlparty_eki_eki_03_02_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -403,7 +360,7 @@ BattleUnitSetup btlparty_eki_eki_03_02_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -413,11 +370,7 @@ BattleUnitSetup btlparty_eki_eki_03_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_03_02 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_03_02_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_03_02_off_1 = {
     3, // numEnemies
     btlparty_eki_eki_03_02_off_1, // enemyData
     25, // heldItemWeight
@@ -428,14 +381,10 @@ BattleGroupSetup btlgrp_eki_eki_03_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_03_03 in Riverside Station: 2 x Poison Pokey and Ruff Puff (start positions and
- * item drop tables included).
- */
-BattleUnitSetup btlparty_eki_eki_03_03_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_03_03_off_1[] = {
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -445,7 +394,7 @@ BattleUnitSetup btlparty_eki_eki_03_03_off_1[] = {
     },
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -455,7 +404,7 @@ BattleUnitSetup btlparty_eki_eki_03_03_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -465,11 +414,7 @@ BattleUnitSetup btlparty_eki_eki_03_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_03_03 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_03_03_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_03_03_off_1 = {
     3, // numEnemies
     btlparty_eki_eki_03_03_off_1, // enemyData
     25, // heldItemWeight
@@ -480,14 +425,10 @@ BattleGroupSetup btlgrp_eki_eki_03_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_03_05 in Riverside Station: Ruff Puff and Poison Pokey (start positions and item
- * drop tables included).
- */
-BattleUnitSetup btlparty_eki_eki_03_05_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_03_05_off_1[] = {
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -497,7 +438,7 @@ BattleUnitSetup btlparty_eki_eki_03_05_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -507,11 +448,7 @@ BattleUnitSetup btlparty_eki_eki_03_05_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_03_05 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_03_05_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_03_05_off_1 = {
     2, // numEnemies
     btlparty_eki_eki_03_05_off_1, // enemyData
     25, // heldItemWeight
@@ -522,14 +459,10 @@ BattleGroupSetup btlgrp_eki_eki_03_05_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_03_07 in Riverside Station: 2 x Ruff Puff and 2 x Poison Pokey (start positions
- * and item drop tables included).
- */
-BattleUnitSetup btlparty_eki_eki_03_07_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_03_07_off_1[] = {
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 40.0f, -10.0f}, // position
@@ -539,7 +472,7 @@ BattleUnitSetup btlparty_eki_eki_03_07_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -549,7 +482,7 @@ BattleUnitSetup btlparty_eki_eki_03_07_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -559,7 +492,7 @@ BattleUnitSetup btlparty_eki_eki_03_07_off_1[] = {
     },
     {
         &unit_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 40.0f, 20.0f}, // position
@@ -569,11 +502,7 @@ BattleUnitSetup btlparty_eki_eki_03_07_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_03_07 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_03_07_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_03_07_off_1 = {
     4, // numEnemies
     btlparty_eki_eki_03_07_off_1, // enemyData
     25, // heldItemWeight
@@ -584,14 +513,10 @@ BattleGroupSetup btlgrp_eki_eki_03_07_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_04_01 in Riverside Station: 3 x S. Parabuzzy (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_eki_eki_04_01_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_04_01_off_1[] = {
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -601,7 +526,7 @@ BattleUnitSetup btlparty_eki_eki_04_01_off_1[] = {
     },
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -611,7 +536,7 @@ BattleUnitSetup btlparty_eki_eki_04_01_off_1[] = {
     },
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -621,11 +546,7 @@ BattleUnitSetup btlparty_eki_eki_04_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_04_01 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_04_01_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_04_01_off_1 = {
     3, // numEnemies
     btlparty_eki_eki_04_01_off_1, // enemyData
     25, // heldItemWeight
@@ -636,14 +557,10 @@ BattleGroupSetup btlgrp_eki_eki_04_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_04_02 in Riverside Station: 2 x S. Parabuzzy and Poison Pokey (start positions
- * and item drop tables included).
- */
-BattleUnitSetup btlparty_eki_eki_04_02_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_04_02_off_1[] = {
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 40.0f, -10.0f}, // position
@@ -653,7 +570,7 @@ BattleUnitSetup btlparty_eki_eki_04_02_off_1[] = {
     },
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -663,7 +580,7 @@ BattleUnitSetup btlparty_eki_eki_04_02_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -673,11 +590,7 @@ BattleUnitSetup btlparty_eki_eki_04_02_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_04_02 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_04_02_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_04_02_off_1 = {
     3, // numEnemies
     btlparty_eki_eki_04_02_off_1, // enemyData
     25, // heldItemWeight
@@ -688,14 +601,10 @@ BattleGroupSetup btlgrp_eki_eki_04_02_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_04_06 in Riverside Station: 2 x S. Parabuzzy (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_eki_eki_04_06_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_04_06_off_1[] = {
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 40.0f, 0.0f}, // position
@@ -705,7 +614,7 @@ BattleUnitSetup btlparty_eki_eki_04_06_off_1[] = {
     },
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -715,11 +624,7 @@ BattleUnitSetup btlparty_eki_eki_04_06_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_04_06 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_04_06_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_04_06_off_1 = {
     2, // numEnemies
     btlparty_eki_eki_04_06_off_1, // enemyData
     25, // heldItemWeight
@@ -730,14 +635,10 @@ BattleGroupSetup btlgrp_eki_eki_04_06_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_04_03 in Riverside Station: 2 x Poison Pokey (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_eki_eki_04_03_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_04_03_off_1[] = {
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -747,7 +648,7 @@ BattleUnitSetup btlparty_eki_eki_04_03_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -757,11 +658,7 @@ BattleUnitSetup btlparty_eki_eki_04_03_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_04_03 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_04_03_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_04_03_off_1 = {
     2, // numEnemies
     btlparty_eki_eki_04_03_off_1, // enemyData
     25, // heldItemWeight
@@ -772,14 +669,10 @@ BattleGroupSetup btlgrp_eki_eki_04_03_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_04_04 in Riverside Station: 4 x Poison Pokey (start positions and item drop
- * tables included).
- */
-BattleUnitSetup btlparty_eki_eki_04_04_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_04_04_off_1[] = {
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -789,7 +682,7 @@ BattleUnitSetup btlparty_eki_eki_04_04_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -799,7 +692,7 @@ BattleUnitSetup btlparty_eki_eki_04_04_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -809,7 +702,7 @@ BattleUnitSetup btlparty_eki_eki_04_04_off_1[] = {
     },
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -819,11 +712,7 @@ BattleUnitSetup btlparty_eki_eki_04_04_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_04_04 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_04_04_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_04_04_off_1 = {
     4, // numEnemies
     btlparty_eki_eki_04_04_off_1, // enemyData
     25, // heldItemWeight
@@ -834,14 +723,10 @@ BattleGroupSetup btlgrp_eki_eki_04_04_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle eki_04_05 in Riverside Station: Poison Pokey and S. Parabuzzy (start positions and
- * item drop tables included).
- */
-BattleUnitSetup btlparty_eki_eki_04_05_off_1[] = {
+static BattleUnitSetup btlparty_eki_eki_04_05_off_1[] = {
     {
         &unit_sambo_mummy, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -851,7 +736,7 @@ BattleUnitSetup btlparty_eki_eki_04_05_off_1[] = {
     },
     {
         &unit_patatogemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 40.0f, 10.0f}, // position
@@ -861,11 +746,7 @@ BattleUnitSetup btlparty_eki_eki_04_05_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle eki_04_05 in Riverside Station: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_eki_eki_04_05_off_1 = {
+static BattleGroupSetup btlgrp_eki_eki_04_05_off_1 = {
     2, // numEnemies
     btlparty_eki_eki_04_05_off_1, // enemyData
     25, // heldItemWeight
@@ -876,116 +757,97 @@ BattleGroupSetup btlgrp_eki_eki_04_05_off_1 = {
     5, // reserved_1C
 };
 
-/** Developer test battle 1 in Riverside Station: always fights eki_06_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_test1_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_test1_off[] = {
     {50, &btlgrp_eki_eki_06_01_off_1, eki_btlstage_data},
     {0},
 };
 
-/** Developer test battle 2 in Riverside Station: always fights eki_06_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_test2_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_test2_off[] = {
     {50, &btlgrp_eki_eki_06_01_off_1, &eki_btlstage_data[2]},
     {0},
 };
 
-/** Developer test battle 3 in Riverside Station: always fights eki_06_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_test3_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_test3_off[] = {
     {50, &btlgrp_eki_eki_06_01_off_1, &eki_btlstage_data[3]},
     {0},
 };
 
-/** Battle 06_01 in Riverside Station always fights one group, eki_06_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_06_01_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_06_01_off[] = {
     {50, &btlgrp_eki_eki_06_01_off_1, eki_btlstage_data},
     {0},
 };
 
-/** Battle 06_02 in Riverside Station always fights one group, eki_06_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_06_02_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_06_02_off[] = {
     {50, &btlgrp_eki_eki_06_01_off_1, eki_btlstage_data},
     {0},
 };
 
-/** Battle 02_01 in Riverside Station always fights one group, eki_02_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_02_01_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_02_01_off[] = {
     {20, &btlgrp_eki_eki_02_01_off_1, &eki_btlstage_data[3]},
     {0},
 };
 
-/** Battle 02_02 in Riverside Station always fights one group, eki_02_02_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_02_02_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_02_02_off[] = {
     {20, &btlgrp_eki_eki_02_02_off_1, &eki_btlstage_data[3]},
     {0},
 };
 
-/** Battle 02_03 in Riverside Station always fights one group, eki_02_03_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_02_03_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_02_03_off[] = {
     {20, &btlgrp_eki_eki_02_03_off_1, &eki_btlstage_data[3]},
     {0},
 };
 
-/** Battle 03_01 in Riverside Station always fights one group, eki_03_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_01_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_01_off[] = {
     {20, &btlgrp_eki_eki_03_01_off_1, &eki_btlstage_data[2]},
     {0},
 };
 
-/** Battle 03_02 in Riverside Station always fights one group, eki_03_02_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_02_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_02_off[] = {
     {20, &btlgrp_eki_eki_03_02_off_1, &eki_btlstage_data[2]},
     {0},
 };
 
-/** Battle 03_03 in Riverside Station always fights one group, eki_03_03_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_03_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_03_off[] = {
     {20, &btlgrp_eki_eki_03_03_off_1, &eki_btlstage_data[2]},
     {0},
 };
 
-/** Battle 03_06 in Riverside Station always fights one group, eki_03_05_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_06_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_06_off[] = {
     {20, &btlgrp_eki_eki_03_05_off_1, &eki_btlstage_data[2]},
     {0},
 };
 
-/** Battle 03_08 in Riverside Station always fights one group, eki_03_07_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_03_08_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_03_08_off[] = {
     {20, &btlgrp_eki_eki_03_07_off_1, &eki_btlstage_data[2]},
     {0},
 };
 
-/** Battle 04_01 in Riverside Station always fights one group, eki_04_01_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_01_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_01_off[] = {
     {20, &btlgrp_eki_eki_04_01_off_1, &eki_btlstage_data[1]},
     {0},
 };
 
-/** Battle 04_02 in Riverside Station always fights one group, eki_04_02_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_02_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_02_off[] = {
     {20, &btlgrp_eki_eki_04_02_off_1, &eki_btlstage_data[1]},
     {0},
 };
 
-/** Battle 04_06 in Riverside Station always fights one group, eki_04_06_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_06_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_06_off[] = {
     {20, &btlgrp_eki_eki_04_06_off_1, &eki_btlstage_data[1]},
     {0},
 };
 
-/** Battle 04_03 in Riverside Station always fights one group, eki_04_03_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_03_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_03_off[] = {
     {20, &btlgrp_eki_eki_04_03_off_1, &eki_btlstage_data[1]},
     {0},
 };
 
-/** Battle 04_04 in Riverside Station always fights one group, eki_04_04_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_04_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_04_off[] = {
     {20, &btlgrp_eki_eki_04_04_off_1, &eki_btlstage_data[1]},
     {0},
 };
 
-/** Battle 04_05 in Riverside Station always fights one group, eki_04_05_off_1. */
-NpcBattleSelect btlgrpsel_eki_btlno_eki_04_05_off[] = {
+static NpcBattleSelect btlgrpsel_eki_btlno_eki_04_05_off[] = {
     {20, &btlgrp_eki_eki_04_05_off_1, &eki_btlstage_data[1]},
     {0},
 };
@@ -1001,7 +863,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1011,7 +873,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_test2_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1021,7 +883,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_test3_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1031,7 +893,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_06_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1041,7 +903,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_06_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1051,7 +913,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_02_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1061,7 +923,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_02_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1071,7 +933,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_02_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1081,7 +943,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_03_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1091,7 +953,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_03_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1101,7 +963,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_03_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1111,7 +973,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_03_06_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1121,7 +983,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_03_08_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1131,7 +993,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_04_01_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1141,7 +1003,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_04_02_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1151,7 +1013,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_04_06_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1161,7 +1023,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_04_03_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1171,7 +1033,7 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_04_04_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1181,17 +1043,13 @@ NpcSetupBattleInfo btlsetup_eki_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_eki_btlno_eki_04_05_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
     {0},
 };
 
-/**
- * Battle ids of Riverside Station (BTLNO_EKI_*) and their index into btlsetup_eki_tbl; handed to the battle
- * system by relSetBtlAddr.
- */
 NpcTerritoryInfo btl_eki_setup_no_tbl[] = {
     {"BTLNO_EKI_TEST1", 0},
     {"BTLNO_EKI_TEST2", 1},

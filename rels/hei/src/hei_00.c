@@ -1,7 +1,34 @@
 // hei_00 (平原, Petal Meadows): room with the Sun Stone and Moon Stone statues and the way to Hooktail Castle (gon_00).
 // Has Hooktail's flyover, a Bowser cutscene leading to kpa_02, a pipe to tik_02 and the epilogue scene that goes to nok_01.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_window.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_case.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_img.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_offscreen.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_telop.h"
+#include "evt/evt_item.h"
+#include "evt/evt_pouch.h"
+#include "driver/mapdrv.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "mario/mario.h"
 #include "mario/mario_party.h"
@@ -19,75 +46,82 @@
 #include "evt/evt_npc.h"
 #include "data_tables.h"
 #include "mario/mario_pouch.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_offscreen.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_telop.h"
-#include "evt/evt_window.h"
-#include "hei.h"
 #include "cam_road.h"
-#include "driver/mapdrv.h"
-#include "version.h"
-#include "mario/mariost.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "driver/seqdrv.h"
 
 typedef struct GonbabaProj {
     GXTexObj obj;
     smartEntry* tex;
 } GonbabaProj;
-static void make_gonbaba_projection(CameraId camera, void* param);
 
 static USER_FUNC(cam_test);
 static USER_FUNC(dist_check);
+static USER_FUNC(make_gonbaba_projection_evt);
 static USER_FUNC(proj_mtx);
 static USER_FUNC(proj_off);
 static USER_FUNC(proj_on);
-// Script helper: sets args[0] to TRUE when Mario's button input or his control is switched off (a cutscene is
-// running), else FALSE.
+static USER_FUNC(shake);
+static USER_FUNC(shake_reset);
 USER_FUNC(hei_00_mario_keyoff_check);
+static USER_FUNC(cam_test2);
 
-extern EvtWord make_proj_evt[];
-extern EvtWord evt_gonbaba_shadow[];
-extern EvtWord gonbaba_evt[];
+static EvtWord make_proj_evt[4];
+static EvtWord evt_gonbaba_shadow[161];
+static EvtWord first_evt[197];
+static EvtWord gonbaba_evt[447];
+static EvtWord first_evt_dokan[18];
 static BeroEntry bero_entry_data[6];
 static BeroEntry e3_bero[2];
-extern EvtWord evt_snd[];
+static EvtWord cam_shake[33];
+static EvtWord cam_shake2[27];
+static EvtWord evt_snd[234];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord moji_msg[];
-extern EvtWord setting_sun_stone[];
+static EvtWord switch_evt[303];
+static EvtWord dokan_evt[335];
+static EvtWord setting_sun_stone[43];
 static s32 itemsel_table00[2];
 extern EvtWord sun_stone_set_event[];
-extern EvtWord setting_moon_stone[];
+static EvtWord setting_moon_stone[43];
 static s32 itemsel_table01[2];
 extern EvtWord moon_stone_set_event[];
-extern EvtWord ki_data_evt_02[];
+#else
+EvtWord moji_msg[22];
+static EvtWord switch_evt[303];
+static EvtWord dokan_evt[345];
+static EvtWord setting_sun_stone[43];
+static s32 itemsel_table00[2];
+EvtWord sun_stone_set_event[68];
+static EvtWord setting_moon_stone[43];
+static s32 itemsel_table01[2];
+EvtWord moon_stone_set_event[68];
+#endif
+
+static EvtWord ki_data_evt_01[20];
+static EvtWord ki_data_evt_02[20];
 static TreeAccess ki_data[4];
 static NpcSetupInfo npcEnt[2];
-extern EvtWord hei_00_koopa_evt[];
+
+#if VERSION >= VERSION_US
+static EvtWord hei_00_koopa_evt[272];
+#else
+static EvtWord hei_00_koopa_evt[269];
+#endif
+
+static EvtWord epilogue_npc_entry[30];
+static EvtWord epilogue_evt[90];
+EvtWord hei_00_init_evt[297];
 
 /**
  * Script helper: switches on the projected-texture material flag for Mario's three paper poses
  * and his partner's pose, so the Hooktail shadow texture falls on them.
  */
 static USER_FUNC(proj_on) {
-    animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[0], ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
-    animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[1], ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
-    animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[2], ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
-    animPoseSetMaterialFlagOn(partyGetPtr(marioGetPartyId())->paperAnimGroup, ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
+    animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[0], MAP_OBJ_FLAG_PROJ_TEX);
+    animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[1], MAP_OBJ_FLAG_PROJ_TEX);
+    animPoseSetMaterialFlagOn(marioGetPtr()->paperAnimGroupId[2], MAP_OBJ_FLAG_PROJ_TEX);
+    animPoseSetMaterialFlagOn(partyGetPtr(marioGetPartyId())->paperAnimGroup, MAP_OBJ_FLAG_PROJ_TEX);
     return EVT_RETURN_DONE;
 }
 
@@ -96,16 +130,16 @@ static USER_FUNC(proj_on) {
  * and his partner's pose.
  */
 static USER_FUNC(proj_off) {
-    animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[0], ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
-    animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[1], ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
-    animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[2], ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
-    animPoseSetMaterialFlagOff(partyGetPtr(marioGetPartyId())->paperAnimGroup, ANIM_MATERIAL_FLAG_PROJ_TEXTURE);
+    animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[0], MAP_OBJ_FLAG_PROJ_TEX);
+    animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[1], MAP_OBJ_FLAG_PROJ_TEX);
+    animPoseSetMaterialFlagOff(marioGetPtr()->paperAnimGroupId[2], MAP_OBJ_FLAG_PROJ_TEX);
+    animPoseSetMaterialFlagOff(partyGetPtr(marioGetPartyId())->paperAnimGroup, MAP_OBJ_FLAG_PROJ_TEX);
     return EVT_RETURN_DONE;
 }
 
 /**
  * Display callback for the Hooktail shadow: renders the hidden shadow NPC (Hooktail, seen from straight above)
- * into a 608x480 texture that the map then projects onto the ground.
+ * into a 608x480 texture that the map then projects onto the ground, then restores the caller's view and GX state.
  */
 static void make_gonbaba_projection(CameraId camera, void* param) {
     GonbabaProj* wp = param;
@@ -149,9 +183,8 @@ static void make_gonbaba_projection(CameraId camera, void* param) {
 }
 
 /**
- * Script helper: allocates the shadow texture (stored in the event's userdata)
- * and registers make_gonbaba_projection as a shadow-camera draw callback;
- * blocks for the rest of the event's life.
+ * Script helper: every frame until the event is deleted, allocates the shadow texture
+ * and registers make_gonbaba_projection as a shadow-camera draw callback (the work struct is allocated once).
  */
 static USER_FUNC(make_gonbaba_projection_evt) {
     GonbabaProj* wp;
@@ -160,11 +193,11 @@ static USER_FUNC(make_gonbaba_projection_evt) {
         event->userdata[0] = (EvtWord)_mapAlloc(sizeof(GonbabaProj));
     }
     wp = (GonbabaProj*)event->userdata[0];
-    wp->tex = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_RGBA8, GX_FALSE, 0), 3);
+    wp->tex = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_RGBA8, GX_FALSE, 0), SMART_GROUP_TEMP);
     GXInitTexObj(&wp->obj, wp->tex->address, 608, 480, GX_TF_RGBA8, GX_CLAMP, GX_CLAMP, GX_FALSE);
     GXInitTexObjLOD(&wp->obj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
     mapSetProjTexObj(&wp->obj, wp->tex);
-    dispEntry(CAMERA_SHADOW, 0.0f, 3, make_gonbaba_projection, wp);
+    dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_OPAQUE_NO_Z, make_gonbaba_projection, wp);
     return EVT_RETURN_BLOCK;
 }
 
@@ -235,7 +268,7 @@ static USER_FUNC(shake_reset) {
  * Starts the Hooktail shadow capture; run as a separate event by evt_gonbaba_shadow so the texture exists
  * while the shadow moves.
  */
-EVT_BEGIN(make_proj_evt)
+static EVT_BEGIN(make_proj_evt)
     CALL(make_gonbaba_projection_evt)
     RETURN
 EVT_END()
@@ -245,13 +278,13 @@ EVT_END()
  * values), shakes the camera and projects the dragon's shadow over the map and the characters,
  * then restores the normal map objects.
  */
-EVT_BEGIN(evt_gonbaba_shadow)
+static EVT_BEGIN(evt_gonbaba_shadow)
     SPAWN_EVENT_GET_ID(PTR(make_proj_evt), LW(9))
     SET_VALUE(GW(0), 0)
     SET_VALUE(GW(1), 0)
     SET_VALUE(GW(2), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_init, 0, -220, -20, 360)
+        CALL(evt_sub_intpl_init, EASING_LINEAR, -220, -20, 360)
         LOOP(361)
             CALL(evt_sub_intpl_get_value)
             SET_VALUE(GW(0), LW(0))
@@ -259,7 +292,7 @@ EVT_BEGIN(evt_gonbaba_shadow)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_init, 11, 0, -300, 30)
+        CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 0, -300, 30)
         LOOP(361)
             CALL(evt_sub_intpl_get_value)
             SET_VALUE(GW(1), LW(0))
@@ -267,7 +300,7 @@ EVT_BEGIN(evt_gonbaba_shadow)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_init, 0, 1200, -1200, 360)
+        CALL(evt_sub_intpl_init, EASING_LINEAR, 1200, -1200, 360)
         LOOP(361)
             CALL(evt_sub_intpl_get_value)
             SET_VALUE(GW(2), LW(0))
@@ -275,10 +308,10 @@ EVT_BEGIN(evt_gonbaba_shadow)
         END_LOOP
     END_INLINE_EVENT
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S"), MAPOBJ_FLAG_PROJ_TEXTURE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S"), MAPOBJ_FLAG_DISPLAY_LIST)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("HAIKEI"), MAPOBJ_FLAG_PROJ_TEXTURE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("HAIKEI"), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S"), MAP_OBJ_FLAG_PROJ_TEX)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S"), MAP_OBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("HAIKEI"), MAP_OBJ_FLAG_PROJ_TEX)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("HAIKEI"), MAP_OBJ_FLAG_DISPLAY_LIST)
     CALL(proj_on)
     BEGIN_INLINE_EVENT_GET_ID(LW(8))
         CALL(shake)
@@ -299,15 +332,16 @@ EVT_BEGIN(evt_gonbaba_shadow)
     DELETE_EVENT(LW(9))
     DELETE_EVENT(LW(8))
     CALL(shake_reset)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S"), MAPOBJ_FLAG_PROJ_TEXTURE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S"), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S"), MAP_OBJ_FLAG_PROJ_TEX)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S"), MAP_OBJ_FLAG_DISPLAY_LIST)
     CALL(proj_off)
     RETURN
 EVT_END()
 
 /**
- * Script helper: puts a camera position and target 250 units behind the midpoint of Mario
- * and his partner (lwData[0..5]) so the camera can pull back to look at Hooktail.
+ * Script helper: works out a camera from the camera road, centred between Mario and the partner: LW(3) to LW(5) get the
+ * target (the road target plus that midpoint in x and z) and LW(0) to LW(2) a point 250 units back along the road's
+ * view direction.
  */
 static USER_FUNC(cam_test) {
     MarioWork* mario = marioGetPtr();
@@ -356,53 +390,53 @@ static USER_FUNC(cam_test2) {
 }
 
 /**
- * Opening cutscene of Chapter 1 at Petal Meadows (map init, before STORY_STG1_00_PETAL_MEADOWS):
+ * Opening cutscene of Chapter 1 at Petal Meadows (map init, before STG1_00_PETAL_MEADOWS):
  * starts the field music and ambience, shows the chapter title (telop) while the camera pans across the meadow,
  * then Mario's entry runs (evt_bero_exec_wait) and he walks to x = -325.
  * The partner looks left and right and says stg1_hei_00;
- * story progress becomes STORY_STG1_00_PETAL_MEADOWS and control returns.
+ * story progress becomes STG1_00_PETAL_MEADOWS and control returns.
  */
 static EVT_BEGIN(first_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI1"))
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
     CALL(evt_fade_set_mapchange_type, 0, -1, -1, FADE_IN_BLACK, 300)
     CALL(evt_fade_set_mapchange_type, 1, -1, -1, FADE_IN_BLACK, 300)
     CALL(evt_cam_letter_box_onoff, 1, 0)
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
     CALL(evt_mario_cont_onoff, 0)
-    CALL(evt_cam3d_evt_set, 250, 350, 1041, 250, 130, -36, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 250, 350, 1041, 250, 130, -36, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
         CALL(evt_telop_entry, 1)
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -250, 350, 1041, -250, 130, -36, 6000, 11)
+    CALL(evt_cam3d_evt_set, -250, 350, 1041, -250, 130, -36, 6000, EASING_SINE_IN_OUT)
     WAIT_MS(6000)
     CALL(evt_mario_cont_onoff, 1)
     SET_VALUE(GF(0), 0)
     WAIT_FRAMES(1)
-    CALL(evt_mario_dispflag_onoff, 0, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 0)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 0)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     CALL(evt_party_stop, 0)
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_mov_pos2, -325, 0, FLOAT(60.0f))
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -340, 175, 263, -340, 125, -33, 1000, 11)
+    CALL(evt_cam3d_evt_set, -340, 175, 263, -340, 125, -33, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_party_stop, 0)
     WAIT_FRAMES(1)
-    CALL(evt_mario_dispflag_onoff, 1, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_POSE_LOCK)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     ADD(LW(0), -1)
     ADD(LW(2), 1)
     CALL(evt_mario_mov_pos, LW(0), LW(2), 30)
-    CALL(evt_mario_dispflag_onoff, 0, 2)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
     LOOP(2)
         CALL(evt_party_set_dir, 0, 270, 300)
         WAIT_MS(600)
@@ -411,8 +445,8 @@ static EVT_BEGIN(first_evt)
     END_LOOP
     CALL(evt_msg_print, 0, STRING("stg1_hei_00"), 0, STRING("party"))
     CALL(evt_mario_set_dir, 90, 300, 0)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_00_PETAL_MEADOWS)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_00_PETAL_MEADOWS)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
     RETURN
@@ -425,7 +459,7 @@ EVT_END()
  * Hooktail's sprite flies in from the back and out again, and the partner comments.
  * Sets the story progress to "The Shadow of Hooktail".
  */
-EVT_BEGIN(gonbaba_evt)
+static EVT_BEGIN(gonbaba_evt)
     // Waits until Mario walks east of x=-100.
     LABEL(1)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -434,20 +468,21 @@ EVT_BEGIN(gonbaba_evt)
         GOTO(1)
     END_IF
     CALL(evt_mario_get_party, LW(0))
-    IF_INT_NOT_EQUAL(LW(0), 1)
+    IF_INT_NOT_EQUAL(LW(0), PARTY_GOOMBELLA)
         CALL(evt_mario_goodbye_party, 0)
-        CALL(evt_mario_hello_party, 0, 1)
+        CALL(evt_mario_hello_party, 0, PARTY_GOOMBELLA)
     END_IF
+
     // Mario freezes and Hooktail's roar echoes from off-screen; Mario and his partner react.
     CALL(evt_mario_key_onoff, 0)
     WAIT_FRAMES(1)
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_EVT_GONBABA_FLY1"))
-    CALL(evt_snd_envoff, PSND_FADE_HOLD)
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_EVT_GONBABA_FLY1"))
+    CALL(evt_snd_envoff, PSND_PAUSE)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_GNB_ROAR1"), -117, 300, 1000, 0)
     WAIT_MS(700)
-    CALL(evt_eff_fukidashi, 0, STRING("eff0"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(evt_eff_fukidashi, 3, STRING("eff1"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING("eff0"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING("eff1"), 0, 0, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(500)
     CALL(evt_party_set_dir, 0, 270, 200)
     CALL(evt_party_set_pose, 0, STRING("PKR_S_1"))
@@ -460,6 +495,7 @@ EVT_BEGIN(gonbaba_evt)
         CALL(evt_mario_set_pose, STRING("M_I_N"))
     END_INLINE_EVENT
     WAIT_MS(1000)
+
     // Hooktail's shadow passes over the field.
     CALL_CHILD(evt_gonbaba_shadow)
     CALL(evt_mario_get_pos, 0, LW(0), LW(2), LW(2))
@@ -478,6 +514,7 @@ EVT_BEGIN(gonbaba_evt)
     CALL(evt_mario_set_dir_npc, STRING("（・ｘ・）"))
     WAIT_MS(1000)
     CALL(evt_mario_cont_onoff, 0)
+
     // Hooktail's sprite flies in from the back, grows and swoops away.
     CALL(evt_npc_set_position, STRING("（・ｘ・）"), 0, 210, -500)
     CALL(evt_npc_set_anim, STRING("（・ｘ・）"), STRING("GNB_F_1"))
@@ -493,7 +530,7 @@ EVT_BEGIN(gonbaba_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CONVERT_MS_TO_FRAME(LW(0), 10000)
-        CALL(evt_sub_intpl_init, 0, 75, 18, LW(0))
+        CALL(evt_sub_intpl_init, EASING_LINEAR, 75, 18, LW(0))
         LOOP(601)
             CALL(evt_sub_intpl_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -503,7 +540,7 @@ EVT_BEGIN(gonbaba_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CONVERT_MS_TO_FRAME(LW(0), 4166)
-        CALL(evt_sub_intpl_init, 11, 210, 114, LW(0))
+        CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 210, 114, LW(0))
         LOOP(251)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_npc_get_position, STRING("（・ｘ・）"), LW(2), LW(3), LW(4))
@@ -513,7 +550,7 @@ EVT_BEGIN(gonbaba_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CONVERT_MS_TO_FRAME(LW(0), 10000)
-        CALL(evt_sub_intpl_init, 11, 0, 290, 600)
+        CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 0, 290, 600)
         LOOP(601)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_npc_get_position, STRING("（・ｘ・）"), LW(2), LW(3), LW(4))
@@ -523,7 +560,7 @@ EVT_BEGIN(gonbaba_evt)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         CONVERT_MS_TO_FRAME(LW(0), 10000)
-        CALL(evt_sub_intpl_init, 0, -287, -480, 600)
+        CALL(evt_sub_intpl_init, EASING_LINEAR, -287, -480, 600)
         LOOP(601)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_npc_get_position, STRING("（・ｘ・）"), LW(2), LW(3), LW(4))
@@ -532,30 +569,30 @@ EVT_BEGIN(gonbaba_evt)
         END_LOOP
     END_INLINE_EVENT
     WAIT_MS(1000)
+
     // The camera returns to Mario and his partner comments on what they saw.
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_cam3d_evt_set_xyz, 270, LW(1), LW(2), 0, 7000, 11)
+    CALL(evt_cam3d_evt_set_xyz, 270, LW(1), LW(2), 0, 7000, EASING_SINE_IN_OUT)
     WAIT_MS(9500)
     CALL(evt_npc_set_position, STRING("（・ｘ・）"), 0, -1000, 0)
-    CALL(evt_cam3d_evt_xyz_off, 0, 11)
+    CALL(evt_cam3d_evt_xyz_off, 0, EASING_SINE_IN_OUT)
     CALL(cam_test)
-    CALL(evt_cam3d_evt_set, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), 0, 11)
+    CALL(evt_cam3d_evt_set, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_party_get_pos, 0, LW(3), LW(4), LW(5))
     CALL(evt_party_set_pos, 0, LW(3), LW(4), LW(2))
-    CALL(evt_snd_envoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_envoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_envon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL(evt_mario_set_dir, 270, 300, 0)
     CALL(evt_msg_print, 0, STRING("stg1_hei_02"), 0, STRING("party"))
     CALL(evt_cam_shift_reset)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    // The story advances to "The Shadow of Hooktail" and control returns.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_00_PETAL_MEADOWS)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_00_01_THE_SHADOW_OF_HOOKTAIL)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_00_PETAL_MEADOWS)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_00_01_THE_SHADOW_OF_HOOKTAIL)
     CALL(evt_mario_cont_onoff, 1)
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
@@ -564,11 +601,11 @@ EVT_END()
 
 /**
  * Enter event of the dokan_2 pipe: before the opening cutscene has finished (story below
- * STORY_STG1_00_PETAL_MEADOWS) it sets GF(0) and waits until first_evt clears it,
+ * STG1_00_PETAL_MEADOWS) it sets GF(0) and waits until first_evt clears it,
  * so the pipe exit does not end before the cutscene; returns 0 in LW(0).
  */
 static EVT_BEGIN(first_evt_dokan)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_00_PETAL_MEADOWS)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG1_00_PETAL_MEADOWS)
         SET_VALUE(LW(0), 0)
         RETURN
     END_IF
@@ -580,7 +617,8 @@ EVT_END()
 
 /**
  * Doors of this room: the east exit (e_bero) to hei_13, the back exit (a_usiro_bero) to gon_00 (Hooktail
- * Castle) and the pipe (a_h_dokan) to tik_02 (Rogueport Sewers).
+ * Castle), the pipe pair a_h_dokan and dokan inside this room (dokan_evt enables it)
+ * and the pipe dokan_2 to tik_02 (Rogueport Sewers).
  */
 static BeroEntry bero_entry_data[] = {
     {
@@ -654,7 +692,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)first_evt_dokan, // enterEvent
+        first_evt_dokan, // enterEvent
         6, // caseType
         NULL, // exitEvent
         "tik_02", // nextMapName
@@ -666,7 +704,7 @@ static BeroEntry bero_entry_data[] = {
     {0},
 };
 
-/** Doors of this room: the pipe (dokan_2) to hei_00. */
+/** Replaces the dokan_2 exit in the kiosk demo (GW_FLAG_E3): the pipe leads back to itself in hei_00. */
 static BeroEntry e3_bero[] = {
     {
         "dokan_2", // hitName
@@ -689,29 +727,29 @@ static BeroEntry e3_bero[] = {
 };
 
 /**
- * Ramps the camera shake up from 0 to 0.010 over 30 steps (the rumble when the hidden pipe starts to rise),
+ * Ramps the camera shake up from 0 to 0.010 over 30 steps (the rumble before the rock isi_0 breaks in dokan_evt),
  * then ends with a minimal shake.
  */
 static EVT_BEGIN(cam_shake)
-    CALL(evt_sub_intpl_init, 11, 0, 10, 30)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 0, 10, 30)
     LABEL(0)
     CALL(evt_sub_intpl_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
-    CALL(evt_cam_shake, 4, LW(0), FLOAT(0.0f), 100)
+    CALL(evt_cam_shake, CAMERA_3D, LW(0), FLOAT(0.0f), 100)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    CALL(evt_cam_shake, 4, FLOAT(0.009765625f), FLOAT(0.0f), 0)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 0)
     RETURN
 EVT_END()
 
-/** Ramps the camera shake back down from 0.010 to 0 over 30 steps. */
+/** Horizontal camera shake that fades from 0.01 to 0 over 30 frames; run by the stone-breaking scene of this map. */
 static EVT_BEGIN(cam_shake2)
-    CALL(evt_sub_intpl_init, 11, 10, 0, 30)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 10, 0, 30)
     LABEL(0)
     CALL(evt_sub_intpl_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
-    CALL(evt_cam_shake, 4, LW(0), FLOAT(0.0f), 100)
+    CALL(evt_cam_shake, CAMERA_3D, LW(0), FLOAT(0.0f), 100)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
@@ -719,10 +757,10 @@ static EVT_BEGIN(cam_shake2)
 EVT_END()
 
 /**
- * Plays the rock-breaking sound effect at Mario's position at a long list of irregular delays;
- * the crumbling noise of the stone door when the pipe is revealed in dokan_evt.
+ * Plays SFX_OFF1_ROCK_BREAK1 at Mario's position 20 times at irregular short intervals; spawned when the rock image
+ * breaks in this map's stone scene.
  */
-EVT_BEGIN(evt_snd)
+static EVT_BEGIN(evt_snd)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     WAIT_MS(33)
     CALL(evt_snd_sfxon_3d, STRING("SFX_OFF1_ROCK_BREAK1"), LW(0), LW(1), LW(2), 0)
@@ -790,10 +828,7 @@ EVT_BEGIN(evt_snd)
     RETURN
 EVT_END()
 
-/**
- * Script helper: sets LW(0) to 1 when Mario's partner stands within 100 units of the spot (150, 25, 0) in front
- * of the hidden pipe, else 0.
- */
+/** Script helper: sets LW(0) to 1 when the partner is within 100 units of (150, 25, 0), else 0. */
 static USER_FUNC(dist_check) {
     MarioWork* mario = marioGetPtr();
     PartyEntry* party = partyGetPtr(marioGetPartyId());
@@ -827,21 +862,17 @@ EVT_BEGIN(moji_msg)
 EVT_END()
 
 /**
- * Runs once both stones are in their sockets (GSWF_HEI00_SUN_STONE_PLACED and GSWF_HEI00_MOON_STONE_PLACED):
- * Mario and the partner step back, the ground quakes,
- * and the two stone slabs (isi_3 with the moon socket and stone, isi_4 with the sun's) slide 80 units apart
- * while spinning over 3 seconds.
- * Their collisions follow and the "moji" lettering fades in with SFX_STG1ROCK_FONT_APPEAR1
- * before control returns.
+ * Run after a stone is placed: once both are in, Mario and the partner step aside, the ground quakes, the pillars
+ * spin apart 80 units each carrying their stones (isi_3 with the Moon Stone, isi_4 with the Sun Stone)
+ * and the tablet s_moji fades in with its talk script moji_msg.
  */
 static EVT_BEGIN(switch_evt)
-    IF_INT_EQUAL(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 0)
+    IF_INT_EQUAL(GSWF_HEI_SUN_STONE_PLACED, 0)
         RETURN
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 0)
+    IF_INT_EQUAL(GSWF_HEI_MOON_STONE_PLACED, 0)
         RETURN
     END_IF
-    // Mario and his partner step back from the pillars.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
     BEGIN_INLINE_EVENT
@@ -863,14 +894,12 @@ static EVT_BEGIN(switch_evt)
         END_IF
         CALL(evt_party_move_pos2, 0, LW(0), LW(2), FLOAT(80.0f))
     END_INLINE_EVENT
-    // The ground quakes.
     CALL(evt_snd_sfxon, STRING("SFX_STG1ROCK_QUAKE1"), LW(10))
-    CALL(evt_cam_shake, 4, FLOAT(0.0f), FLOAT(0.009765625f), 1500)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.009765625f), 1500)
     CALL(evt_snd_sfxoff, LW(10))
     WAIT_MS(200)
-    // The two stone slabs slide apart while spinning.
     CALL(evt_snd_sfxon, STRING("SFX_STG1_ROCK_MOVE1"), LW(10))
-    CALL(evt_sub_intpl_msec_init, 11, 0, 1000, 3000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1000, 3000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -898,19 +927,17 @@ static EVT_BEGIN(switch_evt)
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_snd_sfxoff, LW(10))
-    // Their collisions follow the slabs.
     CALL(evt_hit_bind_mapobj, STRING("a_isi_3"), STRING("isi_3"))
     CALL(evt_hit_bind_mapobj, STRING("a_isi_4"), STRING("isi_4"))
     CALL(evt_hit_bind_update, STRING("a_isi_3"))
     CALL(evt_hit_bind_update, STRING("a_isi_4"))
-    // The camera frames the carved lettering, which fades in, and the tablet can now be read.
-    CALL(evt_cam3d_evt_set, 146, 127, 328, 146, 75, 33, 1000, 11)
+    CALL(evt_cam3d_evt_set, 146, 127, 328, 146, 75, 33, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("s_moji"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("s_moji"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_moji"), 1, 1)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_moji"), 0, PTR(moji_msg), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_moji"), 0, PTR(moji_msg), 0)
     CALL(evt_snd_sfxon, STRING("SFX_STG1ROCK_FONT_APPEAR1"), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 1000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_color, 1, STRING("s_moji"), 255, 255, 255, LW(0))
@@ -920,8 +947,7 @@ static EVT_BEGIN(switch_evt)
         END_IF
     END_LOOP
     WAIT_MS(1000)
-    // Control returns.
-    CALL(evt_cam3d_evt_off, 0, 11)
+    CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
@@ -929,16 +955,13 @@ static EVT_BEGIN(switch_evt)
 EVT_END()
 
 /**
- * Runs when the timer switch (sw_1, sw_2) is solved:
- * the camera shakes with a quake and the partner is moved out of the way,
- * the rock carvings are captured to a paper image (OFF_hei_00) that crumples away,
- * and the hidden pipe (h_dokan) rises out of the ground with SFX_DOKAN_APPEAR1 before control returns.
+ * Timer-switch event: with a quake, the rock isi_0 and the tablet are captured to a paper image that plays A_1 with
+ * the rock sounds, the pipe h_dokan rises, the "dokan" exit is enabled and the story becomes STG1_08_OPENING_THE_PATH.
  */
 static EVT_BEGIN(dokan_evt)
-    // Mario freezes, the partner is moved out of the way and the music fades out.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
         CALL(dist_check)
@@ -960,7 +983,6 @@ static EVT_BEGIN(dokan_evt)
         END_IF
     END_INLINE_EVENT
     SET_VALUE(GF(1), 0)
-    // A quake rumbles and the camera shakes.
     BEGIN_INLINE_EVENT
         WAIT_MS(300)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -976,13 +998,14 @@ static EVT_BEGIN(dokan_evt)
     SPAWN_EVENT_GET_ID(PTR(cam_shake), LW(0))
     WAIT_MS(2000)
     DELETE_EVENT(LW(0))
-    CALL(evt_cam3d_evt_set, 145, 100, 450, 145, 40, -140, 1000, 11)
+    CALL(evt_cam3d_evt_set, 145, 100, 450, 145, 40, -140, 1000, EASING_SINE_IN_OUT)
+#if VERSION <= VERSION_DEMO_JP
     CALL_CHILD(cam_shake2)
-#if VERSION >= VERSION_JP
+#else
+    CALL_CHILD(cam_shake2)
     WAIT_MS(1000)
 #endif
     SET_VALUE(GF(1), 1)
-    // The rock carving is captured as a paper image that crumples away.
     CALL(evt_paper_entry, STRING("OFF_hei_00"))
     CALL(evt_offscreen_entry, STRING("offscreen"))
     CALL(evt_mapobj_set_offscreen, 0, STRING("isi_0"), STRING("offscreen"))
@@ -991,35 +1014,33 @@ static EVT_BEGIN(dokan_evt)
     CALL(evt_img_entry, STRING("img"))
     CALL(evt_img_set_paper, STRING("img"), STRING("OFF_hei_00"))
     CALL(evt_img_alloc_capture, STRING("img"), 0, STRING("offscreen"), 0, 0, 0, 0, 0)
-#if VERSION >= VERSION_JP
-    CALL(evt_img_set_virtual_point, STRING("img"), 150, 25, 20)
-    CALL(evt_img_set_position, STRING("img"), 9, -14)
-#endif
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_img_clear_virtual_point, STRING("img"))
+#else
+    CALL(evt_img_set_virtual_point, STRING("img"), 150, 25, 20)
+    CALL(evt_img_set_position, STRING("img"), 9, -14)
 #endif
     CALL(evt_img_set_shadow, STRING("img"), 2)
     WAIT_FRAMES(1)
     SPAWN_EVENT(evt_snd)
     BEGIN_INLINE_EVENT
         WAIT_MS(3200)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_FF_ENV_SUCCESS1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_FF_ENV_SUCCESS1"))
     END_INLINE_EVENT
     CALL(evt_img_set_paper_anim, STRING("img"), STRING("A_1"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("isi_0"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("s_moji"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("isi_0"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("s_moji"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_img_wait_animend, STRING("img"))
     CALL(evt_img_free_capture, STRING("img"), 0)
     CALL(evt_img_free_capture, STRING("img"), 1)
     CALL(evt_img_set_shadow, STRING("img"), 0)
     CALL(evt_img_onoff, STRING("img"), 0)
     WAIT_MS(830)
-    // The hidden pipe rises out of the ground.
     CALL(evt_mapobj_get_position, STRING("h_dokan"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOKAN_APPEAR1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_mapobj_trans, 0, STRING("h_dokan"), 0, -20, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("h_dokan"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_init, 11, -20, 0, 60)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("h_dokan"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, -20, 0, 60)
     LABEL(0)
     CALL(evt_sub_intpl_get_value)
     CALL(evt_mapobj_trans, 0, STRING("h_dokan"), 0, LW(0), 0)
@@ -1029,20 +1050,18 @@ static EVT_BEGIN(dokan_evt)
     END_IF
     WAIT_MS(300)
     WAIT_MS(500)
-    // The carvings are removed for good, the pipe becomes usable and the story advances to "opening the
-    // path".
     CALL(evt_mapobj_clear_offscreen, 1, STRING("isi_0"))
     CALL(evt_mapobj_clear_offscreen, 1, STRING("s_moji"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("isi_0"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("isi_0"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_isi_0"), 0, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("s_moji"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("s_moji"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_moji"), 0, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("h_dokan"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("h_dokan"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(0), STRING("dokan"))
     CALL_CHILD(bero_case_switch_on)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_08_OPENING_THE_PATH)
-    CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG1_HEI1"), 2000)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_08_OPENING_THE_PATH)
+    CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG1_HEI1"), 2000)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_party_run, 0)
@@ -1050,9 +1069,10 @@ static EVT_BEGIN(dokan_evt)
 EVT_END()
 
 /**
- * Script helper: sets args[0] to TRUE when Mario's button input
- * or his control is switched off (a cutscene is running), else FALSE.
+ * Script helper (JP and later): returns TRUE in args[0] while Mario's keys or control are off (marioKeyOffChk or
+ * marioCtrlOffChk), else FALSE.
  */
+// Descriptive name (not in the symbol maps); placeholder unk_hei_000002a8, JP hei .text+0x1E4. See docs/NAME_PROVENANCE.md.
 #if VERSION >= VERSION_JP
 USER_FUNC(hei_00_mario_keyoff_check) {
     EvtWord* args = event->args;
@@ -1067,14 +1087,14 @@ USER_FUNC(hei_00_mario_keyoff_check) {
 #endif
 
 /**
- * Map-init script: if the Sun Stone has already been placed, hides its empty socket and shows the stone model,
- * shifting the second stone into position when the Moon Stone is placed as well.
+ * Map-init script: if the Sun Stone has already been placed, hides its empty socket and shows the stone model;
+ * when the Moon Stone is placed as well, its pillar (isi_4, with collision) and the stone stand 80 units to the left.
  */
-EVT_BEGIN(setting_sun_stone)
-    IF_INT_EQUAL(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taiyou_ana"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taiyounoisi"), MAPOBJ_FLAG_HIDE)
-        IF_INT_EQUAL(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 1)
+static EVT_BEGIN(setting_sun_stone)
+    IF_INT_EQUAL(GSWF_HEI_SUN_STONE_PLACED, 1)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taiyou_ana"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taiyounoisi"), MAP_OBJ_FLAG_HIDDEN)
+        IF_INT_EQUAL(GSWF_HEI_MOON_STONE_PLACED, 1)
             CALL(evt_mapobj_trans, 1, STRING("isi_4"), -80, 0, 0)
             CALL(evt_mapobj_trans, 1, STRING("taiyounoisi"), -80, 0, 0)
             CALL(evt_hit_bind_mapobj, STRING("a_isi_4"), STRING("isi_4"))
@@ -1095,7 +1115,7 @@ static s32 itemsel_table00[] = {
  * then runs switch_evt to check whether both stones are in.
  */
 EVT_BEGIN(sun_stone_set_event)
-    IF_INT_EQUAL(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 0)
+    IF_INT_EQUAL(GSWF_HEI_SUN_STONE_PLACED, 0)
         CALL(evt_mario_key_onoff, 0)
 #if VERSION <= VERSION_DEMO_JP
         CALL(evt_win_item_select, PTR(itemsel_table00), LW(0))
@@ -1106,10 +1126,10 @@ EVT_BEGIN(sun_stone_set_event)
             CALL(evt_mario_key_onoff, 1)
             RETURN
         END_IF
-        SET_VALUE(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 1)
+        SET_VALUE(GSWF_HEI_SUN_STONE_PLACED, 1)
         CALL(evt_pouch_remove_item, ITEM_SUN_STONE, LW(0))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taiyou_ana"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taiyounoisi"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taiyou_ana"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taiyounoisi"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mapobj_get_position, STRING("taiyounoisi"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_STONE_SET1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_msg_print, 0, STRING("stg1_hei_00_sun"), 0, 0)
@@ -1121,14 +1141,14 @@ EVT_BEGIN(sun_stone_set_event)
 EVT_END()
 
 /**
- * Map-init script: if the Moon Stone has already been placed, hides its empty socket and shows the stone model,
- * shifting the second stone into position when the Sun Stone is placed as well.
+ * Map-init script: if the Moon Stone has already been placed, hides its empty socket and shows the stone model;
+ * when the Sun Stone is placed as well, its pillar (isi_3, with collision) and the stone stand 80 units to the right.
  */
-EVT_BEGIN(setting_moon_stone)
-    IF_INT_EQUAL(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tuki_ana"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("tukinoisi"), MAPOBJ_FLAG_HIDE)
-        IF_INT_EQUAL(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 1)
+static EVT_BEGIN(setting_moon_stone)
+    IF_INT_EQUAL(GSWF_HEI_MOON_STONE_PLACED, 1)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tuki_ana"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("tukinoisi"), MAP_OBJ_FLAG_HIDDEN)
+        IF_INT_EQUAL(GSWF_HEI_SUN_STONE_PLACED, 1)
             CALL(evt_mapobj_trans, 1, STRING("isi_3"), 80, 0, 0)
             CALL(evt_mapobj_trans, 1, STRING("tukinoisi"), 80, 0, 0)
             CALL(evt_hit_bind_mapobj, STRING("a_isi_3"), STRING("isi_3"))
@@ -1149,7 +1169,7 @@ static s32 itemsel_table01[] = {
  * then runs switch_evt to check whether both stones are in.
  */
 EVT_BEGIN(moon_stone_set_event)
-    IF_INT_EQUAL(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 0)
+    IF_INT_EQUAL(GSWF_HEI_MOON_STONE_PLACED, 0)
         CALL(evt_mario_key_onoff, 0)
 #if VERSION <= VERSION_DEMO_JP
         CALL(evt_win_item_select, PTR(itemsel_table01), LW(0))
@@ -1160,10 +1180,10 @@ EVT_BEGIN(moon_stone_set_event)
             CALL(evt_mario_key_onoff, 1)
             RETURN
         END_IF
-        SET_VALUE(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 1)
+        SET_VALUE(GSWF_HEI_MOON_STONE_PLACED, 1)
         CALL(evt_pouch_remove_item, ITEM_MOON_STONE, LW(0))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tuki_ana"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("tukinoisi"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tuki_ana"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("tukinoisi"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mapobj_get_position, STRING("tukinoisi"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG1_STONE_SET1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_msg_print, 0, STRING("stg1_hei_00_moon"), 0, 0)
@@ -1175,13 +1195,13 @@ EVT_BEGIN(moon_stone_set_event)
 EVT_END()
 
 /**
- * Reward script for the first tree (ki_01): if the item has not been taken yet,
- * drops a Star Piece from it (GSWF_HEI00_STAR_PIECE_TREE) when Mario hits the tree.
+ * Hit script of the first tree (a_ki_1): when item_ki01 is not out, drops a Star Piece from it, collected
+ * only once (GSWF_STARPIECE_31).
  */
 static EVT_BEGIN(ki_data_evt_01)
     CALL(evt_item_delete_check, STRING("item_ki01"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ki01"), ITEM_STAR_PIECE, -468, 139, -127, ITEM_ENTRY_FALL_THROWN, GSWF(GSWF_HEI00_STAR_PIECE_TREE), 0)
+        CALL(evt_item_entry, STRING("item_ki01"), ITEM_STAR_PIECE, -468, 139, -127, ITEM_TYPE_FALL_NO_PICKUP, GSWF_STARPIECE_31, 0)
     END_IF
     RETURN
 EVT_END()
@@ -1190,10 +1210,10 @@ EVT_END()
  * Reward script for the second tree (ki_02): if the item has not been taken yet,
  * drops a Mushroom from it when Mario hits the tree.
  */
-EVT_BEGIN(ki_data_evt_02)
+static EVT_BEGIN(ki_data_evt_02)
     CALL(evt_item_delete_check, STRING("item_ki02"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ki02"), ITEM_MUSHROOM, -408, 139, -127, ITEM_ENTRY_FALL_THROWN, GSWF(GSWF_HEI00_TREE_MUSHROOM_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_ki02"), ITEM_MUSHROOM, -408, 139, -127, ITEM_TYPE_FALL_NO_PICKUP, GSWF_HEI_00_MUSHROOM_TREE, 0)
     END_IF
     RETURN
 EVT_END()
@@ -1209,10 +1229,10 @@ static TreeAccess ki_data[] = {
     {7, NULL, NULL, NULL, 0, NULL},
 };
 
-/** NPC of the room: Hooktail (Gonbaba), who appears in the flyover cutscene. */
+/** NPC set up by this table: ババ, Kammy Koopa in the Bowser interlude (hei_00_koopa_evt). */
 static NpcSetupInfo npcEnt[] = {
     {
-        "ババ", // name
+        "ババ", // name (Kammy Koopa (Bowser interlude))
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -1224,34 +1244,34 @@ static NpcSetupInfo npcEnt[] = {
 };
 
 /**
- * Bowser interlude at STORY_STG2_25_02_PEACH_SHALL_WE_DANCE (after Peach's scene in aji_17): the "mario" actor
+ * Bowser interlude at STG2_25_02_PEACH_SHALL_WE_DANCE (after Peach's scene in aji_17): the "mario" actor
  * is Bowser here (mode 2). He leaps into the meadow, Kammy Koopa flies in with word that Peach was seen in the
- * town ahead (kpa_stg2_000..003), the story moves to STORY_STG2_25_03_BOWSER_MEADOWS, Bowser laughs and walks
+ * town ahead (kpa_stg2_000..003), the story moves to STG2_25_03_BOWSER_MEADOWS, Bowser laughs and walks
  * off with Kammy, and the map changes to kpa_02.
  */
-EVT_BEGIN(hei_00_koopa_evt)
+static EVT_BEGIN(hei_00_koopa_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_set_pos, -312, 75, -50)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_mario_kill_party, 0)
     CALL(evt_npc_set_position, STRING("ババ"), -500, 75, 0)
-    CALL(evt_cam3d_evt_set, -148, 195, 539, -148, 95, -22, 0, 11)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_cam3d_evt_set, -148, 195, 539, -148, 95, -22, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
 #if VERSION >= VERSION_US
     CALL(evt_mario_kill_party, 0)
 #endif
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_KUPPA1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_KUPPA1"))
     CALL(evt_snd_bgm_scope, 0, 1)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI1"))
     CALL(evt_mario_mov_pos2, -262, -50, 60)
     CALL(evt_mario_jump_pos, -190, 25, -40, 700, 0, -1000)
     BEGIN_INLINE_EVENT
-        CALL(evt_cam_shake, 4, FLOAT(0.0f), FLOAT(0.009765625f), 300)
+        CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0f), FLOAT(0.009765625f), 300)
     END_INLINE_EVENT
     CALL(evt_mario_mov_pos2, -105, -40, 60)
     CALL(evt_mario_wait_move_end)
-    CALL(evt_cam3d_evt_set, -148, 175, 427, -148, 95, -22, 800, 11)
+    CALL(evt_cam3d_evt_set, -148, 175, 427, -148, 95, -22, 800, EASING_SINE_IN_OUT)
     WAIT_MS(800)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_000"), 0, STRING("mario"))
@@ -1281,7 +1301,7 @@ EVT_BEGIN(hei_00_koopa_evt)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_002"), 0, STRING("mario"))
     CALL(evt_msg_print, 0, STRING("kpa_stg2_003"), 0, STRING("ババ"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_03_BOWSER_MEADOWS)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_25_03_BOWSER_MEADOWS)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_LAUGH2_2"), LW(0), LW(1), LW(2), 0)
@@ -1313,12 +1333,12 @@ EVT_END()
  * wall-ignoring NPC.
  */
 static EVT_BEGIN(epilogue_npc_entry)
-    CALL(evt_npc_entry, STRING("クリスチーヌ"), STRING("c_pkr"))
+    CALL(evt_npc_entry, STRING("クリスチーヌ"), STRING("c_pkr")) // Goombella (epilogue)
     CALL(evt_npc_set_tribe, STRING("クリスチーヌ"), STRING("クリスチーヌ"))
     CALL(evt_npc_set_position, STRING("クリスチーヌ"), -200, 25, 35)
     CALL(evt_npc_set_ry, STRING("クリスチーヌ"), 270)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_status_onoff, 1, STRING("クリスチーヌ"), 2)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリスチーヌ"), NPC_FLAG_NO_HIT | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_status_onoff, 1, STRING("クリスチーヌ"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
@@ -1328,14 +1348,14 @@ EVT_END()
  * music and ambience fade out and the map changes to nok_01.
  */
 static EVT_BEGIN(epilogue_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
     CALL(evt_snd_bgm_scope, 0, 1)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI1"))
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_cam3d_evt_set, -200, 140, 574, -8, 70, 10, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_cam3d_evt_set, -200, 140, 574, -8, 70, 10, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(evt_fade_end_wait)
     WAIT_MS(1000)
     CALL(evt_npc_move_position, STRING("クリスチーヌ"), -50, 35, 0, 60, 0)
@@ -1346,8 +1366,8 @@ static EVT_BEGIN(epilogue_evt)
         CALL(evt_npc_move_position, STRING("クリスチーヌ"), 130, 35, 0, 60, 0)
     END_INLINE_EVENT
     WAIT_MS(2000)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 3000)
-    CALL(evt_snd_envoff_f, PSND_FADE_OUT, 3000)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 3000)
+    CALL(evt_snd_envoff_f, PSND_FADEOUT, 3000)
     CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_BLACK, 900, FADE_IN_BLACK, 900)
     CALL(evt_bero_mapchange, STRING("nok_01"), STRING(""))
     RETURN
@@ -1361,10 +1381,11 @@ EVT_END()
  */
 EVT_BEGIN(hei_00_init_evt)
     // The Bowser interlude (Peach shall we dance) starts a Koopa scene.
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_02_PEACH_SHALL_WE_DANCE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG2_25_02_PEACH_SHALL_WE_DANCE)
         CALL(evt_mario_set_mode, 2)
         SPAWN_EVENT(hei_00_koopa_evt)
     END_IF
+
     // Register the exits and the NPCs of the room.
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
@@ -1372,86 +1393,87 @@ EVT_BEGIN(hei_00_init_evt)
     SET_VALUE(LW(0), STRING("dokan"))
     CALL_CHILD(bero_case_switch_off)
     CALL(evt_npc_setup, PTR(npcEnt))
+
     // Story-dependent cutscenes: the opening and the Hooktail flyover.
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_00_PETAL_MEADOWS)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_00_PETAL_MEADOWS)
         SPAWN_EVENT(first_evt)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_00_01_THE_SHADOW_OF_HOOKTAIL)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_00_01_THE_SHADOW_OF_HOOKTAIL)
         SPAWN_EVENT(gonbaba_evt)
     END_IF
-    // Once the path is open the carving is gone, the pipe is up and both stones count as placed.
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_08_OPENING_THE_PATH)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("isi_0"), MAPOBJ_FLAG_HIDE)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG1_08_OPENING_THE_PATH)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("isi_0"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_isi_0"), 0, 0)
         CALL(evt_mapobj_trans, 0, STRING("h_dokan"), 0, 0, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("h_dokan"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("h_dokan"), MAP_OBJ_FLAG_HIDDEN)
         SET_VALUE(LW(0), STRING("dokan"))
         CALL_CHILD(bero_case_switch_on)
-        SET_VALUE(GSWF(GSWF_HEI_SUN_STONE_TAKEN), 1)
-        SET_VALUE(GSWF(GSWF_HEI_MOON_STONE_TAKEN), 1)
-        SET_VALUE(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 1)
-        SET_VALUE(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 1)
+        SET_VALUE(GSWF_HEI_SUN_STONE_TAKEN, 1)
+        SET_VALUE(GSWF_HEI_MOON_STONE_TAKEN, 1)
+        SET_VALUE(GSWF_HEI_SUN_STONE_PLACED, 1)
+        SET_VALUE(GSWF_HEI_MOON_STONE_PLACED, 1)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("h_dokan"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("h_dokan"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mapobj_trans, 0, STRING("h_dokan"), 0, -20, 0)
     END_IF
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("s_moji"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("s_moji"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_moji"), 1, 0)
+
     // Before that: the timer switch that opens the path, and the tablet once both stones are in place.
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG1_08_OPENING_THE_PATH)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG1_08_OPENING_THE_PATH)
         CALL(evt_mapobj_get_position, STRING("isi_3"), LW(0), LW(1), LW(2))
         CALL(evt_mapobj_get_position, STRING("isi_4"), LW(10), LW(11), LW(12))
-        CALL(evt_mobj_timerswitch, 0, STRING("sw_1"), LW(0), 25, LW(2), STRING("sw_2"), LW(10), 25, LW(12), 120, PTR(dokan_evt), GSWF(GSWF_HEI00_TIMER_SWITCH))
-        IF_INT_EQUAL(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 1)
-            IF_INT_EQUAL(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 1)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("s_moji"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mobj_timerswitch, 0, STRING("sw_1"), LW(0), 25, LW(2), STRING("sw_2"), LW(10), 25, LW(12), 120, PTR(dokan_evt), GSWF_HEI_00_TIMER_SWITCHES_PRESSED)
+        IF_INT_EQUAL(GSWF_HEI_SUN_STONE_PLACED, 1)
+            IF_INT_EQUAL(GSWF_HEI_MOON_STONE_PLACED, 1)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("s_moji"), MAP_OBJ_FLAG_HIDDEN)
                 CALL(evt_hitobj_onoff, STRING("a_moji"), 1, 1)
-                CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_moji"), 0, PTR(moji_msg), 0)
+                CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_moji"), 0, PTR(moji_msg), 0)
             END_IF
         END_IF
     END_IF
+
     // Restore the Sun Stone and Moon Stone sockets according to which stones Mario has taken and placed.
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taiyounoisi"), MAPOBJ_FLAG_HIDE)
-    IF_INT_EQUAL(GSWF(GSWF_HEI_SUN_STONE_TAKEN), 1)
-        IF_INT_EQUAL(GSWF(GSWF_HEI00_SUN_STONE_PLACED), 0)
-            CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_isi_4"), 0, PTR(sun_stone_set_event), 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taiyounoisi"), MAP_OBJ_FLAG_HIDDEN)
+    IF_INT_EQUAL(GSWF_HEI_SUN_STONE_TAKEN, 1)
+        IF_INT_EQUAL(GSWF_HEI_SUN_STONE_PLACED, 0)
+            CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_isi_4"), 0, PTR(sun_stone_set_event), 0)
         ELSE
             CALL_CHILD(setting_sun_stone)
         END_IF
     END_IF
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tukinoisi"), MAPOBJ_FLAG_HIDE)
-    IF_INT_EQUAL(GSWF(GSWF_HEI_MOON_STONE_TAKEN), 1)
-        IF_INT_EQUAL(GSWF(GSWF_HEI00_MOON_STONE_PLACED), 0)
-            CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_isi_3"), 0, PTR(moon_stone_set_event), 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tukinoisi"), MAP_OBJ_FLAG_HIDDEN)
+    IF_INT_EQUAL(GSWF_HEI_MOON_STONE_TAKEN, 1)
+        IF_INT_EQUAL(GSWF_HEI_MOON_STONE_PLACED, 0)
+            CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_isi_3"), 0, PTR(moon_stone_set_event), 0)
         ELSE
             CALL_CHILD(setting_moon_stone)
         END_IF
     END_IF
+
     // Trees, wheat animation, Mushroom block, save block and the Hooktail shadow NPC.
     SET_VALUE(LW(0), PTR(ki_data))
     CALL_CHILD(evt_sub_tree_access_entry)
-    CALL(evt_map_playanim, STRING("anm_mugi_1"), 1, 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_hatenablk"), 450, 60, 0, ITEM_MUSHROOM, 0, GSWF(GSWF_HEI00_MUSHROOM_BLOCK_HIT), 0)
+    CALL(evt_map_playanim, STRING("anm_mugi_1"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_hatenablk"), 450, 60, 0, ITEM_MUSHROOM, 0, GSWF_HEI_00_MUSHROOM_BLOCK, 0)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -455, 135, -75, 0, 0)
     CALL(evt_npc_pera_onoff, STRING("ゴンババ影"), 0)
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_02_PEACH_SHALL_WE_DANCE)
-        IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_END_AFTER_THE_BATTLE)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG2_25_02_PEACH_SHALL_WE_DANCE)
+        IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG8_END_AFTER_THE_BATTLE)
             // Field music and ambience, except during the Bowser interlude and the epilogue.
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI1"))
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI1"))
         END_IF
     END_IF
-    // In the kiosk demo the second pipe leads somewhere else.
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_SET(LW(0), GLOBAL_FLAG_KIOSK)
+    IF_BITS_SET(LW(0), GW_FLAG_E3)
         SET_VALUE(LW(0), STRING("dokan_2"))
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_bero_overwrite, STRING("dokan_2"), PTR(e3_bero))
         SET_VALUE(LW(0), STRING("dokan_2"))
         CALL_CHILD(bero_case_switch_on)
     END_IF
-    // In the epilogue the party leaves and the epilogue play starts.
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG8_END_AFTER_THE_BATTLE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG8_END_AFTER_THE_BATTLE)
         CALL(evt_mario_kill_party, 0)
         CALL_CHILD(epilogue_npc_entry)
         SPAWN_EVENT(epilogue_evt)

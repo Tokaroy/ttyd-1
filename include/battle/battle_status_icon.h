@@ -1,16 +1,9 @@
 // Declares the status icon structures and functions.
+
 #pragma once
 
 #include <dolphin/mtx.h>
 #include <dolphin/gx.h>
-
-struct BattleUnit;
-
-// BattleWorkStatusIconEntry.flags
-enum StatusIconEntryFlags {
-    STATUS_ICON_NO_PLATE = 0x1, // no backing plate (statuses without a turn count)
-    STATUS_ICON_HIDDEN = 0x2,   // icon not drawn this frame (the Allergic icon blinks)
-};
 
 typedef struct BattleWorkStatusIconEntry {
     s32 type;      // 0x0, status type
@@ -21,14 +14,14 @@ typedef struct BattleWorkStatusIconEntry {
     Vec rot;       // 0x24
     Vec trans;     // 0x30
     GXColor color; // 0x3C
-    s32 flags;     // 0x40, StatusIconEntryFlags
+    s32 flags;     // 0x40, 1 = no backing plate
 } BattleWorkStatusIconEntry;
 
 typedef struct BattleWorkStatusIcon {
     Vec position;                        // 0x0
     Vec screenSpaceOffset;               // 0xC
     f32 distanceBetweenIcons;            // 0x18
-    s32 flags;                           // 0x1C
+    s32 flags;                           // 0x1C, STATUS_ICON_WORK_FLAG_*
     BattleWorkStatusIconEntry icons[28]; // 0x20
     f32 dizzyAngle;                      // 0x790, _bsi_guruguru: +4 per frame
     s16 numStatusIcons;                  // 0x794
@@ -42,3 +35,14 @@ typedef struct BattleWorkStatusIcon {
 void BattleStatusIconInit(struct BattleUnit* unit);
 void BattleStatusIconMain(struct BattleUnit* unit);
 void BattleStatusIconDelete(struct BattleUnit* unit);
+
+// Names from LLCOOLT's tree.
+enum {
+    STATUS_ICON_NO_PLATE = 1,
+    STATUS_ICON_HIDDEN = 2,
+};
+
+// BattleWorkStatusIcon.flags. BattleStatusIconMain clears the word every frame; BattleStatusIconDisp only reads it.
+enum {
+    STATUS_ICON_WORK_FLAG_FLIP_PLATE_UNUSED = 1, // the backing plates are drawn upside down (y scale -0.8)
+};

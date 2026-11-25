@@ -1,4 +1,5 @@
 // Battle stage objects: breakable and falling set pieces, their motion, shaking and destruction.
+
 #include "version.h"
 #include "battle/battle_stage_object.h"
 #include "battle/battle.h"
@@ -28,27 +29,29 @@
 #include "battle/battle_weapon_power.h"
 #include "unit/unit_object_tree.h"
 #include "unit/unit_object_switch.h"
-#include "battle/battle_sub.h"
-// FAKE: battle_stage_object.c calls intpl_sub through this prototype (the argument order it was compiled with) instead of the one in battle/battle_sub.h; same registers, behaviour-identical.
-typedef f32 (*IntplSubArgOrderFn)(s32 mode, f32 start, f32 end, s32 cur, s32 steps);
-#include "battle/battle_event_cmd.h"
-#include "battle/battle_message.h"
+#include "battle/battle_status_effect.h"
+
+static BattleStageObjectData _object_nozzle_data[3];
+static BattleStageObjectData _object_spot_light_data[2];
+#include "battle/battle_camera.h"
 #include "battle/battle_seq.h"
-#include "eff/eff_nozle.h"
-
+#include "battle/battle_sub.h"
 #include "battle/battle_ac.h"
-
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
-// FAKE: inlining off for the whole file (FAKES.md); without it 10 functions change length, e.g. _combine_nozzle_weapon 142 -> 260 instructions
-#pragma dont_inline on
-
-#define STAGE_WORK(wp) (&(wp)->stageObjectWork)
-
+#include "battle/battle_message.h"
+#include "battle/battle_event_cmd.h"
 #include "battle/battle_detect.h"
 #include "eff/eff_fall.h"
+#include "eff/eff_nozle.h"
 
 static USER_FUNC(_set_mobj_shake_init);
+static BattleStageObjectData _object_wall_data;
+static BattleUnitSetup _entry_tree_data;
+static BattleUnitSetup _entry_switch_data;
+static EvtWord _object_turn_event_A1[7];
+static EvtWord _object_turn_event_A2[7];
+static EvtWord _object_turn_event_B[7];
+static EvtWord _object_turn_event_core[175];
+static EvtWord _nozzle_work_event_core[199];
 
 // local prototypes
 static void BattleObjectConfig(void);
@@ -56,10 +59,7 @@ static void _mobj_shake_main(BattleStageObject* obj);
 static void _Nozzle_Change_Check(u8 index, u8* rate);
 static void _disp_escape_wall_message(CameraId camera, void* param);
 static void _nozzle_type_init(void);
-static f32 _get_nozzle_dir(s32 index);
 static s32 _get_nozzle_attack_index(u8 index);
-static void _rate_mix(s8* dstChance, s8* dstTime, s8* srcChance, s8* srcTime);
-static void _rate_mix_3(s8* dstChance, s8* dstTime, s8* dstStrength, s8* srcChance, s8* srcTime, s8* srcStrength);
 static void _combine_nozzle_weapon(BOOL copy, BattleWeapon* dst, BattleWeapon* src);
 static USER_FUNC(_object_fall_attack);
 static USER_FUNC(_object_fall_wait);
@@ -71,12 +71,13 @@ static USER_FUNC(_fall_frame_delete);
 static USER_FUNC(_fall_frame);
 static USER_FUNC(_fall_frame_wait_unit_ready);
 static USER_FUNC(_fall_frame_wait);
-#if VERSION <= VERSION_JP
+
+#if VERSION < VERSION_US
 static USER_FUNC(_announce_wall_message);
 #endif
+
 static USER_FUNC(_nozzle_turn);
 static USER_FUNC(_set_mobj_shake);
-static USER_FUNC(_bgset_audience_bgset_access);
 static USER_FUNC(_bgset_audience_bgset_access);
 static USER_FUNC(_bgset_kemuri_effect);
 static USER_FUNC(_get_bgset_attack_data);
@@ -84,8 +85,6 @@ static USER_FUNC(_mobj_destroy);
 static USER_FUNC(_mobj_set_alpha);
 static USER_FUNC(_set_mobj_rotate_x);
 
-extern BattleWeaponData _nozzle_at_base_mario;
-extern BattleWeaponData _nozzle_at_base_monster;
 extern BattleStageNozzleData battle_stage_nozzle_data[];
 extern BattleStageFallObjectData battle_stage_fall_object_data[];
 
@@ -135,7 +134,7 @@ void BattleStageObjectInit(void) {
     BattleStageData* stage = wp->fbatInfo->setup->stageData;
     s32 numObjects = stage->numObjects;
     BattleStageObjectData* data = stage->objects;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     s32 countA1 = 0;
     s32 countA2 = 0;
     s32 countB = 0;
@@ -152,7 +151,7 @@ void BattleStageObjectInit(void) {
         case 1:
         case 2:
         case 3:
-            mapPlayAnimationLv("den", 1, 0);
+            mapPlayAnimationLv("den", MAP_ANIM_PLAY_LOOP, 0);
             break;
     }
     switch (pouchGetPtr()->rank) {
@@ -169,24 +168,24 @@ void BattleStageObjectInit(void) {
     sw->nozzleType = -1;
     sw->fogTimer = 0;
     sw->fogEffect = NULL;
-    mapGrpFlagOff(mapGetWork()->entries[0].rootMapObj->joints->name, 2);
+    mapGrpFlagOff(mapGetWork()->entries[0].rootMapObj->joints->name, MAP_OBJ_FLAG_CLIP);
     if (mapGetMapObj("A1")) {
-        mapGrpFlagOn("A1", 1);
-        mapGrpFlagOff("A1", 2);
+        mapGrpFlagOn("A1", MAP_OBJ_FLAG_HIDDEN);
+        mapGrpFlagOff("A1", MAP_OBJ_FLAG_CLIP);
     }
     if (mapGetMapObj("A2")) {
-        mapGrpFlagOn("A2", 1);
-        mapGrpFlagOff("A2", 2);
+        mapGrpFlagOn("A2", MAP_OBJ_FLAG_HIDDEN);
+        mapGrpFlagOff("A2", MAP_OBJ_FLAG_CLIP);
     }
     if (mapGetMapObj("B")) {
-        mapGrpFlagOn("B", 1);
-        mapGrpFlagOff("B", 2);
+        mapGrpFlagOn("B", MAP_OBJ_FLAG_HIDDEN);
+        mapGrpFlagOff("B", MAP_OBJ_FLAG_CLIP);
     }
     if (mapGetMapObj("C")) {
-        mapGrpFlagOn("C", 1);
-        mapGrpFlagOff("C", 2);
+        mapGrpFlagOn("C", MAP_OBJ_FLAG_HIDDEN);
+        mapGrpFlagOff("C", MAP_OBJ_FLAG_CLIP);
     }
-    mapGrpFlagOn("escape_wall", 1);
+    mapGrpFlagOn("escape_wall", MAP_OBJ_FLAG_HIDDEN);
 
     id = 1;
     if (data) {
@@ -204,31 +203,31 @@ void BattleStageObjectInit(void) {
             obj->id = id;
             obj->battleUnitIdx = -1;
             switch (obj->data->layer) {
-                case 0:
+                case STAGE_LAYER_A1:
                     countA1++;
                     break;
-                case 1:
+                case STAGE_LAYER_A2:
                     countA2++;
                     break;
-                case 2:
+                case STAGE_LAYER_B:
                     countB++;
                     break;
-                case 3:
+                case STAGE_LAYER_C:
                     countC++;
                     break;
-                case 6:
+                case STAGE_LAYER_IRON_FRAME:
                     hasIronFrame = TRUE;
                     break;
             }
             switch (obj->data->layer) {
-                case 0:
-                case 1:
-                case 6:
-                case 7:
+                case STAGE_LAYER_A1:
+                case STAGE_LAYER_A2:
+                case STAGE_LAYER_IRON_FRAME:
+                case STAGE_LAYER_SPOTLIGHT:
                     obj->position = data->position;
                     break;
-                case 2:
-                case 3:
+                case STAGE_LAYER_B:
+                case STAGE_LAYER_C:
                     obj->position = data->position;
                     break;
             }
@@ -237,7 +236,7 @@ void BattleStageObjectInit(void) {
             obj->prevPositionOffset = (Vec){999.0f, 999.0f, 999.0f};
             obj->prevRotation = (Vec){999.0f, 999.0f, 999.0f};
             obj->prevPositionOffset2 = (Vec){999.0f, 999.0f, 999.0f};
-            mapGrpFlagOff(obj->data->name, 1);
+            mapGrpFlagOff(obj->data->name, MAP_OBJ_FLAG_HIDDEN);
             switch (data->spawnSpecialUnitType) {
                 case 0:
                     unit = BtlUnit_Entry(&_entry_tree_data);
@@ -280,7 +279,7 @@ void BattleStageObjectInit(void) {
             obj->prevPositionOffset = (Vec){999.0f, 999.0f, 999.0f};
             obj->prevRotation = (Vec){999.0f, 999.0f, 999.0f};
             obj->prevPositionOffset2 = (Vec){999.0f, 999.0f, 999.0f};
-            mapGrpFlagOff(obj->data->name, 1);
+            mapGrpFlagOff(obj->data->name, MAP_OBJ_FLAG_HIDDEN);
         }
     }
 
@@ -291,6 +290,8 @@ void BattleStageObjectInit(void) {
             break;
         }
     }
+
+    // With no free slot, obj still points to the last slot; there is no full-table check here.
     obj->data = data;
     obj->id = id;
     obj->battleUnitIdx = -1;
@@ -301,8 +302,8 @@ void BattleStageObjectInit(void) {
     obj->prevPositionOffset = (Vec){999.0f, 999.0f, 999.0f};
     obj->prevRotation = (Vec){999.0f, 999.0f, 999.0f};
     obj->prevPositionOffset2 = (Vec){999.0f, 999.0f, 999.0f};
-    mapGrpFlagOn(obj->data->name, 1);
-    obj->flags |= 1;
+    mapGrpFlagOn(obj->data->name, MAP_OBJ_FLAG_HIDDEN);
+    obj->flags |= STAGE_OBJECT_FLAG_HIDDEN;
     id++;
 
     j = 0;
@@ -326,8 +327,8 @@ void BattleStageObjectInit(void) {
         obj->prevPositionOffset = (Vec){999.0f, 999.0f, 999.0f};
         obj->prevRotation = (Vec){999.0f, 999.0f, 999.0f};
         obj->prevPositionOffset2 = (Vec){999.0f, 999.0f, 999.0f};
-        mapGrpFlagOn(obj->data->name, 1);
-        obj->flags |= 1;
+        mapGrpFlagOn(obj->data->name, MAP_OBJ_FLAG_HIDDEN);
+        obj->flags |= STAGE_OBJECT_FLAG_HIDDEN;
         id++;
         j++;
     }
@@ -336,39 +337,39 @@ void BattleStageObjectInit(void) {
         evtEntry(stage->initEvt, 10, 0);
     }
     if (countA1 && stage->bgA1Evt) {
-        STAGE_WORK(wp)->bgEvtId[0] = evtEntry(stage->bgA1Evt, 10, 0)->eventId;
+        wp->stageObjectWork.bgEvtId[0] = evtEntry(stage->bgA1Evt, 10, 0)->eventId;
     }
     if (countA2 && stage->bgA2Evt) {
-        STAGE_WORK(wp)->bgEvtId[1] = evtEntry(stage->bgA2Evt, 10, 0)->eventId;
+        wp->stageObjectWork.bgEvtId[1] = evtEntry(stage->bgA2Evt, 10, 0)->eventId;
     }
     if (countB && stage->bgBEvt) {
-        STAGE_WORK(wp)->bgEvtId[2] = evtEntry(stage->bgBEvt, 10, 0)->eventId;
+        wp->stageObjectWork.bgEvtId[2] = evtEntry(stage->bgBEvt, 10, 0)->eventId;
     }
     if (countC && stage->bgCEvt) {
-        STAGE_WORK(wp)->bgEvtId[3] = evtEntry(stage->bgCEvt, 10, 0)->eventId;
+        wp->stageObjectWork.bgEvtId[3] = evtEntry(stage->bgCEvt, 10, 0)->eventId;
     }
     if (!countA1) {
-        STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_A1_GONE;
+        wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_A1_DESTROY;
     }
     if (!countA2) {
-        STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_A2_GONE;
+        wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_A2_DESTROY;
     }
     if (!countB) {
-        STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_B_GONE;
+        wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_B_DESTROY;
     }
     if (stage->disableBgA1Destroy) {
-        STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_A1_GONE;
+        wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_A1_DESTROY;
     }
     if (stage->disableBgA2Destroy) {
-        STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_A2_GONE;
+        wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_A2_DESTROY;
     }
     if (stage->disableBgBDestroy) {
-        STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_B_GONE;
+        wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_B_DESTROY;
     }
     if (!hasIronFrame) {
-        STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_IRON_FRAME_GONE;
-        mapGrpFlagOn("if_body", 1);
-        mapGrpFlagOn("if_wire", 1);
+        wp->stageObjectWork.flags |= STAGE_FLAG_NO_IRON_FRAME;
+        mapGrpFlagOn("if_body", MAP_OBJ_FLAG_HIDDEN);
+        mapGrpFlagOn("if_wire", MAP_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -379,7 +380,7 @@ void BattleStageObjectInit(void) {
  */
 void BattleStageObjectMain(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     BattleStageObject* obj;
     BOOL changed;
     int i;
@@ -406,12 +407,12 @@ void BattleStageObjectMain(void) {
             obj->prevRotation = obj->rotation;
             changed = TRUE;
         }
-        if (obj->flags & 2) {
-            obj->flags &= ~2;
+        if (obj->flags & STAGE_OBJECT_FLAG_UPDATE) {
+            obj->flags &= ~STAGE_OBJECT_FLAG_UPDATE;
             changed = TRUE;
         }
         switch (obj->data->layer) {
-            case 2:
+            case STAGE_LAYER_B:
                 if (sw->bgRotation.x != sw->bgRotationPrev.x ||
                     sw->bgRotation.y != sw->bgRotationPrev.y ||
                     sw->bgRotation.z != sw->bgRotationPrev.z) {
@@ -421,12 +422,12 @@ void BattleStageObjectMain(void) {
                 break;
         }
         switch (obj->data->layer) {
-            case 0:
-            case 1:
-            case 4:
-            case 5:
-            case 6:
-            case 7:
+            case STAGE_LAYER_A1:
+            case STAGE_LAYER_A2:
+            case STAGE_LAYER_NOZZLE:
+            case STAGE_LAYER_WALL:
+            case STAGE_LAYER_IRON_FRAME:
+            case STAGE_LAYER_SPOTLIGHT:
                 if (changed) {
                     mapObjTranslate(obj->data->name,
                                     obj->positionOffset2.x + (obj->position.x + obj->positionOffset.x),
@@ -435,7 +436,7 @@ void BattleStageObjectMain(void) {
                     mapObjRotate(obj->data->name, obj->rotation.x, obj->rotation.y, obj->rotation.z);
                 }
                 break;
-            case 2:
+            case STAGE_LAYER_B:
                 if (changed) {
                     mapObjTranslate(obj->data->name,
                                     obj->positionOffset2.x + (obj->position.x + obj->positionOffset.x),
@@ -446,7 +447,7 @@ void BattleStageObjectMain(void) {
                     mapObjTranslate(obj->data->name, 0.0f, obj->positionOffset.y, 0.0f);
                 }
                 break;
-            case 3:
+            case STAGE_LAYER_C:
                 if (changed) {
                     mapObjTranslate(obj->data->name,
                                     obj->positionOffset2.x + (obj->position.x + obj->positionOffset.x),
@@ -458,14 +459,12 @@ void BattleStageObjectMain(void) {
                 }
                 break;
         }
-        if (obj->flags & 1) {
-            if (!(mapGetMapObj(obj->data->name)->flags & 1)) {
-                mapGrpFlagOn(obj->data->name, 1);
+        if (obj->flags & STAGE_OBJECT_FLAG_HIDDEN) {
+            if (!(mapGetMapObj(obj->data->name)->flags & MAP_OBJ_FLAG_HIDDEN)) {
+                mapGrpFlagOn(obj->data->name, MAP_OBJ_FLAG_HIDDEN);
             }
-        } else {
-            if (mapGetMapObj(obj->data->name)->flags & 1) {
-                mapGrpFlagOff(obj->data->name, 1);
-            }
+        } else if (mapGetMapObj(obj->data->name)->flags & MAP_OBJ_FLAG_HIDDEN) {
+            mapGrpFlagOff(obj->data->name, MAP_OBJ_FLAG_HIDDEN);
         }
     }
     BattleObjectConfig();
@@ -473,10 +472,9 @@ void BattleStageObjectMain(void) {
 
 /**
  * Empty in every version; called at the end of BattleStageObjectMain each frame.
- * Guess: a stripped debug hook.
  */
 static void BattleObjectConfig(void) {
-    // stubbed in retail
+    // does nothing
 }
 
 /**
@@ -489,9 +487,9 @@ void BattleStage_DestroyA1(void) {
     void* evt = wp->fbatInfo->setup->stageData->destroyBgA1Evt;
     EventEntry* entry;
 
-    evtDeleteID(STAGE_WORK(wp)->bgEvtId[0]);
-    STAGE_WORK(wp)->bgEvtId[0] = 0;
-    if (STAGE_WORK(wp)->bgDestroyEvtId && evtCheckID(STAGE_WORK(wp)->bgDestroyEvtId)) {
+    evtDeleteID(wp->stageObjectWork.bgEvtId[0]);
+    wp->stageObjectWork.bgEvtId[0] = 0;
+    if (wp->stageObjectWork.bgDestroyEvtId && evtCheckID(wp->stageObjectWork.bgDestroyEvtId)) {
         evtDeleteID(wp->stageObjectWork.bgDestroyEvtId);
     }
     if (!evt) {
@@ -511,8 +509,8 @@ void BattleStage_DestroyA2(void) {
     BattleWork* wp = _battleWorkPointer;
     void* evt = wp->fbatInfo->setup->stageData->destroyBgA2Evt;
 
-    evtDeleteID(STAGE_WORK(wp)->bgEvtId[1]);
-    STAGE_WORK(wp)->bgEvtId[1] = 0;
+    evtDeleteID(wp->stageObjectWork.bgEvtId[1]);
+    wp->stageObjectWork.bgEvtId[1] = 0;
     if (!evt) {
         evt = _object_turn_event_A2;
     }
@@ -528,9 +526,9 @@ void BattleStage_DestroyB(void) {
     void* evt = wp->fbatInfo->setup->stageData->destroyBgBEvt;
     EventEntry* entry;
 
-    evtDeleteID(STAGE_WORK(wp)->bgEvtId[2]);
-    STAGE_WORK(wp)->bgEvtId[2] = 0;
-    if (STAGE_WORK(wp)->bgDestroyEvtId && evtCheckID(STAGE_WORK(wp)->bgDestroyEvtId)) {
+    evtDeleteID(wp->stageObjectWork.bgEvtId[2]);
+    wp->stageObjectWork.bgEvtId[2] = 0;
+    if (wp->stageObjectWork.bgDestroyEvtId && evtCheckID(wp->stageObjectWork.bgDestroyEvtId)) {
         evtDeleteID(wp->stageObjectWork.bgDestroyEvtId);
     }
     if (!evt) {
@@ -546,7 +544,7 @@ void BattleStage_DestroyB(void) {
  * Base weapon of a nozzle spray aimed at Mario's side (it skips enemies):
  * _nozzle_work_attack_set starts from it and adds the nozzle type's weapon once per nozzle pointing that way.
  */
-BattleWeaponData _nozzle_at_base_mario = {{
+static BattleWeaponData _nozzle_at_base_mario = {{
     NULL, 0, // name..icon
     {0}, // pad_06
     0, // itemId
@@ -559,9 +557,9 @@ BattleWeaponData _nozzle_at_base_mario = {{
     {0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_ENEMY | TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_ENEMY, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
@@ -579,7 +577,7 @@ BattleWeaponData _nozzle_at_base_mario = {{
 }};
 
 /** Base weapon of a nozzle spray aimed at the enemy side (it skips Mario and his partner), used the same way. */
-BattleWeaponData _nozzle_at_base_monster = {{
+static BattleWeaponData _nozzle_at_base_monster = {{
     NULL, 0, // name..icon
     {0}, // pad_06
     0, // itemId
@@ -592,9 +590,9 @@ BattleWeaponData _nozzle_at_base_monster = {{
     {0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_MARIO | TARGET_CLASS_NO_PARTNER | TARGET_CLASS_UNUSED_4 | TARGET_CLASS_UNUSED_8 | TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_NO_MARIO_OR_SHELL | TARGET_CLASS_NO_PARTNER | TARGET_CLASS_UNUSED_4 | TARGET_CLASS_UNUSED_8 | TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MULTIPLE, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
@@ -611,12 +609,6 @@ BattleWeaponData _nozzle_at_base_monster = {{
     {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
 }};
 
-/**
- * Stage nozzle settings by Mario's rank (entry 0 is unused; nozzles appear from rank 1 up):
- * the odds of each nozzle's next direction, the odds of the battle's nozzle type,
- * and the weapon of each of the four nozzle types.
- * The releases changed the direction odds from the demo's even split.
- */
 BattleStageNozzleData battle_stage_nozzle_data[] = {
     {
 #if VERSION >= VERSION_US
@@ -638,9 +630,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -669,9 +661,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -700,9 +692,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -731,9 +723,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -771,9 +763,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -802,9 +794,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_ICE, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_ICE, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -833,9 +825,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -864,9 +856,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -904,9 +896,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -935,9 +927,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_ICE, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_ICE, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -966,9 +958,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_EXPLOSION, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_EXPLOSION, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -997,9 +989,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -1037,9 +1029,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -1068,9 +1060,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_ICE, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_ICE, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -1099,9 +1091,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_EXPLOSION, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_EXPLOSION, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -1130,9 +1122,9 @@ BattleStageNozzleData battle_stage_nozzle_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_FIRE, 0, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_FIRE, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
@@ -1172,9 +1164,9 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
             {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
             NULL, // fpDamageFn
             {0}, // fpDamageWork
-            TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-            TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-            ELEMENT_NORMAL, 10, // element..damagePattern
+            TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+            TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+            ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
             3, // acLevel
             2, // reserved_6F
             NULL, // acHelpMsg
@@ -1205,16 +1197,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1237,16 +1228,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1269,16 +1259,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 1, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_DAMAGE_SURPRISE, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1301,16 +1290,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1333,16 +1321,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1365,21 +1352,20 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
-                SPECIAL_IGNORE_STATUS_VULNERABILITY, // special
+                SPECIAL_IGNORE_VULNERABILITY, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 100, 0, 100, 0, 100, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 100, 0, 100, 0, 100, // targetWeightFlags..poisonChance
                 0, 0, 100, 0, 100, 0, 0, 0, // poisonTime..dodgyTime
                 100, 0, 100, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
 #if VERSION <= VERSION_DEMO_JP
-                -99, 0, 0, 0, 0, 0, 0, 0, // chargeStrength..paybackTime
+                -99, 0, 0, 0, 0, 0, 0, 0,
 #else
                 -99, 0, 0, 0, 0, 0, 0, -99, // chargeStrength..paybackTime
 #endif
@@ -1401,16 +1387,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {5, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 100, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1433,16 +1418,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {3, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1465,16 +1449,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 25, 3, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1500,9 +1483,9 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
             {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
             NULL, // fpDamageFn
             {0}, // fpDamageWork
-            TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-            TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-            ELEMENT_NORMAL, 10, // element..damagePattern
+            TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+            TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+            ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
             3, // acLevel
             2, // reserved_6F
             NULL, // acHelpMsg
@@ -1533,16 +1516,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1565,16 +1547,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1597,16 +1578,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 1, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_DAMAGE_SURPRISE, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1629,16 +1609,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1661,16 +1640,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1693,21 +1671,20 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
-                SPECIAL_IGNORE_STATUS_VULNERABILITY, // special
+                SPECIAL_IGNORE_VULNERABILITY, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 100, 0, 100, 0, 100, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 100, 0, 100, 0, 100, // targetWeightFlags..poisonChance
                 0, 0, 100, 0, 100, 0, 0, 0, // poisonTime..dodgyTime
                 100, 0, 100, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
 #if VERSION <= VERSION_DEMO_JP
-                -99, 0, 0, 0, 0, 0, 0, 0, // chargeStrength..paybackTime
+                -99, 0, 0, 0, 0, 0, 0, 0,
 #else
                 -99, 0, 0, 0, 0, 0, 0, -99, // chargeStrength..paybackTime
 #endif
@@ -1729,16 +1706,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {5, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 100, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1761,16 +1737,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {3, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1793,16 +1768,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 25, 3, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1828,9 +1802,9 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
             {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
             NULL, // fpDamageFn
             {0}, // fpDamageWork
-            TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-            TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-            ELEMENT_NORMAL, 10, // element..damagePattern
+            TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+            TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+            ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
             3, // acLevel
             2, // reserved_6F
             NULL, // acHelpMsg
@@ -1861,16 +1835,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1893,16 +1866,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1925,16 +1897,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 1, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_DAMAGE_SURPRISE, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1957,16 +1928,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -1989,16 +1959,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2021,21 +1990,20 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
-                SPECIAL_IGNORE_STATUS_VULNERABILITY, // special
+                SPECIAL_IGNORE_VULNERABILITY, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 100, 0, 100, 0, 100, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 100, 0, 100, 0, 100, // targetWeightFlags..poisonChance
                 0, 0, 100, 0, 100, 0, 0, 0, // poisonTime..dodgyTime
                 100, 0, 100, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
 #if VERSION <= VERSION_DEMO_JP
-                -99, 0, 0, 0, 0, 0, 0, 0, // chargeStrength..paybackTime
+                -99, 0, 0, 0, 0, 0, 0, 0,
 #else
                 -99, 0, 0, 0, 0, 0, 0, -99, // chargeStrength..paybackTime
 #endif
@@ -2057,16 +2025,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {5, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 100, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2089,16 +2056,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {3, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2121,16 +2087,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 25, 3, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2156,9 +2121,9 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
             {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
             NULL, // fpDamageFn
             {0}, // fpDamageWork
-            TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-            TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-            ELEMENT_NORMAL, 10, // element..damagePattern
+            TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+            TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+            ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
             3, // acLevel
             2, // reserved_6F
             NULL, // acHelpMsg
@@ -2189,16 +2154,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2221,16 +2185,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2253,16 +2216,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 1, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_DAMAGE_SURPRISE, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2285,16 +2247,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 50, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2317,16 +2278,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2349,21 +2309,20 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 0, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
-                SPECIAL_IGNORE_STATUS_VULNERABILITY, // special
+                SPECIAL_IGNORE_VULNERABILITY, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                100, 0, 100, 0, 100, 0, 100, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 100, 0, 100, 0, 100, 0, 100, // targetWeightFlags..poisonChance
                 0, 0, 100, 0, 100, 0, 0, 0, // poisonTime..dodgyTime
                 100, 0, 100, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
 #if VERSION <= VERSION_DEMO_JP
-                -99, 0, 0, 0, 0, 0, 0, 0, // chargeStrength..paybackTime
+                -99, 0, 0, 0, 0, 0, 0, 0,
 #else
                 -99, 0, 0, 0, 0, 0, 0, -99, // chargeStrength..paybackTime
 #endif
@@ -2385,16 +2344,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {5, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 100, 3, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2417,16 +2375,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {3, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 50, 3, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 50, 3, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 0, 0, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2449,16 +2406,15 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
                 {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
                 NULL, // fpDamageFn
                 {0}, // fpDamageWork
-                TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-                TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-                ELEMENT_NORMAL, 10, // element..damagePattern
+                TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+                TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+                ELEMENT_NORMAL, ATTACKPATTERN_PRESS, // element..damagePattern
                 3, // acLevel
                 2, // reserved_6F
                 NULL, // acHelpMsg
                 0, // special
                 COUNTER_RESIST_ALL, // counterResistFlags
-                TARGET_WEIGHT_RANDOM, // targetWeightFlags
-                0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonChance
+                TARGET_WEIGHT_RANDOM, 0, 0, 0, 0, 0, 0, 0, // targetWeightFlags..poisonChance
                 0, 0, 0, 0, 25, 3, 0, 0, // poisonTime..dodgyTime
                 0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
                 0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
@@ -2473,56 +2429,52 @@ BattleStageFallObjectData battle_stage_fall_object_data[] = {
 };
 
 /** The three stage nozzles (left, centre, right) at the front of the stage, placed from Mario's rank 1 up. */
-BattleStageObjectData _object_nozzle_data[] = {
-    {"nozzle_l", 3, 4, {-120.0f, 0.0f, 90.0f}, 0, 0},
-    {"nozzle_c", 3, 4, {0.0f, 0.0f, 90.0f}, 0, 0},
-    {"nozzle_r", 3, 4, {120.0f, 0.0f, 90.0f}, 0, 0},
+static BattleStageObjectData _object_nozzle_data[] = {
+    {"nozzle_l", 3, STAGE_LAYER_NOZZLE, {-120.0f, 0.0f, 90.0f}, 0, 0},
+    {"nozzle_c", 3, STAGE_LAYER_NOZZLE, {0.0f, 0.0f, 90.0f}, 0, 0},
+    {"nozzle_r", 3, STAGE_LAYER_NOZZLE, {120.0f, 0.0f, 90.0f}, 0, 0},
 };
 
-/** The escape wall at the left edge of the stage, which closes in battles that cannot be fled. */
-BattleStageObjectData _object_wall_data = {"escape_wall", 4, 5, {-175.0f, 0.0f, 0.0f}, 0, 0};
-
-/** The overhead spotlight; the entry with no name ends the list. */
-BattleStageObjectData _object_spot_light_data[] = {
-    {"spotlight", 6, 7, {0.0f, 240.0f, 0.0f}, 0, 0},
+#if VERSION <= VERSION_DEMO_JP
+static BattleStageObjectData _object_wall_data = {"escape_wall", 4, STAGE_LAYER_WALL, {-175.0f, 0.0f, 0.0f}, 0, 0};
+static BattleStageObjectData _object_spot_light_data[] = {
+    {"spotlight", 6, STAGE_LAYER_SPOTLIGHT, {0.0f, 240.0f, 0.0f}, 0, 0},
     {NULL, 6, 7, {0.0f, 0.0f, 0.0f}, 0, 0},
 };
-
-/** Unit setup for a hittable stage tree, spawned for stage objects that ask for one (unit_object_tree.c). */
-BattleUnitSetup _entry_tree_data = {&unit_object_tree, 2, {0}, BATTLE_PHASE_AFTER_ENEMY, {-1000.0f, -1000.0f, -1000.0f}, 0, {0, 0, 0, 0}, NULL};
-
-/** Unit setup for a hittable stage switch, spawned for stage objects that ask for one (unit_object_switch.c). */
-BattleUnitSetup _entry_switch_data = {&unit_object_switch, 2, {0}, BATTLE_PHASE_AFTER_ENEMY, {-1000.0f, -1000.0f, -1000.0f}, 0, {0, 0, 0, 0}, NULL};
+static BattleUnitSetup _entry_tree_data = {&unit_object_tree, 2, {0}, BATTLE_PHASE_AFTER_ENEMY, {-1000.0f, -1000.0f, -1000.0f}, 0, {0, 0, 0, 0}, NULL};
+static BattleUnitSetup _entry_switch_data = {&unit_object_switch, 2, {0}, BATTLE_PHASE_AFTER_ENEMY, {-1000.0f, -1000.0f, -1000.0f}, 0, {0, 0, 0, 0}, NULL};
 
 /** Default destroy script for background layer A1: runs _object_turn_event_core with LW(9) = 0. */
-EVT_BEGIN(_object_turn_event_A1)
+static EVT_BEGIN(_object_turn_event_A1)
     SET_VALUE(LW(9), 0)
     CALL_CHILD(_object_turn_event_core)
     RETURN
 EVT_END()
 
 /** Default destroy script for background layer A2: runs _object_turn_event_core with LW(9) = 1. */
-EVT_BEGIN(_object_turn_event_A2)
+static EVT_BEGIN(_object_turn_event_A2)
     SET_VALUE(LW(9), 1)
     CALL_CHILD(_object_turn_event_core)
     RETURN
 EVT_END()
 
 /** Default destroy script for background layer B: runs _object_turn_event_core with LW(9) = 2. */
-EVT_BEGIN(_object_turn_event_B)
+static EVT_BEGIN(_object_turn_event_B)
     SET_VALUE(LW(9), 2)
     CALL_CHILD(_object_turn_event_core)
     RETURN
 EVT_END()
+#endif
 
 /**
- * Background set falls over (layer in LW(9)): the pieces wobble until the current attack is over, topple flat,
- * then a camera shake, dust, a crash sound and an audience cheer (the shake and cheer skipped for A2).
- * Unless the battle is on the wide stage (BATTLE_FLAG_WIDE_STAGE),
- * it hits everyone with the stage's bgA/bgB weapon (A2 has none),
- * then the layer fades out over 51 frames and is marked gone.
+ * Topples background layer LW(9) (0 A1, 1 A2, 2 B): the pieces wobble until the other battle events are over
+ * (_set_mobj_shake) and fall flat (_set_mobj_rotate_x), with a camera shake except for A2; dust and landing sounds
+ * follow, and except for A2 the audience's reaction. Unless BATTLE_FLAG_PARTY_IN_AUDIENCE is set or the layer has
+ * no weapon (_get_bgset_attack_data), the units that weapon targets (btlevtcmd_SamplingEnemy) are hit, the first one
+ * able to guard with an Action Command defence. After 50 frames the layer fades out over 51 frames and is destroyed
+ * (_mobj_destroy).
  */
-EVT_BEGIN(_object_turn_event_core)
+static EVT_BEGIN(_object_turn_event_core)
     CALL(_set_mobj_shake_init, LW(9))
     CALL(_set_mobj_shake, LW(9))
     CALL(_set_mobj_rotate_x, LW(9))
@@ -2533,7 +2485,7 @@ EVT_BEGIN(_object_turn_event_core)
     IF_INT_NOT_EQUAL(LW(9), 1)
         CALL(_bgset_audience_bgset_access)
     END_IF
-    CALL(btlevtcmd_check_battleflag, LW(0), 256)
+    CALL(btlevtcmd_check_battleflag, LW(0), BATTLE_FLAG_PARTY_IN_AUDIENCE)
     IF_INT_NOT_EQUAL(LW(0), 0)
         GOTO(20)
     END_IF
@@ -2541,8 +2493,8 @@ EVT_BEGIN(_object_turn_event_core)
     IF_INT_EQUAL(LW(12), 0)
         GOTO(20)
     END_IF
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SYSTEM, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SYSTEM, LW(0), LW(12))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SYSTEM, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SYSTEM, LW(0), LW(12))
     CALL(btlevtcmd_GetSelectEnemy, LW(10), LW(11))
     SET_VALUE(LW(15), 0)
     LABEL(10)
@@ -2556,17 +2508,17 @@ EVT_BEGIN(_object_turn_event_core)
             CALL(btlevtcmd_ResultACDefence, LW(10), LW(12))
         END_IF
     END_IF
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SYSTEM, LW(10), LW(11), LW(12), 256, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SYSTEM, LW(10), LW(11), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_EQUAL(4)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(10), 40)
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(10), 38)
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(10), 39)
-        CASE_EQUAL(1)
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SYSTEM, LW(10), LW(11), LW(12), 256, LW(5))
+        CASE_EQUAL(PRECHECK_INTANGIBLE)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_MISS)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_LUCKY)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_DODGY)
+        CASE_EQUAL(PRECHECK_HIT)
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SYSTEM, LW(10), LW(11), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
         CASE_DEFAULT
     END_SWITCH
     CALL(btlevtcmd_GetSelectNextEnemy, LW(10), LW(11))
@@ -2587,19 +2539,14 @@ EVT_BEGIN(_object_turn_event_core)
     RETURN
 EVT_END()
 
+#if VERSION <= VERSION_DEMO_JP
 /** Turns one nozzle (index in the event's unitId) to its new direction; started by _Nozzle_Change_Check. */
-EVT_BEGIN(_nozzle_turn_event)
+static EVT_BEGIN(_nozzle_turn_event)
     CALL(_nozzle_turn)
     RETURN
 EVT_END()
 
-/**
- * JP and demo builds: once the current attack is over,
- * shows the "escape wall closed" banner (btl_msg_escape_wall_close2) for 61 frames.
- * Started by BattleStage_WallCloseCheck in battles that cannot be fled.
- */
-#if VERSION <= VERSION_JP
-EVT_BEGIN(_close_wall_event)
+static EVT_BEGIN(_close_wall_event)
     CALL(btlevtcmd_WaitAttackEnd)
     CALL(_announce_wall_message)
     RETURN
@@ -2611,12 +2558,12 @@ EVT_END()
  * runs every unit's ceiling-fall reaction script, drops the frame, damages everyone the frame weapon reaches,
  * shakes the camera and fades it out.
  */
-EVT_BEGIN(_fall_frame_event)
+static EVT_BEGIN(_fall_frame_event)
     CALL(_fall_frame_wait)
     CALL(_fall_frame_wait_unit_ready)
     CALL(_fall_frame, LW(12))
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SYSTEM, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SYSTEM, LW(0), LW(12))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SYSTEM, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SYSTEM, LW(0), LW(12))
     CALL(btlevtcmd_GetSelectEnemy, LW(10), LW(11))
     SET_VALUE(LW(15), 0)
     LABEL(10)
@@ -2630,7 +2577,7 @@ EVT_BEGIN(_fall_frame_event)
             CALL(btlevtcmd_ResultACDefence, LW(10), LW(12))
         END_IF
     END_IF
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SYSTEM, LW(10), LW(11), LW(12), 256, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SYSTEM, LW(10), LW(11), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
     CALL(btlevtcmd_GetSelectNextEnemy, LW(10), LW(11))
     GOTO(10)
     LABEL(20)
@@ -2639,12 +2586,13 @@ EVT_BEGIN(_fall_frame_event)
     RETURN
 EVT_END()
 
+#if VERSION <= VERSION_DEMO_JP
 /**
- * Nozzle show at the start of the first turn (BattleStage_NozzleWorkCheck(0)):
- * _nozzle_work_event_core with LW(10) = 0, so upright nozzles also shoot confetti and no fog can start.
+ * Nozzle work at the first turn (BattleStage_NozzleWorkCheck(0)): _nozzle_work_event_core with LW(10) = 0.
+ * The early demos place this script and _nozzle_work_event_1 here; JP has its copies after the default
+ * destroy scripts below, US and later after _set_mobj_rotate_x.
  */
-#if VERSION <= VERSION_JP
-EVT_BEGIN(_nozzle_work_event_0)
+static EVT_BEGIN(_nozzle_work_event_0)
     SET_VALUE(LW(10), 0)
     CALL_CHILD(_nozzle_work_event_core)
     RETURN
@@ -2654,7 +2602,7 @@ EVT_END()
  * Nozzle attack during battle (BattleStage_NozzleWorkCheck(1)):
  * _nozzle_work_event_core with LW(10) = 1, which also lets a type-0 nozzle set fill the stage with fog.
  */
-EVT_BEGIN(_nozzle_work_event_1)
+static EVT_BEGIN(_nozzle_work_event_1)
     SET_VALUE(LW(10), 1)
     CALL_CHILD(_nozzle_work_event_core)
     RETURN
@@ -2668,7 +2616,7 @@ EVT_END()
  * and runs each one on its targets, with one action-command guard check on the Mario side and dodges
  * where the pre-check says so.
  */
-EVT_BEGIN(_nozzle_work_event_core)
+static EVT_BEGIN(_nozzle_work_event_core)
     CALL(_nozzle_work_wait)
     CALL(_nozzle_work_effect, LW(10), LW(0))
     IF_INT_EQUAL(LW(0), 0)
@@ -2679,8 +2627,8 @@ EVT_BEGIN(_nozzle_work_event_core)
     IF_INT_EQUAL(LW(12), 0)
         GOTO(19)
     END_IF
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SYSTEM, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SYSTEM, LW(0), LW(12))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SYSTEM, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SYSTEM, LW(0), LW(12))
     CALL(btlevtcmd_GetSelectEnemy, LW(10), LW(11))
     SET_VALUE(LW(15), 0)
     LABEL(10)
@@ -2694,17 +2642,17 @@ EVT_BEGIN(_nozzle_work_event_core)
             CALL(btlevtcmd_ResultACDefence, LW(10), LW(12))
         END_IF
     END_IF
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SYSTEM, LW(10), LW(11), LW(12), 256, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SYSTEM, LW(10), LW(11), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_EQUAL(4)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(10), 40)
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(10), 38)
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(10), 39)
-        CASE_EQUAL(1)
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SYSTEM, LW(10), LW(11), LW(12), 256, LW(5))
+        CASE_EQUAL(PRECHECK_INTANGIBLE)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_MISS)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_LUCKY)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_DODGY)
+        CASE_EQUAL(PRECHECK_HIT)
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SYSTEM, LW(10), LW(11), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
         CASE_DEFAULT
     END_SWITCH
     CALL(btlevtcmd_GetSelectNextEnemy, LW(10), LW(11))
@@ -2714,24 +2662,24 @@ EVT_BEGIN(_nozzle_work_event_core)
     IF_INT_EQUAL(LW(12), 0)
         GOTO(29)
     END_IF
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SYSTEM, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SYSTEM, LW(0), LW(12))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SYSTEM, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SYSTEM, LW(0), LW(12))
     CALL(btlevtcmd_GetSelectEnemy, LW(10), LW(11))
     LABEL(20)
     IF_INT_EQUAL(LW(10), -1)
         GOTO(29)
     END_IF
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SYSTEM, LW(10), LW(11), LW(12), 256, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SYSTEM, LW(10), LW(11), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_EQUAL(4)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(10), 40)
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(10), 38)
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(10), 39)
-        CASE_EQUAL(1)
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SYSTEM, LW(10), LW(11), LW(12), 256, LW(5))
+        CASE_EQUAL(PRECHECK_INTANGIBLE)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_MISS)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_LUCKY)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(10), DAMAGE_CODE_DODGY)
+        CASE_EQUAL(PRECHECK_HIT)
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SYSTEM, LW(10), LW(11), LW(12), DAMAGE_RESULT_FINAL_HIT, LW(5))
         CASE_DEFAULT
     END_SWITCH
     CALL(btlevtcmd_GetSelectNextEnemy, LW(10), LW(11))
@@ -2744,7 +2692,7 @@ EVT_END()
  * An object falls from the ceiling: waits for other stage events, runs _object_fall_attack,
  * and if the object landed in the audience waits another second. Started by BattleStage_ObjectFallCheck.
  */
-EVT_BEGIN(_object_fall_event)
+static EVT_BEGIN(_object_fall_event)
     CALL(_object_fall_wait)
     CALL(_object_fall_attack, LW(0))
     IF_INT_EQUAL(LW(0), 1)
@@ -2753,31 +2701,102 @@ EVT_BEGIN(_object_fall_event)
     RETURN
 EVT_END()
 
+/** The escape wall at the left edge of the stage, which closes in battles that cannot be fled. */
+#if VERSION >= VERSION_JP
+static BattleStageObjectData _object_wall_data = {"escape_wall", 4, STAGE_LAYER_WALL, {-175.0f, 0.0f, 0.0f}, 0, 0};
+
+/** The overhead spotlight; the entry with no name ends the list. */
+static BattleStageObjectData _object_spot_light_data[] = {
+    {"spotlight", 6, STAGE_LAYER_SPOTLIGHT, {0.0f, 240.0f, 0.0f}, 0, 0},
+    {NULL, 6, 7, {0.0f, 0.0f, 0.0f}, 0, 0},
+};
+
+/** Unit setup for a hittable stage tree, spawned for stage objects that ask for one (unit_object_tree.c). */
+static BattleUnitSetup _entry_tree_data = {&unit_object_tree, 2, {0}, BATTLE_PHASE_AFTER_ENEMY, {-1000.0f, -1000.0f, -1000.0f}, 0, {0, 0, 0, 0}, NULL};
+
+/** Unit setup for a hittable stage switch, spawned for stage objects that ask for one (unit_object_switch.c). */
+static BattleUnitSetup _entry_switch_data = {&unit_object_switch, 2, {0}, BATTLE_PHASE_AFTER_ENEMY, {-1000.0f, -1000.0f, -1000.0f}, 0, {0, 0, 0, 0}, NULL};
+
+/** Default destroy script for background layer A1: runs _object_turn_event_core with LW(9) = 0. */
+static EVT_BEGIN(_object_turn_event_A1)
+    SET_VALUE(LW(9), 0)
+    CALL_CHILD(_object_turn_event_core)
+    RETURN
+EVT_END()
+
+/** Default destroy script for background layer A2: runs _object_turn_event_core with LW(9) = 1. */
+static EVT_BEGIN(_object_turn_event_A2)
+    SET_VALUE(LW(9), 1)
+    CALL_CHILD(_object_turn_event_core)
+    RETURN
+EVT_END()
+
+/** Default destroy script for background layer B: runs _object_turn_event_core with LW(9) = 2. */
+static EVT_BEGIN(_object_turn_event_B)
+    SET_VALUE(LW(9), 2)
+    CALL_CHILD(_object_turn_event_core)
+    RETURN
+EVT_END()
+
+/** Turns one nozzle (index in the event's unitId) to its new direction; started by _Nozzle_Change_Check. */
+static EVT_BEGIN(_nozzle_turn_event)
+    CALL(_nozzle_turn)
+    RETURN
+EVT_END()
+#endif
+
 /**
- * Topples background layer args[0]: A1/A2 pieces keep wobbling for their numFramesToStartFalling frames,
- * then swing from their wobble angle to 90 degrees over numFramesToFall with a crash sound;
- * layer B tilts as a whole to 90 degrees over 60 frames. Blocks until every piece is down.
+ * Started once per battle when the escape wall closes (see below): waits for the running attack to end, then shows the
+ * wall banner. JP and the early demos draw it with _announce_wall_message; US and later show btl_msg_escape_wall_close2
+ * with btlevtcmd_AnnounceMessage for 180 frames.
+ */
+#if VERSION == VERSION_JP
+static EVT_BEGIN(_close_wall_event)
+    CALL(btlevtcmd_WaitAttackEnd)
+    CALL(_announce_wall_message)
+    RETURN
+EVT_END()
+
+static EVT_BEGIN(_nozzle_work_event_0)
+    SET_VALUE(LW(10), 0)
+    CALL_CHILD(_nozzle_work_event_core)
+    RETURN
+EVT_END()
+
+/**
+ * Nozzle attack during battle (BattleStage_NozzleWorkCheck(1)):
+ * _nozzle_work_event_core with LW(10) = 1, which also lets a type-0 nozzle set fill the stage with fog.
+ */
+static EVT_BEGIN(_nozzle_work_event_1)
+    SET_VALUE(LW(10), 1)
+    CALL_CHILD(_nozzle_work_event_core)
+    RETURN
+EVT_END()
+#endif
+
+/**
+ * Script: tips over background layer args[0] and blocks until it is down. Layer A1/A2 pieces shake for their start
+ * delay, then turn to 90 degrees about x with a fall sound; layer B turns the whole background (bgRotation.x) to 90
+ * degrees over 60 frames.
  */
 static USER_FUNC(_set_mobj_rotate_x) {
-    const char* fall1;
-    const char* fall3;
     BattleWork* wp;
     int j;
     int i;
     BOOL busy;
-    const char* fall2;
     s32 layer;
     BattleStageObjectWork* sw;
     BattleStageObject* obj;
 
     EvtWord* args = event->args;
     busy = FALSE;
-    sw = STAGE_WORK(wp = _battleWorkPointer);
+
+    sw = (&(wp = _battleWorkPointer)->stageObjectWork);
     layer = evtGetValue(event, *args++);
     if (isFirstCall) {
         switch (layer) {
-            case 0:
-            case 1:
+            case STAGE_LAYER_A1:
+            case STAGE_LAYER_A2:
                 for (j = 0; j < BATTLE_STAGE_OBJECT_MAX; j++) {
                     obj = &wp->stageObjects[j];
                     if (obj->id > 0 && obj->data->layer == layer) {
@@ -2786,7 +2805,7 @@ static USER_FUNC(_set_mobj_rotate_x) {
                     }
                 }
                 break;
-            case 2:
+            case STAGE_LAYER_B:
                 event->userWork[1] = 0;
                 event->userWork[2] = 60;
                 event->userWork[3] = 0;
@@ -2794,10 +2813,8 @@ static USER_FUNC(_set_mobj_rotate_x) {
         }
     }
     switch (layer) {
-        case 0:
-        case 1:
-            fall1 = "SFX_BTL_STAGE_SET_FALL1";
-            fall3 = "SFX_BTL_STAGE_SET_FALL3";
+        case STAGE_LAYER_A1:
+        case STAGE_LAYER_A2:
             for (i = 0; i < BATTLE_STAGE_OBJECT_MAX; i++) {
                 obj = &wp->stageObjects[i];
                 if (obj->id > 0 && obj->data->layer == layer) {
@@ -2808,13 +2825,13 @@ static USER_FUNC(_set_mobj_rotate_x) {
                     } else {
                         if (obj->numFramesFalling == 0) {
                             if (layer == 0) {
-                                psndSFXOn_3D(fall1, &obj->position);
+                                psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_SET_FALL1"), &obj->position);
                             } else {
-                                psndSFXOn_3D(fall3, &obj->position);
+                                psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_SET_FALL3"), &obj->position);
                             }
                         }
                         obj->numFramesFalling++;
-                        obj->rotation.x = ((IntplSubArgOrderFn)intpl_sub)(2, obj->shakeAngle, 90.0f, obj->numFramesFalling, obj->data->numFramesToFall);
+                        obj->rotation.x = intpl_sub(EASING_CUBIC_IN, obj->shakeAngle, 90.0f, obj->numFramesFalling, obj->data->numFramesToFall);
                         if (obj->numFramesFalling < obj->data->numFramesToFall) {
                             busy = TRUE;
                         }
@@ -2822,17 +2839,16 @@ static USER_FUNC(_set_mobj_rotate_x) {
                 }
             }
             break;
-        case 2:
+        case STAGE_LAYER_B:
             if (event->userWork[1]) {
                 event->userWork[1]--;
                 busy = TRUE;
             } else {
                 if (event->userWork[3] == 0) {
-                    fall2 = "SFX_BTL_STAGE_SET_FALL2";
-                    psndSFXOn_3D(fall2, &(Vec){0.0f, 0.0f, -100.0f});
+                    psndSFXOn_3D("SFX_BTL_STAGE_SET_FALL2", &(Vec){0.0f, 0.0f, -100.0f});
                 }
                 event->userWork[3]++;
-                sw->bgRotation.x = (s32)((IntplSubArgOrderFn)intpl_sub)(2, 0.0f, 90.0f, event->userWork[3], event->userWork[2]);
+                sw->bgRotation.x = (s32)intpl_sub(EASING_CUBIC_IN, 0.0f, 90.0f, event->userWork[3], event->userWork[2]);
                 if (event->userWork[3] < event->userWork[2]) {
                     busy = TRUE;
                 }
@@ -2841,56 +2857,52 @@ static USER_FUNC(_set_mobj_rotate_x) {
     }
     return busy ? EVT_RETURN_BLOCK : EVT_RETURN_DONE;
 }
-/* US: these three scripts sit after _set_mobj_rotate_x so the message string pools after its Vec literal */
+
+/* US and later: these three scripts sit after _set_mobj_rotate_x so the message string pools after its Vec literal;
+   these builds show the wall banner with btlevtcmd_AnnounceMessage for 180 frames */
 #if VERSION >= VERSION_US
-EVT_BEGIN(_close_wall_event)
+static EVT_BEGIN(_close_wall_event)
     CALL(btlevtcmd_WaitAttackEnd)
     CALL(btlevtcmd_AnnounceMessage, 2, 0, -225, STRING("btl_msg_escape_wall_close2"), 180)
     RETURN
 EVT_END()
 
-/**
- * The same nozzle script for the other builds, placed after _set_mobj_rotate_x
- * so the string pool keeps its order; see the JP copy above.
- * These builds show the wall banner with btlevtcmd_AnnounceMessage for 180 frames instead.
- */
-EVT_BEGIN(_nozzle_work_event_0)
+static EVT_BEGIN(_nozzle_work_event_0)
     SET_VALUE(LW(10), 0)
     CALL_CHILD(_nozzle_work_event_core)
     RETURN
 EVT_END()
 
-/** See the JP copy above: the in-battle nozzle attack, with fog allowed. */
-EVT_BEGIN(_nozzle_work_event_1)
+static EVT_BEGIN(_nozzle_work_event_1)
     SET_VALUE(LW(10), 1)
     CALL_CHILD(_nozzle_work_event_core)
     RETURN
 EVT_END()
 #endif
 
-/** Sets the alpha (args[1], 0-255) of background layer args[0] (0 A1, 1 A2, 2 B, 3 C) for the fade-out. */
+/** Script: sets the alpha of the map group of background layer args[0] (A1, A2, B or C) to args[1]. */
 static USER_FUNC(_mobj_set_alpha) {
     EvtWord* args = event->args;
     s32 layer = evtGetValue(event, args[0]);
     u8 alpha = evtGetValue(event, args[1]);
 
     switch (layer) {
-        case 0:
+        case STAGE_LAYER_A1:
             if (mapGetMapObj("A1")) {
                 mapGrpSetColor("A1", (GXColor){255, 255, 255, alpha});
             }
             break;
-        case 1:
+        case STAGE_LAYER_A2:
             if (mapGetMapObj("A2")) {
                 mapGrpSetColor("A2", (GXColor){255, 255, 255, alpha});
             }
             break;
-        case 2:
+        case STAGE_LAYER_B:
             if (mapGetMapObj("B")) {
                 mapGrpSetColor("B", (GXColor){255, 255, 255, alpha});
             }
             break;
-        case 3:
+        case STAGE_LAYER_C:
             if (mapGetMapObj("C")) {
                 mapGrpSetColor("C", (GXColor){255, 255, 255, alpha});
             }
@@ -2915,24 +2927,24 @@ static USER_FUNC(_mobj_destroy) {
     for (i = 0; i < BATTLE_STAGE_OBJECT_MAX; i++) {
         obj = &wp->stageObjects[i];
         if (obj->id > 0 && obj->data->layer == layer) {
-            obj->flags |= 1;
+            obj->flags |= STAGE_OBJECT_FLAG_HIDDEN;
             unit = BattleGetUnitPtr(wp, obj->battleUnitIdx);
             if (unit) {
                 for (part = unit->parts; part; part = part->nextPart) {
-                    part->attributes |= PART_ATTR_NOT_TARGETABLE;
+                    part->attributes |= kNotTargetable;
                 }
             }
         }
     }
     switch (layer) {
-        case 0:
-            STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_A1_GONE;
+        case STAGE_LAYER_A1:
+            wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_A1_DESTROY;
             break;
-        case 1:
-            STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_A2_GONE;
+        case STAGE_LAYER_A2:
+            wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_A2_DESTROY;
             break;
-        case 2:
-            STAGE_WORK(wp)->flags |= STAGE_OBJ_FLAG_BG_B_GONE;
+        case STAGE_LAYER_B:
+            wp->stageObjectWork.flags |= STAGE_FLAG_NO_BG_B_DESTROY;
             break;
     }
     return EVT_RETURN_DONE;
@@ -2972,43 +2984,36 @@ static USER_FUNC(_get_bgset_attack_data) {
 /** Puffs dust (kemuri) in front of each piece of the fallen layer args[0] and plays its landing sound. */
 static USER_FUNC(_bgset_kemuri_effect) {
     s32 layer;
-    const char* sfxA1;
-    const char* sfxA2;
-    const char* sfxB;
     BattleWork* wp;
     EvtWord* args = event->args;
     int i;
     BattleStageObject* obj;
     f32 x, y, z;
+
     wp = _battleWorkPointer;
-    layer = evtGetValue(event, args[0]);
-    sfxA1 = "SFX_BTL_STAGE_SET_DOWN1";
-    sfxA2 = "SFX_BTL_STAGE_SET_DOWN3";
-    sfxB = "SFX_BTL_STAGE_SET_DOWN2";
-    for (i = 0; i < BATTLE_STAGE_OBJECT_MAX; i++) {
-        args++;
-        args--;
+    layer = evtGetValue(event, *args++);
+    for (i = 0; i < 32; i++) {
         obj = &wp->stageObjects[i];
         if (obj->id > 0 && obj->data->layer == layer) {
             x = obj->position.x;
             y = obj->position.y;
             z = obj->position.z;
             switch (layer) {
-                case 0:
+                case STAGE_LAYER_A1:
                     z += 30.0f;
                     effKemuri1N64Entry(3, x, y, z, 0.0f);
-                    psndSFXOn_3D(sfxA1, &obj->position);
+                    psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_SET_DOWN1"), &obj->position);
                     break;
-                case 1:
+                case STAGE_LAYER_A2:
                     z += 15.0f;
                     effKemuri1N64Entry(0, x, y, z, 0.0f);
-                    psndSFXOn_3D(sfxA2, &obj->position);
+                    psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_SET_DOWN3"), &obj->position);
                     break;
-                case 2:
+                case STAGE_LAYER_B:
                     z += 30.0f;
                     effKemuri1N64Entry(3, x, y, z, 0.0f);
                     effKemuri1N64Entry(4, x, y, z, 0.0f);
-                    psndSFXOn_3D(sfxB, &obj->position);
+                    psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_SET_DOWN2"), &obj->position);
                     break;
             }
         }
@@ -3022,7 +3027,7 @@ static USER_FUNC(_bgset_audience_bgset_access) {
     return EVT_RETURN_DONE;
 }
 
-/** Gives each piece of layer args[0] a random wobble period of 60-69 frames, starting at either end of the swing. */
+/** Gives each piece of layer args[0] a random wobble period of 60-69 frames, starting at the start or the middle of the period. */
 static USER_FUNC(_set_mobj_shake_init) {
     BattleWork* wp = _battleWorkPointer;
     s32 layer;
@@ -3055,7 +3060,7 @@ static USER_FUNC(_set_mobj_shake_init) {
 static USER_FUNC(_set_mobj_shake) {
     BattleWork* wp = _battleWorkPointer;
     BattleStageObject* obj;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     s32 layer;
     int i;
 
@@ -3068,8 +3073,8 @@ static USER_FUNC(_set_mobj_shake) {
         }
     }
     switch (layer) {
-        case 0:
-        case 1:
+        case STAGE_LAYER_A1:
+        case STAGE_LAYER_A2:
             for (i = 0; i < BATTLE_STAGE_OBJECT_MAX; i++) {
                 obj = &wp->stageObjects[i];
                 if (obj->id > 0 && obj->data->layer == layer) {
@@ -3077,7 +3082,7 @@ static USER_FUNC(_set_mobj_shake) {
                 }
             }
             break;
-        case 2:
+        case STAGE_LAYER_B:
             break;
     }
     return EVT_RETURN_BLOCK;
@@ -3099,7 +3104,7 @@ static void _mobj_shake_main(BattleStageObject* obj) {
  */
 void BattleStage_NozzleDirChangeCheck(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     u8 i;
 
     if (sw->nozzleData) {
@@ -3114,7 +3119,7 @@ void BattleStage_NozzleDirChangeCheck(void) {
  * if it differs and the nozzle is not already turning, starts _nozzle_turn_event toward it.
  */
 static void _Nozzle_Change_Check(u8 index, u8* rate) {
-    BattleStageObjectWork* sw = STAGE_WORK(_battleWorkPointer);
+    BattleStageObjectWork* sw = &_battleWorkPointer->stageObjectWork;
     u8* cur = &sw->nozzleDir[index];
     EventEntry* evt;
     s32 total = 0;
@@ -3139,6 +3144,8 @@ static void _Nozzle_Change_Check(u8 index, u8* rate) {
         if (sw->nozzleTurnEvtId[index] == 0) {
             sw->nozzleNextDir[index] = dir;
             evt = evtEntry(_nozzle_turn_event, 10, 0);
+
+            // evt->eventId is read before the NULL test below (evtEntry never returns NULL; a full pool gives the one-past entry).
             sw->nozzleTurnEvtId[index] = evt->eventId;
             if (evt) {
                 evt->unitId = index;
@@ -3153,7 +3160,7 @@ static void _Nozzle_Change_Check(u8 index, u8* rate) {
  * and the head swings from the old yaw to the new one (45, 0 or -45) over 30 frames. Stores the new direction.
  */
 static USER_FUNC(_nozzle_turn) {
-    BattleStageObjectWork* sw = STAGE_WORK(_battleWorkPointer);
+    BattleStageObjectWork* sw = &_battleWorkPointer->stageObjectWork;
     s32 index = event->unitId;
     const char* name;
     f32 rotX, rotY, from, to;
@@ -3181,43 +3188,43 @@ static USER_FUNC(_nozzle_turn) {
     BattleSearchObjectPtr(name);
     if (event->userWork[2] < 30) {
         event->userWork[2]++;
-        rotX = intpl_sub(2, event->userWork[2], 30, 0.0f, -80.0f);
+        rotX = intpl_sub(EASING_CUBIC_IN, 0.0f, -80.0f, event->userWork[2], 30);
     } else {
         rotX = -80.0f;
     }
     if (event->userWork[3] < 30) {
         event->userWork[3]++;
         switch (sw->nozzleDir[index]) {
-            case 1:
+            case NOZZLE_DIR_PLUS_45:
                 from = 45.0f;
                 break;
-            case 2:
+            case NOZZLE_DIR_CENTER:
                 from = 0.0f;
                 break;
-            case 3:
+            case NOZZLE_DIR_MINUS_45:
                 from = -45.0f;
                 break;
-            case 0:
+            case NOZZLE_DIR_RAISED:
             default:
                 from = 0.0f;
                 break;
         }
         switch (sw->nozzleNextDir[index]) {
-            case 1:
+            case NOZZLE_DIR_PLUS_45:
                 to = 45.0f;
                 break;
-            case 2:
+            case NOZZLE_DIR_CENTER:
                 to = 0.0f;
                 break;
-            case 3:
+            case NOZZLE_DIR_MINUS_45:
                 to = -45.0f;
                 break;
-            case 0:
+            case NOZZLE_DIR_RAISED:
             default:
                 to = 0.0f;
                 break;
         }
-        rotY = intpl_sub(12, event->userWork[3], 30, from, to);
+        rotY = intpl_sub(EASING_SINE_OUT, from, to, event->userWork[3], 30);
     }
     switch (index) {
         case 0:
@@ -3244,16 +3251,19 @@ static USER_FUNC(_nozzle_turn) {
  */
 void BattleStage_WallCloseCheck(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
 
-    if (!(sw->flags & STAGE_OBJ_FLAG_WALL_CLOSING)) {
-        sw->flags |= STAGE_OBJ_FLAG_WALL_CLOSING;
+    if (!(sw->flags & STAGE_FLAG_WALL_CLOSED)) {
+        sw->flags |= STAGE_FLAG_WALL_CLOSED;
         sw->closeWallEvtId = evtEntry(_close_wall_event, 10, 0)->eventId;
     }
 }
 
-/** JP and demo builds: draws the escape-wall banner each frame for 61 frames. */
-#if VERSION <= VERSION_JP
+/**
+ * JP and the early demos: shows the wall banner (_disp_escape_wall_message) for about 60 frames, blocking until it
+ * ends.
+ */
+#if VERSION < VERSION_US
 static USER_FUNC(_announce_wall_message) {
     if (isFirstCall) {
         event->userdata[0] = 60;
@@ -3262,26 +3272,27 @@ static USER_FUNC(_announce_wall_message) {
         return EVT_RETURN_DONE;
     }
     event->userdata[0]--;
-    dispEntry(CAMERA_2D, 900.0f, 1, _disp_escape_wall_message, NULL);
+    dispEntry(CAMERA_2D, 900.0f, DISP_MODE_ALPHA_TEST, _disp_escape_wall_message, NULL);
     return EVT_RETURN_BLOCK;
 }
 
 /**
- * 2D draw callback for the JP/demo wall banner:
- * a white window frame with btl_msg_escape_wall_close2 centred near the top of the screen.
+ * 2D draw callback for the JP and early-demo wall banner:
+ * a white window frame with btl_msg_escape_wall_close2 centred in the lower half of the screen.
  */
 static void _disp_escape_wall_message(CameraId camera, void* param) {
     const char* msg = msgSearch("btl_msg_escape_wall_close2");
     s32 width = FontGetMessageWidth(msg);
     f32 x;
+
+    // zero is a variable: the retail code computes 0.0f - width / 2 at run time (lfs 0.0f, fsubs); a literal folds to fneg
     f32 zero = 0.0f;
 
     x = zero - width / 2;
-    windowDispGX_Waku_col(0, (GXColor){255, 255, 255, 255}, x - 20.0f, -117.0f, width + 40, 30.0f, 10.0f);
+    windowDispGX_Waku_col(x - 20.0f, -117.0f, width + 40, 30.0f, 10.0f, 0, (GXColor){255, 255, 255, 255});
     FontDrawStart();
     FontDrawString(zero - (width / 2), -120.0f, msg);
 }
-
 #endif
 
 /**
@@ -3290,10 +3301,10 @@ static void _disp_escape_wall_message(CameraId camera, void* param) {
  */
 void BattleStage_IronFrameFallCheck(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
 
-    if (!(sw->flags & STAGE_OBJ_FLAG_NO_IRON_FRAME_FALL) && !(sw->flags & STAGE_OBJ_FLAG_IRON_FRAME_GONE)) {
-        sw->flags |= STAGE_OBJ_FLAG_IRON_FRAME_GONE;
+    if (!(sw->flags & STAGE_FLAG_KEEP_IRON_FRAME_UNUSED) && !(sw->flags & STAGE_FLAG_NO_IRON_FRAME)) {
+        sw->flags |= STAGE_FLAG_NO_IRON_FRAME;
         sw->fallFrameEvtId = evtEntry(_fall_frame_event, 10, 0)->eventId;
     }
 }
@@ -3301,7 +3312,7 @@ void BattleStage_IronFrameFallCheck(void) {
 /** Waits until all battle events (except the background set ones) and any nozzle work are over, then yields a frame. */
 static USER_FUNC(_fall_frame_wait) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
 
     if (!BattleWaitAllActiveEvtEnd_NoBgSetEndWait(wp)) {
         return EVT_RETURN_BLOCK;
@@ -3317,7 +3328,7 @@ static USER_FUNC(_fall_frame_wait) {
 
 /**
  * Runs each living unit's ceiling-fall script (btlevtcmd_SetEventCeilFall) and waits for all of them to end.
- * The US and later builds skip units with the instant-kill status.
+ * JP and later skip defeated units (STATUS_DEAD).
  */
 static USER_FUNC(_fall_frame_wait_unit_ready) {
     BattleWork* wp = _battleWorkPointer;
@@ -3329,21 +3340,23 @@ static USER_FUNC(_fall_frame_wait_unit_ready) {
         for (i = 0; i < BATTLE_UNIT_MAX; i++) {
             unit = BattleGetUnitPtr(wp, i);
 #if VERSION <= VERSION_DEMO_JP
-            if (unit && !(unit->flags & UNIT_FLAG_DELETE_PENDING) && unit->ceilFallEventCode) {
+            if (unit && !(unit->flags & BATTLE_UNIT_FLAG_BROKEN) && unit->ceilFallEventCode) {
 #else
-            if (unit && !(unit->flags & UNIT_FLAG_DELETE_PENDING) && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) && unit->ceilFallEventCode) {
+            if (unit && !(unit->flags & BATTLE_UNIT_FLAG_BROKEN) && !BtlUnit_CheckStatus(unit, STATUS_DEAD) && unit->ceilFallEventCode) {
 #endif
                 evt = evtEntry(unit->ceilFallEventCode, 10, 0);
                 if (evt) {
                     evt->unitId = unit->unitId;
                 }
+
+                // Read outside the if (evt) block above (evtEntry never returns NULL; a full pool gives the one-past entry).
                 unit->ceilFallEventId = evt->eventId;
             }
         }
     }
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(wp, i);
-        if (unit && !(unit->flags & UNIT_FLAG_DELETE_PENDING)) {
+        if (unit && !(unit->flags & BATTLE_UNIT_FLAG_BROKEN)) {
             if (unit->ceilFallEventId && !evtCheckID(unit->ceilFallEventId)) {
                 unit->ceilFallEventId = 0;
             }
@@ -3366,14 +3379,14 @@ static USER_FUNC(_fall_frame) {
     BattleStageObjectWork* sw;
 
     wp = _battleWorkPointer;
-    sw = STAGE_WORK(wp);
+    sw = &wp->stageObjectWork;
     body = BattleSearchObjectPtr("if_body");
     if (isFirstCall) {
         event->userWork[2] = 0;
         event->userWork[3] = body->position.y;
     }
     event->userWork[2]++;
-    body->position.y = ((IntplSubArgOrderFn)intpl_sub)(2, event->userWork[3], 0.0f, event->userWork[2] * event->userWork[2] / 60, 60);
+    body->position.y = intpl_sub(EASING_CUBIC_IN, event->userWork[3], 0.0f, event->userWork[2] * event->userWork[2] / 60, 60);
     if (event->userWork[2] < 60) {
         return EVT_RETURN_BLOCK;
     }
@@ -3384,7 +3397,7 @@ static USER_FUNC(_fall_frame) {
 /** Fades the fallen iron frame out over 51 frames and clears fallFrameEvtId. */
 static USER_FUNC(_fall_frame_delete) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
 
     if (isFirstCall) {
         event->userWork[2] = 255;
@@ -3406,7 +3419,7 @@ static USER_FUNC(_fall_frame_delete) {
  */
 void BattleStage_NozzleWorkCheck(s32 type) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     EventEntry* evt;
 
     if (pouchGetPtr()->rank > 0) {
@@ -3430,7 +3443,7 @@ void BattleStage_NozzleWorkCheck(s32 type) {
 /** Picks the battle's nozzle type 0-3 once from the rank's typeRate weights; nozzleType stays -1 until then. */
 static void _nozzle_type_init(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     BattleStageNozzleData* data = sw->nozzleData;
     s32 total;
     s8 i;
@@ -3454,7 +3467,7 @@ static void _nozzle_type_init(void) {
 /** Waits until other battle events (except background set ones) are over and no nozzle is still turning. */
 static USER_FUNC(_nozzle_work_wait) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     int i;
 
     if (!BattleWaitAllActiveEvtEnd_NoBgSetEndWait(wp)) {
@@ -3473,12 +3486,12 @@ static USER_FUNC(_nozzle_work_wait) {
 
 /** Spray angle in degrees for a nozzle's direction: -45 for 1, -135 for 3, -90 for 2 or upright. */
 static f32 _get_nozzle_dir(s32 index) {
-    switch (STAGE_WORK(_battleWorkPointer)->nozzleDir[index]) {
-        case 1:
+    switch (_battleWorkPointer->stageObjectWork.nozzleDir[index]) {
+        case NOZZLE_DIR_PLUS_45:
             return -45.0f;
-        case 3:
+        case NOZZLE_DIR_MINUS_45:
             return -135.0f;
-        case 2:
+        case NOZZLE_DIR_CENTER:
         default:
             return -90.0f;
     }
@@ -3492,7 +3505,7 @@ static f32 _get_nozzle_dir(s32 index) {
  */
 static USER_FUNC(_nozzle_work_effect) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     EvtWord* args = event->args;
     const char* sfx;
     s32 effType = 0;
@@ -3512,23 +3525,23 @@ static USER_FUNC(_nozzle_work_effect) {
         }
         event->userWork[0] = 90;
         switch (sw->nozzleType) {
-            case 1:
+            case STAGE_NOZZLE_ICE:
                 sfx = "SFX_BTL_STAGE_SMOKE1";
                 effType = 0;
                 break;
-            case 2:
+            case STAGE_NOZZLE_EXPLOSION:
                 sfx = NULL;
                 effType = 1;
                 break;
-            case 3:
+            case STAGE_NOZZLE_FIRE:
                 sfx = "SFX_BTL_STAGE_FIRE1";
                 effType = 2;
                 break;
         }
         switch (sw->nozzleType) {
-            case 1:
-            case 2:
-            case 3:
+            case STAGE_NOZZLE_ICE:
+            case STAGE_NOZZLE_EXPLOSION:
+            case STAGE_NOZZLE_FIRE:
                 obj = BattleSearchObjectPtr("nozzle_l");
                 angle1 = _get_nozzle_dir(0);
                 if (sw->nozzleDir[0]) {
@@ -3537,6 +3550,8 @@ static USER_FUNC(_nozzle_work_effect) {
                     } else {
                         event->userWork[5] = -1;
                     }
+
+                    // FAKE: the sum goes through rot first; rot = reviseAngle(90.0f + angle1) changes the object
                     rot = 90.0f + angle1;
                     rot = reviseAngle(rot);
                     z = 10.0f * sinfd(angle1) + obj->position.z;
@@ -3582,6 +3597,8 @@ static USER_FUNC(_nozzle_work_effect) {
                     } else {
                         event->userWork[7] = -1;
                     }
+
+                    // FAKE: z and rot swap roles here (z holds the angle); the left/centre nozzle form changes the object
                     z = reviseAngle(90.0f + angle3);
                     rot = 10.0f * sinfd(angle3) + obj->position.z;
                     event->userWork[3] = (EvtWord)effNozleEntry(effType, obj->position.x - 10.0f * cosfd(angle3), 12.0f + obj->position.y, rot, -80.0f, z, 90);
@@ -3622,13 +3639,13 @@ static USER_FUNC(_nozzle_work_effect) {
     if (event->userWork[0] > 0) {
         event->userWork[0]--;
         if (event->userWork[0] <= 0) {
-            if ((u32)event->userWork[5] != 0xFFFFFFFF) {
+            if (event->userWork[5] != 0xFFFFFFFF) {
                 psndSFXOff(event->userWork[5]);
             }
-            if ((u32)event->userWork[6] != 0xFFFFFFFF) {
+            if (event->userWork[6] != 0xFFFFFFFF) {
                 psndSFXOff(event->userWork[6]);
             }
-            if ((u32)event->userWork[7] != 0xFFFFFFFF) {
+            if (event->userWork[7] != 0xFFFFFFFF) {
                 psndSFXOff(event->userWork[7]);
             }
         }
@@ -3644,7 +3661,7 @@ static USER_FUNC(_nozzle_work_effect) {
  */
 BOOL BattleFogEndCheck(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
 
     if (sw->fogTimer == 0) {
         return TRUE;
@@ -3666,7 +3683,7 @@ BOOL BattleFogEndCheck(void) {
  */
 BOOL BattleFogForceStop(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
 
     if (sw->fogTimer == 0) {
         return FALSE;
@@ -3685,7 +3702,7 @@ BOOL BattleFogForceStop(void) {
  */
 static USER_FUNC(_nozzle_work_attack_set) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     s32 index;
     int i;
 
@@ -3712,34 +3729,35 @@ static USER_FUNC(_nozzle_work_attack_set) {
  * 0 Mario's side, 1 the enemy side, -1 neither (upright or aimed away).
  */
 static s32 _get_nozzle_attack_index(u8 index) {
-    BattleStageObjectWork* sw = STAGE_WORK(_battleWorkPointer);
+    BattleStageObjectWork* sw = &_battleWorkPointer->stageObjectWork;
 
+    // Unmatched directions fall through the remaining nozzle cases to the final -1.
     switch (index) {
         case 0:
             switch (sw->nozzleDir[index]) {
-                case 1:
+                case NOZZLE_DIR_PLUS_45:
                     return -1;
-                case 2:
+                case NOZZLE_DIR_CENTER:
                     return 0;
-                case 3:
+                case NOZZLE_DIR_MINUS_45:
                     return 1;
             }
         case 2:
             switch (sw->nozzleDir[index]) {
-                case 1:
+                case NOZZLE_DIR_PLUS_45:
                     return 0;
-                case 2:
+                case NOZZLE_DIR_CENTER:
                     return 1;
-                case 3:
+                case NOZZLE_DIR_MINUS_45:
                     return -1;
             }
         case 1:
             switch (sw->nozzleDir[index]) {
-                case 1:
+                case NOZZLE_DIR_PLUS_45:
                     return 0;
-                case 2:
+                case NOZZLE_DIR_CENTER:
                     return -1;
-                case 3:
+                case NOZZLE_DIR_MINUS_45:
                     return 1;
             }
     }
@@ -3804,31 +3822,34 @@ static void _combine_nozzle_weapon(BOOL copy, BattleWeapon* dst, BattleWeapon* s
     dst->element = src->element;
     s = (s8*)&src->sleepChance; // status chance/time block from 0x80, indexed below
     d = (s8*)&dst->sleepChance;
-    _rate_mix(&d[0x0], &d[0x1], &s[0x0], &s[0x1]);
-    _rate_mix(&d[0x2], &d[0x3], &s[0x2], &s[0x3]);
-    _rate_mix(&d[0x4], &d[0x5], &s[0x4], &s[0x5]);
-    _rate_mix(&d[0x6], &d[0x7], &s[0x6], &s[0x8]);
-    _rate_mix(&d[0x9], &d[0xA], &s[0x9], &s[0xA]);
-    _rate_mix(&d[0xB], &d[0xC], &s[0xB], &s[0xC]);
-    _rate_mix(&d[0xD], &d[0xE], &s[0xD], &s[0xE]);
-    _rate_mix(&d[0xF], &d[0x10], &s[0xF], &s[0x10]);
-    _rate_mix(&d[0x11], &d[0x12], &s[0x11], &s[0x12]);
-    _rate_mix_3(&d[0x13], &d[0x14], &d[0x15], &s[0x13], &s[0x14], &s[0x15]);
-    _rate_mix_3(&d[0x19], &d[0x1A], &d[0x1B], &s[0x19], &s[0x1A], &s[0x1B]);
-    _rate_mix(&d[0x1C], &d[0x1D], &s[0x1C], &s[0x1D]);
-    d[0x1F] += s[0x1F];
-    _rate_mix(&d[0x20], &d[0x21], &s[0x20], &s[0x21]);
-    _rate_mix(&d[0x22], &d[0x23], &s[0x22], &s[0x23]);
-    d[0x2A] += s[0x2A];
-    d[0x2B] += s[0x2B];
-    d[0x2C] += s[0x2C];
-    d[0x2D] += s[0x2D];
+    _rate_mix(&d[0x0], &d[0x1], &s[0x0], &s[0x1]); // sleep
+    _rate_mix(&d[0x2], &d[0x3], &s[0x2], &s[0x3]); // stop
+    _rate_mix(&d[0x4], &d[0x5], &s[0x4], &s[0x5]); // dizzy
+
+    // BUG: adds the source's poisonStrength (s[0x8]) to poisonTime instead of its poisonTime (s[0x7]);
+    // poisonStrength itself is not combined
+    _rate_mix(&d[0x6], &d[0x7], &s[0x6], &s[0x8]);                           // poison
+    _rate_mix(&d[0x9], &d[0xA], &s[0x9], &s[0xA]);                           // confuse
+    _rate_mix(&d[0xB], &d[0xC], &s[0xB], &s[0xC]);                           // electric
+    _rate_mix(&d[0xD], &d[0xE], &s[0xD], &s[0xE]);                           // dodgy
+    _rate_mix(&d[0xF], &d[0x10], &s[0xF], &s[0x10]);                         // burn
+    _rate_mix(&d[0x11], &d[0x12], &s[0x11], &s[0x12]);                       // freeze
+    _rate_mix_3(&d[0x13], &d[0x14], &d[0x15], &s[0x13], &s[0x14], &s[0x15]); // size change
+    _rate_mix_3(&d[0x19], &d[0x1A], &d[0x1B], &s[0x19], &s[0x1A], &s[0x1B]); // defense change (attack change 0x16..0x18 is not combined)
+    _rate_mix(&d[0x1C], &d[0x1D], &s[0x1C], &s[0x1D]);                       // allergic
+    d[0x1F] += s[0x1F];                                                      // chargeStrength
+    _rate_mix(&d[0x20], &d[0x21], &s[0x20], &s[0x21]);                       // fast
+    _rate_mix(&d[0x22], &d[0x23], &s[0x22], &s[0x23]);                       // slow
+    d[0x2A] += s[0x2A];                                                      // hpRegenTime
+    d[0x2B] += s[0x2B];                                                      // hpRegenStrength
+    d[0x2C] += s[0x2C];                                                      // fpRegenTime
+    d[0x2D] += s[0x2D];                                                      // fpRegenStrength
 }
 
 /** Returns in args[1] the nozzle weapon for side args[0] (0 Mario's side, 1 enemies), or 0 if no nozzle hits it. */
 static USER_FUNC(_nozzle_work_get_weapon_address) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     EvtWord* args = event->args;
     s32 index = evtGetValue(event, args[0]);
 
@@ -3844,7 +3865,7 @@ static USER_FUNC(_nozzle_work_get_weapon_address) {
  */
 s32 BattleStage_ObjectFallCheck(void) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
     EventEntry* evt;
 
     if (wp->flags & BATTLE_FLAG_NO_OBJECT_FALL) {
@@ -3858,7 +3879,7 @@ s32 BattleStage_ObjectFallCheck(void) {
 /** Waits until other battle events, nozzle work, the iron frame fall and any background set fall are all over. */
 static USER_FUNC(_object_fall_wait) {
     BattleWork* wp = _battleWorkPointer;
-    BattleStageObjectWork* sw = STAGE_WORK(wp);
+    BattleStageObjectWork* sw = &wp->stageObjectWork;
 
     if (!BattleWaitAllActiveEvtEnd_NoBgSetEndWait(wp)) {
         return EVT_RETURN_BLOCK;
@@ -3891,10 +3912,10 @@ typedef struct FallObjectEntry {
     s32 unitId;              // 0x8
     s32 partId;              // 0xC
     s16 delay;               // 0x10
-    s16 timer;               // 0x12, cleared at entry, never read
+    s16 reserved_12;         // 0x12
     u8 noAc;                 // 0x14
-    u8 noDodge;              // 0x15, skip the lucky dodge roll (an earlier object of this unit already decided it)
-    s32 reserved_18;         // 0x18, never accessed
+    u8 forceHit;             // 0x15, set on earlier entries for the same unit once a hit is scheduled; damage then skips the evasion rolls
+    u8 pad_16[0x1C - 0x16];  // 0x16, never accessed
     s32 preCheck;            // 0x1C
     s32 sfxId;               // 0x20
     EffectEntry* effect;     // 0x24
@@ -3906,65 +3927,16 @@ typedef struct FallObjectWork {
     s8 prevTypes[3];            // 0x1
     FallObjectEntry entries[1]; // 0x4
 } FallObjectWork;
-static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall);
-static void _combine_nozzle_weapon(BOOL copy, BattleWeapon* dst, BattleWeapon* src);
-static void _rate_mix_3(s8* dstChance, s8* dstTime, s8* dstStrength, s8* srcChance, s8* srcTime, s8* srcStrength);
-static void _rate_mix(s8* dstChance, s8* dstTime, s8* srcChance, s8* srcTime);
-static s32 _get_nozzle_attack_index(u8 index);
-BOOL BattleFogForceStop(void);
-static f32 _get_nozzle_dir(s32 index);
-static void _nozzle_type_init(void);
-void BattleStage_NozzleWorkCheck(s32 type);
-void BattleStage_IronFrameFallCheck(void);
-static void _disp_escape_wall_message(CameraId camera, void* param);
-void BattleStage_WallCloseCheck(void);
-static void _Nozzle_Change_Check(u8 index, u8* rate);
-void BattleStage_NozzleDirChangeCheck(void);
-static void _mobj_shake_main(BattleStageObject* obj);
-void BattleStage_DestroyB(void);
-void BattleStage_DestroyA2(void);
-void BattleStage_DestroyA1(void);
-static void BattleObjectConfig(void);
-void BattleStageObjectMain(void);
-void BattleStageObjectInit(void);
-BattleStageObject* BattleSearchObjectPtr(const char* name);
-BattleStageObject* BattleGetObjectPtr(s32 id);
-static USER_FUNC(_object_fall_wait);
-static USER_FUNC(_nozzle_work_get_weapon_address);
-static USER_FUNC(_nozzle_work_attack_set);
-static USER_FUNC(_nozzle_work_effect);
-static USER_FUNC(_nozzle_work_wait);
-static USER_FUNC(_fall_frame_delete);
-static USER_FUNC(_fall_frame);
-static USER_FUNC(_fall_frame_wait_unit_ready);
-static USER_FUNC(_fall_frame_wait);
-// Forward declarations kept in the original's order; the US and later builds use the shared announcement helper
-// for the wall banner.
-#if VERSION >= VERSION_US
-USER_FUNC(btlevtcmd_AnnounceMessage);
-#else
-static USER_FUNC(_announce_wall_message);
-#endif
-static USER_FUNC(_nozzle_turn);
-static USER_FUNC(_set_mobj_shake);
-static USER_FUNC(_set_mobj_shake_init);
-static USER_FUNC(_bgset_audience_bgset_access);
-static USER_FUNC(_bgset_kemuri_effect);
-static USER_FUNC(_get_bgset_attack_data);
-static USER_FUNC(_mobj_destroy);
-static USER_FUNC(_mobj_set_alpha);
-static USER_FUNC(_set_mobj_rotate_x);
 
 /**
- * Drops one ceiling object: picks its type from the rank's rates (repeating earlier picks once three are
- * recorded), aims it at a target the type's weapon can reach or, 10% of the time once Mario has a Star Power,
+ * Drops one ceiling object: picks its type from the rank's rates (the branch that repeats earlier picks once
+ * three are recorded never runs: the work is new each call and holds one entry), aims it at a target the type's weapon can reach or, 10% of the time once Mario has a Star Power,
  * at a random audience member, then waits for the effect to land and deals the damage (guard check, dodges,
  * Superguard and lucky reactions). Returns 1 in args[0] if it fell on the audience.
  */
-static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
+static USER_FUNC(_object_fall_attack) {
     BattleWork* wp = _battleWorkPointer;
     BattleStageFallObjectData* fd = wp->stageObjectWork.fallObjectData;
-    const char* sfxNormal;
     BOOL done;
     s32 acCount;
     EvtWord* args = event->args;
@@ -3976,17 +3948,13 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
     BattleWeapon* weapon3;
     s32 j;
     BattleWeapon* weapon;
-    BOOL found = 0;
+    BOOL found = FALSE;
     s32 k2;
     FallObjectWork* w;
     FallObjectEntry* e;
     FallObjectEntry* o;
     s32 k;
-    const char* sfxTub2;
     FallObjectEntry* o2;
-#if VERSION >= VERSION_JP
-    const char* sfxRest;
-#endif
     s32 i;
     s32 sum;
     s32 r;
@@ -4001,6 +3969,7 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
     Vec p;
     s32 unitId;
     s32 partId;
+    EffectEntry* eff;
     if (isFirstCall) {
         w = BattleAlloc(sizeof(FallObjectWork));
         event->userdatap[0] = w;
@@ -4013,14 +3982,14 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
 
         if (BattleCheckConcluded(wp)) {
             evtSetValue(event, outArg, event->userdata[1]);
-            return 2;
+            return EVT_RETURN_DONE;
         }
         w->count = 1;
         for (i = 0; i < w->count; i++) {
             e = &w->entries[i];
             e->index = i;
             for (j = 0; j < 3; j++) {
-                if (w->prevTypes[j] == (-1)) {
+                if (w->prevTypes[j] == -1) {
                     break;
                 }
             }
@@ -4043,23 +4012,23 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                 w->prevTypes[j] = e->type;
             }
             e->weapon = fd->weapons[e->type];
-            if (e->type == 6) {
+            if (e->type == STAGE_FALL_BOWSER_STATUE) {
                 if (irand(100) < 50) {
-                    e->weapon.weapon.targetClassFlags |= TARGET_CLASS_NO_OPPOSING_ALLIANCE;
-                    e->weapon.weapon.targetClassFlags &= ~TARGET_CLASS_NO_OWN_ALLIANCE;
+                    e->weapon.weapon.targetClassFlags |= TARGET_CLASS_NO_OPPOSITE_SIDE;
+                    e->weapon.weapon.targetClassFlags &= ~TARGET_CLASS_NO_OWN_SIDE;
                 } else {
-                    e->weapon.weapon.targetClassFlags &= ~TARGET_CLASS_NO_OPPOSING_ALLIANCE;
-                    e->weapon.weapon.targetClassFlags |= TARGET_CLASS_NO_OWN_ALLIANCE;
+                    e->weapon.weapon.targetClassFlags &= ~TARGET_CLASS_NO_OPPOSITE_SIDE;
+                    e->weapon.weapon.targetClassFlags |= TARGET_CLASS_NO_OWN_SIDE;
                 }
             }
             weapon = &e->weapon.weapon;
             e->kind = 0;
-            if (((pouchGetPtr()->starPowersObtained && (!(BattleAudienceBaseGetPtr()->flags & AUDIENCE_FLAG_NO_HAZARDS))) && (e->type != 6)) && (e->type != 7)) {
-                if (((u32)wp->debug.flags & BATTLE_DEBUG_FORCE_FALL_ON_AUDIENCE) || (irand(100) < 10)) {
+            if (pouchGetPtr()->starPowersObtained && !(BattleAudienceBaseGetPtr()->flags & AUDIENCE_FLAG_NO_AUDIENCE_EVENTS) && e->type != STAGE_FALL_BOWSER_STATUE && e->type != STAGE_FALL_METEOR) {
+                if ((wp->debug.flags & BATTLE_DEBUG_FORCE_FALL_ON_AUDIENCE) || irand(100) < 10) {
                     e->kind = 1;
                     e->partId = -1;
                     e->unitId = BattleAudience_HaitiRandForFallObject();
-                    found = 1;
+                    found = TRUE;
                     event->userdata[1] = 1;
                 }
             }
@@ -4067,16 +4036,16 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                 BattleSamplingEnemy(&targets, weapon, BattleGetSystemPtr(wp)->unitId, 1, weapon->targetClassFlags, weapon->targetPropertyFlags, -wp->alliances[1].attackDirection);
                 if (targets.numTargets <= 0) {
                     evtSetValue(event, outArg, event->userdata[1]);
-                    return 2;
+                    return EVT_RETURN_DONE;
                 }
-                found = 1;
+                found = TRUE;
                 BattleChoiceSamplingEnemy(&targets, weapon->targetWeightFlags, &unitId, &partId);
                 e->unitId = unitId;
                 e->partId = partId;
                 e->noAc = 1;
                 for (k = i; k >= 0; k--) {
                     o = &w->entries[k];
-                    if (((e != o) && (o->kind == 0)) && (e->unitId == o->unitId)) {
+                    if (e != o && o->kind == 0 && e->unitId == o->unitId) {
                         o->noAc = 0;
                     }
                 }
@@ -4085,7 +4054,7 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
 
         if (!found) {
             evtSetValue(event, outArg, event->userdata[1]);
-            return 2;
+            return EVT_RETURN_DONE;
         }
         for (i = 0; i < w->count; i++) {
             e = &w->entries[i];
@@ -4093,21 +4062,24 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
             if (e->kind == 0) {
                 flags = 0;
                 if (e->noAc) {
-                    flags |= DAMAGE_FLAG_LAST_HIT;
+                    flags |= DAMAGE_RESULT_FINAL_HIT;
                 }
-                if (e->noDodge) {
-                    flags |= DAMAGE_FLAG_ALWAYS_HIT;
+                if (e->forceHit) {
+                    flags |= DAMAGE_RESULT_NO_EVADE;
                 }
                 e->preCheck = BattlePreCheckDamage(BattleGetSystemPtr(wp), BattleGetUnitPtr(wp, e->unitId), BattleGetUnitPartsPtr(e->unitId, e->partId), weapon, flags);
-                if ((e->preCheck == 1) && (!e->noAc)) {
+                if (e->preCheck == PRECHECK_HIT && !e->noAc) {
                     delay = irand(0);
                     for (k2 = 0; k2 < i; k2++) {
                         o2 = &w->entries[k2];
                         if (e->unitId == o2->unitId) {
                             o2->delay = delay;
                             delay += irand(22) + 20;
+
+                            // BUG: o2 is an earlier entry whose pre-check already ran, and forceHit is read only by
+                            // that pre-check, so setting it here changes nothing.
                             if (o2->noAc) {
-                                o2->noDodge = 1;
+                                o2->forceHit = 1;
                             }
                         }
                     }
@@ -4115,25 +4087,20 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
             }
         }
     }
-    sfxTub2 = (0, "SFX_BTL_STAGE_DAMAGE_TUB1"); // FAKE: comma expr makes the literal an early @ temp (same pointer)
-    sfxNormal = "SFX_BTL_STAGE_DAMAGE_NORMAL1";
-#if VERSION >= VERSION_JP
-    sfxRest = "SFX_REST_CONDITION1";
-#endif
     w = event->userdatap[0];
-    done = 1;
+    done = TRUE;
     for (i = 0; i < w->count; i++) {
         e3 = &w->entries[i];
-        if (e3->index == (-1)) {
+        if (e3->index == -1) {
             continue;
         }
         acCount = 0;
-        done = 0;
+        done = FALSE;
         if (e3->kind == 0) {
             unit = BattleGetUnitPtr(wp, e3->unitId);
             part = BattleGetUnitPartsPtr(e3->unitId, e3->partId);
         }
-        if ((e3->effect == ((void*)0)) || (e3->delay > 0)) {
+        if (e3->effect == NULL || e3->delay > 0) {
             e3->delay--;
             if (e3->delay > 0) {
                 continue;
@@ -4148,8 +4115,8 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                     hit.x = ((e3->unitId % 20) * 25) - 230;
                     hit.y = BattleStageGetPtr()->audienceSizeY;
                     hit.z = (0.1f * (e3->unitId % 20)) + (((e3->unitId / 20) * 30) + 115);
-                    btl_camera_set_mode(0, 6);
-                    btl_camera_set_moveSpeedLv(0, 2);
+                    btl_camera_set_mode(BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_AUDIENCE);
+                    btl_camera_set_moveSpeedLv(BTL_CAM_PRI_NORMAL, 2);
                     width = 0.0f;
                     break;
 
@@ -4167,37 +4134,34 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                 dir = 270.0f;
             }
             switch (e3->preCheck) {
-                case 2:
-
-                case 3:
-
-                case 4:
-
-                case 6:
+                case PRECHECK_MISS:
+                case PRECHECK_LUCKY:
+                case PRECHECK_INTANGIBLE:
+                case PRECHECK_DODGY:
                     hit.y = pos.y;
                     break;
             }
 
             e3->sfxId = -1;
-            e3->timer = 0;
+            e3->reserved_12 = 0;
             switch (e3->type) {
-                case 0:
+                case STAGE_FALL_BASIN:
                     e3->effect = effFallEntry(4, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 1, 90);
                     break;
 
-                case 1:
+                case STAGE_FALL_BUCKET:
                     e3->effect = effFallEntry(5, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 1, 90);
                     break;
 
-                case 2:
+                case STAGE_FALL_SMALL_BUGS:
                     e3->effect = effFallEntry(0, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 100, 90);
                     break;
 
-                case 3:
+                case STAGE_FALL_LARGE_BUG:
                     e3->effect = effFallEntry(1, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 1, 90);
                     break;
 
-                case 4:
+                case STAGE_FALL_FORK:
 #if VERSION <= VERSION_DEMO_JP
                     e3->effect = effFallEntry(2, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 1, 90);
 #else
@@ -4205,15 +4169,15 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
 #endif
                     break;
 
-                case 8:
+                case STAGE_FALL_STAGE_LIGHT:
                     e3->effect = effFallEntry(8, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 1, 90);
                     break;
 
-                case 5:
+                case STAGE_FALL_WATER:
                     e3->effect = effFallEntry(3, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 1, 90);
                     break;
 
-                case 6:
+                case STAGE_FALL_BOWSER_STATUE:
                     if (BtlUnit_GetBelong(unit) == 0) {
 #if VERSION <= VERSION_DEMO_JP
                         e3->effect = effFallEntry(6, -300.0f, pos.y, pos.z, 0.0f, 0.0f, dir, 1, 180);
@@ -4229,7 +4193,7 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                     }
                     break;
 
-                case 7:
+                case STAGE_FALL_METEOR:
 #if VERSION <= VERSION_DEMO_JP
                     e3->effect = effFallEntry(7, pos.x, pos.y, pos.z, width, hit.y - pos.y, dir, 1, 180);
 #else
@@ -4239,7 +4203,7 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
             }
 
         } else {
-            if ((e3->effect != ((void*)0)) && (!effFallCheckHit(e3->effect))) {
+            if (e3->effect != NULL && !effFallCheckHit(e3->effect)) {
                 continue;
             }
             weapon3 = &e3->weapon.weapon;
@@ -4248,17 +4212,16 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                 psndSFXOff(e3->sfxId);
                 BattleAudience_GetHomePosition(e3->unitId, &sfxPos.x, &sfxPos.y, &sfxPos.z);
                 switch (e3->type) {
-                    case 5:
+                    case STAGE_FALL_WATER:
                         break;
 
-                    case 0:
-
-                    case 1:
-                        psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_DAMAGE_TUB1"), &sfxPos); // FAKE: integer cast makes the literal a hoisted @ temp (same pointer)
+                    case STAGE_FALL_BASIN:
+                    case STAGE_FALL_BUCKET:
+                        psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_DAMAGE_TUB1"), &sfxPos);
                         break;
 
                     default:
-                        psndSFXOn_3D(sfxNormal, &sfxPos);
+                        psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_DAMAGE_NORMAL1"), &sfxPos);
                         break;
                 }
 
@@ -4268,49 +4231,38 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                     BtlUnit_GetHitPos(unit, part, &sfxPos.x, &sfxPos.y, &sfxPos.z);
                     flags = 0;
                     if (e3->noAc) {
-                        flags |= DAMAGE_FLAG_LAST_HIT;
+                        flags |= DAMAGE_RESULT_FINAL_HIT;
                     }
                     psndSFXOff(e3->sfxId);
                     switch (e3->preCheck) {
-                        case 2:
-
-                        case 3:
-
-                        case 4:
-
-                        case 6:
+                        case PRECHECK_MISS:
+                        case PRECHECK_LUCKY:
+                        case PRECHECK_INTANGIBLE:
+                        case PRECHECK_DODGY:
                             switch (e3->type) {
-                                case 5:
+                                case STAGE_FALL_WATER:
                                     break;
-
-                                case 0:
-
-                                case 1:
-                                    psndSFXOn_3D(sfxTub2, &sfxPos);
+                                case STAGE_FALL_BASIN:
+                                case STAGE_FALL_BUCKET:
+                                    psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_DAMAGE_TUB1"), &sfxPos);
                                     break;
                             }
-
                             break;
-
-                        case 1:
+                        case PRECHECK_HIT:
                             switch (e3->type) {
-                                case 0:
-
-                                case 1:
-                                    psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_DAMAGE_TUB1"), &sfxPos); // FAKE: integer cast makes the literal a hoisted @ temp (same pointer)
+                                case STAGE_FALL_BASIN:
+                                case STAGE_FALL_BUCKET:
+                                    psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_DAMAGE_TUB1"), &sfxPos);
                                     break;
-
-                                case 5:
+                                case STAGE_FALL_WATER:
 #if VERSION >= VERSION_JP
-                                    psndSFXOn_3D(sfxRest, &sfxPos);
+                                    psndSFXOn_3D(SFX_NAME_WORD("SFX_REST_CONDITION1"), &sfxPos);
 #endif
                                     break;
-
                                 default:
-                                    psndSFXOn_3D(sfxNormal, &sfxPos);
+                                    psndSFXOn_3D(SFX_NAME_WORD("SFX_BTL_STAGE_DAMAGE_NORMAL1"), &sfxPos);
                                     break;
                             }
-
                             if (BtlUnit_GetACPossibility(unit)) {
                                 BattleActionCommandCheckDefence(unit, weapon3);
                             }
@@ -4330,14 +4282,12 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                             }
                             tg = &targets2.targets[targets2.targetIndices[targets2.currentTarget]];
                             unit2 = BattleGetUnitPtr(wp, tg->unitIdx);
-                            switch (BattlePreCheckDamage(BattleGetSystemPtr(wp), unit2, BattleGetUnitPartsPtr(tg->unitIdx, tg->partIdx), weapon3, 0x100)) {
-                                case 2:
-
-                                case 4:
+                            switch (BattlePreCheckDamage(BattleGetSystemPtr(wp), unit2, BattleGetUnitPartsPtr(tg->unitIdx, tg->partIdx), weapon3, DAMAGE_RESULT_FINAL_HIT)) {
+                                case PRECHECK_MISS:
+                                case PRECHECK_INTANGIBLE:
                                     break;
 
-                                case 3: {
-                                    EffectEntry* eff;
+                                case PRECHECK_LUCKY:
                                     BtlUnit_GetPos(unit2, &p.x, &p.y, &p.z);
                                     if (p.y < 85.0f) {
                                         p.y += 50.0f;
@@ -4345,24 +4295,23 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
                                         p.y += -50.0f;
                                     }
                                     p.x -= 45.0f;
-                                    eff = effNiceEntry(6, p.x, p.y, p.z);
+                                    eff = effNiceEntry(NICE_EFFECT_LUCKY, p.x, p.y, p.z);
                                     ((NiceEffectWork*)eff->userdata)->overallScale = 0.75f;
-                                    unit2->damagePattern = 0;
-                                    BattleRunHitEvent(unit2, 0x126);
-                                    break;
-                                }
-
-                                case 6:
-                                    unit2->damagePattern = 0;
-                                    BattleRunHitEvent(unit2, 0x127);
+                                    unit2->damagePattern = ATTACKPATTERN_NULL;
+                                    BattleRunHitEvent(unit2, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_LUCKY);
                                     break;
 
-                                case 1:
-                                    if (BtlUnit_GetACPossibility(unit2) && (acCount <= 0)) {
+                                case PRECHECK_DODGY:
+                                    unit2->damagePattern = ATTACKPATTERN_NULL;
+                                    BattleRunHitEvent(unit2, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_DODGY);
+                                    break;
+
+                                case PRECHECK_HIT:
+                                    if (BtlUnit_GetACPossibility(unit2) && acCount <= 0) {
                                         BattleActionCommandCheckDefence(unit2, weapon3);
                                         acCount++;
                                     }
-                                    BattleCheckDamage(BattleGetSystemPtr(wp), unit2, BattleGetUnitPartsPtr(tg->unitIdx, tg->partIdx), weapon3, DAMAGE_FLAG_LAST_HIT);
+                                    BattleCheckDamage(BattleGetSystemPtr(wp), unit2, BattleGetUnitPartsPtr(tg->unitIdx, tg->partIdx), weapon3, DAMAGE_RESULT_FINAL_HIT);
                                     break;
                             }
 
@@ -4373,13 +4322,12 @@ static s32 _object_fall_attack(EventEntry* event, BOOL isFirstCall) {
             }
             e3->index = -1;
         }
-        w->entries[0].weapon.weapon.reserved_14 = w->entries[0].weapon.weapon.reserved_14; // FAKE: no-op self-assign (no code) raises w spill cost
     }
 
     if (!done) {
-        return 0;
+        return EVT_RETURN_BLOCK;
     }
     BattleFree(event->userdatap[0]);
     evtSetValue(event, outArg, event->userdata[1]);
-    return 2;
+    return EVT_RETURN_DONE;
 }

@@ -1,17 +1,20 @@
 // hei_11 (平原, Petal Meadows): Shhwonk Fortress passage between hei_10 and hei_12.
 // Only the map doors, water and field enemies.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_map.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
-#include "hei.h"
+#include "party/party_motion.h"
 #include "driver/mapdrv.h"
-
-extern s32 hei_test_water_tev[];
+#include "pmario_sound.h"
+#include "driver/npcdrv.h"
+#include "hei.h"
 
 static BeroEntry bero_entry_data[3];
+EvtWord hei_11_init_evt[44];
 
 /** Doors of this room: the west exit (w_bero) to hei_10 and the east exit (e_bero) to hei_12. */
 static BeroEntry bero_entry_data[] = {
@@ -58,13 +61,13 @@ EVT_BEGIN(hei_11_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_TORIDE1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI3"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_TORIDE1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI3"))
     CALL(evt_snd_set_rev_mode, 1)
-    CALL(evt_npc_change_fbat_mode, 1)
-    CALL(evt_map_playanim, STRING("mizu"), 1, 0)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
+    CALL(evt_map_playanim, STRING("mizu"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_map_set_tevcallback, 1, PTR(hei_test_water_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("mizu"), MAPOBJ_TEV_CALLBACK(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("mizu"), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("mizu"), MAP_OBJ_TEV_CALLBACK(1))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("mizu"), MAP_OBJ_FLAG_DISPLAY_LIST)
     RETURN
 EVT_END()

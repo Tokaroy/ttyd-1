@@ -1,4 +1,5 @@
 // eff_sweat_n64.c: Paper Mario 64 sweat drops flung out in a fan, 6 (type 0) or 4 (type 1); effSweatN64Entry and EffSweatN64Work.
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -9,7 +10,7 @@ typedef struct EffSweatN64Work {
     s32 type;     // 0x0
     Vec position; // 0x4
     f32 rot;      // 0x10
-    f32 pad_14;   // 0x14, unused (also unused in the N64 effect)
+    f32 unk_14;   // 0x14
     Vec velocity; // 0x18
     s32 life;     // 0x24
     s32 age;      // 0x28

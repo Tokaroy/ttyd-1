@@ -1,10 +1,6 @@
 #include <dolphin/gd.h>
 #include <math.h>
 
-/**
- * Writes the six attenuation coefficients of a light (three for the angle, three for the distance) to its XF
- * light slot.
- */
 void GDSetLightAttn(GXLightID light, f32 a0, f32 a1, f32 a2, f32 k0, f32 k1, f32 k2) {
     GDWriteXFCmdHdr(__GDLightID2Offset(light) + XF_LIGHT_ATTN_ID, 6);
     GDWrite_f32(a0);
@@ -15,11 +11,6 @@ void GDSetLightAttn(GXLightID light, f32 a0, f32 a1, f32 a2, f32 k0, f32 k1, f32
     GDWrite_f32(k2);
 }
 
-/**
- * Writes a light's three angle attenuation coefficients for a spotlight with the given cutoff angle (in degrees,
- * up to
- * 90) and falloff function. An invalid cutoff turns the spot effect off.
- */
 void GDSetLightSpot(GXLightID light, f32 cutoff, GXSpotFn spot_func) {
     f32 a0;
     f32 a1;
@@ -83,11 +74,6 @@ void GDSetLightSpot(GXLightID light, f32 cutoff, GXSpotFn spot_func) {
     GDWrite_f32(a2);
 }
 
-/**
- * Writes a light's three distance attenuation coefficients
- * so that its brightness is ref_br at distance ref_dist, with a gentle, medium or steep falloff.
- * Invalid parameters turn attenuation off.
- */
 void GDSetLightDistAttn(GXLightID light, f32 ref_dist, f32 ref_br, GXDistAttnFn dist_func) {
     f32 k0;
     f32 k1;
@@ -127,12 +113,10 @@ void GDSetLightDistAttn(GXLightID light, f32 ref_dist, f32 ref_br, GXDistAttnFn 
     GDWrite_f32(k2);
 }
 
-/** Writes a light's color, packed as RGBA, to its XF light slot. */
 void GDSetLightColor(GXLightID light, GXColor color) {
     GDWriteXFCmd(__GDLightID2Offset(light) + XF_LIGHT_COLOR_ID, color.r << 24 | color.g << 16 | color.b << 8 | color.a);
 }
 
-/** Writes a light's position to its XF light slot. */
 void GDSetLightPos(GXLightID light, f32 x, f32 y, f32 z) {
     GDWriteXFCmdHdr(__GDLightID2Offset(light) + XF_LIGHT_POS_ID, 3);
     GDWrite_f32(x);
@@ -140,7 +124,6 @@ void GDSetLightPos(GXLightID light, f32 x, f32 y, f32 z) {
     GDWrite_f32(z);
 }
 
-/** Writes a light's direction to its XF light slot. */
 void GDSetLightDir(GXLightID light, f32 nx, f32 ny, f32 nz) {
     GDWriteXFCmdHdr(__GDLightID2Offset(light) + XF_LIGHT_DIR_ID, 3);
     GDWrite_f32(nx);
@@ -148,14 +131,12 @@ void GDSetLightDir(GXLightID light, f32 nx, f32 ny, f32 nz) {
     GDWrite_f32(nz);
 }
 
-/**
- * Sets up a light for specular lighting: the position is the direction pushed out to a huge distance,
- * and the half- angle vector is given.
- */
 void GDSetSpecularDirHA(GXLightID light, f32 nx, f32 ny, f32 nz, f32 hx, f32 hy, f32 hz) {
     f32 px;
     f32 py;
     f32 pz;
+
+    // a position far along -n: the light is in effect at infinity
     px = 1000000000000000000.0f * -nx;
     py = 1000000000000000000.0f * -ny;
     pz = 1000000000000000000.0f * -nz;
@@ -169,10 +150,6 @@ void GDSetSpecularDirHA(GXLightID light, f32 nx, f32 ny, f32 nz, f32 hx, f32 hy,
     GDWrite_f32(hz);
 }
 
-/**
- * Same as GDSetSpecularDirHA, but the half-angle vector is computed as the normalized (-nx, -ny, 1 - nz),
- * assuming the viewer looks along the z axis.
- */
 void GDSetSpecularDir(GXLightID light, f32 nx, f32 ny, f32 nz) {
     f32 px;
     f32 py;
@@ -184,7 +161,7 @@ void GDSetSpecularDir(GXLightID light, f32 nx, f32 ny, f32 nz) {
 
     hx = -nx;
     hy = -ny;
-    hz = 1.0f + -nz;
+    hz = 1.0f + -nz; // (-n) + (0, 0, 1): the half-angle direction before normalising
 
     mag = hx * hx + hy * hy + hz * hz;
     if (mag != 0.0f) {
@@ -194,6 +171,8 @@ void GDSetSpecularDir(GXLightID light, f32 nx, f32 ny, f32 nz) {
     hx = hx * mag;
     hy = hy * mag;
     hz = hz * mag;
+
+    // a position far along -n: the light is in effect at infinity
     px = 1000000000000000000.0f * -nx;
     py = 1000000000000000000.0f * -ny;
     pz = 1000000000000000000.0f * -nz;
@@ -207,27 +186,18 @@ void GDSetSpecularDir(GXLightID light, f32 nx, f32 ny, f32 nz) {
     GDWrite_f32(hz);
 }
 
-/** Has the XF load a light object (0x10 words) from an indexed array in memory into a light slot. */
 void GDLoadLightObjIndx(u32 lt_obj_indx, GXLightID light) {
     GDWriteXFIndxDCmd(__GDLightID2Offset(light) + XF_LIGHT_ID, 0x10, lt_obj_indx);
 }
 
-/** Writes the ambient color register of a channel (RGBA). */
 void GDSetChanAmbColor(GXChannelID chan, GXColor color) {
     GDWriteXFCmd((chan & 1) + XF_REG_AMBIENT0_ID, color.r << 24 | color.g << 16 | color.b << 8 | color.a);
 }
 
-/** Writes the material color register of a channel (RGBA). */
 void GDSetChanMatColor(GXChannelID chan, GXColor color) {
     GDWriteXFCmd((chan & 1) + XF_REG_MATERIAL0_ID, color.r << 24 | color.g << 16 | color.b << 8 | color.a);
 }
 
-/**
- * Writes the XF channel control register: lighting enable, ambient and material color sources,
- * the lights used (8 bit mask), and the diffuse and attenuation functions.
- * For the combined color and alpha channels (4 and 5) the same value is also written to the alpha control
- * register.
- */
 void GDSetChanCtrl(GXChannelID chan, u8 enable, GXColorSrc amb_src, GXColorSrc mat_src, u32 light_mask, GXDiffuseFn diff_fn, GXAttnFn attn_fn) {
     u32 reg;
 

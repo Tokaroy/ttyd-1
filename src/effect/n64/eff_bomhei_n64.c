@@ -1,4 +1,6 @@
-// Paper Mario 64 effect: Bob-omb (bomhei) sprite scaled over its duration; non-zero types also spin it.
+// Paper Mario 64 effect: Bob-omb (bomhei) sprite that steps through its texture frames over its duration;
+// non-zero types also spin it.
+
 #include "eff/n64/eff_bomhei_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -9,7 +11,6 @@
 
 typedef struct EffBomheiN64Work {
     s16 type;     // 0x0
-    u8 pad_2[2];  // 0x2
     Vec position; // 0x4
     f32 scale;    // 0x10
     s32 timer;    // 0x14
@@ -21,7 +22,7 @@ typedef struct EffBomheiN64Work {
 } EffBomheiN64Work;
 
 /** Camera-facing 32x32 Bob-omb sprite, cross-faded between frames of its texture sheet. */
-static effN64Vtx size32x32_tex32x32_vtx[] = {
+static effN64Vtx size32x32_tex32x32_vtx[] ATTRIBUTE_ALIGN(8) = {
     {-16, -16, 0, 0, 0, 0, 0, 0, 255},
     {16, -16, 0, 1024, 0, 0, 0, 0, 255},
     {16, 16, 0, 1024, 1024, 0, 0, 0, 255},
@@ -29,7 +30,7 @@ static effN64Vtx size32x32_tex32x32_vtx[] = {
 };
 
 static void effBomheiMain(EffectEntry* effect);
-static void effBomheiDisp(CameraId cameraId, EffectEntry* effect);
+static void effBomheiDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns a Bob-omb sprite at (x, y, z), `scale` times its size, living `duration` frames;
@@ -81,21 +82,22 @@ static void effBomheiMain(EffectEntry* effect) {
         return;
     }
     work->rotation += work->rotSpeed;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBomheiDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effBomheiDisp, effect);
 }
 
 /**
  * Draws the sprite, cross-fading between two frames of one texture sheet by the progress fraction;
  * tinted yellow until progress passes 4, then white.
  */
-static void effBomheiDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBomheiDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffBomheiN64Work* work;
     s32 alpha;
     s32 idx;
     s32 next;
+    Mtx transMtx;
     Mtx scaleMtx;
-    Mtx rot;
     Mtx mtx;
     GXTexObj texObj;
 
@@ -126,25 +128,25 @@ static void effBomheiDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetNumTexGens(2);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
     GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
-    PSMTXScale(rot, 0.03125f, 0.0034722222f, 0.0f);
-    PSMTXTrans(scaleMtx, 0.0f, 32.0f * idx, 0.0f);
-    PSMTXConcat(rot, scaleMtx, scaleMtx);
-    GXLoadTexMtxImm(scaleMtx, GX_TEXMTX0, GX_MTX2x4);
+    PSMTXScale(scaleMtx, 0.03125f, 0.0034722222f, 0.0f);
+    PSMTXTrans(transMtx, 0.0f, 32.0f * idx, 0.0f);
+    PSMTXConcat(scaleMtx, transMtx, transMtx);
+    GXLoadTexMtxImm(transMtx, GX_TEXMTX0, GX_MTX2x4);
     next = (idx + 1 < 8) ? idx + 1 : 8;
-    PSMTXTrans(scaleMtx, 0.0f, 32.0f * next, 0.0f);
-    PSMTXConcat(rot, scaleMtx, scaleMtx);
-    GXLoadTexMtxImm(scaleMtx, GX_TEXMTX1, GX_MTX2x4);
+    PSMTXTrans(transMtx, 0.0f, 32.0f * next, 0.0f);
+    PSMTXConcat(scaleMtx, transMtx, transMtx);
+    GXLoadTexMtxImm(transMtx, GX_TEXMTX1, GX_MTX2x4);
     GXSetCullMode(GX_CULL_NONE);
     effSetVtxDescN64(size32x32_tex32x32_vtx);
-    PSMTXTrans(scaleMtx, work->position.x, work->position.y, work->position.z);
+    PSMTXTrans(transMtx, work->position.x, work->position.y, work->position.z);
     PSMTXRotRad(mtx, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
-    PSMTXScale(rot, work->scale, work->scale, 1.0f);
-    PSMTXConcat(scaleMtx, mtx, scaleMtx);
-    PSMTXConcat(scaleMtx, rot, scaleMtx);
+    PSMTXScale(scaleMtx, work->scale, work->scale, 1.0f);
+    PSMTXConcat(transMtx, mtx, transMtx);
+    PSMTXConcat(transMtx, scaleMtx, transMtx);
     PSMTXRotRad(mtx, 'z', 0.017453292f * work->rotation);
-    PSMTXConcat(scaleMtx, mtx, scaleMtx);
-    PSMTXConcat(camera->view, scaleMtx, scaleMtx);
-    GXLoadPosMtxImm(scaleMtx, GX_PNMTX0);
+    PSMTXConcat(transMtx, mtx, transMtx);
+    PSMTXConcat(camera->view, transMtx, transMtx);
+    GXLoadPosMtxImm(transMtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
     if (work->progress > 4.0f) {
         GXSetTevColor(GX_TEVREG0, (GXColor){255, 255, 255, 127});

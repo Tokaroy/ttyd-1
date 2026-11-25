@@ -1,57 +1,77 @@
 // aji_09 (敵のアジト, X-Naut Fortress): the locker room: the changing booths (kou) and lockers (rokka) where
-// Peach puts on an X-Naut uniform (peach_evt_fuku_g).
+// Peach puts on an X-Naut uniform (peach_evt_kou_in).
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "party.h"
-#include "mario/mario.h"
-#include "driver/animdrv.h"
-#include "manager/evtmgr_cmd.h"
-#include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_case.h"
 #include "evt/evt_fade.h"
 #include "evt/evt_hit.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "aji.h"
-#include "version.h"
-#include "evt/evt_story.h"
 #include "driver/mapdrv.h"
+#include "system.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
+
+#if VERSION <= VERSION_DEMO_JP
+#include "driver/itemdrv.h"
+#include "evt/evt_item.h"
+#endif
+
+#include "party.h"
+#include "mario/mario.h"
+#include "driver/animdrv.h"
+#include "manager/evtmgr_cmd.h"
+#include "evt/evt_bero.h"
+#include "aji.h"
+#include "driver/seqdrv.h"
 
 static USER_FUNC(check_kou_evt);
 static USER_FUNC(dot_mario);
 static USER_FUNC(peach_set_pose);
 
+static EvtWord s_door_open[22];
+static EvtWord s_door_close[22];
 static BeroEntry bero_entry_data[2];
-extern EvtWord peach_evt_bero_out1[];
-BeroEntry bero_data_peach1[2];
-extern EvtWord peach_evt_bero_out2[];
-BeroEntry bero_data_peach2[2];
-extern EvtWord evt_kou1[];
+static EvtWord peach_evt_bero_out1[25];
+static BeroEntry bero_data_peach1[2];
+static EvtWord peach_evt_bero_out2[25];
+static BeroEntry bero_data_peach2[2];
+static EvtWord evt_kou1[115];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord evt_kou2[];
-const char* rokka_data[21];
-extern EvtWord evt_rokka_open[];
-extern EvtWord evt_rokka_close[];
-extern EvtWord evt_rokka_init[];
-extern EvtWord peach_evt_fuku_g[];
-extern EvtWord peach_evt_ka_open[];
-extern EvtWord peach_evt_ka_close[];
-extern EvtWord peach_evt_kou_in[];
-extern EvtWord peach_evt_kou_out[];
-extern EvtWord peach_evt_kou1_in[];
-extern EvtWord peach_evt_kou1_out[];
-extern EvtWord peach_evt_kou2_in[];
-extern EvtWord peach_evt_kou2_out[];
-extern EvtWord s_bero_out[];
+#else
+EvtWord evt_kou2[155];
+#endif
+
+static const char* rokka_data[21];
+static EvtWord evt_rokka_open[127];
+static EvtWord evt_rokka_close[165];
+static EvtWord evt_rokka_init[34];
+static EvtWord peach_evt_fuku_g[36];
+static EvtWord peach_evt_ka_open[46];
+static EvtWord peach_evt_ka_close[46];
+static EvtWord peach_evt_kou_in[172];
+static EvtWord peach_evt_kou_out[89];
+static EvtWord peach_evt_kou1_in[72];
+static EvtWord peach_evt_kou1_out[43];
+static EvtWord peach_evt_kou2_in[72];
+static EvtWord peach_evt_kou2_out[43];
+static EvtWord s_bero_out[90];
+static EvtWord peach_evt_stg3[262];
+static EvtWord evt_memo1[21];
+static EvtWord evt_memo2[14];
+EvtWord aji_09_init_evt[];
 
 /**
  * Door open animation step: moves the two door leaves S_door1_2
@@ -104,11 +124,11 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Exit event of the first exit (hit area on the changing-room side) in Peach's section:
- * without the X-Naut disguise (GSWF_AJI09_PEACH3_DISGUISED = 0) she says she cannot go out like this
+ * without the X-Naut disguise (GSWF_AJI_PEACH_IN_UNIFORM = 0) TEC's voice tells her she must change first
  * (peach_aji_133) and LW(0) = 1 tells the exit to be cancelled; disguised, LW(0) = 0 lets her through.
  */
-EVT_BEGIN(peach_evt_bero_out1)
-    IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
+static EVT_BEGIN(peach_evt_bero_out1)
+    IF_INT_EQUAL(GSWF_AJI_PEACH_IN_UNIFORM, 0)
         CALL(evt_mario_key_onoff, 0)
         CALL(evt_msg_print, 0, STRING("peach_aji_133"), 0, 0)
         CALL(evt_mario_key_onoff, 1)
@@ -123,7 +143,7 @@ EVT_END()
  * Replacement for the south door exit, swapped in with evt_bero_overwrite during Peach's scene so it leads
  * on to aji_01 (n_bero_4).
  */
-BeroEntry bero_data_peach1[] = {
+static BeroEntry bero_data_peach1[] = {
     {
         "s_bero", // hitName
         1, // type
@@ -134,7 +154,7 @@ BeroEntry bero_data_peach1[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)peach_evt_bero_out1, // exitEvent
+        peach_evt_bero_out1, // exitEvent
         "aji_01", // nextMapName
         "n_bero_4", // nextBeroName
         5, // enterAnimeType
@@ -147,11 +167,11 @@ BeroEntry bero_data_peach1[] = {
 
 /**
  * Exit event of the second exit in Peach's section, the mirror of peach_evt_bero_out1:
- * while disguised she says peach_aji_155_01 (she should not leave in the disguise)
+ * while disguised TEC's voice says peach_aji_155_01 (she must change back into the dress before leaving)
  * and LW(0) = 1 cancels the exit; undisguised, LW(0) = 0 lets her through.
  */
-EVT_BEGIN(peach_evt_bero_out2)
-    IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
+static EVT_BEGIN(peach_evt_bero_out2)
+    IF_INT_EQUAL(GSWF_AJI_PEACH_IN_UNIFORM, 0)
         SET_VALUE(LW(0), 0)
     ELSE
         CALL(evt_mario_key_onoff, 0)
@@ -166,7 +186,7 @@ EVT_END()
  * Replacement for the south door exit, swapped in with evt_bero_overwrite during Peach's scene so it leads
  * on to aji_17 (w_bero).
  */
-BeroEntry bero_data_peach2[] = {
+static BeroEntry bero_data_peach2[] = {
     {
         "s_bero", // hitName
         1, // type
@@ -177,7 +197,7 @@ BeroEntry bero_data_peach2[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)peach_evt_bero_out2, // exitEvent
+        peach_evt_bero_out2, // exitEvent
         "aji_17", // nextMapName
         "w_bero", // nextBeroName
         5, // enterAnimeType
@@ -192,13 +212,13 @@ BeroEntry bero_data_peach2[] = {
  * Case script for the first changing booth's curtain (A_kou1_ka_omo and A_kou1_ka_ura):
  * rolls the curtain S_kou1_ka open or closed depending on GF(0), toggling it each time.
  */
-EVT_BEGIN(evt_kou1)
+static EVT_BEGIN(evt_kou1)
     CALL(evt_hit_bind_mapobj, STRING("A_kou1_ka_omo"), STRING("S_kou1_ka"))
     CALL(evt_hit_bind_mapobj, STRING("A_kou1_ka_ura"), STRING("S_kou1_ka"))
     IF_INT_EQUAL(GF(0), 0)
         CALL(evt_mapobj_get_position, STRING("S_kou1_ka"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_CURTAIN_OPEN1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 11, 1000, 100, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1000, 100, 500)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -213,7 +233,7 @@ EVT_BEGIN(evt_kou1)
     ELSE
         CALL(evt_mapobj_get_position, STRING("S_kou1_ka"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_CURTAIN_CLOSE1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 11, 100, 1000, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 100, 1000, 500)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -232,13 +252,13 @@ EVT_END()
 /**
  * Case script for the second changing booth's curtain (A_kou2_ka_omo and A_kou2_ka_ura),
  * which also toggles open and closed through GF(1).
- * When the map is entered from the ceiling ("tenjo") Mario turns into 8-bit pixel Mario (dot_mario,
- * GSWF_AJI09_PIXEL_MARIO_ACTIVE) and BGM_EVT_DOT_MARIO1 plays while he stays in that form.
+ * With GSWF_AJI_09_DOT_MARIO_SEEN clear and entrance "tenjo", calls dot_mario and sets that flag.
+ * Opening the curtain with that flag set starts BGM_EVT_DOT_MARIO1.
  */
 EVT_BEGIN(evt_kou2)
     CALL(evt_hit_bind_mapobj, STRING("A_kou2_ka_omo"), STRING("S_kou2_ka"))
     CALL(evt_hit_bind_mapobj, STRING("A_kou2_ka_ura"), STRING("S_kou2_ka"))
-    IF_INT_EQUAL(GSWF(GSWF_AJI09_PIXEL_MARIO_ACTIVE), 0)
+    IF_INT_EQUAL(GSWF_AJI_09_DOT_MARIO_SEEN, 0)
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("tenjo"))
 #if VERSION >= VERSION_JP
@@ -247,9 +267,9 @@ EVT_BEGIN(evt_kou2)
             CALL(evt_mario_normalize)
             CALL(dot_mario)
             WAIT_MS(1000)
-            SET_VALUE(GSWF(GSWF_AJI09_PIXEL_MARIO_ACTIVE), 1)
-            CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-            CALL(evt_snd_envoff, PSND_FADE_OUT)
+            SET_VALUE(GSWF_AJI_09_DOT_MARIO_SEEN, 1)
+            CALL(evt_snd_bgmoff, PSND_FADEOUT)
+            CALL(evt_snd_envoff, PSND_FADEOUT)
 #if VERSION >= VERSION_JP
             CALL(evt_mario_key_onoff, 1)
 #endif
@@ -258,10 +278,10 @@ EVT_BEGIN(evt_kou2)
     IF_INT_EQUAL(GF(1), 0)
         CALL(evt_mapobj_get_position, STRING("S_kou2_ka"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_CURTAIN_OPEN1"), LW(0), LW(1), LW(2), 0)
-        IF_INT_EQUAL(GSWF(GSWF_AJI09_PIXEL_MARIO_ACTIVE), 1)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DOT_MARIO1"))
+        IF_INT_EQUAL(GSWF_AJI_09_DOT_MARIO_SEEN, 1)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DOT_MARIO1"))
         END_IF
-        CALL(evt_sub_intpl_msec_init, 11, 1000, 200, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1000, 200, 500)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -276,7 +296,7 @@ EVT_BEGIN(evt_kou2)
     ELSE
         CALL(evt_mapobj_get_position, STRING("S_kou2_ka"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_CURTAIN_CLOSE1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_sub_intpl_msec_init, 11, 200, 1000, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 200, 1000, 500)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -293,7 +313,7 @@ EVT_BEGIN(evt_kou2)
 EVT_END()
 
 /** Names of the locker parts (door and hit areas) that the room sets up; read until the terminator. */
-const char* rokka_data[] = {
+static const char* rokka_data[] = {
     "R_door_1",
     "a_door_1",
     "a_door_1_omote",
@@ -321,7 +341,7 @@ const char* rokka_data[] = {
  * Opens a locker door: swings the locker (map object LW(0)) open by 120 degrees over 40 frames with
  * SFX_PEACH_LOCKER_OPEN1, then attaches evt_rokka_close to its push and stand-on areas so that it closes again.
  */
-EVT_BEGIN(evt_rokka_open)
+static EVT_BEGIN(evt_rokka_open)
     CALL(evt_mario_get_pos, 0, LW(13), LW(14), LW(15))
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_LOCKER_OPEN1"), LW(13), LW(14), LW(15), 0)
     SET_VALUE(LW(5), LW(0))
@@ -329,7 +349,7 @@ EVT_BEGIN(evt_rokka_open)
     SET_VALUE(LW(7), LW(2))
     SET_VALUE(LW(8), LW(3))
     SET_VALUE(LW(9), LW(4))
-    CALL(evt_sub_intpl_init, 12, 0, 120, 40)
+    CALL(evt_sub_intpl_init, EASING_SINE_OUT, 0, 120, 40)
     LOOP(41)
         CALL(evt_sub_intpl_get_value)
         CALL(evt_mapobj_rotate, 1, LW(5), 0, LW(0), 0)
@@ -342,14 +362,16 @@ EVT_BEGIN(evt_rokka_open)
     SET_VALUE(LW(3), LW(8))
     SET_VALUE(LW(4), LW(9))
     SET_VALUE(LW(10), 0)
-    CALL(evt_run_case_evt, CASE_COND_PUSH, 1, LW(2), 0, PTR(evt_rokka_close), LW(11))
+    CALL(evt_run_case_evt, CASE_PUSH, 1, LW(2), 0, PTR(evt_rokka_close), LW(11))
     SET_VALUE(LW(0), LW(5))
     SET_VALUE(LW(1), LW(6))
     SET_VALUE(LW(2), LW(7))
     SET_VALUE(LW(3), LW(8))
     SET_VALUE(LW(4), LW(9))
     SET_VALUE(LW(10), 1)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, LW(4), 0, PTR(evt_rokka_close), LW(12))
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, LW(4), 0, PTR(evt_rokka_close), LW(12))
+
+    // Each closing trigger remembers both IDs so it can remove the other trigger.
     CALL(evt_set_case_wrk, LW(11), 11, LW(11))
     CALL(evt_set_case_wrk, LW(11), 12, LW(12))
     CALL(evt_set_case_wrk, LW(12), 11, LW(11))
@@ -359,10 +381,12 @@ EVT_BEGIN(evt_rokka_open)
 EVT_END()
 
 /**
- * Closes a locker door again (the reverse swing, 40 or 20 frames depending on LW(10))
- * and attaches evt_rokka_open to the locker's front area again.
+ * Closes a locker opened by evt_rokka_open (its map object, hit objects and case ids in LW(0) to LW(4), LW(11),
+ * LW(12)): deletes the other closing case, plays SFX_PEACH_LOCKER_CLOSE1 and swings the door from 120 back to 0 degrees
+ * (40 frames when LW(10) is 0, else 20), then re-attaches evt_rokka_open (on A press, or on push when LW(10) is
+ * nonzero).
  */
-EVT_BEGIN(evt_rokka_close)
+static EVT_BEGIN(evt_rokka_close)
     IF_INT_EQUAL(LW(10), 0)
         CALL(evt_del_case_evt, 0, LW(12))
         CALL(evt_mario_get_pos, 0, LW(13), LW(14), LW(15))
@@ -372,7 +396,7 @@ EVT_BEGIN(evt_rokka_close)
         SET_VALUE(LW(7), LW(2))
         SET_VALUE(LW(8), LW(3))
         SET_VALUE(LW(9), LW(4))
-        CALL(evt_sub_intpl_init, 12, 120, 0, 40)
+        CALL(evt_sub_intpl_init, EASING_SINE_OUT, 120, 0, 40)
         LOOP(41)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_mapobj_rotate, 1, LW(5), 0, LW(0), 0)
@@ -384,7 +408,7 @@ EVT_BEGIN(evt_rokka_close)
         SET_VALUE(LW(2), LW(7))
         SET_VALUE(LW(3), LW(8))
         SET_VALUE(LW(4), LW(9))
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(2), 0, PTR(evt_rokka_open), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(2), 0, PTR(evt_rokka_open), 0)
     ELSE
         CALL(evt_del_case_evt, 0, LW(11))
         CALL(evt_mario_get_pos, 0, LW(13), LW(14), LW(15))
@@ -394,7 +418,7 @@ EVT_BEGIN(evt_rokka_close)
         SET_VALUE(LW(7), LW(2))
         SET_VALUE(LW(8), LW(3))
         SET_VALUE(LW(9), LW(4))
-        CALL(evt_sub_intpl_init, 12, 120, 0, 20)
+        CALL(evt_sub_intpl_init, EASING_SINE_OUT, 120, 0, 20)
         LOOP(21)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_mapobj_rotate, 1, LW(5), 0, LW(0), 0)
@@ -406,17 +430,17 @@ EVT_BEGIN(evt_rokka_close)
         SET_VALUE(LW(2), LW(7))
         SET_VALUE(LW(3), LW(8))
         SET_VALUE(LW(4), LW(9))
-        CALL(evt_run_case_evt, CASE_COND_PUSH, 1, LW(3), 0, PTR(evt_rokka_open), 0)
+        CALL(evt_run_case_evt, CASE_PUSH, 1, LW(3), 0, PTR(evt_rokka_open), 0)
     END_IF
     CALL(evt_exit_case_evt)
     RETURN
 EVT_END()
 
 /**
- * Attaches evt_rokka_open to every locker listed in rokka_data (read until a 0 entry),
- * so Mario can open each one from the front.
+ * Binds each locker's hit object to its map object and attaches evt_rokka_open (A press) for every entry of rokka_data;
+ * run by aji_09_init_evt.
  */
-EVT_BEGIN(evt_rokka_init)
+static EVT_BEGIN(evt_rokka_init)
     SET_INT_READ_ADDR(PTR(&rokka_data))
     LOOP(0)
         READ_INT3(LW(0), LW(1), LW(2))
@@ -426,36 +450,33 @@ EVT_BEGIN(evt_rokka_init)
         END_IF
         CALL(evt_hit_bind_mapobj, LW(1), LW(0))
         SET_VALUE(LW(10), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(2), 0, PTR(evt_rokka_open), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(2), 0, PTR(evt_rokka_open), 0)
     END_LOOP
     RETURN
 EVT_END()
 
 /**
- * Peach finds the X-Naut uniform in the locker:
- * she and the narrator comment (peach_aji_134 and 135), and GSWF_AJI09_PEACH3_UNIFORM_TAKEN is set.
+ * Peach takes the X-Naut uniform: she says peach_aji_134, then peach_aji_135 is shown with no speaker,
+ * GSWF_AJI_09_UNIFORM_TAKEN is set and R_fuku_g is hidden with its hit object.
  */
-EVT_BEGIN(peach_evt_fuku_g)
+static EVT_BEGIN(peach_evt_fuku_g)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_msg_print, 0, STRING("peach_aji_134"), 0, STRING("mario"))
     CALL(evt_msg_print, 0, STRING("peach_aji_135"), 0, 0)
-    SET_VALUE(GSWF(GSWF_AJI09_PEACH3_UNIFORM_TAKEN), 1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("R_fuku_g"), MAPOBJ_FLAG_HIDE)
+    SET_VALUE(GSWF_AJI_09_UNIFORM_TAKEN, 1)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("R_fuku_g"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_R_fuku_g"), 1, 0)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_exit_case_evt)
     RETURN
 EVT_END()
 
-/**
- * Opens a changing-booth curtain (map object LW(0)):
- * plays SFX_PEACH_CURTAIN_OPEN1 and scales it down along X from full width to a tenth over half a second.
- */
-EVT_BEGIN(peach_evt_ka_open)
+/** Opens the booth curtain map object in LW(0): SFX_PEACH_CURTAIN_OPEN1 and an X scale from 1 to 0.1 over 500 ms. */
+static EVT_BEGIN(peach_evt_ka_open)
     SET_VALUE(LW(2), LW(0))
     CALL(evt_mapobj_get_position, LW(0), LW(1), LW(3), LW(4))
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_CURTAIN_OPEN1"), LW(1), LW(3), LW(4), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 1000, 100, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1000, 100, 500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -468,14 +489,13 @@ EVT_BEGIN(peach_evt_ka_open)
 EVT_END()
 
 /**
- * Closes a changing-booth curtain (map object LW(0)):
- * the reverse of peach_evt_ka_open, scaling it back to full width.
+ * Closes the booth curtain map object in LW(0): SFX_PEACH_CURTAIN_CLOSE1 and an X scale from 0.1 back to 1 over 500 ms.
  */
-EVT_BEGIN(peach_evt_ka_close)
+static EVT_BEGIN(peach_evt_ka_close)
     SET_VALUE(LW(2), LW(0))
     CALL(evt_mapobj_get_position, LW(0), LW(1), LW(3), LW(4))
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_CURTAIN_CLOSE1"), LW(1), LW(3), LW(4), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 100, 1000, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 100, 1000, 500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -488,12 +508,14 @@ EVT_BEGIN(peach_evt_ka_close)
 EVT_END()
 
 /**
- * Peach steps into a changing booth: the curtain opens and closes,
- * and Peach comments depending on the story point (peach_aji_136, 137, 137_02 for the disguise,
- * 154 on the way back) and on which of the two booths she used (GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1).
- * Returns in LW(15) whether she changes clothes.
+ * Peach uses a changing booth (LW(0) the x position, LW(1) the curtain): it opens, she walks in, it closes.
+ * Only once GSWF_AJI_09_UNIFORM_TAKEN is set: from STG3_33_02_PEACH_INCOGNITO on, in the booth other than
+ * the one she changed in (GSWF_AJI_09_CHANGED_IN_BOOTH_1 means S_kou1_ka) she says peach_aji_137_02 and
+ * LW(15) = 1. At STG3_33_03 she says peach_aji_154 unless GSWF_AJI_09_PEACH_DRESS_BACK_ON; at STG3_33_01
+ * she says peach_aji_136 and 137 and the booth is recorded. Then GSWF_AJI_PEACH_IN_UNIFORM and her uniform
+ * toggle. Otherwise LW(15) = 0.
  */
-EVT_BEGIN(peach_evt_kou_in)
+static EVT_BEGIN(peach_evt_kou_in)
     SET_VALUE(LW(10), LW(0))
     SET_VALUE(LW(9), LW(1))
     SET_VALUE(LW(0), LW(9))
@@ -501,25 +523,25 @@ EVT_BEGIN(peach_evt_kou_in)
     CALL(evt_mario_mov_pos2, LW(10), -125, FLOAT(60.0f))
     SET_VALUE(LW(0), LW(9))
     CALL_CHILD(peach_evt_ka_close)
-    IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_UNIFORM_TAKEN), 1)
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_02_PEACH_INCOGNITO)
+    IF_INT_EQUAL(GSWF_AJI_09_UNIFORM_TAKEN, 1)
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_33_02_PEACH_INCOGNITO)
             IF_STR_EQUAL(LW(9), STRING("S_kou1_ka"))
-                IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 0)
+                IF_INT_EQUAL(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 0)
                     CALL(evt_msg_print, 0, STRING("peach_aji_137_02"), 0, STRING("mario"))
                     SET_VALUE(LW(15), 1)
                     RETURN
                 END_IF
             ELSE
-                IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 1)
+                IF_INT_EQUAL(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 1)
                     CALL(evt_msg_print, 0, STRING("peach_aji_137_02"), 0, STRING("mario"))
                     SET_VALUE(LW(15), 1)
                     RETURN
                 END_IF
             END_IF
         END_IF
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_03_PEACH_GRODUS)
-            IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGE_BACK_REMARK), 0)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_03_PEACH_GRODUS)
+            IF_INT_EQUAL(GSWF_AJI_09_PEACH_DRESS_BACK_ON, 0)
                 CALL(evt_msg_print, 0, STRING("peach_aji_154"), 0, STRING("mario"))
             END_IF
         END_IF
@@ -528,7 +550,7 @@ EVT_BEGIN(peach_evt_kou_in)
         CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_CHANGE_CLOTH1"), LW(0), LW(1), LW(2), LW(3))
         CALL(evt_snd_sfx_dist, LW(3), 0)
         WAIT_MS(1000)
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_01_PEACH_TECS_REQUEST)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_01_PEACH_TECS_REQUEST)
             WAIT_MS(1000)
             CALL(evt_msg_print, 0, STRING("peach_aji_136"), 0, STRING("mario"))
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -536,19 +558,19 @@ EVT_BEGIN(peach_evt_kou_in)
             CALL(evt_snd_sfx_dist, LW(3), 0)
             WAIT_MS(2500)
         END_IF
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_01_PEACH_TECS_REQUEST)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_01_PEACH_TECS_REQUEST)
             CALL(evt_msg_print, 0, STRING("peach_aji_137"), 0, STRING("mario"))
             IF_STR_EQUAL(LW(9), STRING("S_kou1_ka"))
-                SET_VALUE(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 1)
+                SET_VALUE(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 1)
             ELSE
-                SET_VALUE(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 0)
+                SET_VALUE(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 0)
             END_IF
         END_IF
-        IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
-            SET_VALUE(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 1)
+        IF_INT_EQUAL(GSWF_AJI_PEACH_IN_UNIFORM, 0)
+            SET_VALUE(GSWF_AJI_PEACH_IN_UNIFORM, 1)
             CALL(evt_peach_transform_gundan_on)
         ELSE
-            SET_VALUE(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
+            SET_VALUE(GSWF_AJI_PEACH_IN_UNIFORM, 0)
             CALL(evt_peach_transform_gundan_off)
         END_IF
     END_IF
@@ -557,40 +579,41 @@ EVT_BEGIN(peach_evt_kou_in)
 EVT_END()
 
 /**
- * Peach steps out of a changing booth: the curtain opens and closes again,
- * the music resumes and she remarks on the change (peach_aji_137_01, 155) depending on the story point
- * and the booth.
+ * Peach steps out of a changing booth (x in LW(0), curtain in LW(1)): restores the field music, opens the curtain,
+ * walks to z -55 and closes it. With the uniform taken (GSWF_AJI_09_UNIFORM_TAKEN) it prints peach_aji_137_01 at
+ * STG3_33_01, and at STG3_33_03 in the booth she changed in prints peach_aji_155 once
+ * (GSWF_AJI_09_PEACH_DRESS_BACK_ON).
  */
-EVT_BEGIN(peach_evt_kou_out)
+static EVT_BEGIN(peach_evt_kou_out)
     SET_VALUE(LW(10), LW(0))
     SET_VALUE(LW(9), LW(1))
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     SET_VALUE(LW(0), LW(9))
     CALL_CHILD(peach_evt_ka_open)
     CALL(evt_mario_mov_pos2, LW(10), -55, FLOAT(60.0f))
     SET_VALUE(LW(0), LW(9))
     CALL_CHILD(peach_evt_ka_close)
-    IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_UNIFORM_TAKEN), 1)
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_01_PEACH_TECS_REQUEST)
+    IF_INT_EQUAL(GSWF_AJI_09_UNIFORM_TAKEN, 1)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_01_PEACH_TECS_REQUEST)
             CALL(evt_msg_print, 0, STRING("peach_aji_137_01"), 0, STRING("mario"))
         END_IF
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_03_PEACH_GRODUS)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_03_PEACH_GRODUS)
             IF_STR_EQUAL(LW(9), STRING("S_kou1_ka"))
-                IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 0)
+                IF_INT_EQUAL(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 0)
                     RETURN
                 END_IF
             ELSE
-                IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 1)
+                IF_INT_EQUAL(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 1)
                     RETURN
                 END_IF
             END_IF
-            IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGE_BACK_REMARK), 0)
+            IF_INT_EQUAL(GSWF_AJI_09_PEACH_DRESS_BACK_ON, 0)
                 CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("P_S_7"), STRING("P_T_13"))
                 CALL(evt_msg_print, 0, STRING("peach_aji_155"), 0, STRING("mario"))
                 CALL(peach_set_pose, STRING("P_S_1"))
                 CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("P_S_1"), STRING("P_T_1"))
-                SET_VALUE(GSWF(GSWF_AJI09_PEACH3_CHANGE_BACK_REMARK), 1)
+                SET_VALUE(GSWF_AJI_09_PEACH_DRESS_BACK_ON, 1)
             END_IF
         END_IF
     END_IF
@@ -598,12 +621,11 @@ EVT_BEGIN(peach_evt_kou_out)
 EVT_END()
 
 /**
- * Case script for stepping into the first changing booth from the front (A_kou1_ka_omo):
- * check_kou_evt decides if the letter box is lifted, runs peach_evt_kou_in with the curtain S_kou1_ka, and,
- * if she has the uniform, swaps the clothes shown in the booth (S_fuku1_g, the X-Naut uniform, and S_fuku1_p,
- * her dress).
+ * Case script of booth 1's front (A_kou1_ka_omo) in Peach's scenes: runs peach_evt_kou_in for S_kou1_ka and, when she
+ * changed (LW(15) 0) with the uniform taken, shows the clothes she left in the booth (S_fuku1_g or S_fuku1_p by
+ * GSWF_AJI_PEACH_IN_UNIFORM). The letterbox is off unless check_kou_evt says otherwise.
  */
-EVT_BEGIN(peach_evt_kou1_in)
+static EVT_BEGIN(peach_evt_kou1_in)
     CALL(check_kou_evt, 0, 1, LF(0))
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_cam_letter_box_disable, 1)
@@ -613,13 +635,13 @@ EVT_BEGIN(peach_evt_kou1_in)
     SET_VALUE(LW(1), STRING("S_kou1_ka"))
     CALL_CHILD(peach_evt_kou_in)
     IF_INT_EQUAL(LW(15), 0)
-        IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_UNIFORM_TAKEN), 1)
-            IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_p"), MAPOBJ_FLAG_HIDE)
+        IF_INT_EQUAL(GSWF_AJI_09_UNIFORM_TAKEN, 1)
+            IF_INT_EQUAL(GSWF_AJI_PEACH_IN_UNIFORM, 0)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_p"), MAP_OBJ_FLAG_HIDDEN)
             ELSE
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_p"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_p"), MAP_OBJ_FLAG_HIDDEN)
             END_IF
         END_IF
     END_IF
@@ -631,11 +653,10 @@ EVT_BEGIN(peach_evt_kou1_in)
 EVT_END()
 
 /**
- * Case script for stepping out of the first changing booth (A_kou1_ka_ura):
- * runs peach_evt_kou_out and, when this was the booth that mattered (LF(0)),
- * moves the story from STORY_STG3_33_01_PEACH_TECS_REQUEST to STORY_STG3_33_02_PEACH_INCOGNITO.
+ * Case script of booth 1's back (A_kou1_ka_ura): runs peach_evt_kou_out for S_kou1_ka; when check_kou_evt reports a
+ * change it moves STG3_33_01 on to STG3_33_02_PEACH_INCOGNITO.
  */
-EVT_BEGIN(peach_evt_kou1_out)
+static EVT_BEGIN(peach_evt_kou1_out)
     CALL(check_kou_evt, 1, 1, LF(0))
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_cam_letter_box_disable, 1)
@@ -647,19 +668,16 @@ EVT_BEGIN(peach_evt_kou1_out)
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_cam_letter_box_disable, 0)
     ELSE
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_01_PEACH_TECS_REQUEST)
-            SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_02_PEACH_INCOGNITO)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_01_PEACH_TECS_REQUEST)
+            SET_VALUE(GSW_STORY_PROGRESS, STG3_33_02_PEACH_INCOGNITO)
         END_IF
     END_IF
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
-/**
- * Case script for stepping into the second changing booth from the front (A_kou2_ka_omo):
- * the same as peach_evt_kou1_in for the curtain S_kou2_ka.
- */
-EVT_BEGIN(peach_evt_kou2_in)
+/** peach_evt_kou1_in for booth 2 (A_kou2_ka_omo, S_kou2_ka, clothes S_fuku2_g / S_fuku2_p). */
+static EVT_BEGIN(peach_evt_kou2_in)
     CALL(check_kou_evt, 0, 0, LF(0))
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_cam_letter_box_disable, 1)
@@ -669,13 +687,13 @@ EVT_BEGIN(peach_evt_kou2_in)
     SET_VALUE(LW(1), STRING("S_kou2_ka"))
     CALL_CHILD(peach_evt_kou_in)
     IF_INT_EQUAL(LW(15), 0)
-        IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_UNIFORM_TAKEN), 1)
-            IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_p"), MAPOBJ_FLAG_HIDE)
+        IF_INT_EQUAL(GSWF_AJI_09_UNIFORM_TAKEN, 1)
+            IF_INT_EQUAL(GSWF_AJI_PEACH_IN_UNIFORM, 0)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_p"), MAP_OBJ_FLAG_HIDDEN)
             ELSE
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_p"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_p"), MAP_OBJ_FLAG_HIDDEN)
             END_IF
         END_IF
     END_IF
@@ -686,11 +704,8 @@ EVT_BEGIN(peach_evt_kou2_in)
     RETURN
 EVT_END()
 
-/**
- * Case script for stepping out of the second changing booth (A_kou2_ka_ura):
- * the same as peach_evt_kou1_out for the other booth.
- */
-EVT_BEGIN(peach_evt_kou2_out)
+/** peach_evt_kou1_out for booth 2 (A_kou2_ka_ura, S_kou2_ka). */
+static EVT_BEGIN(peach_evt_kou2_out)
     CALL(check_kou_evt, 1, 0, LF(0))
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_cam_letter_box_disable, 1)
@@ -702,8 +717,8 @@ EVT_BEGIN(peach_evt_kou2_out)
     IF_INT_EQUAL(LF(0), 0)
         CALL(evt_cam_letter_box_disable, 0)
     ELSE
-        IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_01_PEACH_TECS_REQUEST)
-            SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_02_PEACH_INCOGNITO)
+        IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_01_PEACH_TECS_REQUEST)
+            SET_VALUE(GSW_STORY_PROGRESS, STG3_33_02_PEACH_INCOGNITO)
         END_IF
     END_IF
     CALL(evt_mario_key_onoff, 1)
@@ -711,18 +726,18 @@ EVT_BEGIN(peach_evt_kou2_out)
 EVT_END()
 
 /**
- * Exit event of the door s_bero: Peach in her disguise leaves the changing room through the door
- * and the map changes to aji_17 (entering at w_bero), after the door opens and the screen fades out;
- * without the disguise she says peach_aji_155_01 and stays.
+ * Case script of the s_bero door in Peach's scenes: out of uniform (GSWF_AJI_PEACH_IN_UNIFORM 0) the door opens
+ * (s_door_open), Peach walks out, the screen fades and the map changes to aji_17 at w_bero; in uniform peach_aji_155_01
+ * prints. US and later take the controls first in both cases.
  */
-EVT_BEGIN(s_bero_out)
+static EVT_BEGIN(s_bero_out)
 #if VERSION >= VERSION_US
     CALL(evt_mario_key_onoff, 0)
 #endif
-    IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
+    IF_INT_EQUAL(GSWF_AJI_PEACH_IN_UNIFORM, 0)
         SET_VALUE(LW(1), 0)
         SPAWN_EVENT(bero_open_door_play_se)
-        CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(10))
             IF_INT_EQUAL(LW(10), 0)
@@ -735,17 +750,17 @@ EVT_BEGIN(s_bero_out)
         END_LOOP
         BEGIN_INLINE_EVENT
             CALL(evt_bero_get_start_position, LW(0), LW(1), LW(2))
-            CALL(evt_mario_flag_onoff, 1, 256)
+            CALL(evt_mario_flag_onoff, 1, MARIO_FLAG_FLOORS_DISABLED)
             CALL(evt_mario_mov_pos2, LW(0), 450, FLOAT(150.0f))
         END_INLINE_EVENT
         WAIT_MS(150)
         CALL(evt_fade_entry, FADE_OUT_BLACK, 300, 0, 0, 0)
         CALL(evt_fade_end_wait)
         WAIT_MS(1000)
-        CALL(evt_fade_set_mapchange_type, 0, FADE_NONE, 0, FADE_IN_BLACK, 300)
+        CALL(evt_fade_set_mapchange_type, 0, 0, 0, FADE_IN_BLACK, 300)
         CALL(evt_bero_mapchange, STRING("aji_17"), STRING("w_bero"))
     ELSE
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
         CALL(evt_mario_key_onoff, 0)
 #endif
         CALL(evt_msg_print, 0, STRING("peach_aji_155_01"), 0, 0)
@@ -753,60 +768,59 @@ EVT_BEGIN(s_bero_out)
     END_IF
 #endif
         CALL(evt_mario_key_onoff, 1)
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
     END_IF
 #endif
     RETURN
 EVT_END()
 
 /**
- * Peach's chapter 3 setup of the locker room: depending on the story point (before
- * STORY_STG3_33_02_PEACH_INCOGNITO, in disguise or not,
- * and which changing booth she last used) it shows the right outfit models (S_fuku*),
- * attaches the booth entrance and exit scripts (peach_evt_kou1_in/out, kou2_in/out) and rewires the s_bero exit;
- * at STORY_STG3_33_01_PEACH_TECS_REQUEST it shows peach_aji_132
- * and at STORY_STG3_33_03_PEACH_GRODUS peach_aji_152 and 153 with a camera move.
+ * Peach's chapter 3 setup of this room: before STG3_33_02_PEACH_INCOGNITO the uniform R_fuku_g can be taken
+ * (peach_evt_fuku_g); later the outfit models (S_fuku*) follow GSWF_AJI_PEACH_IN_UNIFORM and
+ * GSWF_AJI_09_CHANGED_IN_BOOTH_1. The booth scripts (peach_evt_kou1_in / out, kou2_in / out) are attached and the
+ * s_bero exit is rewired; STG3_33_01_PEACH_TECS_REQUEST prints peach_aji_132, STG3_33_03_PEACH_GRODUS
+ * peach_aji_152 and 153 with a camera move.
  */
 static EVT_BEGIN(peach_evt_stg3)
     CALL(evt_mario_key_onoff, 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_02_PEACH_INCOGNITO)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("R_fuku_g"), MAPOBJ_FLAG_HIDE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_33_02_PEACH_INCOGNITO)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("R_fuku_g"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_R_fuku_g"), 1, 1)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_R_fuku_g"), 0, PTR(peach_evt_fuku_g), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_R_fuku_g"), 0, PTR(peach_evt_fuku_g), 0)
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_DISGUISED), 0)
-            IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 0)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_p"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAPOBJ_FLAG_HIDE)
+        IF_INT_EQUAL(GSWF_AJI_PEACH_IN_UNIFORM, 0)
+            IF_INT_EQUAL(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 0)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_p"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAP_OBJ_FLAG_HIDDEN)
             ELSE
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_p"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_p"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAP_OBJ_FLAG_HIDDEN)
             END_IF
         ELSE
             CALL(evt_peach_transform_gundan_on)
-            IF_INT_EQUAL(GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1), 0)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_p"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAPOBJ_FLAG_HIDE)
+            IF_INT_EQUAL(GSWF_AJI_09_CHANGED_IN_BOOTH_1, 0)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku2_p"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAP_OBJ_FLAG_HIDDEN)
             ELSE
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_g"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_p"), MAPOBJ_FLAG_HIDE)
-                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAPOBJ_FLAG_HIDE)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_g"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_fuku1_p"), MAP_OBJ_FLAG_HIDDEN)
+                CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAP_OBJ_FLAG_HIDDEN)
             END_IF
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("R_fuku_g"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("R_fuku_g"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou1_ka_omo"), 0, PTR(peach_evt_kou1_in), 0)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou1_ka_ura"), 0, PTR(peach_evt_kou1_out), 0)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou2_ka_omo"), 0, PTR(peach_evt_kou2_in), 0)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou2_ka_ura"), 0, PTR(peach_evt_kou2_out), 0)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_bero_exec_wait, 65536)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_03_PEACH_GRODUS)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou1_ka_omo"), 0, PTR(peach_evt_kou1_in), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou1_ka_ura"), 0, PTR(peach_evt_kou1_out), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou2_ka_omo"), 0, PTR(peach_evt_kou2_in), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou2_ka_ura"), 0, PTR(peach_evt_kou2_out), 0)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_33_03_PEACH_GRODUS)
         SET_VALUE(LW(0), STRING("s_bero"))
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_bero_overwrite, STRING("s_bero"), PTR(bero_data_peach1))
@@ -815,20 +829,20 @@ static EVT_BEGIN(peach_evt_stg3)
     ELSE
         SET_VALUE(LW(0), 0)
         CALL_CHILD(bero_case_switch_off)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("s_bero"), 0, PTR(s_bero_out), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("s_bero"), 0, PTR(s_bero_out), 0)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_01_PEACH_TECS_REQUEST)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_01_PEACH_TECS_REQUEST)
         WAIT_MS(600)
         CALL(evt_msg_print, 0, STRING("peach_aji_132"), 0, 0)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_03_PEACH_GRODUS)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG3_33_03_PEACH_GRODUS)
         WAIT_MS(500)
         CALL(evt_mario_set_dir, 90, 300, 0)
         CALL(evt_msg_print, 0, STRING("peach_aji_152"), 0, STRING("mario"))
-        CALL(evt_cam3d_evt_set, 0, 60, 442, 0, 41, 42, 800, 11)
+        CALL(evt_cam3d_evt_set, 0, 60, 442, 0, 41, 42, 800, EASING_SINE_IN_OUT)
         WAIT_MS(800)
         CALL(evt_msg_print, 0, STRING("peach_aji_153"), 0, STRING("mario"))
-        CALL(evt_cam3d_evt_off, 800, 11)
+        CALL(evt_cam3d_evt_off, 800, EASING_SINE_IN_OUT)
         WAIT_MS(800)
     END_IF
     CALL(evt_mario_key_onoff, 1)
@@ -836,20 +850,20 @@ static EVT_BEGIN(peach_evt_stg3)
 EVT_END()
 
 /**
- * Reading the memo that contains today's password:
- * shows stg7_aji_33 and, if the story is earlier, advances it to STORY_STG7_11_PASSWORD_FOR_TODAY.
+ * Case script of note 1 (A_memo1; aji_06 registers a script of the same name): prints stg7_aji_33 and raises the story
+ * to STG7_11_PASSWORD_FOR_TODAY if it is lower.
  */
 static EVT_BEGIN(evt_memo1)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_msg_print, 0, STRING("stg7_aji_33"), 0, 0)
     CALL(evt_mario_key_onoff, 1)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG7_11_PASSWORD_FOR_TODAY)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_11_PASSWORD_FOR_TODAY)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG7_11_PASSWORD_FOR_TODAY)
+        SET_VALUE(GSW_STORY_PROGRESS, STG7_11_PASSWORD_FOR_TODAY)
     END_IF
     RETURN
 EVT_END()
 
-/** Reading a second memo: shows stg7_aji_33_01. */
+/** Case script of note 2 (A_memo2; aji_06 registers a script of the same name): prints stg7_aji_33_01. */
 static EVT_BEGIN(evt_memo2)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_msg_print, 0, STRING("stg7_aji_33_01"), 0, 0)
@@ -858,25 +872,28 @@ static EVT_BEGIN(evt_memo2)
 EVT_END()
 
 /**
- * Init script of aji_09, the changing room: sets up the exits and the lockers;
- * during Peach's X-Naut disguise scenes (STORY_STG3_33_01 to 03) it starts peach_evt_stg3,
- * otherwise it attaches the curtain scripts to both booths and the wall notes.
- * Entered as "tenjo" Mario drops in from the ceiling.
- * BGM_STG7_DUN2 plays for Mario and BGM_EVT_PEACH1 for Peach.
+ * Map init of aji_09 (relSetEvtAddr in aji.c): the entrances, the changing-room clothes and their hit object hidden.
+ * From STG3_33_01 to STG3_33_03 Peach (mode 1, no partner) runs peach_evt_stg3; otherwise the two changing booths get
+ * evt_kou1 and evt_kou2. Then the lockers (evt_rokka_init), the ceiling (tenjo) entrance drop (the PAL demo and PAL
+ * also pull the partner down to Mario), evt_emergency, and as Mario the two notes (evt_memo1, evt_memo2) with
+ * BGM_STG7_DUN2, as Peach BGM_EVT_PEACH1 with the notes hidden. The early demos place a Repel Cape from STG6_53; JP and
+ * later set reverb mode 1.
  */
 EVT_BEGIN(aji_09_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
+
     // The exits are set up and the changing-room clothes and hit areas start hidden.
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL(evt_hitobj_onoff, STRING("A_R_fuku_g"), 1, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("R_fuku_g"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("R_fuku_g"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LF(0), 0)
+
     // During Peach's disguise scenes (chapter 3) she takes over and her scene starts.
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_01_PEACH_TECS_REQUEST)
-        IF_INT_LESS_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_33_03_PEACH_GRODUS)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_33_01_PEACH_TECS_REQUEST)
+        IF_INT_LESS_OR_EQUAL(GSW_STORY_PROGRESS, STG3_33_03_PEACH_GRODUS)
             SET_VALUE(LF(0), 1)
         END_IF
     END_IF
@@ -886,17 +903,19 @@ EVT_BEGIN(aji_09_init_evt)
         SPAWN_EVENT(peach_evt_stg3)
     ELSE
         SET_VALUE(GF(0), 0)
-        // Otherwise the two changing booths get their curtain scripts and the lockers are set up.
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou1_ka_omo"), 0, PTR(evt_kou1), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou1_ka_ura"), 0, PTR(evt_kou1), 0)
+
+        // Otherwise the two changing booths get their curtain scripts; the lockers are set up in either case below.
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou1_ka_omo"), 0, PTR(evt_kou1), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou1_ka_ura"), 0, PTR(evt_kou1), 0)
         SET_VALUE(GF(1), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou2_ka_omo"), 0, PTR(evt_kou2), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kou2_ka_ura"), 0, PTR(evt_kou2), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_p"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_g"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou2_ka_omo"), 0, PTR(evt_kou2), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kou2_ka_ura"), 0, PTR(evt_kou2), 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku1_p"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_fuku2_g"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     CALL_CHILD(evt_rokka_init)
     CALL(evt_bero_get_entername, LW(0))
+
     // Entering from the ceiling (tenjo): Mario and his partner drop into the room and land.
     IF_STR_EQUAL(LW(0), STRING("tenjo"))
         CALL(evt_cam_letter_box_disable, 1)
@@ -908,7 +927,7 @@ EVT_BEGIN(aji_09_init_evt)
         CALL(evt_party_set_pos, 0, 160, 107, -105)
         CALL(evt_party_set_pos, 1, 150, 107, -95)
         BEGIN_INLINE_EVENT
-            CALL(evt_seq_wait, 2)
+            CALL(evt_seq_wait, SEQ_GAME)
             CALL(evt_mario_cont_onoff, 1)
             CALL(evt_party_cont_onoff, 0, 1)
             CALL(evt_party_cont_onoff, 1, 1)
@@ -932,23 +951,22 @@ EVT_BEGIN(aji_09_init_evt)
         END_INLINE_EVENT
     END_IF
 #if VERSION <= VERSION_DEMO_JP
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_53_THE_REAL_GARNET_STAR)
-        CALL(evt_item_entry, STRING("item_00"), ITEM_REPEL_CAPE, -180, 12, -135, ITEM_ENTRY_FIXED, GSWF(GSWF_AJI09_REPEL_CAPE_TAKEN), 0)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_53_THE_REAL_GARNET_STAR)
+        CALL(evt_item_entry, STRING("item_00"), ITEM_REPEL_CAPE, -180, 12, -135, ITEM_TYPE_STILL, GSWF(4213), 0)
     END_IF
 #endif
-    // The alarm starts; Mario can read the wall notes.
     SPAWN_EVENT(evt_emergency)
     CALL(evt_mario_get_mode, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_memo1"), 0, PTR(evt_memo1), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_memo2"), 0, PTR(evt_memo2), 0)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG7_DUN2"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG7_AJI2"))
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_memo1"), 0, PTR(evt_memo1), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_memo2"), 0, PTR(evt_memo2), 0)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG7_DUN2"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG7_AJI2"))
     ELSE
         // As Peach: the notes are hidden and her music plays.
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_memo"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_PEACH1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_memo"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_PEACH1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
     END_IF
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 1)
@@ -956,16 +974,14 @@ EVT_BEGIN(aji_09_init_evt)
     RETURN
 EVT_END()
 
-void partySetFamicomMode(PartyEntry* party, s32 mode);
-
 /**
- * Script function: loads the pixel-Mario animation group "d_mario" and then switches Mario
- * and his first partner to Famicom (8-bit) mode with marioSetFamicomMode and partySetFamicomMode.
- * Blocks until the animation is loaded.
+ * Script helper: blocks until the d_mario animation group has loaded, then switches Mario and the partner to the
+ * Famicom (8-bit) mode.
  */
 static USER_FUNC(dot_mario) {
     PartyEntry* party = partyGetPtr(0);
 
+    // Keep the event blocked until the dot-mode animation group is available.
     if (!animGroupBaseAsync("d_mario", 0, NULL)) {
         return EVT_RETURN_BLOCK;
     }
@@ -981,10 +997,11 @@ static USER_FUNC(peach_set_pose) {
     marioChgPose(pose);
     return EVT_RETURN_DONE;
 }
+
 /**
  * Script function: returns in args[2] whether the booth entered is the one that matters for the current story
- * point: 1 when Peach has taken the uniform at STORY_STG3_33_01_PEACH_TECS_REQUEST,
- * or when at STORY_STG3_33_03_PEACH_GRODUS the change-back remark has not yet been made
+ * point: 1 when Peach has taken the uniform at STG3_33_01_PEACH_TECS_REQUEST,
+ * or when at STG3_33_03_PEACH_GRODUS the change-back remark has not yet been made
  * and the booth number args[1] equals the booth she changed in.
  */
 static USER_FUNC(check_kou_evt) {
@@ -992,14 +1009,15 @@ static USER_FUNC(check_kou_evt) {
     s32 value;
     s32 result;
 
+    // The enter/exit argument is evaluated but does not affect this condition.
     evtGetValue(event, args[0]);
     value = evtGetValue(event, args[1]);
     result = 0;
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) == STORY_STG3_33_01_PEACH_TECS_REQUEST && evtGetValue(NULL, GSWF(GSWF_AJI09_PEACH3_UNIFORM_TAKEN)) == 1) {
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) == STG3_33_01_PEACH_TECS_REQUEST && evtGetValue(NULL, GSWF_AJI_09_UNIFORM_TAKEN) == 1) {
         result = 1;
     }
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) == STORY_STG3_33_03_PEACH_GRODUS && evtGetValue(NULL, GSWF(GSWF_AJI09_PEACH3_CHANGE_BACK_REMARK)) == 0 &&
-        value == evtGetValue(NULL, GSWF(GSWF_AJI09_PEACH3_CHANGED_IN_BOOTH1))) {
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) == STG3_33_03_PEACH_GRODUS && evtGetValue(NULL, GSWF_AJI_09_PEACH_DRESS_BACK_ON) == 0 &&
+        value == evtGetValue(NULL, GSWF_AJI_09_CHANGED_IN_BOOTH_1)) {
         result = 1;
     }
     evtSetValue(event, args[2], result);

@@ -19,10 +19,6 @@ OSThreadQueue __DVDThreadQueue;
 u32 __DVDLongFileNameFlag;
 
 // prototypes
-static BOOL isSame(const char* path, const char* string);
-static u32 myStrncpy(char* dest, char* src, u32 maxlen);
-static u32 entryToPath(u32 entry, char* path, u32 maxlen);
-static BOOL DVDConvertEntrynumToPath(s32 entrynum, char* path, u32 maxlen);
 static void cbForReadAsync(s32 result, DVDCommandBlock* block);
 static void cbForReadSync(s32 result, DVDCommandBlock* block);
 static void cbForSeekAsync(s32 result, DVDCommandBlock* block);
@@ -30,11 +26,6 @@ static void cbForSeekSync(s32 result, DVDCommandBlock* block);
 static void cbForPrepareStreamAsync(s32 result, DVDCommandBlock* block);
 static void cbForPrepareStreamSync(s32 result, DVDCommandBlock* block);
 
-/**
- * Locates the file system table (FST) through the FSTLocation in the OS boot info,
- * reads the entry count from its root entry and sets the file name string table to start right
- * after the last entry.
- */
 void __DVDFSInit(void) {
     BootInfo = (void*)OSPhysicalToCached(0);
     FstStart = BootInfo->FSTLocation;
@@ -52,7 +43,6 @@ void __DVDFSInit(void) {
 #define filePosition(i) (FstStart[i].parentOrPosition)
 #define fileLength(i) (FstStart[i].nextEntryOrLength)
 
-/** Compares a path component with an FST entry name, case-insensitively, stopping at '/' or the end. */
 static BOOL isSame(const char* path, const char* string) {
     while (*string != '\0') {
         if (tolower(*path++) != tolower(*string++)) {
@@ -67,13 +57,6 @@ static BOOL isSame(const char* path, const char* string) {
     return FALSE;
 }
 
-/**
- * Looks a path up in the FST and returns its entry number, or -1 if a component is missing.
- * A leading '/' starts at the root, otherwise the search starts in the current directory;
- * "." and ".." are understood.
- * Names compare case- insensitively, and unless __DVDLongFileNameFlag is set a component that is not 8.3 format
- * triggers an OSPanic.
- */
 s32 DVDConvertPathToEntrynum(const char* pathPtr) {
     const char* ptr;
     char* stringPtr;
@@ -174,10 +157,6 @@ next_hier:
     }
 }
 
-/**
- * Fills a DVDFileInfo from an FST entry number: the file's disc offset and length.
- * Returns false if the number is out of range or is a directory.
- */
 BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
     ASSERTMSGLINE(455, fileInfo, "DVDFastOpen(): null pointer is specified to file info address  ");
     ASSERTMSG1LINE(458, (entrynum >= 0) && ((u32) entrynum < (u32) MaxEntryNum), "DVDFastOpen(): specified entry number '%d' is out of range  ", entrynum);
@@ -189,16 +168,12 @@ BOOL DVDFastOpen(s32 entrynum, DVDFileInfo* fileInfo) {
     
     fileInfo->startAddr = filePosition(entrynum);
     fileInfo->length = fileLength(entrynum);
-    fileInfo->callback = (DVDCallback)NULL;
+    fileInfo->callback = NULL;
     fileInfo->cb.state = DVD_STATE_END;
     
     return TRUE;
 }
 
-/**
- * Opens a file by path: looks it up in the FST and fills the DVDFileInfo with its disc offset and length.
- * Prints a warning and returns false if it is not found, and returns false for a directory.
- */
 BOOL DVDOpen(const char* fileName, DVDFileInfo* fileInfo) {
     s32 entry;
     char currentDir[128];
@@ -210,7 +185,7 @@ BOOL DVDOpen(const char* fileName, DVDFileInfo* fileInfo) {
     
     if (0 > entry) {
         DVDGetCurrentDir(currentDir, 128);
-        OSReport("Warning: DVDOpen(): file '%s' was not found under %s.\n\0", fileName, currentDir);
+        OSReport("Warning: DVDOpen(): file '%s' was not found under %s.\n", fileName, currentDir);
         return FALSE;
     }
     
@@ -221,20 +196,18 @@ BOOL DVDOpen(const char* fileName, DVDFileInfo* fileInfo) {
     
     fileInfo->startAddr = filePosition(entry);
     fileInfo->length = fileLength(entry);
-    fileInfo->callback = (DVDCallback)NULL;
+    fileInfo->callback = NULL;
     fileInfo->cb.state = DVD_STATE_END;
     
     return TRUE;
 }
 
-/** Cancels any command still pending on the file's command block; always returns true. */
 BOOL DVDClose(DVDFileInfo* fileInfo) {
     ASSERTMSGLINE(530, fileInfo, "DVDClose(): null pointer is specified to file info address  ");
     DVDCancel(&(fileInfo->cb));
     return TRUE;
 }
 
-/** Copies up to maxlen characters of a string without the terminator and returns how many were copied. */
 static u32 myStrncpy(char* dest, char* src, u32 maxlen) {
     u32 i = maxlen;
     
@@ -246,10 +219,6 @@ static u32 myStrncpy(char* dest, char* src, u32 maxlen) {
     return (maxlen - i);
 }
 
-/**
- * Writes the path of an FST entry as "/dir/.../name" by recursing up through the parent directories.
- * Returns the length written, which equals maxlen if it ran out of room.
- */
 static u32 entryToPath(u32 entry, char* path, u32 maxlen) {
     char* name;
     u32 loc;
@@ -273,10 +242,6 @@ static u32 entryToPath(u32 entry, char* path, u32 maxlen) {
     return loc;
 }
 
-/**
- * Writes an FST entry's full path into path (directories end with '/').
- * Returns false and terminates the string early if it did not fit.
- */
 static BOOL DVDConvertEntrynumToPath(s32 entrynum, char* path, u32 maxlen) {
     u32 loc;
     
@@ -304,13 +269,11 @@ static BOOL DVDConvertEntrynumToPath(s32 entrynum, char* path, u32 maxlen) {
     return TRUE;
 }
 
-/** Copies the current directory's path into a buffer. */
 BOOL DVDGetCurrentDir(char* path, u32 maxlen) {
     ASSERTMSG1LINE(671, (maxlen > 1), "DVDGetCurrentDir: maxlen should be more than 1 (%d is specified)", maxlen);
     return DVDConvertEntrynumToPath((s32)currentDirectory, path, maxlen);
 }
 
-/** Sets the current directory used for relative path lookups. */
 BOOL DVDChangeDir(const char* dirName) {
     s32 entry;
     char currentDir[128];
@@ -329,10 +292,6 @@ BOOL DVDChangeDir(const char* dirName) {
     return TRUE;
 }
 
-/**
- * Queues an asynchronous read of length bytes at a byte offset inside the file, at the given priority.
- * The callback gets the result and the DVDFileInfo when it completes.
- */
 BOOL DVDReadAsyncPrio(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset, DVDCallback callback, s32 prio) {
     ASSERTMSGLINE(736, fileInfo, "DVDReadAsync(): null pointer is specified to file info address  ");
     ASSERTMSGLINE(737, addr, "DVDReadAsync(): null pointer is specified to addr  ");
@@ -354,7 +313,6 @@ BOOL DVDReadAsyncPrio(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset,
 #define offsetof(type, memb) ((u32) & ((type*)0)->memb)
 #endif
 
-/** Recovers the DVDFileInfo that contains the command block and calls the callback saved in it. */
 static void cbForReadAsync(s32 result, DVDCommandBlock* block) {
     DVDFileInfo* fileInfo;
 
@@ -365,11 +323,6 @@ static void cbForReadAsync(s32 result, DVDCommandBlock* block) {
     }
 }
 
-/**
- * Reads length bytes at an offset inside the file, sleeping the calling thread until the drive is done.
- * Returns the bytes transferred, -1 if the command could not be queued or hit a fatal error,
- * or -3 if it was canceled.
- */
 s32 DVDReadPrio(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset, s32 prio) {
     int result;
     DVDCommandBlock* block;
@@ -383,26 +336,26 @@ s32 DVDReadPrio(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset, s32 p
     ASSERTMSGLINE(813, !(length & 0x1F), "DVDRead(): length must be  multiple of 32 byte  ");
     ASSERTMSGLINE(815, !(offset & 3), "DVDRead(): offset must be multiple of 4 byte  ");
 
-    DVD_ASSERTMSGLINE(820, (0 <= offset) && (offset <= fileInfo->length), "DVDRead(): specified area is out of the file  \0");
-    DVD_ASSERTMSGLINE(826, (0 <= offset + length) && (offset + length < fileInfo->length + DVD_MIN_TRANSFER_SIZE), "DVDRead(): specified area is out of the file  \0");
+    DVD_ASSERTMSGLINE(820, (0 <= offset) && (offset <= fileInfo->length), "DVDRead(): specified area is out of the file  ");
+    DVD_ASSERTMSGLINE(826, (0 <= offset + length) && (offset + length < fileInfo->length + DVD_MIN_TRANSFER_SIZE), "DVDRead(): specified area is out of the file  ");
 
     block = &fileInfo->cb;
     result = DVDReadAbsAsyncPrio(block, addr, length, fileInfo->startAddr + offset, cbForReadSync, prio);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
     enabled = OSDisableInterrupts();
 
     while (1) {
         state = ((volatile DVDCommandBlock*)block)->state;
-        if (state == 0) {
+        if (state == DVD_STATE_END) {
             retVal = (s32)block->transferredSize;
             break;
-        } else if (state == -1) {
-            retVal = -1;
+        } else if (state == DVD_STATE_FATAL_ERROR) {
+            retVal = DVD_RESULT_FATAL_ERROR;
             break;
-        } else if (state == 10) {
-            retVal = -3;
+        } else if (state == DVD_STATE_CANCELED) {
+            retVal = DVD_RESULT_CANCELED;
             break;
         }
         OSSleepThread(&__DVDThreadQueue);
@@ -412,12 +365,10 @@ s32 DVDReadPrio(DVDFileInfo* fileInfo, void* addr, s32 length, s32 offset, s32 p
     return retVal;
 }
 
-/** Wakes the threads sleeping on the DVD thread queue so DVDReadPrio can check the command state. */
 static void cbForReadSync(s32 result, DVDCommandBlock* block) {
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Queues an asynchronous drive seek to a byte offset inside the file; the callback runs when it completes. */
 int DVDSeekAsyncPrio(DVDFileInfo* fileInfo, s32 offset, DVDCallback callback, s32 prio) {
     ASSERTMSGLINE(898, fileInfo, "DVDSeek(): null pointer is specified to file info address  ");
     ASSERTMSGLINE(902, !(offset & 3), "DVDSeek(): offset must be multiple of 4 byte  ");
@@ -429,7 +380,6 @@ int DVDSeekAsyncPrio(DVDFileInfo* fileInfo, s32 offset, DVDCallback callback, s3
     return 1;
 }
 
-/** Calls the callback saved in the DVDFileInfo when the seek completes. */
 static void cbForSeekAsync(s32 result, DVDCommandBlock* block) {
     DVDFileInfo* fileInfo;
 
@@ -440,10 +390,6 @@ static void cbForSeekAsync(s32 result, DVDCommandBlock* block) {
     }
 }
 
-/**
- * Seeks to an offset inside the file, sleeping until done.
- * Returns 0 on success, -1 on a fatal error or if it could not be queued, or -3 if canceled.
- */
 s32 DVDSeekPrio(DVDFileInfo* fileInfo, s32 offset, s32 prio) {
     int result;
     DVDCommandBlock* block;
@@ -458,20 +404,20 @@ s32 DVDSeekPrio(DVDFileInfo* fileInfo, s32 offset, s32 prio) {
     block = &fileInfo->cb;
     result = DVDSeekAbsAsyncPrio(block, (u32)(char*)fileInfo->startAddr + offset, cbForSeekSync, prio);
     if (!result) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
     enabled = OSDisableInterrupts();
 
     while (1) {
         state = ((volatile DVDCommandBlock*)block)->state;
-        if (state == 0) {
+        if (state == DVD_STATE_END) {
             retVal = 0;
             break;
-        } else if (state == -1) {
-            retVal = -1;
+        } else if (state == DVD_STATE_FATAL_ERROR) {
+            retVal = DVD_RESULT_FATAL_ERROR;
             break;
-        } else if (state == 10) {
-            retVal = -3;
+        } else if (state == DVD_STATE_CANCELED) {
+            retVal = DVD_RESULT_CANCELED;
             break;
         }
         OSSleepThread(&__DVDThreadQueue);
@@ -481,20 +427,14 @@ s32 DVDSeekPrio(DVDFileInfo* fileInfo, s32 offset, s32 prio) {
     return retVal;
 }
 
-/** Wakes the threads sleeping on the DVD thread queue so DVDSeekPrio can check the command state. */
 static void cbForSeekSync(s32 result, DVDCommandBlock* block) {
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Returns the state of the file's command block (see DVDGetCommandBlockStatus). */
 s32 DVDGetFileInfoStatus(const DVDFileInfo* fileInfo) {
     return DVDGetCommandBlockStatus(&fileInfo->cb);
 }
 
-/**
- * Starts iterating a directory given by FST entry number.
- * Returns false if the number is out of range or not a directory.
- */
 BOOL DVDFastOpenDir(s32 entrynum, DVDDir* dir) {
     ASSERTMSGLINE(1048, dir, "DVDFastOpenDir(): null pointer is specified to dir structure address  ");
     ASSERTMSG1LINE(1051, entrynum >= 0 && entrynum < MaxEntryNum, "DVDFastOpenDir(): specified entry number \'%d\' is out of range  ", entrynum);
@@ -510,10 +450,6 @@ BOOL DVDFastOpenDir(s32 entrynum, DVDDir* dir) {
     return TRUE;
 }
 
-/**
- * Starts iterating the directory at a path, positioning on its first entry.
- * Prints a warning and returns false if it is not found, and returns false for a file.
- */
 BOOL DVDOpenDir(const char* dirName, DVDDir* dir) {
     s32 entry;
     char currentDir[128];
@@ -539,10 +475,6 @@ BOOL DVDOpenDir(const char* dirName, DVDDir* dir) {
     return TRUE;
 }
 
-/**
- * Returns the next entry of the directory (entry number, name, directory flag),
- * skipping over the contents of subdirectories. Returns 0 after the last entry.
- */
 int DVDReadDir(DVDDir* dir, DVDDirEntry* dirent) {
     u32 loc;
 
@@ -557,17 +489,14 @@ int DVDReadDir(DVDDir* dir, DVDDirEntry* dirent) {
     return 1;
 }
 
-/** Does nothing, since a directory iterator holds no resources; returns 1. */
 int DVDCloseDir(DVDDir* dir) {
     return 1;
 }
 
-/** Moves the iterator back to the first entry of the directory. */
 void DVDRewindDir(DVDDir* dir) {
     dir->location = dir->entryNum + 1;
 }
 
-/** Returns the FST address stored in the OS boot info. */
 void* DVDGetFSTLocation(void) {
     return BootInfo->FSTLocation;
 }
@@ -575,10 +504,6 @@ void* DVDGetFSTLocation(void) {
 #define RoundUp32KB(x) (((u32)(x) + 32 * 1024 - 1) & ~(32 * 1024 - 1))
 #define Is32KBAligned(x) (((u32)(x) & (32 * 1024 - 1)) == 0)
 
-/**
- * Queues an asynchronous prepare-stream command for a range of the file (length 0 means up to the end of the
- * file) starting at an offset inside it.
- */
 BOOL DVDPrepareStreamAsync(DVDFileInfo* fileInfo, u32 length, u32 offset, DVDCallback callback) {
     u32 start;
     
@@ -599,7 +524,6 @@ BOOL DVDPrepareStreamAsync(DVDFileInfo* fileInfo, u32 length, u32 offset, DVDCal
     return DVDPrepareStreamAbsAsync(&(fileInfo->cb), length, fileInfo->startAddr + offset, cbForPrepareStreamAsync);
 }
 
-/** Calls the callback saved in the DVDFileInfo when the prepare-stream command completes. */
 static void cbForPrepareStreamAsync(s32 result, DVDCommandBlock* block) {
     DVDFileInfo* fileInfo;
     
@@ -612,10 +536,6 @@ static void cbForPrepareStreamAsync(s32 result, DVDCommandBlock* block) {
     }
 }
 
-/**
- * Prepares a stream for a range of the file (length 0 means to the end), sleeping until the drive is done.
- * Returns 0 on success, -1 on a fatal error or if it could not be queued, or -3 if canceled.
- */
 s32 DVDPrepareStream(DVDFileInfo* fileInfo, u32 length, u32 offset) {
     BOOL result;
     DVDCommandBlock* block;
@@ -641,7 +561,7 @@ s32 DVDPrepareStream(DVDFileInfo* fileInfo, u32 length, u32 offset) {
     result = DVDPrepareStreamAbsAsync(block, length, start, cbForPrepareStreamSync);
 
     if (result == FALSE) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
     
     enabled = OSDisableInterrupts();
@@ -658,7 +578,7 @@ s32 DVDPrepareStream(DVDFileInfo* fileInfo, u32 length, u32 offset) {
             break;
         }
         if (state == DVD_STATE_CANCELED) {
-            retVal = -3;
+            retVal = DVD_RESULT_CANCELED;
             break;
         }
         
@@ -669,17 +589,10 @@ s32 DVDPrepareStream(DVDFileInfo* fileInfo, u32 length, u32 offset) {
     return retVal;
 }
 
-/** Wakes the threads sleeping on the DVD thread queue so DVDPrepareStream can check the command state. */
 static void cbForPrepareStreamSync(s32 result, DVDCommandBlock* block) {
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/**
- * Returns the bytes transferred by the file's current command:
- * 0 while waiting, the final count in other states,
- * and while busy the earlier total plus the part of the current DMA already moved (read from the DI length
- * register).
- */
 s32 DVDGetTransferredSize(DVDFileInfo* fileinfo) {
     s32 bytes;
     DVDCommandBlock* cb;
@@ -702,9 +615,10 @@ s32 DVDGetTransferredSize(DVDFileInfo* fileinfo) {
         bytes = 0;
         break;
     case DVD_STATE_BUSY:
-        bytes = (s32)(cb->transferredSize + (cb->currTransferSize - __DIRegs[6]));
+        bytes = (s32)(cb->transferredSize + (cb->currTransferSize - __DIRegs[DI_LENGTH]));
         break;
     default:
+        // BUG: unreachable by design; in a build without asserts bytes is returned uninitialised here.
         ASSERTMSG1LINE(1391, FALSE, "DVDGetTransferredSize(): Illegal state (%d)", cb->state);
         break;
     }

@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: guruguru (spinning), num sprites circling a point at a given radius.
+
 #include "eff/n64/eff_guruguru_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -7,6 +8,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 /** Camera-facing 16x16 quad each circling sprite is drawn with. */
@@ -18,11 +20,11 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
 };
 
 static void effGuruguruMain(EffectEntry* effect);
-static void effGuruguruDisp(CameraId cameraId, EffectEntry* effect);
+static void effGuruguruDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns num yellow sprites circling (x, y, z); the radius opens up to the given radius.
- * Used by the Palace of Shadow rels las_09 and las_28 and by event scripts through evt_eff.
+ * Used by the Palace of Shadow rels las_09 and las_28; also reachable through evt_eff64 (no script uses that).
  */
 EffectEntry* effGuruguruN64Entry(s32 type, s32 num, f32 x, f32 y, f32 z, f32 radius) {
     EffectEntry* effect;
@@ -94,12 +96,13 @@ static void effGuruguruMain(EffectEntry* effect) {
                 work->angle -= 360;
             }
         }
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effGuruguruDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effGuruguruDisp, effect);
     }
 }
 
 /** Draws each sprite as a camera-facing yellow quad (texture 0x1D) at its position on the circle. */
-static void effGuruguruDisp(CameraId cameraId, EffectEntry* effect) {
+static void effGuruguruDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera = camGetPtr(cameraId);
     EffGuruguruN64Work* work = effect->userdata;
     Mtx mtx;

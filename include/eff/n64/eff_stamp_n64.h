@@ -1,4 +1,5 @@
 // eff_stamp_n64.c: stamp effect entry (effStampN64Entry) and its work data (EffStampN64Work).
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -18,7 +19,6 @@ typedef struct EffStampN64Work {
     s32 alpha;     // 0x34
     u8 r, g, b;    // 0x38
     u8 r2, g2, b2; // 0x3B
-    u8 pad[2];
 } EffStampN64Work;
 
 EffectEntry* effStampN64Entry(s32 type, f32 x, f32 y, f32 z);

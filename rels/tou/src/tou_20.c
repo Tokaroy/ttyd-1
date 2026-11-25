@@ -9,17 +9,25 @@
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_party.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
-#include "party.h"
 #include "evt/evt_sub.h"
-#include "tou.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
 #include "mario/mario.h"
+#include "party.h"
+
+static EvtWord evt_tou_balloon[85];
+static EvtWord evt_anim[66];
+static f32 spline_dt[9];
+static EvtWord evt_anim2[147];
+EvtWord tou_20_init_evt[223];
 
 /**
  * Decoration loop for the chapter title scene: every 0.3 to 0.8 seconds a random "balloon_heiho_n64" balloon
  * effect floats out from a point near the tou_enkei1 arena object.
  */
+// Random offsets span [-50,50], [-20,20], [-10,30]; delays span 300..800 ms, inclusive.
 static EVT_BEGIN(evt_tou_balloon)
     CALL(evt_mapobj_get_position, STRING("tou_enkei1"), LW(13), LW(14), LW(15))
     SUBTRACT(LW(14), 20)
@@ -52,8 +60,8 @@ EVT_END()
  * and after 14 seconds the blimp sounds stop and the map changes to the chapter title screen sys_01 (entrance
  * stg_3).
  */
-EVT_BEGIN(evt_anim)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tou_enkei1"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(evt_anim)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("tou_enkei1"), MAP_OBJ_FLAG_HIDDEN)
     BEGIN_INLINE_EVENT
         SET_VALUE(LW(0), 0)
         LOOP(0)
@@ -66,7 +74,7 @@ EVT_BEGIN(evt_anim)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -1017, -239, -331, -21, -22, 53, 10000, 11)
+    CALL(evt_cam3d_evt_set, -1017, -239, -331, -21, -22, 53, 10000, EASING_SINE_IN_OUT)
     WAIT_MS(10000)
     WAIT_MS(4000)
     CALL(evt_snd_sfxoff, GW(10))
@@ -84,15 +92,15 @@ static f32 spline_dt[] = {
 /**
  * Chapter title scene for any other entrance: Mario and the partner are hidden,
  * the blimp (Hikousen) appears after 2 seconds and flies along the spline path spline_dt for 10 seconds
- * while bobbing up and down, and 20 seconds in the blimp sounds stop and the map changes to tou_00.
+ * while bobbing up and down, and 20 seconds after it appears (22 seconds in) the blimp sounds stop and the map changes to tou_00.
  */
-EVT_BEGIN(evt_anim2)
-    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDDEN)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Hikousen"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(evt_anim2)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Hikousen"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_trans, 1, STRING("Hikousen"), FLOAT(-808.0f), FLOAT(971.0f), FLOAT(4897.0f))
     WAIT_MS(2000)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Hikousen"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Hikousen"), MAP_OBJ_FLAG_HIDDEN)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(2), FLOAT(0.0f))
@@ -119,6 +127,8 @@ EVT_BEGIN(evt_anim2)
         END_LOOP
     END_INLINE_EVENT
     CALL(evt_sub_spline_init, 1, 11, PTR(spline_dt), 3, 0, 10000)
+
+    // Once the spline completes, retain its final position while the independent bobbing continues.
     SET_VALUE(LW(3), 1)
     LOOP(0)
         IF_INT_EQUAL(LW(3), 1)
@@ -140,7 +150,7 @@ EVT_END()
  * locks controls, plays the light and jet animations, positions the camera and starts the blimp flight.
  */
 EVT_BEGIN(tou_20_init_evt)
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
+    CALL(evt_snd_envoff, PSND_FADEOUT)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
     CALL(evt_mario_cont_onoff, 0)
@@ -158,9 +168,9 @@ EVT_BEGIN(tou_20_init_evt)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_map_playanim, STRING("lightcoloer"), 1, 0)
-    CALL(evt_map_playanim, STRING("jet"), 1, 0)
-    CALL(evt_map_playanim, STRING("omori"), 1, 0)
+    CALL(evt_map_playanim, STRING("lightcoloer"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("jet"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("omori"), MAP_ANIM_PLAY_LOOP, 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
             CALL(evt_mapobj_rotate, 1, STRING("puro_2"), LW(0), 0, 0)
@@ -179,10 +189,10 @@ EVT_BEGIN(tou_20_init_evt)
     END_INLINE_EVENT
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("start"))
-        CALL(evt_cam3d_evt_set, -3020, 129, -6, -212, 722, 807, 0, 11)
+        CALL(evt_cam3d_evt_set, -3020, 129, -6, -212, 722, 807, 0, EASING_SINE_IN_OUT)
         SPAWN_EVENT(evt_anim)
     ELSE
-        CALL(evt_cam3d_evt_set, -700, 866, 4657, -700, 38, -60, 0, 11)
+        CALL(evt_cam3d_evt_set, -700, 866, 4657, -700, 38, -60, 0, EASING_SINE_IN_OUT)
         SPAWN_EVENT(evt_anim2)
     END_IF
     CALL(evt_bg_auto_scroll_onoff, 1)

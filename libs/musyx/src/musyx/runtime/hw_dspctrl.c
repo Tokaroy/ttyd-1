@@ -1,4 +1,3 @@
-/*
 
 
 
@@ -14,8 +13,8 @@
 
 
 
-*/
-#define _MATH_H_
+
+
 #include "dolphin/os/OSCache.h"
 #include "musyx/assert.h"
 #include "musyx/dspvoice.h"
@@ -28,74 +27,50 @@
 #include <string.h>
 
 #ifdef _DEBUG
-/** Highest number of voices playing at once, kept for debug builds. */
 static u32 dbgActiveVoicesMax = 0;
 #endif
 
 extern u8 salFrame;
 extern u8 salAuxFrame;
 
-DSPstudioinfo dspStudio[8];
+DSPstudioinfo dspStudio[SAL_MAX_STUDIONUM];
 
-/** Address in auxiliary memory of a zero-filled block that silent voices read from. */
 static u32 dspARAMZeroBuffer = 0;
 
-/**
- * The most recent continue (MORE) command written; its size field is filled in once the next block is
- * finished.
- */
 u16* dspCmdLastLoad = NULL;
 
-/** Start of the previous block of the command list, flushed to memory once it is complete. */
 u16* dspCmdLastBase = NULL;
 
-/** Size of the DSP command list most recently built. */
 u16 dspCmdLastSize = 0;
 
-/** Start of the block of the DSP command list being built. */
 u16* dspCmdCurBase = NULL;
 
-/** End of the current block of the command list; a new block is started before it is passed. */
 u16* dspCmdMaxPtr = NULL;
 
-/** Where the next DSP command is written. */
 u16* dspCmdPtr = NULL;
 
-/** Size of the first DSP command list of the current frame, announced to the DSP in the start-up mail. */
 u16 dspCmdFirstSize = 0;
 
-/** The buffer the DSP command lists are built in (1024 words). */
 u16* dspCmdList = NULL;
 
-/** Whether the output compressor is switched on. */
 bool dspCompressorOn = FALSE;
 
-/** Whether head-related (3D headphone) filtering is switched on. */
 u32 dspHRTFOn = FALSE;
 
-/** History samples for the head-related (HRTF) filter. */
 s16* dspHrtfHistoryBuffer = NULL;
 
-/** Buffer of 160 words shared with the DSP for the surround mix. */
 s32* dspSurround = NULL;
 
-/** Buffers for the interaural time difference delay of each voice (64 bytes per voice). */
 s16* dspITDBuffer = NULL;
 
-/** The state of every voice as the DSP sees it. */
 DSPvoice* dspVoice = NULL;
 
-/** Callback the application registered to receive DSP messages. */
 SND_MESSAGE_CALLBACK salMessageCallback = NULL;
 
-/** Allocates the DSP-side state: the 1024-word command list, the 160-word surround buffer, the DSP voice array (each
- * voice gets a physically allocated parameter block, patch data and a 64-byte ITD buffer) and, per studio, a parameter
- * block plus 0x3C00 bytes of main and aux A/B buffers. Then activates studio 0 as the master (Pro Logic II if
- * defaultStudioDPL2) and allocates the HRTF history buffer. Returns FALSE if any allocation fails. */
 bool salInitDspCtrl(u8 numVoices, u8 numStudios, u32 defaultStudioDPL2) {
-  u32 i;         // r31
-  u32 j;         // r27
-  size_t itdPtr; // r28
+  u32 i;
+  u32 j;
+  size_t itdPtr;
 
   salNumVoices = numVoices;
   salMaxStudioNum = numStudios;
@@ -120,7 +95,7 @@ bool salInitDspCtrl(u8 numVoices, u8 numStudios, u32 defaultStudioDPL2) {
           itdPtr = (u32)dspITDBuffer;
           for (i = 0; i < salNumVoices; ++i) {
             MUSY_DEBUG("Initializing voice %d...\n", i);
-            dspVoice[i].state = 0;
+            dspVoice[i].state = DSP_VOICE_STATE_INACTIVE;
             dspVoice[i].postBreak = 0;
             dspVoice[i].startupBreak = 0;
             dspVoice[i].lastUpdate.pitch = 0xff;
@@ -151,7 +126,7 @@ bool salInitDspCtrl(u8 numVoices, u8 numStudios, u32 defaultStudioDPL2) {
 
           for (i = 0; i < salMaxStudioNum; ++i) {
             MUSY_DEBUG("Initializing studio %d...\n", i);
-            dspStudio[i].state = 0;
+            dspStudio[i].state = DSP_STUDIO_STATE_INACTIVE;
             if ((dspStudio[i].spb = (_SPB*)salMallocPhysical(sizeof(_SPB))) == NULL) {
               return FALSE;
             }
@@ -200,7 +175,6 @@ bool salInitDspCtrl(u8 numVoices, u8 numStudios, u32 defaultStudioDPL2) {
   return FALSE;
 }
 
-/** Clears the 0x100-byte HRTF history buffer. */
 void salInitHRTFBuffer() {
   memset(dspHrtfHistoryBuffer, 0, 0x100);
 #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
@@ -208,8 +182,27 @@ void salInitHRTFBuffer() {
 #endif
 }
 
-/** Resets a studio to a clean running state: clears its main and aux buffers, parameter block and de-pop sums, empties
- * its voice lists and inputs, sets state 1 with the given master flag and type, and removes its aux handlers. */
+bool salExitDspCtrl() {
+  u8 i;
+  salFree(dspHrtfHistoryBuffer);
+
+  for (i = 0; i < salNumVoices; ++i) {
+    salFree(dspVoice[i].pb);
+    salFree(dspVoice[i].patchData);
+  }
+
+  for (i = 0; i < salMaxStudioNum; ++i) {
+    salFree(dspStudio[i].spb);
+    salFree(dspStudio[i].main[0]);
+  }
+
+  salFree(dspITDBuffer);
+  salFree(dspVoice);
+  salFree(dspSurround);
+  salFree(dspCmdList);
+  return TRUE;
+}
+
 void salActivateStudio(u8 studio, u32 isMaster, SND_STUDIO_TYPE type) {
   memset(dspStudio[studio].main[0], 0, 0x3c00);
 #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
@@ -235,7 +228,7 @@ void salActivateStudio(u8 studio, u32 isMaster, SND_STUDIO_TYPE type) {
 #endif
   dspStudio[studio].voiceRoot = NULL;
   dspStudio[studio].alienVoiceRoot = NULL;
-  dspStudio[studio].state = 1;
+  dspStudio[studio].state = DSP_STUDIO_STATE_ACTIVE;
   dspStudio[studio].isMaster = isMaster;
   dspStudio[studio].numInputs = 0;
   dspStudio[studio].type = type;
@@ -525,27 +518,25 @@ u16 compressorTable[3360] ATTRIBUTE_ALIGN(32) = {
     21581, 21587, 21593, 21599, 21606, 21612, 21618, 21624, 21630, 21637, 21643, 21649,
 };
 
-struct {
-  u16 v[3][3];
-  u16 pad;
-} dspSRCCycles = {
-    {{2990, 2990, 1115}, {3300, 3300, 1115}, {3700, 3700, 1115}},
-    0,
+static u16 dspSRCCycles[3][3] = {
+    {2990, 2990, 1115}, {3300, 3300, 1115}, {3700, 3700, 1115},
 };
 
-/** DSP cycles each mixer setup costs, indexed by which mixer features a voice uses. */
-const u16 dspMixerCyclesMain[16] = {
+static const u16 dspMixerCyclesMain[16] = {
     0, 760, 760, 1470, 760, 1520, 1520, 2230, 0, 1265, 1265, 2470, 1265, 2530, 2530, 3735,
 };
 
-/** Decides whether a voice volume that is only slightly off target (32 to 159 units) can be corrected with a one-step
- * delta of +1 or -1 in a later sub-frame instead of a full ramp: moves *last_vol by that many 32-unit steps, sets the
- * ramp-reset flag for that step in resetFlags and returns 1. A target of 0 close to the current volume snaps the volume
- * to 0. Otherwise the delta is 0 and it returns 0. */
+static const u16 dspMixerCyclesAux[32] = {
+    0, 760, 760, 1470, 0, 1265, 1265, 2470, 760,  1520, 1520, 2230, 760,  2025, 2025, 3230,
+    0, 760, 760, 1470, 0, 1265, 1265, 2470, 1265, 2025, 2025, 2735, 1265, 2530, 2530, 3735,
+};
+
+void salDeactivateStudio(u8 studio) { dspStudio[studio].state = DSP_STUDIO_STATE_INACTIVE; }
+
 static u32 salCheckVolErrorAndResetDelta(u16* dsp_vol, u16* dsp_delta, u16* last_vol, u16 targetVol,
                                          u16* resetFlags, u16 resetMask) {
-  s16 d; // r31
-  s16 x; // r30
+  s16 d;
+  s16 x;
 
   if (targetVol != *last_vol) {
     d = (s16)targetVol - (s16)*last_vol;
@@ -579,18 +570,14 @@ static u32 salCheckVolErrorAndResetDelta(u16* dsp_vol, u16* dsp_delta, u16* last
   return 0;
 }
 
-/** Turns a target volume into a start value (*last_vol, moved to where the ramp ends this frame) and the per-sample
- * delta *dsp_delta, spread over the 160 samples of one frame. */
 static void sal_setup_dspvol(u16* dsp_delta, u16* last_vol, u16 vol) {
   *dsp_delta = ((s16)vol - (s16)*last_vol) / 160;
   *last_vol += (s16)*dsp_delta * 160;
 }
 
-/** Advances the host-side estimate of a non-looping voice's play position by one frame's worth of pitch (a 32-bit
- * fraction plus carry into the high word), so the position can be read without asking the DSP. */
 static void sal_update_hostplayinfo(DSPvoice* dsp_vptr) {
-  u32 old_lo; // r30
-  u32 pitch;  // r31
+  u32 old_lo;
+  u32 pitch;
 
   if (dsp_vptr->smp_info.loopLength != 0) {
     return;
@@ -612,15 +599,11 @@ static void sal_update_hostplayinfo(DSPvoice* dsp_vptr) {
   }
 }
 
-/** Adds a DSP voice's remaining DC offset to a studio's accumulated sum, clamped to 24 bits. */
-static inline void AddDpop(s32* sum, s16 delta) {
+static void AddDpop(s32* sum, s16 delta) {
   *sum += (int)delta;
   *sum = (*sum > 0x7fffff) ? 0x7fffff : (*sum < -0x7fffff ? -0x7fffff : *sum);
 }
 
-/** Works out how to fade the accumulated DC offset of a studio output to zero: the per-sample step is -sum/160 (at most
- * 20 per sample), and the sum is updated by what the ramp will remove this frame. This hides the click when a voice
- * stops mid-waveform. */
 static void DoDepopFade(long* dspStart, s16* dspDelta, long* hostSum) {
   if (*hostSum <= -160) {
     *dspDelta = (*hostSum <= -3200) ? 0x14 : (s16)(-*hostSum / 160);
@@ -634,47 +617,44 @@ static void DoDepopFade(long* dspStart, s16* dspDelta, long* hostSum) {
   *hostSum += *dspDelta * 160;
 }
 
-/** Called when a voice is removed: marks it stopped and adds the DC offset it was outputting, for each mix channel its
- * mixer control enables, to the studio's de-pop sums. */
 static void HandleDepopVoice(DSPstudioinfo* stp, DSPvoice* dsp_vptr) {
-  _PB* pb; // r31
+  _PB* pb;
   dsp_vptr->postBreak = 0;
-  dsp_vptr->pb->state = 0;
+  dsp_vptr->pb->state = DSP_PB_STATE_STOPPED;
   pb = dsp_vptr->pb;
-  if ((pb->mixerCtrl & 0x1) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_L) != 0) {
     AddDpop(&stp->hostDPopSum.l, pb->dpop.aL);
   }
-  if ((pb->mixerCtrl & 0x2) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_R) != 0) {
     AddDpop(&stp->hostDPopSum.r, pb->dpop.aR);
   }
-  if ((pb->mixerCtrl & 0x4) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_S) != 0) {
     AddDpop(&stp->hostDPopSum.s, pb->dpop.aS);
   }
-  if ((pb->mixerCtrl & 0x10) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_AUXA_L) != 0) {
     AddDpop(&stp->hostDPopSum.lA, pb->dpop.aAuxAL);
   }
-  if ((pb->mixerCtrl & 0x20) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_AUXA_R) != 0) {
     AddDpop(&stp->hostDPopSum.rA, pb->dpop.aAuxAR);
   }
-  if ((pb->mixerCtrl & 0x80) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_AUXA_S) != 0) {
     AddDpop(&stp->hostDPopSum.sA, pb->dpop.aAuxAS);
   }
-  if ((pb->mixerCtrl & 0x200) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_AUXB_L) != 0) {
     AddDpop(&stp->hostDPopSum.lB, pb->dpop.aAuxBL);
   }
-  if ((pb->mixerCtrl & 0x400) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_AUXB_R) != 0) {
     AddDpop(&stp->hostDPopSum.rB, pb->dpop.aAuxBR);
   }
-  if ((pb->mixerCtrl & 0x1000) != 0) {
+  if ((pb->mixerCtrl & MIXER_CTRL_AUXB_S) != 0) {
     AddDpop(&stp->hostDPopSum.sB, pb->dpop.aAuxBS);
   }
 }
 
-/** Recursive quicksort of voices[l..r] by ascending priority. */
 static void SortVoices(DSPvoice** voices, long l, long r) {
-  long i;        // r28
-  long last;     // r29
-  DSPvoice* tmp; // r27
+  long i;
+  long last;
+  DSPvoice* tmp;
 
   if (l >= r) {
     return;
@@ -702,53 +682,48 @@ static void SortVoices(DSPvoice** voices, long l, long r) {
   SortVoices(voices, last + 1, r);
 }
 
-/** Builds the DSP command list for one 5 ms frame into dspCmdList. Per active studio it queues setup, input mixing,
- * then for each voice (sorted by priority) it applies pending changes (new sample and ADPCM info, ADSR, volume ramps,
- * pitch, filter, key-off) to the voice's parameter block and queues it for processing, followed by aux A/B mixing, the
- * surround/LR upload, optional compressor and the final output. A running estimate of DSP cycles is kept: when a
- * studio's voices exceed the budget the rest are dropped (message 1 to the synth). */
 void salBuildCommandList(s16* dest, u32 nsDelay) {
-  static const u16 pbOffsets[10] = {10, 12, 24, 14, 16, 26, 18, 20, 22};
-  static DSPvoice* voices[64];
+  static const u16 pbOffsets[9] = {10, 12, 24, 14, 16, 26, 18, 20, 22};
+  static DSPvoice* voices[64]; // filled per studio with no bound check: more than 64 voices would overrun it
 
-  u8 s;                        // r27
-  u8 mix_start;                // r1+0x17
-  u8 st;                       // r21
-  u8 st1;                      // r1+0x16
-  u8 getAuxFrame;              // r1+0x15
-  u16 rampResetOffsetFlags[5]; // r1+0xE4
-  DSPvoice* dsp_vptr;          // r30
-  DSPvoice* next_dsp_vptr;     // r1+0xE0
-  u32 tmp_addr;                // r1+0xDC
-  u32 addr;                    // r1+0xD8
-  u32 base;                    // r17
-  u32 in;                      // r1+0xD4
-  u32 voiceNum;                // r1+0xD0
-  u32 cyclesUsed;              // r24
-  u16* pptr;                   // r28
-  u16* pend;                   // r1+0xCC
-  u16 adsr_start;              // r1+0x34
-  u16 adsr_delta;              // r1+0x32
-  u16 old_adsr_delta;          // r1+0x30
-  s32 current_delta;           // r1+0xC8
-  s32 v;                       // r25
-  _PB* pb;                     // r31
-  _PB* last_pb;                // r20
-  u32 VoiceDone;               // r1+0xC4
-  u32 needsDelta;              // r19
-  u32 newVoice;                // r1+0xC0
-  _SPB* spb;                   // r26
-  DSPstudioinfo* stp;          // r29
+  u8 s;
+  u8 mix_start;
+  u8 st;
+  u8 st1;
+  u8 getAuxFrame;
+  u16 rampResetOffsetFlags[5];
+  DSPvoice* dsp_vptr;
+  DSPvoice* next_dsp_vptr;
+  u32 tmp_addr;
+  u32 addr;
+  u32 base;
+  u32 in;
+  u32 voiceNum;
+  u32 cyclesUsed;
+  u16* pptr;
+  u16* pend;
+  u16 adsr_start;
+  u16 adsr_delta;
+  u16 old_adsr_delta;
+  s32 current_delta;
+  s32 v;
+  _PB* pb;
+  _PB* last_pb;
+  u32 VoiceDone;
+  u32 needsDelta;
+  u32 newVoice;
+  _SPB* spb;
+  DSPstudioinfo* stp;
 #ifdef _DEBUG
-  u32 dbgActiveVoices; // r1+0xBC
+  u32 dbgActiveVoices;
 #endif
-  u32 procVoiceFlag; // r1+0xB8
-  u32 offset;        // r1+0xB4
-  u32 endAddr;       // r1+0xB0
-  u32 loopAddr;      // r1+0xAC
-  u32 zeroAddr;      // r1+0x98
-  DSPvoice* firstVoice; // written, never read: the first voice of the studio's list
-  DSPvoice* nextVoice; // written, never read: the voice after the one just visited
+  u32 procVoiceFlag;
+  u32 offset;
+  u32 endAddr;
+  u32 loopAddr;
+  u32 zeroAddr;
+
+
 
 #ifdef _DEBUG
   dbgActiveVoices = 0;
@@ -769,16 +744,16 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
   }
   rampResetOffsetFlags[0] = 0;
   for (st = 0; st < salMaxStudioNum; st++) {
-    if (dspStudio[st].state == 1) {
+    if (dspStudio[st].state == DSP_STUDIO_STATE_ACTIVE) {
       stp = &dspStudio[st];
       for (dsp_vptr = stp->voiceRoot; dsp_vptr; dsp_vptr = next_dsp_vptr) {
         next_dsp_vptr = dsp_vptr->next;
-        if ((dsp_vptr->postBreak != 0) || ((dsp_vptr->changed[0] & 0x20) != 0)) {
+        if ((dsp_vptr->postBreak != 0) || ((dsp_vptr->changed[0] & DSP_CHANGED_BREAK) != 0)) {
           HandleDepopVoice(stp, dsp_vptr);
           if (dsp_vptr->virtualSampleID != -1) {
-            salSynthSendMessage(dsp_vptr, 3);
+            salSynthSendMessage(dsp_vptr, HW_MESSAGE_VIRTUAL_SAMPLE_END);
           }
-          if ((dsp_vptr->state != 1) || (dsp_vptr->startupBreak != 0)) {
+          if ((dsp_vptr->state != DSP_VOICE_STATE_STARTING) || (dsp_vptr->startupBreak != 0)) {
             salDeactivateVoice(dsp_vptr);
             dsp_vptr->startupBreak = 0;
           }
@@ -791,7 +766,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
       }
       stp->alienVoiceRoot = NULL;
       if ((dspCmdPtr + 3) > (dspCmdMaxPtr - 4)) {
-        u16 size; // r1+0x2E
+        u16 size;
         dspCmdPtr[0] = 13; // MORE
         dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
         dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -815,7 +790,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
       cyclesUsed += 0x2C62;
       for (in = 0; in < stp->numInputs; in++) {
         if ((dspCmdPtr + 6) > (dspCmdMaxPtr - 4)) {
-          u16 size; // r1+0x2C
+          u16 size;
           dspCmdPtr[0] = 0xD; // MORE
           dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
           dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -842,8 +817,8 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
         cyclesUsed += 0x294D;
       }
       last_pb = NULL;
-      for (v = 0, dsp_vptr = stp->voiceRoot, firstVoice = dsp_vptr; dsp_vptr;
-           v++, dsp_vptr = dsp_vptr->next, nextVoice = dsp_vptr) {
+      for (v = 0, dsp_vptr = stp->voiceRoot; dsp_vptr;
+           v++, dsp_vptr = dsp_vptr->next) {
         voices[v] = dsp_vptr;
       }
       voiceNum = (int)v;
@@ -851,28 +826,28 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
       procVoiceFlag = 0;
       for (v = voiceNum; v > 0; v--) {
         dsp_vptr = voices[v - 1];
-        if (dsp_vptr->state != 0) {
-          u8 i; // r1+0x14
+        if (dsp_vptr->state != DSP_VOICE_STATE_INACTIVE) {
+          u8 i;
           pb = dsp_vptr->pb;
           for (s = 1; s < 5; s++) {
             rampResetOffsetFlags[s] = 0;
           }
-          if (dsp_vptr->state == 1) {
+          if (dsp_vptr->state == DSP_VOICE_STATE_STARTING) {
             dsp_vptr->virtualSampleID = -1;
             dsp_vptr->pb->ve.currentDelta = 0x8000;
             if (adsrSetup(&dsp_vptr->adsr) != 0) {
-              salSynthSendMessage(dsp_vptr, 0);
+              salSynthSendMessage(dsp_vptr, HW_MESSAGE_SAMPLE_END);
               salDeactivateVoice(dsp_vptr);
               continue;
             }
             dsp_vptr->virtualSampleID = -1;
             switch (dsp_vptr->smp_info.compType) {
-            case 5:
-            case 6:
+            case SAMPLE_COMP_ADPCM_VIRTUAL:
+            case SAMPLE_COMP_PCM16_VIRTUAL:
               dsp_vptr->vSampleInfo.loopBufferLength = 0;
-              dsp_vptr->virtualSampleID = salSynthSendMessage(dsp_vptr, 2);
+              dsp_vptr->virtualSampleID = salSynthSendMessage(dsp_vptr, HW_MESSAGE_VIRTUAL_SAMPLE_START);
               if (dsp_vptr->vSampleInfo.loopBufferLength == 0) {
-                salSynthSendMessage(dsp_vptr, 1);
+                salSynthSendMessage(dsp_vptr, HW_MESSAGE_VOICE_KILL);
                 salDeactivateVoice(dsp_vptr);
                 continue;
               }
@@ -883,7 +858,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
             pb->src.last_samples[1] = 0;
             pb->src.last_samples[2] = 0;
             pb->src.last_samples[3] = 0;
-            if ((dsp_vptr->flags & 0x80000000) != 0) {
+            if ((dsp_vptr->flags & DSP_VOICE_FLAG_ITD) != 0) {
               memset(dsp_vptr->itdBuffer, 0, 0x40);
               DCFlushRange(dsp_vptr->itdBuffer, 0x40);
               pb->itd.targetShiftL = dsp_vptr->itdShiftL;
@@ -895,83 +870,84 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
               pb->itd.flag = 0;
             }
             switch (dsp_vptr->smp_info.compType) {
-            case 0:
-            case 4:
-            case 5: {
-              SNDADPCMinfo* adpcmInfo; // r18
-              u8 i;                    // r1+0x13
-              pb->addr.format = 0;
-              pb->adpcm.gain = 0;
-              adpcmInfo = dsp_vptr->smp_info.extraData;
-              pb->adpcm.yn2 = 0;
-              pb->adpcm.yn1 = 0;
-              pb->adpcm.pred_scale = adpcmInfo->initialPS;
-              for (i = 0; i < 8; i++) {
-                pb->adpcm.a[i][0] = adpcmInfo->coefTab[i][0];
-                pb->adpcm.a[i][1] = adpcmInfo->coefTab[i][1];
-              }
-              base = (u32)dsp_vptr->smp_info.addr * 2;
-              addr = base + 2;
-              dsp_vptr->playInfo.posHi = dsp_vptr->playInfo.posLo = 0;
-              if ((dsp_vptr->smp_info.compType == 4) || (dsp_vptr->smp_info.compType == 5)) {
-                pb->loopType = 1;
-              } else {
-                pb->adpcmLoop.loop_yn2 = adpcmInfo->loopY0;
-                pb->adpcmLoop.loop_yn1 = adpcmInfo->loopY1;
-                pb->adpcmLoop.loop_pred_scale = adpcmInfo->loopPS;
-                pb->loopType = 0;
-              }
-            } break;
-            case 1: {
-              DSPADPCMplusInfo* adpcmInfo; // r23
-              u8 i;                        // r1+0x12
-              pb->addr.format = 0;
-              pb->adpcm.gain = 0;
-              offset = (dsp_vptr->smp_info.offset + 0xD) / 14;
-              adpcmInfo = dsp_vptr->smp_info.extraData;
-              pb->adpcm.yn2 = adpcmInfo->blk[offset].Y0;
-              pb->adpcm.yn1 = adpcmInfo->blk[offset].Y1;
-              pb->adpcm.pred_scale = adpcmInfo->blk[offset].PS;
-              pb->adpcmLoop.loop_yn2 = adpcmInfo->loopY0;
-              pb->adpcmLoop.loop_yn1 = adpcmInfo->loopY1;
-              pb->adpcmLoop.loop_pred_scale = adpcmInfo->loopPS;
-              for (i = 0; i < 8; i++) {
-                pb->adpcm.a[i][0] = adpcmInfo->coefTab[i][0];
-                pb->adpcm.a[i][1] = adpcmInfo->coefTab[i][1];
-              }
-              base = (u32)dsp_vptr->smp_info.addr * 2;
-              addr = base + offset * 16 + 2;
-              dsp_vptr->playInfo.posHi = offset * 0xE;
-              dsp_vptr->playInfo.posLo = 0;
-            } break;
-            case 3: {
-              u8 i; // r1+0x11
-              pb->addr.format = 0x19;
-              pb->adpcm.gain = 0x100;
-              for (i = 0; i < 8; i++) {
-                pb->adpcm.a[i][0] = 0;
-                pb->adpcm.a[i][1] = 0;
-              }
-              addr = (u32)dsp_vptr->smp_info.offset + (base = (u32)dsp_vptr->smp_info.addr);
-              dsp_vptr->playInfo.posHi = dsp_vptr->smp_info.offset;
-              dsp_vptr->playInfo.posLo = 0;
-            } break;
-            case 2:
-            case 6: {
-              u8 i; // r1+0x10
-              pb->addr.format = 0xA;
-              pb->adpcm.gain = 0x800;
-              for (i = 0; i < 8; i++) {
-                pb->adpcm.a[i][0] = 0;
-                pb->adpcm.a[i][1] = 0;
-              }
-              addr = dsp_vptr->smp_info.offset + (base = (u32)dsp_vptr->smp_info.addr >> 1);
-              dsp_vptr->playInfo.posHi = dsp_vptr->smp_info.offset;
-              dsp_vptr->playInfo.posLo = 0;
-              if (dsp_vptr->smp_info.compType == 6) {
-                pb->loopType = 1;
-              }
-            } break;
+            case SAMPLE_COMP_ADPCM:
+            case SAMPLE_COMP_ADPCM_STREAM:
+                case SAMPLE_COMP_ADPCM_VIRTUAL: {
+                  SNDADPCMinfo* adpcmInfo;
+                  u8 i;
+                  pb->addr.format = 0;
+                  pb->adpcm.gain = 0;
+                  adpcmInfo = dsp_vptr->smp_info.extraData;
+                  pb->adpcm.yn2 = 0;
+                  pb->adpcm.yn1 = 0;
+                  pb->adpcm.pred_scale = adpcmInfo->initialPS;
+                  for (i = 0; i < 8; i++) {
+                    pb->adpcm.a[i][0] = adpcmInfo->coefTab[i][0];
+                    pb->adpcm.a[i][1] = adpcmInfo->coefTab[i][1];
+                  }
+                  base = (u32)dsp_vptr->smp_info.addr * 2;
+                  addr = base + 2;
+                  dsp_vptr->playInfo.posHi = dsp_vptr->playInfo.posLo = 0;
+                  if ((dsp_vptr->smp_info.compType == SAMPLE_COMP_ADPCM_STREAM) ||
+                      (dsp_vptr->smp_info.compType == SAMPLE_COMP_ADPCM_VIRTUAL)) {
+                    pb->loopType = 1;
+                  } else {
+                    pb->adpcmLoop.loop_yn2 = adpcmInfo->loopY0;
+                    pb->adpcmLoop.loop_yn1 = adpcmInfo->loopY1;
+                    pb->adpcmLoop.loop_pred_scale = adpcmInfo->loopPS;
+                    pb->loopType = 0;
+                  }
+                } break;
+                case SAMPLE_COMP_ADPCM_PLUS: {
+                  DSPADPCMplusInfo* adpcmInfo;
+                  u8 i;
+                  pb->addr.format = 0;
+                  pb->adpcm.gain = 0;
+                  offset = (dsp_vptr->smp_info.offset + 0xD) / 14;
+                  adpcmInfo = dsp_vptr->smp_info.extraData;
+                  pb->adpcm.yn2 = adpcmInfo->blk[offset].Y0;
+                  pb->adpcm.yn1 = adpcmInfo->blk[offset].Y1;
+                  pb->adpcm.pred_scale = adpcmInfo->blk[offset].PS;
+                  pb->adpcmLoop.loop_yn2 = adpcmInfo->loopY0;
+                  pb->adpcmLoop.loop_yn1 = adpcmInfo->loopY1;
+                  pb->adpcmLoop.loop_pred_scale = adpcmInfo->loopPS;
+                  for (i = 0; i < 8; i++) {
+                    pb->adpcm.a[i][0] = adpcmInfo->coefTab[i][0];
+                    pb->adpcm.a[i][1] = adpcmInfo->coefTab[i][1];
+                  }
+                  base = (u32)dsp_vptr->smp_info.addr * 2;
+                  addr = base + offset * 16 + 2;
+                  dsp_vptr->playInfo.posHi = offset * 0xE;
+                  dsp_vptr->playInfo.posLo = 0;
+                } break;
+                case SAMPLE_COMP_PCM8: {
+                  u8 i;
+                  pb->addr.format = 0x19;
+                  pb->adpcm.gain = 0x100;
+                  for (i = 0; i < 8; i++) {
+                    pb->adpcm.a[i][0] = 0;
+                    pb->adpcm.a[i][1] = 0;
+                  }
+                  addr = (u32)dsp_vptr->smp_info.offset + (base = (u32)dsp_vptr->smp_info.addr);
+                  dsp_vptr->playInfo.posHi = dsp_vptr->smp_info.offset;
+                  dsp_vptr->playInfo.posLo = 0;
+                } break;
+            case SAMPLE_COMP_PCM16:
+                case SAMPLE_COMP_PCM16_VIRTUAL: {
+                  u8 i;
+                  pb->addr.format = 0xA;
+                  pb->adpcm.gain = 0x800;
+                  for (i = 0; i < 8; i++) {
+                    pb->adpcm.a[i][0] = 0;
+                    pb->adpcm.a[i][1] = 0;
+                  }
+                  addr = dsp_vptr->smp_info.offset + (base = (u32)dsp_vptr->smp_info.addr >> 1);
+                  dsp_vptr->playInfo.posHi = dsp_vptr->smp_info.offset;
+                  dsp_vptr->playInfo.posLo = 0;
+                  if (dsp_vptr->smp_info.compType == SAMPLE_COMP_PCM16_VIRTUAL) {
+                    pb->loopType = 1;
+                  }
+                } break;
             default:
               MUSY_ASSERT(FALSE);
               break;
@@ -982,36 +958,36 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
             if (dsp_vptr->smp_info.loopLength != 0) {
               pb->addr.loopFlag = 1;
               switch (dsp_vptr->smp_info.compType) {
-              case 0:
-              case 1:
-              case 4: {
-                u32 bn; // r1+0xA8
-                u32 bo; // r1+0xA4
-                bn = dsp_vptr->smp_info.loop / 14;
-                bo = dsp_vptr->smp_info.loop - (bn * 0xE);
-                loopAddr = base + bn * 16 + 2 + bo;
-                endAddr = dsp_vptr->smp_info.loop + dsp_vptr->smp_info.loopLength - 1;
-                bn = endAddr / 14;
-                bo = endAddr - (bn * 0xE);
-                endAddr = base + bn * 16 + 2 + bo;
-              } break;
-              case 5: {
-                u32 bn; // r1+0xA0
-                u32 bo; // r1+0x9C
-                loopAddr = ((u32)dsp_vptr->vSampleInfo.loopBufferAddr * 2) + 2;
-                endAddr = dsp_vptr->smp_info.loop + dsp_vptr->smp_info.loopLength - 1;
-                bn = endAddr / 14;
-                bo = endAddr - (bn * 0xE);
-                endAddr = base + bn * 16 + 2 + bo;
-                dsp_vptr->vSampleInfo.inLoopBuffer = 0;
-              } break;
-              case 6:
+              case SAMPLE_COMP_ADPCM:
+              case SAMPLE_COMP_ADPCM_PLUS:
+                  case SAMPLE_COMP_ADPCM_STREAM: {
+                    u32 bn;
+                    u32 bo;
+                    bn = dsp_vptr->smp_info.loop / 14;
+                    bo = dsp_vptr->smp_info.loop - (bn * 0xE);
+                    loopAddr = base + bn * 16 + 2 + bo;
+                    endAddr = dsp_vptr->smp_info.loop + dsp_vptr->smp_info.loopLength - 1;
+                    bn = endAddr / 14;
+                    bo = endAddr - (bn * 0xE);
+                    endAddr = base + bn * 16 + 2 + bo;
+                  } break;
+                  case SAMPLE_COMP_ADPCM_VIRTUAL: {
+                    u32 bn;
+                    u32 bo;
+                    loopAddr = ((u32)dsp_vptr->vSampleInfo.loopBufferAddr * 2) + 2;
+                    endAddr = dsp_vptr->smp_info.loop + dsp_vptr->smp_info.loopLength - 1;
+                    bn = endAddr / 14;
+                    bo = endAddr - (bn * 0xE);
+                    endAddr = base + bn * 16 + 2 + bo;
+                    dsp_vptr->vSampleInfo.inLoopBuffer = 0;
+                  } break;
+              case SAMPLE_COMP_PCM16_VIRTUAL:
                 loopAddr = (u32)dsp_vptr->vSampleInfo.loopBufferAddr >> 1;
                 endAddr = (dsp_vptr->smp_info.loop + dsp_vptr->smp_info.loopLength) + base - 1;
                 dsp_vptr->vSampleInfo.inLoopBuffer = 0;
                 break;
-              case 2:
-              case 3:
+              case SAMPLE_COMP_PCM16:
+              case SAMPLE_COMP_PCM8:
               default:
                 loopAddr = base + dsp_vptr->smp_info.loop;
                 endAddr = base + dsp_vptr->smp_info.loop + dsp_vptr->smp_info.loopLength - 1;
@@ -1025,23 +1001,23 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
             } else {
               pb->addr.loopFlag = 0;
               switch (dsp_vptr->smp_info.compType) {
-              case 0:
-              case 1:
-              case 4:
-              case 5: {
-                u32 bn; // r1+0x94
-                u32 bo; // r1+0x90
-                bn = (dsp_vptr->smp_info.length - 1) / 14;
-                bo = (dsp_vptr->smp_info.length - 1) - (bn * 0xE);
-                tmp_addr = base + bn * 16 + 2 + bo;
-                zeroAddr = (dspARAMZeroBuffer * 2) + 2;
-              } break;
-              case 3:
+              case SAMPLE_COMP_ADPCM:
+              case SAMPLE_COMP_ADPCM_PLUS:
+              case SAMPLE_COMP_ADPCM_STREAM:
+                  case SAMPLE_COMP_ADPCM_VIRTUAL: {
+                    u32 bn;
+                    u32 bo;
+                    bn = (dsp_vptr->smp_info.length - 1) / 14;
+                    bo = (dsp_vptr->smp_info.length - 1) - (bn * 0xE);
+                    tmp_addr = base + bn * 16 + 2 + bo;
+                    zeroAddr = (dspARAMZeroBuffer * 2) + 2;
+                  } break;
+              case SAMPLE_COMP_PCM8:
                 tmp_addr = base + dsp_vptr->smp_info.length - 1;
                 zeroAddr = dspARAMZeroBuffer;
                 break;
-              case 2:
-              case 6:
+              case SAMPLE_COMP_PCM16:
+              case SAMPLE_COMP_PCM16_VIRTUAL:
                 tmp_addr = base + dsp_vptr->smp_info.length - 1;
                 zeroAddr = dspARAMZeroBuffer >> 1;
                 break;
@@ -1059,7 +1035,8 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
               pb->lpf.b0 = dsp_vptr->filter.coefB;
               pb->lpf.yn1 = 0;
             }
-            pb->state = (mix_start = dsp_vptr->singleOffset) ? 0 : 1;
+            pb->state =
+                (mix_start = dsp_vptr->singleOffset) ? DSP_PB_STATE_STOPPED : DSP_PB_STATE_PLAYING;
             pb->mix.vL = dsp_vptr->lastVolL = dsp_vptr->volL;
             pb->mix.vR = dsp_vptr->lastVolR = dsp_vptr->volR;
             pb->mix.vS = dsp_vptr->lastVolS = dsp_vptr->volS;
@@ -1068,13 +1045,13 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
             pb->mix.vAuxAS = dsp_vptr->lastVolSa = dsp_vptr->volSa;
             pb->mixerCtrl = 0;
             if ((pb->mix.vL | pb->mix.vR) != 0) {
-              pb->mixerCtrl |= 0x3;
+              pb->mixerCtrl |= (MIXER_CTRL_L | MIXER_CTRL_R);
             }
             if ((pb->mix.vAuxAL | pb->mix.vAuxAR) != 0) {
-              pb->mixerCtrl |= 0x30;
+              pb->mixerCtrl |= (MIXER_CTRL_AUXA_L | MIXER_CTRL_AUXA_R);
             }
             if (pb->mix.vAuxAS != 0) {
-              pb->mixerCtrl |= 0x80;
+              pb->mixerCtrl |= MIXER_CTRL_AUXA_S;
             }
             pb->mix.vAuxBL = dsp_vptr->lastVolLb = dsp_vptr->volLb;
             pb->mix.vAuxBR = dsp_vptr->lastVolRb = dsp_vptr->volRb;
@@ -1090,36 +1067,38 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
             pb->mix.vDeltaAuxBS = 0;
             if (stp->type == SND_STUDIO_TYPE_STD) {
               if ((pb->mix.vAuxBL | pb->mix.vAuxBR) != 0) {
-                pb->mixerCtrl |= 0x600;
+                pb->mixerCtrl |= (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R);
               }
               if (pb->mix.vS != 0) {
-                pb->mixerCtrl |= 0x4;
+                pb->mixerCtrl |= MIXER_CTRL_S;
               }
               if (pb->mix.vAuxAS != 0) {
-                pb->mixerCtrl |= 0x80;
+                pb->mixerCtrl |= MIXER_CTRL_AUXA_S;
               }
               if (pb->mix.vAuxBS != 0) {
-                pb->mixerCtrl |= 0x1000;
+                pb->mixerCtrl |= MIXER_CTRL_AUXB_S;
               }
             } else {
-              pb->mixerCtrl |= 0x4000;
+              pb->mixerCtrl |= MIXER_CTRL_DPL2;
               if ((pb->mix.vAuxBL | pb->mix.vAuxBR) != 0) {
-                pb->mixerCtrl |= 0x600;
+                pb->mixerCtrl |= (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R);
               }
               if (pb->mix.vAuxAS != 0) {
-                pb->mixerCtrl |= 0x80;
+                pb->mixerCtrl |= MIXER_CTRL_AUXA_S;
               }
             }
-            dsp_vptr->state = 2;
+            dsp_vptr->state = DSP_VOICE_STATE_PLAYING;
             newVoice = 1;
-            goto block_186;
+            goto apply_changes;
           }
-          if ((dsp_vptr->smp_info.compType == 4) || (dsp_vptr->smp_info.compType == 5)) {
+          if ((dsp_vptr->smp_info.compType == SAMPLE_COMP_ADPCM_STREAM) ||
+              (dsp_vptr->smp_info.compType == SAMPLE_COMP_ADPCM_VIRTUAL)) {
             pb->adpcmLoop.loop_pred_scale = dsp_vptr->streamLoopPS;
-            if ((dsp_vptr->smp_info.compType == 5) && (dsp_vptr->vSampleInfo.inLoopBuffer == 0) &&
+            if ((dsp_vptr->smp_info.compType == SAMPLE_COMP_ADPCM_VIRTUAL) &&
+                (dsp_vptr->vSampleInfo.inLoopBuffer == 0) &&
                 (pb->streamLoopCnt != 0)) {
-              u32 bn; // r1+0x8C
-              u32 bo; // r1+0x88
+              u32 bn;
+              u32 bo;
               bn = (dsp_vptr->vSampleInfo.loopBufferLength - 1) / 14;
               bo = (dsp_vptr->vSampleInfo.loopBufferLength - 1) - (bn * 14);
               tmp_addr = ((u32)dsp_vptr->vSampleInfo.loopBufferAddr * 2) + bn * 16 + 2 + bo;
@@ -1128,7 +1107,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
               pb->addr.endAddressLo = tmp_addr;
               dsp_vptr->vSampleInfo.inLoopBuffer = 1;
             }
-          } else if (dsp_vptr->smp_info.compType == 6) {
+          } else if (dsp_vptr->smp_info.compType == SAMPLE_COMP_PCM16_VIRTUAL) {
             if ((dsp_vptr->vSampleInfo.inLoopBuffer == 0) && (pb->streamLoopCnt != 0)) { 
               tmp_addr = ((u32)dsp_vptr->vSampleInfo.loopBufferAddr >> 1) + (dsp_vptr->vSampleInfo.loopBufferLength - 1);
               dsp_vptr->smp_info.addr = dsp_vptr->vSampleInfo.loopBufferAddr;
@@ -1140,39 +1119,40 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
           }
           if ((dsp_vptr->smp_info.loopLength == 0) &&
               (dsp_vptr->playInfo.posHi >= dsp_vptr->smp_info.length)) {
-            salSynthSendMessage(dsp_vptr, 0);
+            salSynthSendMessage(dsp_vptr, HW_MESSAGE_SAMPLE_END);
             salDeactivateVoice(dsp_vptr);
             continue;
           }
-          if (((dsp_vptr->changed[0] & 0x10) != 0) && (adsrSetup(&dsp_vptr->adsr) != 0)) {
-            salSynthSendMessage(dsp_vptr, 0);
+          if (((dsp_vptr->changed[0] & DSP_CHANGED_ADSR) != 0) &&
+              (adsrSetup(&dsp_vptr->adsr) != 0)) {
+            salSynthSendMessage(dsp_vptr, HW_MESSAGE_SAMPLE_END);
             salDeactivateVoice(dsp_vptr);
             continue;
           }
-          if ((dsp_vptr->changed[0] & 1) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_VOL) != 0) {
             sal_setup_dspvol(&pb->mix.vDeltaL, &dsp_vptr->lastVolL, dsp_vptr->volL);
             sal_setup_dspvol(&pb->mix.vDeltaR, &dsp_vptr->lastVolR, dsp_vptr->volR);
             sal_setup_dspvol(&pb->mix.vDeltaS, &dsp_vptr->lastVolS, dsp_vptr->volS);
             if ((pb->mix.vDeltaL | pb->mix.vDeltaR) != 0) {
-              pb->mixerCtrl |= 0xB;
+              pb->mixerCtrl |= (MIXER_CTRL_L | MIXER_CTRL_R | MIXER_CTRL_RAMP);
             } else if ((pb->mix.vL | pb->mix.vR) != 0) {
-              pb->mixerCtrl |= 0x3;
+              pb->mixerCtrl |= (MIXER_CTRL_L | MIXER_CTRL_R);
             } else {
-              pb->mixerCtrl &= ~0x3;
+              pb->mixerCtrl &= ~(MIXER_CTRL_L | MIXER_CTRL_R);
             }
             if (stp->type == SND_STUDIO_TYPE_STD) {
               if (pb->mix.vDeltaS != 0) {
-                pb->mixerCtrl |= 0xC;
+                pb->mixerCtrl |= (MIXER_CTRL_S | MIXER_CTRL_RAMP);
               } else if (pb->mix.vS != 0) {
-                pb->mixerCtrl |= 0x4;
+                pb->mixerCtrl |= MIXER_CTRL_S;
               } else {
-                pb->mixerCtrl &= ~0x4;
+                pb->mixerCtrl &= ~MIXER_CTRL_S;
               }
             } else {
-              pb->mixerCtrl &= ~0x4;
+              pb->mixerCtrl &= ~MIXER_CTRL_S;
             }
           } else {
-            if ((pb->mixerCtrl & 0x3) != 0) {
+            if ((pb->mixerCtrl & (MIXER_CTRL_L | MIXER_CTRL_R)) != 0) {
               u32 localNeedsDelta;
               localNeedsDelta =
                   salCheckVolErrorAndResetDelta(&pb->mix.vL, &pb->mix.vDeltaL, &dsp_vptr->lastVolL,
@@ -1181,52 +1161,52 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
                   salCheckVolErrorAndResetDelta(&pb->mix.vR, &pb->mix.vDeltaR, &dsp_vptr->lastVolR,
                                                 dsp_vptr->volR, rampResetOffsetFlags, 2);
               if ((localNeedsDelta | (pb->mix.vL | pb->mix.vR)) == 0) {
-                pb->mixerCtrl &= ~0x3;
+                pb->mixerCtrl &= ~(MIXER_CTRL_L | MIXER_CTRL_R);
               } else {
-                pb->mixerCtrl |= 0x8;
+                pb->mixerCtrl |= MIXER_CTRL_RAMP;
               }
             } else {
               pb->mix.vDeltaL = 0;
               pb->mix.vDeltaR = 0;
             }
-            if ((pb->mixerCtrl & 0x4) != 0) {
+            if ((pb->mixerCtrl & MIXER_CTRL_S) != 0) {
               if (stp->type == SND_STUDIO_TYPE_STD) {
                 u32 localNeedsDelta;
                 localNeedsDelta = salCheckVolErrorAndResetDelta(
                     &pb->mix.vS, &pb->mix.vDeltaS, &dsp_vptr->lastVolS, dsp_vptr->volS,
                     rampResetOffsetFlags, 4);
                 if ((pb->mix.vS | localNeedsDelta) == 0) {
-                  pb->mixerCtrl &= ~0x4;
+                  pb->mixerCtrl &= ~MIXER_CTRL_S;
                 } else {
-                  pb->mixerCtrl |= 0x8;
+                  pb->mixerCtrl |= MIXER_CTRL_RAMP;
                 }
               } else {
-                pb->mixerCtrl &= ~0x4;
+                pb->mixerCtrl &= ~MIXER_CTRL_S;
               }
             } else {
               pb->mix.vDeltaS = 0;
             }
           }
-          if ((dsp_vptr->changed[0] & 2) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_VOL_AUXA) != 0) {
             sal_setup_dspvol(&pb->mix.vDeltaAuxAL, &dsp_vptr->lastVolLa, dsp_vptr->volLa);
             sal_setup_dspvol(&pb->mix.vDeltaAuxAR, &dsp_vptr->lastVolRa, dsp_vptr->volRa);
             sal_setup_dspvol(&pb->mix.vDeltaAuxAS, &dsp_vptr->lastVolSa, dsp_vptr->volSa);
             if ((pb->mix.vDeltaAuxAL | pb->mix.vDeltaAuxAR) != 0) {
-              pb->mixerCtrl |= 0x70;
+              pb->mixerCtrl |= (MIXER_CTRL_AUXA_L | MIXER_CTRL_AUXA_R | MIXER_CTRL_AUXA_RAMP);
             } else if ((pb->mix.vAuxAL | pb->mix.vAuxAR) != 0) {
-              pb->mixerCtrl |= 0x30;
+              pb->mixerCtrl |= (MIXER_CTRL_AUXA_L | MIXER_CTRL_AUXA_R);
             } else {
-              pb->mixerCtrl &= ~0x30;
+              pb->mixerCtrl &= ~(MIXER_CTRL_AUXA_L | MIXER_CTRL_AUXA_R);
             }
             if (pb->mix.vDeltaAuxAS != 0) {
-              pb->mixerCtrl |= 0x180;
+              pb->mixerCtrl |= (MIXER_CTRL_AUXA_S | MIXER_CTRL_AUXA_S_RAMP);
             } else if (pb->mix.vAuxAS != 0) {
-              pb->mixerCtrl |= 0x80;
+              pb->mixerCtrl |= MIXER_CTRL_AUXA_S;
             } else {
-              pb->mixerCtrl &= ~0x80;
+              pb->mixerCtrl &= ~MIXER_CTRL_AUXA_S;
             }
           } else {
-            if ((pb->mixerCtrl & 0x30) != 0) {
+            if ((pb->mixerCtrl & (MIXER_CTRL_AUXA_L | MIXER_CTRL_AUXA_R)) != 0) {
               u32 localNeedsDelta;
               localNeedsDelta = salCheckVolErrorAndResetDelta(
                   &pb->mix.vAuxAL, &pb->mix.vDeltaAuxAL, &dsp_vptr->lastVolLa, dsp_vptr->volLa,
@@ -1235,61 +1215,63 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
                   &pb->mix.vAuxAR, &pb->mix.vDeltaAuxAR, &dsp_vptr->lastVolRa, dsp_vptr->volRa,
                   rampResetOffsetFlags, 0x10);
               if ((localNeedsDelta | (pb->mix.vAuxAL | pb->mix.vAuxAR)) == 0) {
-                pb->mixerCtrl &= ~0x30;
+                pb->mixerCtrl &= ~(MIXER_CTRL_AUXA_L | MIXER_CTRL_AUXA_R);
               } else {
-                pb->mixerCtrl |= 0x40;
+                pb->mixerCtrl |= MIXER_CTRL_AUXA_RAMP;
               }
             } else {
               pb->mix.vDeltaAuxAL = 0;
               pb->mix.vDeltaAuxAR = 0;
             }
-            if ((pb->mixerCtrl & 0x80) != 0) {
+            if ((pb->mixerCtrl & MIXER_CTRL_AUXA_S) != 0) {
               u32 localNeedsDelta;
               localNeedsDelta = salCheckVolErrorAndResetDelta(
                   &pb->mix.vAuxAS, &pb->mix.vDeltaAuxAS, &dsp_vptr->lastVolSa, dsp_vptr->volSa,
                   rampResetOffsetFlags, 0x20);
               if ((pb->mix.vAuxAS | localNeedsDelta) == 0) {
-                pb->mixerCtrl &= ~0x80;
+                pb->mixerCtrl &= ~MIXER_CTRL_AUXA_S;
               } else {
-                pb->mixerCtrl |= 0x100;
+                pb->mixerCtrl |= MIXER_CTRL_AUXA_S_RAMP;
               }
             } else {
               pb->mix.vDeltaAuxAS = 0;
             }
           }
-          if ((dsp_vptr->changed[0] & 4) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_VOL_AUXB) != 0) {
             if (stp->type == SND_STUDIO_TYPE_STD) {
               sal_setup_dspvol(&pb->mix.vDeltaAuxBL, &dsp_vptr->lastVolLb, dsp_vptr->volLb);
               sal_setup_dspvol(&pb->mix.vDeltaAuxBR, &dsp_vptr->lastVolRb, dsp_vptr->volRb);
               sal_setup_dspvol(&pb->mix.vDeltaAuxBS, &dsp_vptr->lastVolSb, dsp_vptr->volSb);
               if ((pb->mix.vDeltaAuxBL | pb->mix.vDeltaAuxBR) != 0) {
-                pb->mixerCtrl |= 0xE00;
+                pb->mixerCtrl |= (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R | MIXER_CTRL_AUXB_RAMP);
               } else if ((pb->mix.vAuxBL | pb->mix.vAuxBR) != 0) {
-                pb->mixerCtrl |= 0x600;
+                pb->mixerCtrl |= (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R);
               } else {
-                pb->mixerCtrl &= ~0x600;
+                pb->mixerCtrl &= ~(MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R);
               }
               if (pb->mix.vDeltaAuxBS != 0) {
-                pb->mixerCtrl |= 0x3000;
+                pb->mixerCtrl |= (MIXER_CTRL_AUXB_S | MIXER_CTRL_AUXB_S_RAMP);
               } else if (pb->mix.vAuxBS != 0) {
-                pb->mixerCtrl |= 0x1000;
+                pb->mixerCtrl |= MIXER_CTRL_AUXB_S;
               } else {
-                pb->mixerCtrl &= ~0x1000;
+                pb->mixerCtrl &= ~MIXER_CTRL_AUXB_S;
               }
             } else {
               sal_setup_dspvol(&pb->mix.vDeltaAuxBL, &dsp_vptr->lastVolLb, dsp_vptr->volLb);
               sal_setup_dspvol(&pb->mix.vDeltaAuxBR, &dsp_vptr->lastVolRb, dsp_vptr->volRb);
               if ((pb->mix.vDeltaAuxBL | pb->mix.vDeltaAuxBR) != 0) {
-                pb->mixerCtrl |= 0x4E00;
+                pb->mixerCtrl |=
+                    (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R | MIXER_CTRL_AUXB_RAMP |
+                     MIXER_CTRL_DPL2);
               } else if ((pb->mix.vAuxBL | pb->mix.vAuxBR | pb->mix.vAuxAS | pb->mix.vDeltaAuxAS) !=
                          0) {
-                pb->mixerCtrl |= 0x4600;
+                pb->mixerCtrl |= (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R | MIXER_CTRL_DPL2);
               } else {
-                pb->mixerCtrl &= ~0x4600;
+                pb->mixerCtrl &= ~(MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R | MIXER_CTRL_DPL2);
               }
             }
           } else if (stp->type == SND_STUDIO_TYPE_STD) {
-            if ((pb->mixerCtrl & 0x600) != 0) {
+            if ((pb->mixerCtrl & (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R)) != 0) {
               u32 localNeedsDelta;
               localNeedsDelta = salCheckVolErrorAndResetDelta(
                   &pb->mix.vAuxBL, &pb->mix.vDeltaAuxBL, &dsp_vptr->lastVolLb, dsp_vptr->volLb,
@@ -1298,28 +1280,29 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
                   &pb->mix.vAuxBR, &pb->mix.vDeltaAuxBR, &dsp_vptr->lastVolRb, dsp_vptr->volRb,
                   rampResetOffsetFlags, 0x80);
               if ((localNeedsDelta | (pb->mix.vAuxBL | pb->mix.vAuxBR)) == 0) {
-                pb->mixerCtrl &= ~0x600;
+                pb->mixerCtrl &= ~(MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R);
               } else {
-                pb->mixerCtrl |= 0x800;
+                pb->mixerCtrl |= MIXER_CTRL_AUXB_RAMP;
               }
             } else {
               pb->mix.vDeltaAuxBL = 0;
               pb->mix.vDeltaAuxBR = 0;
             }
-            if ((pb->mixerCtrl & 0x1000) != 0) {
+            if ((pb->mixerCtrl & MIXER_CTRL_AUXB_S) != 0) {
               u32 localNeedsDelta;
               localNeedsDelta = salCheckVolErrorAndResetDelta(
                   &pb->mix.vAuxBS, &pb->mix.vDeltaAuxBS, &dsp_vptr->lastVolSb, dsp_vptr->volSb,
                   rampResetOffsetFlags, 0x100);
               if ((pb->mix.vAuxBS | localNeedsDelta) == 0) {
-                pb->mixerCtrl &= ~0x1000;
+                pb->mixerCtrl &= ~MIXER_CTRL_AUXB_S;
               } else {
-                pb->mixerCtrl |= 0x2000;
+                pb->mixerCtrl |= MIXER_CTRL_AUXB_S_RAMP;
               }
             } else {
               pb->mix.vDeltaAuxBS = 0;
             }
-          } else if ((pb->mixerCtrl & 0x4600) != 0) {
+          } else if ((pb->mixerCtrl & (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R | MIXER_CTRL_DPL2)) !=
+                     0) {
             u32 localNeedsDelta;
             localNeedsDelta = salCheckVolErrorAndResetDelta(
                 &pb->mix.vAuxBL, &pb->mix.vDeltaAuxBL, &dsp_vptr->lastVolLb, dsp_vptr->volLb,
@@ -1328,30 +1311,30 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
                 &pb->mix.vAuxBR, &pb->mix.vDeltaAuxBR, &dsp_vptr->lastVolRb, dsp_vptr->volRb,
                 rampResetOffsetFlags, 0x80);
             if ((localNeedsDelta | (pb->mix.vAuxBL | pb->mix.vAuxBR)) == 0) {
-              pb->mixerCtrl &= ~0x4600;
+              pb->mixerCtrl &= ~(MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R | MIXER_CTRL_DPL2);
             } else {
-              pb->mixerCtrl |= 0x800;
+              pb->mixerCtrl |= MIXER_CTRL_AUXB_RAMP;
             }
           } else {
             pb->mix.vDeltaAuxBL = 0;
             pb->mix.vDeltaAuxBR = 0;
-            pb->mixerCtrl |= 0x4600;
+            pb->mixerCtrl |= (MIXER_CTRL_AUXB_L | MIXER_CTRL_AUXB_R | MIXER_CTRL_DPL2);
           }
-          if ((dsp_vptr->changed[0] & 0x200) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_ITD) != 0) {
             pb->itd.targetShiftL = dsp_vptr->itdShiftL;
             pb->itd.targetShiftR = dsp_vptr->itdShiftR;
           }
-          if ((dsp_vptr->changed[0] & 0x100) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_SRC_TYPE) != 0) {
             pb->srcSelect = dsp_vptr->srcTypeSelect;
           }
-          if ((dsp_vptr->changed[0] & 0x80) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_COEF_SELECT) != 0) {
             pb->coefSelect = dsp_vptr->srcCoefSelect;
           }
-          if ((dsp_vptr->changed[0] & 0x400) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_FILTER_ON) != 0) {
             pb->lpf.on = dsp_vptr->filter.on != 0;
             pb->lpf.yn1 = 0;
           }
-          if ((dsp_vptr->changed[0] & 0x800) != 0) {
+          if ((dsp_vptr->changed[0] & DSP_CHANGED_FILTER_COEF) != 0) {
             if (dsp_vptr->filter.on != 0) {
               pb->lpf.a0 = dsp_vptr->filter.coefA;
               pb->lpf.b0 = dsp_vptr->filter.coefB;
@@ -1360,11 +1343,11 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
           mix_start = 0;
           newVoice = 0;
           dsp_vptr->currentAddr = (pb->addr.currentAddressHi << 0x10) | pb->addr.currentAddressLo;
-        block_186:
-          if ((dsp_vptr->changed[mix_start] & 0x40) != 0) {
+        apply_changes:
+          if ((dsp_vptr->changed[mix_start] & DSP_CHANGED_KEY_OFF) != 0) {
             adsrRelease(&dsp_vptr->adsr);
           }
-          if ((dsp_vptr->changed[mix_start] & 8) != 0) {
+          if ((dsp_vptr->changed[mix_start] & DSP_CHANGED_PITCH) != 0) {
             pb->src.ratioHi = dsp_vptr->pitch[mix_start] >> 0x10;
             pb->src.ratioLo = dsp_vptr->pitch[mix_start];
             dsp_vptr->playInfo.pitch = dsp_vptr->pitch[mix_start];
@@ -1391,7 +1374,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
               pptr[1] = 0;
               pptr += 2;
               pb->update.updNum[s]++;
-              salSynthSendMessage(dsp_vptr, 0);
+              salSynthSendMessage(dsp_vptr, HW_MESSAGE_SAMPLE_END);
               salDeactivateVoice(dsp_vptr);
               break;
             } else {
@@ -1406,14 +1389,14 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
                   }
                 }
               }
-              if ((dsp_vptr->changed[s] & 0x20) != 0) {
+              if ((dsp_vptr->changed[s] & DSP_CHANGED_BREAK) != 0) {
                 adsrStartRelease(&dsp_vptr->adsr, 10);
                 dsp_vptr->postBreak = 1;
               } else if (dsp_vptr->postBreak == 0) {
-                if ((dsp_vptr->changed[s] & 0x40) != 0) {
+                if ((dsp_vptr->changed[s] & DSP_CHANGED_KEY_OFF) != 0) {
                   adsrRelease(&dsp_vptr->adsr);
                 }
-                if ((dsp_vptr->changed[s] & 8) != 0) {
+                if ((dsp_vptr->changed[s] & DSP_CHANGED_PITCH) != 0) {
                   MUSY_ASSERT((pptr + 4) <= pend);
                   pptr[0] = 0x53;
                   pptr[1] = dsp_vptr->pitch[s] >> 16;
@@ -1448,7 +1431,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
             }
           }
           if (VoiceDone != 0) {
-            salSynthSendMessage(dsp_vptr, 0);
+            salSynthSendMessage(dsp_vptr, HW_MESSAGE_SAMPLE_END);
             salDeactivateVoice(dsp_vptr);
           }
           DCStoreRangeNoSync(dsp_vptr->patchData, (u32)pptr - (u32)dsp_vptr->patchData);
@@ -1462,10 +1445,10 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
           switch (pb->src.ratioHi) {
           case 0:
           case 1:
-            cyclesUsed += dspSRCCycles.v[pb->src.ratioHi][pb->srcSelect];
+            cyclesUsed += dspSRCCycles[pb->src.ratioHi][pb->srcSelect];
             break;
           default:
-            cyclesUsed += dspSRCCycles.v[2][pb->srcSelect];
+            cyclesUsed += dspSRCCycles[2][pb->srcSelect];
             break;
           }
           for (s = 0; s < 5; s++) {
@@ -1476,23 +1459,23 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
               HandleDepopVoice(stp, dsp_vptr);
             }
             salDeactivateVoice(dsp_vptr);
-            salSynthSendMessage(dsp_vptr, 1);
+            salSynthSendMessage(dsp_vptr, HW_MESSAGE_VOICE_KILL);
             for (v = v - 1; v > 0; v--) {
-              if (voices[v - 1]->state == 2) {
+              if (voices[v - 1]->state == DSP_VOICE_STATE_PLAYING) {
                 HandleDepopVoice(stp, voices[v - 1]);
               }
               salDeactivateVoice(voices[v - 1]);
-              salSynthSendMessage(voices[v - 1], 1);
+              salSynthSendMessage(voices[v - 1], HW_MESSAGE_VOICE_KILL);
             }
             for (st1 = st + 1; st1 < salMaxStudioNum; st1++) {
-              if (dspStudio[st1].state == 1) {
+              if (dspStudio[st1].state == DSP_STUDIO_STATE_ACTIVE) {
                 for (dsp_vptr = dspStudio[st1].voiceRoot; dsp_vptr; dsp_vptr = next_dsp_vptr) {
                   next_dsp_vptr = dsp_vptr->next;
-                  if (dsp_vptr->state == 2) {
+                  if (dsp_vptr->state == DSP_VOICE_STATE_PLAYING) {
                     HandleDepopVoice(&dspStudio[st1], dsp_vptr);
                   }
                   salDeactivateVoice(dsp_vptr);
-                  salSynthSendMessage(dsp_vptr, 1);
+                  salSynthSendMessage(dsp_vptr, HW_MESSAGE_VOICE_KILL);
                 }
               }
             }
@@ -1500,7 +1483,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
           } else {
             if (!last_pb) {
               if ((dspCmdPtr + 3) > (dspCmdMaxPtr - 4)) {
-                u16 size; // r1+0x2A
+                u16 size;
                 dspCmdPtr[0] = 13; // MORE
                 dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
                 dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1520,7 +1503,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
               dspCmdPtr[0] = 2; // PB_ADDR
               dspCmdPtr[1] = (u32)pb >> 0x10;
               dspCmdPtr[2] = (u32)pb;
-              dspCmdPtr += 3; // PROCESS
+              dspCmdPtr += 3;
 #ifdef _DEBUG
               dbgActiveVoices++;
 #endif
@@ -1540,7 +1523,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
       }
       if (procVoiceFlag != 0) {
         if ((dspCmdPtr + 1) > (dspCmdMaxPtr - 4)) {
-          u16 size; // r1+0x28;
+          u16 size;
           dspCmdPtr[0] = 13; // MORE
           dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
           dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1567,7 +1550,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
       getAuxFrame = (salAuxFrame + 1) % 3;
       if (stp->auxAHandler) {
         if ((dspCmdPtr + 5) > (dspCmdMaxPtr - 4)) {
-          u16 size; // r1+0x26
+          u16 size;
           dspCmdPtr[0] = 13; // MORE
           dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
           dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1594,7 +1577,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
       if (stp->type == SND_STUDIO_TYPE_STD) {
         if (stp->auxBHandler) {
           if ((dspCmdPtr + 5) > (dspCmdMaxPtr - 4)) {
-            u16 size; // r1+0x24
+            u16 size;
             dspCmdPtr[0] = 13; // MORE
             dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
             dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1620,7 +1603,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
         }
       } else {
         if ((dspCmdPtr + 5) > (dspCmdMaxPtr - 4)) {
-          u16 size; // r1+0x22
+          u16 size;
           dspCmdPtr[0] = 13; // MORE
           dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
           dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1645,7 +1628,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
         dspCmdPtr += 5;
       }
       if ((dspCmdPtr + 3) > (dspCmdMaxPtr - 4)) {
-        u16 size; // r1+0x20
+        u16 size;
         dspCmdPtr[0] = 13; // MORE
         dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
         dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1680,7 +1663,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
     }
   }
   if ((dspCmdPtr + 3) > (dspCmdMaxPtr - 4)) {
-    u16 size; // r1+0x1E
+    u16 size;
     dspCmdPtr[0] = 13; // MORE
     dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
     dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1702,9 +1685,9 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
   dspCmdPtr[2] = (u32)dspSurround;
   dspCmdPtr += 3;
   for (st = 0; st < salMaxStudioNum; st++) {
-    if ((dspStudio[st].state == 1) && (dspStudio[st].isMaster != 0)) {
+    if ((dspStudio[st].state == DSP_STUDIO_STATE_ACTIVE) && (dspStudio[st].isMaster != 0)) {
       if ((dspCmdPtr + 3) > (dspCmdMaxPtr - 4)) {
-        u16 size; // r1+0x1C
+        u16 size;
         dspCmdPtr[0] = 13; // MORE
         dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
         dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1754,7 +1737,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
     dspCmdPtr += 5;
   }
   if ((dspCmdPtr + 5) > (dspCmdMaxPtr - 4)) {
-    u16 size; // r1+0x1A
+    u16 size;
     dspCmdPtr[0] = 13; // MORE
     dspCmdPtr[1] = (u32)dspCmdMaxPtr >> 16;
     dspCmdPtr[2] = (u32)dspCmdMaxPtr;
@@ -1772,7 +1755,7 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
     dspCmdMaxPtr = dspCmdPtr + 0xC0;
   }
   {
-    u16 size; // r1+0x18
+    u16 size;
     dspCmdPtr[0] = 14; // OUTPUT
     dspCmdPtr[1] = (u32)dspSurround >> 16;
     dspCmdPtr[2] = (u32)dspSurround;
@@ -1796,19 +1779,15 @@ void salBuildCommandList(s16* dest, u32 nsDelay) {
 #endif
 }
 
-/** Passes mesg (1 = voice dropped for lack of DSP time, 3 = virtual sample ended) and the voice's callback user value
- * to the synth message handler; returns FALSE if none is registered. */
 u32 salSynthSendMessage(DSPvoice* dsp_vptr, u32 mesg) {
   return salMessageCallback == NULL ? FALSE
                                     : salMessageCallback(mesg, dsp_vptr->mesgCallBackUserValue);
 }
 
-/** Puts a voice at the head of studio's voice list in state 1 (starting). If it was already active it is deactivated
- * first and flagged for a break. */
 void salActivateVoice(DSPvoice* dsp_vptr, u8 studio) {
-  if (dsp_vptr->state != 0) {
+  if (dsp_vptr->state != DSP_VOICE_STATE_INACTIVE) {
     salDeactivateVoice(dsp_vptr);
-    dsp_vptr->changed[0] |= 0x20;
+    dsp_vptr->changed[0] |= DSP_CHANGED_BREAK;
   }
 
   dsp_vptr->postBreak = 0;
@@ -1819,13 +1798,12 @@ void salActivateVoice(DSPvoice* dsp_vptr, u8 studio) {
   dsp_vptr->prev = NULL;
   dspStudio[studio].voiceRoot = dsp_vptr;
   dsp_vptr->startupBreak = 0;
-  dsp_vptr->state = 1;
+  dsp_vptr->state = DSP_VOICE_STATE_STARTING;
   dsp_vptr->studio = studio;
 }
 
-/** Unlinks a voice from its studio's voice list and sets its state to 0 (idle). */
 void salDeactivateVoice(DSPvoice* dsp_vptr) {
-  if (dsp_vptr->state == 0) {
+  if (dsp_vptr->state == DSP_VOICE_STATE_INACTIVE) {
     return;
   }
 
@@ -1839,46 +1817,99 @@ void salDeactivateVoice(DSPvoice* dsp_vptr) {
     dsp_vptr->next->prev = dsp_vptr->prev;
   }
 
-  dsp_vptr->state = 0;
+  dsp_vptr->state = DSP_VOICE_STATE_INACTIVE;
 }
 
-/** Once per frame, for each active studio, calls its aux A handler (and aux B for standard studios) with the studio's
- * aux buffers from two frames ago (left, right, surround at +0xA0 and +0x140 words), then flushes them back so the DSP
- * sees the effect output. */
+void salReconnectVoice(DSPvoice* dsp_vptr, u8 studio) {
+  if (dsp_vptr->state != DSP_VOICE_STATE_INACTIVE) {
+    if (dsp_vptr->prev != NULL) {
+      dsp_vptr->prev->next = dsp_vptr->next;
+    } else {
+      dspStudio[dsp_vptr->studio].voiceRoot = dsp_vptr->next;
+    }
+
+    if (dsp_vptr->next != NULL) {
+      dsp_vptr->next->prev = dsp_vptr->prev;
+    }
+
+    if ((dsp_vptr->next = dspStudio[studio].voiceRoot) != NULL) {
+      dsp_vptr->next->prev = dsp_vptr;
+    }
+
+    dsp_vptr->prev = NULL;
+    dspStudio[studio].voiceRoot = dsp_vptr;
+    if (dsp_vptr->state == DSP_VOICE_STATE_PLAYING) {
+      dsp_vptr->nextAlien = dspStudio[dsp_vptr->studio].alienVoiceRoot;
+      dspStudio[dsp_vptr->studio].alienVoiceRoot = dsp_vptr;
+    }
+  }
+
+  dsp_vptr->studio = studio;
+}
+
+bool salAddStudioInput(DSPstudioinfo* stp, SND_STUDIO_INPUT* desc) {
+  if (stp->numInputs < 7) {
+    stp->in[stp->numInputs].studio = desc->srcStudio;
+    stp->in[stp->numInputs].vol = ((u16)desc->vol << 8) | ((u16)desc->vol << 1);
+    stp->in[stp->numInputs].volA = ((u16)desc->volA << 8) | ((u16)desc->volA << 1);
+    stp->in[stp->numInputs].volB = ((u16)desc->volB << 8) | ((u16)desc->volB << 1);
+    stp->in[stp->numInputs].desc = desc;
+    ++stp->numInputs;
+    return 1;
+  }
+
+  return 0;
+}
+
+bool salRemoveStudioInput(DSPstudioinfo* stp, SND_STUDIO_INPUT* desc) {
+  long i;
+
+  for (i = 0; i < stp->numInputs; ++i) {
+    if (stp->in[i].desc == desc) {
+      for (; i <= stp->numInputs - 2; ++i) {
+        stp->in[i] = stp->in[i + 1];
+      }
+      --stp->numInputs;
+      return 1;
+    }
+  }
+
+  return 0;
+}
+
 void salHandleAuxProcessing() {
-  DSPstudioinfo* r28;
-  u8 st;             // r29
-  s32* work;         // r30
-  DSPstudioinfo* sp; // r31
-  SND_AUX_INFO info; // r1+0x8
 
-  for (sp = dspStudio, st = 0; st < salMaxStudioNum; ++st, r28 = sp++, r28 = r28) {
+  u8 st;
+  s32* work;
+  DSPstudioinfo* sp;
+  SND_AUX_INFO info;
 
-    if (sp->state != 1) {
+  for (sp = dspStudio, st = 0; st < salMaxStudioNum; ++st, sp++) {
+
+    if (sp->state != DSP_STUDIO_STATE_ACTIVE) {
       continue;
     }
 
     if (sp->auxAHandler != NULL) {
       work = sp->auxA[(salAuxFrame + 2) % 3];
       info.data.bufferUpdate.left = work;
-      info.data.bufferUpdate.right = work + 0xa0;
-      info.data.bufferUpdate.surround = work + 0x140;
-      sp->auxAHandler(0, &info, sp->auxAUser);
+      info.data.bufferUpdate.right = work + SND_AUX_BLOCKSIZE;
+      info.data.bufferUpdate.surround = work + (2 * SND_AUX_BLOCKSIZE);
+      sp->auxAHandler(SND_AUX_REASON_BUFFERUPDATE, &info, sp->auxAUser);
 #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
-      DCFlushRangeNoSync(work, 0x780);
+      DCFlushRangeNoSync(work, 3 * SND_AUX_BLOCKSIZE * sizeof(*work));
 #endif
     }
 
-    if (sp->type == 0 && sp->auxBHandler != 0) {
+    if (sp->type == SND_STUDIO_TYPE_STD && sp->auxBHandler != NULL) {
       work = sp->auxB[(salAuxFrame + 2) % 3];
       info.data.bufferUpdate.left = work;
-      info.data.bufferUpdate.right = work + 0xa0;
-      info.data.bufferUpdate.surround = work + 0x140;
-      sp->auxBHandler(0, &info, sp->auxBUser);
+      info.data.bufferUpdate.right = work + SND_AUX_BLOCKSIZE;
+      info.data.bufferUpdate.surround = work + (2 * SND_AUX_BLOCKSIZE);
+      sp->auxBHandler(SND_AUX_REASON_BUFFERUPDATE, &info, sp->auxBUser);
 #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
-      DCFlushRangeNoSync(work, 0x780);
+      DCFlushRangeNoSync(work, 3 * SND_AUX_BLOCKSIZE * sizeof(*work));
 #endif
     }
   }
 }
-

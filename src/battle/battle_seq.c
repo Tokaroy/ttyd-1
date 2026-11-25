@@ -1,10 +1,10 @@
 // Battle sequence: the phase and turn flow, and the action, move and command-selection steps of a battle.
-#pragma optimize_for_size on
-#include <dolphin/pad.h>
+
+#include "version.h"
+#include "battle/battle_sub.h"
 #include "battle/battle_seq.h"
 #include "battle/battle.h"
 #include "battle/battle_unit.h"
-#include "battle/battle_sub.h"
 #include "battle/battle_unit_event.h"
 #include "driver/animdrv.h"
 #include "driver/mapdrv.h"
@@ -32,28 +32,24 @@
 #include "unit/party/unit_party_sanders.h"
 #include "manager/evtmgr_cmd.h"
 #include "driver/fadedrv.h"
-#include "battle/battle_actrecord.h"
-#include "battle/battle_detect.h"
-
-#include "battle/battle_seq_command.h"
-#include "battle/battle_damage.h"
+#include "mario/mario.h"
+#include "battle/battle_audience.h"
+#include "battle/battle_break_slot.h"
 #include "battle/battle_stage_object.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "battle/battle_actrecord.h"
+#include "battle/battle_camera.h"
 #include "eff/eff_recovery.h"
 #include "eff/n64/eff_freeze_n64.h"
+#include "battle/battle_detect.h"
+#include "battle/battle_damage.h"
+#include "battle/battle_seq_command.h"
 #include "battle/battle_seq_end.h"
-
-#define STAGE_WORK(wp) (&(wp)->stageObjectWork)
+#include "battle/unit_work.h"
 
 // external prototypes
-extern s32 marioDefaultWeapon_Jump[];
-extern s32 marioWeapon_KururinJump[];
-extern s32 marioDefaultWeapon_Hammer[];
 
 // local prototypes
 static USER_FUNC(_set_haikei_entry_scale);
-static void _mapobj_data_touch_scale(s32 layer);
 static void battleMakePhaseEvtTable(BattleWork* wp);
 static void btlseqPhaseFirstProcess(BattleWork* wp);
 static void btlseqTurnFirstProcess(BattleWork* wp);
@@ -64,12 +60,11 @@ static void btlseqPhase(BattleWork* wp);
 static void _rule_disp(CameraId cameraId, void* param);
 static USER_FUNC(_set_effect_luck);
 
-static s32 _set_haikei_entry_scale(EventEntry* event, BOOL isFirstCall);
 /**
  * Lucky Start event, started by btlseqFirstAct when any living unit wears the badge:
  * applies the random luck status at once (_set_effect_luck) and holds the battle start for at least 60 frames.
  */
-EVT_BEGIN(nanika_luck_event)
+static EVT_BEGIN(nanika_luck_event)
     BEGIN_SIBLING_EVENT_GET_ID(PTR(0xfe363c8f))
         WAIT_FRAMES(60)
     END_SIBLING_EVENT
@@ -78,170 +73,83 @@ EVT_BEGIN(nanika_luck_event)
     RETURN
 EVT_END()
 
-static BattleWeapon* _GetFirstAttackWeapon(s32 type);
-static void BattleCheckAllPinchStatus(BattleWork* wp, BOOL a2);
-static void btlseqInit(BattleWork* wp);
-static void btlseqFirstAct(BattleWork* wp);
-static void btlseqTurn(BattleWork* wp);
-
-// static data from an inlined header function (see unit_party_sanders.c)
-
-/**
- * Status weapon behind the Lucky Start badge: Electrified, Dodgy, HP Regen and FP Regen (2 per turn), each for
- * three turns; _set_effect_luck keeps one of them at random and applies it to the badge wearer.
- */
-const BattleWeapon N_weapon_lucky_start = {
-    NULL, 0, // name..icon
-    {0}, // pad_06
-    0, NULL, // itemId..description
-    100, // baseAccuracy
-    0, 0, 0, 0.0f, 0, 0, 0, 0, // baseFpCost..reserved_1B
-    NULL, // hpDamageFn
-    {0}, // hpDamageWork
-    NULL, // fpDamageFn
-    {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_ONLY_SELF | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OWN_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
-    3, // acLevel
-    2, // reserved_6F
-    NULL, // acHelpMsg
-    SPECIAL_ALWAYS_HITS | SPECIAL_IGNORE_STATUS_VULNERABILITY | SPECIAL_UNGUARDABLE, // special
-    COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
-    0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
-    0, 0, 0, // poisonStrength..confuseTime
-    100, // electricChance
-    3, // electricTime
-    100, // dodgyChance
-    3, // dodgyTime
-    0, 0, 0, 0, 0, 0, 0, 0, // burnChance..atkChangeChance
-    0, 0, 0, 0, 0, 0, 0, 0, // atkChangeTime..ohkoChance
-    0, 0, 0, 0, 0, 0, 0, 0, // chargeStrength..paybackTime
-    0, 0, 0, // holdFastTime..invisibleTime
-    3, // hpRegenTime
-    2, // hpRegenStrength
-    3, // fpRegenTime
-    2, // fpRegenStrength
-    {0}, // pad_AE
-    NULL, // attackEvtScript
-    {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
-};
-
-/** Black: the colour of the curtain fade when the battle starts after the Glitz Pit rule banner. */
-static const GXColor c = {0, 0, 0, 0xFF};
-/** White: the window colour of the Glitz Pit rule banner drawn by _rule_disp. */
-static const GXColor color = {0xFF, 0xFF, 0xFF, 0xFF};
-
-/**
- * Glitz Pit bonus-condition messages for minor-league fights, indexed by the battle's rule type ("a" = unused);
- * _rule_disp shows the one for the fight before turn 1, e.g. "Don't use your jump!".
- */
-const char* _rule_msg_table_2bu[] = {
-    "a", "stg3_tou_cp_001", "a", "stg3_tou_cp_002", "a", "stg3_tou_cp_004", "stg3_tou_cp_008", "a",
-    "a", "a", "a", "a", "a", "a", "a", "a",
-    "a", "a", "stg3_tou_cp_000", "a", "a", "a", "a", "a",
-    "a", "a", "stg3_tou_cp_005", "a", "a", "a", "a", "a",
-    "stg3_tou_cp_006", "a", "a", "a", "a", "a", "a", "a",
-    "a", "a", "a", "stg3_tou_cp_009", "a", "a", "a", "a",
-    "stg3_tou_cp_003", "a", "a", "a", "a", "a", "a", "a",
-    "a", "a", "a", "stg3_tou_cp_007", "a", "a", "a", "a",
-    "a", "a", "a", "a",
-};
-
-/** Glitz Pit bonus-condition messages for major-league fights (top ten), by rule type; shown by _rule_disp. */
-const char* _rule_msg_table_1bu[] = {
-    "test", "stg3_tou_cp_011", "a", "stg3_tou_cp_012", "a", "stg3_tou_cp_014", "stg3_tou_cp_019", "a",
-    "a", "a", "a", "stg3_tou_cp_020", "a", "a", "a", "a",
-    "a", "a", "stg3_tou_cp_010", "a", "stg3_tou_cp_018", "a", "a", "a",
-    "a", "a", "stg3_tou_cp_015", "a", "a", "a", "a", "a",
-    "stg3_tou_cp_016", "a", "a", "a", "a", "a", "a", "a",
-    "a", "a", "a", "stg3_tou_cp_021", "a", "a", "a", "a",
-    "stg3_tou_cp_013", "a", "a", "a", "a", "a", "a", "a",
-    "a", "a", "a", "stg3_tou_cp_017", "a", "a", "a", "stg3_tou_cp_024",
-    "stg3_tou_cp_023", "stg3_tou_cp_022", "a", "a",
-};
-
-/** Glitz Pit bonus-condition messages after chapter 3, by rule type; shown by _rule_disp. */
-const char* _rule_msg_table_after[] = {
-    "a", "stg3_tou_cp_041", "a", "stg3_tou_cp_042", "a", "stg3_tou_cp_044", "stg3_tou_cp_049", "a",
-    "a", "a", "a", "stg3_tou_cp_050", "a", "a", "a", "a",
-    "a", "a", "stg3_tou_cp_040", "a", "stg3_tou_cp_048", "a", "a", "a",
-    "a", "a", "stg3_tou_cp_045", "a", "a", "a", "a", "a",
-    "stg3_tou_cp_046", "a", "a", "a", "a", "a", "a", "a",
-    "a", "a", "a", "stg3_tou_cp_051", "a", "a", "a", "a",
-    "stg3_tou_cp_043", "a", "a", "a", "a", "a", "a", "a",
-    "a", "a", "a", "stg3_tou_cp_047", "a", "a", "a", "stg3_tou_cp_054",
-    "stg3_tou_cp_053", "stg3_tou_cp_052", "a", "a",
-};
-
 /**
  * Started by btlseqFirstAct on a normal battle start (no first strike):
  * pops the stage background layers in with _set_haikei_entry_scale.
  */
-EVT_BEGIN(_default_haikei_set_entry_event)
+#if VERSION >= VERSION_JP
+static EVT_BEGIN(_default_haikei_set_entry_event)
     CALL(_set_haikei_entry_scale)
     RETURN
 EVT_END()
+#endif
+
+static void BattleCheckAllPinchStatus(BattleWork* wp, BOOL noAudience);
+static void btlseqInit(BattleWork* wp);
+static void btlseqFirstAct(BattleWork* wp);
+static void btlseqTurn(BattleWork* wp);
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord _default_haikei_set_entry_event[4];
+#endif
 
 /**
  * Per-frame driver of the battle flow, called from the battle main loop (battle.c):
  * dispatches on the top-level SEQ_UNKNOWN step to setup (0), the opening act (1),
  * the turn loop (2) and the end of battle (3); 4 means finished. Also keeps the low-HP warning beep running.
  */
-void BattleSequenceManager(void) { // 1:1
+void BattleSequenceManager(void) {
     BattleWork* wp = _battleWorkPointer;
     switch (BattleGetSeq(wp, SEQ_UNKNOWN)) {
-        case 0:
+        case BATTLE_STAGE_INIT:
             btlseqInit(wp);
             BattleCheckAllPinchStatus(wp, TRUE);
             break;
-        case 1:
+        case BATTLE_STAGE_FIRST_ACT:
             BattleCheckAllPinchStatus(wp, FALSE);
             btlseqFirstAct(wp);
             break;
-        case 2:
+        case BATTLE_STAGE_TURN:
             BattleCheckAllPinchStatus(wp, FALSE);
             btlseqTurn(wp);
             break;
-        case 3:
+        case BATTLE_STAGE_END:
             btlseqEnd(wp);
             break;
-        case 4:
+        case BATTLE_STAGE_DONE:
             break;
     }
 }
 
 /**
- * Refreshes every unit's Danger/Peril state (a2 is passed on to BtlUnit_CheckPinchStatus;
+ * Refreshes every unit's Danger/Peril state (noAudience is passed on to BtlUnit_CheckPinchStatus;
  * TRUE on the setup frame), then, while the action menu is open, beeps every 60 frames:
  * SFX_BTL_DANGER1 if Mario or the partner is in Peril, else SFX_BTL_PINCH1 for Danger.
- * Only the first unit with the flag is looked at. With neither, clears Mario's work[8] and the timer.
+ * Only the first unit with the flag is looked at. With neither, clears Mario's work[MARIO_WORK_PINCH_VOICE] and the timer.
  */
-static void BattleCheckAllPinchStatus(BattleWork* wp, BOOL a2) { // 1:1, needs stmw forced
+static void BattleCheckAllPinchStatus(BattleWork* wp, BOOL noAudience) {
     BattleUnit* unit;
-    BOOL v6;
+    BOOL alert;
     int i;
 
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(wp, i);
         if (unit) {
-            BtlUnit_CheckPinchStatus(unit, a2);
+            BtlUnit_CheckPinchStatus(unit, noAudience);
         }
     }
 
-    v6 = FALSE;
+    alert = FALSE;
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(wp, i);
         if (unit) {
-            if ((unit->statusFlags & STATUS_FLAG_PERIL) &&
-                !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) &&
+            if ((unit->statusFlags & UNIT_STATUS_FLAG_PERIL) &&
+                !BtlUnit_CheckStatus(unit, STATUS_DEAD) &&
                 !BtlUnit_GetBelong(unit)) {
                 if (unit->currentKind == UNIT_MARIO ||
                     unit->currentKind >= TYPE_PARTNER_MIN &&
                         unit->currentKind < TYPE_PARTNER_MAX) {
                     if (unit->currentHp > 0) {
-                        v6 = TRUE;
+                        alert = TRUE;
                     }
                 }
                 break;
@@ -249,45 +157,46 @@ static void BattleCheckAllPinchStatus(BattleWork* wp, BOOL a2) { // 1:1, needs s
         }
     }
 
-    if (v6) {
+    if (alert) {
         wp->alertTick--;
         if (wp->alertTick <= 0) {
             wp->alertTick = 60;
-            if (wp->commandMenu.flags & CMD_MENU_FLAG_ACT) {
+            if (wp->commandMenu.flags & CMD_MENU_ACT) {
                 psndSFXOn("SFX_BTL_DANGER1");
             }
         }
     } else {
-        v6 = FALSE;
+        // alert is already FALSE in this branch (the repeated store is in the retail code)
+        alert = FALSE;
         for (i = 0; i < BATTLE_UNIT_MAX; i++) {
             unit = BattleGetUnitPtr(wp, i);
             if (unit) {
-                if ((unit->statusFlags & STATUS_FLAG_DANGER) &&
-                    !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) &&
+                if ((unit->statusFlags & UNIT_STATUS_FLAG_DANGER) &&
+                    !BtlUnit_CheckStatus(unit, STATUS_DEAD) &&
                     !BtlUnit_GetBelong(unit)) {
                     if (unit->currentKind == UNIT_MARIO ||
                         unit->currentKind >= TYPE_PARTNER_MIN &&
                             unit->currentKind < TYPE_PARTNER_MAX) {
                         if (unit->currentHp > 0) {
-                            v6 = TRUE;
+                            alert = TRUE;
                         }
                     }
                     break;
                 }
             }
         }
-        if (v6) {
+        if (alert) {
             wp->alertTick--;
             if (wp->alertTick <= 0) {
                 wp->alertTick = 60;
-                if (wp->commandMenu.flags & CMD_MENU_FLAG_ACT) {
+                if (wp->commandMenu.flags & CMD_MENU_ACT) {
                     psndSFXOn("SFX_BTL_PINCH1");
                 }
             }
         } else {
             unit = BattleGetMarioPtr(wp);
             if (unit) {
-                unit->work[8] = 0;
+                unit->work[MARIO_WORK_PINCH_VOICE] = 0;
             }
             wp->alertTick = 0;
         }
@@ -300,48 +209,48 @@ static void BattleCheckAllPinchStatus(BattleWork* wp, BOOL a2) { // 1:1, needs s
  * p_jyabara and p_kaiten_h animation effects and the Nice effect to load,
  * then turns the status window on and moves on to SEQ_FIRST_ACT.
  */
-static void btlseqInit(BattleWork* wp) { // 1:1, needs stmw
+static void btlseqInit(BattleWork* wp) {
     MarioWork* mario;
     PartyEntry* party;
 
     switch (BattleGetSeq(wp, SEQ_INIT)) {
-        case 0x1000000: // continues through to 0x1000001
-            BattleSetSeq(wp, SEQ_INIT, 0x1000001);
+        case SEQ_INIT_START: // falls through
+            BattleSetSeq(wp, SEQ_INIT, SEQ_INIT_UNIT_SETUP);
 
-        case 0x1000001:
+        case SEQ_INIT_UNIT_SETUP:
             mario = marioGetPtr();
-            mario->dispFlags |= MARIO_DISP_FLAG_HIDDEN;
+            mario->dispFlags |= MARIO_DISP_FLAG_HIDE;
             party = partyGetPtr(marioGetPartyId());
             if (party) {
-                party->flags2 |= PARTY_DISP_FLAG_HIDDEN;
+                party->flags2 |= PARTY_DISP_FLAG_HIDE;
             }
             Btl_UnitSetup(wp);
-            BattleSetSeq(wp, SEQ_INIT, 0x1000002);
+            BattleSetSeq(wp, SEQ_INIT, SEQ_INIT_UNIT_INIT_WAIT);
             break;
 
-        case 0x1000002:
+        case SEQ_INIT_UNIT_INIT_WAIT:
             if (BattleCheckEndUnitInitEvent(wp)) {
-                BattleSetSeq(wp, SEQ_INIT, 0x1000003u);
+                BattleSetSeq(wp, SEQ_INIT, SEQ_INIT_LOAD_ANIMS);
             }
             break;
 
-        case 0x1000003:
+        case SEQ_INIT_LOAD_ANIMS:
             if (animEffectAsync("p_b_st", 1) &&
                 animEffectAsync("p_jyabara", 1) &&
                 animEffectAsync("p_kaiten_h", 1) &&
                 effNiceAsync(1)) {
-                BattleSetSeq(wp, SEQ_INIT, 0x1000004);
+                BattleSetSeq(wp, SEQ_INIT, SEQ_INIT_PAUSE);
             }
             break;
 
-        case 0x1000004:
-            BattleSetSeq(wp, SEQ_INIT, 0x1000005);
+        case SEQ_INIT_PAUSE:
+            BattleSetSeq(wp, SEQ_INIT, SEQ_INIT_FINISH);
             break;
 
-        case 0x1000005:
+        case SEQ_INIT_FINISH:
             BattleStatusWindowEventOn();
             BattleStatusWindowSystemOn();
-            BattleSetSeq(wp, SEQ_UNKNOWN, 1);
+            BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_FIRST_ACT);
             BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000000);
             break;
     }
@@ -349,29 +258,29 @@ static void btlseqInit(BattleWork* wp) { // 1:1, needs stmw
 
 /**
  * Weapon whose attack script opens the battle for a field first strike,
- * by the type in FieldBattleInfo.partyId (set by BattleInformationSetFirstAttack):
+ * by the type in FieldBattleInfo.firstAttack (set by BattleInformationSetFirstAttack):
  * 1 and 3 Jump, 2 Spin Jump, 4 Hammer, 5 Super Hammer spin, 6 Ultra Hammer, 7 Koops, 8 Bobbery.
  * 0 (no first strike) gives NULL.
  */
 static BattleWeapon* _GetFirstAttackWeapon(s32 type) {
     switch (type) {
-        case 1:
-            return (BattleWeapon*)marioDefaultWeapon_Jump;
-        case 2:
-            return (BattleWeapon*)marioWeapon_KururinJump;
-        case 3:
-            return (BattleWeapon*)marioDefaultWeapon_Jump;
-        case 4:
-            return (BattleWeapon*)marioDefaultWeapon_Hammer;
-        case 5:
+        case FIRST_ATTACK_JUMP:
+            return &marioDefaultWeapon_Jump;
+        case FIRST_ATTACK_SPIN_JUMP:
+            return &marioWeapon_KururinJump;
+        case FIRST_ATTACK_JUMP_UNUSED:
+            return &marioDefaultWeapon_Jump;
+        case FIRST_ATTACK_HAMMER:
+            return &marioDefaultWeapon_Hammer;
+        case FIRST_ATTACK_SPIN_HAMMER:
             return &marioDefaultWeapon_FirstAttackKaitenHammer;
-        case 6:
+        case FIRST_ATTACK_ULTRA_HAMMER:
             return &marioDefaultWeapon_FirstAttackUltraHammer;
-        case 7:
+        case FIRST_ATTACK_SHELL:
             return &partyWeapon_NokotarouFirstAttack;
-        case 8:
+        case FIRST_ATTACK_BOMB:
             return &partyWeapon_SandersFirstAttack;
-        case 0:
+        case FIRST_ATTACK_NONE:
         default:
             return NULL;
     }
@@ -386,6 +295,7 @@ static BattleWeapon* _GetFirstAttackWeapon(s32 type) {
  */
 static void btlseqFirstAct(BattleWork* wp) {
     s32 type;
+    NpcBattleInfo* info;
     int i;
     BattleUnit* unit;
     BattleUnit* a;
@@ -395,24 +305,25 @@ static void btlseqFirstAct(BattleWork* wp) {
     s32 flag;
     int k;
     FieldBattleInfo* fb = wp->fbatInfo;
-    void* info;
-    type = (s32)fb->partyId;
+
+    s32* id;
+    type = (s32)fb->firstAttack;
 
     switch (BattleGetSeq(wp, SEQ_FIRST_ACT)) {
         case 0x2000000:
             switch (type) {
-                case 0: {
+                case 0:
                     wp->ruleDispTimer = 0;
                     evtEntry(_default_haikei_set_entry_event, 10, 0);
                     info = wp->fbatInfo->setup;
                     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                         unit = BattleGetUnitPtr(wp, i);
                         if (unit && unit->entryEventCode) {
-                            if ((((NpcBattleInfo*)info)->battleFlags & NPC_BATTLE_NO_PLAYER_ENTRY) && (unit->currentKind == UNIT_MARIO || (unit->currentKind >= TYPE_PARTNER_MIN && unit->currentKind < TYPE_PARTNER_MAX))) {
+                            if ((info->battleFlags & NPC_BATTLE_NO_PARTY_ENTRY) && (unit->currentKind == UNIT_MARIO || (unit->currentKind >= TYPE_PARTNER_MIN && unit->currentKind < TYPE_PARTNER_MAX))) {
                                 continue;
                             }
                             if (marioGetPtr()->currMotionId == MARIO_MOTION_YOSHI && unit->currentKind == UNIT_MARIO) {
-                                evt = evtEntry((s32*)BtlUnit_GetData(unit, 0x41), 10, 0);
+                                evt = evtEntry(BtlUnit_GetData(unit, UNIT_DATA_RIDE_ENTRY_EVENT), 10, 0);
                                 unit->entryEventId = evt->eventId;
                                 evt->unitId = unit->unitId;
                             } else {
@@ -423,77 +334,77 @@ static void btlseqFirstAct(BattleWork* wp) {
                         }
                     }
                     BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000001);
-                    goto done_fa;
-                }
-            }
-            switch (type) {
-                case 1:
-                case 2:
-                case 3:
-                    wp->ruleDispTimer = 10;
-                    break;
-                case 4:
-                case 5:
-                case 6:
-                case 7:
-                case 8:
-                    wp->ruleDispTimer = 0;
                     break;
                 default:
-                    wp->ruleDispTimer = 0;
+                    switch (type) {
+                        case FIRST_ATTACK_JUMP:
+                        case FIRST_ATTACK_SPIN_JUMP:
+                        case FIRST_ATTACK_JUMP_UNUSED:
+                            wp->ruleDispTimer = 10;
+                            break;
+                        case FIRST_ATTACK_HAMMER:
+                        case FIRST_ATTACK_SPIN_HAMMER:
+                        case FIRST_ATTACK_ULTRA_HAMMER:
+                        case FIRST_ATTACK_SHELL:
+                        case FIRST_ATTACK_BOMB:
+                            wp->ruleDispTimer = 0;
+                            break;
+                        default:
+                            wp->ruleDispTimer = 0;
+                            break;
+                    }
+                    wp->flags |= BATTLE_FLAG_FIRST_ATTACK;
+                    BattleGetFirstAttackUnit(wp, &a, &b);
+                    wp->activeUnitId = a->unitId;
+                    a->tokenFlags |= kCurrentlyActing;
+                    evt = evtEntry(b->damageEventCode, 10, EVENT_START_IMMEDIATE);
+                    if (evt) {
+                        evt->unitId = b->unitId;
+                        b->damageCode = DAMAGE_CODE_FIRST_ATTACK_POS;
+                        b->damageEventId = evt->eventId;
+                    }
+                    a->flags |= BATTLE_UNIT_FLAG_ACTING;
+                    if (type < FIRST_ATTACK_ENEMY) {
+                        a->attackEventCode = _GetFirstAttackWeapon(type)->attackEvtScript;
+                        a->attackEventFlags = 0;
+                        BattleStatusWindowEventOff();
+                    }
+                    if (BtlUnit_GetBelong(a) == 0) {
+                        BattleAudience_Case_FirstAttack_Good();
+                    } else {
+                        BattleAudience_Case_FirstAttack_Bad();
+                    }
+                    evt = evtEntry(a->attackEventCode, 10, 0);
+                    if (evt) {
+                        evt->unitId = a->unitId;
+                        a->attackEventId = evt->eventId;
+                    }
+                    switch (type) {
+                        case FIRST_ATTACK_JUMP:
+                        case FIRST_ATTACK_SPIN_JUMP:
+                        case FIRST_ATTACK_JUMP_UNUSED:
+                        case FIRST_ATTACK_HAMMER:
+                        case FIRST_ATTACK_SPIN_HAMMER:
+                        case FIRST_ATTACK_ULTRA_HAMMER:
+                            unit = BattleGetPartyPtr(wp);
+                            if (unit) {
+                                evt = evtEntry(unit->entryEventCode, 10, 0);
+                                unit->entryEventId = evt->eventId;
+                                evt->unitId = unit->unitId;
+                            }
+                            break;
+                        case FIRST_ATTACK_SHELL:
+                        case FIRST_ATTACK_BOMB:
+                            unit = BattleGetMarioPtr(wp);
+                            if (unit) {
+                                evt = evtEntry(unit->entryEventCode, 10, 0);
+                                unit->entryEventId = evt->eventId;
+                                evt->unitId = unit->unitId;
+                            }
+                    }
+                    BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000001);
                     break;
             }
-            wp->flags |= BATTLE_FLAG_FIRST_ATTACK;
-            BattleGetFirstAttackUnit(wp, &a, &b);
-            wp->activeUnitId = a->unitId;
-            a->tokenFlags |= TOKEN_FLAG_CURRENTLY_ACTING;
-            evt = evtEntry(b->damageEventCode, 10, EVENT_START_NOW);
-            if (evt) {
-                evt->unitId = b->unitId;
-                b->damageCode = 0x39;
-                b->damageEventId = evt->eventId;
-            }
-            a->flags |= UNIT_FLAG_TURN_SKIPPED;
-            if (type < 9) {
-                a->attackEventCode = (void*)_GetFirstAttackWeapon(type)->attackEvtScript;
-                a->attackEventFlags = 0;
-                BattleStatusWindowEventOff();
-            }
-            if (BtlUnit_GetBelong(a) == 0) {
-                BattleAudience_Case_FirstAttack_Good();
-            } else {
-                BattleAudience_Case_FirstAttack_Bad();
-            }
-            evt = evtEntry(a->attackEventCode, 10, 0);
-            if (evt) {
-                evt->unitId = a->unitId;
-                a->attackEventId = evt->eventId;
-            }
-            switch (type) {
-                case 1:
-                case 2:
-                case 3:
-                case 4:
-                case 5:
-                case 6:
-                    unit = BattleGetPartyPtr(wp);
-                    if (unit) {
-                        evt = evtEntry(unit->entryEventCode, 10, 0);
-                        unit->entryEventId = evt->eventId;
-                        evt->unitId = unit->unitId;
-                    }
-                    break;
-                case 7:
-                case 8:
-                    unit = BattleGetMarioPtr(wp);
-                    if (unit) {
-                        evt = evtEntry(unit->entryEventCode, 10, 0);
-                        unit->entryEventId = evt->eventId;
-                        evt->unitId = unit->unitId;
-                    }
-            }
-            BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000001);
-        done_fa:
             break;
 
         case 0x2000001:
@@ -501,13 +412,15 @@ static void btlseqFirstAct(BattleWork* wp) {
                 break;
             }
             {
+                // black: the curtain fade that opens every battle
+                GXColor c = {0, 0, 0, 0xFF};
                 fadeEntry(FADE_CURTAIN_VERTICAL_A2, 200, c);
             }
             wp->curtainSfxId = psndSFXOn("SFX_OFF_BTL_START_CURTAIN_UP1");
             BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000002);
 
         case 0x2000002:
-            if (fadeIsFinish() && (u32)wp->curtainSfxId != 0xFFFFFFFFU) {
+            if (fadeIsFinish() && wp->curtainSfxId != -1) {
                 psndSFXOff(wp->curtainSfxId);
                 wp->curtainSfxId = -1;
             }
@@ -518,7 +431,7 @@ static void btlseqFirstAct(BattleWork* wp) {
                 BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000003);
                 unit = BattleGetUnitPtr(wp, wp->activeUnitId);
                 if (unit) {
-                    unit->flags &= ~UNIT_FLAG_TURN_SKIPPED;
+                    unit->flags &= ~BATTLE_UNIT_FLAG_ACTING;
                 }
             }
             break;
@@ -526,8 +439,8 @@ static void btlseqFirstAct(BattleWork* wp) {
         case 0x2000003:
             if (BattleCheckConcluded(wp)) {
                 BattleAudience_PerAct();
-                BattleSetSeq(wp, SEQ_UNKNOWN, 3);
-                BattleSetSeq(wp, SEQ_END, 0x7000000);
+                BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_END);
+                BattleSetSeq(wp, SEQ_END, SEQ_END_START);
                 break;
             }
             BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000004);
@@ -543,19 +456,19 @@ static void btlseqFirstAct(BattleWork* wp) {
             BattleIncSeq(wp, SEQ_FIRST_ACT);
 
         case 0x2000005:
-            if (!(wp->flags & (BATTLE_FLAG_ESCAPED | BATTLE_FLAG_INTERRUPTED))) {
+            if (!(wp->flags & (BATTLE_FLAG_ESCAPED | BATTLE_FLAG_INTERRUPT_STOP))) {
                 BattleStatusWindowSystemOn();
             }
             BattleConsumeReserveItem();
-            wp->flags &= ~BATTLE_FLAG_ACT_DECIDED;
+            wp->flags &= ~BATTLE_FLAG_ACT_DECIDED_UNUSED;
             BattleAudience_PerAct();
             BattleIncSeq(wp, SEQ_FIRST_ACT);
 
         case 0x2000006:
-            if ((u8)BattleAudience_CheckReaction()) {
+            if (BattleAudience_CheckReaction()) {
                 break;
             }
-            if (!BattleCheckConcluded(wp) && (u8)BattleBreakSlot_CheckReaction()) {
+            if (!BattleCheckConcluded(wp) && BattleBreakSlot_CheckReaction()) {
                 break;
             }
             BattleIncSeq(wp, SEQ_FIRST_ACT);
@@ -570,7 +483,7 @@ static void btlseqFirstAct(BattleWork* wp) {
             if (!BattleWaitAllActiveEvtEnd(wp)) {
                 break;
             }
-            if ((u32)wp->fbatInfo->setup->battleFlags & NPC_BATTLE_NO_ESCAPE) {
+            if (wp->fbatInfo->setup->battleFlags & NPC_BATTLE_NO_ESCAPE) {
                 BattleSetSeq(wp, SEQ_FIRST_ACT, 0x2000009);
                 BattleStage_WallCloseCheck();
             } else {
@@ -578,29 +491,28 @@ static void btlseqFirstAct(BattleWork* wp) {
             }
             break;
 
-        case 0x2000009: {
-            s32* id = &wp->stageObjectWork.closeWallEvtId;
+        case 0x2000009:
+            id = &wp->stageObjectWork.closeWallEvtId;
             if (*id != 0 && !evtCheckID(*id)) {
                 *id = 0;
             }
             if (*id == 0) {
                 BattleSetSeq(wp, SEQ_FIRST_ACT, 0x200000A);
             }
-        } break;
+            break;
 
         case 0x200000A:
             wp->luckEventId = 0;
             flag = 0;
-            k = 0;
-            do {
+            for (k = 0; k < BATTLE_UNIT_MAX; k++) {
                 unit = BattleGetUnitPtr(wp, k);
-                if (unit && unit->badgesEquipped.LuckyStart && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+                if (unit && unit->badgesEquipped.LuckyStart && !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
                     flag = 1;
                 }
-            } while (++k < 64);
+            }
             if (flag) {
                 evt = evtEntry(nanika_luck_event, 10, 0);
-                evt->unitId = -5;
+                evt->unitId = UNIT_ID_SYSTEM;
                 wp->luckEventId = evt->eventId;
                 *(s64*)&wp->announce.stChg.maskHi |= -1;
                 BattleStatusChangeMsgAdjust(wp);
@@ -653,42 +565,110 @@ static void btlseqFirstAct(BattleWork* wp) {
 
         case 0x200000E:
             wp->flags &= ~BATTLE_FLAG_FIRST_ATTACK;
-            BattleSetSeq(wp, SEQ_UNKNOWN, 2);
+            BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_TURN);
             BattleSetSeq(wp, SEQ_TURN, 0x3000000);
             break;
     }
 }
 
-//==== written below (reverse order) ====
-
 /**
  * Lucky Start: for every living unit wearing the badge,
- * applies one random status from N_weapon_lucky_start (Electrified, Dodgy, HP Regen or FP Regen, 3 turns) with
+ * applies one random status from its weapon (Electrified, Dodgy, HP Regen or FP Regen, 3 turns) with
  * SFX_SYSTEM_LUCKY1 and a Nice sparkle by the unit. No script arguments; run by nanika_luck_event.
  */
 static USER_FUNC(_set_effect_luck) {
     BattleWork* wp = _battleWorkPointer;
-    f32* pz;
-    f32* py;
-    BattleWeapon weapon = *&N_weapon_lucky_start;
-    f32 z;
-    f32 y;
-    BattleWeapon* pw;
-    f32 x;
-    const char* sfx;
+
+    // the four statuses Lucky Start chooses from; one is kept at random per unit
+    BattleWeapon weapon = {
+        NULL,
+        0,   // name..icon
+        {0}, // pad_06
+        0,
+        NULL, // itemId..description
+        100,  // baseAccuracy
+        0,
+        0,
+        0,
+        0.0f,
+        0,
+        0,
+        0,
+        0,                                                                             // baseFpCost..reserved_1B
+        NULL,                                                                          // hpDamageFn
+        {0},                                                                           // hpDamageWork
+        NULL,                                                                          // fpDamageFn
+        {0},                                                                           // fpDamageWork
+        TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_SELF | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+        TARGET_PROP_SAME_SIDE_FIRST,                                                   // targetPropertyFlags
+        ELEMENT_NORMAL,
+        ATTACKPATTERN_NULL,                                                       // element..damagePattern
+        3,                                                                        // acLevel
+        2,                                                                        // reserved_6F
+        NULL,                                                                     // acHelpMsg
+        SPECIAL_CANNOT_MISS | SPECIAL_IGNORE_VULNERABILITY | SPECIAL_UNGUARDABLE, // special
+        COUNTER_RESIST_ALL,                                                       // counterResistFlags
+        TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM,   // targetWeightFlags
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0, // sleepChance..poisonTime
+        0,
+        0,
+        0,   // poisonStrength..confuseTime
+        100, // electricChance
+        3,   // electricTime
+        100, // dodgyChance
+        3,   // dodgyTime
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0, // burnChance..atkChangeChance
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0, // atkChangeTime..ohkoChance
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0, // chargeStrength..paybackTime
+        0,
+        0,
+        0,                                      // holdFastTime..invisibleTime
+        3,                                      // hpRegenTime
+        2,                                      // hpRegenStrength
+        3,                                      // fpRegenTime
+        2,                                      // fpRegenStrength
+        {0},                                    // pad_AE
+        NULL,                                   // attackEvtScript
+        {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
+    };
     BattleUnit* unit;
     BattleUnitPart* part;
-    NiceEffectWork* effect;
     int i;
+    BattleWeapon* pw = &weapon;
+    Vec pos;
+    EffectEntry* e;
 
-    // FAKE: comma temps so the pointers are coloured in assignment order (r31 pw ... r28 sfx)
-    pw = (0, &weapon);
-    pz = (0, &z);
-    py = (0, &y);
-    sfx = (0, "SFX_SYSTEM_LUCKY1");
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(wp, i);
-        if (unit && unit->badgesEquipped.LuckyStart && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+        if (unit && unit->badgesEquipped.LuckyStart && !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
             switch (irand(4)) {
                 case 0:
                     weapon.dodgyChance = 0;
@@ -724,96 +704,20 @@ static USER_FUNC(_set_effect_luck) {
                     break;
             }
             part = BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit));
-            BattleSetStatusDamageFromWeapon(BattleGetSystemPtr(wp), unit, part, pw, 0x100);
-            BtlUnit_GetPos(unit, &x, py, pz);
-            psndSFXOn(sfx);
-            {
-                EffectEntry* e = effNiceEntry(6, x - 45.0f, 60.0f + y, z);
-                effect = e->userdata;
-                effect->overallScale = 0.75f;
-            }
+            BattleSetStatusDamageFromWeapon(BattleGetSystemPtr(wp), unit, part, pw, DAMAGE_RESULT_FINAL_HIT);
+            BtlUnit_GetPos(unit, &pos.x, &pos.y, &pos.z);
+            psndSFXOn(SFX_NAME_WORD("SFX_SYSTEM_LUCKY1"));
+
+            e = effNiceEntry(NICE_EFFECT_LUCKY, pos.x - 45.0f, 60.0f + pos.y, pos.z);
+            ((NiceEffectWork*)e->userdata)->overallScale = 0.75f;
         }
     }
     return EVT_RETURN_DONE;
 }
 
-#define TURN_NEXT(wp)           \
-    BattleIncSeq(wp, SEQ_TURN); \
-    btlseqTurn(wp)
-
-#define TURN_SKIP(wp)           \
-    BattleIncSeq(wp, SEQ_TURN); \
-    BattleIncSeq(wp, SEQ_TURN); \
-    btlseqTurn(wp)
-
-#define TURN_WAIT_CASE(wp)                    \
-    if (!BattleWaitAllActiveEvtEnd(wp)) {     \
-        break;                                \
-    }                                         \
-    if (BattleCheckConcluded(wp)) {           \
-        BattleSetSeq(wp, SEQ_UNKNOWN, 3);     \
-        BattleSetSeq(wp, SEQ_END, 0x7000000); \
-    } else {                                  \
-        BattleIncSeq(wp, SEQ_TURN);           \
-    }                                         \
-    break
-
-#define TURN_RECOVERY_CASE(wp, status)                        \
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {                   \
-        unit = BattleGetUnitPtr(wp, i);                       \
-        ret = BtlUnit_CheckRecoveryStatus(unit, status);      \
-        sfx |= ret;                                           \
-        if (ret) {                                            \
-            evt = evtEntry(subsetevt_status_recovery, 10, 0); \
-            if (evt) {                                        \
-                unit->attackEventId = evt->eventId;           \
-                evt->unitId = unit->unitId;                   \
-            }                                                 \
-            found = TRUE;                                     \
-        }                                                     \
-    }                                                         \
-    if (sfx) {                                                \
-        psndSFXOn("SFX_REST_CONDITION1");                     \
-    }                                                         \
-    if (!found) {                                             \
-        TURN_SKIP(wp);                                        \
-        break;                                                \
-    }                                                         \
-    TURN_NEXT(wp);                                            \
-    break
-
-#define TURN_RECOVERY_CASE2(wp, status)                           \
-    for (i = 0; i < BATTLE_UNIT_MAX; i++) {                       \
-        unit = BattleGetUnitPtr(wp, i);                           \
-        if (unit) {                                               \
-            ret = BtlUnit_CheckRecoveryStatus(unit, status);      \
-            sfx |= ret;                                           \
-            if (ret) {                                            \
-                evt = evtEntry(subsetevt_status_recovery, 10, 0); \
-                if (evt) {                                        \
-                    unit->attackEventId = evt->eventId;           \
-                    evt->unitId = unit->unitId;                   \
-                }                                                 \
-                found = TRUE;                                     \
-            }                                                     \
-        }                                                         \
-    }                                                             \
-    if (sfx) {                                                    \
-        psndSFXOn("SFX_REST_CONDITION1");                         \
-    }                                                             \
-    if (!found) {                                                 \
-        TURN_SKIP(wp);                                            \
-        break;                                                    \
-    }                                                             \
-    TURN_NEXT(wp);                                                \
-    break
-
-#define TURN_COMMAND_DISABLED_CASE(wp, n) \
-    if (wp->commandDisabled[n]) {         \
-        wp->commandDisabled[n]--;         \
-    }                                     \
-    TURN_SKIP(wp);                        \
-    break
+static const char* _rule_msg_table_2bu[68];
+static const char* _rule_msg_table_1bu[68];
+static const char* _rule_msg_table_after[68];
 
 /**
  * SEQ_TURN steps, one full turn: start-of-turn bookkeeping, the Glitz Pit bonus-condition banner on turn 1,
@@ -821,7 +725,7 @@ static USER_FUNC(_set_effect_luck) {
  * the per-status recovery checks with SFX_REST_CONDITION1, the command-disable countdowns,
  * then the phase loop (btlseqPhase) and the audience's turn-end check before starting the next turn.
  * A step with nothing to do skips its wait step.
- * In the US and PAL releases two of the countdowns are per unit (usCommandDisabled).
+ * In US and later two of the countdowns are per unit (usCommandDisabled).
  */
 static void btlseqTurn(BattleWork* wp) {
     Vec pos;
@@ -850,6 +754,7 @@ static void btlseqTurn(BattleWork* wp) {
     s32 n;
     s32 rate;
     int i;
+
     found = 0;
     sfx = 0;
     switch (BattleGetSeq(wp, SEQ_TURN)) {
@@ -885,11 +790,11 @@ static void btlseqTurn(BattleWork* wp) {
             if (wp->ruleDispTimer) {
                 wp->ruleDispTimer--;
             }
-            if ((wp->ruleDispTimer <= 0) || BattlePadCheckTrigger((PAD_BUTTON_A | PAD_BUTTON_B))) {
+            if ((wp->ruleDispTimer <= 0) || BattlePadCheckTrigger(PAD_BUTTON_A | PAD_BUTTON_B)) {
                 BattleIncSeq(wp, SEQ_TURN);
                 break;
             }
-            dispEntry(CAMERA_2D, 900.0f, 1, _rule_disp, (void*)0);
+            dispEntry(CAMERA_2D, 900.0f, DISP_MODE_ALPHA_TEST, _rule_disp, NULL);
             break;
 
         case 0x3000002:
@@ -903,69 +808,37 @@ static void btlseqTurn(BattleWork* wp) {
             break;
 
         case 0x3000007:
-
         case 0x300000B:
-
         case 0x300000D:
-
         case 0x300000F:
-
         case 0x3000011:
-
         case 0x3000013:
-
         case 0x3000015:
-
         case 0x3000017:
-
         case 0x3000019:
-
         case 0x300001B:
-
         case 0x300001D:
-
         case 0x300001F:
-
         case 0x3000021:
-
         case 0x3000023:
-
         case 0x3000025:
-
         case 0x3000027:
-
         case 0x3000029:
-
         case 0x300002B:
-
         case 0x300002D:
-
         case 0x300002F:
-
         case 0x3000031:
-
         case 0x3000033:
-
         case 0x3000035:
-
         case 0x3000037:
-
         case 0x3000039:
-
         case 0x300003B:
-
         case 0x300003D:
-
         case 0x300003F:
-
         case 0x3000041:
-
         case 0x3000043:
-
         case 0x3000045:
-
         case 0x3000047:
-
         case 0x3000049:
             if (!BattleWaitAllActiveEvtEnd(wp)) {
                 break;
@@ -974,8 +847,8 @@ static void btlseqTurn(BattleWork* wp) {
             BattleIncSeq(wp, SEQ_TURN);
 #else
             if (BattleCheckConcluded(wp)) {
-                BattleSetSeq(wp, SEQ_UNKNOWN, 3);
-                BattleSetSeq(wp, SEQ_END, 0x7000000);
+                BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_END);
+                BattleSetSeq(wp, SEQ_END, SEQ_END_START);
             } else {
                 BattleIncSeq(wp, SEQ_TURN);
             }
@@ -1167,7 +1040,6 @@ static void btlseqTurn(BattleWork* wp) {
 
             if (sfx) {
                 psndSFXOn("SFX_REST_CONDITION1");
-            dummy_label_899231:;
             }
             if (!found) {
                 BattleIncSeq(wp, SEQ_TURN);
@@ -1186,7 +1058,7 @@ static void btlseqTurn(BattleWork* wp) {
                 unit = BattleGetUnitPtr(wp, i);
                 if (BtlUnit_CheckRecoveryStatus(unit, STATUS_FREEZE)) {
                     if (!BtlUnit_CheckShadowGuard(unit)) {
-                        BattleDamageDirect(-5, unit, (void*)0, 1, 0, 0x11A, 0, 1);
+                        BattleDamageDirect(UNIT_ID_SYSTEM, unit, NULL, 1, 0, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_ICE, 0, 1);
                     }
                     BtlUnit_GetPos(unit, &pos.x, &pos.y, &pos.z);
                     pos.y += BtlUnit_GetHeight(unit);
@@ -1647,11 +1519,11 @@ static void btlseqTurn(BattleWork* wp) {
         case 0x3000006:
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL))) && (unit->currentHp > 0)) {
+                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_DEAD))) && (unit->currentHp > 0)) {
                     BtlUnit_GetStatus(unit, STATUS_POISON, &turns, &strength);
                     if ((strength > 0) && (!BtlUnit_CheckShadowGuard(unit))) {
                         found = 1;
-                        BattleDamageDirect(-5, unit, (void*)0, strength, 0, 0x117, 0, 1);
+                        BattleDamageDirect(UNIT_ID_SYSTEM, unit, NULL, strength, 0, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_NORMAL, 0, 1);
                     }
                 }
             }
@@ -1669,7 +1541,7 @@ static void btlseqTurn(BattleWork* wp) {
         case 0x3000008:
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL))) && (unit->currentHp > 0)) {
+                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_DEAD))) && (unit->currentHp > 0)) {
                     BtlUnit_GetStatus(unit, STATUS_BURN, &turns, &strength);
                     if (strength > 0) {
                         found = 1;
@@ -1695,7 +1567,7 @@ static void btlseqTurn(BattleWork* wp) {
                     wp->turnSubSeq++;
                     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                         unit = BattleGetUnitPtr(wp, i);
-                        if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL))) && (unit->currentHp > 0)) {
+                        if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_DEAD))) && (unit->currentHp > 0)) {
                             BtlUnit_GetStatus(unit, STATUS_BURN, &turns, &strength);
                             if (strength > 0) {
                                 BSE_TurnFirstProcessEffectEntry(unit, 1);
@@ -1725,30 +1597,29 @@ static void btlseqTurn(BattleWork* wp) {
                     BattleIncSeq(wp, SEQ_TURN);
 #else
                     if (BattleCheckConcluded(wp)) {
-                        BattleSetSeq(wp, SEQ_UNKNOWN, 3);
-                        BattleSetSeq(wp, SEQ_END, 0x7000000);
+                        BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_END);
+                        BattleSetSeq(wp, SEQ_END, SEQ_END_START);
                     } else {
                         BattleIncSeq(wp, SEQ_TURN);
                     }
 #endif
                     break;
             }
-
             break;
 
         case 0x300000A:
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL))) && (unit->currentHp > 0)) {
+                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_DEAD))) && (unit->currentHp > 0)) {
                     BtlUnit_GetStatus(unit, STATUS_HP_REGEN, &turns, &strength);
                     if (strength > 0) {
-                        if (!(unit->attributeFlags & UNIT_ATTR_HP_LOCKED)) {
+                        if (!(unit->attributeFlags & kUnitHpFixed)) {
                             unit->hpGauge.prevHp = unit->currentHp;
                             BtlUnit_RecoverHp(unit, strength);
                             unit->hpGauge.targetHp = unit->currentHp;
                             unit->hpGauge.drainTimer = unit->hpGauge.drainLength;
                             unit->hpGauge.visibleTimer = unit->hpGauge.visibleLength;
-                            unit->hpGauge.flags |= HP_GAUGE_FADE_OUT;
+                            unit->hpGauge.flags |= HP_GAUGE_FLAG_TIMED;
                         } else {
                             BtlUnit_RecoverHp(unit, strength);
                         }
@@ -1778,7 +1649,7 @@ static void btlseqTurn(BattleWork* wp) {
         case 0x300000C:
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL))) && (unit->currentHp > 0)) {
+                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_DEAD))) && (unit->currentHp > 0)) {
                     BtlUnit_GetStatus(unit, STATUS_FP_REGEN, &turns, &strength);
                     if (strength > 0) {
                         BtlUnit_RecoverFp(unit, strength);
@@ -1814,9 +1685,10 @@ static void btlseqTurn(BattleWork* wp) {
             }
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL))) && (unit->currentHp > 0)) {
+                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_DEAD))) && (unit->currentHp > 0)) {
                     n = 0;
                     for (count = unit->badgesEquipped.HappyHeart; count > 0; count--) {
+                        // integer division: currentHp / maxHp is 0 below full HP, so the chance is 33 %, at full HP 30 %
                         rate = 33 - ((unit->currentHp / unit->maxHp) * 3);
                         if (irand(100) < rate) {
                             n++;
@@ -1863,9 +1735,12 @@ static void btlseqTurn(BattleWork* wp) {
             }
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL))) && (unit->currentHp > 0)) {
+                if ((unit && (!BtlUnit_CheckStatus(unit, STATUS_DEAD))) && (unit->currentHp > 0)) {
                     n = 0;
+
+                    // rate and count swap roles here compared with the Happy Heart case above (retail local reuse): rate is the badge counter, count the chance
                     for (rate = unit->badgesEquipped.HappyFlower; rate > 0; rate--) {
+                        // integer division: currentFp / maxFp is 0 below full FP, so the chance is 33 %, at full FP 30 %
                         count = 33 - ((unit->currentFp / unit->maxFp) * 3);
                         if (irand(100) < count) {
                             n++;
@@ -1932,7 +1807,7 @@ static void btlseqTurn(BattleWork* wp) {
 #if VERSION >= VERSION_US
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if (unit && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) && unit->currentHp > 0 && unit->usCommandDisabled[0]) {
+                if (unit && !BtlUnit_CheckStatus(unit, STATUS_DEAD) && unit->currentHp > 0 && unit->usCommandDisabled[0]) {
                     unit->usCommandDisabled[0]--;
                 }
             }
@@ -1950,7 +1825,7 @@ static void btlseqTurn(BattleWork* wp) {
 #if VERSION >= VERSION_US
             for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                 unit = BattleGetUnitPtr(wp, i);
-                if (unit && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) && unit->currentHp > 0 && unit->usCommandDisabled[1]) {
+                if (unit && !BtlUnit_CheckStatus(unit, STATUS_DEAD) && unit->currentHp > 0 && unit->usCommandDisabled[1]) {
                     unit->usCommandDisabled[1]--;
                 }
             }
@@ -1987,14 +1862,9 @@ static void btlseqTurn(BattleWork* wp) {
 }
 
 /**
- * Draw callback for the Glitz Pit bonus-condition banner at the start of turn 1:
- * picks the message by FieldBattleInfo.ruleType from the 1bu table while GSW_TOU_PLAYER_RANK is below 11,
- * the 2bu table otherwise, and the 'after' table once the story is past chapter 3,
- * formats ruleParam into it and draws it in a window at the top of the screen.
- * 1bu (1部) is the major league, used once fewer than 11 fighters rank above Mario (the top ten),
- * and 2bu (2部) the minor league;
- * the major-league conditions are harder (stg3_tou_cp_010: take damage at least five times,
- * against three in cp_000).
+ * Draw callback for the battle-rule banner: the rule message for fbatInfo->ruleType, formatted with ruleParam, in a
+ * white window near the top. The text comes from _rule_msg_table_1bu while GSW_GLITZ_PIT_RANK is below 11, else
+ * _rule_msg_table_2bu, and from STG3_34_RETURN_TO_ROGUEPORT on from _rule_msg_table_after.
  */
 static void _rule_disp(CameraId cameraId, void* param) {
     FieldBattleInfo* info = _battleWorkPointer->fbatInfo;
@@ -2002,11 +1872,10 @@ static void _rule_disp(CameraId cameraId, void* param) {
     f32 x;
     f32 y;
     u16 lines;
-    // FAKE: s32 width holding the u16 result, halved as (u16)width / 2 (twin _get_item_announce_disp shape)
-    s32 width;
+    u16 width;
 
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
-        if (evtGetValue(NULL, GSW(GSW_TOU_PLAYER_RANK)) < 11) {
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
+        if (evtGetValue(NULL, GSW_GLITZ_PIT_RANK) < 11) {
             sprintf(buf, msgSearch(_rule_msg_table_1bu[info->ruleType]), info->ruleParam);
         } else {
             sprintf(buf, msgSearch(_rule_msg_table_2bu[info->ruleType]), info->ruleParam);
@@ -2018,10 +1887,63 @@ static void _rule_disp(CameraId cameraId, void* param) {
     lines++;
     x = 0.0f;
     y = 120.0f;
-    windowDispGX_Waku_col(0, color, (x - (u16)width / 2) - 10.0f, 94.0f, width + 20, lines * 29 + 3, 10.0f);
+    {
+        // white: the rule banner's window
+        GXColor color = {0xFF, 0xFF, 0xFF, 0xFF};
+        windowDispGX_Waku_col((x - width / 2) - 10.0f, 94.0f, width + 20, lines * 29 + 3, 10.0f, 0, color);
+    }
     FontDrawStart();
-    FontDrawMessage(x - (u16)width / 2, (s32)y - 29, buf);
+    FontDrawMessage(x - width / 2, (s32)y - 29, buf);
 }
+
+/**
+ * Glitz Pit bonus-condition messages for minor-league fights, indexed by the battle's rule type ("a" = unused);
+ * _rule_disp shows the one for the fight at the start of turn 1, e.g. "Don't use your jump!".
+ */
+static const char* _rule_msg_table_2bu[] = {
+    "a", "stg3_tou_cp_001", "a", "stg3_tou_cp_002", "a", "stg3_tou_cp_004", "stg3_tou_cp_008", "a",
+    "a", "a", "a", "a", "a", "a", "a", "a",
+    "a", "a", "stg3_tou_cp_000", "a", "a", "a", "a", "a",
+    "a", "a", "stg3_tou_cp_005", "a", "a", "a", "a", "a",
+    "stg3_tou_cp_006", "a", "a", "a", "a", "a", "a", "a",
+    "a", "a", "a", "stg3_tou_cp_009", "a", "a", "a", "a",
+    "stg3_tou_cp_003", "a", "a", "a", "a", "a", "a", "a",
+    "a", "a", "a", "stg3_tou_cp_007", "a", "a", "a", "a",
+    "a", "a", "a", "a",
+};
+
+/** Glitz Pit bonus-condition messages for major-league fights (top ten), by rule type; shown by _rule_disp. */
+static const char* _rule_msg_table_1bu[] = {
+    "test", "stg3_tou_cp_011", "a", "stg3_tou_cp_012", "a", "stg3_tou_cp_014", "stg3_tou_cp_019", "a",
+    "a", "a", "a", "stg3_tou_cp_020", "a", "a", "a", "a",
+    "a", "a", "stg3_tou_cp_010", "a", "stg3_tou_cp_018", "a", "a", "a",
+    "a", "a", "stg3_tou_cp_015", "a", "a", "a", "a", "a",
+    "stg3_tou_cp_016", "a", "a", "a", "a", "a", "a", "a",
+    "a", "a", "a", "stg3_tou_cp_021", "a", "a", "a", "a",
+    "stg3_tou_cp_013", "a", "a", "a", "a", "a", "a", "a",
+    "a", "a", "a", "stg3_tou_cp_017", "a", "a", "a", "stg3_tou_cp_024",
+    "stg3_tou_cp_023", "stg3_tou_cp_022", "a", "a",
+};
+
+/** Glitz Pit bonus-condition messages after chapter 3, by rule type; shown by _rule_disp. */
+static const char* _rule_msg_table_after[] = {
+    "a", "stg3_tou_cp_041", "a", "stg3_tou_cp_042", "a", "stg3_tou_cp_044", "stg3_tou_cp_049", "a",
+    "a", "a", "a", "stg3_tou_cp_050", "a", "a", "a", "a",
+    "a", "a", "stg3_tou_cp_040", "a", "stg3_tou_cp_048", "a", "a", "a",
+    "a", "a", "stg3_tou_cp_045", "a", "a", "a", "a", "a",
+    "stg3_tou_cp_046", "a", "a", "a", "a", "a", "a", "a",
+    "a", "a", "a", "stg3_tou_cp_051", "a", "a", "a", "a",
+    "stg3_tou_cp_043", "a", "a", "a", "a", "a", "a", "a",
+    "a", "a", "a", "stg3_tou_cp_047", "a", "a", "a", "stg3_tou_cp_054",
+    "stg3_tou_cp_053", "stg3_tou_cp_052", "a", "a",
+};
+
+#if VERSION <= VERSION_DEMO_JP
+static EVT_BEGIN(_default_haikei_set_entry_event)
+    CALL(_set_haikei_entry_scale)
+    RETURN
+EVT_END()
+#endif
 
 /**
  * SEQ_PHASE steps: runs btlseqMove through each of the turn's five phases (before player, player, after player,
@@ -2048,13 +1970,15 @@ static void btlseqPhase(BattleWork* wp) {
 }
 
 /**
- * SEQ_MOVE steps inside one phase: queues the phase's units,
- * applies Merlee's Defense charm at the start of the enemy phase,
- * runs the units' unison phase events and then each unit's phase event in stage order,
- * then repeatedly picks the next unit from movePriorityQueue and runs its action (btlseqAct)
- * until none can move; ends with the per-phase audience reaction and status messages.
- * For Mario it also sets BATTLE_FLAG_SINGLE_JUMP/HAMMER when he has no jump or hammer badge
- * and only the basic boots or hammer.
+ * SEQ_MOVE steps of one phase, run each frame by btlseqPhase (steps that finish at once loop on): the start-of-phase
+ * bookkeeping (btlseqPhaseFirstProcess); at the enemy phase Merlee's Defense charm when it is the next curse
+ * (marioAttackEvent_MajinaiDefenceUp); the units' unison phase events, then each queued phase event in turn
+ * (phaseEvtTable), ending the battle when one decides it. Then, until BattlePhaseEndCheck (or
+ * BATTLE_FLAG_RESET_TURN), the bonuses and per-unit damage counters are cleared and the first unit in
+ * movePriorityQueue that can still act becomes the active unit and acts (btlseqAct); for Mario
+ * BATTLE_FLAG_JUMP_NO_SUBMENU / BATTLE_FLAG_HAMMER_NO_SUBMENU are set unless a jump or hammer badge is equipped or
+ * the boots or hammer are upgraded. At the end the Defense charm state is cleared, the audience reacts
+ * (BattleAudience_PerPhase), and the status-change announcements and messages finish before the next phase.
  */
 static void btlseqMove(BattleWork* wp) {
     int j;
@@ -2083,13 +2007,13 @@ static void btlseqMove(BattleWork* wp) {
             case 0x5000002:
                 pouch = pouchGetPtr();
                 mario = BattleGetMarioPtr(wp);
-                if (pouch->merleeNextCurseType != 2 || BattleGetSeq(wp, SEQ_PHASE) != BATTLE_PHASE_ENEMY) {
+                if (pouch->merleeNextCurseType != MAJINAI_DEFENCE_UP || BattleGetSeq(wp, SEQ_PHASE) != BATTLE_PHASE_ENEMY) {
                     BattleIncSeq(wp, SEQ_MOVE);
                     BattleIncSeq(wp, SEQ_MOVE);
                     loop = TRUE;
                     break;
                 }
-                wp->majinaiState = 2;
+                wp->majinaiState = MAJINAI_DEFENCE_UP;
                 BattleMajinaiDone();
                 BattleMajinaiEndCheck();
                 evt = evtEntry(marioAttackEvent_MajinaiDefenceUp, 10, 0);
@@ -2122,7 +2046,7 @@ static void btlseqMove(BattleWork* wp) {
                 break;
             case 0x5000006:
                 for (i = 0; i < BATTLE_UNIT_MAX; i++) {
-                    if (wp->phaseEvtTable[i].unitId != -1) {
+                    if (wp->phaseEvtTable[i].unitId != UNIT_ID_NONE) {
                         unit = BattleGetUnitPtr(wp, wp->phaseEvtTable[i].unitId);
                         if (unit && unit->phaseEventCode) {
                             break;
@@ -2131,7 +2055,7 @@ static void btlseqMove(BattleWork* wp) {
                 }
                 if (i < BATTLE_UNIT_MAX) {
                     BattleRunPhaseEvent(unit, FALSE);
-                    wp->phaseEvtTable[i].unitId = -1;
+                    wp->phaseEvtTable[i].unitId = UNIT_ID_NONE;
                     BattleIncSeq(wp, SEQ_MOVE);
                 } else {
                     BattleSetSeq(wp, SEQ_MOVE, 0x500000A);
@@ -2143,8 +2067,8 @@ static void btlseqMove(BattleWork* wp) {
                     break;
                 }
                 if (BattleCheckConcluded(wp)) {
-                    BattleSetSeq(wp, SEQ_UNKNOWN, 3);
-                    BattleSetSeq(wp, SEQ_END, 0x7000000);
+                    BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_END);
+                    BattleSetSeq(wp, SEQ_END, SEQ_END_START);
                 } else {
                     BattleSetSeq(wp, SEQ_MOVE, 0x5000006);
                     loop = TRUE;
@@ -2156,19 +2080,19 @@ static void btlseqMove(BattleWork* wp) {
                     unit = BattleGetUnitPtr(wp, i);
                     if (unit) {
 #if VERSION <= VERSION_DEMO_JP
-                        unit->tokenFlags &= TOKEN_FLAG_PERSISTENT;
+                        unit->tokenFlags &= kTokenPersistent_UNUSED;
 #else
-                        unit->tokenFlags &= (TOKEN_FLAG_RALLY_WINK | TOKEN_FLAG_PERSISTENT);
+                        unit->tokenFlags &= kTokenPersistent_UNUSED | kHasRallyWinkStatus;
 #endif
                         unit->totalHpDamageTaken = 0;
                         unit->hpDamageTaken = 0;
                         unit->hpDamageCount = 0;
-                        unit->superguardCountTaken = 0;
+                        unit->attackerHitCountTaken = 0;
                         unit->totalFpDamageTaken = 0;
                         unit->fpDamageTaken = 0;
                         unit->totalFpLost = 0;
                         unit->fpLost = 0;
-                        unit->superguardedCount = 0;
+                        unit->attackHitCount = 0;
                     }
                 }
                 for (i = 0; i < BATTLE_UNIT_MAX; i++) {
@@ -2181,49 +2105,49 @@ static void btlseqMove(BattleWork* wp) {
                         if (unit && unit->movesRemaining > 0) {
 #endif
                             state = unit->moveState;
-                            if (state != 10 && (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) || (unit->attributeFlags & UNIT_ATTR_REVIVES_AFTER_KO))) {
-                                if (state != 1) {
+                            if (state != MOVE_STATE_DONE && (!BtlUnit_CheckStatus(unit, STATUS_DEAD) || (unit->attributeFlags & kUndead))) {
+                                if (state != MOVE_STATE_POSITION_CHANGE) {
                                     break;
                                 }
-                                unit->moveState = 0;
+                                unit->moveState = MOVE_STATE_NORMAL;
                             }
                         }
                     }
                 }
                 wp->activeUnitId = id;
-                BattleGetUnitPtr(wp, id)->tokenFlags |= TOKEN_FLAG_CURRENTLY_ACTING;
+                BattleGetUnitPtr(wp, id)->tokenFlags |= kCurrentlyActing;
                 BattleIncSeq(wp, SEQ_MOVE);
                 BattleSetSeq(wp, SEQ_ACT, 0x6000000);
                 for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                     id = wp->movePriorityQueue[i];
                     if (id != -1) {
                         unit = BattleGetUnitPtr(wp, id);
-                        if (unit && unit->moveState == 1) {
-                            unit->moveState = 0;
+                        if (unit && unit->moveState == MOVE_STATE_POSITION_CHANGE) {
+                            unit->moveState = MOVE_STATE_NORMAL;
                         }
                     }
                 }
                 unit = BattleGetUnitPtr(wp, wp->activeUnitId);
                 if (unit->currentKind == UNIT_MARIO) {
                     pouch = pouchGetPtr();
-                    wp->flags |= (BATTLE_FLAG_SINGLE_JUMP | BATTLE_FLAG_SINGLE_HAMMER);
-                    for (i = 0; i < 200; i++) {
-                        if (pouch->equippedBadges[i] >= 0xF0 && pouch->equippedBadges[i] < 0xF7) {
-                            wp->flags &= ~BATTLE_FLAG_SINGLE_JUMP;
+                    wp->flags |= (BATTLE_FLAG_JUMP_NO_SUBMENU | BATTLE_FLAG_HAMMER_NO_SUBMENU);
+                    for (i = 0; i < MAX_BADGES; i++) {
+                        if (pouch->equippedBadges[i] >= ITEM_POWER_JUMP && pouch->equippedBadges[i] < ITEM_POWER_SMASH) {
+                            wp->flags &= ~BATTLE_FLAG_JUMP_NO_SUBMENU;
                             break;
                         }
                     }
                     if (pouch->jumpLevel >= 2) {
-                        wp->flags &= ~BATTLE_FLAG_SINGLE_JUMP;
+                        wp->flags &= ~BATTLE_FLAG_JUMP_NO_SUBMENU;
                     }
-                    for (i = 0; i < 200; i++) {
-                        if (pouch->equippedBadges[i] >= 0xF7 && pouch->equippedBadges[i] < 0xFE) {
-                            wp->flags &= ~BATTLE_FLAG_SINGLE_HAMMER;
+                    for (i = 0; i < MAX_BADGES; i++) {
+                        if (pouch->equippedBadges[i] >= ITEM_POWER_SMASH && pouch->equippedBadges[i] < ITEM_DOUBLE_DIP) {
+                            wp->flags &= ~BATTLE_FLAG_HAMMER_NO_SUBMENU;
                             break;
                         }
                     }
                     if (pouch->hammerLevel >= 2) {
-                        wp->flags &= ~BATTLE_FLAG_SINGLE_HAMMER;
+                        wp->flags &= ~BATTLE_FLAG_HAMMER_NO_SUBMENU;
                     }
                 }
                 break;
@@ -2232,15 +2156,15 @@ static void btlseqMove(BattleWork* wp) {
                 break;
             case 0x500000A:
                 if (BattleCheckConcluded(wp)) {
-                    BattleSetSeq(wp, SEQ_UNKNOWN, 3);
-                    BattleSetSeq(wp, SEQ_END, 0x7000000);
+                    BattleSetSeq(wp, SEQ_UNKNOWN, BATTLE_STAGE_END);
+                    BattleSetSeq(wp, SEQ_END, SEQ_END_START);
                     break;
                 }
                 for (i = 0; i < BATTLE_UNIT_MAX; i++) {
                     unit = BattleGetUnitPtr(wp, i);
                     if (unit) {
                         BtlUnit_SetTotalHitDamage(unit, 0);
-                        unit->tokenFlags &= ~TOKEN_FLAG_CURRENTLY_ACTING;
+                        unit->tokenFlags &= ~kCurrentlyActing;
                     }
                 }
                 end = BattlePhaseEndCheck();
@@ -2248,8 +2172,8 @@ static void btlseqMove(BattleWork* wp) {
                     end = TRUE;
                 }
                 if (end) {
-                    if (wp->majinaiState == 2) {
-                        wp->majinaiState = 0;
+                    if (wp->majinaiState == MAJINAI_DEFENCE_UP) {
+                        wp->majinaiState = MAJINAI_NONE;
                     }
                     BattleAudience_PerPhase(BattleGetSeq(wp, SEQ_PHASE));
                     BattleIncSeq(wp, SEQ_MOVE);
@@ -2258,7 +2182,7 @@ static void btlseqMove(BattleWork* wp) {
                 }
                 break;
             case 0x500000B:
-                if ((u8)BattleAudience_CheckReactionPerPhase()) {
+                if (BattleAudience_CheckReactionPerPhase()) {
                     break;
                 }
                 if (!BattleWaitAllActiveEvtEnd(wp)) {
@@ -2286,7 +2210,7 @@ static void btlseqMove(BattleWork* wp) {
 
 /**
  * TRUE when no unit in this phase's move queue can still act (done for the turn or KO'd).
- * Outside the demos a unit also needs movesRemaining above 0.
+ * Outside the early demos a unit also needs movesRemaining above 0.
  */
 static BOOL BattlePhaseEndCheck(void) {
     BattleWork* wp = _battleWorkPointer;
@@ -2297,10 +2221,10 @@ static BOOL BattlePhaseEndCheck(void) {
         if (wp->movePriorityQueue[i] != -1) {
             unit = BattleGetUnitPtr(wp, wp->movePriorityQueue[i]);
 #if VERSION <= VERSION_DEMO_JP
-            if (unit && unit->moveState != 10 && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+            if (unit && unit->moveState != MOVE_STATE_DONE && !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
 #else
-            if (unit && unit->moveState != 10 && unit->movesRemaining > 0 &&
-                !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+            if (unit && unit->moveState != MOVE_STATE_DONE && unit->movesRemaining > 0 &&
+                !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
 #endif
                 break;
             }
@@ -2341,7 +2265,7 @@ static void btlseqAct(BattleWork* wp) {
                     if (!BtlUnit_CheckStatus(unit, STATUS_SLEEP) &&
                         !BtlUnit_CheckStatus(unit, STATUS_STOP) &&
                         !BtlUnit_CheckStatus(unit, STATUS_FREEZE) &&
-                        !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+                        !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
                         cantMove = FALSE;
                     }
                     break;
@@ -2350,7 +2274,7 @@ static void btlseqAct(BattleWork* wp) {
                         if (!BtlUnit_CheckStatus(unit, STATUS_SLEEP) &&
                             !BtlUnit_CheckStatus(unit, STATUS_STOP) &&
                             !BtlUnit_CheckStatus(unit, STATUS_FREEZE) &&
-                            !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+                            !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
                             cantMove = FALSE;
                         }
                     }
@@ -2358,9 +2282,9 @@ static void btlseqAct(BattleWork* wp) {
             }
             if (cantMove) {
                 BattleSetSeq(wp, SEQ_ACT, 0x6000003);
-            } else if (unit->attributeFlags & UNIT_ATTR_VEILED) {
+            } else if (unit->attributeFlags & kVeiled) {
                 BattleSetSeq(wp, SEQ_ACT, 0x6000004);
-            } else if (unit->currentKind == UNIT_VIVIAN && (BattleGetMarioPtr(wp)->attributeFlags & UNIT_ATTR_VEILED)) {
+            } else if (unit->currentKind == UNIT_VIVIAN && (BattleGetMarioPtr(wp)->attributeFlags & kVeiled)) {
                 BattleSetSeq(wp, SEQ_ACT, 0x6000004);
             } else if (unit->flippedTurns) {
                 BattleSetSeq(wp, SEQ_ACT, 0x6000005);
@@ -2384,46 +2308,49 @@ static void btlseqAct(BattleWork* wp) {
             break;
         case 0x6000005:
             unit = BattleGetUnitPtr(wp, wp->activeUnitId);
-            unit->attackEventCode = BtlUnit_GetData(unit, 2);
-            unit->attackEventFlags = ATTACK_EVENT_KEEP_STATUS_WINDOW;
+            unit->attackEventCode = BtlUnit_GetData(unit, UNIT_DATA_WAKEUP_EVENT);
+            unit->attackEventFlags = ACT_EVENT_KEEP_STATUS_WINDOW;
             BattleSetSeq(wp, SEQ_ACT, 0x6000006);
             break;
         case 0x6000003:
             unit = BattleGetUnitPtr(wp, wp->activeUnitId);
-            unit->attackEventFlags = ATTACK_EVENT_KEEP_STATUS_WINDOW;
-            unit->flags |= UNIT_FLAG_TURN_SKIPPED;
+            unit->attackEventFlags = ACT_EVENT_KEEP_STATUS_WINDOW;
+            unit->flags |= BATTLE_UNIT_FLAG_ACTING;
             BattleSetSeq(wp, SEQ_ACT, 0x6000006);
             break;
         case 0x6000004:
             unit = BattleGetUnitPtr(wp, wp->activeUnitId);
-            unit->attackEventCode = BtlUnit_GetData(unit, 3);
-            unit->attackEventFlags = ATTACK_EVENT_KEEP_STATUS_WINDOW | ATTACK_EVENT_IGNORE_STATUS | ATTACK_EVENT_ZERO_GRAVITY_OK | ATTACK_EVENT_ALWAYS_RUN;
+            unit->attackEventCode = BtlUnit_GetData(unit, UNIT_DATA_HIDE_EVENT);
+            unit->attackEventFlags = ACT_EVENT_KEEP_STATUS_WINDOW | ACT_EVENT_IGNORE_STATUS | ACT_EVENT_IN_ZERO_GRAVITY | ACT_EVENT_ALWAYS;
             BattleSetSeq(wp, SEQ_ACT, 0x6000006);
             break;
         case 0x6000006:
             unit = BattleGetUnitPtr(wp, wp->activeUnitId);
-            if (!(unit->attackEventFlags & ATTACK_EVENT_KEEP_STATUS_WINDOW)) {
+            if (!(unit->attackEventFlags & ACT_EVENT_KEEP_STATUS_WINDOW)) {
                 BattleStatusWindowSystemOff();
             }
             unit = BattleGetUnitPtr(wp, wp->activeUnitId);
             evt = NULL;
-            if ((wp->flags & BATTLE_FLAG_ZERO_GRAVITY) && !(unit->attributeFlags & UNIT_ATTR_ACTS_IN_ZERO_GRAVITY) &&
-                !(unit->attackEventFlags & ATTACK_EVENT_ZERO_GRAVITY_OK) && !(unit->attackEventFlags & ATTACK_EVENT_ALWAYS_RUN)) {
+            if ((wp->flags & BATTLE_FLAG_ZERO_GRAVITY_UNUSED) && !(unit->attributeFlags & kActsInZeroGravity) &&
+                !(unit->attackEventFlags & ACT_EVENT_IN_ZERO_GRAVITY) && !(unit->attackEventFlags & ACT_EVENT_ALWAYS)) {
                 evt = evtEntry(btldefaultevt_CantMoveZeroGravity, 10, 0);
-            } else if (unit->attackEventFlags & ATTACK_EVENT_ALWAYS_RUN) {
+            } else if (unit->attackEventFlags & ACT_EVENT_ALWAYS) {
                 if (unit->attackEventCode) {
                     evt = evtEntry(unit->attackEventCode, 10, 0);
                 }
-            } else if (unit->attackEventFlags & ATTACK_EVENT_IGNORE_STATUS) {
+            } else if (unit->attackEventFlags & ACT_EVENT_IGNORE_STATUS) {
                 evt = evtEntry(unit->attackEventCode, 10, 0);
             } else if (!BtlUnit_CheckStatus(unit, STATUS_SLEEP) &&
                        !BtlUnit_CheckStatus(unit, STATUS_STOP) &&
                        !BtlUnit_CheckStatus(unit, STATUS_FREEZE) &&
-                       (!BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) || (unit->attributeFlags & UNIT_ATTR_REVIVES_AFTER_KO))) {
+                       (!BtlUnit_CheckStatus(unit, STATUS_DEAD) || (unit->attributeFlags & kUndead))) {
+                // BUG: irand(100) < 0 never holds, so an electrified unit never runs btldefaultevt_BiribiriMove.
+                // With a real chance, the shock would replace the unit's action for the turn, like the status tests
+                // above. Feeling Fine blocks Electric along with the harmful statuses (BattleSetStatusDamage).
                 if (BtlUnit_CheckStatus(unit, STATUS_ELECTRIC) && irand(100) < 0) {
                     evt = evtEntry(btldefaultevt_BiribiriMove, 10, 0);
                 } else if (BtlUnit_CheckStatus(unit, STATUS_CONFUSE) && irand(100) < 50) {
-                    unit->tokenFlags |= TOKEN_FLAG_CONFUSED_ACTION;
+                    unit->tokenFlags |= kConfusedAction;
                     evt = evtEntry(unit->confusionEventCode, 10, 0);
                 } else {
                     evt = evtEntry(unit->attackEventCode, 10, 0);
@@ -2454,43 +2381,44 @@ static void btlseqAct(BattleWork* wp) {
             }
             BattleIncSeq(wp, SEQ_ACT);
         case 0x6000009:
-            if (!(wp->flags & (BATTLE_FLAG_ESCAPED | BATTLE_FLAG_INTERRUPTED))) {
+            if (!(wp->flags & (BATTLE_FLAG_ESCAPED | BATTLE_FLAG_INTERRUPT_STOP))) {
                 BattleStatusWindowSystemOn();
             }
             unit = BattleGetUnitPtr(wp, wp->activeUnitId);
             if (unit) {
-                unit->flags &= ~UNIT_FLAG_TURN_SKIPPED;
-                if (unit->tokenFlags & TOKEN_FLAG_CHARGE_EXPENDED) {
+                unit->flags &= ~BATTLE_UNIT_FLAG_ACTING;
+                if (unit->tokenFlags & kChargeExpended) {
                     BtlUnit_SetStatus(unit, STATUS_CHARGE, 1, -99);
-                    unit->tokenFlags &= ~TOKEN_FLAG_CHARGE_EXPENDED;
+                    unit->tokenFlags &= ~kChargeExpended;
                 }
-                if (wp->majinaiState == 1) {
-                    wp->majinaiState = 0;
+                if (wp->majinaiState == MAJINAI_POWER_UP) {
+                    wp->majinaiState = MAJINAI_NONE;
                 }
                 unit->reserved_258 = 0;
                 switch (unit->moveState) {
-                    case 5:
-                        unit->moveState = 6;
+                    case MOVE_STATE_TRIPLE_DIP_1:
+                        unit->moveState = MOVE_STATE_TRIPLE_DIP_2;
                         break;
-                    case 6:
-                        unit->moveState = 7;
+                    case MOVE_STATE_TRIPLE_DIP_2:
+                        unit->moveState = MOVE_STATE_TRIPLE_DIP_3;
                         break;
-                    case 8:
-                        unit->moveState = 9;
+                    case MOVE_STATE_DOUBLE_DIP_1:
+                        unit->moveState = MOVE_STATE_DOUBLE_DIP_2;
                         break;
-                    case 7:
-                    case 9:
-                        unit->moveState = 0;
+                    case MOVE_STATE_TRIPLE_DIP_3:
+                    case MOVE_STATE_DOUBLE_DIP_2:
+                        unit->moveState = MOVE_STATE_NORMAL;
                         break;
                 }
-                if (unit->moveState == 0) {
+                if (unit->moveState == MOVE_STATE_NORMAL) {
+                    // decrement is always TRUE; the flag, its second store and its test are all in the retail code
                     decrement = TRUE;
                     if (wp->flags & BATTLE_FLAG_RESET_TURN) {
                         decrement = TRUE;
                     }
                     if (decrement) {
-                        if (BtlUnit_CheckStatusFlag(unit, STATUS_FLAG_EXTRA_MOVE)) {
-                            BtlUnit_OffStatusFlag(unit, STATUS_FLAG_EXTRA_MOVE);
+                        if (BtlUnit_CheckStatusFlag(unit, UNIT_STATUS_FLAG_HUSTLE)) {
+                            BtlUnit_OffStatusFlag(unit, UNIT_STATUS_FLAG_HUSTLE);
                         } else {
                             unit->movesRemaining--;
                         }
@@ -2498,37 +2426,37 @@ static void btlseqAct(BattleWork* wp) {
                             unit->movesRemaining = 0;
                         }
                         if (unit->movesRemaining <= 0) {
-                            unit->moveState = 10;
-#if VERSION <= VERSION_DEMO_JP
-                            unit->activeTurns = 0;
-#else
-                            if (!(unit->tokenFlags & TOKEN_FLAG_RALLY_WINK)) {
+                            unit->moveState = MOVE_STATE_DONE;
+#if VERSION >= VERSION_JP
+                            if (!(unit->tokenFlags & kHasRallyWinkStatus)) {
                                 unit->activeTurns = 0;
                             } else {
-                                unit->tokenFlags &= ~TOKEN_FLAG_RALLY_WINK;
+                                unit->tokenFlags &= ~kHasRallyWinkStatus;
                             }
+#else
+                            unit->activeTurns = 0;
 #endif
                             if (!BtlUnit_GetBelong(unit) && unit->attackPhase == BATTLE_PHASE_PLAYER &&
                                 !BattlePhaseEndCheck() && !(wp->flags & BATTLE_FLAG_RESET_TURN)) {
-                                unit->moveColorLv = 0x60;
+                                unit->moveColorLv = MOVE_COLOR_LV_DONE;
                             }
                         }
                     }
-                } else if (unit->moveState == 3) {
-                    unit->moveState = 0;
-                } else if (unit->moveState == 4) {
-                    unit->moveState = 0;
+                } else if (unit->moveState == MOVE_STATE_QUICK_CHANGE) {
+                    unit->moveState = MOVE_STATE_NORMAL;
+                } else if (unit->moveState == MOVE_STATE_AUDIENCE_ATTACK) {
+                    unit->moveState = MOVE_STATE_NORMAL;
                 }
             }
             BattleConsumeReserveItem();
-            wp->flags &= ~BATTLE_FLAG_ACT_DECIDED;
+            wp->flags &= ~BATTLE_FLAG_ACT_DECIDED_UNUSED;
             BattleAudience_PerAct();
             BattleIncSeq(wp, SEQ_ACT);
         case 0x600000A:
-            if ((u8)BattleAudience_CheckReaction()) {
+            if (BattleAudience_CheckReaction()) {
                 break;
             }
-            if (!BattleCheckConcluded(wp) && (u8)BattleBreakSlot_CheckReaction()) {
+            if (!BattleCheckConcluded(wp) && BattleBreakSlot_CheckReaction()) {
                 break;
             }
             BattleIncSeq(wp, SEQ_ACT);
@@ -2601,8 +2529,8 @@ static void btlseqTurnFirstProcess(BattleWork* wp) {
             BtlUnit_ResetMoveStatus(unit);
             kind = unit->kindParams;
             unit->movePriority = kind->turnOrder + irand(kind->turnOrderVariance) - kind->turnOrderVariance / 2;
-            if (BtlUnit_CheckStatusFlag(unit, STATUS_FLAG_DEFENDING)) {
-                BtlUnit_OffStatusFlag(unit, STATUS_FLAG_DEFENDING);
+            if (BtlUnit_CheckStatusFlag(unit, UNIT_STATUS_FLAG_DEFEND)) {
+                BtlUnit_OffStatusFlag(unit, UNIT_STATUS_FLAG_DEFEND);
             }
         }
     }
@@ -2611,7 +2539,7 @@ static void btlseqTurnFirstProcess(BattleWork* wp) {
 
 /**
  * Start-of-phase bookkeeping: queues the units whose attackPhase is this phase into movePriorityQueue (skipping
- * units done for the turn; outside the demos Slowed units are still queued),
+ * units done for the turn; outside the early demos Slowed units are still queued),
  * resets their protect target and pose sounds, then sorts the queue and builds the phase event order.
  */
 static void btlseqPhaseFirstProcess(BattleWork* wp) {
@@ -2629,16 +2557,16 @@ static void btlseqPhaseFirstProcess(BattleWork* wp) {
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(wp, i);
         if (unit) {
-            unit->moveColorLv = 0xFF;
+            unit->moveColorLv = MOVE_COLOR_LV_FULL;
 #if VERSION <= VERSION_DEMO_JP
-            if (unit->moveState == 10) {
+            if (unit->moveState == MOVE_STATE_DONE) {
 #else
-            if (unit->moveState == 10 && !BtlUnit_CheckStatus(unit, STATUS_SLOW)) {
+            if (unit->moveState == MOVE_STATE_DONE && !BtlUnit_CheckStatus(unit, STATUS_SLOW)) {
 #endif
                 continue;
             }
             if (unit->attackPhase == BattleGetSeq(wp, SEQ_PHASE) &&
-                !(unit->attributeFlags & UNIT_ATTR_NO_TURN)) {
+                !(unit->attributeFlags & kNoTurn)) {
                 wp->movePriorityQueue[count] = unit->unitId;
                 unit->protectId = -1;
                 for (part = unit->parts; part; part = part->nextPart) {
@@ -2666,39 +2594,39 @@ void battleSortPhaseMoveTable(BattleWork* wp, s32 count) {
     f32 x1, y1, z1;
     f32 x2, y2, z2;
     s32 tmp;
-    void* w;
 
-    w = (void*)wp;
+    BattleWork* const w = wp;
+
     if (count <= 0) {
         count = 0;
         for (i = 0; i < BATTLE_UNIT_MAX; i++) {
-            if (((BattleWork*)w)->movePriorityQueue[i] == -1) {
+            if (w->movePriorityQueue[i] == -1) {
                 break;
             }
-            count = count + 1;
+            count++;
         }
     }
     for (i = 0; i < count - 1; i++) {
         for (j = 0; j < count - i - 1; j++) {
-            unit1 = BattleGetUnitPtr(((BattleWork*)w), ((BattleWork*)w)->movePriorityQueue[j]);
-            unit2 = BattleGetUnitPtr(((BattleWork*)w), ((BattleWork*)w)->movePriorityQueue[j + 1]);
+            unit1 = BattleGetUnitPtr(w, w->movePriorityQueue[j]);
+            unit2 = BattleGetUnitPtr(w, w->movePriorityQueue[j + 1]);
             BtlUnit_GetHomePos(unit1, &x1, &y1, &z1);
             BtlUnit_GetHomePos(unit2, &x2, &y2, &z2);
             if (__fabs(x1) > __fabs(x2)) {
-                tmp = ((BattleWork*)w)->movePriorityQueue[j];
-                ((BattleWork*)w)->movePriorityQueue[j] = ((BattleWork*)w)->movePriorityQueue[j + 1];
-                ((BattleWork*)w)->movePriorityQueue[j + 1] = tmp;
+                tmp = w->movePriorityQueue[j];
+                w->movePriorityQueue[j] = w->movePriorityQueue[j + 1];
+                w->movePriorityQueue[j + 1] = tmp;
             }
         }
     }
     for (i = 0; i < count - 1; i++) {
         for (j = 0; j < count - i - 1; j++) {
-            unit1 = BattleGetUnitPtr(((BattleWork*)w), ((BattleWork*)w)->movePriorityQueue[j]);
-            unit2 = BattleGetUnitPtr(((BattleWork*)w), ((BattleWork*)w)->movePriorityQueue[j + 1]);
+            unit1 = BattleGetUnitPtr(w, w->movePriorityQueue[j]);
+            unit2 = BattleGetUnitPtr(w, w->movePriorityQueue[j + 1]);
             if (unit1->movePriority < unit2->movePriority) {
-                tmp = ((BattleWork*)w)->movePriorityQueue[j];
-                ((BattleWork*)w)->movePriorityQueue[j] = ((BattleWork*)w)->movePriorityQueue[j + 1];
-                ((BattleWork*)w)->movePriorityQueue[j + 1] = tmp;
+                tmp = w->movePriorityQueue[j];
+                w->movePriorityQueue[j] = w->movePriorityQueue[j + 1];
+                w->movePriorityQueue[j + 1] = tmp;
             }
         }
     }
@@ -2719,13 +2647,13 @@ static void battleMakePhaseEvtTable(BattleWork* wp) {
 
     table = wp->phaseEvtTable;
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
-        table[i].unitId = -1;
+        table[i].unitId = UNIT_ID_NONE;
         table[i].priority = 0;
     }
     count = 0;
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(wp, i);
-        if (unit && !(unit->attributeFlags & UNIT_ATTR_NO_TURN)) {
+        if (unit && !(unit->attributeFlags & kNoTurn)) {
             table[count].unitId = i;
             BtlUnit_GetHomePos(unit, &x, &y, &z);
             if (x >= 0.0f) {
@@ -2753,7 +2681,7 @@ static void battleMakePhaseEvtTable(BattleWork* wp) {
  * clears the ids of finished ones. The sequence steps poll it before moving on.
  */
 BOOL BattleWaitAllActiveEvtEnd(BattleWork* wp) {
-    BattleStageObjectWork* stage = STAGE_WORK(wp);
+    BattleStageObjectWork* stage = &wp->stageObjectWork;
     BOOL ret = BattleWaitAllActiveEvtEnd_NoBgSetEndWait(wp);
 
     if (!ret) {
@@ -2794,21 +2722,22 @@ BOOL BattleWaitAllActiveEvtEnd(BattleWork* wp) {
 
 /**
  * TRUE once no unit has a running phase, attack,
- * damage or entry event (the PAL release also waits for the slide-return event)
+ * damage or entry event (the PAL demo and PAL also wait for the slide-return event)
  * and BattleAfterReactionMain is idle; clears the ids of finished events.
  * Unlike BattleWaitAllActiveEvtEnd it ignores the stage-object events,
  * so battle_stage_object.c can use it while those run.
  */
 BOOL BattleWaitAllActiveEvtEnd_NoBgSetEndWait(BattleWork* wp) {
-    void* w;
+    BattleWork* const w = wp;
     BattleUnit* unit;
     BOOL done;
     int i;
     done = TRUE;
-    w = (void*)wp;
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
-        unit = BattleGetUnitPtr((BattleWork*)w, i);
+        unit = BattleGetUnitPtr(w, i);
         if (unit) {
+            // Each test is a loop that always breaks on its first pass: the target has the loop layout (a jump to the
+            // test at the bottom), which an if/else does not give.
             while (unit->phaseEventId) {
                 if (evtCheckID(unit->phaseEventId)) {
                     done = FALSE;
@@ -2863,8 +2792,8 @@ BOOL BattleWaitAllActiveEvtEnd_NoBgSetEndWait(BattleWork* wp) {
 }
 
 /**
- * TRUE when the battle is over: at least two of the three alliances meet their clear condition (bit 1: no active
- * member left standing; bit 2: no required member left;
+ * TRUE when the battle is over: at least two of the three alliances meet their clear condition (ALLIANCE_CLEAR_ALL_OUT, 1: no active
+ * member left standing; ALLIANCE_CLEAR_LEADER_OUT, 2: no leader left;
  * an unused alliance counts as met), or the party ran away or the battle was interrupted.
  * Records clearConditionMet per alliance.
  */
@@ -2877,18 +2806,18 @@ BOOL BattleCheckConcluded(BattleWork* wp) {
     count = 0;
     for (i = 0; i < 3; i++) {
         wp->alliances[i].clearConditionMet = 0;
-        if (wp->alliances[i].allianceId == 0) {
+        if (wp->alliances[i].clearFlags == ALLIANCE_CLEAR_NONE) {
             wp->alliances[i].clearConditionMet = 1;
             count++;
             continue;
         }
-        if (wp->alliances[i].allianceId & 1) {
+        if (wp->alliances[i].clearFlags & ALLIANCE_CLEAR_ALL_OUT) {
             for (j = 0; j < BATTLE_UNIT_MAX; j++) {
                 unit = BattleGetUnitPtr(wp, j);
                 if (unit && unit->alliance == i &&
-                    !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) &&
-                    !(unit->attributeFlags & UNIT_ATTR_INACTIVE) &&
-                    !(unit->attributeFlags & UNIT_ATTR_IGNORE_FOR_CLEAR)) {
+                    !BtlUnit_CheckStatus(unit, STATUS_DEAD) &&
+                    !(unit->attributeFlags & kInactive) &&
+                    !(unit->attributeFlags & kUnitNoncombatant)) {
                     break;
                 }
             }
@@ -2898,13 +2827,13 @@ BOOL BattleCheckConcluded(BattleWork* wp) {
                 continue;
             }
         }
-        if (wp->alliances[i].allianceId & 2) {
+        if (wp->alliances[i].clearFlags & ALLIANCE_CLEAR_LEADER_OUT) {
             for (j = 0; j < BATTLE_UNIT_MAX; j++) {
                 unit = BattleGetUnitPtr(wp, j);
                 if (unit && unit->alliance == i &&
-                    (unit->attributeFlags & UNIT_ATTR_REQUIRED_FOR_CLEAR) &&
-                    !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL) &&
-                    !(unit->attributeFlags & UNIT_ATTR_IGNORE_FOR_CLEAR)) {
+                    (unit->attributeFlags & kUnitLeader) &&
+                    !BtlUnit_CheckStatus(unit, STATUS_DEAD) &&
+                    !(unit->attributeFlags & kUnitNoncombatant)) {
                     break;
                 }
             }
@@ -2917,7 +2846,7 @@ BOOL BattleCheckConcluded(BattleWork* wp) {
     if (count >= 2) {
         return TRUE;
     }
-    return (wp->flags & (BATTLE_FLAG_ESCAPED | BATTLE_FLAG_INTERRUPTED)) != 0;
+    return (wp->flags & (BATTLE_FLAG_ESCAPED | BATTLE_FLAG_INTERRUPT_STOP)) != 0;
 }
 
 /**
@@ -2933,13 +2862,11 @@ static void _mapobj_data_touch_scale(s32 layer) {
     for (i = 0; i < BATTLE_STAGE_OBJECT_MAX; i++) {
         obj = &wp->stageObjects[i];
         if (obj->id > 0 && obj->data->layer == layer) {
-            obj->flags |= 2;
+            obj->flags |= STAGE_OBJECT_FLAG_UPDATE;
         }
     }
 }
 
-// FAKE: inlining off from here to the end of the file (FAKES.md); without it 6 functions change length, e.g. btlseqFirstAct 510 -> 871 instructions
-#pragma dont_inline on
 /**
  * Background pop-in at the start of a normal battle (run by _default_haikei_set_entry_event):
  * keeps the background layers A1 and A2 flattened for 60 frames,
@@ -2991,24 +2918,24 @@ static USER_FUNC(_set_haikei_entry_scale) {
                 mapObjScale("A1", 1.0f, 1.0f, 1.0f);
                 _mapobj_data_touch_scale(0);
                 if (event->userdata[1] < 25) {
-                    sy = intpl_sub(5, event->userdata[1] - 15, 10, 0.0f, 110.0f);
+                    sy = intpl_sub(EASING_CUBIC_OUT, 0.0f, 110.0f, event->userdata[1] - 15, 10);
                 } else if (event->userdata[1] < 35) {
-                    sy = intpl_sub(11, event->userdata[1] - 25, 10, 110.0f, 90.0f);
+                    sy = intpl_sub(EASING_SINE_IN_OUT, 110.0f, 90.0f, event->userdata[1] - 25, 10);
                 } else if (event->userdata[1] < 40) {
-                    sy = intpl_sub(11, event->userdata[1] - 35, 5, 90.0f, 100.0f);
+                    sy = intpl_sub(EASING_SINE_IN_OUT, 90.0f, 100.0f, event->userdata[1] - 35, 5);
                 }
                 if (event->userdata[1] < 25) {
-                    sx = intpl_sub(5, event->userdata[1] - 15, 10, 100.0f, 90.0f);
+                    sx = intpl_sub(EASING_CUBIC_OUT, 100.0f, 90.0f, event->userdata[1] - 15, 10);
                 } else if (event->userdata[1] < 35) {
-                    sx = intpl_sub(11, event->userdata[1] - 25, 10, 90.0f, 110.0f);
+                    sx = intpl_sub(EASING_SINE_IN_OUT, 90.0f, 110.0f, event->userdata[1] - 25, 10);
                 } else if (event->userdata[1] < 40) {
-                    sx = intpl_sub(11, event->userdata[1] - 35, 5, 110.0f, 100.0f);
+                    sx = intpl_sub(EASING_SINE_IN_OUT, 110.0f, 100.0f, event->userdata[1] - 35, 5);
                 }
                 for (i = 0; i < BATTLE_STAGE_OBJECT_MAX; i++) {
                     obj = &wp->stageObjects[i];
-                    if (obj->id > 0 && obj->data->layer == 0) {
+                    if (obj->id > 0 && obj->data->layer == STAGE_LAYER_A1) {
                         mapObjScale(obj->data->name, sx / 100.0f, sy / 100.0f, 1.0f);
-                        obj->flags |= 2;
+                        obj->flags |= STAGE_OBJECT_FLAG_UPDATE;
                     }
                 }
             }
@@ -3027,24 +2954,24 @@ static USER_FUNC(_set_haikei_entry_scale) {
                 mapObjScale("A2", 1.0f, 1.0f, 1.0f);
                 _mapobj_data_touch_scale(1);
                 if (event->userdata[1] < 30) {
-                    sy = intpl_sub(5, event->userdata[1] - 20, 10, 0.0f, 110.0f);
+                    sy = intpl_sub(EASING_CUBIC_OUT, 0.0f, 110.0f, event->userdata[1] - 20, 10);
                 } else if (event->userdata[1] < 40) {
-                    sy = intpl_sub(11, event->userdata[1] - 30, 10, 110.0f, 90.0f);
+                    sy = intpl_sub(EASING_SINE_IN_OUT, 110.0f, 90.0f, event->userdata[1] - 30, 10);
                 } else if (event->userdata[1] < 45) {
-                    sy = intpl_sub(11, event->userdata[1] - 40, 5, 90.0f, 100.0f);
+                    sy = intpl_sub(EASING_SINE_IN_OUT, 90.0f, 100.0f, event->userdata[1] - 40, 5);
                 }
                 if (event->userdata[1] < 30) {
-                    sx = intpl_sub(5, event->userdata[1] - 20, 10, 100.0f, 90.0f);
+                    sx = intpl_sub(EASING_CUBIC_OUT, 100.0f, 90.0f, event->userdata[1] - 20, 10);
                 } else if (event->userdata[1] < 40) {
-                    sx = intpl_sub(11, event->userdata[1] - 30, 10, 90.0f, 110.0f);
+                    sx = intpl_sub(EASING_SINE_IN_OUT, 90.0f, 110.0f, event->userdata[1] - 30, 10);
                 } else if (event->userdata[1] < 45) {
-                    sx = intpl_sub(11, event->userdata[1] - 40, 5, 110.0f, 100.0f);
+                    sx = intpl_sub(EASING_SINE_IN_OUT, 110.0f, 100.0f, event->userdata[1] - 40, 5);
                 }
                 for (i = 0; i < BATTLE_STAGE_OBJECT_MAX; i++) {
                     obj = &wp->stageObjects[i];
-                    if (obj->id > 0 && obj->data->layer == 1) {
+                    if (obj->id > 0 && obj->data->layer == STAGE_LAYER_A2) {
                         mapObjScale(obj->data->name, sx / 100.0f, sy / 100.0f, 1.0f);
-                        obj->flags |= 2;
+                        obj->flags |= STAGE_OBJECT_FLAG_UPDATE;
                     }
                 }
             }

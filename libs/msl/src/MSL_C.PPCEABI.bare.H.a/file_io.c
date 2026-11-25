@@ -1,21 +1,32 @@
 #include "ansi_files.h"
+#include "ctype_map.h"
+
+static inline int tolower(int c) { return (c == EOF) ? EOF : (int)__lower_map[(unsigned char)c]; }
 
 int __flush_all(void);
 long ftell(FILE* file);
 
-enum { __read = 1, __write = 2 };
+int __msl_strnicmp(const char* str1, const char* str2, int n) {
+    int i;
+    char c1, c2;
 
-#define set_error(file)          \
-    do {                         \
-        (file)->state.error = 1; \
-        (file)->buffer_len = 0;  \
-    } while (0)
+    for (i = 0; i < n; i++) {
+        c1 = tolower(*str1++);
+        c2 = tolower(*str2++);
 
-/**
- * Standard fflush(): NULL flushes all streams; read-only streams return 0;
- * a stream in write state has its buffer flushed through __flush_buffer
- * and its position reset (disk files use ftell); returns EOF on error or a closed stream.
- */
+        if (c1 < c2)
+            return -1;
+
+        if (c1 > c2)
+            return 1;
+
+        if (c1 == '\0')
+            return 0;
+    }
+
+    return 0;
+}
+
 int fflush(FILE* file) {
     fpos_t position;
 
@@ -56,11 +67,6 @@ int fflush(FILE* file) {
     return (0);
 }
 
-/**
- * Standard fclose(): flushes the stream, calls its close_proc, marks it closed,
- * and frees the buffer if the stream owns it (free_buffer); returns EOF if the flush or close failed.
- * The list entry itself is released later by __close_all.
- */
 int fclose(FILE* file) {
     int flush_result, close_result;
 

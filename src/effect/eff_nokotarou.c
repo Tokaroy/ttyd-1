@@ -1,16 +1,18 @@
 // Koops effect (nokotarou: Koops) using the MOBJ_EFF_nokotarou3 animation, stretched from a start point to the current point.
+
 #include "eff/eff_nokotarou.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
-
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
 static void effNokotarouDisp(CameraId cameraId, EffectEntry* effect);
 static void effNokotarouMain(EffectEntry* effect);
 
 /**
- * Spawns the Koops effect at (x, y, z) scaled by `size` for `duration` frames;
+ * Spawns the Koops effect at (x, y, z) scaled by `size` for `duration` frames (0 or less: until soft-deleted);
  * called by the Koops party unit and a tst test script.
  */
 EffectEntry* effNokotarouEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 size) {
@@ -23,7 +25,7 @@ EffectEntry* effNokotarouEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffNokotarouWork));
     effect->userdata = work;
     effect->callback = effNokotarouMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->start.x = x;
     work->start.y = y;
@@ -64,8 +66,8 @@ static void effNokotarouMain(EffectEntry* effect) {
     }
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 32;
     }
     if (work->timer < 1000) {
@@ -87,10 +89,13 @@ static void effNokotarouMain(EffectEntry* effect) {
     } else {
         work->scale += (1.0f - work->scale) / 32.0f;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effNokotarouDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effNokotarouDisp, effect);
 }
 
-/** Draws the pose in three stretched segments from the start point to the current point. */
+/**
+ * Draws two camera-facing poses (draw passes 1-3 each): S_1 scaled evenly, and A_1 stretched by the offset
+ * from the start point to the current point.
+ */
 static void effNokotarouDisp(CameraId cameraId, EffectEntry* effect) {
     EffNokotarouWork* work = effect->userdata;
     Mtx mtx;
@@ -106,7 +111,7 @@ static void effNokotarouDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 2.0f);
@@ -125,7 +130,7 @@ static void effNokotarouDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
             PSMTXConcat(mtx, rot, mtx);
             PSMTXConcat(mtx, scale, mtx);
-            animPoseSetMaterialFlagOn(work->poseId2, ANIM_MATERIAL_FLAG_EVT_COLOR);
+            animPoseSetMaterialFlagOn(work->poseId2, MAP_OBJ_FLAG_COLOR);
             animPoseSetMaterialEvtColor(work->poseId2, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
             animPoseMain(work->poseId2);
             animPoseDrawMtx(work->poseId2, mtx, 1, 0.0f, 2.0f);

@@ -1,5 +1,7 @@
 // Hit (collision) driver: builds the collision objects from the map joints and answers the ray and
 // sphere checks against them.
+
+#include "version.h"
 #include "driver/hitdrv.h"
 #include "addr_word.h"
 #include "hwaccess.h"
@@ -8,95 +10,21 @@
 #include "driver/mapdrv.h"
 #include "memory.h"
 #include "party.h"
-#include "version.h"
 #include <string.h>
 
-// prototypes for asm stopgap forward references
-static void hitDamageReturnSet(HitEntry* hit, HitDamageReturn* damage, BOOL recursion);
-static void hitObjGetPosSub(HitEntry* hit, Vec* position, s32* counter, BOOL recursion);
-static BOOL chkFilterAttr(HitCheckQuery* query, HitEntry* entry);
+// forward declarations: these functions are defined further down
 static BOOL checkTriVec_xz(HitCheckQuery* query, HitVector* vector);
 static s32 hitCalcVtxPosition(HitEntry* hit);
 static void hitReCalcMatrix2(HitEntry* hit, Mtx mtx, BOOL recursion);
-static void hitAtrOff(HitEntry* hit, u32 mask, s32 r);
-static void hitAtrOn(HitEntry* hit, u32 mask, s32 r);
-static void hitFlgOff(HitEntry* hit, u16 mask, s32 r);
-static void hitFlgOn(HitEntry* hit, u16 mask, s32 r);
-static HitEntry* hitEntrySub(MapFileJoint* joint, HitEntry* parent, Mtx parentMtx, BOOL ignoreSiblings, s32 mapIndex);
-static HitEntry* _hitEnt(MapFileJoint* joint, HitEntry* parent, Mtx parentMtx, s32 mapIndex);
-
-/*
-    00012b2c 000004 8001810c  4 hitInit 	hitdrv.o
-    00012a94 000098 80018074  4 hitReInit 	hitdrv.o
-    0001260c 000488 80017bec  4 _hitEnt 	hitdrv.o
-    00012394 000278 80017974  4 hitEntrySub 	hitdrv.o
-    000122fc 000098 800178dc  4 hitEntry 	hitdrv.o
-    0001228c 000070 8001786c  4 hitEntryMOBJ 	hitdrv.o
-    000121e8 0000a4 800177c8  4 hitDelete 	hitdrv.o
-    00011fc4 000224 800175a4  4 hitMain 	hitdrv.o
-    00011ef0 0000d4 800174d0  4 hitObjFlagOn 	hitdrv.o
-    00011e1c 0000d4 800173fc  4 hitObjFlagOff 	hitdrv.o
-    00011b0c 000310 800170ec  4 hitFlgOn 	hitdrv.o
-    000117f4 000318 80016dd4  4 hitFlgOff 	hitdrv.o
-    0001171c 0000d8 80016cfc  4 hitGrpFlagOn 	hitdrv.o
-    00011644 0000d8 80016c24  4 hitGrpFlagOff 	hitdrv.o
-    00011570 0000d4 80016b50  4 hitObjAttrOn 	hitdrv.o
-    0001149c 0000d4 80016a7c  4 hitObjAttrOff 	hitdrv.o
-    0001118c 000310 8001676c  4 hitAtrOn 	hitdrv.o
-    00010e78 000314 80016458  4 hitAtrOff 	hitdrv.o
-    00010da0 0000d8 80016380  4 hitGrpAttrOn 	hitdrv.o
-    00010cc8 0000d8 800162a8  4 hitGrpAttrOff 	hitdrv.o
-    00010c68 000060 80016248  4 hitReCalcMatrix 	hitdrv.o
-    000107bc 0004ac 80015d9c  4 hitReCalcMatrix2 	hitdrv.o
-    00010308 0004b4 800158e8  4 hitCalcVtxPosition 	hitdrv.o
-    0000f878 000a90 80014e58  4 hitCheckVecFilter 	hitdrv.o
-    0000f750 000128 80014d30  4 hitCheckFilter 	hitdrv.o
-    0000f3a4 0003ac 80014984  4 checkTriVec_xz 	hitdrv.o
-    0000f2c0 0000e4 800148a0  4 hitCheckVecHitObjXZ 	hitdrv.o
-    0000f2a8 000018 80014888  4 chkFilterAttr 	hitdrv.o
-    0000f174 000134 80014754  4 hitCheckAttr 	hitdrv.o
-    UNUSED   00002c ........ chkFilterAttr2 hitdrv.o
-    UNUSED   000138 ........ hitCheckAttrOnly hitdrv.o
-    0000ec18 00055c 800141f8  4 hitCheckSphereFilter 	hitdrv.o
-    UNUSED   000088 ........ hitPreCheck hitdrv.o
-    0000eb68 0000b0 80014148  4 hitNameToPtr 	hitdrv.o
-    0000e5fc 00056c 80013bdc  4 hitObjGetPosSub 	hitdrv.o
-    0000e4ac 000150 80013a8c  4 hitObjGetPos 	hitdrv.o
-    0000e3d4 0000d8 800139b4  4 hitObjGetNormal 	hitdrv.o
-    0000e3b8 00001c 80013998  4 hitGetName 	hitdrv.o
-    0000e3a0 000018 80013980  4 hitGetAttr 	hitdrv.o
-    0000e054 00034c 80013634  4 hitDamageReturnSet 	hitdrv.o
-    0000df8c 0000c8 8001356c  4 hitGrpDamageReturnSet 	hitdrv.o
-    0000df80 00000c 80013560  4 hitGetDamageReturnPos 	hitdrv.o
-    0000de88 0000f8 80013468  4 hitBindMapObj 	hitdrv.o
-    0000dd7c 00010c 8001335c  4 hitBindUpdate 	hitdrv.o
-    UNUSED   0006a4 ........ dbg_hitObjDisp hitdrv.o
-    UNUSED   00022c ........ bounding_sphere hitdrv.o
-    UNUSED   000528 ........ bounding_box hitdrv.o
-    UNUSED   000038 ........ hitGetEntNum hitdrv.o
-    UNUSED   00004c ........ hitNumberToPtr hitdrv.o
-    0000dd7c 005e1c 8001335c  1 .text 	hitdrv.o
-*/
+static void hitPreCheck(void);
 
 #if VERSION >= VERSION_JP
-HitEntry* hitActiveListTop; // head of the active hit list (linked through nextActive)
+HitEntry* hitActiveListTop; // head of the active hit list (descriptive name, see docs/NAME_PROVENANCE.md)
 #endif
-
-// local prototypes
-static void hitReCalcMatrix2(HitEntry* hit, Mtx mtx, BOOL recursion);
-static s32 hitCalcVtxPosition(HitEntry* hit);
-
-inline BOOL tempfunc(HitCheckQuery* query, HitVector* vector);
-inline BOOL tempfunc2(HitCheckQuery* query, HitVector* vector);
-inline BOOL tempfunc3(HitCheckQuery* query, HitVector* vector);
-static BOOL checkTriVec_xz(HitCheckQuery* query, HitVector* vector);
-static BOOL chkFilterAttr(HitCheckQuery* query, HitEntry* entry);
-static void hitObjGetPosSub(HitEntry* hit, Vec* position, s32* counter, BOOL recursion);
-static void hitDamageReturnSet(HitEntry* hit, HitDamageReturn* damage, BOOL recursion);
 
 /** Boot setup for the collision driver; empty, all state lives with the loaded maps. */
 void hitInit(void) {
-    ; // stubbed in retail
+    ; // empty in every version
 }
 
 /** Frees the collision objects and their triangle lists of every loaded map, e.g. before a map change. */
@@ -108,8 +36,8 @@ void hitReInit(void) {
     HitEntry* hit;
 
     wp = mapGetWork();
-    entry = wp->entries;
-    for (i = 0; i < wp->entries->count; entry++, i++) {
+    for (i = 0; i < wp->count; i++) {
+        entry = &wp->entries[i];
         hit = entry->hitEntries;
         if (hit != NULL) {
             for (j = 0; j < entry->hitNumJoints; j++, hit++) {
@@ -124,7 +52,11 @@ void hitReInit(void) {
     }
 }
 
-/** This function is cursed, managed to hit 99% - https://decomp.me/scratch/FjwSA */
+/**
+ * Sets up the next free collision object of map mapIndex for joint: local and world matrices from the joint's transform
+ * and parentMtx, its centre (the middle of its bounding box, or its translation for a joint without parts), bounding
+ * radius and triangle list. Also widens the joint's bounding box by 0.1 on every side.
+ */
 static HitEntry* _hitEnt(MapFileJoint* joint, HitEntry* parent, Mtx parentMtx, s32 mapIndex) {
     MapWork* wp = mapGetWork();
     HitEntry* hit = wp->entries[mapIndex].hitEntries;
@@ -254,84 +186,16 @@ HitEntry* hitEntryMOBJ(MapFileJoint* joint, Mtx mtx) {
     return hitEntrySub(joint, NULL, mtx, TRUE, 0);
 }
 
-typedef struct HitAnimJointList {
-    s32 count;
-    void* joints[1];
-} HitAnimJointList;
-
-/**
- * Builds the list of hit objects the checks walk (hitActiveListTop).
- * The demo has no active list: hit objects without parts are flagged 0x8000 and skipped by the checks.
- */
-inline void hitPreCheck(void) {
-    MapEntry* entry;
-    s32 i;
-    s32 j;
-    MapWork* wp = mapGetWork();
-    HitEntry* hit;
-#if VERSION >= VERSION_JP
-    HitEntry* prev;
-
-    prev = hitActiveListTop = NULL;
-#endif
-    i = 0;
-    entry = wp->entries;
-    for (; i < wp->entries->count; entry++, i++) {
-        hit = entry->hitEntries;
-        for (j = 0; j < entry->hitNumJoints; j++, hit++) {
-#if VERSION <= VERSION_DEMO_JP
-            hit->flags |= HIT_FLAG_NO_GEOMETRY;
-            if (hit->joint->partCount != 0) {
-                hit->flags &= ~HIT_FLAG_NO_GEOMETRY;
-            }
-#else
-            if (hit->joint->partCount != 0 && !(hit->flags & (HIT_FLAG_OFF | HIT_FLAG_DELETED))) {
-                if (prev == NULL) {
-                    hitActiveListTop = hit;
-                    prev = hit;
-                } else {
-                    prev->nextActive = hit;
-                    prev = hit;
-                }
-            }
-#endif
-        }
-    }
-#if VERSION >= VERSION_JP
-    if (prev != NULL) {
-        prev->nextActive = NULL;
-    }
-#endif
-}
-/** hitNameToPtr without its NULL check: the first live collision object named name in any loaded map, or NULL. */
-inline HitEntry* hitNameToPtrNoChk(const char* name) {
-    MapWork* wp = mapGetWork();
-    MapEntry* map;
-    HitEntry* hit;
-    s32 i, j;
-
-    map = wp->entries;
-    for (i = 0; i < wp->entries->count; map++, i++) {
-        hit = map->hitEntries;
-        for (j = 0; j < map->hitNumJoints; j++, hit++) {
-            if (!(hit->flags & HIT_FLAG_DELETED) && !strcmp(hit->joint->name, name)) {
-                return hit;
-            }
-        }
-    }
-    return NULL;
-}
-
 /**
  * Removes the collision object named name: it is flagged deleted (0x80) and the checks skip it from then on;
- * the JP and later releases also rebuild the active list.
+ * JP and later also rebuild the active list.
  */
 void hitDelete(const char* name) {
     MapWork* wp = mapGetWork();
     s32 j;
     s32 i;
 
-    for (i = 0; i < wp->entries->count; i++) {
+    for (i = 0; i < wp->count; i++) {
         HitEntry* hit;
 
         for (j = 0, hit = wp->entries[i].hitEntries; j < wp->entries[i].hitNumJoints; j++, hit++) {
@@ -350,12 +214,11 @@ void hitDelete(const char* name) {
 }
 
 /**
- * Once per frame: rebuilds the list of collision objects the checks walk,
+ * Once per frame: refreshes collision-check eligibility (the JP and later active list, or the early demos' geometry flags),
  * applies the current frame of every playing map animation to the collision objects it moves,
  * and recomputes the world matrices and triangles of the maps that changed.
  */
 void hitMain(void) {
-    void** joints;
     MapEntry* entry;
     MapWork* wp = mapGetWork();
     s32 j;
@@ -363,34 +226,33 @@ void hitMain(void) {
     s32 i;
     MapEntryAnimData* anim;
     BOOL recalc;
-    HitAnimJointList* list;
+    MapAnimJointList* list;
     HitEntry* hit;
     Mtx mtx;
 
     hitPreCheck();
-    entry = wp->entries;
-    for (i = 0; i < wp->entries->count; entry++, i++) {
+    for (i = 0; i < wp->count; i++) {
+        entry = &wp->entries[i];
         anim = entry->animData;
         for (recalc = FALSE, j = 0; j < entry->numAnims; j++, anim++) {
-            list = (HitAnimJointList*)anim->anim->jointAnims;
-            if (!(anim->flags & MAP_ANIM_FLAG_PLAYING)) {
+            list = anim->anim->jointAnims;
+            if (!(anim->flags & MAP_ANIM_FLAG_ACTIVE)) {
                 continue;
             }
-            if ((anim->flags & MAP_ANIM_FLAG_ENDED) && (anim->flags & MAP_ANIM_FLAG_HIT_APPLIED)) {
+            if ((anim->flags & MAP_ANIM_FLAG_END) && (anim->flags & MAP_ANIM_FLAG_HIT_UPDATED)) {
                 continue;
             }
             if (list == NULL) {
                 continue;
             }
-            joints = (void**)list;
-            for (k = 0; k < list->count; joints++, k++) {
-                hit = hitNameToPtr(*(const char**)joints[1]);
+            for (k = 0; k < list->count; k++) {
+                hit = hitNameToPtr(list->items[k]->name);
                 if (hit != NULL) {
-                    mapCalcAnimMatrix(hit->animMtx, hit->localMtx, anim, joints[1]);
+                    mapCalcAnimMatrix(hit->animMtx, hit->localMtx, anim, list->items[k]);
                     recalc = TRUE;
                     hit->flags |= HIT_FLAG_ANIM_MTX;
                     hit->flags |= HIT_FLAG_MTX_DIRTY;
-                    anim->flags |= MAP_ANIM_FLAG_HIT_APPLIED;
+                    anim->flags |= MAP_ANIM_FLAG_HIT_UPDATED;
                 }
             }
         }
@@ -400,11 +262,6 @@ void hitMain(void) {
         }
     }
 }
-
-static void hitFlgOn(HitEntry* hit, u16 mask, s32 r);
-static void hitFlgOff(HitEntry* hit, u16 mask, s32 r);
-static void hitAtrOn(HitEntry* hit, u32 mask, s32 r);
-static void hitAtrOff(HitEntry* hit, u32 mask, s32 r);
 
 /** Sets flag bits mask on the collision object named name (reports a map error if there is none). */
 void hitObjFlagOn(const char* name, u16 mask) {
@@ -566,7 +423,7 @@ static void hitReCalcMatrix2(HitEntry* hit, Mtx mtx, BOOL recursion) {
         } else {
             PSMTXConcat(mtx, hit->localMtx, hit->worldMtx);
         }
-        if (hit->flags & HIT_FLAG_BOUND) {
+        if (hit->flags & HIT_FLAG_MAPOBJ_BIND) {
             PSMTXConcat(hit->worldMtx, hit->mapObj->transformMtx, hit->worldMtx);
         }
         PSMTXMultVec(hit->worldMtx, &hit->centerLocal, &hit->centerWorld);
@@ -595,7 +452,7 @@ static inline f32 hitDequant(s16* base, s32 idx) {
 
 /**
  * Transforms all of hit's map triangles to world space and stores each with its edges and normal;
- * returns how many have a non-zero normal.
+ * returns the stored triangle count; packed display-list triangles with a zero normal are omitted.
  */
 static s32 hitCalcVtxPosition(HitEntry* hit) {
     s32 i;
@@ -610,7 +467,7 @@ static s32 hitCalcVtxPosition(HitEntry* hit) {
     MapFileMesh* mesh;
 
     // FAKE: NULL check through stride gives stride an early web (the packed stride becomes a split @ temp, target r19);
-    // the dead int guard (COLOURING M) keeps stride as the compared operand so the pointer compare stays cmplwi
+    // the dead guard `if (i != 0) stride = stride;` keeps stride as the compared operand so the pointer compare stays cmplwi
     stride = (s32)(AddrWord)hit->vectors;
     i = 0;
     if (i != 0) {
@@ -635,9 +492,11 @@ static s32 hitCalcVtxPosition(HitEntry* hit) {
                 list = mesh->displayLists.normalLists[j];
                 for (k = 0; k < list->count - 2; k++) {
                     s16* idx;
+                    int next1 = k + 1;
+                    int next2 = k + 2;
                     idx = &list->vtx[k].pos;
-                    i1 = *(s16*)((u8*)list + (k + 1) * sizeof(MapVtxRec) + offsetof(MapRawDL, vtx)); // FAKE: the next two strip vertices by byte offset ((k + n) * size + 4), which keeps the target's mulli/strength reduction; list->vtx[k + n].pos schedules differently
-                    i2 = *(s16*)((u8*)list + (k + 2) * sizeof(MapVtxRec) + offsetof(MapRawDL, vtx));
+                    i1 = list->vtx[next1].pos;
+                    i2 = list->vtx[next2].pos;
                     vec = &hit->vectors[count++];
                     pos = (Vec*)mesh->vcdTable->positions->data;
                     MTXMultVec(hit->worldMtx, &pos[*idx], &vec->v0);
@@ -655,7 +514,7 @@ static s32 hitCalcVtxPosition(HitEntry* hit) {
             wp = mapGetWork();
             m = 0; // FAKE: popcount accumulated in m (later reused as the i0 pointer) so stride is a single-def web
             for (bit = 0; bit < 12; bit++) {
-                m += ((u32)mesh->elementMask >> bit) & 1;
+                m += (mesh->elementMask >> bit) & 1;
             }
             stride = m * 2;
             for (k = 0; k < mesh->displayListCount; k++) {
@@ -670,7 +529,9 @@ static s32 hitCalcVtxPosition(HitEntry* hit) {
                     s32 o1;
                     s32 o2;
                     u16 i1;
-                    register u32 gqr; // an asm operand (HW_SET_GQR5) must be a register variable
+
+                    // FAKE: register storage class on gqr; a plain u32 local changes the object
+                    register u32 gqr;
                     HitVector* v2;
                     base = (s16*)mesh->vcdTable->positions->data;
                     v2 = &hit->vectors[count];
@@ -685,8 +546,8 @@ static s32 hitCalcVtxPosition(HitEntry* hit) {
                     m += j * stride;
                     i0 = *(u16*)(m + 3);
                     o0 = i0 * 3;
-                    o1 = (u16)(even ? i2 : i1) * 3;
-                    o2 = (u16)(even ? i1 : i2) * 3;
+                    o1 = (even ? i2 : i1) * 3;
+                    o2 = (even ? i1 : i2) * 3;
                     gqr = (wp->entries[hit->mapIndex].vcdTable->posFrac << 8) | 7;
                     gqr |= gqr << 16;
                     HW_SET_GQR5(gqr);
@@ -721,7 +582,7 @@ static s32 hitCalcVtxPosition(HitEntry* hit) {
  * on a hit closer than the best so far it stores the distance,
  * hit point and normal (flipped to face the ray) in query. Single-sided triangles only count from the front.
  */
-inline BOOL tempfunc(HitCheckQuery* query, HitVector* vector) {
+inline BOOL checkTriVecDown(HitCheckQuery* query, HitVector* vector) {
     Vec toV0;
     Vec toV1;
     Vec toV2;
@@ -781,10 +642,10 @@ inline BOOL tempfunc(HitCheckQuery* query, HitVector* vector) {
 }
 
 /**
- * Like tempfunc, for a straight-up ray (ceilings):
+ * Like checkTriVecDown, for a straight-up ray (ceilings):
  * stores the distance, hit point and facing normal in query on a closer hit.
  */
-inline BOOL tempfunc2(HitCheckQuery* query, HitVector* vector) {
+inline BOOL checkTriVecUp(HitCheckQuery* query, HitVector* vector) {
     Vec toV0;
     Vec toV1;
     Vec toV2;
@@ -845,7 +706,7 @@ inline BOOL tempfunc2(HitCheckQuery* query, HitVector* vector) {
  * on a hit within range and closer than the best so far stores the distance,
  * hit point and facing normal in query.
  */
-inline BOOL tempfunc3(HitCheckQuery* query, HitVector* vector) {
+inline BOOL checkTriVecDir(HitCheckQuery* query, HitVector* vector) {
     Vec toV0;
     Vec toV1;
     Vec toV2;
@@ -912,12 +773,17 @@ inline BOOL tempfunc3(HitCheckQuery* query, HitVector* vector) {
     return 1;
 }
 
-#if VERSION <= VERSION_DEMO_JP
-/** The demo walks every map entry's hit objects (no active list) and has no separate straight-up case. */
+/**
+ * Finds the closest collision object hit by the query ray, applying callback when supplied,
+ * and updates the query's distance, hit position and normal. Returns NULL on no hit.
+ * The early demos scan every map entry (no active list) without a separate straight-up case;
+ * JP and later walk the active list and have separate straight-down, straight-up and horizontal cases.
+ */
 HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
+#if VERSION <= VERSION_DEMO_JP
     HitVector* vector2;
     HitVector* vector3;
-    MapEntry* map = mapGetWork()->entries;
+    MapWork* wp = mapGetWork();
     HitEntry* hit2;
     HitEntry* hit3;
     HitEntry* hit;
@@ -931,24 +797,42 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
     MapEntry* mapEntry;
     s32 mapIdx;
     f32 reach;
-    f32 temp;
-
     Vec position;
     Vec hitNormalTmp;
     Vec normal;
     Vec endPos;
+#else
+    HitVector* vector;
+    Vec position;
+    Vec hitNormalTmp;
+    Vec normal;
+    Vec endPos;
+    HitEntry* entry;
+    HitEntry* closest;
+    int i;
+    f32 distance;
+    f32 minDist;
+    HitVector* vec;
+    f32 reach;
 
+    mapGetWork();
+    closest = NULL;
+#endif
     if (!PSVECSquareMag(&query->targetDir)) {
         return NULL;
     }
     minDist = -1.0f;
+
+#if VERSION <= VERSION_DEMO_JP
     hitIdx = -1;
-    temp = 0.5f;
-    reach = query->targetDistance * temp;
+#endif
+    reach = query->targetDistance / 2.0f;
     PSVECScale(&query->targetDir, &endPos, reach);
     PSVECAdd(&query->targetPos, &endPos, &endPos);
+#if VERSION <= VERSION_DEMO_JP
     if (query->targetDir.x == 0.0f && query->targetDir.y == -1.0f && query->targetDir.z == 0.0f) {
-        for (mapEntry = map, i = 0; i < map->count; mapEntry++, i++) {
+        for (i = 0; i < wp->count; i++) {
+            mapEntry = &wp->entries[i];
             for (j = 0, hit = mapEntry->hitEntries; j < mapEntry->hitNumJoints; j++, hit++) {
                 if (hit->flags & (HIT_FLAG_NO_GEOMETRY | HIT_FLAG_DELETED | HIT_FLAG_OFF)) {
                     continue;
@@ -959,7 +843,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
                 if (PSVECDistance(&endPos, &hit->centerWorld) > reach + hit->radius) {
                     continue;
                 }
-                if (hit->joint->drawMode->cullMode == 1) {
+                if (hit->joint->drawMode->cullMode == MAP_CULL_BACK) {
                     query->singleSided = 1;
                 } else {
                     query->singleSided = 0;
@@ -967,7 +851,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
                 vector = hit->vectors;
                 for (k = 0; k < hit->vectorCount; k++, vector++) {
                     if (query->singleSided == 0 || !(PSVECDotProduct(&vector->normal, &query->targetDir) >= 0.0f)) {
-                        if (tempfunc(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
+                        if (checkTriVecDown(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
                             minDist = query->targetDistance;
                             hitIdx = j;
                             mapIdx = i;
@@ -980,7 +864,8 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
             }
         }
     } else if (query->targetDir.y == 0.0f) {
-        for (mapEntry = map, i = 0; i < map->count; mapEntry++, i++) {
+        for (i = 0; i < wp->count; i++) {
+            mapEntry = &wp->entries[i];
             for (j = 0, hit2 = mapEntry->hitEntries; j < mapEntry->hitNumJoints; j++, hit2++) {
                 if (hit2->flags & (HIT_FLAG_NO_GEOMETRY | HIT_FLAG_DELETED | HIT_FLAG_OFF)) {
                     continue;
@@ -991,7 +876,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
                 if (PSVECDistance(&endPos, &hit2->centerWorld) > reach + hit2->radius) {
                     continue;
                 }
-                if (hit2->joint->drawMode->cullMode == 1) {
+                if (hit2->joint->drawMode->cullMode == MAP_CULL_BACK) {
                     query->singleSided = 1;
                 } else {
                     query->singleSided = 0;
@@ -1012,7 +897,8 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
             }
         }
     } else {
-        for (mapEntry = map, i = 0; i < map->count; mapEntry++, i++) {
+        for (i = 0; i < wp->count; i++) {
+            mapEntry = &wp->entries[i];
             for (j = 0, hit3 = mapEntry->hitEntries; j < mapEntry->hitNumJoints; j++, hit3++) {
                 if (hit3->flags & (HIT_FLAG_NO_GEOMETRY | HIT_FLAG_DELETED | HIT_FLAG_OFF)) {
                     continue;
@@ -1023,7 +909,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
                 if (PSVECDistance(&endPos, &hit3->centerWorld) > reach + hit3->radius) {
                     continue;
                 }
-                if (hit3->joint->drawMode->cullMode == 1) {
+                if (hit3->joint->drawMode->cullMode == MAP_CULL_BACK) {
                     query->singleSided = 1;
                 } else {
                     query->singleSided = 0;
@@ -1031,7 +917,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
                 vector3 = hit3->vectors;
                 for (k = 0; k < hit3->vectorCount; k++, vector3++) {
                     if (query->singleSided == 0 || !(PSVECDotProduct(&vector3->normal, &query->targetDir) >= 0.0f)) {
-                        if (tempfunc3(query, vector3) && (minDist < 0.0f || minDist > query->targetDistance)) {
+                        if (checkTriVecDir(query, vector3) && (minDist < 0.0f || minDist > query->targetDistance)) {
                             minDist = query->targetDistance;
                             hitIdx = j;
                             mapIdx = i;
@@ -1045,53 +931,13 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) {
         }
     }
     if (hitIdx < 0) {
-        return NULL;
-    }
-    PSVECNormalize(&hitNormalTmp, &normal);
-    query->targetDistance = distance;
-    query->hitPos = position;
-    query->hitNormal = normal;
-    return &map[mapIdx].hitEntries[hitIdx];
-}
 #else
-/**
- * Casts the ray in query (targetPos, targetDir, targetDistance) against every collision object on the active
- * list that callback accepts, skipping objects whose bounding sphere is out of reach,
- * and returns the closest object hit with its point, normal and distance in query; NULL if nothing is hit.
- * Horizontal, straight-down and straight-up rays use the cheaper special-case tests.
- * The demo version above walks every object instead.
- */
-HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { // 1:1
-    f32 temp;
-    HitVector* vector;
-    Vec position;
-    Vec hitNormalTmp;
-    Vec normal;
-    Vec endPos;
-    HitEntry* entry;
-    HitEntry* closest;
-    int i;
-    f32 distance;
-    f32 minDist;
-    HitVector* vec;
-    f32 reach;
-
-    mapGetWork();
-    closest = NULL;
-    if (!PSVECSquareMag(&query->targetDir)) {
-        return NULL;
-    }
-    minDist = -1.0f;
-    temp = 0.5f;
-    reach = query->targetDistance * temp;
-    PSVECScale(&query->targetDir, &endPos, reach);
-    PSVECAdd(&query->targetPos, &endPos, &endPos);
     entry = hitActiveListTop;
     if (query->targetDir.y == 0.0f) {
         while (entry != NULL) {
             if (callback == NULL || callback(query, entry)) {
                 if (!(PSVECDistance(&endPos, &entry->centerWorld) > reach + entry->radius)) {
-                    if (entry->joint->drawMode->cullMode == 1) {
+                    if (entry->joint->drawMode->cullMode == MAP_CULL_BACK) {
                         query->singleSided = 1;
                     } else {
                         query->singleSided = 0;
@@ -1111,14 +957,14 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { 
                     }
                 }
             }
-            entry = entry->nextActive;
+            entry = entry->siblingActive;
         }
     } else if (query->targetDir.x == 0.0f && query->targetDir.z == 0.0f) {
         if (query->targetDir.y == -1.0f) {
             while (entry != NULL) {
                 if (callback == NULL || callback(query, entry)) {
                     if (!(PSVECDistance(&endPos, &entry->centerWorld) > reach + entry->radius)) {
-                        if (entry->joint->drawMode->cullMode == 1) {
+                        if (entry->joint->drawMode->cullMode == MAP_CULL_BACK) {
                             query->singleSided = 1;
                         } else {
                             query->singleSided = 0;
@@ -1126,7 +972,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { 
                         vector = entry->vectors;
                         for (i = 0; i < entry->vectorCount; i++, vector++) {
                             if (query->singleSided == 0 || !(vector->normal.y <= 0.0f)) {
-                                if (tempfunc(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
+                                if (checkTriVecDown(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
                                     minDist = query->targetDistance;
                                     closest = entry;
                                     distance = minDist;
@@ -1137,13 +983,13 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { 
                         }
                     }
                 }
-                entry = entry->nextActive;
+                entry = entry->siblingActive;
             }
         } else if (query->targetDir.y == 1.0f) {
             while (entry != NULL) {
                 if (callback == NULL || callback(query, entry)) {
                     if (!(PSVECDistance(&endPos, &entry->centerWorld) > reach + entry->radius)) {
-                        if (entry->joint->drawMode->cullMode == 1) {
+                        if (entry->joint->drawMode->cullMode == MAP_CULL_BACK) {
                             query->singleSided = 1;
                         } else {
                             query->singleSided = 0;
@@ -1151,7 +997,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { 
                         vector = entry->vectors;
                         for (i = 0; i < entry->vectorCount; i++, vector++) {
                             if (query->singleSided == 0 || !(vector->normal.y >= 0.0f)) {
-                                if (tempfunc2(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
+                                if (checkTriVecUp(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
                                     minDist = query->targetDistance;
                                     closest = entry;
                                     distance = minDist;
@@ -1162,17 +1008,17 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { 
                         }
                     }
                 }
-                entry = entry->nextActive;
+                entry = entry->siblingActive;
             }
         } else {
-            goto check_entries;
+            goto any_direction;
         }
     } else {
-    check_entries:
+    any_direction:
         while (entry != NULL) {
             if (callback == NULL || callback(query, entry)) {
                 if (!(PSVECDistance(&endPos, &entry->centerWorld) > (reach + entry->radius))) {
-                    if (entry->joint->drawMode->cullMode == 1) {
+                    if (entry->joint->drawMode->cullMode == MAP_CULL_BACK) {
                         query->singleSided = 1;
                     } else {
                         query->singleSided = 0;
@@ -1180,7 +1026,7 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { 
                     vector = entry->vectors;
                     for (i = 0; i < entry->vectorCount; i++, vector++) {
                         if (query->singleSided == 0 || !(PSVECDotProduct(&vector->normal, &query->targetDir) >= 0.0f)) {
-                            if (tempfunc3(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
+                            if (checkTriVecDir(query, vector) && (minDist < 0.0f || minDist > query->targetDistance)) {
                                 minDist = query->targetDistance;
                                 closest = entry;
                                 distance = minDist;
@@ -1191,22 +1037,31 @@ HitEntry* hitCheckVecFilter(HitCheckQuery* query, HitFilterCallback callback) { 
                     }
                 }
             }
-            entry = entry->nextActive;
+            entry = entry->siblingActive;
         }
     }
     if (closest == NULL) {
+#endif
         return NULL;
     }
     PSVECNormalize(&hitNormalTmp, &normal);
     query->targetDistance = distance;
     query->hitPos = position;
     query->hitNormal = normal;
+#if VERSION <= VERSION_DEMO_JP
+    return &wp->entries[mapIdx].hitEntries[hitIdx];
+#else
     return closest;
-}
 #endif
+}
 
-HitEntry* hitCheckFilter(HitFilterCallback callback, f32* hitX, f32* hitY, f32* hitZ, f32* distance, f32* hitNX,
-                         f32* hitNY, f32* hitNZ, f32 x, f32 y, f32 z, f32 nx, f32 ny, f32 nz) { // 1:1
+/**
+ * Casts a ray from (x, y, z) in direction (nx, ny, nz) up to *distance, accepting only the objects callback passes (all
+ * when NULL). On a hit stores the distance, hit point and normal through the pointers and returns the object; returns
+ * NULL and leaves them unchanged otherwise.
+ */
+HitEntry* hitCheckFilter(HitFilterCallback callback, f32 x, f32 y, f32 z, f32 nx, f32 ny, f32 nz, f32* hitX,
+                         f32* hitY, f32* hitZ, f32* distance, f32* hitNX, f32* hitNY, f32* hitNZ) {
     HitCheckQuery temp;
     HitCheckQuery* query = &temp;
     HitEntry* entry;
@@ -1309,11 +1164,11 @@ static BOOL checkTriVec_xz(HitCheckQuery* query, HitVector* vector) {
 }
 
 /** Tells whether the horizontal ray in query hits any triangle of collision object entry. */
-BOOL hitCheckVecHitObjXZ(HitCheckQuery* query, HitEntry* entry) { // 1:1
+BOOL hitCheckVecHitObjXZ(HitCheckQuery* query, HitEntry* entry) {
     int i;
     HitVector* vector;
 
-    if (entry->joint->drawMode->cullMode == 1) {
+    if (entry->joint->drawMode->cullMode == MAP_CULL_BACK) {
         query->singleSided = 1;
     } else {
         query->singleSided = 0;
@@ -1322,19 +1177,20 @@ BOOL hitCheckVecHitObjXZ(HitCheckQuery* query, HitEntry* entry) { // 1:1
     for (i = 0; i < entry->vectorCount; i++, vector++) {
         if ((query->singleSided == 0 || !(PSVECDotProduct(&vector->normal, &query->targetDir) >= 0.0f)) &&
             checkTriVec_xz(query, vector)) {
-            return 1;
+            return TRUE;
         }
     }
-    return 0;
+    return FALSE;
 }
 
 /** hitCheckAttr's filter: accepts collision objects that have none of the attribute bits in query->user0. */
-static BOOL chkFilterAttr(HitCheckQuery* query, HitEntry* entry) { // 1:1
+static BOOL chkFilterAttr(HitCheckQuery* query, HitEntry* entry) {
     return (entry->attributes & query->user0) == 0;
 }
 
-HitEntry* hitCheckAttr(s32 user0, f32* hitX, f32* hitY, f32* hitZ, f32* distance, f32* hitNX, f32* hitNY, f32* hitNZ,
-                       f32 x, f32 y, f32 z, f32 nx, f32 ny, f32 nz) { // 1:1
+/** hitCheckFilter with a filter that skips collision objects having any of the attribute bits user0. */
+HitEntry* hitCheckAttr(s32 user0, f32 x, f32 y, f32 z, f32 nx, f32 ny, f32 nz, f32* hitX, f32* hitY, f32* hitZ,
+                       f32* distance, f32* hitNX, f32* hitNY, f32* hitNZ) {
     HitCheckQuery temp;
     HitCheckQuery* query = &temp;
     HitEntry* entry;
@@ -1357,10 +1213,59 @@ HitEntry* hitCheckAttr(s32 user0, f32* hitX, f32* hitY, f32* hitZ, f32* distance
     return entry;
 }
 
+/**
+ * hitCheckAttrOnly's filter: accepts collision objects that have none of the bits in query->user0, or any of the
+ * bits in query->user1 (the same filter as mario_hit.c's chkFilterAttr2).
+ */
+// Original name and size (0x2c) from the JP demo map (UNUSED there, as its only user hitCheckAttrOnly). Body:
+// chkFilterAttr with the second mask, rebuilt to fit that size.
+static BOOL chkFilterAttr2(HitCheckQuery* query, HitEntry* entry) {
+    BOOL ret = FALSE;
+    s32 attr = entry->attributes;
+    if ((attr & query->user0) == 0 || (attr & query->user1) != 0) {
+        ret = TRUE;
+    }
+    return ret;
+}
+
+/** hitCheckAttr with a second mask: also accepts objects that have any of the attribute bits user1. */
+// Original name and size (0x138) from the JP demo map (UNUSED there). Body: hitCheckAttr with a second mask,
+// rebuilt from it; the size and its two Vec templates (map UNUSED .rodata @942/@944) fit, and user1 second is the
+// parameter order that fits the size.
+HitEntry* hitCheckAttrOnly(s32 user0, s32 user1, f32 x, f32 y, f32 z, f32 nx, f32 ny, f32 nz, f32* hitX, f32* hitY,
+                           f32* hitZ, f32* distance, f32* hitNX, f32* hitNY, f32* hitNZ) {
+    HitCheckQuery temp;
+    HitCheckQuery* query = &temp;
+    HitEntry* entry;
+
+    query->targetPos = (Vec){x, y, z};
+    query->targetDir = (Vec){nx, ny, nz};
+    query->targetDistance = *distance;
+    query->user0 = user0;
+    query->user1 = user1;
+    entry = hitCheckVecFilter(query, chkFilterAttr2);
+    if (entry == NULL) {
+        return NULL;
+    }
+    *distance = query->targetDistance;
+    *hitX = query->hitPos.x;
+    *hitY = query->hitPos.y;
+    *hitZ = query->hitPos.z;
+    *hitNX = query->hitNormal.x;
+    *hitNY = query->hitNormal.y;
+    *hitNZ = query->hitNormal.z;
+    return entry;
+}
+
+/**
+ * Finds the map-object collision (HIT_ATTR_MOBJ, with parts, not off or deleted) closest to (x, y, z) whose bounding
+ * sphere comes within distance, filtered by callback when given. Returns it only when a ray from the point toward its
+ * centre hits one of its triangles within distance (JP and later return it at once when the point is within half its
+ * radius); otherwise NULL.
+ */
 HitEntry* hitCheckSphereFilter(HitFilterCallback callback, f32 x, f32 y, f32 z,
-                               f32 distance) { // almost 1:1, stubborn regalloc
-    MapEntry* map = mapGetWork()->entries;
-    MapEntry* mapEntry = map;
+                               f32 distance) {
+    MapWork* wp = mapGetWork();
     int i;
     Vec center;
     int j;
@@ -1368,7 +1273,7 @@ HitEntry* hitCheckSphereFilter(HitFilterCallback callback, f32 x, f32 y, f32 z,
     HitVector* vector;
     f32 minDist;
     s32 objectId;
-    s32 fl;
+    s32 found;
     f32 dist;
     f32 minVecDist;
     f32 radius;
@@ -1382,9 +1287,9 @@ HitEntry* hitCheckSphereFilter(HitFilterCallback callback, f32 x, f32 y, f32 z,
     objectId = -1;
     query = &temp;
     center = (Vec){x, y, z};
-    for (i = 0; i < map->count; mapEntry++, i++) {
-        hitObj = mapEntry->hitEntries;
-        for (j = 0; j < mapEntry->hitNumJoints; j++, hitObj++) {
+    for (i = 0; i < wp->count; i++) {
+        hitObj = wp->entries[i].hitEntries;
+        for (j = 0; j < wp->entries[i].hitNumJoints; j++, hitObj++) {
             if ((hitObj->attributes & HIT_ATTR_MOBJ) && (hitObj->joint->partCount != 0)) {
                 entryFlags = hitObj->flags;
                 if (!(entryFlags & HIT_FLAG_OFF) && !(entryFlags & HIT_FLAG_DELETED)) {
@@ -1404,22 +1309,21 @@ HitEntry* hitCheckSphereFilter(HitFilterCallback callback, f32 x, f32 y, f32 z,
         }
     }
     if (objectId < 0) {
-        return 0;
+        return NULL;
     }
 #if VERSION >= VERSION_JP
     if (minDist < (0.5f * radius)) {
-        return &map[entryId].hitEntries[objectId];
+        return &wp->entries[entryId].hitEntries[objectId];
     }
 #endif
-    map = &map[entryId];
-    bestEntry = &map->hitEntries[objectId];
+    bestEntry = &wp->entries[entryId].hitEntries[objectId];
     PSVECSubtract(&bestEntry->centerWorld, &center, &query->targetDir);
     PSVECNormalize(&query->targetDir, &query->targetDir);
     minVecDist = -1.0f;
-    fl = -1;
+    found = -1;
     query->targetPos = center;
     query->targetDistance = distance;
-    if (bestEntry->joint->drawMode->cullMode == 1) {
+    if (bestEntry->joint->drawMode->cullMode == MAP_CULL_BACK) {
         query->singleSided = 1;
     } else {
         query->singleSided = 0;
@@ -1427,23 +1331,67 @@ HitEntry* hitCheckSphereFilter(HitFilterCallback callback, f32 x, f32 y, f32 z,
     vector = bestEntry->vectors;
     for (i = 0; i < bestEntry->vectorCount; i++, vector++) {
         if ((query->singleSided == 0) || !(PSVECDotProduct(&vector->normal, &query->targetDir) >= 0.0f)) {
-            if (tempfunc3(query, vector) && ((minVecDist < 0.0f) || (minVecDist > query->targetDistance))) {
+            if (checkTriVecDir(query, vector) && ((minVecDist < 0.0f) || (minVecDist > query->targetDistance))) {
                 minVecDist = query->targetDistance;
-                fl = 1;
+                found = 1;
             }
         }
     }
     if (minVecDist > distance) {
-        return 0;
+        return NULL;
     }
-    if (fl < 0) {
-        return 0;
+    if (found < 0) {
+        return NULL;
     }
-    return &map->hitEntries[objectId];
+    return &wp->entries[entryId].hitEntries[objectId];
+}
+
+/**
+ * Builds the list of hit objects the checks walk (hitActiveListTop; JP and later).
+ * The early demos have no active list: hit objects without parts are flagged 0x8000 and skipped by the checks.
+ */
+static void hitPreCheck(void) {
+    MapEntry* entry;
+    s32 i;
+    s32 j;
+    MapWork* wp = mapGetWork();
+    HitEntry* hit;
+#if VERSION >= VERSION_JP
+    HitEntry* prev;
+
+    prev = hitActiveListTop = NULL;
+#endif
+    for (i = 0; i < wp->count; i++) {
+        entry = &wp->entries[i];
+        hit = entry->hitEntries;
+        for (j = 0; j < entry->hitNumJoints; j++, hit++) {
+#if VERSION <= VERSION_DEMO_JP
+            hit->flags |= HIT_FLAG_NO_GEOMETRY;
+            if (hit->joint->partCount != 0) {
+                hit->flags &= ~HIT_FLAG_NO_GEOMETRY;
+            }
+        }
+    }
+#else
+            if (hit->joint->partCount != 0 && !(hit->flags & (HIT_FLAG_OFF | HIT_FLAG_DELETED))) {
+                if (prev == NULL) {
+                    hitActiveListTop = hit;
+                    prev = hit;
+                } else {
+                    prev->siblingActive = hit;
+                    prev = hit;
+                }
+            }
+        }
+    }
+    if (prev != NULL) {
+        prev->siblingActive = NULL;
+    }
+#endif
 }
 
 /** Returns the live (not deleted) collision object named name in any loaded map, or NULL (also for a NULL name). */
-HitEntry* hitNameToPtr(const char* name) { // 1:1
+HitEntry* hitNameToPtr(const char* name) {
     MapEntry* map;
     MapWork* wp = mapGetWork();
     int j;
@@ -1453,7 +1401,7 @@ HitEntry* hitNameToPtr(const char* name) { // 1:1
     if (name == NULL) {
         return NULL;
     }
-    for (i = 0; i < wp->entries->count; i++) {
+    for (i = 0; i < wp->count; i++) {
         map = &wp->entries[i];
         hit = map->hitEntries;
         for (j = 0; j < map->hitNumJoints; j++, hit++) {
@@ -1470,11 +1418,11 @@ HitEntry* hitNameToPtr(const char* name) { // 1:1
  * Adds the world centres of the leaf objects below hit (and of its following siblings when recursing) to
  * position and counts them.
  */
-static void hitObjGetPosSub(HitEntry* hit, Vec* position, s32* counter, BOOL recursion) { // 1:1, awful inlining
+static void hitObjGetPosSub(HitEntry* hit, Vec* position, s32* counter, BOOL recursion) {
     Vec center;
 
     if (hit->child != NULL) {
-        hitObjGetPosSub(hit->child, position, counter, 1);
+        hitObjGetPosSub(hit->child, position, counter, TRUE);
     } else {
         PSMTXMultVec(hit->worldMtx, &hit->centerLocal, &center);
         PSVECAdd(position, &center, position);
@@ -1482,16 +1430,16 @@ static void hitObjGetPosSub(HitEntry* hit, Vec* position, s32* counter, BOOL rec
     }
     if (recursion) {
         if (hit->sibling != NULL) {
-            hitObjGetPosSub(hit->sibling, position, counter, 1);
+            hitObjGetPosSub(hit->sibling, position, counter, TRUE);
         }
     }
 }
 
 /**
- * Stores in position the average centre of the collision object named name and its leaf objects,
+ * Stores in position the average centre of the leaf collision objects rooted at name,
  * e.g. to place an effect or Mario on it; the origin if there is no such object.
  */
-void hitObjGetPos(const char* name, Vec* position) { // 1:1
+void hitObjGetPos(const char* name, Vec* position) {
     Vec sum;
     s32 counter;
     HitEntry* hit;
@@ -1511,7 +1459,7 @@ void hitObjGetPos(const char* name, Vec* position) { // 1:1
  * Stores the normal of the first triangle of the collision object named name, normalised;
  * leaves normal unchanged if the object has no geometry.
  */
-void hitObjGetNormal(const char* name, Vec* normal) { // 1:1
+void hitObjGetNormal(const char* name, Vec* normal) {
     HitEntry* hit;
 
     hit = hitNameToPtr(name);
@@ -1520,21 +1468,13 @@ void hitObjGetNormal(const char* name, Vec* normal) { // 1:1
     }
 }
 
-#if VERSION <= VERSION_DEMO_JP
-/** Returns hit's joint name, or NULL for NULL (the demo has no range check). */
-const char* hitGetName(HitEntry* hit) {
-    if (hit != NULL) {
-        return hit->joint->name;
-    }
-    return NULL;
-}
-#else
 /**
- * Returns hit's joint name (what cases and scripts compare against), or NULL for NULL.
- * The JP and later releases first check that hit lies inside a loaded map's collision table and return NULL
- * otherwise.
+ * Returns hit's joint name, or NULL for NULL; JP and later also return NULL for a pointer outside every
+ * loaded map's hit table (the early demos have no range check).
  */
-const char* hitGetName(HitEntry* hit) { // 1:1
+#if VERSION >= VERSION_JP
+const char* hitGetName(HitEntry* hit) {
+    MapWork* wp;
     MapEntry* map;
     s32 count;
     int i;
@@ -1544,9 +1484,10 @@ const char* hitGetName(HitEntry* hit) { // 1:1
     if (hit == NULL) {
         return NULL;
     }
-    map = mapGetWork()->entries;
-    count = map->count;
-    for (i = 0; i < count; map++, i++) {
+    wp = mapGetWork();
+    count = wp->count;
+    for (i = 0; i < count; i++) {
+        map = &wp->entries[i];
         start = (u8*)map->hitEntries;
         size = OSRoundUp32B((map->hitNumJoints + 0x80) * sizeof(HitEntry));
         if ((u8*)hit >= start && (u8*)hit < start + size) {
@@ -1560,8 +1501,17 @@ const char* hitGetName(HitEntry* hit) { // 1:1
 }
 #endif
 
+#if VERSION <= VERSION_DEMO_JP
+const char* hitGetName(HitEntry* hit) {
+    if (hit != NULL) {
+        return hit->joint->name;
+    }
+    return NULL;
+}
+#endif
+
 /** Returns hit's attribute bits, 0 for NULL. */
-s32 hitGetAttr(HitEntry* hit) { // 1:1
+s32 hitGetAttr(HitEntry* hit) {
     return hit != NULL ? hit->attributes : 0;
 }
 
@@ -1573,7 +1523,7 @@ s32 hitGetAttr(HitEntry* hit) { // 1:1
  * back at its point.
  * They are the hazard water: mot_damage sinks Mario in it and has the Gazigazi bite him (evt_gazigazi).
  */
-static void hitDamageReturnSet(HitEntry* hit, HitDamageReturn* damage, BOOL recursion) { // 1:1
+static void hitDamageReturnSet(HitEntry* hit, HitDamageReturn* damage, BOOL recursion) {
     hit->attributes |= HIT_ATTR_DAMAGE_RETURN;
     hit->damage = damage;
     if (hit->child != NULL) {
@@ -1590,7 +1540,7 @@ static void hitDamageReturnSet(HitEntry* hit, HitDamageReturn* damage, BOOL recu
  * Marks the collision object named name and everything below it as a damaging surface using damage (the spot
  * Mario is put back at afterwards, given as a map object and position).
  */
-void hitGrpDamageReturnSet(const char* name, HitDamageReturn* damage) { // 1:1
+void hitGrpDamageReturnSet(const char* name, HitDamageReturn* damage) {
     HitEntry* hit;
 
     hit = hitNameToPtr(name);
@@ -1624,10 +1574,10 @@ void hitBindMapObj(const char* hitName, const char* mapobjName) {
         return;
     }
     hit->mapObj = mapObj;
-    hit->flags |= HIT_FLAG_BOUND;
+    hit->flags |= HIT_FLAG_MAPOBJ_BIND;
 }
 
-/** Recomputes the collision object name after its bound map object moved (only if it was bound by hitBindMapObj). */
+/** Recomputes the collision object's world matrix and triangles after its bound map object moved (only if it was bound by hitBindMapObj). */
 void hitBindUpdate(const char* name) {
     HitEntry* parent;
     HitEntry* hit;
@@ -1638,7 +1588,7 @@ void hitBindUpdate(const char* name) {
         mapErrorEntry(1, name);
         return;
     }
-    if (hit->flags & HIT_FLAG_BOUND) {
+    if (hit->flags & HIT_FLAG_MAPOBJ_BIND) {
         parent = hit->parent;
         if (parent != NULL) {
             hitReCalcMatrix(hit, parent->worldMtx);
@@ -1648,39 +1598,14 @@ void hitBindUpdate(const char* name) {
         hitReCalcMatrix(hit, mtx);
     }
 }
-/*
-// Counts the triangles in hit's map meshes (the size of its triangle list). Unused and stripped from the game; kept
-// here as a reference.
-s32 hitGetEntNum(HitEntry* hit) {
-    s32 numVectors;
-    s32 i, j;
 
-    numVectors = 0;
-    for (i = 0; i < hit->joint->partCount; i++) {
-        MapFileMesh* mesh = hit->joint->parts[i].mesh;
-        if (mesh == NULL) {
-            continue;
-        }
-
-        if (!mesh->isPackedDisplay) {
-            DisplayList* dls = (DisplayList*)mesh->displayLists;
-            for (j = 0; j < mesh->displayListCount; j++) {
-                numVectors += *(u16*)((u8*)dls[j].offset + 1) - 2;
-            }
-        } else {
-            PackedDisplayList* dls = (PackedDisplayList*)mesh->displayLists;
-            for (j = 0; j < mesh->displayListCount; j++) {
-                numVectors += *(u16*)((u8*)dls[j].offset + 1) - 2;
-            }
-        }
-    }
-
-    return numVectors;
-}
-*/
-
-// FAKE: stand-in for a function the linker stripped (all versions, the demo included); codegen runs bottom-up, so its
-// 0.0f and 0.1f open the .sdata2 pool. It is dead-stripped at link and emits nothing in the DOL.
+// FAKE: stand-in for code the linker stripped from the original object; its 0.0f and 0.1f are the first linked
+// literals in the target .sdata2 pool (codegen runs bottom-up, so it must sit last in the file). JP demo map: the
+// last five functions of the file are stripped (hitNumberToPtr 0x4c, hitGetEntNum 0x38, bounding_box 0x528,
+// bounding_sphere 0x22c, dbg_hitObjDisp 0x6a4, in codegen order); the pool starts with their constants: UNUSED
+// @1184, @1206, @1249, then 0.0f (@1250), then 0.1f (@1392) next to UNUSED @1393-@1395 (and the UNUSED .rodata
+// culling_tbl, attribute_rgb, @1397), so 0.0f and 0.1f most likely belong to the debug drawers.
+// No build contains their code, so the original cannot be restored.
 void hitStrippedPool(f32* f) {
     f[0] = 0.0f;
     f[1] = 0.1f;

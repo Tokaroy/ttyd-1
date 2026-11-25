@@ -1,12 +1,7 @@
 #include "fdlibm.h"
 
-/** Constants for sqrt: 1.0 and a tiny value used to raise the inexact flag. */
 static const double one = 1.0, tiny = 1.0e-300;
 
-/**
- * Square root of x (fdlibm), bit-by-bit integer method;
- * NaN and infinity set errno to EDOM, and negative arguments return NaN with EDOM.
- */
 double __ieee754_sqrt(double x) {
     double z;
     int sign = (int)0x80000000;
@@ -99,6 +94,8 @@ double __ieee754_sqrt(double x) {
     ix1 = q1 >> 1;
     if ((q & 1) == 1) ix1 |= sign;
     ix0 += (m << 20);
+
+    // both halves of z are stored here, so its earlier value (set only for a nonzero remainder) is not read
     __HI(z) = ix0;
     __LO(z) = ix1;
     return z;

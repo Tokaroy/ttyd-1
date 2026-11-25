@@ -1,7 +1,31 @@
 // mri_17 (巨木の中, The Great Tree): the cage trap (trap_event) that Lord Crump and his X-Nauts spring on the
 // Punies, the guide Puni, his sister and the rival; also a strange statue and a switch.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_img.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_offscreen.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "mri_puni.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_item.h"
+#include "evt/evt_mobj.h"
+#include "driver/npcdrv.h"
+#include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "manager/evtmgr_cmd.h"
 #include "driver/imgdrv.h"
@@ -10,53 +34,66 @@
 #include "evt/evt_sub.h"
 #include "mri.h"
 #include "evt/evt_npc.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_offscreen.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
-#include "mri_puni.h"
 #include "data_tables.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
-#include "driver/mapdrv.h"
-#include "driver/camdrv.h"
 
 static USER_FUNC(set_depthPlaneOffset);
 
-extern EvtWord bero_02_into_event[];
+static EvtWord bero_02_into_event[14];
 static BeroEntry bero_entry_data[4];
+static EvtWord guide_init[2];
+static EvtWord guide_talk[8];
+static EvtWord sister_init[2];
+static EvtWord sister_talk[8];
+static EvtWord rival_init[2];
+static EvtWord rival_talk[8];
 static NpcSetupInfo npcEnt[4];
 static KusaAccess ueki_access_data[4];
-s16 trap_position[204];
-extern EvtWord trap_main[];
-extern EvtWord trap_restore[];
-extern EvtWord wana_kemuri[];
-extern EvtWord wana_offscreen[];
+static s16 trap_position[204];
+static EvtWord trap_main[122];
+
+#if VERSION >= VERSION_JP
+EvtWord trap_restore[59];
+#endif
+
+static EvtWord wana_kemuri[130];
+static EvtWord wana_offscreen[219];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord trap_event[];
-extern EvtWord trap_check[];
-extern EvtWord strange_statue[];
+#else
+EvtWord trap_event[716];
+#endif
+
+static EvtWord trap_check[185];
+static EvtWord punipuni_ball00_init[34];
+static EvtWord punipuni_ball00[45];
+static EvtWord breakyuka_init[11];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord breakyuka_main[135];
+#else
+static EvtWord breakyuka_main[131];
+#endif
+
+static EvtWord strange_statue[56];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord switch_event[];
+extern EvtWord mri_17_init_evt[];
+#else
+EvtWord switch_event[41];
+EvtWord mri_17_init_evt[208];
+#endif
 
 /**
  * Enter script of the east pipe: the first time Mario comes in,
- * it starts the strange statue scene (strange_statue) and records it with GSWF_MRI17_STRANGE_STATUE_SEEN.
+ * it starts the strange statue scene (strange_statue) and records it with GSWF_MRI_17_PILLAR_SCENE_SEEN.
  * Returns 0 in LW(0).
  */
-EVT_BEGIN(bero_02_into_event)
-    IF_INT_EQUAL(GSWF(GSWF_MRI17_STRANGE_STATUE_SEEN), 0)
+static EVT_BEGIN(bero_02_into_event)
+    IF_INT_EQUAL(GSWF_MRI_17_PILLAR_SCENE_SEEN, 0)
         SPAWN_EVENT(strange_statue)
-        SET_VALUE(GSWF(GSWF_MRI17_STRANGE_STATUE_SEEN), 1)
+        SET_VALUE(GSWF_MRI_17_PILLAR_SCENE_SEEN, 1)
     END_IF
     SET_VALUE(LW(0), 0)
     RETURN
@@ -104,7 +141,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)bero_02_into_event, // enterEvent
+        bero_02_into_event, // enterEvent
         10, // caseType
         NULL, 0, // exitEvent..nextMapName
         "dokan1", // nextBeroName
@@ -151,8 +188,8 @@ EVT_END()
 /** NPCs of the cage trap scene: the guide Puni, his sister and the rival Puni. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "ガイド", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ガイド", // name (Punio)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         guide_init, // initEvent
         NULL, // regularEvent
@@ -163,8 +200,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ガイド妹", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ガイド妹", // name (Petuni)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         sister_init, // initEvent
         NULL, // regularEvent
@@ -175,8 +212,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ライバル", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ライバル", // name (Puniper)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         rival_init, // initEvent
         NULL, // regularEvent
@@ -198,7 +235,7 @@ static KusaAccess ueki_access_data[] = {
 };
 
 /** Scattered (x, z) spots, as pairs of 16-bit values, where the caged Punies are placed. */
-s16 trap_position[] = {
+static s16 trap_position[] = {
     69, -22, 70, -9, 64, -11, 46, -34,
     39, -45, 56, -31, 64, -15, 39, -6,
     68, -25, 62, -28, 31, -19, 35, -9,
@@ -228,11 +265,11 @@ s16 trap_position[] = {
 };
 
 /**
- * After the cage trap has sprung (stories STG2_21 to 21_03):
- * puts every Puni that was caught (trap index 1) back inside the trap at its saved position, and moves Punio,
+ * After the cage trap has sprung (STG2_21_BUBBLES_2 through STG2_21_03_SUPER_BOOTS):
+ * puts every Puni that was caught (trap index 1) back inside the trap at a preset position, and moves Punio,
  * his sister and the rival Puni NPCs to the cage with the Puni of the same slot.
  */
-EVT_BEGIN(trap_main)
+static EVT_BEGIN(trap_main)
     CALL(evt_puni_wait_systemmode, 2)
     SET_VALUE(LW(10), 1)
     SET_VALUE(LW(11), 0)
@@ -246,17 +283,17 @@ EVT_BEGIN(trap_main)
             CALL(evt_puni_init_puni, LW(10), 24, LW(0), 0, LW(2), 0)
             CALL(evt_puni_flag_onoff, LW(10), 0, 10485760)
             IF_INT_EQUAL(LW(10), 1)
-                CALL(evt_puni_flag_onoff, LW(10), 0, 2048)
+                CALL(evt_puni_flag_onoff, LW(10), 0, PUNI_FLAG_HIDDEN)
                 CALL(evt_puni_set_position, LW(10), 39, 0, 14)
                 CALL(evt_npc_set_position, STRING("ガイド"), 39, 0, 14)
             END_IF
             IF_INT_EQUAL(LW(10), 2)
-                CALL(evt_puni_flag_onoff, LW(10), 0, 2048)
+                CALL(evt_puni_flag_onoff, LW(10), 0, PUNI_FLAG_HIDDEN)
                 CALL(evt_puni_set_position, LW(10), 113, 0, 17)
                 CALL(evt_npc_set_position, STRING("ガイド妹"), 113, 0, 17)
             END_IF
             IF_INT_EQUAL(LW(10), 4)
-                CALL(evt_puni_flag_onoff, LW(10), 0, 2048)
+                CALL(evt_puni_flag_onoff, LW(10), 0, PUNI_FLAG_HIDDEN)
                 CALL(evt_puni_set_position, LW(10), 120, 0, -50)
                 CALL(evt_npc_set_position, STRING("ライバル"), 120, 0, -50)
             END_IF
@@ -269,11 +306,12 @@ EVT_BEGIN(trap_main)
     RETURN
 EVT_END()
 
+// Consume one x/z pair for every Puni index, including those not trapped.
 #if VERSION >= VERSION_JP
 /**
- * After the escape (story STG2_21_04 to 21_06; JP and later):
- * puts the Punies that were trapped back into the room at their saved trap positions
- * so they can join Mario again.
+ * Spawned by the map init from STG2_21_04_ESCAPE to STG2_21_06_WATER_SWITCH (JP and later). Once the Puni
+ * system is in mode 2 it re-creates every Puni 1 to 102 whose trap flag is set (evt_puni_get_trap_index)
+ * at its saved trap position (trap_position) in mode 16 and clears its PUNI_FLAG_NOT_IN_PARTY flag.
  */
 EVT_BEGIN(trap_restore)
     CALL(evt_puni_wait_systemmode, 2)
@@ -287,7 +325,7 @@ EVT_BEGIN(trap_restore)
         CALL(evt_puni_get_trap_index, LW(10), LW(12))
         IF_INT_EQUAL(LW(12), 1)
             CALL(evt_puni_init_puni, LW(10), 16, LW(0), 0, LW(2), 0)
-            CALL(evt_puni_flag_onoff, LW(10), 0, 8388608)
+            CALL(evt_puni_flag_onoff, LW(10), 0, PUNI_FLAG_NOT_IN_PARTY)
         END_IF
         ADD(LW(10), 1)
         IF_INT_EQUAL(LW(10), 103)
@@ -299,7 +337,7 @@ EVT_END()
 #endif
 
 /** Dust puffs along the base of the trap cage at eight fixed positions when it drops. */
-EVT_BEGIN(wana_kemuri)
+static EVT_BEGIN(wana_kemuri)
     CALL(evt_eff, 0, STRING("kemuri_test"), 0, -18, 25, 76, FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
     CALL(evt_eff, 0, STRING("kemuri_test"), 0, 5, 10, 70, FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
     CALL(evt_eff, 0, STRING("kemuri_test"), 0, 23, 23, 77, FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
@@ -316,7 +354,7 @@ EVT_END()
  * dust and a camera shake, then the pipe (S_dokan1) pops out of the floor next to it with its appearing sounds.
  * Both are played as captured paper animations, and the solid cage and pipe replace them at the end.
  */
-EVT_BEGIN(wana_offscreen)
+static EVT_BEGIN(wana_offscreen)
     CALL(evt_img_entry, STRING("capture_img"))
     CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_batan"))
     CALL(evt_img_onoff, STRING("capture_img"), 0)
@@ -326,7 +364,7 @@ EVT_BEGIN(wana_offscreen)
     BEGIN_INLINE_EVENT
         CALL(evt_snd_sfxon_3d, STRING("SFX_OFF2_DOOR_GRID_SHUT1"), 50, 0, 0, 0)
         WAIT_MS(1750)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_DOOR_GRID_DOWN1"), 50, 0, 0, 0)
         SPAWN_EVENT(wana_kemuri)
         CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.029296875f), FLOAT(0.0f), 500)
@@ -339,7 +377,7 @@ EVT_BEGIN(wana_offscreen)
     CALL(evt_img_release, STRING("capture_img"))
     CALL(evt_mapobj_clear_offscreen, 1, STRING("S_hako"))
     CALL(evt_offscreen_delete, STRING("offscreen"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hako"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hako"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_hako"), 1, 1)
     CALL(evt_img_entry, STRING("capture_img"))
     CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_saku"))
@@ -359,7 +397,7 @@ EVT_BEGIN(wana_offscreen)
         CALL(evt_snd_sfxon_3d, STRING("SFX_OFF2_DOKAN_APPEAR2"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
     CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_2"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dokan1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dokan1"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_img_onoff, STRING("capture_img"), 1)
     CALL(evt_img_wait_animend, STRING("capture_img"))
     CALL(evt_img_free_capture, STRING("capture_img"), 0)
@@ -367,29 +405,32 @@ EVT_BEGIN(wana_offscreen)
     CALL(evt_img_release, STRING("capture_img"))
     CALL(evt_mapobj_clear_offscreen, 1, STRING("S_dokan1"))
     CALL(evt_offscreen_delete, STRING("offscreen"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dokan1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dokan1"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_dokan1"), 1, 1)
     RETURN
 EVT_END()
 
 /**
- * The cage trap (story up to STG2_20): when Mario and his partner walk in with the Puni Orb in place,
+ * The cage trap (story up to STG2_20_PUNIO_PETUNI): when Mario and his partner walk in with the Puni Orb in place,
  * the cage falls on the Punies, Lord Crump and two X-Nauts drop in front of it and taunt the party,
- * and the guide Puni answers. Sets the story to STORY_STG2_21_PUNIES_VS_JABBIES_2.
+ * and the guide Puni answers. Sets the story to STG2_21_BUBBLES_2.
  */
 EVT_BEGIN(trap_event)
     WAIT_WHILE(GF(15))
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    // Mario and his partner walk in with the Puni Orb in place; Punio runs ahead.
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_NO_WALL_COLLISION)
+
+    // Mario and his partner are inside with the Puni Orb in place; the cage drops before Punio moves ahead.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 80, 151, 555, 80, 56, 13, 500, 11)
+    CALL(evt_cam3d_evt_set, 80, 151, 555, 80, 56, 13, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+#if VERSION <= VERSION_DEMO_JP
     CALL_CHILD(wana_offscreen)
-#if VERSION >= VERSION_JP
+#else
+    CALL_CHILD(wana_offscreen)
     CALL_CHILD(mri_guide_goryu)
 #endif
     CALL(evt_target_flag_onoff, 0, 1, 1)
@@ -406,30 +447,31 @@ EVT_BEGIN(trap_event)
 #if VERSION <= VERSION_DEMO_JP
     CALL_CHILD(mri_guide_goryu)
 #endif
-    CALL(evt_puni_flag_onoff, 1, 0, 262144)
-#if VERSION >= VERSION_JP
+    CALL(evt_puni_flag_onoff, 1, 0, PUNI_FLAG_SCRIPT_CONTROL)
+#if VERSION <= VERSION_DEMO_JP
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+#else
     CALL(evt_puni_set_mode, 1, PUNI_MODE_INERT)
     CALL(evt_puni_get_position, 1, LW(0), LW(1), LW(2))
     CALL(evt_npc_set_position, STRING("ガイド"), LW(0), LW(1), LW(2))
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-#endif
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイド"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION)
 #endif
     CALL(evt_npc_set_ry, STRING("ガイド"), 270)
     SET_VALUE(LW(0), STRING("ガイド"))
     SPAWN_EVENT_GET_ID(PTR(mri_puni_walk_se), LW(9))
     CALL(evt_npc_glide_position, STRING("ガイド"), 12, 6, 8, 0, FLOAT(120.0f), 0, 0, 0)
     DELETE_EVENT(LW(9))
-    CALL(evt_cam3d_evt_set, 13, 110, 326, 13, 56, 20, 500, 11)
+    CALL(evt_cam3d_evt_set, 13, 110, 326, 13, 56, 20, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // The cage falls on the Punies and Punio wonders what happened.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e18_00_01"), 0, STRING("ガイド"))
-    CALL(evt_msg_toge, 2, 5, 230, 0)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, 5, 230, 0)
+
     // Lord Crump laughs and drops in with two X-Naut grunts in front of the cage.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_3RD_ENEMY"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_3RD_ENEMY"))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e18_00_02"), 0, 0)
-    CALL(evt_cam3d_evt_set, 50, 164, 624, 50, 56, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 50, 164, 624, 50, 56, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_npc_set_position, STRING("第三勢力部下Ａ"), 10, 180, 90)
     CALL(evt_npc_set_position, STRING("第三勢力部下Ｂ"), 90, 180, 90)
@@ -476,17 +518,18 @@ EVT_BEGIN(trap_event)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_mov_pos2, 50, 8, FLOAT(120.0f))
     END_INLINE_EVENT
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_MOVE_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_MOVE_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力幹部"), NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ａ"), NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("第三勢力部下Ｂ"), NPC_FLAG_AUTO_MOVE_ANIM)
     CALL(evt_npc_sound_data_reset, STRING("第三勢力部下Ａ"))
     CALL(evt_npc_sound_data_reset, STRING("第三勢力部下Ｂ"))
     CALL(evt_npc_sound_data_reset, STRING("第三勢力幹部"))
-    CALL(evt_cam3d_evt_set, 50, 121, 451, 50, 43, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 50, 121, 451, 50, 43, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // Crump taunts the party, boasts about the trap and says he can now take the Crystal Star.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e18_00_03"), 0, STRING("第三勢力幹部"))
-    CALL(evt_cam3d_evt_set, 50, 151, 548, 50, 56, 7, 500, 11)
+    CALL(evt_cam3d_evt_set, 50, 151, 548, 50, 56, 7, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_npc_set_ry, STRING("第三勢力幹部"), 270)
     WAIT_MS(200)
@@ -498,7 +541,7 @@ EVT_BEGIN(trap_event)
     WAIT_MS(500)
     SET_VALUE(GF(0), 1)
     BEGIN_INLINE_EVENT
-        CALL(evt_cam3d_evt_set, -58, 151, 548, -58, 56, 7, 1300, 11)
+        CALL(evt_cam3d_evt_set, -58, 151, 548, -58, 56, 7, 1300, EASING_SINE_IN_OUT)
         WAIT_MS(1300)
         SET_VALUE(GF(0), 0)
     END_INLINE_EVENT
@@ -523,23 +566,23 @@ EVT_BEGIN(trap_event)
     CALL(evt_npc_set_position, LW(10), 0, -1000, 0)
     WAIT_WHILE(GF(0))
     WAIT_MS(2000)
-    CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 1000)
-    CALL(evt_cam3d_evt_set, 34, 122, 390, 34, 56, 14, 500, 11)
+    CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 1000)
+    CALL(evt_cam3d_evt_set, 34, 122, 390, 34, 56, 14, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_npc_set_ry, STRING("ガイド"), 90)
     CALL(evt_mario_set_dir, 270, 200, 0)
+
     // The X-Nauts leave and Punio asks Mario what to do.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e18_00_05"), 0, STRING("ガイド"))
     CALL(evt_npc_get_position, STRING("ガイド"), LW(0), LW(1), LW(2))
-    CALL(evt_puni_flag_onoff, 1, 1, 262144)
+    CALL(evt_puni_flag_onoff, 1, 1, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_position, 1, LW(0), LW(1), LW(2))
 #if VERSION >= VERSION_JP
     CALL(evt_puni_set_mode, 1, PUNI_MODE_TRAP)
 #endif
-    // The story advances and Mario regains control; later the partner and Punio urge him to think of a plan.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_PUNIES_VS_JABBIES_2)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_21_BUBBLES_2)
     SET_VALUE(GF(1), 0)
-    CALL(evt_cam3d_evt_off, 300, 11)
+    CALL(evt_cam3d_evt_off, 300, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_mario_key_onoff, 1)
     LOOP(0)
@@ -559,21 +602,22 @@ EVT_BEGIN(trap_event)
 #if VERSION >= VERSION_JP
     CALL(evt_puni_get_position, 1, LW(0), LW(1), LW(2))
     ADD(LW(1), 20)
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
 #endif
     CALL(evt_msg_print, 0, STRING("stg2_mri_e18_00_12"), 0, STRING("ガイド"))
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
     RETURN
 EVT_END()
 
 /**
- * Waits for the trap condition: at least 10 Punies standing in the area,
- * the Puni Orb on its pedestal (GSWF_MRI17_ORB_ON_PEDESTAL) and Mario and his partner both in the trigger area;
- * then starts trap_event.
+ * Waits for the trap condition: at least 10 Punies in the area, the Puni Orb on its pedestal
+ * (GSWF_MRI_17_PUNI_ORB_PLACED) and Mario and his partner both in the area; then spawns trap_event, sets GF(1) and
+ * waits for it to clear, and for every active Puni (1 to 102) inside the trap box clears PUNI_FLAG_NOT_IN_PARTY and
+ * sets trap index 1.
  */
-EVT_BEGIN(trap_check)
+static EVT_BEGIN(trap_check)
     SET_VALUE(LW(10), 50)
     SET_VALUE(LW(11), 0)
     SET_VALUE(LW(12), -25)
@@ -598,7 +642,7 @@ EVT_BEGIN(trap_check)
             SET_VALUE(LW(14), 0)
         END_IF
         IF_INT_GREATER_OR_EQUAL(LW(8), 10)
-            IF_INT_EQUAL(GSWF(GSWF_MRI17_ORB_ON_PEDESTAL), 1)
+            IF_INT_EQUAL(GSWF_MRI_17_PUNI_ORB_PLACED, 1)
                 IF_INT_EQUAL(LW(9), 1)
                     IF_INT_EQUAL(LW(14), 1)
                         BREAK_LOOP
@@ -614,7 +658,7 @@ EVT_BEGIN(trap_check)
     SET_VALUE(LW(8), 1)
     LOOP(0)
         CALL(evt_puni_get_flag, LW(8), LW(9))
-        AND(LW(9), 1024)
+        AND(LW(9), PUNI_FLAG_ACTIVE)
         IF_INT_NOT_EQUAL(LW(9), 0)
             CALL(evt_puni_get_position, LW(8), LW(0), LW(1), LW(2))
             SET_VALUE(LW(9), 0)
@@ -632,7 +676,7 @@ EVT_BEGIN(trap_check)
                 END_IF
             END_IF
             IF_INT_EQUAL(LW(9), 1)
-                CALL(evt_puni_flag_onoff, LW(8), 0, 8388608)
+                CALL(evt_puni_flag_onoff, LW(8), 0, PUNI_FLAG_NOT_IN_PARTY)
                 CALL(evt_puni_set_trap_index, LW(8), 1)
             END_IF
         END_IF
@@ -650,9 +694,9 @@ EVT_END()
  * and its target is on. The target is placed in front of the pedestal.
  */
 static EVT_BEGIN(punipuni_ball00_init)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAP_OBJ_FLAG_HIDDEN)
     CALL_CHILD(mri_punipuni_setup)
-    IF_INT_EQUAL(GSWF(GSWF_MRI17_ORB_ON_PEDESTAL), 1)
+    IF_INT_EQUAL(GSWF_MRI_17_PUNI_ORB_PLACED, 1)
         CALL(evt_item_set_position, LW(10), 50, 30, -58)
         CALL(evt_target_flag_onoff, LW(11), 0, 3)
     END_IF
@@ -662,24 +706,24 @@ static EVT_BEGIN(punipuni_ball00_init)
 EVT_END()
 
 /**
- * Hit/talk script of the orb pedestal: if empty,
+ * A-button interaction script of the orb pedestal: if empty,
  * Mario picks an item to put on it (cancel ends the script) and the orb is placed; if full, Mario takes it back.
  * Mario is frozen during this.
  */
 static EVT_BEGIN(punipuni_ball00)
     CALL(evt_mario_key_onoff, 0)
-    IF_INT_EQUAL(GSWF(GSWF_MRI17_ORB_ON_PEDESTAL), 0)
+    IF_INT_EQUAL(GSWF_MRI_17_PUNI_ORB_PLACED, 0)
         CALL_CHILD(mri_punipuni_itemselect)
         IF_INT_EQUAL(LW(1), 0)
             GOTO(100)
         END_IF
-        SET_VALUE(GSWF(GSWF_MRI17_ORB_ON_PEDESTAL), 1)
+        SET_VALUE(GSWF_MRI_17_PUNI_ORB_PLACED, 1)
         CALL(evt_item_set_position, LW(10), 50, 30, -58)
         SET_VALUE(GF(15), 1)
         CALL_CHILD(mri_punipuni_itemset)
         SET_VALUE(GF(15), 0)
     ELSE
-        SET_VALUE(GSWF(GSWF_MRI17_ORB_ON_PEDESTAL), 0)
+        SET_VALUE(GSWF_MRI_17_PUNI_ORB_PLACED, 0)
         CALL_CHILD(mri_punipuni_itemremove)
     END_IF
     LABEL(100)
@@ -688,22 +732,20 @@ static EVT_BEGIN(punipuni_ball00)
 EVT_END()
 
 /**
- * Init script of the breaking floor: until the floor has fallen (GSWF_MRI17_FLOOR_BROKEN is 0) the lower floor
+ * Init script of the breaking floor: until the floor has fallen (GSWF_MRI_17_BREAKING_FLOOR_BROKEN is 0) the lower floor
  * piece (A_f2_rak_01) has its collision off.
  */
 static EVT_BEGIN(breakyuka_init)
-    IF_INT_EQUAL(GSWF(GSWF_MRI17_FLOOR_BROKEN), 0)
+    IF_INT_EQUAL(GSWF_MRI_17_BREAKING_FLOOR_BROKEN, 0)
         CALL(evt_hitobj_onoff, STRING("A_f2_rak_01"), 1, 0)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Scene when the floor gives way under the Puni weight:
- * Mario is frozen, the floor collision is turned on, the Punies fall and Mario lands.
- * Punio speaks (stg2_mri_e18_00_13); Punio, his sister and the rival are flagged
- * and their stand-in NPCs moved out of sight when they are with the crowd.
- * Every trapped Puni becomes lost (hagure), and the story is set to STORY_STG2_21_04_ESCAPE.
+ * Breaking floor mobj_bf00 (evt_mobj_breaking_floor, GSWF_MRI_17_BREAKING_FLOOR_BROKEN): Mario and the Punis fall; the
+ * guide Puni says stg2_mri_e18_00_13 and is hidden, its sister and the rival are hidden if trapped, every trapped Puni
+ * (1 to 102) is set to PUNI_MODE_HAGURE, and GSW_STORY_PROGRESS becomes STG2_21_04_ESCAPE with BGM_STG2_MRI1.
  */
 static EVT_BEGIN(breakyuka_main)
     CALL(evt_mario_key_onoff, 0)
@@ -716,16 +758,16 @@ static EVT_BEGIN(breakyuka_main)
     SET_VALUE(LW(10), 1)
     SET_VALUE(LW(11), 2)
     SET_VALUE(LW(12), 4)
-    CALL(evt_puni_flag_onoff, LW(10), 1, 2048)
+    CALL(evt_puni_flag_onoff, LW(10), 1, PUNI_FLAG_HIDDEN)
     CALL(evt_npc_set_position, STRING("ガイド"), 0, -1000, 0)
     CALL(evt_puni_get_trap_index, LW(11), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_puni_flag_onoff, LW(11), 1, 2048)
+        CALL(evt_puni_flag_onoff, LW(11), 1, PUNI_FLAG_HIDDEN)
         CALL(evt_npc_set_position, STRING("ガイド妹"), 0, -1000, 0)
     END_IF
     CALL(evt_puni_get_trap_index, LW(12), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_puni_flag_onoff, LW(12), 1, 2048)
+        CALL(evt_puni_flag_onoff, LW(12), 1, PUNI_FLAG_HIDDEN)
         CALL(evt_npc_set_position, STRING("ライバル"), 0, -1000, 0)
     END_IF
     SET_VALUE(LW(10), 1)
@@ -733,12 +775,11 @@ static EVT_BEGIN(breakyuka_main)
         CALL(evt_puni_get_trap_index, LW(10), LW(12))
         IF_INT_EQUAL(LW(12), 1)
             CALL(evt_puni_set_mode, LW(10), PUNI_MODE_HAGURE)
-#if VERSION >= VERSION_JP
-            CALL(evt_puni_flag_onoff, LW(10), 1, 2097152)
-#endif
 #if VERSION <= VERSION_DEMO_JP
             CALL(evt_puni_flag_onoff, LW(10), 1, 0xA00000)
             CALL(evt_puni_set_trap_index, LW(10), 0)
+#else
+            CALL(evt_puni_flag_onoff, LW(10), 1, 2097152)
 #endif
         END_IF
         ADD(LW(10), 1)
@@ -746,9 +787,9 @@ static EVT_BEGIN(breakyuka_main)
             BREAK_LOOP
         END_IF
     END_LOOP
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_04_ESCAPE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_21_04_ESCAPE)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
     RETURN
 EVT_END()
 
@@ -756,9 +797,9 @@ EVT_END()
  * Scene on first arrival in the pipe room: the partner walks to the strange statue,
  * looks left and right and comments on it (stg2_mri_e18_00_11).
  */
-EVT_BEGIN(strange_statue)
+static EVT_BEGIN(strange_statue)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     CALL(evt_party_stop, 0)
     WAIT_MS(500)
     CALL(evt_party_move_pos2, 0, 50, -50, FLOAT(120.0f))
@@ -777,8 +818,8 @@ EVT_BEGIN(strange_statue)
 EVT_END()
 
 /**
- * Blue switch pressed in mri_17 (just before the mystery pillar): a quake and shake, the party comments.
- * Sets the story to STORY_STG2_21_01_MYSTERY_PILLAR.
+ * Blue switch "switch" (evt_mobj_switch_blue): a quake sound and camera shake, then the partner's line
+ * stg2_mri_e18_00_10 and GSW_STORY_PROGRESS STG2_21_01_MYSTERY_PILLAR. JP and later stop the partner during the line.
  */
 EVT_BEGIN(switch_event)
     CALL(evt_mario_key_onoff, 0)
@@ -796,7 +837,7 @@ EVT_BEGIN(switch_event)
 #if VERSION >= VERSION_JP
     CALL(evt_party_run, 0)
 #endif
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_01_MYSTERY_PILLAR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_21_01_MYSTERY_PILLAR)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
@@ -821,53 +862,55 @@ EVT_BEGIN(mri_17_init_evt)
     SPAWN_EVENT(puni_disp_info)
     SPAWN_EVENT(mri_countdown)
     CALL(evt_npc_setup, PTR(npcEnt))
-    CALL(evt_map_playanim, STRING("mizu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("mizu_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("sui_hikari"), 1, 0)
+    CALL(evt_map_playanim, STRING("mizu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("sui_hikari"), MAP_ANIM_PLAY_LOOP, 0)
+
+    // BUG: mri_countdown is already spawned above, so two copies watch the timer (only the first can start it).
     SPAWN_EVENT(mri_countdown)
     SET_VALUE(LW(0), PTR(ueki_access_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_23_TIME_BOMB_ACTIVATED, STORY_STG2_23_01_X_NAUT_BATTLE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI9"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_23_TIME_BOMB_ACTIVATED, STG2_23_01_X_NAUT_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI9"))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI4"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI4"))
     END_SWITCH
     SET_VALUE(LW(10), STRING("punipuni"))
     SET_VALUE(LW(11), 0)
     SPAWN_EVENT(punipuni_ball00_init)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_dai_mae"), 0, PTR(punipuni_ball00), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_dai_mae"), 0, PTR(punipuni_ball00), 0)
     SPAWN_EVENT(breakyuka_init)
-    CALL(evt_mobj_breaking_floor, STRING("mobj_bf00"), 0, 0, -35, 1, PTR(breakyuka_main), GSWF(GSWF_MRI17_FLOOR_BROKEN))
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_01_MYSTERY_PILLAR)
+    CALL(evt_mobj_breaking_floor, STRING("mobj_bf00"), 0, 0, -35, 1, PTR(breakyuka_main), GSWF_MRI_17_BREAKING_FLOOR_BROKEN)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG2_21_01_MYSTERY_PILLAR)
         CALL(evt_mobj_switch_blue, 1, STRING("switch"), 60, -309, 53, PTR(switch_event), 0)
     END_IF
-    CALL(evt_item_entry, STRING("item_01"), ITEM_STAR_PIECE, 168, -310, -44, ITEM_ENTRY_FIXED, GSWF(GSWF_MRI17_STAR_PIECE), 0)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS_OR_EQUAL(STORY_STG2_20_PUNIO_AND_PETUNI)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hako"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_item_entry, STRING("item_01"), ITEM_STAR_PIECE, 168, -310, -44, ITEM_TYPE_STILL, GSWF_STARPIECE_50, 0)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS_OR_EQUAL(STG2_20_PUNIO_PETUNI)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_hako"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_hako"), 1, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_dokan1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_dokan1"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_dokan1"), 1, 0)
         CALL(evt_paper_entry, STRING("OFF_d_batan"))
         CALL(evt_paper_entry, STRING("OFF_d_saku"))
         SPAWN_EVENT(trap_check)
-        CASE_BETWEEN(STORY_STG2_21_PUNIES_VS_JABBIES_2, STORY_STG2_21_03_SUPER_BOOTS)
-        SPAWN_EVENT(trap_main)
-#if VERSION >= VERSION_JP
-        CASE_BETWEEN(STORY_STG2_21_04_ESCAPE, STORY_STG2_21_06_WATER_SWITCH)
-        SPAWN_EVENT(trap_restore)
-        CASE_GREATER_OR_EQUAL(STORY_STG2_21_04_ESCAPE)
-#endif
+        CASE_BETWEEN(STG2_21_BUBBLES_2, STG2_21_03_SUPER_BOOTS)
 #if VERSION <= VERSION_DEMO_JP
-        CASE_GREATER_OR_EQUAL(STORY_STG2_21_03_SUPER_BOOTS)
+        SPAWN_EVENT(trap_main)
+        CASE_GREATER_OR_EQUAL(STG2_21_03_SUPER_BOOTS)
+#else
+        SPAWN_EVENT(trap_main)
+        CASE_BETWEEN(STG2_21_04_ESCAPE, STG2_21_06_WATER_SWITCH)
+        SPAWN_EVENT(trap_restore)
+        CASE_GREATER_OR_EQUAL(STG2_21_04_ESCAPE)
 #endif
     END_SWITCH
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hako_saku_mae"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_hako_saku_mae"), MAP_OBJ_FLAG_CLIP)
     RETURN
 EVT_END()
 

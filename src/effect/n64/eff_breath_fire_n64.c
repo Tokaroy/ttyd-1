@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: fire breath, a stream of flames from a start point toward an end point; types 0-2.
+
 #include "eff/n64/eff_breath_fire_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -9,9 +10,12 @@
 #include <dolphin/mtx.h>
 
 static void effBreathFireMain(EffectEntry* effect);
-static void effBreathFireDisp(CameraId cameraId, EffectEntry* effect);
+static void effBreathFireDisp(CameraId cameraId, void* param);
 
-/** Mesh of a fire-breath flame: two stacked quads whose texture strip frame advances as the flame ages. */
+/**
+ * Mesh of a fire-breath flame: two quads of five vertices (corners + centre) at z 0 and z 5;
+ * the draw uses only the second.
+ */
 static effN64Vtx stg_fire_breath_v[] = {
     {100, -100, 0, 3072, 0, 0, 0, 0, 255},
     {100, 100, 0, 3072, 1024, 0, 0, 0, 255},
@@ -27,8 +31,9 @@ static effN64Vtx stg_fire_breath_v[] = {
 
 /**
  * Spawns `count` flames (random `seed`) living `lifetime` frames,
- * streaming from (x, y, z) toward (endX, endY, endZ); the table names it Bowser breathing fire.
- * Spawned only by event scripts through evt_eff.
+ * streaming from (x, y, z) toward (endX, endY, endZ); the effect table calls it breathing fire, with
+ * patterns fire breath, trickling fire and general-purpose breath for types 0-2.
+ * Reached through evt_eff ("breath_fire_n64", and "breath_fire" via effBreathFireEntry, e.g. Yoshi's battle fire).
  */
 EffectEntry* effBreathFireN64Entry(s32 type, s32 count, s32 seed, s32 lifetime, f32 x, f32 y, f32 z, f32 endX,
                                    f32 endY, f32 endZ) {
@@ -43,7 +48,7 @@ EffectEntry* effBreathFireN64Entry(s32 type, s32 count, s32 seed, s32 lifetime, 
     effect->callback = effBreathFireMain;
     work->type = type;
     work->count = count;
-    work->spawnDelay = seed;
+    work->seed = seed;
     work->pos.x = x;
     work->pos.y = y;
     work->pos.z = z;
@@ -58,14 +63,14 @@ EffectEntry* effBreathFireN64Entry(s32 type, s32 count, s32 seed, s32 lifetime, 
     } else {
         work->scale = 0.040000003f;
     }
-    work->initialScale = work->scale;
+    work->baseScale = work->scale;
     work->lifetime = lifetime;
     work->remaining = lifetime;
     work->frame = 0;
     work->alpha = 255;
     work->texFrame = 0.0f;
     work->scaleRate = 0.1f;
-    work->targetScale = work->initialScale;
+    work->targetScale = work->baseScale;
     if (type == 0) {
         work->vel.x = 0.2f * (0.2f * (endX - x) * (f32)((s32)effTblRandN64(10, seed) - 5));
         work->vel.y = 0.2f * (0.2f * (endY - y) * (f32)((s32)effTblRandN64(10, seed + 1) - 5));
@@ -122,8 +127,8 @@ static void effBreathFireMain(EffectEntry* effect) {
             work->velY = 0.01f * frame + work->velY;
             work->pos.y = work->pos.y + work->velY;
         }
-        if (frame == work->spawnDelay + 1 && work->count > 0) {
-            child = effBreathFireN64Entry(work->type, work->count - 1, work->spawnDelay, lifetime, work->start.x,
+        if (frame == work->seed + 1 && work->count > 0) {
+            child = effBreathFireN64Entry(work->type, work->count - 1, work->seed, lifetime, work->start.x,
                                           work->start.y, work->start.z, work->end.x, work->end.y, work->end.z);
             ((EffBreathFireN64Work*)child->userdata)->color[0] = work->color[0];
             ((EffBreathFireN64Work*)child->userdata)->color[1] = work->color[1];
@@ -131,7 +136,7 @@ static void effBreathFireMain(EffectEntry* effect) {
             ((EffBreathFireN64Work*)child->userdata)->color[3] = work->color[3];
             ((EffBreathFireN64Work*)child->userdata)->color[4] = work->color[4];
             ((EffBreathFireN64Work*)child->userdata)->color[5] = work->color[5];
-            ((EffBreathFireN64Work*)child->userdata)->initialScale = ((EffBreathFireN64Work*)child->userdata)->scale = work->initialScale;
+            ((EffBreathFireN64Work*)child->userdata)->baseScale = ((EffBreathFireN64Work*)child->userdata)->scale = work->baseScale;
             ((EffBreathFireN64Work*)child->userdata)->targetScale = work->targetScale;
             ((EffBreathFireN64Work*)child->userdata)->scaleRate = work->scaleRate;
         }
@@ -146,17 +151,21 @@ static void effBreathFireMain(EffectEntry* effect) {
             work->alpha = remaining * 224 / lifetime;
             work->scale += work->scaleRate * (work->targetScale - work->scale);
         }
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBreathFireDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effBreathFireDisp, effect);
     }
 }
 
-/** Draws the flame as two stacked textured quads whose texture strip frame advances with age. */
-static void effBreathFireDisp(CameraId cameraId, EffectEntry* effect) {
+/**
+ * Draws the flame as one camera-facing quad (four triangles around its centre vertex), blending two adjacent
+ * frames of the texture strip by the fraction of texFrame, so the strip frame advances with age.
+ */
+static void effBreathFireDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffBreathFireN64Work* work;
     GXTexObj texObj;
-    Mtx scale;
-    Mtx mtx;
+    Mtx transMtx;
+    Mtx scaleMtx;
     Mtx rot;
     f32 f;
     s32 n;
@@ -167,21 +176,21 @@ static void effBreathFireDisp(CameraId cameraId, EffectEntry* effect) {
     f = work->texFrame;
     n = (s32)f;
     GXSetNumChans(1);
-    GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTevStages(2);
-    GXSetTevOrder(0, 0, 0, 4);
-    GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 4, 2, 10, 15);
-    GXSetTevAlphaIn(0, 7, 7, 7, 4);
-    GXSetTevOrder(1, 1, 1, 0xff);
-    GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(1, 15, 15, 15, 0);
-    GXSetTevAlphaIn(1, 0, 4, 2, 7);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_C1, GX_CC_C0, GX_CC_RASC, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_APREV, GX_CA_TEXA, GX_CA_A1, GX_CA_ZERO);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen2(0, 1, 4, 30, 0, 0x7d);
-    GXSetTexCoordGen2(1, 1, 4, 33, 0, 0x7d);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
     GXSetTevColor(GX_TEVREG0, (GXColor){work->color[0], work->color[1], work->color[2], work->alpha});
     GXSetTevColor(GX_TEVREG1, (GXColor){work->color[3], work->color[4], work->color[5], (u8)(256.0f * (f - n))});
     effGetTexObjN64(0x77, &texObj);
@@ -189,21 +198,21 @@ static void effBreathFireDisp(CameraId cameraId, EffectEntry* effect) {
     effGetTexObjN64(0x77, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP1);
     m = n << 5;
-    PSMTXScale(mtx, 1.0f / 128.0f, 1.0f / 32.0f, 0.0f);
-    PSMTXTrans(scale, m, 0.0f, 0.0f);
-    PSMTXConcat(mtx, scale, mtx);
-    GXLoadTexMtxImm(mtx, 30, GX_MTX2x4);
-    PSMTXScale(mtx, 1.0f / 128.0f, 1.0f / 32.0f, 0.0f);
-    PSMTXTrans(scale, m + 32, 0.0f, 0.0f);
-    PSMTXConcat(mtx, scale, mtx);
-    GXLoadTexMtxImm(mtx, 33, GX_MTX2x4);
-    PSMTXTrans(scale, work->pos.x, work->pos.y, work->pos.z);
+    PSMTXScale(scaleMtx, 1.0f / 128.0f, 1.0f / 32.0f, 0.0f);
+    PSMTXTrans(transMtx, m, 0.0f, 0.0f);
+    PSMTXConcat(scaleMtx, transMtx, scaleMtx);
+    GXLoadTexMtxImm(scaleMtx, GX_TEXMTX0, GX_MTX2x4);
+    PSMTXScale(scaleMtx, 1.0f / 128.0f, 1.0f / 32.0f, 0.0f);
+    PSMTXTrans(transMtx, m + 32, 0.0f, 0.0f);
+    PSMTXConcat(scaleMtx, transMtx, scaleMtx);
+    GXLoadTexMtxImm(scaleMtx, GX_TEXMTX1, GX_MTX2x4);
+    PSMTXTrans(transMtx, work->pos.x, work->pos.y, work->pos.z);
     PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
-    PSMTXScale(mtx, work->scale, work->scale, 0.0f);
-    PSMTXConcat(scale, rot, scale);
-    PSMTXConcat(scale, mtx, scale);
-    PSMTXConcat(camera->view, scale, scale);
-    GXLoadPosMtxImm(scale, GX_PNMTX0);
+    PSMTXScale(scaleMtx, work->scale, work->scale, 0.0f);
+    PSMTXConcat(transMtx, rot, transMtx);
+    PSMTXConcat(transMtx, scaleMtx, transMtx);
+    PSMTXConcat(camera->view, transMtx, transMtx);
+    GXLoadPosMtxImm(transMtx, GX_PNMTX0);
     GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_NONE);
     effSetVtxDescN64(&stg_fire_breath_v[5]);

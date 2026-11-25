@@ -1,5 +1,7 @@
 // Bowser (koopa) as the player in the Super Mario Bros. style side-scrolling interludes: work, level, camera,
 // fire attack and jump parameters.
+
+#include "version.h"
 #include "eff/eff_gonbaba_breath.h"
 #include "mario/mario.h"
 #include "koopa.h"
@@ -9,136 +11,51 @@
 #include "system.h"
 #include <dolphin/types.h>
 #include <dolphin/mtx.h>
-#include "koopa_motion.h"
-#include "mario/mario_balloon.h"
-#include "mario/mario_cam.h"
-#include "mario/mario_hit.h"
-#include "mario/mario_sbr.h"
-#include "mot/mot_jump.h"
-#include "party.h"
 #include "memory.h"
 #include <string.h>
 #include "koopa_hit.h"
-#include "mario/mario_motion.h"
-#include "mario/mario_kemuri.h"
-#include "mario/mario_hit.h"
-#include "version.h"
 #include <dolphin/pad.h>
-
-// mario_motion.c's MarioJumpData; read here as a plain array of floats (koopa.c addresses it as a far object,
-// which it does only through an array of unknown size).
-extern f32 marioJumpData[];
+#include "driver/camdrv.h"
+#include "sfx_name_word.h"
+#include "koopa_motion.h"
+#include "mario/mario_motion.h"
+#include "mario/mario_cam.h"
+#include "mot/mot_jump.h"
+#include "mario/mario_sbr.h"
+#include "mario/mario_balloon.h"
+#include "party.h"
+#include "mario/mario_hit.h"
+#include "mario/mario_kemuri.h"
+#include "driver/mapdrv.h"
 
 static void kpa2DMain(void);
 static void kpa3DMain(void);
 static void kpaFireAttack(void);
 static void kpaFireMain(void);
 static void kpaFall(void);
-/** Zero vector: the origin that Bowser's fire-breath collision check moves to each flame's position. */
-const f32 kpaZeroVec[3] = {0.0f, 0.0f, 0.0f};
+static void kpaFire(Vec pos);
+static void kpaFireEntry(Vec pos);
+void fire_se_init(void);
 
-#define KPW(m) ((m)->kpaWork)
+// mario_motion.c's marioJumpData (MarioJumpData; its jump[] curve comes first), declared without a size as this
+// file saw it in the original: the retail code here addresses the 0x28-byte .sdata object with lis/addi, which
+// MWCC gives only for an incomplete type (any sized declaration gets r13-relative SDA21 under -sdata 48, as
+// mario_motion.c's own references do).
+extern f32 marioJumpData[];
 
 /**
  * Bowser's size per power-up level (small, normal, big, giant): his width (kpaGetWidth) and model scale
  * (kpaSetLevel); then the 28 voice clips of which one plays at random when the pause menu opens as Bowser.
  */
-f32 kpaWidthDat[4] = {20.0f, 60.0f, 84.0f, 186.0f};
-f32 baseScaleTbl[4] = {0.3f, 1.0f, 1.4f, 3.1f};
-s32 kpaPauseSeTable[28] = {0x10C, 0x10D, 0x10E, 0x10F, 0x111, 0x112, 0x113, 0x114, 0x116, 0x117,
-                           0x118, 0x119, 0x11B, 0x11E, 0x11F, 0x120, 0x122, 0x123, 0x124, 0x125,
-                           0x127, 0x128, 0x129, 0x12A, 0x12C, 0x12D, 0x12E, 0x12F};
+static f32 kpaWidthDat[4] = {20.0f, 60.0f, 84.0f, 186.0f};
+static f32 baseScaleTbl[4] = {0.3f, 1.0f, 1.4f, 3.1f};
+static s32 kpaPauseSeTable[28] = {PSND_SFX_VOICE_KOOPA_ANGRY1_1, PSND_SFX_VOICE_KOOPA_ANGRY1_2, PSND_SFX_VOICE_KOOPA_ANGRY2_1, PSND_SFX_VOICE_KOOPA_ANGRY2_2, PSND_SFX_VOICE_KOOPA_HAPPY1_1, PSND_SFX_VOICE_KOOPA_HAPPY1_2, PSND_SFX_VOICE_KOOPA_HAPPY2_1, PSND_SFX_VOICE_KOOPA_HAPPY2_2, PSND_SFX_VOICE_KOOPA_LAUGH1_1, PSND_SFX_VOICE_KOOPA_LAUGH1_2,
+                           PSND_SFX_VOICE_KOOPA_LAUGH2_1, PSND_SFX_VOICE_KOOPA_LAUGH2_2, PSND_SFX_VOICE_KOOPA_QUESTION1, PSND_SFX_VOICE_KOOPA_SATIATED1_2, PSND_SFX_VOICE_KOOPA_SATIATED2_1, PSND_SFX_VOICE_KOOPA_SATIATED2_2, PSND_SFX_VOICE_KOOPA_SURPRISED1_1, PSND_SFX_VOICE_KOOPA_SURPRISED1_2, PSND_SFX_VOICE_KOOPA_SURPRISED2_1, PSND_SFX_VOICE_KOOPA_SURPRISED2_2,
+                           PSND_SFX_VOICE_KOOPA_THINK1_1, PSND_SFX_VOICE_KOOPA_THINK1_2, PSND_SFX_VOICE_KOOPA_THINK2_1, PSND_SFX_VOICE_KOOPA_THINK2_2, PSND_SFX_VOICE_KOOPA_VEXATIOUS1_1, PSND_SFX_VOICE_KOOPA_VEXATIOUS1_2, PSND_SFX_VOICE_KOOPA_VEXATIOUS2_1, PSND_SFX_VOICE_KOOPA_VEXATIOUS2_2};
 static EffectEntry* fireefp;
 
-/**
- * Spawns Bowser's fire breath (the Hooktail breath effect) in front of his mouth if none is active:
- * offset by his size and facing, flame size by level (level 3 uses the big flame type),
- * both flame layers turned to his facing.
- */
-static inline void kpaFireEntry2(Vec pos) {
-    MarioWork* mario = marioGetPtr();
-    if (fireefp == NULL) {
-        s32 flag = 0;
-        s32 ang;
-        f32 dir;
-        f32 scale;
-        f32 x;
-        f32 y;
-        f32 z;
-        f32 sz;
-        s32 type;
-        EffectEntry* child;
-        s32 t;
-        dir = (mario->displayDirection >= 90.0f && mario->displayDirection <= 270.0f) ? 1.0f : -1.0f;
-        scale = kpaGetBaseScale(kpaGetLevel());
-        x = 40.0f * dir * scale + pos.x;
-        t = (marioGetPtr()->stageFlags & MARIO_STAGE_FLAG_SIDE_VIEW) ^ 1;
-        y = pos.y + (20.0f * scale + (t == 1 ? 6.0f : 0.0f));
-        z = pos.z;
-        type = 7;
-        sz = 0.4f;
-        switch (KPW(mario)->level) {
-            case 0:
-                sz = 0.3f;
-                break;
-            case 1:
-                sz = 1.0f;
-                break;
-            case 2:
-                sz = 1.4f;
-                break;
-            case 3:
-                sz = 1.5f;
-                type = 0;
-                break;
-        }
-        fireefp = effGonbabaBreathEntry(type, 0, x, y, z, sz);
-        flag = 0;
-        if (mario->displayDirectionTarget >= 90.0f && mario->displayDirectionTarget <= 270.0f) {
-            flag = 1;
-        }
-        ((EffGonbabaBreathWork*)fireefp->userdata)->yaw = (f32)(flag ? 180 : 0);
-        child = ((EffGonbabaBreathWork*)fireefp->userdata)->child;
-        if (child) {
-            flag = 0;
-            if (mario->displayDirectionTarget >= 90.0f && mario->displayDirectionTarget <= 270.0f) {
-                flag = 1;
-            }
-            ang = flag ? 180 : 0;
-            ((EffGonbabaBreathWork*)child->userdata)->yaw = (f32)ang;
-        }
-    }
-}
-
-/** Spawns the fire breath at pos (see kpaFireEntry2). */
-static inline void kpaFireEntry(Vec pos) {
-    MarioWork* mario = marioGetPtr();
-    kpaFireEntry2(pos);
-}
-
-/** Starts the looping fire breath sound plus a roar at Bowser's position, unless the loop is already playing. */
-static inline void kpaFireSEOn(void) {
-    MarioWork* mario = marioGetPtr();
-    if (KPW(mario)->fireSfxId == 0xFFFFFFFFU) {
-        KPW(mario)->fireSfxId = psndSFXOn_3D((const char*)0x821, &mario->position);
-        psndSFXOn_3D((const char*)0x131, &mario->position);
-    }
-}
-
-/** Marks the fire breath sound as not playing. */
-static inline void kpaFireSEInit(void) {
-    MarioWork* mario = marioGetPtr();
-    KPW(mario)->fireSfxId = -1;
-}
-
-/** Stops the looping fire breath sound if it is playing. */
-static inline void kpaFireSEOff(void) {
-    MarioWork* mario = marioGetPtr();
-    if (KPW(mario)->fireSfxId != 0xFFFFFFFFU) {
-        psndSFXOff(KPW(mario)->fireSfxId);
-        KPW(mario)->fireSfxId = -1;
-    }
-}
+// Unused 4-byte object, read by nothing; the original had it too (its storage is in the retail .sbss). Name invented.
+static u8* fireefp_pad;
 
 /** Returns the active fire breath effect, or NULL. koopa_hit reads it to test the flame against objects. */
 EffectEntry* getKoopaFireEfp(void) {
@@ -150,38 +67,50 @@ s32 kpaNoHitEnemyCheck(void) {
     return marioGetPtr()->kpaNoHitTimer;
 }
 
-/** TRUE while Bowser is invincible (muteki) from a star (KpaWork flag 0x10000). */
+/** TRUE while Bowser is invincible (muteki) from a star (KPA_WORK_FLAG_MUTEKI). */
 s32 kpaMutekiCheck(void) {
-    return (KPW(marioGetPtr())->flags >> 16) & 1;
+    return (marioGetPtr()->kpaWork->flags & KPA_WORK_FLAG_MUTEKI) != 0;
 }
 
 /** Makes Bowser invincible and turns on his highlight material. */
 void kpaMutekiOn(void) {
     MarioWork* mario = marioGetPtr();
-    animPoseSetMaterialFlagOn(mario->paperAnimGroupId[0], ANIM_MATERIAL_FLAG_HIGHLIGHT);
-    KPW(mario)->flags |= KPA_WORK_FLAG_MUTEKI;
+    animPoseSetMaterialFlagOn(mario->paperAnimGroupId[0], MAP_OBJ_FLAG_PULSE);
+    mario->kpaWork->flags |= KPA_WORK_FLAG_MUTEKI;
 }
 
 /** Ends Bowser's invincibility and his highlight. */
 void kpaMutekiOff(void) {
     MarioWork* mario = marioGetPtr();
-    animPoseSetMaterialFlagOff(mario->paperAnimGroupId[0], ANIM_MATERIAL_FLAG_HIGHLIGHT);
-    KPW(mario)->flags &= ~KPA_WORK_FLAG_MUTEKI;
+    animPoseSetMaterialFlagOff(mario->paperAnimGroupId[0], MAP_OBJ_FLAG_PULSE);
+    mario->kpaWork->flags &= ~KPA_WORK_FLAG_MUTEKI;
 }
 
 /**
  * Starts the 12-second star invincibility timer and clears the post-damage timer;
- * the side-scrolling update calls kpaMutekiOff when it runs out.
+ * the player update (kpa2DMain or kpa3DMain) runs it down in kpaMutekiTimerMain.
  */
 void kpaMSetMutekiTimer(void) {
     MarioWork* mario = marioGetPtr();
-    KPW(mario)->mutekiTimer = sysMsec2Frame(12000);
+    mario->kpaWork->mutekiTimer = sysMsec2Frame(12000);
     mario->kpaNoHitTimer = 0;
+}
+
+/** Per-frame star timer: counts mutekiTimer down and ends the invincibility (kpaMutekiOff) when it runs out. */
+// Original name and size (0x74) from the JP demo map (UNUSED there: every call is inlined).
+void kpaMutekiTimerMain(void) {
+    MarioWork* mario = marioGetPtr();
+    if (mario->kpaWork->mutekiTimer > 0) {
+        if (--mario->kpaWork->mutekiTimer <= 0) {
+            mario->kpaWork->mutekiTimer = 0;
+            kpaMutekiOff();
+        }
+    }
 }
 
 /** Sets Bowser's pose: a in the 3D maps, b in the side-scrolling stages (the KPA2_ poses). */
 void kpaChgPose(const char* a, const char* b) {
-    s32 v = (marioGetPtr()->stageFlags & MARIO_STAGE_FLAG_SIDE_VIEW) ^ 1;
+    s32 v = (marioGetPtr()->stageFlags & KPA_STAGE_FLAG_SIDE_SCROLLING) ^ 1;
     marioChgPose(v == 1 ? a : b);
 }
 
@@ -189,8 +118,8 @@ void kpaChgPose(const char* a, const char* b) {
 s32 kpaGetLevel(void) {
     s32 lv = 0;
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId == 2) {
-        lv = KPW(mario)->level;
+    if (mario->characterId == CHARACTER_BOWSER) {
+        lv = mario->kpaWork->level;
     }
     return lv;
 }
@@ -201,9 +130,9 @@ s32 kpaGetLevel(void) {
  */
 void kpaSetLevel(s32 lv) {
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId == 2 && KPW(mario) != NULL) {
+    if (mario->characterId == CHARACTER_BOWSER && mario->kpaWork != NULL) {
         f32 s;
-        KPW(mario)->level = lv;
+        mario->kpaWork->level = lv;
         s = baseScaleTbl[lv];
         mario->scale.x = mario->scale.y = s;
         mario->scale.z = 1.0f;
@@ -223,40 +152,65 @@ f32 kpaGetWidth(s32 lv) {
 s32 kpaGetBodyStatus(void) {
     MarioWork* mario = marioGetPtr();
     s32 st;
-    if (mario->characterId != 2) {
-        return -1;
+    if (mario->characterId != CHARACTER_BOWSER) {
+        return KPA_BODY_NOT_BOWSER;
     }
-    st = 0;
+    st = KPA_BODY_DRY;
     if (strcmp(gp->currentMapName, "kpa_03") == 0) {
         if (mario->position.y > 370.0f) {
-            return 0;
+            return KPA_BODY_DRY;
         }
         if (mario->position.y + mario->wPlayerCollisionBox.y < 370.0f) {
-            st = 2;
+            st = KPA_BODY_SUBMERGED;
         } else {
-            st = 1;
+            st = KPA_BODY_PARTLY_SUBMERGED;
         }
     }
     return st;
 }
 
-/** 1 in kpa_03, the seaside stage with water (stageFlags bit 2), else 0. */
+/** Sets KPA_STAGE_FLAG_KPA03 in kpa_03 and clears it elsewhere (kpaPreInit). */
+// Original name and size (0x64) from the JP demo map (UNUSED there: every call is inlined).
+void kpaGetStageTypeInit(void) {
+    MarioWork* mario = marioGetPtr();
+
+    if (strcmp(gp->currentMapName, "kpa_03") == 0) {
+        mario->stageFlags |= KPA_STAGE_FLAG_KPA03;
+    } else {
+        mario->stageFlags &= ~KPA_STAGE_FLAG_KPA03;
+    }
+}
+
+/** 1 in kpa_03, the seaside stage with water (KPA_STAGE_FLAG_KPA03, stageFlags 0x2), else 0. */
 s32 kpaGetStageType(void) {
     return (marioGetPtr()->stageFlags >> 1) & 1;
 }
 
-#define JP(m, i) ((&(m)->jumpVelocityY)[i]) // jumpVelocityY..jumpSnapY as f32[4]
-#define SETP(m, a, b, c, d) \
-    do {                    \
-        JP(m, 0) = (a);     \
-        JP(m, 1) = (b);     \
-        JP(m, 2) = (c);     \
-        JP(m, 3) = (d);     \
-    } while (0)
+/** Sets mp's jump parameters: y velocity, acceleration, jerk and snap. */
+static inline void kpaSetJumpParams(MarioWork* mp, f32 velocityY, f32 accelerationY, f32 jerkY, f32 snapY) {
+    mp->jumpVelocityY = velocityY;
+    mp->jumpAccelerationY = accelerationY;
+    mp->jumpJerkY = jerkY;
+    mp->jumpSnapY = snapY;
+}
 
-/** 1 in the 3D maps, 0 in the side-scrolling stages kpa_02 to kpa_06 (stageFlags bit 1). */
+/** Sets KPA_STAGE_FLAG_SIDE_SCROLLING in the side-scrolling stages kpa_02 to kpa_06 and clears it elsewhere (kpaPreInit). */
+// Original name and size (0xd0) from the JP demo map (UNUSED there: every call is inlined).
+void kpaGetStageViewTypeInit(void) {
+    MarioWork* mario = marioGetPtr();
+
+    if (strcmp(gp->currentMapName, "kpa_02") == 0 || strcmp(gp->currentMapName, "kpa_03") == 0 ||
+        strcmp(gp->currentMapName, "kpa_04") == 0 || strcmp(gp->currentMapName, "kpa_05") == 0 ||
+        strcmp(gp->currentMapName, "kpa_06") == 0) {
+        mario->stageFlags |= KPA_STAGE_FLAG_SIDE_SCROLLING;
+    } else {
+        mario->stageFlags &= ~KPA_STAGE_FLAG_SIDE_SCROLLING;
+    }
+}
+
+/** 1 in the 3D maps, 0 in the side-scrolling stages kpa_02 to kpa_06 (KPA_STAGE_FLAG_SIDE_SCROLLING, stageFlags 0x1). */
 s32 kpaGetStageViewType(void) {
-    return !(marioGetPtr()->stageFlags & MARIO_STAGE_FLAG_SIDE_VIEW);
+    return !(marioGetPtr()->stageFlags & KPA_STAGE_FLAG_SIDE_SCROLLING);
 }
 
 /**
@@ -266,7 +220,8 @@ s32 kpaGetStageViewType(void) {
 s32 kpaCamFollow(void) {
     MarioWork* mario = marioGetPtr();
     s32 v;
-    if (marioBgmodeChk() == 1 || (v = (marioGetPtr()->stageFlags & MARIO_STAGE_FLAG_SIDE_VIEW) ^ 1, (s32)v == 1)) {
+
+    if (marioBgmodeChk() == 1 || (v = (marioGetPtr()->stageFlags & KPA_STAGE_FLAG_SIDE_SCROLLING) ^ 1) == 1) {
         return 0;
     }
     if (mario->position.y > 76.0f) {
@@ -282,35 +237,38 @@ s32 kpaCamFollow(void) {
  */
 void kpaPreInit(void) {
     MarioWork* mario = marioGetPtr();
-    if (KPW(mario) == NULL) {
-        KPW(mario) = (KpaWork*)__memAlloc(0, sizeof(KpaWork));
+    if (mario->kpaWork == NULL) {
+        mario->kpaWork = (KpaWork*)__memAlloc(HEAP_DEFAULT, sizeof(KpaWork));
     }
-    memset(KPW(mario), 0, sizeof(KpaWork));
-    KPW(mario)->level = 1;
-    KPW(mario)->walkRate = 1;
-    KPW(mario)->fireCount = 0;
-    KPW(mario)->fireRate = 1;
-    kpaFireSEInit();
-    mario = marioGetPtr();
-    if (strcmp(gp->currentMapName, "kpa_02") == 0 || strcmp(gp->currentMapName, "kpa_03") == 0 ||
-        strcmp(gp->currentMapName, "kpa_04") == 0 || strcmp(gp->currentMapName, "kpa_05") == 0 ||
-        strcmp(gp->currentMapName, "kpa_06") == 0) {
-        mario->stageFlags |= MARIO_STAGE_FLAG_SIDE_VIEW;
-    } else {
-        mario->stageFlags &= ~MARIO_STAGE_FLAG_SIDE_VIEW;
-    }
-    mario = marioGetPtr();
-    if (strcmp(gp->currentMapName, "kpa_03") == 0) {
-        mario->stageFlags |= MARIO_STAGE_FLAG_WATER;
-    } else {
-        mario->stageFlags &= ~MARIO_STAGE_FLAG_WATER;
-    }
-    fireefp = 0;
+    memset(mario->kpaWork, 0, sizeof(KpaWork));
+    mario->kpaWork->level = 1;
+    mario->kpaWork->walkRate = 1;
+    mario->kpaWork->fireCount = 0;
+    mario->kpaWork->fireRate = 1;
+    fire_se_init();
+    kpaGetStageViewTypeInit();
+    kpaGetStageTypeInit();
+    fireefp = NULL;
 }
+
+/** Frees the Bowser work kpaPreInit allocated. */
+// Original name and size (0x48) from the JP demo map (UNUSED there: nothing calls it), between kpaPreInit and
+// kpaMain: kpaPreInit's allocation undone (a free without the NULL test is 0x40, without clearing the pointer 0x34;
+// clearing the pointer outside the test is also 0x48). peachPostClear, the counterpart of peachPreInit, which
+// allocates nothing, is a bare return.
+void kpaPostClear(void) {
+    MarioWork* mario = marioGetPtr();
+    if (mario->kpaWork) {
+        __memFree(HEAP_DEFAULT, mario->kpaWork);
+        mario->kpaWork = NULL;
+    }
+}
+
+f32 __fabsf(f32);
 
 /** Per-frame player update while playing as Bowser: the side-scrolling or the 3D version. */
 void kpaMain(void) {
-    if (marioGetPtr()->stageFlags & MARIO_STAGE_FLAG_SIDE_VIEW) {
+    if (marioGetPtr()->stageFlags & KPA_STAGE_FLAG_SIDE_SCROLLING) {
         kpa2DMain();
     } else {
         kpa3DMain();
@@ -344,15 +302,7 @@ static void kpa2DMain(void) {
     marioItemGetChk();
     kpaFireAttack();
     kpaFireMain();
-    {
-        MarioWork* m2 = marioGetPtr();
-        if (KPW(m2)->mutekiTimer > 0) {
-            if (--KPW(m2)->mutekiTimer <= 0) {
-                KPW(m2)->mutekiTimer = 0;
-                kpaMutekiOff();
-            }
-        }
-    }
+    kpaMutekiTimerMain();
     if (mp->currMotionId == MARIO_MOTION_JUMP_3) {
         mp->basePos = mp->position;
         mp->floorMove.x = 0.0f;
@@ -457,15 +407,7 @@ static void kpa3DMain(void) {
     marioItemGetChk();
     kpaFireAttack();
     kpaFireMain();
-    {
-        MarioWork* m2 = marioGetPtr();
-        if (KPW(m2)->mutekiTimer > 0) {
-            if (--KPW(m2)->mutekiTimer <= 0) {
-                KPW(m2)->mutekiTimer = 0;
-                kpaMutekiOff();
-            }
-        }
-    }
+    kpaMutekiTimerMain();
     if (mp->currMotionId == MARIO_MOTION_JUMP_3) {
         mp->basePos = mp->position;
         mp->floorMove.x = 0.0f;
@@ -527,27 +469,27 @@ static void kpa3DMain(void) {
  * 7.0, 8.1, 8.4 or 10.5 units per frame upward. Returns the initial speed.
  */
 f32 kpaSetJumpPara(void) {
+    int i;
     f32* jd = marioJumpData;
     MarioWork* mario = marioGetPtr();
-    mario->jumpVelocityY = *jd++;
-    mario->jumpAccelerationY = *jd++;
-    mario->jumpJerkY = *jd++;
-    mario->jumpSnapY = *jd;
-    switch (KPW(mario)->level) {
+    for (i = 0; i < 4; i++) {
+        (&mario->jumpVelocityY)[i] = jd[i]; // jumpVelocityY..jumpSnapY as f32[4]
+    }
+    switch (mario->kpaWork->level) {
         case 0:
-            SETP(mario, 7.0f, -0.4f, 0.08f, -0.02f);
+            kpaSetJumpParams(mario, 7.0f, -0.4f, 0.08f, -0.02f);
             break;
         case 1:
-            SETP(mario, 8.1f, -0.3f, 0.08f, -0.02f);
+            kpaSetJumpParams(mario, 8.1f, -0.3f, 0.08f, -0.02f);
             break;
         case 2:
-            SETP(mario, 8.4f, -0.1f, 0.08f, -0.018f);
+            kpaSetJumpParams(mario, 8.4f, -0.1f, 0.08f, -0.018f);
             break;
         case 3:
-            SETP(mario, 10.5f, -0.12f, 0.08f, -0.018f);
+            kpaSetJumpParams(mario, 10.5f, -0.12f, 0.08f, -0.018f);
             break;
     }
-    return JP(mario, 0);
+    return mario->jumpVelocityY;
 }
 
 /**
@@ -557,16 +499,16 @@ f32 kpaSetJumpPara(void) {
  */
 f32 kpaSetFallPara(void) {
     MarioWork* mario = marioGetPtr();
-    if ((mario->buttonHold & PAD_BUTTON_A)) {
-        SETP(mario, -0.05f, -0.08f, -0.006f, -0.002f);
+    if (mario->buttonHold & PAD_BUTTON_A) {
+        kpaSetJumpParams(mario, -0.05f, -0.08f, -0.006f, -0.002f);
     } else {
-        SETP(mario, -0.1f, -0.2f, -0.024f, -0.01f);
+        kpaSetJumpParams(mario, -0.1f, -0.2f, -0.024f, -0.01f);
     }
 }
 
 /**
  * Player motion for being bounced off an NPC: a small fixed jump (2.6 up) that turns into a fall at the peak.
- * Mario also gets his jump poses. Run from mot_jump.
+ * The M_J_ poses apply only to Mario, but mot_jumpNpc (mot_jump) calls this only for Bowser.
  */
 void kpa_jumpNpc(void) {
     MarioWork* mario = marioGetPtr();
@@ -576,18 +518,18 @@ void kpa_jumpNpc(void) {
         mario->flags &= ~MARIO_FLAG_STOP_AIR_MOVEMENT;
         camFollowYOff();
         marioPreJump();
-        SETP(mario, 2.6f, -0.06f, -0.01f, -0.002f);
-        if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == 0) {
+        kpaSetJumpParams(mario, 2.6f, -0.06f, -0.01f, -0.002f);
+        if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == CHARACTER_MARIO) {
             marioChgPose("M_J_1B");
         }
         mario->flags |= MARIO_FLAG_IS_JUMPING;
         mario->currSubMotionId = 0;
     }
-    switch ((s32)mario->currSubMotionId) {
-        case 0: {
+    switch (mario->currSubMotionId) {
+        case 0:
             marioMakeJumpPara();
             if (mario->jumpVelocityY <= 0.0f) {
-                if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == 0) {
+                if (!(mario->flags & MARIO_FLAG_IS_CARRYING_BOBBERY) && mario->characterId == CHARACTER_MARIO) {
                     marioChgPose("M_J_1C");
                 }
                 marioSetPeakYpos();
@@ -597,7 +539,7 @@ void kpa_jumpNpc(void) {
                 mario->flags &= ~MARIO_FLAG_IS_JUMPING;
                 mario->flags |= MARIO_FLAG_IS_FALLING;
             }
-        } break;
+            break;
     }
     mario->position.y += mario->jumpVelocityY;
     mario->airTimer++;
@@ -634,61 +576,59 @@ static void kpaFall(void) {
         }
         if (mario->hitobjStandOn) {
             marioLandOn();
-            psndSFXOn_3D((char*)0x81D, &mario->position);
+            psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_KUPPA_LANDING1), &mario->position);
         }
     } else {
         void* h;
         if (mario->currMotionId == MARIO_MOTION_HIP || mario->currMotionId == MARIO_MOTION_HIP_2) {
             return;
         }
-        {
-            if (!marioKeyOffChk() || !marioCtrlOffChk()) {
-                if (!(mario->flags & MARIO_FLAG_FORCED_MOVEMENT)) {
-                    f32 bs = mario->baseSpeed;
-                    bs += 0.01f * (-0.5f - bs);
-                    if (bs < 0.0f) {
-                        bs = 0.0f;
-                    }
-                    mario->baseSpeed = bs;
+        if (!marioKeyOffChk() || !marioCtrlOffChk()) {
+            if (!(mario->flags & MARIO_FLAG_FORCED_MOVEMENT)) {
+                f32 bs = mario->baseSpeed;
+                bs += 0.01f * (-0.5f - bs);
+                if (bs < 0.0f) {
+                    bs = 0.0f;
                 }
+                mario->baseSpeed = bs;
             }
-            if (mario->currMotionId != MARIO_MOTION_JUMP_NPC) {
-                if (mario->buttonHold & PAD_BUTTON_A) {
-                    mario->jumpSnapY = -0.001f;
-                } else {
-                    mario->jumpSnapY = -0.01f;
-                }
+        }
+        if (mario->currMotionId != MARIO_MOTION_JUMP_NPC) {
+            if (mario->buttonHold & PAD_BUTTON_A) {
+                mario->jumpSnapY = -0.001f;
+            } else {
+                mario->jumpSnapY = -0.01f;
             }
-            mario->hitobjStandOn = NULL;
-            kpaClearHitobjRide();
-            fs = marioGetFallSpd();
-            if (fs < -20.0f) {
-                fs = -20.0f;
-            }
-            h = marioChkLandon(&ly, fs);
-            if (!h) {
+        }
+        mario->hitobjStandOn = NULL;
+        kpaClearHitobjRide();
+        fs = marioGetFallSpd();
+        if (fs < -20.0f) {
+            fs = -20.0f;
+        }
+        h = marioChkLandon(&ly, fs);
+        if (!h) {
+            mario->position.y += fs;
+        } else {
+            mario->hitobjStandOn = h;
+            mario->hitobjJumpFrom = NULL;
+            if (hitGetAttr(h) & HIT_ATTR_WATER_HAZARD) {
                 mario->position.y += fs;
             } else {
-                mario->hitobjStandOn = h;
-                mario->hitobjJumpFrom = NULL;
-                if (hitGetAttr(h) & HIT_ATTR_DEEP_WATER) {
-                    mario->position.y += fs;
-                } else {
-                    mario->position.y = ly;
-                }
+                mario->position.y = ly;
             }
-            if (h || kpaChkHitobjRide()) {
-                marioLandOn();
-            }
+        }
+        if (h || kpaChkHitobjRide()) {
+            marioLandOn();
         }
     }
 }
 
-/**
- * Stand-in for a stripped function (in no version's symbols, never called):
- * it only keeps the fall constants (the two kpaSetFallPara sets) in their place in the literal pool.
- */
-// FAKE: uncalled stand-in for a stripped function; puts the fall constants ahead of -20.0f in .sdata2
+// FAKE: stand-in, never called (the linker strips it); it only puts kpaSetFallPara's eight literals into the
+// .sdata2 pool; removing it changes the object. JP demo map: this is the slot of the stripped kpaJumpInWater
+// (UNUSED 0x134, compiled right before kpaFall), and the pool has its own UNUSED @1520 followed at once by the
+// eight (@1521-@1528), before kpaFall's -20.0f: kpaJumpInWater uses one constant of its own, then kpaSetFallPara's
+// (an inlined call). Its body is not known.
 void kpaStrippedFallPool(f32* f) {
     f[0] = -0.05f;
     f[1] = -0.08f;
@@ -698,6 +638,33 @@ void kpaStrippedFallPool(f32* f) {
     f[5] = -0.2f;
     f[6] = -0.024f;
     f[7] = -0.01f;
+}
+
+/** Starts the looping fire breath sound plus a roar at Bowser's position, unless the loop is already playing. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void fire_se_on(void) {
+    MarioWork* mario = marioGetPtr();
+    if (mario->kpaWork->fireSfxId == 0xFFFFFFFFU) {
+        mario->kpaWork->fireSfxId = psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_KUPPA_FIRE_BREATH1), &mario->position);
+        psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_VOICE_KOOPA_FIRE1), &mario->position);
+    }
+}
+
+/** Stops the looping fire breath sound if it is playing. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void fire_se_off(void) {
+    MarioWork* mp = marioGetPtr();
+    if (mp->kpaWork->fireSfxId != 0xFFFFFFFFU) {
+        psndSFXOff(mp->kpaWork->fireSfxId);
+        mp->kpaWork->fireSfxId = -1;
+    }
+}
+
+/** Marks the fire breath loop as not playing (fireSfxId -1). */
+// Original name and size (0x2c) from the JP demo map (UNUSED there): every call is inlined, so the linker strips it.
+void fire_se_init(void) {
+    MarioWork* mario = marioGetPtr();
+    mario->kpaWork->fireSfxId = -1;
 }
 
 /**
@@ -710,7 +677,7 @@ s32 kpaFireAttackCheck(void) {
     if (!(mario->flags & MARIO_FLAG_ACTIVE)) {
         return 0;
     }
-    m = KPW(mario)->attackState;
+    m = mario->kpaWork->attackState;
     if ((m >= 20 && m <= 23) || (m >= 40 && m <= 43)) {
         return 1;
     }
@@ -722,152 +689,153 @@ s32 kpaFireAttackCheck(void) {
  * stops his movement and switches him to standing.
  */
 void kpaAttackStart(void) {
-    MarioWork* mario = marioGetPtr();
-    if (KPW(mario)->attackState == 0) {
+    MarioWork* mp = marioGetPtr();
+    if (mp->kpaWork->attackState == KPA_ATTACK_NONE) {
         marioChgMot(MARIO_MOTION_STAY);
-        KPW(mario)->attackState = 1;
+        mp->kpaWork->attackState = KPA_ATTACK_START;
     }
 }
 
-/** Starts the fire breath attack without changing motion (state 30), used while moving or jumping. */
+/** Starts the fire breath attack without changing motion (state 30), used while swimming (kpa_swim). */
 void kpaAttackStart2(void) {
-    KpaWork* w = KPW(marioGetPtr());
-    if (w->attackState == 0) {
-        w->attackState = 30;
+    KpaWork* w = marioGetPtr()->kpaWork;
+    if (w->attackState == KPA_ATTACK_NONE) {
+        w->attackState = KPA_ATTACK_SCRIPTED_START;
     }
 }
 
 /**
  * Runs the fire breath attack: wind-up pose, then flames every frame for at least 400 ms and for as long as B
  * or fireHold is held, then the closing pose and back to the motion's normal pose.
- * States 1-24 are the standing attack, 30-44 the moving one; the looping sound plays while flames come out.
+ * States 1-24 are the standing attack, 30-44 the swimming one (its end picks the pose of the current motion);
+ * the looping sound plays while flames come out.
  */
 static void kpaFireAttack(void) {
     MarioWork* mario = marioGetPtr();
-    switch (KPW(mario)->attackState) {
-        case 1:
+    switch (mario->kpaWork->attackState) {
+        case KPA_ATTACK_START:
             mario->flags &= ~(MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP);
             mario->airTimer = 0;
-            KPW(mario)->fireRate = KPW(mario)->level == 0 ? 12 : 8;
-            KPW(mario)->fireCount = 0;
-            KPW(mario)->attackTimer = 0;
-            KPW(mario)->attackState = 20;
+            mario->kpaWork->fireRate = mario->kpaWork->level == 0 ? 12 : 8;
+            mario->kpaWork->fireCount = 0;
+            mario->kpaWork->attackTimer = 0;
+            mario->kpaWork->attackState = KPA_ATTACK_WINDUP_POSE;
             if (!(mario->flags & MARIO_FLAG_FORCED_MOVEMENT)) {
                 mario->baseSpeed = 0.0f;
                 mario->kpaSpeed = 0.0f;
             }
-        case 20:
+        case KPA_ATTACK_WINDUP_POSE:
             kpaChgPose("KPA_A_1A", "KPA2_A_1A");
-            KPW(mario)->attackTimer = 6;
-            KPW(mario)->attackState = 21;
+            mario->kpaWork->attackTimer = 6;
+            mario->kpaWork->attackState = KPA_ATTACK_WINDUP;
             break;
-        case 21:
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_WINDUP:
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
             kpaChgPose("KPA_A_1B", "KPA2_A_1B");
-            KPW(mario)->attackTimer = 8;
-            KPW(mario)->attackState = 22;
-            kpaFireSEOn();
+            mario->kpaWork->attackTimer = 8;
+            mario->kpaWork->attackState = KPA_ATTACK_FIRE_START;
+            fire_se_on();
             break;
-        case 22:
-            kpaFireEntry(mario->position);
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_FIRE_START:
+            kpaFire(mario->position);
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
-            KPW(mario)->attackTimer = sysMsec2Frame(400);
+            mario->kpaWork->attackTimer = sysMsec2Frame(400);
             kpaChgPose("KPA_A_1C", "KPA2_A_1C");
-            KPW(mario)->attackState = 23;
+            mario->kpaWork->attackState = KPA_ATTACK_FIRE_HOLD;
             break;
-        case 23:
-            kpaFireEntry(mario->position);
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_FIRE_HOLD:
+            kpaFire(mario->position);
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
             if (mario->buttonHold & PAD_BUTTON_B) {
                 break;
             }
-            if (KPW(mario)->fireHold != 0) {
+            if (mario->kpaWork->fireHold != 0) {
                 break;
             }
             kpaChgPose("KPA_A_1D", "KPA2_A_1D");
-            KPW(mario)->attackState = 24;
-            KPW(mario)->attackTimer = 6;
-            kpaFireSEOff();
+            mario->kpaWork->attackState = KPA_ATTACK_FINISH;
+            mario->kpaWork->attackTimer = 6;
+            fire_se_off();
             break;
-        case 24:
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_FINISH:
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
-            KPW(mario)->attackState = 0;
+            mario->kpaWork->attackState = KPA_ATTACK_NONE;
             kpaChgPose("KPA_S_1", "KPA2_S_1");
             break;
     }
-    switch (KPW(mario)->attackState) {
-        case 30:
-            KPW(mario)->fireRate = KPW(mario)->level == 0 ? 12 : 8;
-            KPW(mario)->fireCount = 0;
-            KPW(mario)->attackTimer = 0;
-            KPW(mario)->attackState = 40;
+    switch (mario->kpaWork->attackState) {
+        case KPA_ATTACK_SCRIPTED_START:
+            mario->kpaWork->fireRate = mario->kpaWork->level == 0 ? 12 : 8;
+            mario->kpaWork->fireCount = 0;
+            mario->kpaWork->attackTimer = 0;
+            mario->kpaWork->attackState = KPA_ATTACK_SCRIPTED_WINDUP_POSE;
             if (!(mario->flags & MARIO_FLAG_FORCED_MOVEMENT)) {
                 mario->baseSpeed = 0.0f;
                 mario->kpaSpeed = 0.0f;
             }
-        case 40:
+        case KPA_ATTACK_SCRIPTED_WINDUP_POSE:
             kpaChgPose("KPA_A_1A", "KPA2_A_1A");
-            KPW(mario)->attackTimer = 6;
-            KPW(mario)->attackState = 41;
+            mario->kpaWork->attackTimer = 6;
+            mario->kpaWork->attackState = KPA_ATTACK_SCRIPTED_WINDUP;
             break;
-        case 41:
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_SCRIPTED_WINDUP:
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
             kpaChgPose("KPA_A_1B", "KPA2_A_1B");
-            KPW(mario)->attackTimer = 8;
-            KPW(mario)->attackState = 42;
-            kpaFireSEOn();
+            mario->kpaWork->attackTimer = 8;
+            mario->kpaWork->attackState = KPA_ATTACK_SCRIPTED_FIRE_START;
+            fire_se_on();
             break;
-        case 42:
-            kpaFireEntry(mario->position);
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_SCRIPTED_FIRE_START:
+            kpaFire(mario->position);
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
-            KPW(mario)->attackTimer = sysMsec2Frame(400);
+            mario->kpaWork->attackTimer = sysMsec2Frame(400);
             kpaChgPose("KPA_A_1C", "KPA2_A_1C");
-            KPW(mario)->attackState = 43;
+            mario->kpaWork->attackState = KPA_ATTACK_SCRIPTED_FIRE_HOLD;
             break;
-        case 43:
-            kpaFireEntry(mario->position);
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_SCRIPTED_FIRE_HOLD:
+            kpaFire(mario->position);
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
             if (mario->buttonHold & PAD_BUTTON_B) {
                 break;
             }
-            if (KPW(mario)->fireHold != 0) {
+            if (mario->kpaWork->fireHold != 0) {
                 break;
             }
             kpaChgPose("KPA_A_1D", "KPA2_A_1D");
-            KPW(mario)->attackState = 44;
-            KPW(mario)->attackTimer = 6;
-            kpaFireSEOff();
+            mario->kpaWork->attackState = KPA_ATTACK_SCRIPTED_FINISH;
+            mario->kpaWork->attackTimer = 6;
+            fire_se_off();
             break;
-        case 44:
-            if (--KPW(mario)->attackTimer > 0) {
+        case KPA_ATTACK_SCRIPTED_FINISH:
+            if (--mario->kpaWork->attackTimer > 0) {
                 break;
             }
-            KPW(mario)->attackState = 0;
-            switch ((u16)mario->currMotionId) {
-                case 0:
+            mario->kpaWork->attackState = KPA_ATTACK_NONE;
+            switch (mario->currMotionId) {
+                case MARIO_MOTION_STAY:
                     kpaChgPose("KPA_S_1", "KPA2_S_1");
                     break;
-                case 1:
+                case MARIO_MOTION_WALK:
                     kpaChgPose("KPA_W_1", "KPA2_W_1");
                     break;
-                case 2:
+                case MARIO_MOTION_DASH:
                     kpaChgPose("KPA_R_1", "KPA2_R_1");
                     break;
-                case 0x25:
+                case MARIO_MOTION_KPA_SWIM:
                     kpaChgPose("KPA_S_1", "KPA2_Z_2");
                     break;
             }
@@ -877,48 +845,96 @@ static void kpaFireAttack(void) {
 
 /** Ends any fire attack at once and stops its sound. */
 void kpaCancelAttackMode(void) {
-    MarioWork* mario;
-    KpaWork* w = KPW(marioGetPtr());
-    w->attackState = 0;
-    mario = marioGetPtr();
-    if (KPW(mario)->fireSfxId != 0xFFFFFFFFU) {
-        psndSFXOff(KPW(mario)->fireSfxId);
-        KPW(mario)->fireSfxId = -1;
-    }
+    KpaWork* w = marioGetPtr()->kpaWork;
+    w->attackState = KPA_ATTACK_NONE;
+    fire_se_off();
 }
 
 /** TRUE while any fire attack state is active. */
 s32 kpaGetAttackMode(void) {
-    return KPW(marioGetPtr())->attackState != 0;
+    return marioGetPtr()->kpaWork->attackState != KPA_ATTACK_NONE;
 }
 
-/** Removes the fire breath effect and stops its sound. Called by the kpa map scripts. */
+/**
+ * Removes the fire breath effect and stops its sound. Called by the kpa map scripts.
+ * Descriptive name (not in the symbol maps); placeholder unk_801f8cd0, JP 0x801F8CD0. See docs/NAME_PROVENANCE.md.
+ */
 void kpaFireDelete(void) {
     if (fireefp) {
-        MarioWork* mario;
-        effSoftDelete((void*)fireefp);
-        fireefp = 0;
-        mario = marioGetPtr();
-        if (KPW(mario)->fireSfxId != 0xFFFFFFFFU) {
-            psndSFXOff(KPW(mario)->fireSfxId);
-            KPW(mario)->fireSfxId = -1;
+        effSoftDelete(fireefp);
+        fireefp = NULL;
+        fire_se_off();
+    }
+}
+
+/** Spawns the fire breath at pos (see kpaFireEntry). */
+// Original names from the JP demo's link map (UNUSED there, after kpaGetFireNum): kpaFire 0x28c and
+// kpaFireEntry 0x278, the sizes of these two bodies out of line; every call is inlined.
+static void kpaFire(Vec pos) {
+    // the result of this marioGetPtr() call is never used (the call is in the retail code)
+    MarioWork* mp = marioGetPtr();
+    kpaFireEntry(pos);
+}
+
+/**
+ * Spawns Bowser's fire breath (the Hooktail breath effect) in front of his mouth if none is active:
+ * offset by his size and facing, flame size by level (level 3 uses the big flame type),
+ * both flame layers turned to his facing.
+ */
+// A plain function inlined into kpaFire, so at most 30 statements: the two facing tests are one-line assignments.
+static void kpaFireEntry(Vec pos) {
+    MarioWork* mario = marioGetPtr();
+    if (fireefp == NULL) {
+        s32 flag = 0;
+        s32 ang;
+        f32 dir;
+        f32 scale;
+        f32 x;
+        f32 y;
+        f32 z;
+        f32 sz;
+        s32 type;
+        EffectEntry* child;
+        s32 t;
+        dir = (mario->displayDirection >= 90.0f && mario->displayDirection <= 270.0f) ? 1.0f : -1.0f;
+        scale = kpaGetBaseScale(kpaGetLevel());
+        x = 40.0f * dir * scale + pos.x;
+        t = (marioGetPtr()->stageFlags & KPA_STAGE_FLAG_SIDE_SCROLLING) ^ 1;
+        y = pos.y + (20.0f * scale + (t == 1 ? 6.0f : 0.0f));
+        z = pos.z;
+        type = 7;
+        sz = 0.4f;
+        switch (mario->kpaWork->level) {
+            case 0:
+                sz = 0.3f;
+                break;
+            case 1:
+                sz = 1.0f;
+                break;
+            case 2:
+                sz = 1.4f;
+                break;
+            case 3:
+                sz = 1.5f;
+                type = 0;
+                break;
+        }
+        fireefp = effGonbabaBreathEntry(type, 0, x, y, z, sz);
+        flag = mario->displayDirectionTarget >= 90.0f && mario->displayDirectionTarget <= 270.0f;
+        ((EffGonbabaBreathWork*)fireefp->userdata)->yaw = (f32)(flag ? 180 : 0);
+        child = ((EffGonbabaBreathWork*)fireefp->userdata)->child;
+        if (child) {
+            flag = mario->displayDirectionTarget >= 90.0f && mario->displayDirectionTarget <= 270.0f;
+            ang = flag ? 180 : 0;
+            ((EffGonbabaBreathWork*)child->userdata)->yaw = (f32)ang;
         }
     }
 }
 
 /**
- * Stand-in for a stripped function (in no version's symbols, never called):
- * it only keeps the int-to-float conversion constant in its place in the pool.
- */
-// FAKE: uncalled stand-in for a stripped function; creates the int-to-float double in .rodata
-void kpaStrippedPool(f32* f, s32 i) {
-    *f = (f32)i;
-}
-
-/**
  * Keeps the fire breath effect at Bowser's mouth
  * and tests every fourth live flame puff against objects (kpaFlameHitCheck), storing the first hit in flameHit.
- * Retail skips the test at level 0 and for puffs smaller than 7 units; the demo tests them all.
+ * JP and later skip the test at level 0 and for puffs smaller than 7 units; the early demos test them all.
  * Deletes the effect when the attack ends.
  */
 static void kpaFireMain(void) {
@@ -927,51 +943,56 @@ static void kpaFireMain(void) {
     Mtx m80;
     Mtx m50;
     Mtx m20;
+    f32 fireX;
     Vec out;
     Vec zero;
-    s32 flag;
     s32 lv;
     EffectEntry* fe;
     EffGonbabaBreathWork* w;
     s32 i;
-    f32 f31;
-    f32 f30;
-    f32 f29;
-    KPW(mario)->flameHit = NULL;
-    flag = 0;
-    if (fireefp && (f32)flag == 0.0f) {
+    f32 ballScale;
+    f32 radius;
+    f32 headScale;
+    mario->kpaWork->flameHit = NULL;
+    if (fireefp) {
         f32 dir;
         f32 scale;
-        f32 x;
         f32 y;
         f32 z;
         s32 t;
         dir = (mario->displayDirection >= 90.0f && mario->displayDirection <= 270.0f) ? 1.0f : -1.0f;
         scale = kpaGetBaseScale(kpaGetLevel());
-        f30 = 40.0f * dir * scale + mario->position.x;
-        t = (marioGetPtr()->stageFlags & MARIO_STAGE_FLAG_SIDE_VIEW) ^ 1;
+        fireX = 40.0f * dir * scale + mario->position.x;
+        t = (marioGetPtr()->stageFlags & KPA_STAGE_FLAG_SIDE_SCROLLING) ^ 1;
         y = mario->position.y + (20.0f * scale + (t == 1 ? 6.0f : 0.0f));
         z = mario->position.z;
-        ((EffGonbabaBreathWork*)fireefp->userdata)->position.x = f30;
+        ((EffGonbabaBreathWork*)fireefp->userdata)->position.x = fireX;
         ((EffGonbabaBreathWork*)fireefp->userdata)->position.y = y;
         ((EffGonbabaBreathWork*)fireefp->userdata)->position.z = z;
         {
             EffectEntry* w2 = ((EffGonbabaBreathWork*)fireefp->userdata)->child;
             if (w2) {
-                ((EffGonbabaBreathWork*)w2->userdata)->position.x = f30;
+                ((EffGonbabaBreathWork*)w2->userdata)->position.x = fireX;
                 ((EffGonbabaBreathWork*)((EffGonbabaBreathWork*)fireefp->userdata)->child->userdata)->position.y = y;
                 ((EffGonbabaBreathWork*)((EffGonbabaBreathWork*)fireefp->userdata)->child->userdata)->position.z = z;
             }
         }
 #if VERSION <= VERSION_DEMO_JP
-        // the demo checks the flame against every hit at every level, without the size cut-off
         {
             f32 sc;
             f32 base;
+#else
+        lv = kpaGetLevel();
+        if (lv != 0) {
+#endif
             fe = fireefp;
             camGetPtr(CAMERA_3D);
             w = (EffGonbabaBreathWork*)fe->userdata;
+#if VERSION <= VERSION_DEMO_JP
             base = w->scale;
+#else
+            headScale = w->scale;
+#endif
             PSMTXTrans(m80, w->position.x, w->position.y, w->position.z);
             PSMTXRotRad(m50, 'y', 0.017453292f * (w->yaw - camGetPtr(CAMERA_3D)->viewYaw));
             if (w->yaw > 90.0f && w->yaw < 270.0f) {
@@ -985,69 +1006,56 @@ static void kpaFireMain(void) {
             for (i = 1; i < fe->count; i++, w++) {
                 if (((i - 1) & 3) == 0 && w->delay == 0 && w->life > 0x10) {
                     void* hit;
+#if VERSION <= VERSION_DEMO_JP
                     sc = 7.0f * w->scale;
                     PSMTXTrans(m80, w->position.x, w->position.y, w->position.z);
                     PSMTXScale(mb0, sc, sc, sc);
                     PSMTXConcat(m80, mb0, m80);
                     PSMTXConcat(m20, m80, m80);
-                    zero = *(Vec*)kpaZeroVec;
+                    zero = (Vec){0.0f, 0.0f, 0.0f};
                     PSMTXMultVec(m80, &zero, &out);
                     hit = kpaFlameHitCheck(out.x, out.y, out.z, sc * base);
                     if (hit) {
-                        KPW(mario)->flameHit = hit;
+                        mario->kpaWork->flameHit = hit;
                         break;
                     }
                 }
             }
         }
+    }
+    if (kpaFireAttackCheck() == 0) {
+        if (fireefp) {
+            effSoftDelete(fireefp);
+            fireefp = NULL;
+        }
+    }
 #else
-        lv = kpaGetLevel();
-        if (lv != 0) {
-            fe = fireefp;
-            camGetPtr(CAMERA_3D);
-            w = (EffGonbabaBreathWork*)fe->userdata;
-            f29 = w->scale;
-            PSMTXTrans(m80, w->position.x, w->position.y, w->position.z);
-            PSMTXRotRad(m50, 'y', 0.017453292f * (w->yaw - camGetPtr(CAMERA_3D)->viewYaw));
-            if (w->yaw > 90.0f && w->yaw < 270.0f) {
-                PSMTXScale(mb0, w->scale, w->scale, -w->scale);
-            } else {
-                PSMTXScale(mb0, w->scale, w->scale, w->scale);
-            }
-            PSMTXConcat(m80, m50, m80);
-            PSMTXConcat(m80, mb0, m20);
-            w = w + 1;
-            for (i = 1; i < fe->count; i++, w++) {
-                if (((i - 1) & 3) == 0 && w->delay == 0 && w->life > 0x10) {
-                    void* hit;
-                    f31 = 7.0f * w->scale;
-                    f30 = f31 * f29;
-                    if (!(f30 < 7.0f)) {
+                    ballScale = 7.0f * w->scale;
+                    radius = ballScale * headScale;
+                    if (!(radius < 7.0f)) {
                         PSMTXTrans(m80, w->position.x, w->position.y, w->position.z);
-                        PSMTXScale(mb0, f31, f31, f31);
+                        PSMTXScale(mb0, ballScale, ballScale, ballScale);
                         PSMTXConcat(m80, mb0, m80);
                         PSMTXConcat(m20, m80, m80);
-                        zero = *(Vec*)kpaZeroVec;
+                        zero = (Vec){0.0f, 0.0f, 0.0f};
                         PSMTXMultVec(m80, &zero, &out);
-                        hit = kpaFlameHitCheck(out.x, out.y, out.z, f30);
+                        hit = kpaFlameHitCheck(out.x, out.y, out.z, radius);
                         if (hit) {
-                            KPW(mario)->flameHit = hit;
+                            mario->kpaWork->flameHit = hit;
                             break;
                         }
                     }
                 }
             }
         }
-#endif
     }
-    {
-        if (kpaFireAttackCheck() == 0) {
-            if (fireefp) {
-                effSoftDelete((void*)fireefp);
-                fireefp = 0;
-            }
+    if (kpaFireAttackCheck() == 0) {
+        if (fireefp) {
+            effSoftDelete(fireefp);
+            fireefp = NULL;
         }
     }
+#endif
 }
 
 /** Bowser's scale for power-up level lv (0.3, 1.0, 1.4, 3.1). */
@@ -1059,7 +1067,7 @@ f32 kpaGetBaseScale(s32 lv) {
 s32 kpaHipAttackCheck(void) {
     s32 r = 0;
     MarioWork* mario = marioGetPtr();
-    if (mario->characterId != 2) {
+    if (mario->characterId != CHARACTER_BOWSER) {
         return 0;
     }
     if (mario->currMotionId == MARIO_MOTION_HIP_2) {
@@ -1070,7 +1078,14 @@ s32 kpaHipAttackCheck(void) {
 
 /** TRUE while Bowser is in the air (airTimer not zero). */
 s32 kpaJumpChk(void) {
-    return ((MarioWork*)marioGetPtr())->airTimer != 0;
+    return marioGetPtr()->airTimer != 0;
+}
+
+/** Plays one of Bowser's 28 random voice clips (kpaPauseSeTable), without kpaPauseSE2's mute bypass. */
+// Original name and size (0x38) from the JP demo map (UNUSED there: nothing calls it), before kpaPauseSE2:
+// kpaPauseSE2 without PSND_SFX_BYPASS_MUTE (the size fits exactly; with the flag it is kpaPauseSE2's 0x3c).
+void kpaPauseSE(void) {
+    psndSFXOn(SFX_NAME_WORD(kpaPauseSeTable[irand(28)]));
 }
 
 /**
@@ -1078,5 +1093,5 @@ s32 kpaJumpChk(void) {
  * when Start is pressed in it.
  */
 void kpaPauseSE2(void) {
-    psndSFXOn(SFX_NAME_WORD(kpaPauseSeTable[irand(28)] | 0x20000));
+    psndSFXOn(SFX_NAME_WORD(kpaPauseSeTable[irand(28)] | PSND_SFX_BYPASS_MUTE));
 }

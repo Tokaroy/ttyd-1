@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: dust (hokori) puffs scattered near the ground in a grey-brown tint.
+
 #include "eff/n64/eff_hokori_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -10,7 +11,7 @@
 #include <stdlib.h>
 
 /** Tall 16x32 dust puff, alternating with the square one for types 0-1. */
-effN64Vtx size16x32_tex32x64_vtx[] = {
+static effN64Vtx size16x32_tex32x64_vtx[] = {
     {-8, -32, 0, 0, 1024, 0, 0, 0, 255},
     {8, -32, 0, 1024, 1024, 0, 0, 0, 255},
     {8, 0, 0, 1024, 3040, 0, 0, 0, 255},
@@ -18,7 +19,7 @@ effN64Vtx size16x32_tex32x64_vtx[] = {
 };
 
 /** Square 16x16 dust puff, alternating with the tall one for types 0-1. */
-effN64Vtx size16x16_tex32x32_vtx[] = {
+static effN64Vtx size16x16_tex32x32_vtx[] = {
     {-8, -16, 0, 0, 0, 0, 0, 0, 255},
     {8, -16, 0, 1024, 0, 0, 0, 0, 255},
     {8, 0, 0, 1024, 1024, 0, 0, 0, 255},
@@ -26,7 +27,7 @@ effN64Vtx size16x16_tex32x32_vtx[] = {
 };
 
 /** Small 8x8 dust puff, used by types above 1. */
-effN64Vtx size8x8_tex32x32_vtx[] = {
+static effN64Vtx size8x8_tex32x32_vtx[] = {
     {-4, -4, 0, 0, 0, 0, 0, 0, 255},
     {4, -4, 0, 1024, 0, 0, 0, 0, 255},
     {4, 4, 0, 1024, 1024, 0, 0, 0, 255},
@@ -34,18 +35,16 @@ effN64Vtx size8x8_tex32x32_vtx[] = {
 };
 
 static void effHokoriMain(EffectEntry* effect);
-static void effHokoriDisp(CameraId cameraId, EffectEntry* effect);
+static void effHokoriDisp(CameraId cameraId, void* payload);
 
 /**
- * Spawns hokori (dust) puffs near (x, y, z) for lifetime frames: four puffs, five for types 0 and 1.
- * The tint is grey-brown by default.
- * Called by the boss_magnum_battender unit (mri) and by event scripts through evt_eff.
+ * Spawns dust puffs at (x, y, z) for lifetime frames: four scattered up to 100 units to each side for types 0 and 1
+ * (type 1's growth speeding up faster), three within 2 units of the point (growth 0.4) for other types.
  */
 EffectEntry* effHokoriN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z) {
     s32 count;
     EffectEntry* effect;
     EffHokoriN64Work* work;
-    EffHokoriN64Work* p;
     s32 i;
 
     effect = effEntry();
@@ -67,28 +66,28 @@ EffectEntry* effHokoriN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z) {
     work->r2 = 160;
     work->g2 = 160;
     work->b2 = 140;
-    p = work + 1;
-    for (i = 1; i < count; i++, p++) {
-        p->position.x = rand() % 200 - 100;
-        p->position.y = rand() % 50;
-        p->position.z = 0.0f;
-        p->velY = -1.0f;
-        p->gravity = 0.0f;
-        p->scaleY = 1.0f;
-        p->scaleX = 1.0f;
-        p->growth = (rand() % 10) / 200.0f;
+    work++;
+    for (i = 1; i < count; i++, work++) {
+        work->position.x = rand() % 200 - 100;
+        work->position.y = rand() % 50;
+        work->position.z = 0.0f;
+        work->velY = -1.0f;
+        work->gravity = 0.0f;
+        work->scaleY = 1.0f;
+        work->scaleX = 1.0f;
+        work->growth = (rand() % 10) / 200.0f;
         switch (type) {
             case 0:
-                p->growth2 = 0.1f * p->growth;
+                work->growth2 = 0.1f * work->growth;
                 break;
             case 1:
-                p->growth2 = 0.2f * p->growth;
+                work->growth2 = 0.2f * work->growth;
                 break;
             default:
-                p->growth2 = p->growth = 0.4f;
-                p->velY = 0.0f;
-                p->position.x = 0.1f * (rand() % 40 - 20);
-                p->position.y = 0.1f * (rand() % 40 - 20);
+                work->growth2 = work->growth = 0.4f;
+                work->velY = 0.0f;
+                work->position.x = 0.1f * (rand() % 40 - 20);
+                work->position.y = 0.1f * (rand() % 40 - 20);
                 break;
         }
     }
@@ -137,14 +136,15 @@ static void effHokoriMain(EffectEntry* effect) {
             work->scaleX += work->growth2;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effHokoriDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effHokoriDisp, effect);
 }
 
 /**
  * Draws each puff as a camera-facing sprite (texture 21 for type 0, 22 otherwise):
  * tall and square ones alternate for types 0-1, small ones for other types.
  */
-static void effHokoriDisp(CameraId cameraId, EffectEntry* effect) {
+static void effHokoriDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffHokoriN64Work* work;
     GXTexObj tex;
@@ -154,7 +154,7 @@ static void effHokoriDisp(CameraId cameraId, EffectEntry* effect) {
     Mtx scale;
     Mtx rot;
     Mtx base;
-    void* vtx;
+    effN64Vtx* vtx;
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
@@ -185,6 +185,7 @@ static void effHokoriDisp(CameraId cameraId, EffectEntry* effect) {
             GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
             effGetTexObjN64(22, &tex);
             GXLoadTexObj(&tex, GX_TEXMAP0);
+            break;
     }
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
     PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
@@ -201,12 +202,14 @@ static void effHokoriDisp(CameraId cameraId, EffectEntry* effect) {
         GXLoadPosMtxImm(mtx, GX_PNMTX0);
         GXSetCurrentMtx(GX_PNMTX0);
         if (type <= 1) {
-            if (i & 1)
+            if (i & 1) {
                 vtx = size16x32_tex32x64_vtx;
-            else
+            } else {
                 vtx = size16x16_tex32x32_vtx;
-        } else
+            }
+        } else {
             vtx = size8x8_tex32x32_vtx;
+        }
         effSetVtxDescN64(vtx);
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);

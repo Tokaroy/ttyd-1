@@ -1,4 +1,6 @@
 // Bullet Bill (killer): battle unit used in Pirate's Grotto.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "battle/battle_event_subset.h"
@@ -9,6 +11,7 @@
 #include "evt/evt_eff.h"
 #include "battle/battle_database_common.h"
 #include "battle/battle_sub.h"
+#include "battle/battle_damage.h"
 
 BattleUnitKind unit_killer;
 static BattleUnitDefense defence;
@@ -20,100 +23,97 @@ static PoseTableEntry pose_table[18];
 static BattleDataEntry data_table[2];
 static EvtWord init_event[39];
 static EvtWord damage_event[10];
+static EvtWord start_avoid[26];
 static EvtWord attack_event[407];
 static EvtWord wait_event[6];
 
 /** Unit data of the Bullet Bill: 2 HP, level 1; the battle starts it from init_event. */
 BattleUnitKind unit_killer = {
-    UNIT_BULLET_BILL,
-    "btl_un_killer",
-    2,
-    0,
-    1,
-    1,
-    1,
-    0,
-    0,
-    70,
-    0,
-    50,
-    9999,
-    32,
-    26,
-    3,
-    26,
-    0.0f,
-    13.0f,
-    0.0f,
-    0,
-    0,
-    0.0f,
-    0.0f,
-    0.0f,
-    16.0f,
-    0.0f,
-    -10.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    16.0f,
-    0.0f,
-    0.0f,
-    16.0f,
-    16.9f,
-    0.0f,
-    0.0f,
-    13.0f,
-    0.0f,
-    32.0f,
-    26.0f,
-    0,
-    0,
-    0,
-    2,
-    100,
-    20,
-    0.0f,
-    0.0f,
-    0.0f,
-    "SFX_ENM_KILLER_DAMAGED1",
-    "SFX_BTL_DAMAGE_FIRE1",
-    "SFX_BTL_DAMAGE_ICE1",
-    "SFX_BTL_DAMAGE_BIRIBIRI1",
-    UNIT_ATTR_FLOATING,
-    &regist,
-    1,
-    parts,
-    init_event,
-    data_table,
+    UNIT_BULLET_BILL, // unitType
+    "btl_un_killer", // name
+    2, // maxHp
+    0, // maxFp
+    1, // dangerHP
+    1, // perilHP
+    1, // level
+    0, // bonusExp
+    0, // bonusCoin
+    70, // bonusCoinRate
+    0, // baseCoin
+    50, // runRate
+    9999, // pbSoftCap
+    32, // width
+    26, // height
+    {3, 26}, // hitOffset
+    {0.0f, 13.0f, 0.0f}, // centerOffset
+    {0, 0}, // hpGaugeOffset
+    {0.0f, 0.0f, 0.0f}, // talkTogeBaseOffset
+    {16.0f, 0.0f, -10.0f}, // heldItemBaseOffset
+    {0.0f, 0.0f, 0.0f}, // burnFlameOffset
+    0.0f, // vivianOffsetX
+    0.0f, // vivianOffsetZ
+    {16.0f, 0.0f, 0.0f}, // bintaHitOffset
+    {16.0f, 16.9f, 0.0f}, // kissHitOffset
+    {0.0f, 13.0f, 0.0f}, // cutBaseOffset
+    32.0f, // cutWidth
+    26.0f, // cutHeight
+    0, // turnOrder
+    0, // turnOrderVariance
+    0, // swallowChance
+    2, // swallowAttributes
+    100, // hammerKnockbackChance
+    20, // itemStealParam
+    {0.0f, 0.0f, 0.0f}, // starPointDispOffset
+    "SFX_ENM_KILLER_DAMAGED1", // damageSfxName
+    "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
+    "SFX_BTL_DAMAGE_ICE1", // iceDamageSfxName
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    kFloating, // attributeFlags
+    &regist, // statusVulnerability
+    1, // numParts
+    parts, // parts
+    init_event, // initEventCode
+    data_table, // dataTable
 };
 
 /** Defence of the Bullet Bill: 1 against every element. */
 static BattleUnitDefense defence = {{1, 1, 1, 1, 1}};
 
 /** Elemental reactions of the Bullet Bill: none, every element hurts it normally. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 #if VERSION <= VERSION_DEMO_JP
-/**
- * Status vulnerability of the Bullet Bill (percent, 100 is normal) in the demo builds: immune to sleep, stop,
- * poison and fright; resists most statuses (50-95%); is extra vulnerable to electric (150%).
- */
 static StatusVulnerability regist = {0, 0, 100, 0, 50, 150, 100, 75, 100, 75, 100, 75, 100, 75, 75, 0, 100, 100, 75, 100, 100, 95};
 #else
-/**
- * Status vulnerability of the Bullet Bill (percent, 100 is normal) in the retail builds: immune to sleep,
- * stop, poison and fright; resists most statuses (50-95%); is extra vulnerable to dizzy (105%) and electric
- * (150%).
- */
-static StatusVulnerability regist = {0, 0, 105, 0, 50, 150, 100, 70, 100, 95, 100, 95, 100, 95, 75, 0, 100, 100, 75, 100, 100, 95};
+static StatusVulnerability regist = {
+    0, // sleep
+    0, // stop
+    105, // dizzy
+    0, // poison
+    50, // confuse
+    150, // electric
+    100, // burn
+    70, // freeze
+    100, // huge
+    95, // tiny
+    100, // attackUp
+    95, // attackDown
+    100, // defenseUp
+    95, // defenseDown
+    75, // allergic
+    0, // fright
+    100, // galeForce
+    100, // fast
+    75, // slow
+    100, // dodgy
+    100, // invisible
+    95, // ohko
+};
 #endif
 
 /** Body part of the Bullet Bill, model c_kilr: its one target part. */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_killer", "c_kilr", 0.0f, 0.0f, 0.0f, 0.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER, 0, pose_table},
+    {1, "btl_un_killer", "c_kilr", 0.0f, 0.0f, 0.0f, 0.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart, 0, pose_table},
 };
 
 /** Weapon data for the Bullet Bill's charge: 4 damage, one target. */
@@ -133,15 +133,15 @@ static BattleWeapon weapon_killer_charge_attack = {
     {4, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE | SPECIAL_FLIPS_SHELLED, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH | SPECIAL_FLIP_SHELLED, // special
     COUNTER_RESIST_ALL, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -157,29 +157,29 @@ static BattleWeapon weapon_killer_charge_attack = {
  * Pose table of the Bullet Bill: the animation each battle pose (idle, hurt, walk, attack and so on) plays.
  */
 static PoseTableEntry pose_table[] = {
-    {STATUS_SLEEP, "KIL_N_1"},
-    {STATUS_STOP, "KIL_D_1"},
-    {STATUS_FREEZE, "KIL_D_1"},
-    {STATUS_CONFUSE, "KIL_K_1"},
-    {STATUS_POISON, "KIL_X_1"},
-    {STATUS_DIZZY, "KIL_X_1"},
-    {BTL_POSE_NORMAL, "KIL_S_1"},
-    {29, "KIL_Q_1"},
-    {30, "KIL_Q_1"},
-    {31, "KIL_A_1"},
-    {BTL_POSE_DAMAGE, "KIL_D_1"},
-    {50, "KIL_A_1"},
-    {BTL_POSE_WALK, "KIL_W_1"},
-    {BTL_POSE_RUN, "KIL_R_1"},
-    {BTL_POSE_DANGER, "KIL_X_1"},
-    {BTL_POSE_PERIL, "KIL_X_1"},
-    {BTL_POSE_TALK, "KIL_T_1"},
-    {BTL_POSE_STAY_DEFAULT, "KIL_S_1"},
+    {POSE_TYPE_SLEEP, "KIL_N_1"},
+    {POSE_TYPE_STOP, "KIL_D_1"},
+    {POSE_TYPE_FREEZE, "KIL_D_1"},
+    {POSE_TYPE_CONFUSE, "KIL_K_1"},
+    {POSE_TYPE_POISON, "KIL_X_1"},
+    {POSE_TYPE_DIZZY, "KIL_X_1"},
+    {POSE_TYPE_NORMAL, "KIL_S_1"},
+    {POSE_TYPE_DAMAGE_FIRE, "KIL_Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "KIL_Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "KIL_A_1"},
+    {POSE_TYPE_DAMAGE, "KIL_D_1"},
+    {POSE_TYPE_ATTACK, "KIL_A_1"},
+    {POSE_TYPE_WALK, "KIL_W_1"},
+    {POSE_TYPE_RUN, "KIL_R_1"},
+    {POSE_TYPE_DANGER, "KIL_X_1"},
+    {POSE_TYPE_PERIL, "KIL_X_1"},
+    {POSE_TYPE_TALK, "KIL_T_1"},
+    {POSE_TYPE_ACTION, "KIL_S_1"},
 };
 
 /** Event table of the Bullet Bill: the First Strike reaction (does nothing). */
 static BattleDataEntry data_table[] = {
-    {48, btldefaultevt_Dummy},
+    {UNIT_DATA_FIRST_ATTACK_POS_EVENT, btldefaultevt_Dummy},
     {0, NULL},
 };
 
@@ -189,20 +189,20 @@ static BattleDataEntry data_table[] = {
  * starts the wait script and raises the unit and its home position to height 10.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), 10, LW(2))
-    CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, LW(0), 10, LW(2))
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), 10, LW(2))
+    CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, LW(0), 10, LW(2))
     RETURN
 EVT_END()
 
 /** Damage event of the Bullet Bill: runs the default damage reaction (btldefaultevt_Damage) for itself. */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
@@ -214,13 +214,13 @@ EVT_END()
  */
 static EVT_BEGIN(start_avoid)
     IF_INT_EQUAL(LW(5), 3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
     END_IF
     IF_INT_EQUAL(LW(5), 6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
     END_IF
     IF_INT_EQUAL(LW(5), 2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
     END_IF
     RETURN
 EVT_END()
@@ -229,67 +229,72 @@ EVT_END()
  * The Bullet Bill's suicide charge.
  * It picks a target (the first-attack target on a pre-emptive strike),
  * charges up with SFX_ENM_KILLER_CHARGE1 and flies at it.
- * If the pre-damage check says the attack misses or is guarded,
- * it flies past the target with the avoid animation; on a hit it deals damage with a camera shake.
- * Either way it ends by exploding (smoke effect, then coin, exp and star points are paid out)
- * and KillUnit removes it.
+ * If the pre-damage check selects a miss branch,
+ * it flies past the target, with an avoid animation for some results; on a hit it deals damage with a camera shake.
+ * Only the hit path explodes (smoke effect, then coin, exp and star points are paid out);
+ * common hit/miss cleanup then calls KillUnit. Item-use and confused no-target returns bypass that cleanup.
  */
+// Common attack cleanup removes the projectile, including the no-target path.
 static EVT_BEGIN(attack_event)
-    // Choose the target: the First Strike victim, an item if one is ready, or a sampled opposing unit.
-    CALL(btlevtcmd_check_battleflag, LW(0), 2)
+    // Use the First Strike target; otherwise run a selected item action or pick a sampled opposing unit.
+    CALL(btlevtcmd_check_battleflag, LW(0), BATTLE_FLAG_FIRST_ATTACK)
     IF_INT_NOT_EQUAL(LW(0), 0)
         WAIT_MS(750)
         CALL(btlevtcmd_GetFirstAttackTarget, LW(3), LW(4))
     ELSE
-        CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+        CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(LW(0))
-            CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+            CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
             RETURN
         END_IF
-        CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-        CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_killer_charge_attack))
+        CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+        CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_killer_charge_attack))
         CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_killer_charge_attack), LW(3), LW(4))
     END_IF
-    // No valid target: a confused Bullet Bill is flustered, otherwise the turn is skipped.
+
+    // No valid target: a confused Bullet Bill is flustered, otherwise cleanup removes it.
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    // The camera follows it as it declares the attack and the guard window opens.
-    CALL(evt_btl_camera_set_mode, 0, 8)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, LW(3))
+
+    // The camera follows it as it declares the attack and waits for any bodyguard to finish moving.
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT_TO_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, LW(3))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
     CALL(evt_btl_camera_set_zoom, 0, 250)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_killer_charge_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_killer_charge_attack))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_killer_charge_attack))
+
     // It turns to the target and charges up with a sound.
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_KILLER_CHARGE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 50)
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_KILLER_CHARGE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_ATTACK)
     WAIT_FRAMES(30)
+
     // It blasts off toward the target and the hit check runs.
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_KILLER_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_killer_charge_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_KILLER_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_killer_charge_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
+        CASE_EQUAL(PRECHECK_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
+        CASE_EQUAL(PRECHECK_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
+        CASE_EQUAL(PRECHECK_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
@@ -297,46 +302,50 @@ static EVT_BEGIN(attack_event)
         CASE_END
     END_SWITCH
     LABEL(90)
-    // Miss: it flies at the target, which dodges, and shoots on past and off the stage.
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
+
+    // Miss: it flies at the target, which dodges for some results, and shoots on past and off the stage.
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(8.0f))
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), 10, LW(2), 0, -1)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(8.0f))
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), 10, LW(2), 0, MOVE_SOUND_FROM_TABLE)
     CALL_CHILD(start_avoid)
-    CALL(evt_btl_camera_set_mode, 0, 3)
-    CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(0), 500)
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), 10, LW(2), 0, -1)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_KILLER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_FREE)
+    CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(0), 500)
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), 10, LW(2), 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_KILLER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(evt_btl_camera_shake_w, 0, 5, 0, 15, 0)
     WAIT_MS(300)
-    CALL(btlevtcmd_OnAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
+    CALL(btlevtcmd_OnAttribute, UNIT_ID_SELF, kUnitHidden)
     WAIT_MS(500)
     GOTO(98)
     LABEL(91)
+
     // Hit: it slams into the target and the damage is dealt, with a camera shake.
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(8.0f))
-    CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), 10, LW(2), 0, -1)
-    CALL(evt_btl_camera_set_mode, 0, 3)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(8.0f))
+    CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), 10, LW(2), 0, MOVE_SOUND_FROM_TABLE)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_FREE)
     CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_killer_charge_attack))
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_killer_charge_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_killer_charge_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
     CALL(evt_btl_camera_shake_w, 0, 5, 0, 15, 0)
-    CALL(btlevtcmd_OnAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_KILLER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_OnAttribute, UNIT_ID_SELF, kUnitHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_KILLER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+
     // It bursts in a puff of smoke.
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_ENEMY_DIE1_2"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_ENEMY_DIE1_2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     ADD(LW(2), 10)
     ADD(LW(1), 20)
     CALL(evt_eff, STRING(""), STRING("kemuri_test"), 17, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
+
     // Its coins, EXP and Star Points are paid out as it blows up.
-    CALL(btlevtcmd_GetCoin, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetCoin, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_StoreCoin, LW(0))
-    CALL(btlevtcmd_GetExp, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetExp, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_StoreExp, LW(0))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(3), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(3), LW(1), LW(2))
     ADD(LW(2), 10)
     ADD(LW(1), 30)
     CALL(_add_star_point_disp_offset, LW(10), LW(3), LW(1), LW(2))
@@ -348,16 +357,17 @@ static EVT_BEGIN(attack_event)
     WAIT_MS(500)
     GOTO(98)
     LABEL(98)
+
     // The camera returns to normal and the Bullet Bill is removed from the battle.
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_MS(200)
     LABEL(99)
-    CALL(btlevtcmd_KillUnit, BTL_UNIT_SELF, 0)
+    CALL(btlevtcmd_KillUnit, UNIT_ID_SELF, 0)
     RETURN
 EVT_END()
 
 /** Wait (idle) event of the Bullet Bill: sets its idle pose from the pose table. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()

@@ -1,26 +1,44 @@
 // las_13 (ラストダンジョン, Palace of Shadow): a riddle room off las_10: the switch and the small star.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "driver/mobjdrv.h"
+#include "mario/mario_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "eff/eff_small_star.h"
 #include "manager/evtmgr_cmd.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_snd.h"
 #include "las.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
 
 static USER_FUNC(small_star);
 
+static EvtWord e_door_close[12];
+static EvtWord e_door_open[12];
 static BeroEntry bero_entry_data[2];
+static EvtWord box_evt[30];
+static EvtWord switch_check[114];
+static EvtWord switch1_evt[11];
+static EvtWord switch2_evt[15];
+static EvtWord hint_plate[14];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_13_init_evt[];
+#else
+EvtWord las_13_init_evt[79];
+#endif
 
 /**
  * Door animation script (closing) for the east door, used as the enter/exit animation of this room's bero entry.
@@ -69,25 +87,36 @@ static BeroEntry bero_entry_data[] = {
 static EVT_BEGIN(box_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mobj_get_position, STRING("box"), LW(0), LW(1), LW(2))
-    CALL(evt_item_entry, STRING("key"), ITEM_PALACE_KEY_0x28, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+    CALL(evt_item_entry, STRING("key"), ITEM_PALACE_KEY_0x28, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
     CALL(evt_mobj_wait_animation_end, STRING("box"))
     CALL(evt_item_get_item, STRING("key"))
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
+/** Script helper: spawns a small star sparkle effect above the point (args[0], args[1], args[2]). */
+static USER_FUNC(small_star) {
+    EvtWord* args = event->args;
+    f32 x = evtGetFloat(event, args[0]);
+    f32 y = evtGetFloat(event, args[1]);
+    f32 z = evtGetFloat(event, args[2]);
+
+    effSmallStarEntry(0, 4, x, 12.5f + y, z, 0.0f, -1.0f, 0.0f);
+    return EVT_RETURN_DONE;
+}
+
 /**
  * Event script: checks the red switch riddle after each press.
  * When switch 1 has been hit twice and switch 2 three times (switch 2 only counts before switch 1 is touched),
  * it sparkles both switches away, plays a success jingle and makes the key chest (Palace Key 0x28) appear,
- * then sets GSWF_LAS13_RED_SWITCHES_SOLVED.
+ * then sets GSWF_LAS_13_SWITCH_PUZZLE_SOLVED.
  */
-EVT_BEGIN(switch_check)
+static EVT_BEGIN(switch_check)
     SET_VALUE(LW(0), 0)
-    IF_INT_EQUAL(LSW(1), 2)
+    IF_INT_EQUAL(LSW_LAS_13_SWITCH_1_COUNT, 2)
         ADD(LW(0), 1)
     END_IF
-    IF_INT_EQUAL(LSW(2), 3)
+    IF_INT_EQUAL(LSW_LAS_13_SWITCH_2_COUNT, 3)
         ADD(LW(0), 1)
     END_IF
     IF_INT_EQUAL(LW(0), 2)
@@ -99,32 +128,32 @@ EVT_BEGIN(switch_check)
         CALL(small_star, LW(0), LW(1), LW(2))
         CALL(evt_mobj_delete, STRING("switch1"))
         CALL(evt_mobj_delete, STRING("switch2"))
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SUCCESS1"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SUCCESS1"))
         WAIT_MS(2000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-        CALL(evt_cam3d_evt_set, 0, 100, 363, 0, 30, -30, 500, 11)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+        CALL(evt_cam3d_evt_set, 0, 100, 363, 0, 30, -30, 500, EASING_SINE_IN_OUT)
         WAIT_MS(1000)
         CALL(evt_mobj_set_position, STRING("box"), 0, -30, 0)
-        CALL(evt_mobj_flag_onoff, 0, STRING("box"), MOBJ_FLAG_INVISIBLE | MOBJ_FLAG_FALL)
+        CALL(evt_mobj_flag_onoff, 0, STRING("box"), MOBJ_FLAG_GRAVITY | MOBJ_FLAG_NO_DISP)
         CALL(evt_mobj_hit_onoff, STRING("box"), 1)
         SET_VALUE(LW(0), STRING("box"))
         CALL_CHILD(box_syutugen)
-        CALL(evt_cam3d_evt_off, 500, 11)
+        CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
         CALL(evt_mario_key_onoff, 1)
-        SET_VALUE(GSWF(GSWF_LAS13_RED_SWITCHES_SOLVED), 1)
+        SET_VALUE(GSWF_LAS_13_SWITCH_PUZZLE_SOLVED, 1)
     END_IF
     RETURN
 EVT_END()
 
 /**
  * Event script: the first switch of las_13 was hit.
- * Counts the hit in LSW(1) (up to 255) and re-checks the puzzle with switch_check.
+ * Counts the hit in LSW_LAS_13_SWITCH_1_COUNT (up to 255) and re-checks the puzzle with switch_check.
  */
 static EVT_BEGIN(switch1_evt)
-    IF_INT_LESS(LSW(1), 255)
-        ADD(LSW(1), 1)
+    IF_INT_LESS(LSW_LAS_13_SWITCH_1_COUNT, 255)
+        ADD(LSW_LAS_13_SWITCH_1_COUNT, 1)
     END_IF
     CALL_CHILD(switch_check)
     RETURN
@@ -132,12 +161,12 @@ EVT_END()
 
 /**
  * Event script: the second switch of las_13 was hit.
- * Counts the hit in LSW(2) (up to 255) only while LSW(1) is 0, and re-checks the puzzle with switch_check.
+ * Counts the hit in LSW_LAS_13_SWITCH_2_COUNT (up to 255) only while LSW_LAS_13_SWITCH_1_COUNT is 0, and re-checks the puzzle with switch_check.
  */
 static EVT_BEGIN(switch2_evt)
-    IF_INT_EQUAL(LSW(1), 0)
-        IF_INT_LESS(LSW(2), 255)
-            ADD(LSW(2), 1)
+    IF_INT_EQUAL(LSW_LAS_13_SWITCH_1_COUNT, 0)
+        IF_INT_LESS(LSW_LAS_13_SWITCH_2_COUNT, 255)
+            ADD(LSW_LAS_13_SWITCH_2_COUNT, 1)
         END_IF
     END_IF
     CALL_CHILD(switch_check)
@@ -158,36 +187,25 @@ EVT_END()
  * the key chest (hidden until solved) and the hint plate.
  */
 EVT_BEGIN(las_13_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST2"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST2"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_EQUAL(GSWF(GSWF_LAS13_RED_SWITCHES_SOLVED), 0)
-        SET_VALUE(LSW(1), 0)
-        SET_VALUE(LSW(2), 0)
-        CALL(evt_mobj_floatswitch_red, 0, STRING("switch1"), 150, 60, 0, PTR(switch1_evt), GSWF(GSWF_LAS13_RED_SWITCHES_SOLVED))
-        CALL(evt_mobj_floatswitch_red, 0, STRING("switch2"), -150, 60, 0, PTR(switch2_evt), GSWF(GSWF_LAS13_RED_SWITCHES_SOLVED))
+    IF_INT_EQUAL(GSWF_LAS_13_SWITCH_PUZZLE_SOLVED, 0)
+        SET_VALUE(LSW_LAS_13_SWITCH_1_COUNT, 0)
+        SET_VALUE(LSW_LAS_13_SWITCH_2_COUNT, 0)
+        CALL(evt_mobj_floatswitch_red, 0, STRING("switch1"), 150, 60, 0, PTR(switch1_evt), GSWF_LAS_13_SWITCH_PUZZLE_SOLVED)
+        CALL(evt_mobj_floatswitch_red, 0, STRING("switch2"), -150, 60, 0, PTR(switch2_evt), GSWF_LAS_13_SWITCH_PUZZLE_SOLVED)
     END_IF
-    CALL(evt_mobj_itembox, STRING("box"), 0, 0, 0, 0, 0, PTR(box_evt), GSWF(GSWF_LAS13_KEY_CHEST_OPENED))
-    IF_INT_EQUAL(GSWF(GSWF_LAS13_RED_SWITCHES_SOLVED), 0)
-        CALL(evt_mobj_flag_onoff, 1, STRING("box"), MOBJ_FLAG_INVISIBLE)
+    CALL(evt_mobj_itembox, STRING("box"), 0, 0, 0, MOBJ_ITEMBOX_NORMAL, 0, PTR(box_evt), GSWF_LAS_13_PALACE_KEY_CHEST)
+    IF_INT_EQUAL(GSWF_LAS_13_SWITCH_PUZZLE_SOLVED, 0)
+        CALL(evt_mobj_flag_onoff, 1, STRING("box"), MOBJ_FLAG_NO_DISP)
         CALL(evt_mobj_hit_onoff, STRING("box"), 0)
     END_IF
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_pure"), 0, PTR(hint_plate), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_pure"), 0, PTR(hint_plate), 0)
     RETURN
 EVT_END()
-
-/** Script helper: spawns a small star sparkle effect above the point (args[0], args[1], args[2]). */
-static USER_FUNC(small_star) {
-    EvtWord* args = event->args;
-    f32 x = evtGetFloat(event, args[0]);
-    f32 y = evtGetFloat(event, args[1]);
-    f32 z = evtGetFloat(event, args[2]);
-
-    effSmallStarEntry(0, 4, x, 12.5f + y, z, 0.0f, -1.0f, 0.0f);
-    return EVT_RETURN_DONE;
-}

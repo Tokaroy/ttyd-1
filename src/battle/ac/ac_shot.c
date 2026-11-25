@@ -1,24 +1,21 @@
-// Action command: shooting (ac_shot); move a sight with the stick and fire at the moving target.
-#include <dolphin/pad.h>
-#include "icon_ids.h"
-#include "version.h"
+// Action command: shooting (ac_shot); a target mark, the Control Stick and A.
+
 #include "battle/battle.h"
 #include "battle/battle_ac.h"
 #include "battle/battle_pad.h"
 #include "battle/battle_unit.h"
 #include "driver/icondrv.h"
-#include "battle/battle_sub.h"
 #include "system.h"
 #include <string.h>
 #include "pmario_sound.h"
+#include "driver/camdrv.h"
+#include "battle/battle_sub.h"
 #include "battle/battle_disp.h"
-
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
+#include "icon_ids.h"
 
 typedef struct ShotWork {
     s32 timer;    // 0x0
-    s32 timer2;   // 0x4, never used
+    s32 pad_04;   // 0x4, never accessed
     s32 idx;      // 0x8
     f32 minV;     // 0xC
     f32 maxV;     // 0x10
@@ -37,96 +34,88 @@ typedef struct ShotWork {
     u32 sfxId;    // 0x64
 } ShotWork;
 
-typedef struct ShotParams {
-    s32 unitId; // 0x38
-    s32 count;  // 0x3C
-    s32 a;      // 0x40
-    s32 b;      // 0x44
-    s32 c;      // 0x48
-    s32 d;      // 0x4C
-    s32 e;      // 0x50
-} ShotParams;
-
-#define SH_DISP(ac) (&(ac)->disp)
-#define SH_WORK(ac) ((ShotWork*)(ac)->work)
-#define SH_PARAMS(ac) ((ShotParams*)(ac)->params)
-#define SH_OUT(ac) ((s32*)(ac)->outputParams)
+// BattleActions.params slots this command reads (btlevtcmd_AcSetParamAll)
+typedef enum ShotParam {
+    SHOT_PARAM_UNIT_ID = 0,
+    SHOT_PARAM_COUNT = 1,     // shots
+    SHOT_PARAM_MIN_VALUE = 2, // lowest result value (ShotWork.minV)
+    SHOT_PARAM_MAX_VALUE = 3, // result value at 100 % (ShotWork.maxV)
+    SHOT_PARAM_LEFT = 4,      // ShotWork.left
+    SHOT_PARAM_RIGHT = 5,     // ShotWork.right
+    SHOT_PARAM_SPEED = 6,     // ShotWork.vel in tenths
+} ShotParam;
 
 static void _disp_target_mark(CameraId cameraId, void* param);
 static void _disp_target_mark_afterimage(CameraId cameraId, void* param);
 static void _ac_disp_init(BattleWork* work);
 
-#define SH_RECORD(ac, sw)                \
-    SH_OUT(ac)                           \
-    [2] = (s32)(sw)->pos;                \
-    SH_OUT(ac)                           \
-    [0] = 1;                             \
-    (sw)->ang[(sw)->idx] = (sw)->pos;    \
-    (sw)->spin[(sw)->idx] = (sw)->angle; \
-    (sw)->life[(sw)->idx] = 70.0f;       \
-    (sw)->idx++;                         \
-    SH_OUT(ac)                           \
-    [3]++
+// Records one shot: its position becomes the result, and an afterimage starts at it.
+static inline void shotRecord(BattleActions* ac, ShotWork* sw) {
+    ac->outputParams[2] = (s32)sw->pos;
+    ac->outputParams[0] = 1;
+    sw->ang[sw->idx] = sw->pos;
+    sw->spin[sw->idx] = sw->angle;
+    sw->life[sw->idx] = 70.0f;
+    sw->idx++;
+    ac->outputParams[3]++;
+}
 
 /**
  * Per-frame driver of action command 7, used by Bobbery's Bomb Squad.
  * A reticle sweeps a 60-unit arc around unit params[0] between angles params[4]
  * and params[5] at params[6]/10 degrees a frame;
- * pressing A, holding to charge and letting go throws (acFlags bit 0 throws at once at half power).
+ * pressing A, holding to charge and letting go throws (acFlags bit 0 throws at once with the mean of params[2] and [3]).
  * Each throw sets outputParams[1] (power, params[2]..[3]), [2] (angle), [3] (count) and [0],
  * which the script clears for the next of params[1] throws.
  * Without a press for 360 frames it throws by itself, and the command fails if the last throw was such.
  */
 s32 battleAcMain_Shot(BattleWork* work) {
-    const char* sfx;
     BattleActions* ac;
     ShotWork* sw;
     s32 loop;
-    sfx = (0, "SFX_AC_CURSOR_MOVE1");
+    BattleUnit* unit;
+    s32 i;
     ac = &work->actionCommands;
-    sw = SH_WORK(ac);
+    sw = (ShotWork*)ac->work;
     do {
         loop = 0;
         switch (ac->acState) {
-            case 0: {
-                BattleUnit* unit;
-                s32 i;
+            case AC_STATE_INIT:
                 _ac_disp_init(work);
-                ac->result = 1;
-                sw->minV = SH_PARAMS(ac)->a;
-                sw->maxV = SH_PARAMS(ac)->b;
-                sw->left = SH_PARAMS(ac)->c;
-                sw->right = SH_PARAMS(ac)->d;
+                ac->result = AC_RESULT_RUNNING;
+                sw->minV = ac->params[SHOT_PARAM_MIN_VALUE];
+                sw->maxV = ac->params[SHOT_PARAM_MAX_VALUE];
+                sw->left = ac->params[SHOT_PARAM_LEFT];
+                sw->right = ac->params[SHOT_PARAM_RIGHT];
                 sw->speed0 = 100.0f * sw->minV / sw->maxV;
                 sw->speed = sw->speed0;
                 sw->pos = sw->left + (f32)irand((s32)(sw->right - sw->left));
-                sw->vel = 0.1f * SH_PARAMS(ac)->e;
+                sw->vel = 0.1f * ac->params[SHOT_PARAM_SPEED];
                 sw->idx = 0;
                 ac->setupParam = 30;
-                unit = BattleGetUnitPtr(work, SH_PARAMS(ac)->unitId);
+                unit = BattleGetUnitPtr(work, ac->params[SHOT_PARAM_UNIT_ID]);
                 BtlUnit_GetPos(unit, &sw->unitPos.x, &sw->unitPos.y, &sw->unitPos.z);
                 sw->unitPos.y = sw->unitPos.y + 0.5 * (unit->sizeMultiplier * (f32)BtlUnit_GetHeight(unit));
-                SH_OUT(ac)
-                [0] = 0;
-                SH_OUT(ac)
-                [3] = 0;
+                ac->outputParams[0] = 0;
+                ac->outputParams[3] = 0;
                 for (i = 0; i < 3; i++) {
                     sw->ang[i] = -1000.0f;
                     sw->spin[i] = 0.0f;
                 }
                 sw->sfxId = -1;
-                ac->acState = 99;
+                ac->acState = AC_STATE_WAIT_START;
                 break;
-            }
-            case 99:
-            case 1003:
+            case AC_STATE_WAIT_START:
+            case AC_STATE_RUN + 3:
                 break;
-            case 100:
+            case AC_STATE_START:
                 sw->timer = 360;
-                ac->acState = 1000;
-                sw->sfxId = psndSFXOn(sfx);
-            case 1000:
-                if ((ac->setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && (ac->acUnit->tokenFlags & TOKEN_FLAG_CONFUSED_ACTION)) {
+                ac->acState = AC_STATE_RUN;
+
+                // sound name passed as an integer word, as in the original (only loops show it; see sfx_name_word.h)
+                sw->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_AC_CURSOR_MOVE1"));
+            case AC_STATE_RUN:
+                if ((ac->setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && (ac->acUnit->tokenFlags & kConfusedAction)) {
                     f32 range;
                     s32 r;
                     if (ac->setupFlags & AC_SETUP_FLAG_RETRIES) {
@@ -141,15 +130,13 @@ s32 battleAcMain_Shot(BattleWork* work) {
                     } else {
                         r = (s32)sw->minV;
                     }
-                    SH_OUT(ac)
-                    [1] = (s32)(sw->maxV * (f32)r / 100.0f);
-                    if ((f32)SH_OUT(ac)[1] < sw->minV) {
-                        SH_OUT(ac)
-                        [1] = (s32)sw->minV;
+                    ac->outputParams[1] = (s32)(sw->maxV * (f32)r / 100.0f);
+                    if ((f32)ac->outputParams[1] < sw->minV) {
+                        ac->outputParams[1] = (s32)sw->minV;
                     }
-                    SH_RECORD(ac, sw);
-                    if (sw->idx >= SH_PARAMS(ac)->count) {
-                        ac->result = 2;
+                    shotRecord(ac, sw);
+                    if (sw->idx >= ac->params[SHOT_PARAM_COUNT]) {
+                        ac->result = AC_RESULT_SUCCESS;
                         return 0;
                     }
                     if (ac->setupFlags & AC_SETUP_FLAG_RETRIES) {
@@ -157,25 +144,23 @@ s32 battleAcMain_Shot(BattleWork* work) {
                     }
                     break;
                 }
-                if (!BattlePadCheckTrigger(PAD_BUTTON_A) && !SH_OUT(ac)[0] && ac->countdown <= 0) {
+                if (!BattlePadCheckTrigger(PAD_BUTTON_A) && !ac->outputParams[0] && ac->countdown <= 0) {
                     if (--sw->timer <= 0) {
-                        SH_OUT(ac)
-                        [1] = (s32)(sw->maxV * sw->speed / 100.0f);
-                        if ((f32)SH_OUT(ac)[1] < sw->minV) {
-                            SH_OUT(ac)
-                            [1] = (s32)sw->minV;
+                        ac->outputParams[1] = (s32)(sw->maxV * sw->speed / 100.0f);
+                        if ((f32)ac->outputParams[1] < sw->minV) {
+                            ac->outputParams[1] = (s32)sw->minV;
                         }
-                        SH_RECORD(ac, sw);
-                        if (sw->idx >= SH_PARAMS(ac)->count) {
+                        shotRecord(ac, sw);
+                        if (sw->idx >= ac->params[SHOT_PARAM_COUNT]) {
                             ac->result = 0;
-                            ac->acState = 1002;
+                            ac->acState = AC_STATE_RUN + 2;
                         } else {
                             sw->timer = 360;
                         }
                         loop = 1;
                     }
-                } else if (!SH_OUT(ac)[0]) {
-                    ac->acState = 1001;
+                } else if (!ac->outputParams[0]) {
+                    ac->acState = AC_STATE_RUN + 1;
                 }
                 if (sw->vel) {
                     sw->pos += sw->vel;
@@ -191,82 +176,80 @@ s32 battleAcMain_Shot(BattleWork* work) {
                 }
                 sw->angle += 8.0f;
                 break;
-            case 1001:
+            case AC_STATE_RUN + 1:
                 if (ac->countdown > 0) {
-                    SH_OUT(ac)
-                    [1] = (s32)(50.0f * sw->maxV / 100.0f);
-                    if ((f32)SH_OUT(ac)[1] < sw->minV) {
-                        SH_OUT(ac)
-                        [1] = (s32)sw->minV;
+                    ac->outputParams[1] = (s32)(50.0f * sw->maxV / 100.0f);
+                    if ((f32)ac->outputParams[1] < sw->minV) {
+                        ac->outputParams[1] = (s32)sw->minV;
                     }
-                    SH_RECORD(ac, sw);
-                    if (sw->idx >= SH_PARAMS(ac)->count) {
+                    shotRecord(ac, sw);
+                    if (sw->idx >= ac->params[SHOT_PARAM_COUNT]) {
                         ac->countdown--;
-                        ac->result = 2;
-                        ac->acState = 1002;
+                        ac->result = AC_RESULT_SUCCESS;
+                        ac->acState = AC_STATE_RUN + 2;
                     } else {
-                        ac->acState = 1000;
+                        ac->acState = AC_STATE_RUN;
                     }
                     loop = 1;
                 }
+
+                // BUG: speed is set from speed0 only in AC_STATE_INIT, never after a throw, so each later throw
+                // starts from the charge the previous one reached.
                 sw->speed += 1.0f;
                 if (sw->speed > 100.0f) {
                     sw->speed = 100.0f;
                 }
-                if (ac->acFlags & 1) {
-                    SH_OUT(ac)
-                    [1] = (s32)((sw->minV + sw->maxV) / 2.0f);
-                    SH_RECORD(ac, sw);
-                    if (sw->idx >= SH_PARAMS(ac)->count) {
-                        ac->acState = 1002;
-                        ac->result = 2;
+                if (ac->acFlags & AC_SHOT_FLAG_NO_CHARGE) {
+                    ac->outputParams[1] = (s32)((sw->minV + sw->maxV) / 2.0f);
+                    shotRecord(ac, sw);
+                    if (sw->idx >= ac->params[SHOT_PARAM_COUNT]) {
+                        ac->acState = AC_STATE_RUN + 2;
+                        ac->result = AC_RESULT_SUCCESS;
                     } else {
-                        ac->acState = 1000;
+                        ac->acState = AC_STATE_RUN;
                     }
                 } else if (!BattlePadCheckNow(PAD_BUTTON_A)) {
-                    SH_OUT(ac)
-                    [1] = (s32)(sw->maxV * sw->speed / 100.0f);
-                    if ((f32)SH_OUT(ac)[1] < sw->minV) {
-                        SH_OUT(ac)
-                        [1] = (s32)sw->minV;
+                    ac->outputParams[1] = (s32)(sw->maxV * sw->speed / 100.0f);
+                    if ((f32)ac->outputParams[1] < sw->minV) {
+                        ac->outputParams[1] = (s32)sw->minV;
                     }
-                    SH_RECORD(ac, sw);
-                    if (sw->idx >= SH_PARAMS(ac)->count) {
-                        ac->result = 2;
-                        ac->acState = 1002;
+                    shotRecord(ac, sw);
+                    if (sw->idx >= ac->params[SHOT_PARAM_COUNT]) {
+                        ac->result = AC_RESULT_SUCCESS;
+                        ac->acState = AC_STATE_RUN + 2;
                     } else {
-                        ac->acState = 1000;
+                        ac->acState = AC_STATE_RUN;
                     }
                 }
                 break;
-            case 1002:
-                ac->acState = 1003;
+            case AC_STATE_RUN + 2:
+                ac->acState = AC_STATE_RUN + 3;
                 break;
-            case 1004:
+            case AC_STATE_RUN + 4:
                 sw->endTimer = 60;
-                ac->acState = 1005;
+                ac->acState = AC_STATE_RUN + 5;
                 if (sw->sfxId != -1) {
                     psndSFXOff(sw->sfxId);
                 }
                 break;
-            case 1005:
+            case AC_STATE_RUN + 5:
                 sw->endTimer--;
                 if (sw->endTimer <= 0) {
-                    ac->acState = 1006;
+                    ac->acState = AC_STATE_RUN + 6;
                 }
                 break;
-            case 1006:
-                ac->maincb = 0;
-                ac->dispcb = 0;
-                ac->resultcb = 0;
-                ac->deletecb = 0;
+            case AC_STATE_RUN + 6:
+                ac->maincb = NULL;
+                ac->dispcb = NULL;
+                ac->resultcb = NULL;
+                ac->deletecb = NULL;
                 break;
         }
     } while (loop);
-    if (ac->acState == 1000 || ac->acState == 1001) {
-        dispEntry(CAMERA_2D, 900.0f, 1, _disp_target_mark, work);
+    if (ac->acState == AC_STATE_RUN || ac->acState == AC_STATE_RUN + 1) {
+        dispEntry(CAMERA_2D, 900.0f, DISP_MODE_ALPHA_TEST, _disp_target_mark, work);
     }
-    dispEntry(CAMERA_2D, 900.0f, 1, _disp_target_mark_afterimage, work);
+    dispEntry(CAMERA_2D, 900.0f, DISP_MODE_ALPHA_TEST, _disp_target_mark_afterimage, work);
     return 1;
 }
 
@@ -284,24 +267,24 @@ static void actionCommandDisp(f32 x, f32 y);
 void battleAcDisp_Shot(CameraId cameraId, void* param) {
     BattleWork* work = (BattleWork*)param;
     BattleActions* ac = &work->actionCommands;
-    BattleACDispParams* disp = SH_DISP(ac);
+    BattleACDispParams* disp = &ac->disp;
     switch (ac->acState) {
-        case 99:
-        case 100:
-        case 1000:
-        case 1001:
-        case 1002:
-        case 1003:
-            disp->iconX = intplGetValue(4, -200.0f, 30.0f, 20 - disp->slideTimer, 20);
+        case AC_STATE_WAIT_START:
+        case AC_STATE_START:
+        case AC_STATE_RUN:
+        case AC_STATE_RUN + 1:
+        case AC_STATE_RUN + 2:
+        case AC_STATE_RUN + 3:
+            disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, -200.0f, 30.0f, 20 - disp->slideTimer, 20);
             actionCommandDisp(disp->iconX, disp->iconY);
             if (disp->slideTimer > 0) {
                 disp->slideTimer--;
             }
             break;
-        case 1004:
-        case 1005:
+        case AC_STATE_RUN + 4:
+        case AC_STATE_RUN + 5:
             if (disp->slideTimer >= 40) {
-                disp->iconX = intplGetValue(4, 30.0f, -200.0f, disp->slideTimer - 40, 20);
+                disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, 30.0f, -200.0f, disp->slideTimer - 40, 20);
             } else {
                 disp->iconX = 30.0f;
             }
@@ -315,15 +298,13 @@ void battleAcDisp_Shot(CameraId cameraId, void* param) {
 
 /** Called by btlevtcmd_StopAC: stops the cursor sound and starts the 60-frame end wait. */
 void battleAcDelete_Shot(BattleWork* work) {
-    work->actionCommands.acState = 1004;
+    work->actionCommands.acState = AC_STATE_RUN + 4;
 }
 
-// FAKE: inlining off (FAKES.md); without it _ac_disp_init is inlined into battleAcMain_Shot (649 -> 667 instructions)
-#pragma dont_inline on
 /** Resets the display state: the gauge off screen to the left with a 20-frame slide, white colour, empty fill. */
 static void _ac_disp_init(BattleWork* work) {
-    BattleACDispParams* disp = SH_DISP(&work->actionCommands);
-    memset(disp, 0, 0x2C);
+    BattleACDispParams* disp = &work->actionCommands.disp;
+    memset(disp, 0, sizeof(BattleACDispParams));
     disp->iconX = -200.0f;
     disp->iconY = 0.0f;
     disp->slideTimer = 20;
@@ -334,24 +315,23 @@ static void _ac_disp_init(BattleWork* work) {
     disp->colorStep[3] = 0;
     disp->gaugeRatio = 0.0f;
 }
-#pragma dont_inline reset
 
 /** Draws the power gauge filling as A is held (pulsing red at full); nothing when acFlags bit 0 removes the charge. */
 static void actionCommandDisp(f32 x, f32 y) {
     BattleWork* work = _battleWorkPointer;
     BattleActions* ac = &work->actionCommands;
-    ShotWork* sw = SH_WORK(ac);
-    BattleACDispParams* disp = SH_DISP(ac);
+    ShotWork* sw = (ShotWork*)ac->work;
+    BattleACDispParams* disp = &ac->disp;
     Mtx m3;
     Mtx m1;
     Mtx m2;
     f32 limit;
-    if (!(ac->acFlags & 1)) {
+    if (!(ac->acFlags & AC_SHOT_FLAG_NO_CHARGE)) {
         Vec pos = {0.0f, 0.0f, 0.0f};
         f32 px = -200.0f + x;
         pos.x = px;
         pos.y = 25.0f + y;
-        iconDispGx(&pos, ICON_DISP_2D, ICON_08C, 1.0f);
+        iconDispGx(&pos, ICON_FLAG_2D, 1.0f, ICON_AC_GAUGE_FRAME);
         limit = sw->speed / 100.0f;
         if (disp->gaugeRatio <= limit) {
             disp->gaugeRatio += 0.01f;
@@ -377,27 +357,24 @@ static void actionCommandDisp(f32 x, f32 y) {
         MTXTrans(m1, px - 88.0f * (1.0f - disp->gaugeRatio), 33.0f + y, 0.0f);
         MTXScale(m2, disp->gaugeRatio, 1.0f, 1.0f);
         MTXConcat(m1, m2, m3);
-        iconDispGxCol(m3, ICON_DISP_2D, ICON_08D, (GXColor){disp->color.r, disp->color.g, disp->color.b, disp->color.a});
+        iconDispGxCol(m3, ICON_FLAG_2D, ICON_AC_GAUGE_FILL, (GXColor){disp->color.r, disp->color.g, disp->color.b, disp->color.a});
     }
 }
 
-// FAKE: inlining off (FAKES.md); without it _draw_target_mark is inlined into _disp_target_mark_afterimage (93 -> 251 instructions; one other caller grows)
-#pragma dont_inline on
 /** Draws the reticle: two textures spinning in opposite directions by angle, at half size, in the given colour. */
 static void _draw_target_mark(GXColor color, f32 x, f32 y, f32 z, f32 angle) {
     Vec pos = {0.0f, 0.0f, 0.0f};
     pos.x = x;
     pos.y = y;
     pos.z = z;
-    btlDispTex4(VERSION_PICK(0x42, 0x58), pos, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, reviseAngle(-angle)}, color);
-    btlDispTex4(VERSION_PICK(0x41, 0x57), pos, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, reviseAngle(angle)}, color);
+    btlDispTex4(BTL_TEX(0x42), pos, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, reviseAngle(-angle)}, color);
+    btlDispTex4(BTL_TEX(0x41), pos, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, reviseAngle(angle)}, color);
 }
-#pragma dont_inline reset
 
 /** Display callback for the live reticle at its current angle around the unit; main registers it while aiming. */
 static void _disp_target_mark(CameraId cameraId, void* param) {
     BattleWork* work = (BattleWork*)param;
-    ShotWork* sw = SH_WORK(&work->actionCommands);
+    ShotWork* sw = (ShotWork*)work->actionCommands.work;
     Vec in;
     Vec out;
     in.x = 60.0f * sinfd(sw->pos) + sw->unitPos.x;
@@ -413,7 +390,7 @@ static void _disp_target_mark(CameraId cameraId, void* param) {
  */
 static void _disp_target_mark_afterimage(CameraId cameraId, void* param) {
     BattleWork* work = (BattleWork*)param;
-    ShotWork* sw = SH_WORK(&work->actionCommands);
+    ShotWork* sw = (ShotWork*)work->actionCommands.work;
     s32 i;
     for (i = 0; i < 3; i++) {
         if (sw->ang[i] >= 0.0f && sw->life[i] > 0.0f) {
@@ -427,7 +404,7 @@ static void _disp_target_mark_afterimage(CameraId cameraId, void* param) {
             if (sw->life[i] >= 30.0f) {
                 _draw_target_mark((GXColor){0x90, 0x80, 0xA0, 0xFF}, out.x, out.y, out.z, sw->spin[i]);
             } else {
-                u8 a = (u8)intplGetValue(0, 255.0f, 0.0f, (s32)(30.0f - sw->life[i]), 30);
+                u8 a = (u8)intplGetValue(EASING_LINEAR, 255.0f, 0.0f, (s32)(30.0f - sw->life[i]), 30);
                 _draw_target_mark((GXColor){0x90, 0x80, 0xA0, a}, out.x, out.y, out.z, sw->spin[i]);
             }
             if (sw->life[i] <= 0.0f) {

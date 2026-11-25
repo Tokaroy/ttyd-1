@@ -1,18 +1,18 @@
 // Rank-up banner: plays the EFF_Rankup model animation once (EFF_TekiKyouka, "enemy strengthening", before US);
 // from US on the model is chosen per language.
+
 #include "version.h"
-#if VERSION >= VERSION_US
-#include "mario/mariost.h"
-#endif
 #include "eff/eff_rankup.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
-
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
 static void effRankupDisp(CameraId cameraId, EffectEntry* effect);
 static void effRankupMain(EffectEntry* effect);
+
 #if VERSION >= VERSION_US
 /**
  * Animation group of the rank-up effect by language
@@ -27,7 +27,7 @@ typedef struct EffRankupWork {
     f32 scale;    // 0x10
     s32 poseId;   // 0x14
     s32 state;    // 0x18
-    s32 timer;    // 0x1C, only cleared at entry
+    s32 timer;    // 0x1C
     s32 alpha;    // 0x20
 } EffRankupWork;
 
@@ -42,7 +42,7 @@ EffectEntry* effRankupEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffRankupWork) * effect->count);
     effect->userdata = work;
     effect->callback = effRankupMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -55,11 +55,11 @@ EffectEntry* effRankupEntry(s32 type, f32 x, f32 y, f32 z) {
     return effect;
 }
 
-/** Per frame: loads the banner animation, fades it in, and deletes the effect after one loop. */
+/** Per frame: loads the banner animation, fades it out late in the loop, and deletes the effect after one loop. */
 static void effRankupMain(EffectEntry* effect) {
     EffRankupWork* work = effect->userdata;
     Vec position;
-    BOOL inBattle;
+    s32 inBattle;
 
     position = (Vec){work->position.x, work->position.y, work->position.z};
 #if VERSION >= VERSION_US
@@ -69,8 +69,8 @@ static void effRankupMain(EffectEntry* effect) {
 #endif
 
     // soft delete
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (work->poseId != -1) {
             animPoseRelease(work->poseId);
         }
@@ -86,10 +86,11 @@ static void effRankupMain(EffectEntry* effect) {
 #endif
                 return;
             }
+
 #if VERSION >= VERSION_US
-            work->poseId = animPoseEntry(eff_rankup_str_tbl[gp->language], (u32)inBattle);
+            work->poseId = animPoseEntry(eff_rankup_str_tbl[gp->language], inBattle);
 #else
-            work->poseId = animPoseEntry("EFF_TekiKyouka", (u32)inBattle);
+            work->poseId = animPoseEntry("EFF_TekiKyouka", inBattle);
 #endif
             animPoseSetAnim(work->poseId, "Z_1", TRUE);
             work->state++;
@@ -102,6 +103,7 @@ static void effRankupMain(EffectEntry* effect) {
             }
             break;
     }
+
     // fade out over the last part of the animation
     if (!(animPoseGetLoopTimes(work->poseId) < 0.61538464f)) {
         work->alpha -= 20;
@@ -109,10 +111,10 @@ static void effRankupMain(EffectEntry* effect) {
             work->alpha = 0;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effRankupDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effRankupDisp, effect);
 }
 
-/** Draws the banner animation pose in three segments scaled by 6. */
+/** Draws the camera-facing banner animation pose in xlu modes 1-3 at draw scale 6. */
 static void effRankupDisp(CameraId cameraId, EffectEntry* effect) {
     EffRankupWork* work = effect->userdata;
     Mtx mtx;
@@ -125,7 +127,7 @@ static void effRankupDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 6.0f);

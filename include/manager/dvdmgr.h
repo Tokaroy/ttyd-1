@@ -1,20 +1,24 @@
 // dvdmgr.c: the DVD manager (DVDEntry, DVDFlags): prioritised file reads run on a separate thread.
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/dvd.h>
 #include "dolphin/os/OSThread.h"
 
 #define DVDEntryCount 0x100
 
-typedef BOOL (*DVDMgrCallback)(void);
+typedef u32 (*DVDMgrCallback)(void); // psndPushGroup's type; the result is not used
 
 typedef enum DVDFlags {
     DVDMGR_READING = (1 << 0),
     DVDMGR_FINISHED = (1 << 1),
     DVDMGR_CLOSED = (1 << 3),
-    DVDMGR_OPEN_FAILED = (1 << 4), // demo: dvdMgrOpen's DVDOpen failed (the entry is cleared right after)
-    DVDMGR_UNK_ERROR1 = (1 << 5),
-    DVDMGR_UNK_ERROR2 = (1 << 7),
+#if VERSION <= VERSION_DEMO_JP
+    DVDMGR_OPEN_FAILED = (1 << 4), // dvdMgrOpen: DVDOpen failed (the entry is cleared right after)
+#endif
+    DVDMGR_READ_ERROR = (1 << 5),
+    DVDMGR_READ_FAILED = (1 << 7),
     DVDMGR_INUSE = (1 << 15)
 } DVDFlags;
 
@@ -29,7 +33,6 @@ typedef struct DVDEntry {
     u16 status;           // 0x90
     u16 priority;         // 0x92
     u16 unknown;          // 0x94
-    u8 pad_96[2];         // 0x96
 } DVDEntry;
 
 void DVDMgrInit(void);

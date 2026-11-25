@@ -1,4 +1,5 @@
 // eff_thunder_n64.c: lightning strike effect entry (effThunderN64Entry).
+
 #pragma once
 
 #include "driver/effdrv.h"

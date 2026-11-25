@@ -1,24 +1,29 @@
 // hei_02 (平原, Petal Meadows): grassy field between Petalburg (nok_01) and hei_03.
 // Field enemies, coins, a Star Piece and a POW Block.
+
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_cloud.h"
-#include "evt/evt_item.h"
+#include "data_tables.h"
 #include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
-#include "hei.h"
-#include "data_tables.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "evt/evt_mobj.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "driver/npcdrv.h"
 
 static BeroEntry bero_entry_data[3];
-extern EvtWord evt_ki_6[];
+static EvtWord evt_ki_6[20];
 static TreeAccess ki_data[8];
+static EvtWord evt_kusa_1[20];
 static KusaAccess kusa_data[16];
+EvtWord hei_02_init_evt[129];
 
 /** Doors of this room: the west exit (w_bero) to nok_01 (Petalburg) and the east exit (e_bero) to hei_03. */
 static BeroEntry bero_entry_data[] = {
@@ -58,10 +63,10 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /** Reward script for tree ki_6: if the coin has not been collected yet, a Coin falls out when Mario hits the tree. */
-EVT_BEGIN(evt_ki_6)
+static EVT_BEGIN(evt_ki_6)
     CALL(evt_item_delete_check, STRING("item_ki_6"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ki_6"), ITEM_COIN, 192, 92, -120, ITEM_ENTRY_FALL_THROWN, GSWF(GSWF_HEI02_TREE_COIN_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_ki_6"), ITEM_COIN, 192, 92, -120, ITEM_TYPE_FALL_NO_PICKUP, GSWF_HEI_02_COIN_TREE, 0)
     END_IF
     RETURN
 EVT_END()
@@ -79,19 +84,19 @@ static TreeAccess ki_data[] = {
 };
 
 /**
- * Reward script for bush a_kusa_1: if not yet taken,
- * a Star Piece pops out of the bush when Mario hits it (GSWF_HEI02_STAR_PIECE_BUSH).
+ * Event of grass patch a_kusa_1 (kusa_data): when item_kusa_1 is not out, scatters it as a Star Piece,
+ * collected only once (GSWF_STARPIECE_33).
  */
 static EVT_BEGIN(evt_kusa_1)
     CALL(evt_item_delete_check, STRING("item_kusa_1"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_kusa_1"), ITEM_STAR_PIECE, -645, 50, -70, ITEM_ENTRY_LAUNCH, GSWF(GSWF_HEI02_STAR_PIECE_BUSH), 0)
+        CALL(evt_item_entry, STRING("item_kusa_1"), ITEM_STAR_PIECE, -645, 50, -70, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_STARPIECE_33, 0)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Grass patches Mario can hit on this field (a_kusa_1 to a_kusa_13 and on); the first one runs an event when
+ * Grass patches Mario can hit on this field (a_kusa_1 to a_kusa_14 and a_ku_15); the first one runs an event when
  * cut.
  */
 static KusaAccess kusa_data[] = {
@@ -115,22 +120,22 @@ static KusaAccess kusa_data[] = {
 
 /**
  * Petal Meadows hei_02 map init: registers the exits, field music, the tree and grass rewards, wheat animation,
- * the POW Block item block and the drifting grass clouds.
+ * the POW Block item block and the grass patches kusa_1 to kusa_13 as pieces Flurrie can blow away (evt_cloud_ent).
  */
 EVT_BEGIN(hei_02_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI1"))
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI1"))
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     SET_VALUE(LW(0), PTR(ki_data))
     CALL_CHILD(evt_sub_tree_access_entry)
     SET_VALUE(LW(0), PTR(kusa_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    CALL(evt_map_playanim, STRING("anm_mugi_1"), 1, 0)
-    CALL(evt_mobj_badgeblk, STRING("m"), 425, 25, -50, ITEM_POW_BLOCK, 0, GSWF(GSWF_HEI02_POW_BLOCK_ITEM_BLOCK_HIT), 0)
+    CALL(evt_map_playanim, STRING("anm_mugi_1"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_mobj_badgeblk, STRING("m"), 425, 25, -50, ITEM_POW_BLOCK, 0, GSWF_HEI_02_POW_BLOCK_BLOCK, 0)
     CALL(evt_cloud_init)
     CALL(evt_cloud_ent, 0, STRING("kusa_1"), STRING("a_kusa_1"), 0)
     CALL(evt_cloud_ent, 0, STRING("kusa_2"), STRING("a_kusa_2"), 0)

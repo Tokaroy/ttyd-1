@@ -1,4 +1,6 @@
-// Ice block (Ice): appears for the given duration, then shrinks away dripping smoke puffs; used for the frozen status.
+// Ice block (Ice): plays its final animation phase when the duration expires or soft deletion is requested.
+
+#include "version.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -29,7 +31,7 @@ typedef struct EffIceWork {
  * Keyframes of the ice block's root joint: it grows from its base to full size by frame 14, wobbles
  * until frame 22, then tips slightly to one side and holds.
  */
-MayaHermitKey ice_effHermit_0[] = {
+static MayaHermitKey ice_effHermit_0[] = {
     {
         0, // time
         {
@@ -119,11 +121,12 @@ MayaHermitKey ice_effHermit_0[] = {
         },
     },
 };
+
 /**
  * Keyframes of ice shard 1 (top-left quarter, top triangle): still until the ice breaks at frame 99,
  * then it flies up and left, spinning a full turn about Y, and shrinks away.
  */
-MayaHermitKey ice_effHermit_1[] = {
+static MayaHermitKey ice_effHermit_1[] = {
     {
         0, // time
         {
@@ -158,19 +161,18 @@ MayaHermitKey ice_effHermit_1[] = {
         },
     },
 };
-/** Ice shard 1: the top triangle of the block face's top-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane1_0[] = {
-    3, // vertex count
-    -1280, 1280, 0, 0, 0,
-    -640, 640, 0, 128, 128,
-    0, 1280, 0, 256, 0,
-};
-s16* ice_effFaceDt_pPlane1 = ice_effFace_pPlane1_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 1
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 2 (top-left quarter, left triangle): still until the ice breaks at frame 99,
  * then it flies down and left, spinning a full turn about Z, and shrinks away.
  */
-MayaHermitKey ice_effHermit_2[] = {
+static MayaHermitKey ice_effHermit_2[] = {
     {
         0, // time
         {
@@ -205,19 +207,18 @@ MayaHermitKey ice_effHermit_2[] = {
         },
     },
 };
-/** Ice shard 2: the left triangle of the block face's top-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane2_0[] = {
-    3, // vertex count
-    -1280, 0, 0, 0, 256,
-    -640, 640, 0, 128, 128,
-    -1280, 1280, 0, 0, 0,
-};
-s16* ice_effFaceDt_pPlane2 = ice_effFace_pPlane2_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 2
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 3 (top-left quarter, bottom triangle): still until the ice breaks at frame 99,
  * then it flies up and left, spinning a full turn about Y, and shrinks away.
  */
-MayaHermitKey ice_effHermit_3[] = {
+static MayaHermitKey ice_effHermit_3[] = {
     {
         0, // time
         {
@@ -252,19 +253,18 @@ MayaHermitKey ice_effHermit_3[] = {
         },
     },
 };
-/** Ice shard 3: the bottom triangle of the block face's top-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane3_0[] = {
-    3, // vertex count
-    -1280, 0, 0, 0, 256,
-    0, 0, 0, 256, 256,
-    -640, 640, 0, 128, 128,
-};
-s16* ice_effFaceDt_pPlane3 = ice_effFace_pPlane3_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 3
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 4 (top-left quarter, right triangle): still until the ice breaks at frame 99,
  * then it flies up and left, spinning a full turn about X, and shrinks away.
  */
-MayaHermitKey ice_effHermit_4[] = {
+static MayaHermitKey ice_effHermit_4[] = {
     {
         0, // time
         {
@@ -299,19 +299,18 @@ MayaHermitKey ice_effHermit_4[] = {
         },
     },
 };
-/** Ice shard 4: the right triangle of the block face's top-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane4_0[] = {
-    3, // vertex count
-    0, 1280, 0, 256, 0,
-    -640, 640, 0, 128, 128,
-    0, 0, 0, 256, 256,
-};
-s16* ice_effFaceDt_pPlane4 = ice_effFace_pPlane4_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 4
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 5 (top-right quarter, top triangle): still until the ice breaks at frame 99,
  * then it flies to the right, spinning a full turn about X, and shrinks away.
  */
-MayaHermitKey ice_effHermit_5[] = {
+static MayaHermitKey ice_effHermit_5[] = {
     {
         0, // time
         {
@@ -346,19 +345,18 @@ MayaHermitKey ice_effHermit_5[] = {
         },
     },
 };
-/** Ice shard 5: the top triangle of the block face's top-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane5_0[] = {
-    3, // vertex count
-    0, 1280, 0, 256, 0,
-    640, 640, 0, 384, 128,
-    1280, 1280, 0, 512, 0,
-};
-s16* ice_effFaceDt_pPlane5 = ice_effFace_pPlane5_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 5
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 6 (top-right quarter, left triangle): still until the ice breaks at frame 99,
  * then it flies up and right, spinning a full turn about Z, and shrinks away.
  */
-MayaHermitKey ice_effHermit_6[] = {
+static MayaHermitKey ice_effHermit_6[] = {
     {
         0, // time
         {
@@ -393,19 +391,18 @@ MayaHermitKey ice_effHermit_6[] = {
         },
     },
 };
-/** Ice shard 6: the left triangle of the block face's top-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane6_0[] = {
-    3, // vertex count
-    0, 0, 0, 256, 256,
-    640, 640, 0, 384, 128,
-    0, 1280, 0, 256, 0,
-};
-s16* ice_effFaceDt_pPlane6 = ice_effFace_pPlane6_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 6
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 7 (top-right quarter, bottom triangle): still until the ice breaks at frame 99,
  * then it flies to the right, spinning a full turn about Y, and shrinks away.
  */
-MayaHermitKey ice_effHermit_7[] = {
+static MayaHermitKey ice_effHermit_7[] = {
     {
         0, // time
         {
@@ -440,19 +437,18 @@ MayaHermitKey ice_effHermit_7[] = {
         },
     },
 };
-/** Ice shard 7: the bottom triangle of the block face's top-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane7_0[] = {
-    3, // vertex count
-    0, 0, 0, 256, 256,
-    1280, 0, 0, 512, 256,
-    640, 640, 0, 384, 128,
-};
-s16* ice_effFaceDt_pPlane7 = ice_effFace_pPlane7_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 7
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 8 (top-right quarter, right triangle): still until the ice breaks at frame 99,
  * then it flies up and right, spinning a full turn about X, and shrinks away.
  */
-MayaHermitKey ice_effHermit_8[] = {
+static MayaHermitKey ice_effHermit_8[] = {
     {
         0, // time
         {
@@ -487,19 +483,18 @@ MayaHermitKey ice_effHermit_8[] = {
         },
     },
 };
-/** Ice shard 8: the right triangle of the block face's top-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane8_0[] = {
-    3, // vertex count
-    640, 640, 0, 384, 128,
-    1280, 0, 0, 512, 256,
-    1280, 1280, 0, 512, 0,
-};
-s16* ice_effFaceDt_pPlane8 = ice_effFace_pPlane8_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 8
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 9 (bottom-left quarter, top triangle): still until the ice breaks at frame 99,
  * then it flies down and left, spinning a full turn about Z, and shrinks away.
  */
-MayaHermitKey ice_effHermit_9[] = {
+static MayaHermitKey ice_effHermit_9[] = {
     {
         0, // time
         {
@@ -534,19 +529,18 @@ MayaHermitKey ice_effHermit_9[] = {
         },
     },
 };
-/** Ice shard 9: the top triangle of the block face's bottom-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane9_0[] = {
-    3, // vertex count
-    -640, -640, 0, 128, 384,
-    0, 0, 0, 256, 256,
-    -1280, 0, 0, 0, 256,
-};
-s16* ice_effFaceDt_pPlane9 = ice_effFace_pPlane9_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 9
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 10 (bottom-left quarter, left triangle): still until the ice breaks at frame 99,
  * then it flies down and left, spinning a full turn about X, and shrinks away.
  */
-MayaHermitKey ice_effHermit_10[] = {
+static MayaHermitKey ice_effHermit_10[] = {
     {
         0, // time
         {
@@ -581,19 +575,18 @@ MayaHermitKey ice_effHermit_10[] = {
         },
     },
 };
-/** Ice shard 10: the left triangle of the block face's bottom-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane10_0[] = {
-    3, // vertex count
-    -1280, -1280, 0, 0, 512,
-    -640, -640, 0, 128, 384,
-    -1280, 0, 0, 0, 256,
-};
-s16* ice_effFaceDt_pPlane10 = ice_effFace_pPlane10_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 10
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 11 (bottom-left quarter, bottom triangle): still until the ice breaks at frame 99,
  * then it flies down, spinning a full turn about Y, and shrinks away.
  */
-MayaHermitKey ice_effHermit_11[] = {
+static MayaHermitKey ice_effHermit_11[] = {
     {
         0, // time
         {
@@ -628,19 +621,18 @@ MayaHermitKey ice_effHermit_11[] = {
         },
     },
 };
-/** Ice shard 11: the bottom triangle of the block face's bottom-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane11_0[] = {
-    3, // vertex count
-    -1280, -1280, 0, 0, 512,
-    0, -1280, 0, 256, 512,
-    -640, -640, 0, 128, 384,
-};
-s16* ice_effFaceDt_pPlane11 = ice_effFace_pPlane11_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 11
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 12 (bottom-left quarter, right triangle): still until the ice breaks at frame 99,
  * then it flies down, spinning a full turn about X, and shrinks away.
  */
-MayaHermitKey ice_effHermit_12[] = {
+static MayaHermitKey ice_effHermit_12[] = {
     {
         0, // time
         {
@@ -675,19 +667,18 @@ MayaHermitKey ice_effHermit_12[] = {
         },
     },
 };
-/** Ice shard 12: the right triangle of the block face's bottom-left quarter, with texture coordinates. */
-s16 ice_effFace_pPlane12_0[] = {
-    3, // vertex count
-    -640, -640, 0, 128, 384,
-    0, -1280, 0, 256, 512,
-    0, 0, 0, 256, 256,
-};
-s16* ice_effFaceDt_pPlane12 = ice_effFace_pPlane12_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 12
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 13 (bottom-right quarter, top triangle): still until the ice breaks at frame 99,
  * then it flies down and right, spinning a full turn about Z, and shrinks away.
  */
-MayaHermitKey ice_effHermit_13[] = {
+static MayaHermitKey ice_effHermit_13[] = {
     {
         0, // time
         {
@@ -722,19 +713,18 @@ MayaHermitKey ice_effHermit_13[] = {
         },
     },
 };
-/** Ice shard 13: the top triangle of the block face's bottom-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane13_0[] = {
-    3, // vertex count
-    0, 0, 0, 256, 256,
-    640, -640, 0, 384, 384,
-    1280, 0, 0, 512, 256,
-};
-s16* ice_effFaceDt_pPlane13 = ice_effFace_pPlane13_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 13
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 14 (bottom-right quarter, left triangle): still until the ice breaks at frame 99,
  * then it flies down and right, spinning a full turn about Y, and shrinks away.
  */
-MayaHermitKey ice_effHermit_14[] = {
+static MayaHermitKey ice_effHermit_14[] = {
     {
         0, // time
         {
@@ -769,19 +759,18 @@ MayaHermitKey ice_effHermit_14[] = {
         },
     },
 };
-/** Ice shard 14: the left triangle of the block face's bottom-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane14_0[] = {
-    3, // vertex count
-    0, -1280, 0, 256, 512,
-    640, -640, 0, 384, 384,
-    0, 0, 0, 256, 256,
-};
-s16* ice_effFaceDt_pPlane14 = ice_effFace_pPlane14_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 14
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 15 (bottom-right quarter, bottom triangle): still until the ice breaks at frame 99,
  * then it flies up and right, spinning a full turn about X, and shrinks away.
  */
-MayaHermitKey ice_effHermit_15[] = {
+static MayaHermitKey ice_effHermit_15[] = {
     {
         0, // time
         {
@@ -816,19 +805,18 @@ MayaHermitKey ice_effHermit_15[] = {
         },
     },
 };
-/** Ice shard 15: the bottom triangle of the block face's bottom-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane15_0[] = {
-    3, // vertex count
-    0, -1280, 0, 256, 512,
-    1280, -1280, 0, 512, 512,
-    640, -640, 0, 384, 384,
-};
-s16* ice_effFaceDt_pPlane15 = ice_effFace_pPlane15_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 15
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of ice shard 16 (bottom-right quarter, right triangle): still until the ice breaks at frame 99,
  * then it flies up, spinning a full turn about X, and shrinks away.
  */
-MayaHermitKey ice_effHermit_16[] = {
+static MayaHermitKey ice_effHermit_16[] = {
     {
         0, // time
         {
@@ -863,19 +851,18 @@ MayaHermitKey ice_effHermit_16[] = {
         },
     },
 };
-/** Ice shard 16: the right triangle of the block face's bottom-right quarter, with texture coordinates. */
-s16 ice_effFace_pPlane16_0[] = {
-    3, // vertex count
-    1280, 0, 0, 512, 256,
-    640, -640, 0, 384, 384,
-    1280, -1280, 0, 512, 512,
-};
-s16* ice_effFaceDt_pPlane16 = ice_effFace_pPlane16_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 16
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
 /**
  * Keyframes of the block's translucent frost overlay, just in front of the shards: shown until the ice
  * breaks at frame 99, then gone.
  */
-MayaHermitKey ice_effHermit_17[] = {
+static MayaHermitKey ice_effHermit_17[] = {
     {
         0, // time
         {
@@ -910,17 +897,36 @@ MayaHermitKey ice_effHermit_17[] = {
         },
     },
 };
-/** The frost overlay: one square covering the whole block face, corners with texture coordinates. */
-s16 ice_effFace_pPlane17_0[] = {
-    4, // vertex count
-    -1280, -1280, 0, 0, 512,
-    1280, -1280, 0, 512, 512,
-    1280, 1280, 0, 512, 0,
-    -1280, 1280, 0, 0, 0,
-};
-s16* ice_effFaceDt_pPlane17 = ice_effFace_pPlane17_0;
+
+#if VERSION <= VERSION_DEMO_JP
+#define ICE_FACE 17
+#include "../src/effect/eff_ice_face.inc"
+#undef ICE_FACE
+#endif
+
+#if VERSION >= VERSION_JP
+// From JP on, the face pointers are defined after this table (eff_ice_face.inc below).
+static s16* ice_effFaceDt_pPlane1;
+static s16* ice_effFaceDt_pPlane2;
+static s16* ice_effFaceDt_pPlane3;
+static s16* ice_effFaceDt_pPlane4;
+static s16* ice_effFaceDt_pPlane5;
+static s16* ice_effFaceDt_pPlane6;
+static s16* ice_effFaceDt_pPlane7;
+static s16* ice_effFaceDt_pPlane8;
+static s16* ice_effFaceDt_pPlane9;
+static s16* ice_effFaceDt_pPlane10;
+static s16* ice_effFaceDt_pPlane11;
+static s16* ice_effFaceDt_pPlane12;
+static s16* ice_effFaceDt_pPlane13;
+static s16* ice_effFaceDt_pPlane14;
+static s16* ice_effFaceDt_pPlane15;
+static s16* ice_effFaceDt_pPlane16;
+static s16* ice_effFaceDt_pPlane17;
+#endif
+
 /** Joints of the ice block animation: the root, the 16 face shards and the frost overlay. */
-MayaPoly ice_effAnimRST[] = {
+static MayaPoly ice_effAnimRST[] = {
     {8, ice_effHermit_0, 0, NULL},
     {3, ice_effHermit_1, 1, &ice_effFaceDt_pPlane1},
     {3, ice_effHermit_2, 1, &ice_effFaceDt_pPlane2},
@@ -940,18 +946,24 @@ MayaPoly ice_effAnimRST[] = {
     {3, ice_effHermit_16, 1, &ice_effFaceDt_pPlane16},
     {3, ice_effHermit_17, 1, &ice_effFaceDt_pPlane17},
 };
+
+#if VERSION >= VERSION_JP
+#include "../src/effect/eff_ice_face.inc"
+#endif
+
 /** Joint list of the ice block animation. */
-MayaPolyList ice_effAnimRSTDt = {18, ice_effAnimRST};
+static MayaKeyList ice_effAnimRSTDt = {18, ice_effAnimRST};
+
 /**
  * The ice block animation (119 frames), played by effIceMain: it runs to frame 90 and holds there
  * until the freeze ends, then plays on through the shatter.
  */
-MayaAnimData ice_effAnimDt = {{0}, 119.0f, &ice_effAnimRSTDt};
+static MayaAnimData ice_effAnimDt = {{0}, 119.0f, &ice_effAnimRSTDt};
 
 static void effIceMain(EffectEntry* effect);
-static void effIceDisp(CameraId cameraId, EffectEntry* effect);
+static void effIceDisp(CameraId cameraId, void* param);
 
-/** Spawns an ice block at (x, y, z); duration <= 0 keeps it until soft-deleted. Used for the frozen status. */
+/** Spawns an ice block at (x, y, z); durations 1..999 count down, other values hold until soft-deleted. Used for the frozen status. */
 EffectEntry* effIceEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffIceWork* work;
@@ -962,7 +974,7 @@ EffectEntry* effIceEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 scale)
     work = __memAlloc(HEAP_EFFECT, sizeof(EffIceWork));
     effect->userdata = work;
     effect->callback = effIceMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -983,25 +995,24 @@ EffectEntry* effIceEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 scale)
     return effect;
 }
 
-/** Plays the ice block's animation; soft delete jumps to its shrinking phase, which drips smoke puffs. */
+/** Plays the ice block's animation; soft delete starts its final animation phase at frame 90. */
 static void effIceMain(EffectEntry* effect) {
     EffIceWork* work = effect->userdata;
     Vec calcPos;
     Vec pos = {0.0f, 0.0f, 0.0f};
+    OSTime now;
 
     pos.x = work->position.x;
     pos.y = work->position.y;
     pos.z = work->position.z;
     calcPos = pos;
 
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->frame = 90;
         work->state = 1;
-        {
-            OSTime now = gp->inBattle ? gp->renderTime : gp->renderFieldTime;
-            work->anim->startTime = now / (OS_TIMER_CLOCK / 1000) - (u64)(1000.0f / gp->framerate) * work->frame;
-        }
+        now = gp->inBattle ? gp->renderTime : gp->renderFieldTime;
+        work->anim->startTime = OSTicksToMilliseconds(now) - (u64)(1000.0f / gp->framerate) * work->frame;
     }
 
     switch (work->state) {
@@ -1050,11 +1061,12 @@ static void effIceMain(EffectEntry* effect) {
             }
             break;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&calcPos), 2, (DispCallback)effIceDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&calcPos), DISP_MODE_XLU, effIceDisp, effect);
 }
 
 /** Draws the ice block model with its animated joint transforms. */
-static void effIceDisp(CameraId cameraId, EffectEntry* effect) {
+static void effIceDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffIceWork* work = effect->userdata;
     GXTexObj texObj;
     Mtx trans;
@@ -1084,28 +1096,26 @@ static void effIceDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GXSetTevOp(GX_TEVSTAGE0, GX_MODULATE);
     GXSetCurrentMtx(GX_PNMTX0);
-    {
-        for (i = 1; i < work->anim->data->polyList->count; i++) {
-            id = 0x20;
-            if (i < work->anim->data->polyList->count - 1) {
-                id = 0x1f;
-            }
-            effGetTexObj(id, &texObj);
-            GXLoadTexObj(&texObj, GX_TEXMAP0);
-            if (i < work->anim->data->polyList->count - 1) {
-                effGetTexObj(0x1f, &texObj);
-                GXLoadTexObj(&texObj, GX_TEXMAP0);
-                GXSetChanMatColor(GX_COLOR0A0, (GXColor){255, 255, 255, (u8)(191.25f * work->alpha)});
-            } else {
-                effGetTexObj(0x20, &texObj);
-                GXLoadTexObj(&texObj, GX_TEXMAP0);
-                GXSetChanMatColor(GX_COLOR0A0, (GXColor){255, 255, 255, (u8)(127.5f * work->alpha)});
-            }
-            PSMTXConcat(mtx, work->anim->joints[0].mtx, joint);
-            PSMTXConcat(joint, work->anim->joints[i].mtx, joint);
-            PSMTXConcat(camGetPtr(cameraId)->view, joint, joint);
-            GXLoadPosMtxImm(joint, GX_PNMTX0);
-            effDrawMayaPoly(&work->anim->data->polyList->polys[i]);
+    for (i = 1; i < work->anim->data->lists->count; i++) {
+        id = 0x20;
+        if (i < work->anim->data->lists->count - 1) {
+            id = 0x1f;
         }
+        effGetTexObj(id, &texObj);
+        GXLoadTexObj(&texObj, GX_TEXMAP0);
+        if (i < work->anim->data->lists->count - 1) {
+            effGetTexObj(0x1f, &texObj);
+            GXLoadTexObj(&texObj, GX_TEXMAP0);
+            GXSetChanMatColor(GX_COLOR0A0, (GXColor){255, 255, 255, (u8)(191.25f * work->alpha)});
+        } else {
+            effGetTexObj(0x20, &texObj);
+            GXLoadTexObj(&texObj, GX_TEXMAP0);
+            GXSetChanMatColor(GX_COLOR0A0, (GXColor){255, 255, 255, (u8)(127.5f * work->alpha)});
+        }
+        PSMTXConcat(mtx, work->anim->joints[0].mtx, joint);
+        PSMTXConcat(joint, work->anim->joints[i].mtx, joint);
+        PSMTXConcat(camGetPtr(cameraId)->view, joint, joint);
+        GXLoadPosMtxImm(joint, GX_PNMTX0);
+        effDrawMayaPoly(&work->anim->data->lists->polys[i]);
     }
 }

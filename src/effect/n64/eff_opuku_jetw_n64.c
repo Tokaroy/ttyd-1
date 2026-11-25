@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: water jet (jetw) from a point with a scale and lifetime.
+
 #include "eff/n64/eff_opuku_jetw_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -81,51 +82,45 @@ static JetwEnt adata[] = {
     {0, 50, 210, 140, 180, 10, 0},
 };
 
-static struct {
-    JetwEnt e[33];
-    s16 pad;
-} a2data = {{
-                {0, 0, 30, 140, 0, 255, 0},
-                {0, 6, 30, 120, 0, 240, 0},
-                {1, 12, 30, 110, -5, 230, 0},
-                {1, 17, 50, 100, -20, 220, 0},
-                {2, 22, 60, 90, -30, 210, 0},
-                {2, 26, 70, 90, -40, 200, 0},
-                {3, 28, 80, 85, -50, 190, 0},
-                {4, 32, 90, 80, -60, 180, 0},
-                {5, 35, 100, 77, -70, 120, 0},
-                {7, 38, 110, 65, -80, 80, 0},
-                {8, 40, 120, 54, -90, 40, 0},
-                {0, 0, 30, 140, 0, 255, 0},
-                {0, 6, 30, 120, 0, 240, 0},
-                {-1, 12, 30, 110, 5, 230, 0},
-                {-1, 17, 50, 100, 20, 220, 0},
-                {-2, 22, 60, 90, 30, 210, 0},
-                {-2, 26, 70, 90, 40, 200, 0},
-                {-3, 28, 80, 85, 50, 190, 0},
-                {-4, 32, 90, 80, 60, 180, 0},
-                {-5, 35, 100, 77, 70, 120, 0},
-                {-7, 38, 110, 65, 80, 80, 0},
-                {-8, 40, 120, 54, 90, 40, 0},
-                {0, 0, 30, 140, 0, 255, 0},
-                {0, 6, 30, 120, 0, 240, 0},
-                {0, 12, 30, 110, 5, 230, 0},
-                {0, 17, 50, 100, 20, 220, 0},
-                {0, 22, 60, 90, 30, 210, 0},
-                {0, 26, 70, 90, 40, 200, 0},
-                {0, 28, 80, 85, 50, 190, 0},
-                {0, 32, 90, 80, 60, 180, 0},
-                {0, 36, 100, 77, 70, 120, 0},
-                {0, 39, 110, 65, 80, 80, 0},
-                {0, 42, 120, 54, 90, 40, 0},
-            },
-            0};
+static JetwEnt a2data[] = {
+    {0, 0, 30, 140, 0, 255, 0},
+    {0, 6, 30, 120, 0, 240, 0},
+    {1, 12, 30, 110, -5, 230, 0},
+    {1, 17, 50, 100, -20, 220, 0},
+    {2, 22, 60, 90, -30, 210, 0},
+    {2, 26, 70, 90, -40, 200, 0},
+    {3, 28, 80, 85, -50, 190, 0},
+    {4, 32, 90, 80, -60, 180, 0},
+    {5, 35, 100, 77, -70, 120, 0},
+    {7, 38, 110, 65, -80, 80, 0},
+    {8, 40, 120, 54, -90, 40, 0},
+    {0, 0, 30, 140, 0, 255, 0},
+    {0, 6, 30, 120, 0, 240, 0},
+    {-1, 12, 30, 110, 5, 230, 0},
+    {-1, 17, 50, 100, 20, 220, 0},
+    {-2, 22, 60, 90, 30, 210, 0},
+    {-2, 26, 70, 90, 40, 200, 0},
+    {-3, 28, 80, 85, 50, 190, 0},
+    {-4, 32, 90, 80, 60, 180, 0},
+    {-5, 35, 100, 77, 70, 120, 0},
+    {-7, 38, 110, 65, 80, 80, 0},
+    {-8, 40, 120, 54, 90, 40, 0},
+    {0, 0, 30, 140, 0, 255, 0},
+    {0, 6, 30, 120, 0, 240, 0},
+    {0, 12, 30, 110, 5, 230, 0},
+    {0, 17, 50, 100, 20, 220, 0},
+    {0, 22, 60, 90, 30, 210, 0},
+    {0, 26, 70, 90, 40, 200, 0},
+    {0, 28, 80, 85, 50, 190, 0},
+    {0, 32, 90, 80, 60, 180, 0},
+    {0, 36, 100, 77, 70, 120, 0},
+    {0, 39, 110, 65, 80, 80, 0},
+    {0, 42, 120, 54, 90, 40, 0},
+};
 
-/**
- * Extra tilt in degrees for each spray blob, picked by stream
- * and step so neighbouring blobs turn differently.
- */
+#if VERSION <= VERSION_DEMO_JP
 static s32 dat_ry[] = {0, 40, 55, 190, 20, 130, 270, 300};
+#endif
 
 /** 16x16 quad drawn for the central blob and for every blob in the spray streams. */
 static effN64Vtx size16x16_tex32x32_vtx[] = {
@@ -136,15 +131,19 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
 };
 
 /** A tall 6x22 quad standing on its origin; nothing in this effect draws it. */
-effN64Vtx size6x22_tex32x32_vtx[] = {
+static effN64Vtx size6x22_tex32x32_vtx[] = {
     {-3, 0, 0, 0, 0, 255, 255, 255, 255},
     {3, 0, 0, 1024, 0, 255, 255, 255, 255},
     {3, 22, 0, 1024, 1024, 255, 255, 255, 255},
     {-3, 22, 0, 0, 1024, 255, 255, 255, 255},
 };
 
+#if VERSION >= VERSION_JP
+static s32 dat_ry[] = {0, 40, 55, 190, 20, 130, 270, 300};
+#endif
+
 static void effOpukuJetwMain(EffectEntry* effect);
-static void effOpukuJetwDisp(CameraId cameraId, EffectEntry* effect);
+static void effOpukuJetwDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns a spray of blobs at (x, y, z) scaled by scale, lasting lifetime frames (<= 0 until deleted).
@@ -161,7 +160,7 @@ EffectEntry* effOpukuJetwN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f
     work = __memAlloc(HEAP_EFFECT, sizeof(EffOpukuJetwN64Work));
     effect->userdata = work;
     effect->callback = effOpukuJetwMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -199,8 +198,8 @@ static void effOpukuJetwMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -214,14 +213,15 @@ static void effOpukuJetwMain(EffectEntry* effect) {
     if (work->frame < 8) {
         work->alpha = (work->frame << 5) + 31;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effOpukuJetwDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effOpukuJetwDisp, effect);
 }
 
 /**
  * Draws a central blob, then three streams of 16x16 sprites (texture 0x34) whose positions, sizes,
  * rotations and alphas come from step tables and advance with the frame.
  */
-static void effOpukuJetwDisp(CameraId cameraId, EffectEntry* effect) {
+static void effOpukuJetwDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     Mtx mtx;
     Mtx scale;
     Mtx rot;
@@ -233,6 +233,7 @@ static void effOpukuJetwDisp(CameraId cameraId, EffectEntry* effect) {
     s32 frame, alpha, r, g, b;
     s32 n, m;
     JetwEnt* tbl;
+
     camera = camGetPtr(cameraId);
     work = effect->userdata;
     frame = work->frame;
@@ -248,7 +249,7 @@ static void effOpukuJetwDisp(CameraId cameraId, EffectEntry* effect) {
             m = 3;
             break;
         default:
-            tbl = a2data.e;
+            tbl = a2data;
             n = 11;
             m = 3;
             break;
@@ -294,7 +295,9 @@ static void effOpukuJetwDisp(CameraId cameraId, EffectEntry* effect) {
             if (idx <= frame * 5) {
                 if (n - 1 - idx <= lifetime) {
                     PSMTXTrans(mtx, (f32)ptr[idx].x, 10.0f + (f32)ptr[idx].y, 0.0f);
-                    PSMTXScale(scale, 0.01f * (f32)tbl[idx].sx, 0.01f * (f32)tbl[idx].sy, 1.0f);
+
+                    // Scale and alpha come from tbl[idx] (the first group) for every group; only position and rotation use the group's own rows.
+                    PSMTXScale(scale, 0.01f * tbl[idx].sx, 0.01f * tbl[idx].sy, 1.0f);
                     PSMTXConcat(mtx, scale, mtx);
                     PSMTXRotRad(rot, 'z', 0.017453292f * ((f32)ptr[idx].rot + (f32)dat_ry[(j + i) & 7]));
                     PSMTXConcat(mtx, rot, mtx);

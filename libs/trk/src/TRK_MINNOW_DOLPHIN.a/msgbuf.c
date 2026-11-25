@@ -1,7 +1,10 @@
+#include "trk.h"
+
 typedef int BOOL;
 typedef int DSError;
 typedef unsigned long size_t;
 typedef unsigned char u8;
+typedef unsigned short u16;
 typedef unsigned int u32;
 typedef unsigned long long u64;
 
@@ -26,14 +29,12 @@ extern BOOL gTRKBigEndian;
 
 TRKBuffer gTRKMsgBufs[3];
 
-/** Sets or clears the in-use flag of a message buffer. */
-static inline void TRKSetBufferUsed(TRKBuffer* msg, BOOL state) {
+void TRKSetBufferUsed(TRKBuffer* msg, BOOL state) {
     msg->isInUse = state;
 }
 
 void TRKResetBuffer(TRKBuffer* msg, BOOL keepData);
 
-/** Initialises the mutex of each of the three message buffers and marks them all free. Returns 0. */
 DSError TRKInitializeMessageBuffers(void) {
     int i;
 
@@ -49,13 +50,9 @@ DSError TRKInitializeMessageBuffers(void) {
 
 void* TRKGetBuffer(int idx);
 
-/**
- * Finds the first unused of the three message buffers, empties its length and position,
- * marks it used and returns its index and pointer. Returns 0x300 (and prints a message) if all three are busy.
- */
 DSError TRKGetFreeBuffer(int* msgID, TRKBuffer** outMsg) {
     TRKBuffer* buf;
-    DSError error = 0x300;
+    DSError error = DS_NoMessageBufferAvailable;
     int i;
 
     *outMsg = 0;
@@ -77,13 +74,12 @@ DSError TRKGetFreeBuffer(int* msgID, TRKBuffer** outMsg) {
         TRKReleaseMutex(buf);
     }
 
-    if (error == 0x300)
+    if (error == DS_NoMessageBufferAvailable)
         usr_puts_serial("ERROR : No buffer available\n");
 
     return error;
 }
 
-/** Returns the message buffer with the given index (0-2), or null for an index out of range. */
 void* TRKGetBuffer(int idx) {
     TRKBuffer* buf = 0;
 
@@ -93,7 +89,6 @@ void* TRKGetBuffer(int idx) {
     return buf;
 }
 
-/** Marks the message buffer with the given index as free; indexes out of range (including -1) are ignored. */
 void TRKReleaseBuffer(int idx) {
     TRKBuffer* msg;
 
@@ -105,7 +100,6 @@ void TRKReleaseBuffer(int idx) {
     }
 }
 
-/** Sets a message buffer's length and position back to 0; zeroes its data too unless keepData is set. */
 void TRKResetBuffer(TRKBuffer* msg, BOOL keepData) {
     msg->length = 0;
     msg->position = 0;
@@ -114,15 +108,11 @@ void TRKResetBuffer(TRKBuffer* msg, BOOL keepData) {
         TRK_memset(msg->data, 0, TRKMSGBUF_SIZE);
 }
 
-/**
- * Moves the buffer's cursor to pos, growing the length if pos is past it;
- * returns 0x301 if pos is beyond the 0x880-byte capacity.
- */
 DSError TRKSetBufferPosition(TRKBuffer* msg, u32 pos) {
     DSError error = 0;
 
     if (pos > TRKMSGBUF_SIZE) {
-        error = 0x301;
+        error = DS_MessageBufferOverflow;
     } else {
         msg->position = pos;
         if (pos > msg->length)
@@ -132,10 +122,6 @@ DSError TRKSetBufferPosition(TRKBuffer* msg, u32 pos) {
     return error;
 }
 
-/**
- * Appends length bytes at the cursor (truncating to what fits and returning 0x301 on overflow)
- * and sets the length to the new cursor position.
- */
 DSError TRKAppendBuffer(TRKBuffer* msg, const void* data, size_t length) {
     DSError error = 0;
     u32 bytesLeft;
@@ -146,7 +132,7 @@ DSError TRKAppendBuffer(TRKBuffer* msg, const void* data, size_t length) {
     bytesLeft = TRKMSGBUF_SIZE - msg->position;
 
     if (bytesLeft < length) {
-        error = 0x301;
+        error = DS_MessageBufferOverflow;
         length = bytesLeft;
     }
 
@@ -161,10 +147,6 @@ DSError TRKAppendBuffer(TRKBuffer* msg, const void* data, size_t length) {
     return error;
 }
 
-/**
- * Copies length bytes from the cursor into the caller's memory and advances the cursor;
- * if fewer bytes remain it copies those and returns 0x302.
- */
 DSError TRKReadBuffer(TRKBuffer* msg, void* data, size_t length) {
     DSError error = 0;
     unsigned int bytesLeft;
@@ -175,7 +157,7 @@ DSError TRKReadBuffer(TRKBuffer* msg, void* data, size_t length) {
     bytesLeft = msg->length - msg->position;
 
     if (length > bytesLeft) {
-        error = 0x302;
+        error = DS_MessageBufferReadError;
         length = bytesLeft;
     }
 
@@ -184,8 +166,26 @@ DSError TRKReadBuffer(TRKBuffer* msg, void* data, size_t length) {
     return error;
 }
 
-/** Appends one 32-bit value in big-endian (network) order, byte-swapping it first if the target is little-endian. */
-static inline DSError TRKAppendBuffer1_ui32(TRKBuffer* buffer, const u32 data) {
+/* Messages are big endian: on a little-endian host (gTRKBigEndian clear) these helpers swap the bytes. */
+DSError TRKAppendBuffer1_ui16(TRKBuffer* buffer, const u16 data) {
+    u8* bigEndianData;
+    u8* byteData;
+    u8 swapBuffer[sizeof(data)];
+
+    if (gTRKBigEndian) {
+        bigEndianData = (u8*)&data;
+    } else {
+        byteData = (u8*)&data;
+        bigEndianData = swapBuffer;
+
+        bigEndianData[0] = byteData[1];
+        bigEndianData[1] = byteData[0];
+    }
+
+    return TRKAppendBuffer(buffer, (const void*)bigEndianData, sizeof(data));
+}
+
+DSError TRKAppendBuffer1_ui32(TRKBuffer* buffer, const u32 data) {
     u8* bigEndianData;
     u8* byteData;
     u8 swapBuffer[sizeof(data)];
@@ -205,7 +205,6 @@ static inline DSError TRKAppendBuffer1_ui32(TRKBuffer* buffer, const u32 data) {
     return TRKAppendBuffer(buffer, (const void*)bigEndianData, sizeof(data));
 }
 
-/** Appends one 64-bit value in big-endian order, byte-swapping it first if the target is little-endian. */
 DSError TRKAppendBuffer1_ui64(TRKBuffer* buffer, const u64 data) {
     u8* bigEndianData;
     u8* byteData;
@@ -230,17 +229,15 @@ DSError TRKAppendBuffer1_ui64(TRKBuffer* buffer, const u64 data) {
     return TRKAppendBuffer(buffer, (const void*)bigEndianData, sizeof(data));
 }
 
-/** Appends one byte at the cursor; returns 0x301 if the buffer is full. */
 static inline DSError TRKAppendBuffer1_ui8(TRKBuffer* buffer, const u8 data) {
     if (buffer->position >= TRKMSGBUF_SIZE)
-        return 0x301;
+        return DS_MessageBufferOverflow;
 
     buffer->data[buffer->position++] = data;
     buffer->length++;
     return 0;
 }
 
-/** Appends count bytes one at a time, stopping at the first error. */
 DSError TRKAppendBuffer_ui8(TRKBuffer* buffer, const u8* data, int count) {
     DSError err;
     int i;
@@ -251,7 +248,16 @@ DSError TRKAppendBuffer_ui8(TRKBuffer* buffer, const u8* data, int count) {
     return err;
 }
 
-/** Appends count 32-bit values with the endian handling of TRKAppendBuffer1_ui32, stopping at the first error. */
+DSError TRKAppendBuffer_ui16(TRKBuffer* buffer, const u16* data, int count) {
+    DSError err;
+    int i;
+
+    for (i = 0, err = 0; err == 0 && i < count; i++)
+        err = TRKAppendBuffer1_ui16(buffer, data[i]);
+
+    return err;
+}
+
 DSError TRKAppendBuffer_ui32(TRKBuffer* buffer, const u32* data, int count) {
     DSError err;
     int i;
@@ -262,13 +268,44 @@ DSError TRKAppendBuffer_ui32(TRKBuffer* buffer, const u32* data, int count) {
     return err;
 }
 
-/** Reads one byte from the buffer's cursor. */
-static inline DSError TRKReadBuffer1_ui8(TRKBuffer* buffer, u8* data) {
+DSError TRKAppendBuffer_ui64(TRKBuffer* buffer, const u64* data, int count) {
+    DSError err;
+    int i;
+
+    for (i = 0, err = 0; err == 0 && i < count; i++)
+        err = TRKAppendBuffer1_ui64(buffer, data[i]);
+
+    return err;
+}
+
+DSError TRKReadBuffer1_ui8(TRKBuffer* buffer, u8* data) {
     return TRKReadBuffer(buffer, (void*)data, 1);
 }
 
-/** Reads one 32-bit value from the buffer, byte-swapping it from big-endian if the target is little-endian. */
-static inline DSError TRKReadBuffer1_ui32(TRKBuffer* buffer, u32* data) {
+DSError TRKReadBuffer1_ui16(TRKBuffer* buffer, u16* data) {
+    DSError err;
+    u8* bigEndianData;
+    u8* byteData;
+    u8 swapBuffer[sizeof(*data)];
+
+    if (gTRKBigEndian)
+        bigEndianData = (u8*)data;
+    else
+        bigEndianData = swapBuffer;
+
+    err = TRKReadBuffer(buffer, (void*)bigEndianData, sizeof(*data));
+
+    if (!gTRKBigEndian && err == 0) {
+        byteData = (u8*)data;
+
+        byteData[0] = bigEndianData[1];
+        byteData[1] = bigEndianData[0];
+    }
+
+    return err;
+}
+
+DSError TRKReadBuffer1_ui32(TRKBuffer* buffer, u32* data) {
     DSError err;
     u8* bigEndianData;
     u8* byteData;
@@ -293,7 +330,6 @@ static inline DSError TRKReadBuffer1_ui32(TRKBuffer* buffer, u32* data) {
     return err;
 }
 
-/** Reads one 64-bit value from the buffer, byte-swapping it from big-endian if the target is little-endian. */
 DSError TRKReadBuffer1_ui64(TRKBuffer* buffer, u64* data) {
     DSError err;
     u8* bigEndianData;
@@ -323,7 +359,6 @@ DSError TRKReadBuffer1_ui64(TRKBuffer* buffer, u64* data) {
     return err;
 }
 
-/** Reads count bytes one at a time, stopping at the first error. */
 DSError TRKReadBuffer_ui8(TRKBuffer* buffer, u8* data, int count) {
     DSError err;
     int i;
@@ -334,13 +369,32 @@ DSError TRKReadBuffer_ui8(TRKBuffer* buffer, u8* data, int count) {
     return err;
 }
 
-/** Reads count 32-bit values with the endian handling of TRKReadBuffer1_ui32, stopping at the first error. */
+DSError TRKReadBuffer_ui16(TRKBuffer* buffer, u16* data, int count) {
+    DSError err;
+    int i;
+
+    for (i = 0, err = 0; err == 0 && i < count; i++)
+        err = TRKReadBuffer1_ui16(buffer, &(data[i]));
+
+    return err;
+}
+
 DSError TRKReadBuffer_ui32(TRKBuffer* buffer, u32* data, int count) {
     DSError err;
     int i;
 
     for (i = 0, err = 0; err == 0 && i < count; i++)
         err = TRKReadBuffer1_ui32(buffer, &(data[i]));
+
+    return err;
+}
+
+DSError TRKReadBuffer_ui64(TRKBuffer* buffer, u64* data, int count) {
+    DSError err;
+    int i;
+
+    for (i = 0, err = 0; err == 0 && i < count; i++)
+        err = TRKReadBuffer1_ui64(buffer, &(data[i]));
 
     return err;
 }

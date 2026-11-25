@@ -1,117 +1,137 @@
-// itemdrv.c: the field item driver (ItemEntry, ITEM_FLAG_*, item status flags): drops, coins and pickups.
 #pragma once
 
+#include "version.h"
+
 #include "driver/effdrv.h"
+#include "driver/hitdrv.h"
 #include "evt/evt_word.h"
 #include <dolphin/mtx.h>
 #include <dolphin/os.h>
 
-// ItemEntry.flags (itemFlagOn/itemFlagOff/itemFlag). Meanings from the readers in itemdrv.c.
-enum ItemFlags {
-    ITEM_FLAG_USED = 0x1,
-    ITEM_FLAG_NO_TOUCH = 0x2,         // itemHitCheck ignores it: not picked up by walking into it
-    ITEM_FLAG_INSTANT_GET = 0x4,      // coins, hearts, flowers: straight into the pouch, no get sequence
-    ITEM_FLAG_BGM_SILENT = 0x8,       // the field BGM was silent at the get: leave it off afterwards
-    ITEM_FLAG_CUSTOM_BOUNCE = 0x10,   // the launch keeps the caller's bounceFactor/gravityScale/maxBounces
-    ITEM_FLAG_COLLECT_GSWF = 0x20,    // collectFlag is a GSWF, set on pickup
-    ITEM_FLAG_COLLECT_LSWF = 0x40,    // collectFlag is an LSWF, set on pickup
-    ITEM_FLAG_ELASTIC = 0x80,         // bounces keep their speed; no setter in C
-    ITEM_FLAG_BADGE_RETURN = 0x100,   // retail: a field badge left uncollected goes on sale at the badge shop
-                                      // (the demo reads the bit the other way round: clear = goes on sale)
-    ITEM_FLAG_RESTORE_MOTION = 0x200, // first bounce restores savedDirection/savedSpeed; no setter in C
-    ITEM_FLAG_REPLACEABLE = 0x400,    // a dropped coin/heart/flower itemEntry may delete when the list is full
-    ITEM_FLAG_NO_CEILING = 0x800,     // itemseq_Bound skips the ceiling check
-    ITEM_FLAG_FORCE_GET = 0x1000,     // itemForceGet: the get does not wait for Mario's get motion
-    ITEM_FLAG_JINGLE_DONE = 0x2000,   // the get jingle has finished and the BGM is back
-    ITEM_FLAG_KOOPS_GET = 0x4000,     // itemNokoForceGet: fetched by Koops's shell (waits for the motion)
-    ITEM_FLAG_NO_JINGLE = 0x8000,     // no get jingle
-};
+// ItemEntry.flags, named from itemdrv (itemMain, itemHitCheck, itemseq_*, the get sequence).
+typedef enum ItemEntry_Flags {
+    ITEM_FLAG_ACTIVE = (1 << 0), // 0x1, the entry is in use
 
-// ItemEntry.status (itemStatusOn/itemStatus). Meanings from the readers in itemdrv.c.
-enum ItemStatusFlags {
-    ITEM_STATUS_IN_POUCH = 0x1,                 // itemGetPouch put it into the pouch
-    ITEM_STATUS_END_WAIT = 0x2,                 // ends the evt_item get waits; no setter in C
-    ITEM_STATUS_LAUNCH = 0x4,                   // launched: not collectable until it falls or bounces
-    ITEM_STATUS_THROWN = 0x8,                   // thrown back out: not collectable until the first bounce
-    ITEM_STATUS_CUSTOM_LAUNCH = 0x10,           // the next bounce start keeps the caller's speed/direction/velocityY
-    ITEM_STATUS_VANISH_ON_FALL = 0x20,          // mode 10: deleted in a stardust puff once it starts to fall
-    ITEM_STATUS_SCATTER = 0x40,                 // dropped coin: directions spread in 132 degree steps
-    ITEM_STATUS_BLINK_HIDDEN = 0x100,           // hidden this frame (blinking before it times out)
-    ITEM_STATUS_PARTY_HOLD = 0x1000,            // itemPickUp: carried by the partner (mode 8)
-    ITEM_STATUS_IMPORTANT = 0x2000,             // items 7, 8, 10, 11: the get ends with the important-item lecture
-    ITEM_STATUS_TIMER_HOLD = 0x4000,            // the despawn timer waits until the item lands
-    ITEM_STATUS_NO_Z_MOVE = 0x8000,             // no Z motion (set when Mario has flag 0x2000000)
-    ITEM_STATUS_GET_ENDED = 0x10000,            // the get sequence is over (evt_item get waits end)
-    ITEM_STATUS_IN_WATER = 0x100000,            // fell into water or lava (hit attr 0x600): not collectable
-    ITEM_STATUS_CTRL_OFF = 0x1000000,           // the get turned Mario's control off; itemGetEnd turns it back on
-    ITEM_STATUS_NO_KOOPS = 0x2000000,           // Koops's shell and itemNearDistCheck ignore it
-    ITEM_STATUS_SAVED_BADGE_RETURN = 0x4000000, // ITEM_FLAG_BADGE_RETURN saved over the get sequence
-};
+    ITEM_FLAG_NO_TOUCH_GET = (1 << 1),       // 0x2, itemHitCheck ignores it (no pickup by touch)
+    ITEM_FLAG_QUICK_GET = (1 << 2),          // 0x4, straight into the pouch without the get window
+    ITEM_FLAG_BGM_SILENT = (1 << 3),         // 0x8, the get sequence dipped the BGM
+    ITEM_FLAG_CUSTOM_BOUND = (1 << 4),       // 0x10, itemseq_Bound keeps the caller's bounce parameters
+    ITEM_FLAG_COLLECT_GSWF = (1 << 5),       // 0x20, collectFlag is a GSWF, set when the item is collected
+    ITEM_FLAG_COLLECT_LSWF = (1 << 6),       // 0x40, collectFlag is an LSWF, set when the item is collected
+    ITEM_FLAG_ELASTIC_UNUSED = (1 << 7),     // 0x80, tested by the bounce code; nothing sets it (name from LLCOOLT's tree)
+    ITEM_FLAG_LOST_BADGE_TO_SHOP = (1 << 8), // 0x100, a badge that vanishes goes back to the shop (pouchArriveBadge)
+    ITEM_FLAG_BOUND_NEXT = (1 << 9),         // 0x200, first bounce uses evt_item_set_bound_next_dir/_speed
+    ITEM_FLAG_REPLACEABLE = (1 << 10),       // 0x400, may be deleted when all entries are in use
+    ITEM_FLAG_NO_CEILING_HIT = (1 << 11),    // 0x800
+    ITEM_FLAG_FORCE_GET = (1 << 12),         // 0x1000, itemForceGet
+    ITEM_FLAG_GET_BGM_ENDED = (1 << 13),     // 0x2000, the get fanfare finished
+    ITEM_FLAG_NOKO_GET = (1 << 14),          // 0x4000, itemNokoForceGet (fetched by Koops' shell)
+    ITEM_FLAG_NO_GET_BGM = (1 << 15),        // 0x8000, no get fanfare
+} ItemEntry_Flags;
 
-// itemEntry's type argument (ItemEntry.type, also evt_item_entry's): the start mode, the despawn timer and a few
-// flags (the switch at the end of itemEntry). Timers count down once the item is out and blink for the last 3 s;
-// the _DROP types hold the timer until the item lands (ITEM_STATUS_TIMER_HOLD). Retail added
-// ITEM_ENTRY_DROP_8S_BADGE_RETURN, so in the demo the types after it are one lower; the enum carries the shift.
-enum ItemEntryType {
-    ITEM_ENTRY_STAY,              // rests where it is put (falls if there is no floor under it)
-    ITEM_ENTRY_STAY_NO_TOUCH,     // as STAY, with ITEM_FLAG_NO_TOUCH
-    ITEM_ENTRY_BOUNCE,            // hops out to one side; collectable at once
-    ITEM_ENTRY_BOUNCE_5S,         // as BOUNCE, gone after 5 s
-    ITEM_ENTRY_LAUNCH,            // hops out to one side; collectable once it starts to fall (ITEM_STATUS_LAUNCH)
-    ITEM_ENTRY_LAUNCH_5S,         // as LAUNCH, gone after 5 s
-    ITEM_ENTRY_LAUNCH_5S_SCATTER, // as LAUNCH_5S, directions spread in 132 degree steps (ITEM_STATUS_SCATTER)
-    ITEM_ENTRY_DROP_5S,           // as LAUNCH, gone 5 s after it lands
-    ITEM_ENTRY_DROP_8S,           // as LAUNCH, gone 8 s after it lands
-#if VERSION >= VERSION_JP
-    ITEM_ENTRY_DROP_8S_BADGE_RETURN, // as DROP_8S, with ITEM_FLAG_BADGE_RETURN
+// ItemEntry.flags2 (itemStatusOn / itemStatus, evt_item_status_on).
+typedef enum ItemEntry_Flags2 {
+    ITEM_FLAG2_IN_POUCH = (1 << 0),              // 0x1, the item went into the pouch
+    ITEM_FLAG2_END_WAIT_UNUSED = (1 << 1),       // 0x2, tested in evt_item_get_item; nothing sets it (LLCOOLT's name)
+    ITEM_FLAG2_NO_PICKUP_RISING = (1 << 2),      // 0x4, not collectible while rising
+    ITEM_FLAG2_NO_PICKUP_UNTIL_BOUND = (1 << 3), // 0x8, not collectible before the first bounce
+    ITEM_FLAG2_SKIP_BOUND_INIT = (1 << 4),       // 0x10, one-shot: the next bounce keeps its state
+    ITEM_FLAG2_POP_VANISH = (1 << 5),            // 0x20, pops up once and disappears
+    ITEM_FLAG2_SPREAD = (1 << 6),                // 0x40, scattered like lost coins
+    ITEM_FLAG2_HIDDEN = (1 << 8),                // 0x100, not drawn (blinks in the last 3000 ms)
+    ITEM_FLAG2_CARRIED = (1 << 12),              // 0x1000, carried by the partner
+    ITEM_FLAG2_UPGRADE_GET = (1 << 13),          // 0x2000, boots/hammer upgrade get sequence
+    ITEM_FLAG2_TIMER_WAIT_LAND = (1 << 14),      // 0x4000, the despawn timer starts once it has landed
+    ITEM_FLAG2_NO_Z_MOVE = (1 << 15),            // 0x8000
+    ITEM_FLAG2_RELEASED = (1 << 16),             // 0x10000, thrown out of a full pouch (msg_window_item_release), cleared when taken; evt_item waits on it
+    ITEM_FLAG2_SUNK = (1 << 20),                 // 0x100000
+    ITEM_FLAG2_CTRL_OFF = (1 << 24),             // 0x1000000
+    ITEM_FLAG2_NO_PARTNER = (1 << 25),           // 0x2000000
+    ITEM_FLAG2_SAVED_LOST_BADGE = (1 << 26),     // 0x4000000, its badge was already sent back to the shop
+} ItemEntry_Flags2;
+
+// itemEntry's type argument (ItemEntry.type): an ItemEntryMode plus a despawn timer (ms) and extra flags
+typedef enum ItemEntryType {
+    ITEM_TYPE_GROUND = 0,
+    ITEM_TYPE_GROUND_NO_TOUCH = 1, // + ITEM_FLAG_NO_TOUCH_GET
+    ITEM_TYPE_SCATTER = 2,
+    ITEM_TYPE_SCATTER_TIMED = 3, // vanishes after 5000 ms
+    ITEM_TYPE_SCATTER_NO_PICKUP = 4,
+    ITEM_TYPE_SCATTER_NO_PICKUP_TIMED = 5,      // vanishes after 5000 ms
+    ITEM_TYPE_SPREAD_TIMED = 6,                 // + ITEM_FLAG2_SPREAD, 5000 ms
+    ITEM_TYPE_SCATTER_NO_PICKUP_TIMED_LAND = 7, // 5000 ms counted from landing
+    ITEM_TYPE_DROP = 8,                         // enemy and coin drops: 8000 ms from landing
+#if VERSION <= VERSION_DEMO_JP                  // the early demos have no lost-badge type
+    ITEM_TYPE_DROP_REPLACEABLE = 9,             // + ITEM_FLAG_REPLACEABLE
+    ITEM_TYPE_DROP_LONG = 10,                   // recovered items: 20000 ms from landing
+    ITEM_TYPE_DROP_LONG_REPLACEABLE = 11,
+    ITEM_TYPE_FALL = 12,
+    ITEM_TYPE_FALL_NO_PICKUP = 13,
+    ITEM_TYPE_POP = 14,
+    ITEM_TYPE_STILL = 15,
+    ITEM_TYPE_STILL_NO_TOUCH = 16, // + ITEM_FLAG_NO_TOUCH_GET
+#else
+    ITEM_TYPE_DROP_LOST_BADGE = 9,   // + ITEM_FLAG_LOST_BADGE_TO_SHOP
+    ITEM_TYPE_DROP_REPLACEABLE = 10, // + ITEM_FLAG_REPLACEABLE
+    ITEM_TYPE_DROP_LONG = 11,        // recovered items: 20000 ms from landing
+    ITEM_TYPE_DROP_LONG_REPLACEABLE = 12,
+    ITEM_TYPE_FALL = 13,
+    ITEM_TYPE_FALL_NO_PICKUP = 14,
+    ITEM_TYPE_POP = 15,
+    ITEM_TYPE_STILL = 16,
+    ITEM_TYPE_STILL_NO_TOUCH = 17, // + ITEM_FLAG_NO_TOUCH_GET
 #endif
-    ITEM_ENTRY_DROP_8S_REPLACEABLE,  // as DROP_8S, with ITEM_FLAG_REPLACEABLE
-    ITEM_ENTRY_DROP_20S,             // as LAUNCH, gone 20 s after it lands
-    ITEM_ENTRY_DROP_20S_REPLACEABLE, // as DROP_20S, with ITEM_FLAG_REPLACEABLE
-    ITEM_ENTRY_FALL,                 // drops straight down from where it is put
-    ITEM_ENTRY_FALL_THROWN,          // as FALL, not collectable until the first bounce (ITEM_STATUS_THROWN)
-    ITEM_ENTRY_POP_VANISH,           // pops straight up and vanishes in stardust as it starts to fall (block coins)
-    ITEM_ENTRY_FIXED,                // stays where it is put, without gravity
-    ITEM_ENTRY_FIXED_NO_TOUCH,       // as FIXED, with ITEM_FLAG_NO_TOUCH
-};
+} ItemEntryType;
+
+// ItemEntry.mode (itemModeChange); descriptive names from itemMain / itemseq_Bound
+typedef enum ItemEntryMode {
+    ITEM_MODE_GROUND = 1,            // follows the ground, collectible
+    ITEM_MODE_GET = 2,               // being collected (itemseq_GetItem)
+    ITEM_MODE_FALL = 3,              // falls and bounces, collectible
+    ITEM_MODE_FALL_NO_PICKUP = 4,    // as FALL, not collectible before the first bounce
+    ITEM_MODE_SCATTER = 5,           // thrown up and scattered, collectible
+    ITEM_MODE_SCATTER_NO_PICKUP = 6, // as SCATTER, not collectible while rising
+    ITEM_MODE_STILL = 7,             // stays in place, collectible
+    ITEM_MODE_CARRIED = 8,           // carried by the partner
+    ITEM_MODE_DELETE = 9,            // deleted on the next update
+    ITEM_MODE_POP = 10,              // pops up once and disappears
+} ItemEntryMode;
 
 typedef struct ItemEntry {
-    u16 flags;              // 0x0, ItemFlags
+    u16 flags;              // 0x0, ItemEntry_Flags
     u16 type;               // 0x2, ItemEntryType
     s32 itemId;             // 0x4
-    s32 collectFlag;        // 0x8, GSWF/LSWF flag set when collected, -1 for none
-    char name[0x10];        // 0xC
-    EffectEntry* effect;    // 0x1C
-    EvtWord evtCode;        // 0x20, event script run on pickup (evtEntry)
-    u16 mode;               // 0x24
+    s32 collectFlag;        // 0x8, saved flag set when the item is collected (-1: none)
+    char name[0x10];        // 0xC, itemEntry name; also the name of its icon (iconEntry, iconSetPos)
+    EffectEntry* effect;    // 0x1C, Crystal Star effect drawn instead of an icon (effStarStoneEntry); NULL for other items
+    EvtWord* evtCode;       // 0x20, event script run on pickup (evtEntry)
+    u16 mode;               // 0x24, ItemEntryMode
     u16 subState;           // 0x26, per-sequence state
-    s32 winId[3];           // 0x28
+    s32 winId[3];           // 0x28, winMgr windows of the get sequence (desc 0, 1 and 2)
     u8 pad_34[0x38 - 0x34]; // 0x34, never accessed
-    u32 status;             // 0x38, ItemStatusFlags
-    Vec position;           // 0x3C
-    f32 scale;              // 0x48
-    u8 alpha;               // 0x4C
-    u8 pad_4D[0x50 - 0x4D]; // 0x4D, never accessed
-    f32 speed;              // 0x50
-    s32 direction;          // 0x54
-    f32 velocityY;          // 0x58
-    u8 pad_5C[0x60 - 0x5C]; // 0x5C, never accessed
-    s64 airTime;            // 0x60
+    u32 flags2;             // 0x38, ItemEntry_Flags2
+    Vec position;           // 0x3C, world position; the icon or effect is placed on it
+    f32 scale;              // 0x48, icon scale (iconSetScale)
+    u8 alpha;               // 0x4C, icon alpha (iconSetAlpha)
+    f32 speed;              // 0x50, horizontal speed of the bounce arc, along direction
+    s32 direction;          // 0x54, degrees; x += sin, z -= cos
+    f32 velocityY;          // 0x58, upward speed at the start of the current arc (gravity -980 * gravityScale)
+    s64 airTime;            // 0x60, ticks since the current arc started
     OSTime baseTime;        // 0x68, timestamp elapsed time is measured from
-    OSTime curTime;         // 0x70
-    s64 timer;              // 0x78
-    f32 bounceFactor;       // 0x80
-    f32 gravityScale;       // 0x84
-    s32 maxBounces;         // 0x88
-    s32 bounceCount;        // 0x8C
-    s32 savedDirection;     // 0x90
-    f32 savedSpeed;         // 0x94
+    OSTime curTime;         // 0x70, gp->renderTime of this update; baseTime takes it afterwards
+    s64 timer;              // 0x78, despawn countdown in ms (itemVanishCountDown; 0 = none), blinks near the end
+    f32 bounceFactor;       // 0x80, scales the upward speed after a bounce
+    f32 gravityScale;       // 0x84, scales the -980 gravity of the arc
+    s32 maxBounces;         // 0x88, bounces before the item settles on the ground (0 = no limit)
+    s32 bounceCount;        // 0x8C, bounces so far in this fall
+    s32 savedDirection;     // 0x90, direction after the first bounce with ITEM_FLAG_BOUND_NEXT (evt_item)
+    f32 savedSpeed;         // 0x94, speed after the first bounce with ITEM_FLAG_BOUND_NEXT (evt_item)
 } ItemEntry;
 
 typedef struct ItemWork {
     s32 count;                     // 0x0
     ItemEntry* entries;            // 0x4
-    u32 currId;                    // 0x8, next available itemId
+    u32 currId;                    // 0x8, serial for auto-named entries ("_i%05x"): incremented before use, wraps at 0xFFFFF
     EffectEntry* effect;           // 0xC
     struct WinMgrSelect* select;   // 0x10
     struct EventEntry* lectureEvt; // 0x14
@@ -121,26 +141,26 @@ typedef struct ItemWork {
 void itemInit(void);
 void itemReInit(void);
 void itemMain(void);
-ItemEntry* itemNameToPtr(char*);
+ItemEntry* itemEntry(f32 x, f32 y, f32 z, const char* name, s32 itemId, u16 type, s32 collectFlag, EvtWord* evtCode);
+ItemEntry* itemNameToPtr(char* name);
 
 void itemNokoForceGet(ItemEntry* entry);
 void itemPickUp(ItemEntry* entry);
 
 void itemDelete(const char* name);
-// The position comes first: every call site in the original binary evaluates x, y, z before the other
-// arguments. type is an ItemEntryType (start mode and despawn timer);
-// collectFlag is a GSWF/LSWF set on pickup, or -1; pickupEvt runs on pickup (NULL for none).
-// Returns NULL when collectFlag is already set or no slot is free.
-ItemEntry* itemEntry(f32 x, f32 y, f32 z, const char* name, s32 itemId, u16 type, s32 collectFlag, EvtWord* pickupEvt);
 void itemFlagOn(ItemEntry* entry, u16 flags);
-void itemModeChange(ItemEntry* entry, s32 mode);
-
-BOOL N_itemPickUpFromFieldCheck(void);
-void itemSetPosition(ItemEntry* entry, f32 x, f32 y, f32 z);
-void itemFlagOff(ItemEntry* entry, u16 flags);
+void itemModeChange(ItemEntry* entry, u16 mode);
+BOOL itemPickUpFromFieldCheck(void);
 u16 itemFlag(ItemEntry* entry, u16 flags);
+void itemFlagOff(ItemEntry* entry, u16 flags);
+void itemSetPosition(ItemEntry* entry, f32 x, f32 y, f32 z);
 u32 itemStatus(ItemEntry* entry, u32 flags);
+void itemRecycle(ItemEntry* entry);
 void itemForceGet(ItemEntry* entry);
 ItemEntry* itemHitCheck(f32 x, f32 y, f32 z, f32 range);
 ItemEntry* itemNearDistCheck(f32 x, f32 y, f32 z, f32 range);
 void itemStatusOn(ItemEntry* entry, u32 flags);
+void itemStatusOff(ItemEntry* entry, u32 flags);
+void itemCoinDrop(Vec* position);
+HitEntry* itemHitCheckGround(ItemEntry* entry, f32* outY, f32 vy);
+HitEntry* itemHitCheckCeil(ItemEntry* entry, f32* outY, f32 vy);

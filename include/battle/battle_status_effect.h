@@ -1,12 +1,14 @@
 // Declares the status effect ids and the status effect functions.
+
 #pragma once
 
 #include <dolphin/types.h>
 
+struct BattleWork;
 struct BattleUnit;
 
 // battle_status_effect
-// should be an s8, typecasting for now
+// Status effect ids (the unit status APIs take them as s8).
 typedef enum StatusEffectType {
     STATUS_ALLERGIC,     // 0x0
     STATUS_SLEEP,        // 0x1
@@ -35,8 +37,11 @@ typedef enum StatusEffectType {
     STATUS_FP_REGEN,     // 0x18
     STATUS_FRIGHT,       // 0x19
     STATUS_GALE_FORCE,   // 0x1A
-    STATUS_INSTANT_KILL, // 0x1B
-    STATUS_INVALID       // 0x1C
+    // 0x1B: defeated (the Switch remake's name is STATUS_DEAD). Every defeated unit gets it (HP 0, a script
+    // kill, a partner that enters battle at 0 HP); one-hit-KO attacks inflict it like any other status
+    // (their chance is the weapon's ohkoChance).
+    STATUS_DEAD,   // 0x1B
+    STATUS_INVALID // 0x1C
 } StatusEffectType;
 
 void BattleStatusEffectInit(struct BattleUnit* unit);
@@ -47,13 +52,9 @@ void BattleStatusChangeInfoWorkInit(struct BattleUnit* unit);
 
 void BattleStatusChangeMsgWorkInit(void);
 
-extern s8 _st_pri_data[];
-
-struct BattleWork;
-
-void BattleStatusChangeMsgSetAnnouce(struct BattleUnit* unit, s32 index, s32 changed);
-void BattleStatusEffectDelete(struct BattleUnit* unit);
-void BattleStatusChangeInfoSetAnnouce(struct BattleUnit* unit, s32 type, s32 strength, s32 changed);
 BOOL BattleStatusChangeAnnouceMain(struct BattleWork* wp);
+void BattleStatusChangeInfoSetAnnouce(struct BattleUnit* unit, s32 type, s32 strength, s32 changed);
 void BattleStatusChangeMsgAdjust(struct BattleWork* wp);
 BOOL BattleStatusChangeMsgMain(struct BattleWork* wp);
+void BattleStatusChangeMsgSetAnnouce(struct BattleUnit* unit, s32 index, s32 changed);
+void BattleStatusEffectDelete(struct BattleUnit* unit);

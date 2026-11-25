@@ -1,19 +1,26 @@
 // rsh_08 (列車, Excess Express): tiny connector room off rsh_01; only door data and an init event for the second trip
 // (nidome).
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_map.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
-#include "rsh.h"
-#include "evt/evt_story.h"
+#include "pmario_sound.h"
 
-BeroEntry bero_data_a_nidome[2];
-BeroEntry bero_data_b_nidome[2];
-BeroEntry bero_data_c_nidome[2];
+static BeroEntry bero_data_a_nidome[2];
+static BeroEntry bero_data_b_nidome[2];
+static BeroEntry bero_data_c_nidome[2];
 
-/** Doors and exits of rsh_08 variant a (second visit): e_bero to rsh_01_a. */
-BeroEntry bero_data_a_nidome[] = {
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord rsh_08_a_init_evt[];
+#else
+EvtWord rsh_08_a_init_evt[72];
+#endif
+
+static BeroEntry bero_data_a_nidome[] = {
     {
         "e_bero", // hitName
         1, // type
@@ -35,8 +42,7 @@ BeroEntry bero_data_a_nidome[] = {
     {0},
 };
 
-/** Doors and exits of rsh_08 variant b (second visit): e_bero to rsh_01_b. */
-BeroEntry bero_data_b_nidome[] = {
+static BeroEntry bero_data_b_nidome[] = {
     {
         "e_bero", // hitName
         1, // type
@@ -58,8 +64,7 @@ BeroEntry bero_data_b_nidome[] = {
     {0},
 };
 
-/** Doors and exits of rsh_08 variant c (second visit): e_bero to rsh_01_c. */
-BeroEntry bero_data_c_nidome[] = {
+static BeroEntry bero_data_c_nidome[] = {
     {
         "e_bero", // hitName
         1, // type
@@ -82,43 +87,44 @@ BeroEntry bero_data_c_nidome[] = {
 };
 
 /**
- * Init script of rsh_08_a, the connector room off rsh_01 (the only map of rsh_08):
- * picks the music for the station the train has reached (Poshley Heights, Rogueport or the train ambience),
- * chooses the door set that leads back to rsh_01 a,
- * b or c from the scenery variant flag (GSWF_RSH_REVISIT_VARIANT_A, B or C)
- * and starts the shaking train scenery.
+ * Init script of rsh_08_a: plays BGM_STG6_PIK1 when the train is at Poshley Heights (GSWF_RSH_TRAIN_AT_POSHLEY),
+ * BGM_STG0_GOR1 at Rogueport (GSWF_RSH_TRAIN_AT_ROGUEPORT; the early demos also start ENV_STG0_GOR5), both at
+ * silent level 6, otherwise the ENV_STG6_RSH1_3 ambience. Picks bero_data_a/b/c_nidome (C over B over A, a by
+ * default) from GSWF_RSH_REVISIT_MAP_A, B and C and loops the map animation "yure".
  */
 EVT_BEGIN(rsh_08_a_init_evt)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_POSHLEY), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_PIK1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_POSHLEY, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_PIK1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     ELSE
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_ARRIVED_ROGUEPORT), 1)
-            CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_GOR1"))
+        IF_INT_EQUAL(GSWF_RSH_TRAIN_AT_ROGUEPORT, 1)
+            CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_GOR1"))
 #if VERSION <= VERSION_DEMO_JP
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR5"))
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR5"))
 #else
-            CALL(evt_snd_envoff, PSND_FADE_OUT)
+            CALL(evt_snd_envoff, PSND_FADEOUT)
 #endif
-            CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+            CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
         ELSE
-            CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-            CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH1_3"))
+            CALL(evt_snd_bgmoff, PSND_FADEOUT)
+            CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH1_3"))
         END_IF
     END_IF
+
+    // Default to route A; independent checks let B override A and C override both.
     SET_VALUE(LW(0), PTR(bero_data_a_nidome))
-    IF_INT_EQUAL(GSWF(GSWF_RSH_REVISIT_VARIANT_A), 1)
+    IF_INT_EQUAL(GSWF_RSH_REVISIT_MAP_A, 1)
         SET_VALUE(LW(0), PTR(bero_data_a_nidome))
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_RSH_REVISIT_VARIANT_B), 1)
+    IF_INT_EQUAL(GSWF_RSH_REVISIT_MAP_B, 1)
         SET_VALUE(LW(0), PTR(bero_data_b_nidome))
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_RSH_REVISIT_VARIANT_C), 1)
+    IF_INT_EQUAL(GSWF_RSH_REVISIT_MAP_C, 1)
         SET_VALUE(LW(0), PTR(bero_data_c_nidome))
     END_IF
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_map_playanim, STRING("yure"), 1, 0)
+    CALL(evt_map_playanim, STRING("yure"), MAP_ANIM_PLAY_LOOP, 0)
     RETURN
 EVT_END()

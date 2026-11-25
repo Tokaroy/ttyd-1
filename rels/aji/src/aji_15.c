@@ -1,31 +1,43 @@
 // aji_15 (敵のアジト, X-Naut Fortress): the shower room where Peach takes a shower (peach_evt_syawa_main).
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "mario/mario.h"
-#include "manager/evtmgr_cmd.h"
-#include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_case.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_npc.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "aji.h"
-#include "evt/evt_story.h"
 #include "driver/mapdrv.h"
+#include "system.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
+
+#include "mario/mario.h"
+#include "manager/evtmgr_cmd.h"
+#include "evt/evt_bero.h"
+#include "aji.h"
 
 static USER_FUNC(peach_chk_aftershower);
 static USER_FUNC(peach_set_pos);
 
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
 static BeroEntry bero_entry_data[2];
-extern EvtWord peach_evt_yuge[];
-extern EvtWord peach_evt_syawa_main[];
-extern EvtWord peach_evt_syawa_init[];
+static EvtWord peach_evt_yuge[43];
+static EvtWord peach_evt_syawa_main[798];
+static EvtWord peach_evt_syawa_init[63];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord aji_15_init_evt[];
+#else
+EvtWord aji_15_init_evt[58];
+#endif
 
 /**
  * Door close animation step: moves the two door leaves S_door1_1
@@ -53,7 +65,7 @@ static EVT_BEGIN(e_door_open)
     RETURN
 EVT_END()
 
-/** Exit of this room: the east door to aji_10. */
+/** Exit of this room: the east door to aji_16. */
 static BeroEntry bero_entry_data[] = {
     {
         "e_bero", // hitName
@@ -77,10 +89,10 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Puffs steam (the kemuri_test effect) at random spots above the bath every 0.7 seconds, forever,
- * while Peach is bathing.
+ * Puffs steam (kemuri_test type 1) at random spots above the bath every 0.7 seconds while Peach is bathing.
+ * The emission loop runs until the shower scene deletes the event.
  */
-EVT_BEGIN(peach_evt_yuge)
+static EVT_BEGIN(peach_evt_yuge)
     LOOP(0)
         CALL(evt_sub_random, 38, LW(0))
         SUBTRACT(LW(0), 19)
@@ -94,7 +106,7 @@ EVT_BEGIN(peach_evt_yuge)
     RETURN
 EVT_END()
 
-/** Script function: sets Mario's (Peach's) position directly to the x, y and z floats in args[0] to args[2]. */
+/** Script helper: sets the player's position (MarioWork) to (args[0], args[1], args[2]). */
 static USER_FUNC(peach_set_pos) {
     EvtWord* args = event->args;
     f32 x = evtGetFloat(event, args[0]);
@@ -102,21 +114,21 @@ static USER_FUNC(peach_set_pos) {
     f32 z = evtGetFloat(event, args[2]);
     MarioWork* mario = marioGetPtr();
 
+    // Write the position directly while the event controls the movement path.
     mario->position = (Vec){x, y, z};
     return EVT_RETURN_DONE;
 }
 
 /**
- * Peach's shower scene (case script on the bath A_furo):
- * she steps to the tub (peach_aji_35, or peach_aji_35_1 on a repeat visit), hangs up her clothes,
- * showers humming (SFX_PEACH_SHOWER1, SFX_VOICE_PEACH_HAMMING1 to 3) amid steam, says peach_aji_36 and 37,
- * changes clothes (SFX_PEACH_CHANGE_CLOTH1, evt_peach_set_condition 1) and leaves;
- * GSWF_AJI15_PEACH_SHOWER_TAKEN records that she has showered.
+ * Peach's shower (case script on A_furo): she says peach_aji_35, or 35_1 once
+ * GSWF_AJI_15_PEACH_SHOWER_EXAMINED is set, steps into the tub, hangs up her dress, showers humming (one of
+ * three random voices) in steam fog, says peach_aji_36, dries and dresses (evt_peach_set_condition 1),
+ * steps out and says peach_aji_37; then the flag is set.
  */
-EVT_BEGIN(peach_evt_syawa_main)
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(30))
-    CALL(evt_snd_envoff, PSND_FADE_HOLD)
+static EVT_BEGIN(peach_evt_syawa_main)
     // The music dips and Peach is led to the tub.
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(2))
+    CALL(evt_snd_envoff, PSND_PAUSE)
     CALL(evt_mario_key_onoff, 0)
     CALL(peach_chk_aftershower, LW(0))
     IF_INT_EQUAL(LW(0), 0)
@@ -124,13 +136,14 @@ EVT_BEGIN(peach_evt_syawa_main)
     ELSE
         CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("P_S_2"), STRING("P_T_2"))
     END_IF
-    // She comments on the shower (peach_aji_35, or 35_1 when she has already showered).
-    IF_INT_EQUAL(GSWF(GSWF_AJI15_PEACH_SHOWER_TAKEN), 0)
+
+    // She comments on the shower (peach_aji_35, or 35_1 when she has already examined it).
+    IF_INT_EQUAL(GSWF_AJI_15_PEACH_SHOWER_EXAMINED, 0)
         CALL(evt_msg_print, 0, STRING("peach_aji_35"), 0, STRING("mario"))
     ELSE
         CALL(evt_msg_print, 0, STRING("peach_aji_35_1"), 0, STRING("mario"))
     END_IF
-    CALL(evt_cam3d_evt_set, -30, 130, 336, -30, 68, -58, 1400, 11)
+    CALL(evt_cam3d_evt_set, -30, 130, 336, -30, 68, -58, 1400, EASING_SINE_IN_OUT)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     IF_INT_LESS_OR_EQUAL(LW(0), -60)
         CALL(evt_mario_mov_pos2, -85, -60, FLOAT(48.0f))
@@ -142,9 +155,12 @@ EVT_BEGIN(peach_evt_syawa_main)
             CALL(evt_mario_mov_pos2, LW(0), LW(2), FLOAT(48.0f))
         END_IF
     END_IF
+
+    // Use the cached or explicitly adjusted X value; the preceding moves do not refresh these locals.
     IF_INT_GREATER_OR_EQUAL(LW(0), 25)
         CALL(evt_mario_mov_pos2, 25, -41, FLOAT(48.0f))
     END_IF
+
     // Peach walks up to the tub.
     BEGIN_INLINE_EVENT
         CALL(evt_mario_mov_pos2, -28, -45, FLOAT(48.0f))
@@ -154,7 +170,7 @@ EVT_BEGIN(peach_evt_syawa_main)
     CALL(evt_mario_cont_onoff, 0)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 13, 0, 1000, 300)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN, 0, 1000, 300)
         LABEL(20)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -164,7 +180,7 @@ EVT_BEGIN(peach_evt_syawa_main)
             GOTO(20)
         END_IF
         WAIT_MS(100)
-        CALL(evt_sub_intpl_msec_init, 13, 1000, 800, 200)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN, 1000, 800, 200)
         LABEL(21)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -174,7 +190,9 @@ EVT_BEGIN(peach_evt_syawa_main)
             GOTO(21)
         END_IF
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, -45, -15, 600)
+
+    // The child supplies height through GW(0), while this interpolation supplies depth.
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -45, -15, 600)
     LABEL(10)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(peach_set_pos, FLOAT(-28.0f), GW(0), LW(0))
@@ -190,9 +208,10 @@ EVT_BEGIN(peach_evt_syawa_main)
     WAIT_MS(1000)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_HANG_CLOTH1"), 0, 0, 0, 0)
     CALL(evt_mapobj_trans, 1, STRING("p_fuku"), 0, -10, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("p_fuku"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_msec_init, 0, -10, 0, 100)
-    // She hangs her dress on the hook.
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("p_fuku"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -10, 0, 100)
+
+    // She hangs her dress.
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, STRING("p_fuku"), 0, LW(0), 0)
@@ -201,14 +220,14 @@ EVT_BEGIN(peach_evt_syawa_main)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_map_playanim, STRING("fuku"), 0, 0)
+    CALL(evt_map_playanim, STRING("fuku"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("fuku"), LW(0), LW(1))
     WAIT_MS(LW(1))
     WAIT_MS(500)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_SHOWER1"), -40, 0, -30, 0)
     WAIT_MS(300)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_SHOWER2"), -40, 0, -30, LW(10))
-    CALL(evt_sub_intpl_msec_init, 12, FLOAT(0.0f), FLOAT(1.0f), 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_OUT, FLOAT(0.0f), FLOAT(1.0f), 500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_scale, 1, STRING("S_syawa"), LW(0), FLOAT(1.0f), FLOAT(1.0f))
@@ -217,7 +236,8 @@ EVT_BEGIN(peach_evt_syawa_main)
         GOTO(0)
     END_IF
     WAIT_MS(500)
-    // She showers, humming, as steam rises.
+
+    // Retain the steam event ID so emission can be deleted after the shower closes.
     SPAWN_EVENT_GET_ID(PTR(peach_evt_yuge), LW(9))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_sub_random, 2, LW(3))
@@ -232,7 +252,7 @@ EVT_BEGIN(peach_evt_syawa_main)
     WAIT_MS(1500)
     CALL(evt_map_set_fog, 2, 900, 1500, 255, 255, 255)
     CALL(evt_map_fog_onoff, 1)
-    CALL(evt_sub_intpl_msec_init, 12, 900, 0, 5000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_OUT, 900, 0, 5000)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_map_set_fog, 2, LW(0), 1200, 255, 255, 255)
@@ -241,13 +261,14 @@ EVT_BEGIN(peach_evt_syawa_main)
         GOTO(1)
     END_IF
     WAIT_MS(300)
+
     // She comments on the shower (peach_aji_36 and 37) and changes clothes.
     CALL(evt_msg_print, 0, STRING("peach_aji_36"), 0, STRING("mario"))
     WAIT_MS(500)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_SHOWER1"), -40, 0, -30, 0)
     WAIT_MS(300)
     CALL(evt_snd_sfxoff, LW(10))
-    CALL(evt_sub_intpl_msec_init, 12, FLOAT(1.0f), FLOAT(0.0f), 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_OUT, FLOAT(1.0f), FLOAT(0.0f), 500)
     LABEL(2)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_scale, 1, STRING("S_syawa"), LW(0), FLOAT(1.0f), FLOAT(1.0f))
@@ -258,7 +279,7 @@ EVT_BEGIN(peach_evt_syawa_main)
     WAIT_MS(500)
     DELETE_EVENT(LW(9))
     WAIT_MS(1800)
-    CALL(evt_sub_intpl_msec_init, 13, 0, 900, 5000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN, 0, 900, 5000)
     LABEL(3)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_map_set_fog, 2, LW(0), 1200, 255, 255, 255)
@@ -268,10 +289,10 @@ EVT_BEGIN(peach_evt_syawa_main)
     END_IF
     CALL(evt_map_fog_onoff, 0)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_HANG_CLOTH1"), 0, 0, 0, 0)
-    CALL(evt_map_playanim, STRING("taoru2"), 0, 0)
+    CALL(evt_map_playanim, STRING("taoru2"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("taoru2"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_sub_intpl_msec_init, 0, 0, -10, 100)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, -10, 100)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, STRING("taoru"), 0, LW(0), 0)
@@ -280,12 +301,12 @@ EVT_BEGIN(peach_evt_syawa_main)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taoru"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taoru"), MAP_OBJ_FLAG_HIDDEN)
     WAIT_MS(1500)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_HANG_CLOTH1"), 0, 0, 0, 0)
     CALL(evt_mapobj_trans, 1, STRING("taoru"), 0, -10, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taoru"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_sub_intpl_msec_init, 0, -10, 0, 100)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taoru"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -10, 0, 100)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, STRING("taoru"), 0, LW(0), 0)
@@ -294,15 +315,15 @@ EVT_BEGIN(peach_evt_syawa_main)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_map_playanim, STRING("taoru"), 0, 0)
+    CALL(evt_map_playanim, STRING("taoru"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("taoru"), LW(0), LW(1))
     WAIT_MS(LW(1))
     WAIT_MS(800)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_HANG_CLOTH1"), 0, 0, 0, 0)
-    CALL(evt_map_playanim, STRING("fuku2"), 0, 0)
+    CALL(evt_map_playanim, STRING("fuku2"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("fuku2"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_sub_intpl_msec_init, 0, 0, -10, 100)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, -10, 100)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, STRING("p_fuku"), 0, LW(0), 0)
@@ -311,14 +332,14 @@ EVT_BEGIN(peach_evt_syawa_main)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("p_fuku"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("p_fuku"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_snd_sfxon_3d, STRING("SFX_PEACH_CHANGE_CLOTH1"), 0, 0, 0, 0)
     WAIT_MS(1000)
     CALL(evt_peach_set_condition, 1)
     CALL(evt_mario_cont_onoff, 0)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 13, 800, 1000, 200)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN, 800, 1000, 200)
         LABEL(22)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -328,7 +349,7 @@ EVT_BEGIN(peach_evt_syawa_main)
             GOTO(22)
         END_IF
         WAIT_MS(100)
-        CALL(evt_sub_intpl_msec_init, 13, 1000, 0, 300)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN, 1000, 0, 300)
         LABEL(23)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -338,7 +359,7 @@ EVT_BEGIN(peach_evt_syawa_main)
             GOTO(23)
         END_IF
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, -15, -45, 600)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -15, -45, 600)
     LABEL(11)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(peach_set_pos, FLOAT(-28.0f), GW(0), LW(0))
@@ -348,89 +369,85 @@ EVT_BEGIN(peach_evt_syawa_main)
     END_IF
     CALL(evt_mario_cont_onoff, 1)
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, 30, 130, 336, 30, 60, -58, 1250, 11)
+    CALL(evt_cam3d_evt_set, 30, 130, 336, 30, 60, -58, 1250, EASING_SINE_IN_OUT)
     CALL(evt_mario_mov_pos2, 30, -45, FLOAT(48.0f))
     CALL(evt_mario_wait_move_end)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("P_S_2"), STRING("P_T_2"))
     CALL(evt_msg_print, 0, STRING("peach_aji_37"), 0, STRING("mario"))
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("P_S_1"), STRING("P_T_1"))
-    // The music returns, the shower-taken flag is set and Peach gets control back.
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-    CALL(evt_snd_envoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    SET_VALUE(GSWF(GSWF_AJI15_PEACH_SHOWER_TAKEN), 1)
-    CALL(evt_cam3d_evt_off, 800, 11)
+
+    // The music returns, the shower-examined flag is set and Peach gets control back.
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_snd_envoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_envon, PSND_CONTINUE | PSND_FADEIN, 0)
+    SET_VALUE(GSWF_AJI_15_PEACH_SHOWER_EXAMINED, 1)
+    CALL(evt_cam3d_evt_off, 800, EASING_SINE_IN_OUT)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
 /**
- * Shower room set-up: hides Peach's dress (p_fuku) and the towel,
- * flattens the shower stream and starts its animation.
- * If the player is Peach it removes the partner,
- * plays the towel animation and attaches peach_evt_syawa_main to the bath hit area A_furo;
- * for Mario's visit it stops after the set-up.
+ * Shower set-up for aji_15_init_evt: hides p_fuku and taoru, flattens S_syawa and loops the syawa animation. In mode 1
+ * (Peach) it removes the partner, plays the taoru animation once and attaches peach_evt_syawa_main to A_furo.
  */
-EVT_BEGIN(peach_evt_syawa_init)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("p_fuku"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taoru"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(peach_evt_syawa_init)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("p_fuku"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("taoru"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_scale, 1, STRING("S_syawa"), 0, 1, 1)
-    CALL(evt_map_playanim, STRING("syawa"), 1, 0)
+    CALL(evt_map_playanim, STRING("syawa"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_mario_get_mode, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 1)
         RETURN
     END_IF
     CALL(evt_mario_kill_party, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taoru"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("taoru"), 0, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("taoru"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("taoru"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("taoru"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_furo"), 0, PTR(peach_evt_syawa_main), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_furo"), 0, PTR(peach_evt_syawa_main), 0)
     RETURN
 EVT_END()
 
 /**
- * Init script of aji_15, the shower room: sets up the exits,
- * removes the elite grunt 軍団ザコエリート once Lord Crump is beaten (and during Peach's visit),
- * plays BGM_EVT_PEACH1 with the ambience off, runs the shower room set-up (peach_evt_syawa_init)
- * and records the first entry in GSWF_AJI15_PEACH1_SHOWER_ROOM_ENTERED.
+ * Map init of aji_15 (relSetEvtAddr in aji.c): the entrances, BGM_EVT_PEACH1 with the environment sound off,
+ * peach_evt_syawa_init (JP and later set reverb mode 1 first), GSWF_AJI_15_VISITED set and evt_emergency. The elite
+ * underling NPC is deleted from STG7_20_LORD_CRUMP_DEFEATED, or always when Mario is in mode 1 (Peach).
  */
 EVT_BEGIN(aji_15_init_evt)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG7_20_LORD_CRUMP_DEFEATED)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG7_20_LORD_CRUMP_DEFEATED)
         CALL(evt_npc_check_delete, STRING("軍団ザコエリート"))
     END_IF
     CALL(evt_mario_get_mode, LW(0))
     IF_INT_EQUAL(LW(0), 1)
         CALL(evt_mario_set_mode, 1)
         CALL(evt_npc_check_delete, STRING("軍団ザコエリート"))
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_PEACH1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_PEACH1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
     ELSE
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_PEACH1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_PEACH1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
     END_IF
-#if VERSION >= VERSION_JP
-    CALL(evt_snd_set_rev_mode, 1)
-#endif
+#if VERSION <= VERSION_DEMO_JP
     CALL_CHILD(peach_evt_syawa_init)
-    IF_INT_EQUAL(GSWF(GSWF_AJI15_PEACH1_SHOWER_ROOM_ENTERED), 0)
-        SET_VALUE(GSWF(GSWF_AJI15_PEACH1_SHOWER_ROOM_ENTERED), 1)
+#else
+    CALL(evt_snd_set_rev_mode, 1)
+    CALL_CHILD(peach_evt_syawa_init)
+#endif
+    IF_INT_EQUAL(GSWF_AJI_15_VISITED, 0)
+        SET_VALUE(GSWF_AJI_15_VISITED, 1)
     END_IF
     SPAWN_EVENT(evt_emergency)
     RETURN
 EVT_END()
 
-/**
- * Script function: returns in args[0] whether Peach already has her
- * after-shower state (peachFlags bit 0x10 set) as 1 or 0.
- */
+/** Script helper: returns 1 in args[0] when PEACH_FLAG_AFTERSHOWER is set, else 0. */
 static USER_FUNC(peach_chk_aftershower) {
     EvtWord* args = event->args;
 
-    if (marioGetPtr()->peachFlags & PEACH_FLAG_AFTER_SHOWER) {
+    if (marioGetPtr()->peachFlags & PEACH_FLAG_AFTERSHOWER) {
         evtSetValue(event, args[0], 1);
     } else {
         evtSetValue(event, args[0], 0);

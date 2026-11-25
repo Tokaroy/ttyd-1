@@ -1,4 +1,5 @@
-// Paper Mario 64 effect: pikkyolo effect at a point with a scale and life.
+// Paper Mario 64 effect: pikkyolo, six coloured fragments thrown out from a point that bounce on the ground.
+
 #include "eff/n64/eff_pikkyolo_n64.h"
 #include "driver/effdrv.h"
 #include "driver/camdrv.h"
@@ -28,8 +29,8 @@ typedef struct EffPikkyoloN64Work {
 } EffPikkyoloN64Work;
 
 /**
- * Four 16x16 quads, one per animation cell of the fragment texture,
- * that each tumbling fragment steps through.
+ * Four 16x16 quads, one per animation cell of the fragment texture;
+ * fragment i always uses cell i & 3.
  */
 static effN64Vtx size16x16_tex16x16_vtx[] = {
     {-8, -8, 0, 0, 0, 0, 0, 0, 255},
@@ -51,7 +52,7 @@ static effN64Vtx size16x16_tex16x16_vtx[] = {
 };
 
 static void effPikkyoloMain(EffectEntry* effect);
-static void effPikkyoloDisp(CameraId cameraId, EffectEntry* effect);
+static void effPikkyoloDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns six randomly colored fragments at (x, y, z) thrown out with random velocities, scaled by scale;
@@ -69,7 +70,7 @@ EffectEntry* effPikkyoloN64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 sc
     work = __memAlloc(HEAP_EFFECT, sizeof(EffPikkyoloN64Work) * 6);
     effect->userdata = work;
     effect->callback = effPikkyoloMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->counter = 0;
     if (life <= 0) {
@@ -123,8 +124,8 @@ static void effPikkyoloMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 16;
     }
     if (work->life < 1000) {
@@ -147,18 +148,18 @@ static void effPikkyoloMain(EffectEntry* effect) {
             work->position.y = 0.0f;
             work->velocity.y *= -0.7f;
         }
-        work->rot += (s32)((i & 1) * 2 - 1) * 14;
+        work->rot += ((i & 1) * 2 - 1) * 14;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effPikkyoloDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effPikkyoloDisp, effect);
 }
 
 /** Draws each fragment as a camera-facing, spinning quad using one of four animation cells of texture 0x41. */
-static void effPikkyoloDisp(CameraId cameraId, EffectEntry* effect) {
+static void effPikkyoloDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffPikkyoloN64Work* work;
     s32 i;
     s32 alpha;
-    s32 n;
     Mtx mtx;
     Mtx scaleMtx;
     Mtx rot;

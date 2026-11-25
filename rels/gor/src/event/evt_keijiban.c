@@ -1,6 +1,7 @@
-// evt_keijiban: Notice board (掲示板) text helper; builds board entries from "<prefix>_NNNN" messages.
+// evt_keijiban: notice board (keijiban) text helper; builds board entries from "<prefix>_NNNN" messages.
 
 #include "battle/battle_unit.h"
+#include "gor.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
 
@@ -9,13 +10,12 @@
 #include "stdio.h"
 #include "string.h"
 #include "memory.h"
-#include "evt/evt_story.h"
 
 typedef struct KeijibanEntry {
     s16 flags;
     s16 evtNo;
     s16 index;
-} KeijibanEntry; /* flags: never accessed */
+} KeijibanEntry;
 typedef struct KeijibanData {
     KeijibanEntry* entries;
     s32 count;
@@ -24,23 +24,21 @@ typedef struct KeijibanData {
     s32 current;
     s32 maxEvtNo;
 } KeijibanData;
-#define KJDT (_kjdt)
 
 KeijibanData _kjdt[1];
 
 /**
- * Builds the list of notice board entries for a message prefix: reads the messages prefix_0000, prefix_0001, ...
- * until one lacks the "<!" header or its name is "enddata";
- * each header's first field names an event number (search_evt_no).
- * Without fill it finds the highest event number not past the current story progress
- * and counts the entries for it; with fill (bit 0) it stores those entries (event number and message index) in
- * the table. Returns the number of entries.
+ * Builds the list of notice board entries for a message prefix: reads the messages prefix_0000,
+ * prefix_0001, ... until one lacks the "<!" header or its first field is "enddata"; that field names an
+ * event number (search_evt_no). Without fill it finds the highest event number not past the story progress
+ * and counts its entries; with fill (bit 0) it stores those entries (event number and message index) in
+ * the table, or returns 0 at once when none was found. Returns the number of entries.
  */
 s32 keijiban_data_make(const char* prefix, BOOL fill) {
     char name[64];
     char buf[64];
-    KeijibanData* kj = KJDT;
-    s32 gsw = evtGetValue(NULL, GSW(GSW_STORY_PROGRESS));
+    KeijibanData* kj = _kjdt;
+    s32 gsw = evtGetValue(NULL, GSW_STORY_PROGRESS);
     s32 i;
     s32 len;
     s32 field;
@@ -129,13 +127,14 @@ s32 keijiban_data_make(const char* prefix, BOOL fill) {
 }
 
 /**
- * Script helper that builds the message label of notice board entry args[0] ("prefix_NNNN") into args[1]
- * and remembers it as the current entry; gives an empty string when the index is out of range.
+ * Script helper that builds the message label of notice board entry args[0] (the prefix and the entry's
+ * message index, "%s_%04d") into args[1] and remembers it as the current entry; gives an empty string
+ * when the index is out of range.
  */
 USER_FUNC(keijiban_joho_makelabel) {
     EvtWord* args = event->args;
     s32 idx = evtGetValue(event, args[0]);
-    KeijibanData* kj = KJDT;
+    KeijibanData* kj = _kjdt;
 
     if (idx >= 0 && idx < kj->count) {
         sprintf(kj->label, "%s_%04d", kj->prefix, kj->entries[idx].index);
@@ -150,13 +149,13 @@ USER_FUNC(keijiban_joho_makelabel) {
 
 /** Script helper that returns the number of notice board entries in args[0]. */
 USER_FUNC(keijiban_joho_check) {
-    evtSetValue(event, event->args[0], KJDT->count);
+    evtSetValue(event, event->args[0], _kjdt->count);
     return EVT_RETURN_DONE;
 }
 
 /** Script helper that frees the notice board entry table and resets the board data. */
 USER_FUNC(keijiban_data_free) {
-    KeijibanData* kj = KJDT;
+    KeijibanData* kj = _kjdt;
 
     if (kj->entries == NULL) {
         return EVT_RETURN_DONE;
@@ -175,12 +174,12 @@ USER_FUNC(keijiban_data_free) {
  * counts the entries at the current story progress, allocates the table and fills it.
  */
 USER_FUNC(keijiban_data_alloc) {
-    KJDT->prefix = (const char*)evtGetValue(event, event->args[0]);
-    KJDT->count = keijiban_data_make(KJDT->prefix, FALSE);
-    KJDT->entries = _mapAlloc(KJDT->count * sizeof(KeijibanEntry) + 0x40);
-    memset(KJDT->entries, 0, KJDT->count * sizeof(KeijibanEntry) + 0x40);
-    KJDT->label = (char*)&KJDT->entries[KJDT->count];
-    keijiban_data_make(KJDT->prefix, TRUE);
+    _kjdt->prefix = (const char*)evtGetValue(event, event->args[0]);
+    _kjdt->count = keijiban_data_make(_kjdt->prefix, FALSE);
+    _kjdt->entries = _mapAlloc(_kjdt->count * sizeof(KeijibanEntry) + 0x40);
+    memset(_kjdt->entries, 0, _kjdt->count * sizeof(KeijibanEntry) + 0x40);
+    _kjdt->label = (char*)&_kjdt->entries[_kjdt->count];
+    keijiban_data_make(_kjdt->prefix, TRUE);
     return EVT_RETURN_DONE;
 }
 

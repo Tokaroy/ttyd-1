@@ -1,11 +1,16 @@
 // Battle units: creating, spawning, deleting and updating the units and parts that fight in a battle.
-#pragma optimize_for_size on
-// no automatic inlining in this unit, as in the original (the object differs without it)
-#pragma auto_inline off
+
+// FAKE: the early demos' status functions take the enum here while their callers see the s8 prototypes.
+#define BATTLE_UNIT_STATUS_ENUM
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "battle/battle.h"
 #include "system.h"
 #include <string.h>
+#include "battle/battle_status_effect.h"
+#include "battle/battle_audience.h"
+#include "battle/battle_actrecord.h"
+#include "battle/unit_work.h"
 
 #include "battle/battle_disp.h"
 #include "mario/mario_pouch.h"
@@ -14,22 +19,13 @@
 #include "driver/animdrv.h"
 #include "manager/evtmgr.h"
 #include "memory.h"
-#include "version.h"
-#include "battle/battle_status_effect.h"
-#include "unit/unit_koura.h"
-#include "unit/party/unit_party_vivian.h"
-#include "battle/battle_actrecord.h"
-
-double pow(double, double);
-void BtlActRec_AddCount(u8* rec);
-
-#define PART_POSE_SOUND(part) (&(part)->poseSound)
+#include "libc_decls.h"
 
 /**
  * Items an enemy can use in battle (attack, status and healing items; 0 ends the list). Besides badges, only
  * these pass BtlUnit_EnemyItemCanUseCheck, which decides whether an enemy may be given an item.
  */
-s32 _enemy_can_use_item_table[] = {
+static s32 _enemy_can_use_item_table[] = {
     ITEM_THUNDER_BOLT, ITEM_FIRE_FLOWER, ITEM_POW_BLOCK, ITEM_THUNDER_RAGE, ITEM_SHOOTING_STAR, ITEM_ICE_STORM,
     ITEM_EARTH_QUAKE, ITEM_HP_DRAIN_ITEM, ITEM_SLEEPY_SHEEP, ITEM_STOPWATCH, ITEM_DIZZY_DIAL, ITEM_MINI_MR_MINI,
     ITEM_MR_SOFTENER, ITEM_RUIN_POWDER, ITEM_POWER_PUNCH, ITEM_COURAGE_SHELL, ITEM_BOOS_SHEET, ITEM_VOLT_SHROOM,
@@ -39,14 +35,13 @@ s32 _enemy_can_use_item_table[] = {
 };
 
 // local prototypes
-void _CheckMoveCount(BattleUnit* unit);
 
 /** Clears all 64 unit slots in the battle work at battle start. Always returns TRUE. */
 BOOL BtlUnit_Init(void) {
     int i;
     BattleWork* wp = _battleWorkPointer;
 
-    for (i = 0; i < 64; i++) {
+    for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         BattleSetUnitPtr(wp, i, NULL);
     }
     return TRUE;
@@ -161,7 +156,7 @@ BattleUnit* BtlUnit_Entry(BattleUnitSetup* setup) {
         part->owner = unit;
         part->attributes = part->kindPartParams->attributes;
         part->counterAttributes = part->kindPartParams->counterAttributes;
-        if (part->attributes & PART_ATTR_MAIN) {
+        if (part->attributes & kMainPart) {
             unit->talkPartId = part->kindPartParams->partNum;
         }
         part->defense = part->kindPartParams->defense;
@@ -199,7 +194,7 @@ BattleUnit* BtlUnit_Entry(BattleUnitSetup* setup) {
         part->poseName[0] = 0;
         part->animSpeed = 1.0f;
         part->animSpeed2 = 1.0f;
-        part->poseType = 0;
+        part->look = PART_LOOK_NONE;
         part->poseState = 0;
         part->handle = -1;
         part->partName = part->kindPartParams->partName;
@@ -213,10 +208,10 @@ BattleUnit* BtlUnit_Entry(BattleUnitSetup* setup) {
     part->nextPart = NULL;
 
     body = BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit));
-    unit->talkPose = BtlUnit_GetPoseNameFromType(body, BTL_POSE_TALK);
-    unit->stayPose = BtlUnit_GetPoseNameFromType(body, BTL_POSE_STAY);
-    unit->moveColorLv = 0xFF;
-    unit->moveColorLvDisp = 0xFF;
+    unit->talkPose = BtlUnit_GetPoseNameFromType(body, POSE_TYPE_TALK);
+    unit->stayPose = BtlUnit_GetPoseNameFromType(body, POSE_TYPE_NEUTRAL);
+    unit->moveColorLv = MOVE_COLOR_LV_FULL;
+    unit->moveColorLvDisp = MOVE_COLOR_LV_FULL;
     btlDispEntAnime(unit);
     unit->countersetWeapon = NULL;
     unit->deleteFunc = NULL;
@@ -276,7 +271,7 @@ BOOL BtlUnit_Delete(BattleUnit* unit) {
             wp->movePriorityQueue[j] = -1;
         }
     }
-    if (unit->flags & UNIT_FLAG_HOLDING_STOLEN_ITEM) {
+    if (unit->flags & BATTLE_UNIT_FLAG_STOLEN_ITEM) {
         NpcBattleInfo* info = wp->fbatInfo->setup;
         if (unit->groupSetupId >= 0) {
             info->stolenItems[unit->groupSetupId] = unit->heldItem;
@@ -291,7 +286,7 @@ BOOL BtlUnit_Delete(BattleUnit* unit) {
             BattleFree(unit->countersetWeapon);
         }
     }
-    if ((void*)unit->screenTexBuf) {
+    if (unit->screenTexBuf) {
         smartFree(unit->screenTexBuf);
         unit->screenTexBuf = NULL;
     }
@@ -311,8 +306,8 @@ BOOL BtlUnit_Delete(BattleUnit* unit) {
 }
 
 /**
- * Creates a unit mid-battle (BtlUnit_Entry) and, with flag 2, puts it first in the move order or, with flag 1,
- * last.
+ * Creates a unit mid-battle (BtlUnit_Entry) and, with BTL_SPAWN_QUEUE_FRONT, puts it first in the move order or,
+ * with BTL_SPAWN_QUEUE_BACK, last.
  */
 BattleUnit* BtlUnit_Spawn(BattleUnitSetup* setup, s32 flags) {
     BattleWork* wp = _battleWorkPointer;
@@ -324,8 +319,8 @@ BattleUnit* BtlUnit_Spawn(BattleUnitSetup* setup, s32 flags) {
     unit = BtlUnit_Entry(setup);
     if (!unit)
         return unit;
-    if (flags & 2) {
-        unit->moveState = 0;
+    if (flags & BTL_SPAWN_QUEUE_FRONT) {
+        unit->moveState = MOVE_STATE_NORMAL;
         id = unit->unitId;
         for (i = 0; i < BATTLE_UNIT_MAX; i++) {
             if (id == -1)
@@ -338,8 +333,8 @@ BattleUnit* BtlUnit_Spawn(BattleUnitSetup* setup, s32 flags) {
             wp->movePriorityQueue[i] = id;
             id = tmp;
         }
-    } else if (flags & 1) {
-        unit->moveState = 0;
+    } else if (flags & BTL_SPAWN_QUEUE_BACK) {
+        unit->moveState = MOVE_STATE_NORMAL;
         id = unit->unitId;
         for (i = 63; i >= 0; i--) {
             if (id == -1)
@@ -361,7 +356,7 @@ s32 BtlUnit_GetUnitId(BattleUnit* unit) {
     return unit->unitId;
 }
 
-/** Finds the part with the given part number; a negative number, a one-part unit or no match gives the first part. */
+/** Finds the part with the given part number; a negative number or a one-part unit gives the first part, while no match returns NULL. */
 BattleUnitPart* BtlUnit_GetPartsPtr(BattleUnit* unit, s32 partNum) {
     BattleUnitPart* part = unit->parts;
 
@@ -379,14 +374,33 @@ BattleUnitPart* BtlUnit_GetPartsPtr(BattleUnit* unit, s32 partNum) {
     return part;
 }
 
-/** Returns the part number of the unit's main (body) part, the one flagged PART_ATTR_MAIN, or -1. */
+/** Returns the part number of the unit's main (body) part, the one flagged kMainPart, or -1. */
 s32 BtlUnit_GetBodyPartsId(BattleUnit* unit) {
     BattleUnitPart* part;
     s32 ret = -1;
 
     if (unit) {
         for (part = unit->parts; part; part = part->nextPart) {
-            if (part->attributes & PART_ATTR_MAIN) {
+            if (part->attributes & kMainPart) {
+                ret = part->kindPartParams->partNum;
+                break;
+            }
+        }
+    }
+    return ret;
+}
+
+/** Returns the part number of the unit's bodyguard target part (kGuardTargetPart), or -1. */
+// Original name and size (0x40) from the JP demo map (UNUSED there: nothing calls it; the map lists it after
+// BtlUnit_GetBodyPartsId). BtlUnit_GetBodyPartsId's search for the part attribute its name gives: kGuardTargetPart
+// is the one guard attribute (battle_damage.c finds the bodyguard's part by it).
+s32 BtlUnit_GetGuardBodyPartsId(BattleUnit* unit) {
+    BattleUnitPart* part;
+    s32 ret = -1;
+
+    if (unit) {
+        for (part = unit->parts; part; part = part->nextPart) {
+            if (part->attributes & kGuardTargetPart) {
                 ret = part->kindPartParams->partNum;
                 break;
             }
@@ -417,7 +431,7 @@ void BtlUnit_AddPos(BattleUnit* unit, f32 x, f32 y, f32 z) {
 }
 
 /**
- * Reads a part's own position field (absolute only for PART_ATTR_WORLD_POSITION parts;
+ * Reads a part's own position field (absolute only for kAbsolutePosition parts;
  * see BtlUnit_GetPartsWorldPos).
  */
 void BtlUnit_GetPartsPos(BattleUnitPart* part, f32* x, f32* y, f32* z) {
@@ -441,14 +455,14 @@ void BtlUnit_AddPartsPos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
 }
 
 /**
- * Stage position of a part: its own position for PART_ATTR_WORLD_POSITION parts,
+ * Stage position of a part: its own position for kAbsolutePosition parts,
  * otherwise the unit's position plus the part's offset, with x mirrored by the unit's facing direction.
  */
 void BtlUnit_GetPartsWorldPos(BattleUnitPart* part, f32* x, f32* y, f32* z) {
     BattleUnit* unit = part->owner;
     f32 ux, ox, uy, oy, uz, oz;
 
-    if (part->attributes & PART_ATTR_WORLD_POSITION) {
+    if (part->attributes & kAbsolutePosition) {
         *x = part->position.x;
         *y = part->position.y;
         *z = part->position.z;
@@ -469,6 +483,7 @@ void BtlUnit_GetHitPos(BattleUnit* unit, BattleUnitPart* part, f32* x, f32* y, f
     f32 y_multiply = 1.0f;
     s32 direction = _battleWorkPointer->alliances[unit->alliance].attackDirection;
     BtlUnit_GetPartsWorldPos(part, x, y, z);
+
     // add hit base offset
     *x = ((f32)direction * (part->hitBaseOffset.x * unit->sizeMultiplier)) + *x;
     *y = (y_multiply * (part->hitBaseOffset.y * unit->sizeMultiplier)) + *y;
@@ -514,11 +529,28 @@ void BtlUnit_AddHomePos(BattleUnit* unit, f32 x, f32 y, f32 z) {
     unit->homePosition.z += z;
 }
 
+/** Reads a part's home position. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it); the getter of
+// BtlUnit_SetPartsHomePos's field in the form of BtlUnit_GetHomePos.
+void BtlUnit_GetPartsHomePos(BattleUnitPart* part, f32* x, f32* y, f32* z) {
+    *x = part->homePosition.x;
+    *y = part->homePosition.y;
+    *z = part->homePosition.z;
+}
+
 /** Sets a part's home position. */
 void BtlUnit_SetPartsHomePos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
     part->homePosition.x = x;
     part->homePosition.y = y;
     part->homePosition.z = z;
+}
+
+/** Moves a part's home position by an offset. */
+// Original name and size (0x28) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_AddHomePos for a part.
+void BtlUnit_AddPartsHomePos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
+    part->homePosition.x += x;
+    part->homePosition.y += y;
+    part->homePosition.z += z;
 }
 
 /** Sets the unit's rotation in degrees, each axis normalised to 0..360 with 360 folded to 0. */
@@ -638,30 +670,57 @@ void BtlUnit_GetPartsBaseRotate(BattleUnitPart* part, f32* x, f32* y, f32* z) {
  * Like the other setters here, an axis passed as -250000000.0 (the scripts' "keep" value) is left unchanged.
  */
 void BtlUnit_SetRotateOffset(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         unit->rotationOffset.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         unit->rotationOffset.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         unit->rotationOffset.z = z;
     }
 }
 
+/** Reads the unit's rotation offset. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it); the getter of
+// BtlUnit_SetRotateOffset's field in the form of BtlUnit_GetRotate.
+void BtlUnit_GetRotateOffset(BattleUnit* unit, f32* x, f32* y, f32* z) {
+    *x = unit->rotationOffset.x;
+    *y = unit->rotationOffset.y;
+    *z = unit->rotationOffset.z;
+}
+
+/** Adds to the unit's rotation offset. */
+// Original name and size (0x28) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_AddPartsRotateOffset
+// for the unit.
+void BtlUnit_AddRotateOffset(BattleUnit* unit, f32 x, f32 y, f32 z) {
+    unit->rotationOffset.x += x;
+    unit->rotationOffset.y += y;
+    unit->rotationOffset.z += z;
+}
+
 /** Sets the pivot offset a part rotates around; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_SetPartsRotateOffset(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->rotationOffset.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->rotationOffset.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->rotationOffset.z = z;
     }
+}
+
+/** Reads a part's rotation offset. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it); the getter of
+// BtlUnit_SetPartsRotateOffset's field in the form of BtlUnit_GetPartsRotate.
+void BtlUnit_GetPartsRotateOffset(BattleUnitPart* part, f32* x, f32* y, f32* z) {
+    *x = part->rotationOffset.x;
+    *y = part->rotationOffset.y;
+    *z = part->rotationOffset.z;
 }
 
 /** Moves a part's rotation pivot offset by the given amounts. */
@@ -673,92 +732,101 @@ void BtlUnit_AddPartsRotateOffset(BattleUnitPart* part, f32 x, f32 y, f32 z) {
 
 /** Sets the unit's base scale (its normal size, multiplied with the animated scale); -250000000.0 keeps an axis. */
 void BtlUnit_SetBaseScale(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         unit->baseScale.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         unit->baseScale.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         unit->baseScale.z = z;
     }
 }
 
 /** Reads the unit's animated scale. */
 void BtlUnit_GetScale(BattleUnit* unit, f32* x, f32* y, f32* z) {
-    *x = unit->scale.x;
-    *y = unit->scale.y;
-    *z = unit->scale.z;
+    *x = unit->mScale.x;
+    *y = unit->mScale.y;
+    *z = unit->mScale.z;
 }
 
 /** Sets the unit's animated scale; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_SetScale(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
-        unit->scale.x = x;
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
+        unit->mScale.x = x;
     }
-    if (thefuckyone != y) {
-        unit->scale.y = y;
+    if (noValue != y) {
+        unit->mScale.y = y;
     }
-    if (thefuckyone != z) {
-        unit->scale.z = z;
+    if (noValue != z) {
+        unit->mScale.z = z;
     }
 }
 
 /** Adds to the unit's animated scale; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_AddScale(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
-        unit->scale.x += x;
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
+        unit->mScale.x += x;
     }
-    if (thefuckyone != y) {
-        unit->scale.y += y;
+    if (noValue != y) {
+        unit->mScale.y += y;
     }
-    if (thefuckyone != z) {
-        unit->scale.z += z;
+    if (noValue != z) {
+        unit->mScale.z += z;
     }
 }
 
 /** Sets a part's base scale; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_SetPartsBaseScale(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->baseScale.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->baseScale.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->baseScale.z = z;
     }
 }
 
+/** Reads a part's scale. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_GetScale for a part
+// (the field BtlUnit_SetPartsScale sets).
+void BtlUnit_GetPartsScale(BattleUnitPart* part, f32* x, f32* y, f32* z) {
+    *x = part->mScale.x;
+    *y = part->mScale.y;
+    *z = part->mScale.z;
+}
+
 /** Sets a part's animated scale; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_SetPartsScale(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
-        part->scale.x = x;
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
+        part->mScale.x = x;
     }
-    if (thefuckyone != y) {
-        part->scale.y = y;
+    if (noValue != y) {
+        part->mScale.y = y;
     }
-    if (thefuckyone != z) {
-        part->scale.z = z;
+    if (noValue != z) {
+        part->mScale.z = z;
     }
 }
 
 /** Adds to a part's animated scale; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_AddPartsScale(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
-        part->scale.x += x;
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
+        part->mScale.x += x;
     }
-    if (thefuckyone != y) {
-        part->scale.y += y;
+    if (noValue != y) {
+        part->mScale.y += y;
     }
-    if (thefuckyone != z) {
-        part->scale.z += z;
+    if (noValue != z) {
+        part->mScale.z += z;
     }
 }
 
@@ -772,9 +840,24 @@ s32 BtlUnit_GetHeight(BattleUnit* unit) {
     return unit->height;
 }
 
+/** Sets the unit's width. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_SetHeight for the width.
+void BtlUnit_SetWidth(BattleUnit* unit, s16 width) {
+    unit->width = width;
+}
+
 /** Overrides the unit's height. */
 void BtlUnit_SetHeight(BattleUnit* unit, s16 height) {
     unit->height = height;
+}
+
+/** Reads the unit's position offset. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_GetPartsOffsetPos for
+// the unit (the field BtlUnit_SetOffsetPos sets).
+void BtlUnit_GetOffsetPos(BattleUnit* unit, f32* x, f32* y, f32* z) {
+    *x = unit->positionOffset.x;
+    *y = unit->positionOffset.y;
+    *z = unit->positionOffset.z;
 }
 
 /**
@@ -782,16 +865,25 @@ void BtlUnit_SetHeight(BattleUnit* unit, s16 height) {
  * Entry sets it to the start position.
  */
 void BtlUnit_SetOffsetPos(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         unit->positionOffset.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         unit->positionOffset.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         unit->positionOffset.z = z;
     }
+}
+
+/** Adds to the unit's position offset. */
+// Original name and size (0x28) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_AddPartsOffsetPos for
+// the unit.
+void BtlUnit_AddOffsetPos(BattleUnit* unit, f32 x, f32 y, f32 z) {
+    unit->positionOffset.x += x;
+    unit->positionOffset.y += y;
+    unit->positionOffset.z += z;
 }
 
 /** Reads a part's offset from its unit's position. */
@@ -803,14 +895,14 @@ void BtlUnit_GetPartsOffsetPos(BattleUnitPart* part, f32* x, f32* y, f32* z) {
 
 /** Sets a part's offset from its unit's position; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_SetPartsOffsetPos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->positionOffset.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->positionOffset.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->positionOffset.z = z;
     }
 }
@@ -824,126 +916,222 @@ void BtlUnit_AddPartsOffsetPos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
 
 /** Sets the unit's draw offset (displayOffset); -250000000.0 keeps an axis. */
 void BtlUnit_SetDispOffset(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         unit->displayOffset.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         unit->displayOffset.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         unit->displayOffset.z = z;
+    }
+}
+
+/** Reads the unit's draw offset into the axes whose current value is not -250000000.0. */
+// Original name and size (0x4c) from the JP demo map (UNUSED there: only the stripped btlevtcmd_GetDispOffset
+// calls it), listed between BtlUnit_SetDispOffset and BtlUnit_AddDispOffset. Body: their -250000000.0 axis test,
+// here on the value each out-pointer holds. Plain reads give 0x1c and NULL tests 0x34; this form gives 0x4c, and
+// with BtlUnit_GetPartsDispOffset it closes the JP demo @N gap after the -250000000.0 constant exactly (7 numbers
+// each). The bytes of the stripped copy (operand order of the compares) are not known.
+void BtlUnit_GetDispOffset(BattleUnit* unit, f32* x, f32* y, f32* z) {
+    f32 noValue = -250000000.0f;
+    if (noValue != *x) {
+        *x = unit->displayOffset.x;
+    }
+    if (noValue != *y) {
+        *y = unit->displayOffset.y;
+    }
+    if (noValue != *z) {
+        *z = unit->displayOffset.z;
+    }
+}
+
+/** Adds to the unit's display offset; -250000000.0 keeps an axis. */
+// Original name and size (0x4c) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_AddPartsDispOffset
+// for the unit.
+void BtlUnit_AddDispOffset(BattleUnit* unit, f32 x, f32 y, f32 z) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
+        unit->displayOffset.x += x;
+    }
+    if (noValue != y) {
+        unit->displayOffset.y += y;
+    }
+    if (noValue != z) {
+        unit->displayOffset.z += z;
     }
 }
 
 /** Sets a part's draw offset (displayOffset); an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_SetPartsDispOffset(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->displayOffset.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->displayOffset.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->displayOffset.z = z;
+    }
+}
+
+/** Reads the part's draw offset into the axes whose current value is not -250000000.0. */
+// Original name and size (0x4c) from the JP demo map (UNUSED there: only the stripped
+// btlevtcmd_GetPartsDispOffset calls it), listed between BtlUnit_SetPartsDispOffset and
+// BtlUnit_AddPartsDispOffset; the form of BtlUnit_GetDispOffset (see there for the evidence).
+void BtlUnit_GetPartsDispOffset(BattleUnitPart* part, f32* x, f32* y, f32* z) {
+    f32 noValue = -250000000.0f;
+    if (noValue != *x) {
+        *x = part->displayOffset.x;
+    }
+    if (noValue != *y) {
+        *y = part->displayOffset.y;
+    }
+    if (noValue != *z) {
+        *z = part->displayOffset.z;
     }
 }
 
 /** Adds to a part's draw offset; an axis passed as -250000000.0 is left unchanged. */
 void BtlUnit_AddPartsDispOffset(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->displayOffset.x += x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->displayOffset.y += y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->displayOffset.z += z;
     }
 }
 
+/** Reads where the unit's current scripted move starts. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it), as the five getters below:
+// each reads the field its Set function sets, in the form of BtlUnit_GetPos.
+void BtlUnit_GetMoveStartPos(BattleUnit* unit, f32* x, f32* y, f32* z) {
+    *x = unit->moveStartPos.x;
+    *y = unit->moveStartPos.y;
+    *z = unit->moveStartPos.z;
+}
+
 /** Sets where the unit's current scripted move (walk, jump) starts; -250000000.0 keeps an axis. */
 void BtlUnit_SetMoveStartPos(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         unit->moveStartPos.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         unit->moveStartPos.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         unit->moveStartPos.z = z;
     }
 }
 
+/** Reads where a part's current scripted move starts (JP demo map: UNUSED, 0x1c). */
+void BtlUnit_GetPartsMoveStartPos(BattleUnitPart* part, f32* x, f32* y, f32* z) {
+    *x = part->moveStartPos.x;
+    *y = part->moveStartPos.y;
+    *z = part->moveStartPos.z;
+}
+
 /** Sets where a part's current scripted move starts; -250000000.0 keeps an axis. */
 void BtlUnit_SetPartsMoveStartPos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->moveStartPos.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->moveStartPos.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->moveStartPos.z = z;
     }
 }
 
+/** Reads the position the unit's current scripted move has reached (JP demo map: UNUSED, 0x1c). */
+void BtlUnit_GetMoveCurrentPos(BattleUnit* unit, f32* x, f32* y, f32* z) {
+    *x = unit->moveCurrentPos.x;
+    *y = unit->moveCurrentPos.y;
+    *z = unit->moveCurrentPos.z;
+}
+
 /** Sets the position the unit's current scripted move has reached; -250000000.0 keeps an axis. */
 void BtlUnit_SetMoveCurrentPos(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         unit->moveCurrentPos.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         unit->moveCurrentPos.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         unit->moveCurrentPos.z = z;
     }
 }
 
+/** Reads the position a part's current scripted move has reached (JP demo map: UNUSED, 0x1c). */
+void BtlUnit_GetPartsMoveCurrentPos(BattleUnitPart* part, f32* x, f32* y, f32* z) {
+    *x = part->moveCurrentPos.x;
+    *y = part->moveCurrentPos.y;
+    *z = part->moveCurrentPos.z;
+}
+
 /** Sets the position a part's current scripted move has reached; -250000000.0 keeps an axis. */
 void BtlUnit_SetPartsMoveCurrentPos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->moveCurrentPos.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->moveCurrentPos.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->moveCurrentPos.z = z;
     }
 }
 
+/** Reads where the unit's current scripted move ends (JP demo map: UNUSED, 0x1c). */
+void BtlUnit_GetMoveTargetPos(BattleUnit* unit, f32* x, f32* y, f32* z) {
+    *x = unit->moveTargetPos.x;
+    *y = unit->moveTargetPos.y;
+    *z = unit->moveTargetPos.z;
+}
+
 /** Sets where the unit's current scripted move ends; -250000000.0 keeps an axis. */
 void BtlUnit_SetMoveTargetPos(BattleUnit* unit, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         unit->moveTargetPos.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         unit->moveTargetPos.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         unit->moveTargetPos.z = z;
     }
 }
 
+/** Reads where a part's current scripted move ends (JP demo map: UNUSED, 0x1c). */
+void BtlUnit_GetPartsMoveTargetPos(BattleUnitPart* part, f32* x, f32* y, f32* z) {
+    *x = part->moveTargetPos.x;
+    *y = part->moveTargetPos.y;
+    *z = part->moveTargetPos.z;
+}
+
 /** Sets where a part's current scripted move ends; -250000000.0 keeps an axis. */
 void BtlUnit_SetPartsMoveTargetPos(BattleUnitPart* part, f32 x, f32 y, f32 z) {
-    f32 thefuckyone = -250000000.0f;
-    if (thefuckyone != x) {
+    f32 noValue = -250000000.0f;
+    if (noValue != x) {
         part->moveTargetPos.x = x;
     }
-    if (thefuckyone != y) {
+    if (noValue != y) {
         part->moveTargetPos.y = y;
     }
-    if (thefuckyone != z) {
+    if (noValue != z) {
         part->moveTargetPos.z = z;
     }
 }
@@ -973,6 +1161,19 @@ void BtlUnit_SetJumpSpeed(BattleUnit* unit, f32 moveSpeedY) {
     unit->moveSpeedY = moveSpeedY;
 }
 
+/** Sets the vertical speed of a part's scripted jumps. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it); BtlUnit_SetJumpSpeed for a part.
+void BtlUnit_SetPartsJumpSpeed(BattleUnitPart* part, f32 moveSpeedY) {
+    part->moveSpeedY = moveSpeedY;
+}
+
+/** Sets the unit's alliance: which side it fights on. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it); the setter of
+// BtlUnit_GetBelong's field.
+void BtlUnit_SetBelong(BattleUnit* unit, s8 alliance) {
+    unit->alliance = alliance;
+}
+
 /** Returns the unit's alliance: which side it fights on. */
 s8 BtlUnit_GetBelong(BattleUnit* unit) {
     return unit->alliance;
@@ -985,7 +1186,7 @@ s8 BtlUnit_GetBelong(BattleUnit* unit) {
 void _CheckMoveCount(BattleUnit* unit) {
     s8 maxmoves;
 
-    if (!(unit->tokenFlags & TOKEN_FLAG_CURRENTLY_ACTING)) {
+    if (!(unit->tokenFlags & kCurrentlyActing)) {
         maxmoves = unit->maxMovesThisTurn;
         if (maxmoves > 0 && maxmoves == unit->movesRemaining) {
             BtlUnit_ResetMoveStatus(unit);
@@ -998,11 +1199,20 @@ void _CheckMoveCount(BattleUnit* unit) {
  * for statuses with no strength (sleep, stop, dizzy, ...) both get the turn count.
  * A size, attack or defense change of the other sign reads as 0.
  */
+#if VERSION <= VERSION_DEMO_JP
+void BtlUnit_GetStatus(BattleUnit* unit, StatusEffectType type, s8* turns, s8* strength) {
+#else
 void BtlUnit_GetStatus(BattleUnit* unit, s8 type, s8* turns, s8* strength) {
+#endif
+
     s8 status_turns = 0;
     s8 status_strength = 0;
 
+#if VERSION <= VERSION_DEMO_JP
+    switch ((s8)type) {
+#else
     switch (type) {
+#endif
         case STATUS_SLEEP:
             status_strength = unit->sleepTurns;
             status_turns = status_strength;
@@ -1115,7 +1325,7 @@ void BtlUnit_GetStatus(BattleUnit* unit, s8 type, s8* turns, s8* strength) {
             status_turns = unit->fpRegenTurns;
             status_strength = unit->fpRegenStrength;
             break;
-        case STATUS_INSTANT_KILL:
+        case STATUS_DEAD:
             status_strength = unit->instantKillStrength;
             status_turns = status_strength;
             break;
@@ -1134,11 +1344,17 @@ void BtlUnit_GetStatus(BattleUnit* unit, s8 type, s8* turns, s8* strength) {
  * Stores a status effect's turns and strength (Charge adds to its strength, capped 0..99).
  * Burn and freeze cancel each other, as do Fast and Slow, without applying the new one,
  * and a zero strength for a size, attack or defense change clears an effect of that sign.
- * Returns FALSE when nothing was applied; retail versions also return FALSE when Charge drops below 0
- * or Allergic or Payback is set to 0 turns, which the demos treat as set.
+ * Cancellation and zero-strength clear paths return FALSE; unhandled types return TRUE without changing a status.
+ * JP and later also return FALSE when Charge drops below 0
+ * or Allergic or Payback is set to 0 turns, which the early demos treat as set.
  */
+#if VERSION <= VERSION_DEMO_JP
+BOOL BtlUnit_SetStatus(BattleUnit* unit, StatusEffectType type, s8 turns, s8 strength) {
+    switch ((s8)type) {
+#else
 BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength) {
     switch (type) {
+#endif
         case STATUS_SLEEP:
             unit->sleepTurns = turns;
             unit->sleepStrength = 0;
@@ -1179,7 +1395,11 @@ BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength) {
         case STATUS_HUGE:
         case STATUS_TINY:
             if (!strength) {
+#if VERSION <= VERSION_DEMO_JP
+                if ((s8)type == STATUS_HUGE) {
+#else
                 if (type == STATUS_HUGE) {
+#endif
                     if (unit->sizeChangeStrength >= 0) {
                         unit->sizeChangeTurns = 0;
                         unit->sizeChangeStrength = 0;
@@ -1228,7 +1448,11 @@ BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength) {
                 unit->defChangeTurns = turns;
                 unit->defChangeStrength = strength;
             } else if (strength == 0) {
+#if VERSION <= VERSION_DEMO_JP
+                if ((s8)type == STATUS_DEFENSE_DOWN) {
+#else
                 if (type == STATUS_DEFENSE_DOWN) {
+#endif
                     if (unit->defChangeStrength <= 0) {
                         unit->defChangeTurns = 0;
                         unit->defChangeStrength = 0;
@@ -1250,34 +1474,30 @@ BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength) {
             break;
         case STATUS_CHARGE:
             unit->chargeStrength += strength;
+            if (unit->chargeStrength < 0) {
+                unit->chargeStrength = 0;
 #if VERSION <= VERSION_DEMO_JP
-            if (unit->chargeStrength < 0) {
-                unit->chargeStrength = 0;
             } else if (unit->chargeStrength > 99) {
-                unit->chargeStrength = 99;
-            }
-            break;
-        case STATUS_ALLERGIC:
-            unit->allergicTurns = turns;
-            break;
 #else
-            if (unit->chargeStrength < 0) {
-                unit->chargeStrength = 0;
                 return FALSE;
             }
             if (unit->chargeStrength > 99) {
+#endif
                 unit->chargeStrength = 99;
             }
             break;
         case STATUS_ALLERGIC:
+#if VERSION >= VERSION_JP
             if (turns > 0) {
                 unit->allergicTurns = turns;
             } else {
                 unit->allergicTurns = 0;
                 return FALSE;
             }
-            break;
+#else
+            unit->allergicTurns = turns;
 #endif
+            break;
         case STATUS_FLIPPED:
             unit->flippedTurns = turns;
             break;
@@ -1285,15 +1505,15 @@ BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength) {
             unit->invisibleTurns = turns;
             break;
         case STATUS_PAYBACK:
-#if VERSION <= VERSION_DEMO_JP
-            unit->paybackTurns = turns;
-#else
+#if VERSION >= VERSION_JP
             if (turns > 0) {
                 unit->paybackTurns = turns;
             } else {
                 unit->paybackTurns = 0;
                 return FALSE;
             }
+#else
+            unit->paybackTurns = turns;
 #endif
             break;
         case STATUS_HOLD_FAST:
@@ -1333,7 +1553,7 @@ BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength) {
             unit->fpRegenTurns = turns;
             unit->fpRegenStrength = strength;
             break;
-        case STATUS_INSTANT_KILL:
+        case STATUS_DEAD:
             unit->instantKillStrength = turns;
             break;
         default:
@@ -1343,8 +1563,9 @@ BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength) {
 }
 
 /** clears the 0x1E bytes of status turns and strengths from sleepTurns on */
+// the 0x1E bytes from sleepTurns are every status's turns and strength
 void BtlUnit_ClearStatus(BattleUnit* unit) {
-    memset(&unit->sleepTurns, 0, 0x1Eu);
+    memset(&unit->sleepTurns, 0, sizeof(BtlStatusCopy));
     BtlUnit_SetStatus(unit, STATUS_CHARGE, 1, -99);
 #if VERSION >= VERSION_JP
     BattleStatusChangeInfoWorkInit(unit);
@@ -1356,13 +1577,17 @@ void BtlUnit_ClearStatus(BattleUnit* unit) {
  * attack and defense changes, poison and regen), clearing its strength when the turns run out.
  * Returns TRUE when the status just wore off; FALSE when it continues, was not active, or the unit is KO'd.
  */
+#if VERSION <= VERSION_DEMO_JP
+BOOL BtlUnit_CheckRecoveryStatus(BattleUnit* unit, StatusEffectType type) {
+#else
 BOOL BtlUnit_CheckRecoveryStatus(BattleUnit* unit, s8 type) {
+#endif
     s8 turns, strength;
 
     if (!unit) {
         return FALSE;
     }
-    if (BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+    if (BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
         return FALSE;
     }
     if (unit->currentHp <= 0) {
@@ -1372,7 +1597,11 @@ BOOL BtlUnit_CheckRecoveryStatus(BattleUnit* unit, s8 type) {
     if (!turns) {
         return FALSE;
     }
+#if VERSION <= VERSION_DEMO_JP
+    switch ((s8)type) {
+#else
     switch (type) {
+#endif
         case STATUS_SLEEP:
             if (turns > 1) {
                 turns--;
@@ -1475,7 +1704,11 @@ BOOL BtlUnit_CheckRecoveryStatus(BattleUnit* unit, s8 type) {
 }
 
 /** Returns TRUE while the status effect has turns left; Electric also counts as active when the unit wears Zap Tap. */
+#if VERSION <= VERSION_DEMO_JP
+BOOL BtlUnit_CheckStatus(BattleUnit* unit, StatusEffectType type) {
+#else
 BOOL BtlUnit_CheckStatus(BattleUnit* unit, s8 type) {
+#endif
     s8 turns, strength;
 
     if (!unit) {
@@ -1485,7 +1718,11 @@ BOOL BtlUnit_CheckStatus(BattleUnit* unit, s8 type) {
     if (turns) {
         return TRUE;
     }
+#if VERSION <= VERSION_DEMO_JP
+    if ((s8)type == STATUS_ELECTRIC && unit->badgesEquipped.ZapTap) {
+#else
     if (type == STATUS_ELECTRIC && unit->badgesEquipped.ZapTap) {
+#endif
         return TRUE;
     }
     return FALSE;
@@ -1509,41 +1746,41 @@ void BtlUnit_OffStatusFlag(BattleUnit* unit, s32 flags) {
     unit->statusFlags &= ~flags;
 }
 
-/** Tests the unit's general flags (UNIT_FLAG_*). */
+/** Tests the unit's flags (BATTLE_UNIT_FLAG_*). */
 s32 BtlUnit_CheckUnitFlag(BattleUnit* unit, s32 flags) {
     return unit->flags & flags;
 }
 
-/** Sets general unit flags (UNIT_FLAG_*). */
+/** Sets unit flags (BATTLE_UNIT_FLAG_*). */
 void BtlUnit_OnUnitFlag(BattleUnit* unit, s32 flags) {
     unit->flags |= flags;
 }
 
-/** Clears general unit flags (UNIT_FLAG_*). */
+/** Clears unit flags (BATTLE_UNIT_FLAG_*). */
 void BtlUnit_OffUnitFlag(BattleUnit* unit, s32 flags) {
     unit->flags &= ~flags;
 }
 
 /**
  * Looks up the animation name for a pose type in the part's pose table,
- * taking the first entry that matches the type or its group's fallback (BTL_POSE_NORMAL,
- * BTL_POSE_DAMAGE or BTL_POSE_STAY_DEFAULT). NULL when nothing fits.
+ * taking the first entry that matches the type or its group's fallback (POSE_TYPE_NORMAL,
+ * POSE_TYPE_DAMAGE or POSE_TYPE_ACTION). NULL when nothing fits.
  */
 const char* BtlUnit_GetPoseNameFromType(BattleUnitPart* part, s32 type) {
     PoseTableEntry* pose = part->poseTable;
     s32 alt;
 
-    if (type <= BTL_POSE_NORMAL) {
-        alt = BTL_POSE_NORMAL;
-    } else if (type < BTL_POSE_WALK) {
-        alt = BTL_POSE_DAMAGE;
-    } else if (type < BTL_POSE_MAX) {
-        alt = BTL_POSE_STAY_DEFAULT;
+    if (type <= POSE_TYPE_NORMAL) {
+        alt = POSE_TYPE_NORMAL;
+    } else if (type < POSE_TYPE_WALK) {
+        alt = POSE_TYPE_DAMAGE;
+    } else if (type < POSE_TYPE_MAX) {
+        alt = POSE_TYPE_ACTION;
     } else {
         return NULL;
     }
     while (pose) {
-        if (pose->poseType >= BTL_POSE_MAX) {
+        if (pose->poseType >= POSE_TYPE_MAX) {
             return NULL;
         }
         if (pose->poseType != type && pose->poseType != alt) {
@@ -1556,21 +1793,21 @@ const char* BtlUnit_GetPoseNameFromType(BattleUnitPart* part, s32 type) {
 }
 
 /**
- * Plays the part's animation for a pose type; hurt poses 29-39 restart the animation,
- * and poses 29 and 30 also draw the part black (PART_ANIM_BLACKEN).
+ * Plays the part's animation for a pose type (see BtlUnit_GetPoseNameFromType); damage types 29..39 play as a hurt
+ * pose, and the fire damage types also mark the part PART_ANIM_BURNT.
  */
 void BtlUnit_SetAnimType(BattleUnitPart* part, s32 type) {
     const char* name = BtlUnit_GetPoseNameFromType(part, type);
 
-    if (type >= 0x1D && type < 0x28) {
-        btlDispChangeAnime(part, name, 1);
+    if (type >= POSE_TYPE_DAMAGE_FIRE && type < POSE_TYPE_WALK) {
+        btlDispChangeAnime(part, name, TRUE);
     } else {
-        btlDispChangeAnime(part, name, 0);
+        btlDispChangeAnime(part, name, FALSE);
     }
     switch (type) {
-        case 0x1D:
-        case 0x1E:
-            part->animFlags |= PART_ANIM_BLACKEN;
+        case POSE_TYPE_DAMAGE_FIRE:
+        case POSE_TYPE_DAMAGE_FIRE_2_UNUSED:
+            part->animFlags |= PART_ANIM_BURNT;
             break;
     }
 }
@@ -1604,6 +1841,18 @@ void BtlUnit_ChangeStayAnim(s32 unitId) {
     btlDispChangeAnime(BtlUnit_GetPartsPtr(unit, unit->talkPartId), unit->stayPose, 0);
 }
 
+/** Sets the animation BtlUnit_ChangeTalkAnim plays. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it), as BtlUnit_SetStayAnim below:
+// the setters of the names BtlUnit_ChangeTalkAnim and BtlUnit_ChangeStayAnim play.
+void BtlUnit_SetTalkAnim(BattleUnit* unit, const char* name) {
+    unit->talkPose = name;
+}
+
+/** Sets the animation BtlUnit_ChangeStayAnim plays. */
+void BtlUnit_SetStayAnim(BattleUnit* unit, const char* name) {
+    unit->stayPose = name;
+}
+
 /**
  * Where a speech bubble's tail (toge, "thorn") points for this unit:
  * its position plus the kind's talk offset and the unit's own tail offset, x mirrored by facing.
@@ -1622,14 +1871,14 @@ void BtlUnit_GetTalkTogePos(s32 unitId, f32* x, f32* y, f32* z) {
 }
 
 /** Returns the opposing alliance: 0 and 1 swap, any other alliance is returned unchanged. */
-BOOL BtlUnit_GetEnemyBelong(BattleUnit* unit) {
+s32 BtlUnit_GetEnemyBelong(BattleUnit* unit) {
     s32 belong = unit->alliance;
     switch (belong) {
-        case 0:
-            belong = 1;
+        case ALLIANCE_PLAYER:
+            belong = ALLIANCE_ENEMY;
             break;
-        case 1:
-            belong = 0;
+        case ALLIANCE_ENEMY:
+            belong = ALLIANCE_PLAYER;
             break;
     }
     return belong;
@@ -1638,6 +1887,13 @@ BOOL BtlUnit_GetEnemyBelong(BattleUnit* unit) {
 /** Returns the HP damage the unit took from the last hit. */
 s32 BtlUnit_GetHitDamage(BattleUnit* unit) {
     return unit->hpDamageTaken;
+}
+
+/** Sets the HP damage the unit took from the last hit. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it); the setter of
+// BtlUnit_GetHitDamage's field.
+void BtlUnit_SetHitDamage(BattleUnit* unit, s8 damage) {
+    unit->hpDamageTaken = damage;
 }
 
 /** Returns the HP damage the unit has taken so far in the current attack. */
@@ -1662,10 +1918,10 @@ BOOL BtlUnit_GetACPossibility(BattleUnit* unit) {
         return FALSE;
     }
     if (BtlUnit_CheckStatus(unit, STATUS_SLEEP) || BtlUnit_CheckStatus(unit, STATUS_STOP) ||
-        BtlUnit_CheckStatus(unit, STATUS_FREEZE) || BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+        BtlUnit_CheckStatus(unit, STATUS_FREEZE) || BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
         return FALSE;
     }
-    return !BtlUnit_CheckStatusFlag(unit, 1);
+    return !BtlUnit_CheckStatusFlag(unit, UNIT_STATUS_FLAG_FLIPPED);
 }
 
 /** Looks up an entry of the unit kind's tagged data table (scripts and parameters keyed by tag); NULL when absent. */
@@ -1706,16 +1962,16 @@ BOOL BtlUnit_CanGuardStatus(BattleUnit* unit) {
 /** Whether the unit's statuses let it act: not asleep, stopped, frozen, KO'd or flipped. */
 BOOL BtlUnit_CanActStatus(BattleUnit* unit) {
     if (BtlUnit_CheckStatus(unit, STATUS_SLEEP) || BtlUnit_CheckStatus(unit, STATUS_STOP) ||
-        BtlUnit_CheckStatus(unit, STATUS_FREEZE) || BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+        BtlUnit_CheckStatus(unit, STATUS_FREEZE) || BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
         return FALSE;
     }
-    return !BtlUnit_CheckStatusFlag(unit, 1);
+    return !BtlUnit_CheckStatusFlag(unit, UNIT_STATUS_FLAG_FLIPPED);
 }
 
 /**
- * Loads Mario's or a partner's HP and FP from the save data (pouch) into the battle unit;
+ * Loads Mario's HP and FP, or a partner's HP, from the save data (pouch) into the battle unit;
  * partners also get back the size, status flags
- * and status turns saved in the battle's party info (and, in US and PAL, the disabled commands) and are KO'd
+ * and status turns saved in the battle's party info (and, in US and later, the disabled commands) and are KO'd
  * if their HP is 0.
  */
 void BtlUnit_SetParamFromPouch(BattleUnit* unit) {
@@ -1730,6 +1986,7 @@ void BtlUnit_SetParamFromPouch(BattleUnit* unit) {
     } else if (unit->currentKind >= TYPE_PARTNER_MIN && unit->currentKind < TYPE_PARTNER_MAX) {
         s32 id = BattleTransPartyId(unit->currentKind);
         PouchPartyData* party = &pouch->partyData[id];
+
         unit->currentHp = party->currentHP;
         BtlUnit_ReviseHpFp(unit);
         info = &wp->partyInfo[unit->currentKind - TYPE_PARTNER_MIN];
@@ -1741,14 +1998,15 @@ void BtlUnit_SetParamFromPouch(BattleUnit* unit) {
         unit->usCommandDisabled[1] = info->usCommandDisabled[1];
 #endif
         if (unit->currentHp <= 0) {
-            BtlUnit_SetStatus(unit, STATUS_INSTANT_KILL, 1, 1);
+            BtlUnit_SetStatus(unit, STATUS_DEAD, 1, 1);
         }
     }
 }
 
 /**
- * Recomputes max HP and FP from the base values plus 5 per HP Plus
- * and FP Plus badge (from the pouch for Mario and the partners) and clamps current HP and FP to them.
+ * Recomputes max HP from base HP plus 5 per HP Plus and clamps current HP to it.
+ * Mario and partners take base HP from the pouch; partners also reload current HP from it.
+ * For Mario and non-partner units, also recomputes max FP plus 5 per FP Plus and clamps current FP.
  */
 void BtlUnit_ReviseHpFp(BattleUnit* unit) {
     PouchData* pouch = pouchGetPtr();
@@ -1786,8 +2044,8 @@ void BtlUnit_ReviseHpFp(BattleUnit* unit) {
 }
 
 /**
- * Writes Mario's or a partner's HP and FP back to the save data (pouch) and keeps a partner's size,
- * status flags and status turns (and, in US and PAL, disabled commands) in the battle's party info for
+ * Writes Mario's HP and FP, or a partner's HP, back to the save data (pouch) and keeps a partner's size,
+ * status flags and status turns (and, in US and later, disabled commands) in the battle's party info for
  * when it is switched back in.
  */
 void BtlUnit_SetParamToPouch(BattleUnit* unit) {
@@ -1801,6 +2059,7 @@ void BtlUnit_SetParamToPouch(BattleUnit* unit) {
     } else if (unit->currentKind >= TYPE_PARTNER_MIN && unit->currentKind < TYPE_PARTNER_MAX) {
         s32 id = BattleTransPartyId(unit->currentKind);
         PouchPartyData* party = &pouch->partyData[id];
+
         party->currentHP = unit->currentHp;
         info = &wp->partyInfo[unit->currentKind - TYPE_PARTNER_MIN];
         info->sizeMultiplier = unit->sizeMultiplier;
@@ -1820,24 +2079,24 @@ void BtlUnit_SetParamToPouch(BattleUnit* unit) {
  */
 void BtlUnit_CheckPinchStatus(BattleUnit* unit, BOOL noAudience) {
     if (unit->currentHp <= unit->kindParams->perilHP && unit->currentHp < unit->maxHp) {
-        if (!(unit->statusFlags & STATUS_FLAG_PERIL)) {
-            unit->statusFlags |= STATUS_FLAG_PERIL;
+        if (!(unit->statusFlags & UNIT_STATUS_FLAG_PERIL)) {
+            unit->statusFlags |= UNIT_STATUS_FLAG_PERIL;
             if (!noAudience && unit->currentKind == UNIT_MARIO) {
                 BattleAudience_Case_MarioDanger();
             }
         }
-    } else if (unit->statusFlags & STATUS_FLAG_PERIL) {
-        unit->statusFlags &= ~STATUS_FLAG_PERIL;
+    } else if (unit->statusFlags & UNIT_STATUS_FLAG_PERIL) {
+        unit->statusFlags &= ~UNIT_STATUS_FLAG_PERIL;
     }
     if (unit->currentHp <= unit->kindParams->dangerHP && unit->currentHp < unit->maxHp) {
-        if (!(unit->statusFlags & STATUS_FLAG_DANGER)) {
-            unit->statusFlags |= STATUS_FLAG_DANGER;
-            if (!(unit->statusFlags & STATUS_FLAG_PERIL) && !noAudience && unit->currentKind == UNIT_MARIO) {
+        if (!(unit->statusFlags & UNIT_STATUS_FLAG_DANGER)) {
+            unit->statusFlags |= UNIT_STATUS_FLAG_DANGER;
+            if (!(unit->statusFlags & UNIT_STATUS_FLAG_PERIL) && !noAudience && unit->currentKind == UNIT_MARIO) {
                 BattleAudience_Case_MarioPinch();
             }
         }
-    } else if (unit->statusFlags & STATUS_FLAG_DANGER) {
-        unit->statusFlags &= ~STATUS_FLAG_DANGER;
+    } else if (unit->statusFlags & UNIT_STATUS_FLAG_DANGER) {
+        unit->statusFlags &= ~UNIT_STATUS_FLAG_DANGER;
     }
 }
 
@@ -1853,11 +2112,12 @@ s32 BtlUnit_GetExp(BattleUnit* unit) {
     s32 unitLevel = unit->level;
     FieldBattleInfo* fbat = wp->fbatInfo;
     f32 scale;
+    f32 t;
 
     if (level > unitLevel) {
         return 0;
     }
-    switch (*(s32*)fbat->setup->groupSetup) {
+    switch (fbat->setup->groupSetup->numEnemies) {
         case 0:
         case 1:
         case 2:
@@ -1874,10 +2134,9 @@ s32 BtlUnit_GetExp(BattleUnit* unit) {
             scale = 1.5f;
             break;
     }
-    {
-        f32 t = scale * (f32)(unitLevel - level);
-        return (s32)(t / 2.0f) + unit->kindParams->bonusExp;
-    }
+
+    t = scale * (f32)(unitLevel - level);
+    return (s32)(t / 2.0f) + unit->kindParams->bonusExp;
 }
 
 /** Coins the enemy drops: its kind's base coins plus one per bonus roll that succeeds at bonusCoinRate percent. */
@@ -1973,37 +2232,37 @@ void BtlUnit_SetMaxFp(BattleUnit* unit, s32 value) {
  * doubling per extra copy for Power Jump, Multibounce, Power Bounce, Tornado Jump, Power Smash, Quake Hammer,
  * Hammer Throw, Fire Drive, Charge, the Mega moves and Super Charge;
  * times the count for the stomps, Head Rattle and Ice Smash. Each Flower Saver takes 1 off (not below 1).
- * Retail caps it at 999.
+ * JP and later cap it at 999.
  */
 s32 BtlUnit_GetWeaponCost(BattleUnit* unit, BattleWeapon* weapon) {
-    s32 cost = (u8)weapon->baseFpCost;
+    s32 cost = weapon->baseFpCost;
     s32 count;
 
     if (weapon->itemId) {
         count = pouchEquipCheckBadge(weapon->itemId);
         switch (weapon->itemId) {
-            case 0xF0:
-            case 0xF1:
-            case 0xF2:
-            case 0xF3:
-            case 0xF7:
-            case 0xF8:
-            case 0xF9:
-            case 0xFC:
-            case 0x100:
-            case 0x101:
-            case 0x14C:
-            case 0x14D:
-            case 0x14E:
-            case 0x151:
-            case 0x152:
+            case ITEM_POWER_JUMP:
+            case ITEM_MULTIBOUNCE:
+            case ITEM_POWER_BOUNCE:
+            case ITEM_TORNADO_JUMP:
+            case ITEM_POWER_SMASH:
+            case ITEM_QUAKE_HAMMER:
+            case ITEM_HAMMER_THROW:
+            case ITEM_FIRE_DRIVE:
+            case ITEM_CHARGE:
+            case ITEM_CHARGE_P:
+            case ITEM_MEGA_JUMP:
+            case ITEM_MEGA_SMASH:
+            case ITEM_MEGA_QUAKE:
+            case ITEM_SUPER_CHARGE:
+            case ITEM_SUPER_CHARGE_P:
                 cost = cost * pow(2.0, count - 1);
                 break;
-            case 0xF4:
-            case 0xF5:
-            case 0xF6:
-            case 0xFB:
-            case 0xFD:
+            case ITEM_SHRINK_STOMP:
+            case ITEM_SLEEPY_STOMP:
+            case ITEM_SOFT_STOMP:
+            case ITEM_HEAD_RATTLE:
+            case ITEM_ICE_SMASH:
                 cost *= count;
                 break;
         }
@@ -2028,7 +2287,7 @@ BOOL BtlUnit_CheckWeaponCost(BattleUnit* unit, BattleWeapon* weapon) {
     if (fp < BtlUnit_GetWeaponCost(unit, weapon)) {
         return FALSE;
     }
-    return pouchGetAP() >= weapon->baseSpCost * 100;
+    return pouchGetAP() >= (u8)weapon->baseSpCost * 100;
 }
 
 /** Spends a move's FP and Star Power, adding the FP to Mario's or the partner's action record for the audience. */
@@ -2039,13 +2298,13 @@ void BtlUnit_PayWeaponCost(BattleUnit* unit, BattleWeapon* weapon) {
 
     BtlUnit_SetFp(unit, fp - cost);
     if (unit->currentKind == UNIT_MARIO) {
-        BtlActRec_AddPoint(&wp->actRecord.marioFpSpent, (u8)cost);
+        BtlActRec_AddPoint(&wp->actRecord.marioFpSpent, cost);
         BtlActRec_AddCount(&wp->actRecord.marioFpMoves);
     } else if (unit->currentKind >= TYPE_PARTNER_MIN && unit->currentKind < TYPE_PARTNER_MAX) {
-        BtlActRec_AddPoint(&wp->actRecord.partnerFpSpent, (u8)cost);
+        BtlActRec_AddPoint(&wp->actRecord.partnerFpSpent, cost);
         BtlActRec_AddCount(&wp->actRecord.partnerFpMoves);
     }
-    pouchAddAP(-weapon->baseSpCost * 100);
+    pouchAddAP(-(u8)weapon->baseSpCost * 100);
 }
 
 /** Finds the Shell Shield (Koops's move) guarding this unit, the one whose work[0] holds its id; NULL if none. */
@@ -2057,7 +2316,7 @@ BattleUnit* BtlUnit_GetGuardKouraPtr(BattleUnit* unit) {
 
     for (; i < BATTLE_UNIT_MAX; i++) {
         other = BattleGetUnitPtr(wp, i);
-        if (other && other->currentKind == UNIT_SHELL_SHIELD && other->work[UW_KOURA_SHIELDED_UNIT] == id) {
+        if (other && other->currentKind == UNIT_SHELL_SHIELD && other->work[SHELL_SHIELD_WORK_TARGET] == id) {
             break;
         }
     }
@@ -2074,7 +2333,7 @@ BattleUnit* BtlUnit_GetGuardKouraPtr(BattleUnit* unit) {
 void BtlUnit_ResetMoveStatus(BattleUnit* unit) {
     s32 n;
 
-    unit->moveState = 0;
+    unit->moveState = MOVE_STATE_NORMAL;
     unit->movesRemaining = unit->maxMoveCount;
     if (BtlUnit_CheckStatus(unit, STATUS_FAST)) {
         unit->movesRemaining *= 2;
@@ -2089,23 +2348,23 @@ void BtlUnit_ResetMoveStatus(BattleUnit* unit) {
             }
             if (unit->activeTurns >= n) {
                 unit->movesRemaining = 1;
-                unit->moveState = 0;
+                unit->moveState = MOVE_STATE_NORMAL;
             } else {
                 unit->movesRemaining = 0;
-                unit->moveState = 10;
+                unit->moveState = MOVE_STATE_DONE;
             }
         }
     }
     unit->maxMovesThisTurn = unit->movesRemaining;
     if (!unit->maxMovesThisTurn) {
         unit->movesRemaining = 0;
-        unit->moveState = 10;
+        unit->moveState = MOVE_STATE_DONE;
     }
 }
 
 /**
  * Loads the sound set for a scripted move from the unit's move sound table:
- * with kind -1, mode 0, 1 or 3 picks entries 0-2 and mode 2 the jump sounds; kind -2 only restarts the timer;
+ * with kind -1, mode 0, 1 or 3 picks entries 0-2 and mode 2 the jump sounds; kind -2 restarts the timer;
  * anything else silences it. Called by the btlevtcmd move helpers.
  */
 void BtlUnit_LoadSeMode(s32 mode, s32 kind, BtlPoseSoundTable* table, BecSndWork* work) {
@@ -2167,12 +2426,12 @@ void BtlUnit_LoadSeMode(s32 mode, s32 kind, BtlPoseSoundTable* table, BecSndWork
 }
 
 /** Sets a move sound set directly: two sound names, the start delay and the repeat period, plus two extra values. */
-void BtlUnit_SetSeMode(BecSndWork* work, const char* name0, const char* name1, s16 c, s16 e, s16 unused, s16 a, s16 b) {
+void BtlUnit_SetSeMode(BecSndWork* work, const char* name0, const char* name1, s16 delay, s16 period, s16 unused, s16 a, s16 b) {
     work->name0 = name0;
     work->name1 = name1;
-    work->delay = c;
-    work->period0 = e;
-    work->period1 = e;
+    work->delay = delay;
+    work->period0 = period;
+    work->period1 = period;
     work->count = 0;
     work->reserved_08 = a;
     work->reserved_0A = b;
@@ -2187,12 +2446,12 @@ void BtlUnit_SetCommandAnimPose(BattleUnit* unit) {
     BattleUnitPart* part = BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit));
     BOOL special = FALSE;
 
-    if (!(unit->statusFlags & (STATUS_FLAG_DANGER | STATUS_FLAG_PERIL)) && _GetStatusPoseType(unit) == BTL_POSE_NORMAL) {
+    if (!(unit->statusFlags & (UNIT_STATUS_FLAG_DANGER | UNIT_STATUS_FLAG_PERIL)) && _GetStatusPoseType(unit) == POSE_TYPE_NORMAL) {
         special = TRUE;
     }
     if (special) {
-        BtlUnit_SetAnimType(part, BTL_POSE_COMMAND_WAIT);
-        part->animFlags |= PART_ANIM_COMMAND_WAIT;
+        BtlUnit_SetAnimType(part, POSE_TYPE_COMMAND);
+        part->animFlags |= PART_ANIM_COMMAND_POSE;
     } else {
         btlDispPoseAnime(part);
     }
@@ -2200,83 +2459,92 @@ void BtlUnit_SetCommandAnimPose(BattleUnit* unit) {
 
 /** Resets a part's animation-synced sound state (loop count and timeline). */
 void BtlUnit_PoseSoundInit(BattleUnitPart* part) {
-    PART_POSE_SOUND(part)->loopCount = 0;
-    PART_POSE_SOUND(part)->time = 0.0f;
-    PART_POSE_SOUND(part)->prevTime = 0.0f;
+    part->poseSound.loopCount = 0;
+    part->poseSound.time = 0.0f;
+    part->poseSound.prevTime = 0.0f;
 }
 
 /**
  * Plays the sound effects tied to a part's current animation:
  * each frame, entries in the part's pose sound table whose time (in seconds of the animation) was just passed
  * fire their sound or callback, restarting on each loop.
- * Sounds of units outside the current phase play at 70% volume.
+ * Entries with POSE_SOUND_FLAG_PHASE_VOLUME play at full volume, or at 70% when the owner's attackPhase is not the
+ * current phase; other entries keep the sound's default volume.
  */
 void BtlUnit_ControlPoseSoundMain(BattleUnitPart* part) {
     BattleWork* wp = _battleWorkPointer;
     BtlPartPoseSound* state;
-    const char* anim;
+    AnimTableEntry* anim;
     BtlPoseSoundData* entry;
     AnimationPose* pose;
     f32 time;
-    u32 loops;
     s32 id;
     u8 vol;
 
-    if (part) {
-        state = PART_POSE_SOUND(part);
-        entry = state->table;
-        if (entry && part->poseId != -1) {
-            pose = animPoseGetAnimPosePtr(part->poseId);
-            if (pose) {
-                time = pose->localFrame / 60.0f;
-                loops = pose->loopTime;
-                if (state->loopCount > loops) {
-                    state->time = time;
-                    state->prevTime = -1.0f;
-                    state->loopCount = (s32)pose->loopTime;
-                    state->count = 0;
-                    if (BattleGetSeq(wp, SEQ_PHASE) == BATTLE_PHASE_PLAYER || BattleGetSeq(wp, SEQ_PHASE) == BATTLE_PHASE_ENEMY) {
-                        state->flag = 1;
-                    }
-                } else if (state->loopCount == loops && state->time > time) {
-                    state->time = time;
-                    state->prevTime = -1.0f;
-                } else if (state->loopCount < loops) {
-                    state->time = time;
-                    state->prevTime = -1.0f;
-                    state->loopCount = (s32)pose->loopTime;
+    if (!part) {
+        return;
+    }
+    state = &part->poseSound;
+    entry = state->table;
+    if (!entry) {
+        return;
+    }
+    if (part->poseId == -1) {
+        return;
+    }
+    pose = animPoseGetAnimPosePtr(part->poseId);
+    if (!pose) {
+        return;
+    }
+    time = pose->localFrame / 60.0f;
+    if (state->loopCount > (u32)pose->loopTime) {
+        state->time = time;
+        state->prevTime = -1.0f;
+        state->loopCount = (s32)pose->loopTime;
+        state->count = 0;
+        if (BattleGetSeq(wp, SEQ_PHASE) == BATTLE_PHASE_PLAYER || BattleGetSeq(wp, SEQ_PHASE) == BATTLE_PHASE_ENEMY) {
+            state->flag = 1;
+        }
+    } else if (state->loopCount == (u32)pose->loopTime && state->time > time) {
+        state->time = time;
+        state->prevTime = -1.0f;
+    } else if (state->loopCount < (u32)pose->loopTime) {
+        state->time = time;
+        state->prevTime = -1.0f;
+        state->loopCount = (s32)pose->loopTime;
+    } else {
+        state->prevTime = state->time;
+        state->time = time;
+    }
+    if (state->time == state->prevTime) {
+        return;
+    }
+    anim = animPoseGetCurrentAnim(part->poseId);
+    for (; entry->animName; entry++) {
+        if (strcmp(entry->animName, anim->name)) {
+            continue;
+        }
+        if (entry->time <= state->time && entry->time > state->prevTime) {
+            if (entry->flags & POSE_SOUND_FLAG_PHASE_VOLUME) {
+                if (entry->callback) {
+                    id = entry->callback(part->owner, entry, state);
                 } else {
-                    state->prevTime = state->time;
-                    state->time = time;
+                    id = BtlUnit_snd_se(part->owner, entry->sfxName, EVT_NULLPTR, entry->pitch);
                 }
-                if (state->time != state->prevTime) {
-                    anim = (const char*)animPoseGetCurrentAnim(part->poseId);
-                    for (; entry->animName; entry++) {
-                        if (!strcmp(entry->animName, anim) && entry->time <= state->time && entry->time > state->prevTime) {
-                            if (entry->flags & 1) {
-                                if (entry->callback) {
-                                    id = entry->callback(part->owner, entry, state);
-                                } else {
-                                    id = BtlUnit_snd_se(part->owner, entry->sfxName, -250000000, entry->pitch);
-                                }
-                                vol = 0x7F;
-                                psndSFX_vol(id, vol);
-                                state->count++;
-                                if (part->owner->attackPhase != BattleGetSeq(wp, SEQ_PHASE)) {
-                                    vol *= 0.7;
-                                    psndSFX_vol(id, vol);
-                                }
-                            } else {
-                                if (entry->callback) {
-                                    entry->callback(part->owner, entry, state);
-                                } else {
-                                    BtlUnit_snd_se(part->owner, entry->sfxName, -250000000, entry->pitch);
-                                }
-                                state->count++;
-                            }
-                        }
-                    }
+                vol = 0x7F;
+                psndSFX_vol(id, vol);
+                state->count++;
+                if (part->owner->attackPhase != BattleGetSeq(wp, SEQ_PHASE)) {
+                    vol *= 0.7;
+                    psndSFX_vol(id, vol);
                 }
+            } else {
+                if (entry->callback) {
+                    entry->callback(part->owner, entry, state);
+                } else {
+                    BtlUnit_snd_se(part->owner, entry->sfxName, EVT_NULLPTR, entry->pitch);
+                }
+                state->count++;
             }
         }
     }
@@ -2286,6 +2554,7 @@ void BtlUnit_ControlPoseSoundMain(BattleUnitPart* part) {
 s32 BtlUnit_snd_se(BattleUnit* unit, const char* sfxName, s32 volume, s16 pitch) {
     Vec pos;
     BtlUnit_GetPos(unit, &pos.x, &pos.y, &pos.z);
+
     return BtlUnit_snd_se_pos(unit, sfxName, volume, pitch, &pos);
 }
 
@@ -2314,7 +2583,7 @@ s32 BtlUnit_snd_se_pos(BattleUnit* unit, const char* sfxName, s32 volume, s16 pi
     p += irand(41) - 20;
     id = psndSFXOn_3D(sfxName, pos);
     psndSFX_pit(id, p);
-    psndSFX_vol(id, volume == -250000000 ? psndSFX_get_vol(id) : (u8)volume);
+    psndSFX_vol(id, volume == EVT_NULLPTR ? psndSFX_get_vol(id) : (u8)volume);
     return id;
 }
 
@@ -2361,12 +2630,12 @@ void BtlUnit_HpGaugeMain(BattleUnit* unit) {
             switch (gauge->mode) {
                 case 1:
                     gauge->barRatio = (f32)unit->currentHp / (f32)unit->maxHp;
-                    gauge->trailRatio = gauge->barRatio + (f32)(gauge->prevHp - gauge->targetHp) * intplGetValue(2, 0.0f, 1.0f, gauge->drainTimer, gauge->drainLength) / (f32)unit->maxHp;
+                    gauge->trailRatio = gauge->barRatio + (f32)(gauge->prevHp - gauge->targetHp) * intplGetValue(EASING_CUBIC_IN, 0.0f, 1.0f, gauge->drainTimer, gauge->drainLength) / (f32)unit->maxHp;
                     break;
                 default:
                     gauge->trailRatio = 0.0f;
                     maxHp = unit->maxHp;
-                    gauge->barRatio = (f32)(gauge->prevHp - gauge->targetHp) * intplGetValue(0, 0.0f, 1.0f, gauge->drainTimer, gauge->drainLength) / (f32)maxHp + (f32)unit->currentHp / (f32)maxHp;
+                    gauge->barRatio = (f32)(gauge->prevHp - gauge->targetHp) * intplGetValue(EASING_LINEAR, 0.0f, 1.0f, gauge->drainTimer, gauge->drainLength) / (f32)maxHp + (f32)unit->currentHp / (f32)maxHp;
                     break;
             }
         }
@@ -2374,9 +2643,9 @@ void BtlUnit_HpGaugeMain(BattleUnit* unit) {
     if (gauge->visibleTimer > 0) {
         gauge->visibleTimer--;
     }
-    if ((unit->flags & UNIT_FLAG_SHOW_HP_GAUGE) && gauge->visibleTimer <= 0 && (gauge->flags & 1)) {
-        unit->flags &= ~UNIT_FLAG_SHOW_HP_GAUGE;
-        gauge->flags &= ~1;
+    if ((unit->flags & BATTLE_UNIT_FLAG_SHOW_HP) && gauge->visibleTimer <= 0 && (gauge->flags & HP_GAUGE_FLAG_TIMED)) {
+        unit->flags &= ~BATTLE_UNIT_FLAG_SHOW_HP;
+        gauge->flags &= ~HP_GAUGE_FLAG_TIMED;
     }
 }
 
@@ -2384,10 +2653,10 @@ void BtlUnit_HpGaugeMain(BattleUnit* unit) {
  * Whether an enemy can use (and so may be given) this item: any badge, or an item in _enemy_can_use_item_table.
  * Returns the item id when it can, else 0.
  */
-BOOL BtlUnit_EnemyItemCanUseCheck(s32 item) {
+s32 BtlUnit_EnemyItemCanUseCheck(s32 item) {
     s32* table = _enemy_can_use_item_table;
 
-    if (item >= 0xF0 && item < 0x153) {
+    if (item >= BADGE_MIN && item < BADGE_MAX) {
         return item;
     }
     while (*table) {
@@ -2400,14 +2669,14 @@ BOOL BtlUnit_EnemyItemCanUseCheck(s32 item) {
 }
 
 /**
- * Whether the unit is hidden in the shadows and cannot be hit:
- * a veiled unit (Vivian's Veil) or Vivian while her UW_VIVIAN_VEIL_TURNS counter is running.
+ * Whether the unit is hidden in the shadow and cannot be hit: a kVeiled unit (Vivian's Veil), or Vivian while her
+ * VIVIAN_WORK_HIDE_TURNS counter is above 0.
  */
 BOOL BtlUnit_CheckShadowGuard(BattleUnit* unit) {
-    if (unit->attributeFlags & UNIT_ATTR_VEILED) {
+    if (unit->attributeFlags & kVeiled) {
         return TRUE;
     }
-    if (unit->currentKind == UNIT_VIVIAN && unit->work[UW_VIVIAN_VEIL_TURNS] > 0) {
+    if (unit->currentKind == UNIT_VIVIAN && unit->work[VIVIAN_WORK_HIDE_TURNS] > 0) {
         return TRUE;
     }
     return FALSE;

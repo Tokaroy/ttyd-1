@@ -1,20 +1,17 @@
 // Font manager: loads the font file and draws text (strings, messages with tags, centred and rotated
 // text, edges, colour effects) glyph by glyph.
-#include "manager/fontmgr.h"
+
 #include "version.h"
+#include "manager/fontmgr.h"
 #include "manager/dvdmgr.h"
 #include "driver/camdrv.h"
+#include "driver/icondrv.h"
 #include "driver/msgdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include "system.h"
 #include "driver/windowdrv.h"
 #include "libc_decls.h"
-
-typedef struct FontWidthEntry {
-    u8 kerning; // 0x0
-    u8 width;   // 0x1
-} FontWidthEntry;
 
 typedef struct FontWidthBlock {
     u32 magic;                // 0x0, "WID1"
@@ -25,116 +22,76 @@ typedef struct FontWidthBlock {
 } FontWidthBlock;
 
 //.sdata
-GXColor fontColTbl[3] = {
+static GXColor fontColTbl[3] = {
     {0x1E, 0x14, 0x14, 0xFF},
     {0xDC, 0xDC, 0xDC, 0xFF},
     {0xB4, 0x78, 0x14, 0xFF}
 };
+static s32 charspace[VERSION_PICK(2, 7)] = {
+    4, 2,
 #if VERSION >= VERSION_US
-s32 charspace[7] = {4, 2, 2, 2, 2, 2, 2};
-const char* fontname[7] = {"papermarioset_JPN", "papermarioset_US", "papermarioset_EU", "papermarioset_EU",
+    2, 2, 2, 2, 2
+#endif
+};
+
+#if VERSION >= VERSION_US
+static const char* fontname[7] = {"papermarioset_JPN", "papermarioset_US", "papermarioset_EU", "papermarioset_EU",
     "papermarioset_EU", "papermarioset_EU", "papermarioset_US"};
 #else
-s32 charspace[2] = {4, 2};
-const char* fontname[2] = {"papermarioset_JPN", "popjoyB22"};
-#endif
-
-// The demo draws message icons with display flag 4 (retail 0x10) and keeps the fonts under font/
-#if VERSION <= VERSION_DEMO_JP
-#define FONT_ICON_FLAGS 4
-#define FONT_DIR "font"
-#else
-#define FONT_ICON_FLAGS 0x10
-#define FONT_DIR "f"
+static const char* fontname[2] = {"papermarioset_JPN", "popjoyB22"};
 #endif
 
 //.sbss
-Vec fontScale;
-GXColor fontColor;
-u8 fontAlpha;
-BOOL fontEdge;
+// fontNoiseTexObj and fontTpl: stripped (UNUSED in the JP demo map: fontNoiseTexObj 0x20 after fontScale in .bss,
+// fontTpl 4 bytes first in .sbss); nothing reads them. Types from the names, fgTexObj and windowdrv's winTpl.
+GXTexObj fontNoiseTexObj;
+static Vec fontScale;
+static GXColor fontColor;
+static u8 fontAlpha;
+static BOOL fontEdge;
 BinaryFontInfo* pfi; // pointer to font info
 BinaryFontGlyph* blockGlyph;
 GXTexObj fgTexObj;
 BinaryFontHeader* pfh; // pointer to font header
+TEXPalette* fontTpl;
+
+// US and later pass single-byte characters to JUTFont_CodeToGlyph zero-extended
+#if VERSION >= VERSION_US
+#define FONT_CH(c) ((u8)(c))
+#else
+#define FONT_CH(c) (c)
+#endif
 
 // local prototypes
 void JUTFont_DrawStart(GXColor color);
 static void _JUTFont_DrawPos(u16 code, s16 x, s16 y);
 u16 JUTFont_CodeToGlyph(u32 code);
+
+/** Glyph of a single-byte character. */
+static inline u16 fontByteGlyph(s8 c) {
+    return JUTFont_CodeToGlyph(FONT_CH(c));
+}
+
 #if VERSION >= VERSION_US
 void FontDrawStringVecPitch(Vec pos, f32 pitch, const s8* msg);
 #endif
-
-/**
- * The glyph of a single-byte character.
- * JP sign-extends the byte, so codes 0x80-0xFF look up 0xFF80-0xFFFF;
- * US zero-extends it (the European fonts use those codes for accented letters).
- */
-static inline u16 fontByteGlyph(s8 c) {
-#if VERSION >= VERSION_US
-    return JUTFont_CodeToGlyph((u8)c);
-#else
-    return JUTFont_CodeToGlyph(c);
-#endif
-}
-
-/**
- * The width entry (kerning and advance width in pixels) of a glyph, from the font's WID1 block that covers it;
- * NULL if no block does (callers do not check).
- */
-static inline FontWidthEntry* fontGetWidth(u16 code) {
-    FontWidthBlock* block = (FontWidthBlock*)&pfh[1];
-    u32 i;
-
-    for (i = 0; i < pfh->blockcount; i++) {
-        switch (block->magic) {
-            case 'WID1':
-                if (code >= block->firstcode && code <= block->lastcode) {
-                    return &block->entries[code - block->firstcode];
-                }
-                break;
-        }
-        block = (FontWidthBlock*)((u8*)block + block->size);
-    }
-    return NULL;
-}
-
-/**
- * Draws one glyph at the current position matrix origin;
- * with FontDrawEdge on, first draws it four times in the outline colour (fontColTbl[0]) offset 2 px left, right,
- * down and up, then restores the colour.
- */
-static inline void fontDrawCodeEdge(u16 code) {
-    if (fontEdge) {
-        GXColor save = fontColor;
-        FontDrawColorIDX(0);
-        _JUTFont_DrawPos(code, -2, 0);
-        _JUTFont_DrawPos(code, 2, 0);
-        _JUTFont_DrawPos(code, 0, -2);
-        _JUTFont_DrawPos(code, 0, 2);
-        FontDrawColor(save);
-    }
-    _JUTFont_DrawPos(code, 0, 0);
-}
 
 /**
  * Font manager start-up, called once from the boot code in mariost.c.
  * Empty: the font is loaded later by fontmgrTexSetup.
  */
 void fontmgrInit(void) {
-    ; // stubbed in retail
 }
 
 /**
- * Loads the font for the current language (US and PAL by gp->language, the US demo the US font,
- * JP and the JP demo the Japanese one). Called from the logo sequence; does nothing once a font is loaded.
+ * Loads the font selected by gp->language in US and later (the September demos too), index 1 in the June US
+ * demo, and index 0 in JP and the JP demo. Does nothing once a font is loaded.
  */
 void fontmgrTexSetup(void) {
-#if VERSION >= VERSION_US
-    JUTFontSetup(gp->language);
-#elif VERSION == VERSION_DEMO_US_1
+#if VERSION == VERSION_DEMO_US_1
     JUTFontSetup(1);
+#elif VERSION >= VERSION_US
+    JUTFontSetup(gp->language);
 #else
     JUTFontSetup(0);
 #endif
@@ -260,10 +217,7 @@ void FontDrawCode(f32 x, f32 y, u16 code) {
 
     PSMTXScale(mtx, fontScale.x, fontScale.y, fontScale.z);
     PSMTXTransApply(mtx, mtx, x, y, 0.0f);
-    PSMTXConcat(camGetCurPtr()->view, mtx, mtx);
-    GXLoadPosMtxImm(mtx, 0);
-    GXSetCurrentMtx(0);
-    fontDrawCodeEdge(code);
+    FontDrawCodeMtx(mtx, code);
 }
 
 /**
@@ -272,16 +226,32 @@ void FontDrawCode(f32 x, f32 y, u16 code) {
  */
 void FontDrawCodeMtx(Mtx mtx, u16 code) {
     PSMTXConcat(camGetCurPtr()->view, mtx, mtx);
-    GXLoadPosMtxImm(mtx, 0);
-    GXSetCurrentMtx(0);
-    fontDrawCodeEdge(code);
+    GXLoadPosMtxImm(mtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
+    JUTFont_Draw(code);
+}
+
+static void FontDrawStringVec(Vec pos, const s8* str);
+
+/**
+ * Draws a single-line string at x, y with proportional spacing;
+ * message tags are drawn as text in JP and the early demos and skipped in US and later.
+ */
+// US and later: FontDrawString and FontDrawStringPitch are wrappers over FontDrawStringVecPitch
+void FontDrawString(f32 x, f32 y, const char* msg) {
+#if VERSION >= VERSION_US
+    // US and later: FontDrawString and FontDrawStringPitch are wrappers over FontDrawStringVecPitch
+    FontDrawStringVecPitch((Vec){x, y, 0.0f}, -1.0f, (const s8*)msg);
+#else
+    FontDrawStringVec((Vec){x, y, 0.0f}, (const s8*)msg);
+#endif
 }
 
 /**
- * JP and demo body of FontDrawString: draws a plain string (no tags, no line breaks) left to right from pos with
+ * JP and early-demo body of FontDrawString: draws a plain string (no tags, no line breaks) left to right from pos with
  * the current scale and outline, Shift-JIS pairs as one glyph.
  */
-static inline void FontDrawStringVec(Vec pos, const s8* str) {
+static void FontDrawStringVec(Vec pos, const s8* str) {
     CameraEntry* camera;
     Mtx trans, scale;
     u8 width;
@@ -295,37 +265,26 @@ static inline void FontDrawStringVec(Vec pos, const s8* str) {
     PSMTXScale(scale, fontScale.x, fontScale.y, fontScale.z);
     while (*msg) {
         if (_ismbblead(*msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
-            code = fontByteGlyph(*msg++);
+            code = JUTFont_CodeToGlyph(FONT_CH(*msg++));
         }
-        width = fontGetWidth(code)->width;
+        width = JUTFont_GetWidthEntry(code)->width;
         PSMTXTransApply(scale, trans, x, pos.y, pos.z);
         PSMTXConcat(camera->view, trans, trans);
-        GXLoadPosMtxImm(trans, 0);
-        fontDrawCodeEdge(code);
+        GXLoadPosMtxImm(trans, GX_PNMTX0);
+        JUTFont_Draw(code);
         x += fontScale.x * (width + charspace[gp->language]);
     }
 }
 
 /**
- * Draws a single-line string at x, y with proportional spacing;
- * message tags are drawn as text in JP and the demos and skipped in the US and PAL releases.
- */
-void FontDrawString(f32 x, f32 y, const char* msg) {
-#if VERSION >= VERSION_US
-    // US: FontDrawString and FontDrawStringPitch are wrappers over FontDrawStringVecPitch
-    FontDrawStringVecPitch((Vec){x, y, 0.0f}, -1.0f, (const s8*)msg);
-#else
-    FontDrawStringVec((Vec){x, y, 0.0f}, (const s8*)msg);
-#endif
-}
-
-/**
- * JP and demo: FontDrawStringPitch's copy of FontDrawStringVecPitch.
- * It walks the string through a local copy (msg = str);
- * calling FontDrawStringVecPitch itself, or giving it the same copy, changes the registers.
+ * JP and the early demos: FontDrawStringPitch's copy of FontDrawStringVecPitch.
+ * FAKE: an invented inline copy (no map entry). FontDrawStringVecPitch itself cannot be inlined
+ * here: the declaration order of its msg copy that matches the inlined FontDrawStringPitch breaks
+ * the out-of-line function (all 8 positions tried). The msg = str copy itself is natural (as in
+ * FontDrawStringVec).
  */
 static inline void fontDrawStringVecPitch(Vec pos, f32 pitch, const s8* str) {
     CameraEntry* camera;
@@ -341,16 +300,16 @@ static inline void fontDrawStringVecPitch(Vec pos, f32 pitch, const s8* str) {
     PSMTXScale(scale, fontScale.x, fontScale.y, fontScale.z);
     while (*msg) {
         if (_ismbblead(*msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
-            code = fontByteGlyph(*msg++);
+            code = JUTFont_CodeToGlyph(FONT_CH(*msg++));
         }
-        width = fontGetWidth(code)->width;
+        width = JUTFont_GetWidthEntry(code)->width;
         PSMTXTransApply(scale, trans, pitch < 0.0f ? x : x + fontScale.x * ((pitch - width) * 0.5f), pos.y, pos.z);
         PSMTXConcat(camera->view, trans, trans);
-        GXLoadPosMtxImm(trans, 0);
-        fontDrawCodeEdge(code);
+        GXLoadPosMtxImm(trans, GX_PNMTX0);
+        JUTFont_Draw(code);
         if (pitch < 0.0f) {
             x += fontScale.x * (width + charspace[gp->language]);
         } else {
@@ -371,13 +330,9 @@ void FontDrawStringPitch(f32 x, f32 y, f32 pitch, const char* msg) {
 #endif
 }
 
-#if VERSION >= VERSION_US
-// FAKE: auto_inline off keeps the wrappers from inlining FontDrawStringVecPitch (the US wrappers call it)
-#pragma auto_inline off
-#endif
 /**
  * Draws a single-line string from pos, fixed pitch or (pitch < 0) proportional;
- * the shared body of FontDrawString and FontDrawStringPitch in the US and PAL releases,
+ * the shared body of FontDrawString and FontDrawStringPitch in US and later,
  * where it also skips <tag>s.
  */
 void FontDrawStringVecPitch(Vec pos, f32 pitch, const s8* msg) {
@@ -391,6 +346,7 @@ void FontDrawStringVecPitch(Vec pos, f32 pitch, const s8* msg) {
     u16 code;
     f32 x;
 #if VERSION >= VERSION_US
+    f32 drawX;
     s8 c;
 #endif
 
@@ -402,11 +358,11 @@ void FontDrawStringVecPitch(Vec pos, f32 pitch, const s8* msg) {
         code = 0xFFFF;
 #endif
         if (_ismbblead(*msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
 #if VERSION >= VERSION_US
-            // US: skips <command> tags instead of drawing them
+            // US and later: skips <command> tags instead of drawing them
             switch (c = *msg) {
                 case '<':
                     msg = (const s8*)msgGetCommand((char*)(msg + 1), cmd, arg);
@@ -416,60 +372,38 @@ void FontDrawStringVecPitch(Vec pos, f32 pitch, const s8* msg) {
                     code = JUTFont_CodeToGlyph((u8)c);
                     break;
             }
+        }
+        if (code != 0xFFFF) {
+            width = JUTFont_GetWidthEntry(code)->width;
+            if (pitch < 0.0f) {
+                drawX = x;
+            } else {
+                drawX = x + fontScale.x * ((pitch - width) * 0.5f);
+            }
+            PSMTXTransApply(scale, trans, drawX, pos.y, pos.z);
+            PSMTXConcat(camera->view, trans, trans);
+            GXLoadPosMtxImm(trans, GX_PNMTX0);
+            JUTFont_Draw(code);
+            if (pitch < 0.0f) {
+                x += fontScale.x * (width + charspace[gp->language]);
+            } else {
+                x += pitch * fontScale.x;
+            }
 #else
-            code = fontByteGlyph(*msg++);
-#endif
+            code = JUTFont_CodeToGlyph(FONT_CH(*msg++));
         }
-#if VERSION >= VERSION_US
-        if (code == 0xFFFF) {
-            continue;
-        }
-#endif
-        width = fontGetWidth(code)->width;
+        width = JUTFont_GetWidthEntry(code)->width;
         PSMTXTransApply(scale, trans, pitch < 0.0f ? x : x + fontScale.x * ((pitch - width) * 0.5f), pos.y, pos.z);
         PSMTXConcat(camera->view, trans, trans);
-        GXLoadPosMtxImm(trans, 0);
-        fontDrawCodeEdge(code);
+        GXLoadPosMtxImm(trans, GX_PNMTX0);
+        JUTFont_Draw(code);
         if (pitch < 0.0f) {
             x += fontScale.x * (width + charspace[gp->language]);
         } else {
             x += pitch * fontScale.x;
+#endif
         }
     }
-}
-#if VERSION >= VERSION_US
-#pragma auto_inline reset
-#endif
-/** The left/right pair of a glyph's four outline copies, 2 px either side of an integer x, y. */
-static inline void fontDrawPairXI(u16 code, s16 x, s16 y) {
-    s16 iy = y;
-    s16 ix = x;
-    _JUTFont_DrawPos(code, ix - 2, (s16)iy);
-    _JUTFont_DrawPos(code, ix + 2, (s16)iy);
-}
-
-/** The down/up pair of outline copies for an integer position; see fontDrawPairXI. */
-static inline void fontDrawPairYI(u16 code, s16 x, s16 y) {
-    s16 iy = y;
-    s16 ix = x;
-    _JUTFont_DrawPos(code, ix, iy - 2);
-    _JUTFont_DrawPos(code, ix, iy + 2);
-}
-
-/** The left/right pair of outline copies for a float position (truncated to pixels). */
-static inline void fontDrawPairX(u16 code, f32 x, f32 y) {
-    s16 ix = x;
-    s16 iy = y;
-    _JUTFont_DrawPos(code, ix - 2, (s16)iy);
-    _JUTFont_DrawPos(code, ix + 2, (s16)iy);
-}
-
-/** The down/up pair of outline copies for a float position (truncated to pixels). */
-static inline void fontDrawPairY(u16 code, f32 x, f32 y) {
-    s16 ix = x;
-    s16 iy = y;
-    _JUTFont_DrawPos(code, (s16)ix, iy - 2);
-    _JUTFont_DrawPos(code, (s16)ix, iy + 2);
 }
 
 /** Draws one glyph at x, y in the already-loaded matrix, with the outline first when FontDrawEdge is on. */
@@ -477,8 +411,22 @@ static inline void fontDrawCodeEdgeXY(u16 code, f32 x, f32 y) {
     if (fontEdge) {
         GXColor save = fontColor;
         FontDrawColorIDX(0);
-        fontDrawPairX(code, x, y);
-        fontDrawPairY(code, x, y);
+
+        // Outline: copies 2 pixels left and right, then down and up, at the position truncated to pixels.
+        {
+            const s16 ix = x;
+            const s16 iy = y;
+
+            _JUTFont_DrawPos(code, ix - 2, iy);
+            _JUTFont_DrawPos(code, ix + 2, iy);
+        }
+        {
+            const s16 ix = x;
+            const s16 iy = y;
+
+            _JUTFont_DrawPos(code, ix, iy - 2);
+            _JUTFont_DrawPos(code, ix, iy + 2);
+        }
         FontDrawColor(save);
     }
     _JUTFont_DrawPos(code, x, y);
@@ -500,11 +448,11 @@ void FontDrawStringMtx(Mtx mtx, const char* msg) {
     x = 0.0f;
     y = x;
     PSMTXConcat(camera->view, mtx, m);
-    GXLoadPosMtxImm(m, 0);
+    GXLoadPosMtxImm(m, GX_PNMTX0);
     while (*(const s8*)msg) {
         code = 0xFFFF;
         if (_ismbblead(*(const s8*)msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
             switch (*(const s8*)msg) {
@@ -515,6 +463,7 @@ void FontDrawStringMtx(Mtx mtx, const char* msg) {
                     break;
                 case '<':
                     msg = msgGetCommand((char*)(msg + 1), (char*)tag, (char*)value);
+
                     // BUG: '/r' is a multi-character constant (0x2F72), so the closing ruby tag test is always false
                     if (tag[0] == 'R' || (tag[0] == '/' && tag[0] == (u32)'/r')) {
                         break;
@@ -530,23 +479,9 @@ void FontDrawStringMtx(Mtx mtx, const char* msg) {
         }
         if (code != 0xFFFF) {
             fontDrawCodeEdgeXY(code, x, y);
-            x += fontGetWidth(code)->width + charspace[gp->language];
+            x += JUTFont_GetWidthEntry(code)->width + charspace[gp->language];
         }
     }
-}
-
-/** Draws one glyph at x on the baseline (y = 0), outline first when FontDrawEdge is on. Not called anywhere. */
-static inline void fontDrawCodeEdgeX(u16 code, f32 x) {
-    if (fontEdge) {
-        GXColor save = fontColor;
-        FontDrawColorIDX(0);
-        _JUTFont_DrawPos(code, (s16)x - 2, 0);
-        _JUTFont_DrawPos(code, (s16)x + 2, 0);
-        _JUTFont_DrawPos(code, x, -2);
-        _JUTFont_DrawPos(code, x, 2);
-        FontDrawColor(save);
-    }
-    _JUTFont_DrawPos(code, x, 0);
 }
 
 /**
@@ -562,78 +497,57 @@ void FontDrawStringCenterMtx(Mtx mtx, const s8* msg) {
     camera = camGetCurPtr();
     x = -(f32)FontGetMessageWidthLine((const char*)msg, NULL) * 0.5f;
     PSMTXConcat(camera->view, mtx, m);
-    GXLoadPosMtxImm(m, 0);
+    GXLoadPosMtxImm(m, GX_PNMTX0);
     while (*msg) {
         if (_ismbblead(*msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
-            code = fontByteGlyph(*msg++);
+            code = JUTFont_CodeToGlyph(FONT_CH(*msg++));
         }
         fontDrawCodeEdgeXY(code, x, 0.0f);
-        x += fontGetWidth(code)->width + charspace[gp->language];
+        x += JUTFont_GetWidthEntry(code)->width + charspace[gp->language];
     }
-}
-
-/** A glyph's advance width in pixels from the WID1 block. */
-inline u8 fontGetGlyphWidth(u16 code) {
-    return fontGetWidth(code)->width;
 }
 
 /**
  * Draws a single-line string with every glyph jittered 0-2 px at random each frame (shaking text);
  * npcdrv uses it for the first-strike bubble text.
  */
-void FontDrawStringShake(f32 x, f32 y, const char* msg) {
+void FontDrawStringShake(f32 x, f32 y, const s8* msg) {
     CameraEntry* camera;
     Mtx trans, scale;
     u8 width;
     u16 code;
     f32 sx, sy;
+    s32 gz;
 
 #if VERSION >= VERSION_US
     // FAKE: dead guard (folded after register allocation, emits no code). It only creates the -1.0f
     // .sdata2 literal at this point, which puts it before the 28.0f of FontDrawStringMtx like the target.
-    {
-        s32 gz = 0;
-        if (gz != 0) {
-            x = -1.0f;
-        }
+    gz = 0;
+    if (gz != 0) {
+        x = -1.0f;
     }
 #endif
     camera = camGetCurPtr();
     PSMTXScale(scale, fontScale.x, fontScale.y, fontScale.z);
-    while (*(const s8*)msg) {
-        if (_ismbblead(*(const s8*)msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+    while (*msg) {
+        if (_ismbblead(*msg)) {
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
-            code = fontByteGlyph(*(const s8*)msg++);
+            code = JUTFont_CodeToGlyph(FONT_CH(*msg++));
         }
         sx = x + fontScale.x * (irand(10000) % 3);
         sy = y + fontScale.y * (irand(10000) % 3);
-        width = fontGetGlyphWidth(code);
+        width = JUTFont_GetWidth(code);
         PSMTXTransApply(scale, trans, sx, sy, 0.0f);
         PSMTXConcat(camera->view, trans, trans);
-        GXLoadPosMtxImm(trans, 0);
-        fontDrawCodeEdge(code);
+        GXLoadPosMtxImm(trans, GX_PNMTX0);
+        JUTFont_Draw(code);
         x += fontScale.x * (width + charspace[gp->language]);
     }
-}
-// FAKE: the prototype this file was compiled with (u16 icon id; icondrv.h has s16/s32), so callers zero-extend the id
-extern void iconGetWidthHight(u16* width, u16* height, u16 id);
-extern void iconDispGxAlpha(Vec* position, s16 flags, u16 iconId, u8 alpha, f32 scale);
-
-/** Draws one glyph at integer x, y in the loaded matrix, outline first when FontDrawEdge is on. */
-static inline void fontDrawCodeEdgeI(u16 code, s16 x, s16 y) {
-    if (fontEdge) {
-        GXColor save = fontColor;
-        FontDrawColorIDX(0);
-        fontDrawPairXI(code, x, y);
-        fontDrawPairYI(code, x, y);
-        FontDrawColor(save);
-    }
-    _JUTFont_DrawPos(code, x, y);
 }
 
 /**
@@ -650,7 +564,7 @@ void FontDrawMessage(s32 x, s32 y, const char* msg) {
     Vec pos;
     GXColor color;
     s32 id;
-    s32 d1, d2, d3;
+    s32 offsetX, offsetY, spacing;
     f32 scale;
     u16 w, h;
 
@@ -659,7 +573,7 @@ void FontDrawMessage(s32 x, s32 y, const char* msg) {
     while (*(const s8*)msg) {
         code = 0xFFFF;
         if (_ismbblead(*(const s8*)msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
             switch (*(const s8*)msg) {
@@ -682,25 +596,25 @@ void FontDrawMessage(s32 x, s32 y, const char* msg) {
                     } else if (!strcmp((char*)tag, "icon")) {
                         camGetCurPtr();
                         if (value[0] >= '0' && value[0] <= '9') {
-                            sscanf((char*)value, "%d%f%d%d%d", &id, &scale, &d1, &d2, &d3);
+                            sscanf((char*)value, "%d%f%d%d%d", &id, &scale, &offsetX, &offsetY, &spacing);
                         } else {
-                            sscanf((char*)value, "%s%f%d%d%d", name, &scale, &d1, &d2, &d3);
+                            sscanf((char*)value, "%s%f%d%d%d", name, &scale, &offsetX, &offsetY, &spacing);
                             id = msgIconStr2ID(name);
                             if (id < 0) {
                                 id = 0;
                             }
                         }
-                        iconGetWidthHight(&w, &h, id);
-                        pos.x = d1 + (cx + 0.5f * w * scale);
-                        pos.y = d2 + (cy - h * scale);
+                        iconGetWidthHight(&w, &h, (u16)id);
+                        pos.x = offsetX + (cx + 0.5f * w * scale);
+                        pos.y = offsetY + (cy - h * scale);
                         pos.z = 0.0f;
-                        iconDispGxAlpha(&pos, FONT_ICON_FLAGS, id, fontAlpha, scale);
+                        iconDispGxAlpha(&pos, ICON_FLAG_2D, scale, id, fontAlpha);
                         FontDrawStart_alpha(fontAlpha);
                         FontDrawColor(fontColor);
-                        cx += w * scale + d3;
-                    }
-                    // BUG: '/r' is a multi-character constant (0x2F72), so the closing ruby tag test is always false
-                    else if (tag[0] == 'R' || (tag[0] == '/' && tag[0] == (u32)'/r')) {
+                        cx += w * scale + spacing;
+
+                        // BUG: '/r' is a multi-character constant (0x2F72), so the closing ruby tag test is always false
+                    } else if (tag[0] == 'R' || (tag[0] == '/' && tag[0] == (u32)'/r')) {
                         break;
                     }
                     if (*(const s8*)msg == '\n') {
@@ -713,8 +627,8 @@ void FontDrawMessage(s32 x, s32 y, const char* msg) {
             }
         }
         if (code != 0xFFFF) {
-            fontDrawCodeEdgeI(code, cx, cy);
-            cx += fontGetWidth(code)->width + charspace[gp->language];
+            JUTFont_DrawPos(code, cx, cy);
+            cx += JUTFont_GetWidthEntry(code)->width + charspace[gp->language];
         }
     }
 }
@@ -736,7 +650,7 @@ void FontDrawMessageMtx(Mtx mtx, const char* msg) {
     char name[0x20];
     Vec pos;
     s32 id;
-    s32 d1, d2, d3;
+    s32 offsetX, offsetY, spacing;
     f32 scale;
     u16 w, h;
 
@@ -747,7 +661,7 @@ void FontDrawMessageMtx(Mtx mtx, const char* msg) {
     while (*(const s8*)msg) {
         code = 0xFFFF;
         if (_ismbblead(*(const s8*)msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
             switch (*(const s8*)msg) {
@@ -765,27 +679,27 @@ void FontDrawMessageMtx(Mtx mtx, const char* msg) {
                     } else if (!strcmp((char*)tag, "icon")) {
                         camGetCurPtr();
                         if (value[0] >= '0' && value[0] <= '9') {
-                            sscanf((char*)value, "%d%f%d%d%d", &id, &scale, &d1, &d2, &d3);
+                            sscanf((char*)value, "%d%f%d%d%d", &id, &scale, &offsetX, &offsetY, &spacing);
                         } else {
-                            sscanf((char*)value, "%s%f%d%d%d", name, &scale, &d1, &d2, &d3);
+                            sscanf((char*)value, "%s%f%d%d%d", name, &scale, &offsetX, &offsetY, &spacing);
                             id = msgIconStr2ID(name);
                             if (id < 0) {
                                 id = 0;
                             }
                         }
-                        iconGetWidthHight(&w, &h, id);
-                        pos.x = d1 + (cx + 0.5f * w * scale);
-                        pos.y = d2 + (cy - h * scale);
+                        iconGetWidthHight(&w, &h, (u16)id);
+                        pos.x = offsetX + (cx + 0.5f * w * scale);
+                        pos.y = offsetY + (cy - h * scale);
                         pos.z = 0.0f;
                         PSMTXMultVec(mtx, &pos, &pos);
-                        scale = scale; // FAKE: the self-assignment gives scale the target register; see FAKES.md
-                        iconDispGxAlpha(&pos, FONT_ICON_FLAGS, id, fontAlpha, scale);
+
+                        iconDispGxAlpha(&pos, ICON_FLAG_2D, scale, id, fontAlpha);
                         FontDrawStart_alpha(fontAlpha);
                         FontDrawColor(fontColor);
-                        cx += w * scale + d3;
-                    }
-                    // BUG: '/r' is a multi-character constant (0x2F72), so the closing ruby tag test is always false
-                    else if (tag[0] == 'R' || (tag[0] == '/' && tag[0] == (u32)'/r')) {
+                        cx += w * scale + spacing;
+
+                        // BUG: '/r' is a multi-character constant (0x2F72), so the closing ruby tag test is always false
+                    } else if (tag[0] == 'R' || (tag[0] == '/' && tag[0] == (u32)'/r')) {
                         break;
                     }
                     if (*(const s8*)msg == '\n') {
@@ -801,16 +715,16 @@ void FontDrawMessageMtx(Mtx mtx, const char* msg) {
             PSMTXTrans(m, cx, cy, 0.0f);
             PSMTXConcat(camera->view, mtx, m2);
             PSMTXConcat(m2, m, m2);
-            GXLoadPosMtxImm(m2, 0);
-            fontDrawCodeEdge(code);
-            cx += fontGetWidth(code)->width + charspace[gp->language];
+            GXLoadPosMtxImm(m2, GX_PNMTX0);
+            JUTFont_Draw(code);
+            cx += JUTFont_GetWidthEntry(code)->width + charspace[gp->language];
         }
     }
 }
 
 /** The glyph index of a single-byte (hankaku, half-width) character; msgdrv's entry point to the font map. */
-u16 hankakuSearch(s32 c) {
-    return fontByteGlyph(c);
+u16 hankakuSearch(s8 c) {
+    return JUTFont_CodeToGlyph(FONT_CH(c));
 }
 
 /** The glyph index of a two-byte Shift-JIS (kanji or full-width) character code. */
@@ -819,8 +733,8 @@ u16 kanjiSearch(u32 code) {
 }
 
 /** A glyph's advance width in pixels (code is a glyph index, not a character code). */
-u16 kanjiGetWidth(u16 code) {
-    return fontGetWidth(code)->width;
+u16 kanjiGetWidth(u32 code) {
+    return JUTFont_GetWidthEntry(code)->width;
 }
 
 /**
@@ -837,14 +751,14 @@ u16 FontGetMessageWidthLine(const char* msg, u16* lines) {
     s8 value[0x80];
     char name[0x20];
     s32 id;
-    s32 d1, d2, d3;
+    s32 offsetX, offsetY, spacing;
     f32 scale;
     u16 w, h;
 
     while (*(const s8*)msg) {
         code = 0xFFFF;
         if (_ismbblead(*(const s8*)msg)) {
-            code = JUTFont_CodeToGlyph(*(const u16*)msg);
+            code = JUTFont_CodeToGlyph(*(u16*)msg);
             msg += 2;
         } else {
             switch (*(const s8*)msg) {
@@ -861,19 +775,19 @@ u16 FontGetMessageWidthLine(const char* msg, u16* lines) {
                     if (!strcmp((char*)tag, "icon")) {
                         camGetCurPtr();
                         if (value[0] >= '0' && value[0] <= '9') {
-                            sscanf((char*)value, "%d%f%d%d%d", &id, &scale, &d1, &d2, &d3);
+                            sscanf((char*)value, "%d%f%d%d%d", &id, &scale, &offsetX, &offsetY, &spacing);
                         } else {
-                            sscanf((char*)value, "%s%f%d%d%d", name, &scale, &d1, &d2, &d3);
+                            sscanf((char*)value, "%s%f%d%d%d", name, &scale, &offsetX, &offsetY, &spacing);
                             id = msgIconStr2ID(name);
                             if (id < 0) {
                                 id = 0;
                             }
                         }
-                        iconGetWidthHight(&w, &h, id);
-                        width += w * scale + d3;
-                    }
-                    // BUG: '/r' is a multi-character constant (0x2F72), so the closing ruby tag test is always false
-                    else if (tag[0] == 'R' || (tag[0] == '/' && tag[0] == (u32)'/r')) {
+                        iconGetWidthHight(&w, &h, (u16)id);
+                        width += w * scale + spacing;
+
+                        // BUG: '/r' is a multi-character constant (0x2F72), so the closing ruby tag test is always false
+                    } else if (tag[0] == 'R' || (tag[0] == '/' && tag[0] == (u32)'/r')) {
                         break;
                     }
                     if (*(const s8*)msg == '\n') {
@@ -886,14 +800,15 @@ u16 FontGetMessageWidthLine(const char* msg, u16* lines) {
             }
         }
         if (code != 0xFFFF) {
-            width += fontGetWidth(code)->width + charspace[gp->language];
+            width += JUTFont_GetWidthEntry(code)->width + charspace[gp->language];
         }
     }
     if (maxWidth < width) {
         maxWidth = width;
     }
     if (maxWidth) {
-        if (code && code) { // FAKE: an empty test that keeps code live here; without it registers are allocated differently (code is unset for an empty string; the test does nothing)
+        // FAKE: empty dead test of code; removing it changes the object
+        if (code && code) {
         }
         maxWidth -= charspace[gp->language];
     }
@@ -970,7 +885,8 @@ GXColor HSV2RGB(GXColor hsv) {
  * Loads font file fontname[font] (.bfn) from the disc into the default heap, finds its INF1 and GLY1 blocks,
  * sets up the glyph sheet texture and forces the widths of the space (7) and full-width space (9).
  * Does nothing once a font is loaded.
- * The US and PAL releases size the buffer for the largest of the seven font files.
+ * US and later try to size the buffer for the largest of the seven font files, but that loop opens
+ * "<root>/font/" while the fonts are in "<root>/f/", so no file opens and the buffer fits the loaded font.
  */
 void JUTFontSetup(u16 font) {
 #if VERSION >= VERSION_US
@@ -990,13 +906,19 @@ void JUTFontSetup(u16 font) {
     s32 len;
 #endif
 
-#if VERSION >= VERSION_US
     if (!pfh) {
+#if VERSION <= VERSION_DEMO_JP
+        sprintf(path, "%s/font/%s.bfn", getMarioStDvdRoot(), fontname[font]);
+#else
         sprintf(path, "%s/f/%s.bfn", getMarioStDvdRoot(), fontname[font]);
+#endif
         dvd = DVDMgrOpen(path, 2, 0);
         size = DVDMgrGetLength(dvd);
+#if VERSION >= VERSION_US
         maxsize = size;
-        for (j = 0; j < 7; j++) {
+        for (j = 0; j < (s32)(sizeof(fontname) / sizeof(fontname[0])); j++) {
+            // BUG (US and later): opens <root>/font/ while the fonts are loaded from <root>/f/ above, so no file
+            // opens and maxsize stays the size of the loaded font.
             sprintf(path, "%s/font/%s.bfn", getMarioStDvdRoot(), fontname[j]);
             other = DVDMgrOpen(path, 2, 0);
             if (other) {
@@ -1009,16 +931,11 @@ void JUTFontSetup(u16 font) {
         }
         pfh = __memAlloc(HEAP_DEFAULT, OSRoundUp32B(maxsize));
         DVDMgrRead(dvd, pfh, OSRoundUp32B(size), 0);
-        DVDMgrClose(dvd);
 #else
-    if (!pfh) {
-        sprintf(path, "%s/" FONT_DIR "/%s.bfn", getMarioStDvdRoot(), fontname[font]);
-        dvd = DVDMgrOpen(path, 2, 0);
-        size = DVDMgrGetLength(dvd);
         pfh = __memAlloc(HEAP_DEFAULT, size = OSRoundUp32B(size));
         DVDMgrRead(dvd, pfh, size, 0);
-        DVDMgrClose(dvd);
 #endif
+        DVDMgrClose(dvd);
         ptr = (BinaryFontBlock*)(pfh + 1);
         for (i = 0; i < pfh->blockcount; i++) {
             switch (ptr->magic) {
@@ -1038,13 +955,15 @@ void JUTFontSetup(u16 font) {
         GXInitTexObj(&fgTexObj, &blockGlyph[1], blockGlyph->sheetwidth, blockGlyph->sheetheight,
                      GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
         GXInitTexObjLOD(&fgTexObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-        fontGetWidth(JUTFont_CodeToGlyph(' '))->width = 7;
-        fontGetWidth(JUTFont_CodeToGlyph(0x8140))->width = 9;
+        JUTFont_GetWidthEntry(JUTFont_CodeToGlyph(' '))->width = 7;
+        JUTFont_GetWidthEntry(JUTFont_CodeToGlyph(0x8140))->width = 9;
     }
 }
 
-/** Frees the loaded font so JUTFontSetup can load another (JP and the demos only; nothing in this tree calls it). */
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
+/**
+ * Frees the loaded font file, so the next JUTFontSetup loads it again (the ending's language switch); only before US.
+ */
 void JUTFont_Free(void) {
     if (pfh) {
         __memFree(HEAP_DEFAULT, pfh);
@@ -1127,6 +1046,34 @@ u16 JUTFont_CodeToGlyph(u32 code) {
 }
 
 /**
+ * The width entry (kerning and advance width in pixels) of a glyph, from the font's WID1 block that covers it;
+ * NULL if no block does (callers do not check).
+ */
+// Original name and size (0x74) from the JP demo map (UNUSED there: every call is inlined).
+FontWidthEntry* JUTFont_GetWidthEntry(u16 code) {
+    FontWidthBlock* block = (FontWidthBlock*)&pfh[1];
+    u32 i;
+
+    for (i = 0; i < pfh->blockcount; i++) {
+        switch (block->magic) {
+            case 'WID1':
+                if (code >= block->firstcode && code <= block->lastcode) {
+                    return &block->entries[code - block->firstcode];
+                }
+                break;
+        }
+        block = (FontWidthBlock*)((u8*)block + block->size);
+    }
+    return NULL;
+}
+
+/** A glyph's advance width in pixels from the WID1 block. */
+// Original name and size (0x78) from the JP demo map (UNUSED there: every call is inlined).
+u8 JUTFont_GetWidth(u16 code) {
+    return JUTFont_GetWidthEntry(code)->width;
+}
+
+/**
  * Sets up GX for textured glyph quads: alpha blending, no depth test or fog,
  * direct s16 positions with colour and two texture coordinates, the glyph sheet texture and its texel scale,
  * colour in TEV register 0.
@@ -1140,7 +1087,7 @@ void JUTFont_DrawStart(GXColor color) {
     GXSetCullMode(GX_CULL_NONE);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, (GXLogicOp)7);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_OR);
     GXSetZMode(GX_TRUE, GX_ALWAYS, GX_FALSE);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -1159,11 +1106,11 @@ void JUTFont_DrawStart(GXColor color) {
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, (GXTevColorArg)0xC, GX_CC_ZERO);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C0, GX_CC_ONE, GX_CC_ZERO);
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
     GXLoadTexObj(&fgTexObj, GX_TEXMAP0);
 #if VERSION >= VERSION_US
-    if ((u32)gp->language == 0) {
+    if (gp->language == LANGUAGE_JP) {
         PSMTXScale(mtx, 0.001953125f, 0.0009765625f, 1.0f);
     } else {
         PSMTXScale(mtx, 0.001953125f, 0.00390625f, 1.0f);
@@ -1173,8 +1120,8 @@ void JUTFont_DrawStart(GXColor color) {
 #endif
     GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
-    GXLoadPosMtxImm(camera->view, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){0, 0, 0, 0});
 }
 
@@ -1200,7 +1147,7 @@ static inline void fontPos(const s16 x, s16 y, GXColor* hsv, u8 hue) {
  * texture coordinates of its cell in the glyph sheet,
  * a rainbow vertex colour whose hue moves with x and the frame count,
  * and random noise texture coordinates (used only when FontDrawRainbowColor or FontDrawNoise add their stage).
- * The US and PAL fonts trim 2 px off the cell.
+ * US and later trim 2 px off the cell.
  */
 static void _JUTFont_DrawPos(u16 code, s16 x, s16 y) {
     s32 row;
@@ -1223,7 +1170,7 @@ static void _JUTFont_DrawPos(u16 code, s16 x, s16 y) {
     f32 tv;
     f32 scale;
     u8 kern;
-    entry = fontGetWidth(code);
+    entry = JUTFont_GetWidthEntry(code);
     kern = entry->kerning;
     glyph = blockGlyph;
     row = (code - glyph->firstcode) / glyph->sheetrows;
@@ -1300,4 +1247,47 @@ static void _JUTFont_DrawPos(u16 code, s16 x, s16 y) {
     GXTexCoord2u8(n0, t1);
 }
 
-#pragma opt_common_subs reset
+/**
+ * Draws one glyph at x, y (pixels) in the loaded matrix; with FontDrawEdge on, first draws it four times in the
+ * outline colour (fontColTbl[0]) 2 px left, right, down and up of it, then restores the colour.
+ */
+// Original name and size (0x154) from the JP demo map (UNUSED there: every call is inlined).
+void JUTFont_DrawPos(u16 code, s32 x, s32 y) {
+    if (fontEdge) {
+        GXColor save = fontColor;
+        FontDrawColorIDX(0);
+        {
+            s16 ix = x;
+            s16 iy = y;
+            _JUTFont_DrawPos(code, ix - 2, iy);
+            _JUTFont_DrawPos(code, ix + 2, iy);
+        }
+        {
+            s16 ix = x;
+            s16 iy = y;
+            _JUTFont_DrawPos(code, ix, iy - 2);
+            _JUTFont_DrawPos(code, ix, iy + 2);
+        }
+        FontDrawColor(save);
+    }
+    _JUTFont_DrawPos(code, x, y);
+}
+
+/**
+ * Draws one glyph at the current position matrix origin;
+ * with FontDrawEdge on, first draws it four times in the outline colour (fontColTbl[0]) offset 2 px left, right,
+ * down and up, then restores the colour.
+ */
+// Original name and size (0x12c) from the JP demo map (UNUSED there: every call is inlined).
+void JUTFont_Draw(u16 code) {
+    if (fontEdge) {
+        GXColor save = fontColor;
+        FontDrawColorIDX(0);
+        _JUTFont_DrawPos(code, -2, 0);
+        _JUTFont_DrawPos(code, 2, 0);
+        _JUTFont_DrawPos(code, 0, -2);
+        _JUTFont_DrawPos(code, 0, 2);
+        FontDrawColor(save);
+    }
+    _JUTFont_DrawPos(code, 0, 0);
+}

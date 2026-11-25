@@ -1,5 +1,9 @@
 // Stage clear banner: letter sprites pop in one by one with confetti and camera shake; type 0 is the stage-clear
-// text (per language), type 1 a shorter variant. effStageClearEndChk reports when it has finished.
+// text (per language), type 1 the shorter goal-in text (Japanese only; other languages get the minigame effect).
+// effStageClearEndChk reports when it has finished.
+
+#include "version.h"
+#include "eff/eff_minigame.h"
 #include "eff/eff_stageclear.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -14,14 +18,13 @@
 #include <dolphin/mtx.h>
 #include "evt/evt_cam.h"
 #include "evt/evt_cmd.h"
-#include "version.h"
+#include "sfx_name_word.h"
 #include "libc_decls.h"
-#include "eff/eff_minigame.h"
 
 typedef struct StageClearWork {
     s32 type;          // 0x0
     Vec position;      // 0x4
-    f32 reserved_10;   // 0x10, never read or written
+    f32 pad10;         // 0x10
     f32 scale;         // 0x14
     s32 delay;         // 0x18
     s32 frame;         // 0x1C
@@ -31,25 +34,38 @@ typedef struct StageClearWork {
 } StageClearWork;
 
 static void effStageClearMain(EffectEntry* effect);
-static void effStageClearDisp(CameraId cameraId, EffectEntry* effect);
+static void effStageClearDisp(CameraId cameraId, void* payload);
 
-#if VERSION <= VERSION_JP
-/** Letter textures of the stage-clear banner, Japanese then English, each with a matching shadow list. */
+#if VERSION < VERSION_US
+#if VERSION <= VERSION_DEMO_JP
 static s32 tex_jp[] = {0x9C, 0x9D, 0x9E, 0x9F, 0xA0, 0xA1, 0xA2, 0xA3};
-s32 tex_shadow_jp[] = {0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB};
-static s32 tex_us[] = {0x9C, 0x9D, 0x9E, 0x9F, 0xA0, 0xA1, 0xA2, 0xA0, 0x9E, 0xA3, 0xA0, 0xA4, 0xA5};
-s32 tex_shadow_us[] = {0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAA, 0xA8, 0xAD, 0xAA, 0xAE, 0xAF};
-static s32* texid_tbl[] = {tex_jp, tex_shadow_jp, tex_us, tex_shadow_us};
-/** Rainbow (niji) texture laid over the banner letters, Japanese then English. */
-static u32 niji_tbl[] = {0xAC, 0xB0};
+static s32 tex_shadow_jp[] = {0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB};
 #endif
+static s32 tex_us[] = {0x9C, 0x9D, 0x9E, 0x9F, 0xA0, 0xA1, 0xA2, 0xA0, 0x9E, 0xA3, 0xA0, 0xA4, 0xA5};
+static s32 tex_shadow_us[] = {0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAA, 0xA8, 0xAD, 0xAA, 0xAE, 0xAF};
+#if VERSION <= VERSION_DEMO_JP
+static s32* texid_tbl[] = {tex_jp, tex_shadow_jp, tex_us, tex_shadow_us};
+static s32 shake_dt[] = {2, 6, 2, 0, -1};
+static s32 shake_dt2[] = {12, 36, 12, 0, -1};
+#endif
+#endif
+
+/** Shakes the camera when a banner letter lands: 50 frames lightly, or 100 frames harder for the last letter (LW 1). */
+#if VERSION < VERSION_US
+static EVT_BEGIN(evt_shake)
+    IF_INT_EQUAL(LW(1), 0)
+        CALL(evt_cam_shake, CAMERA_3D_EFFECTA, FLOAT(0.009765625f), FLOAT(0.009765625f), 50)
+    ELSE
+        CALL(evt_cam_shake, CAMERA_3D_EFFECTA, FLOAT(0.01953125f), FLOAT(0.01953125f), 100)
+    END_IF
+    RETURN
+EVT_END()
+#endif
+
+/** Letter textures of the stage-clear banner for each language, each with a matching shadow list; -1 is a gap. */
 #if VERSION >= VERSION_US
-/**
- * Letter textures of the stage-clear banner for each language, each with a matching shadow list;
- * -1 is a gap between words.
- */
 static s16 tex_jp[] = {128, 129, 130, 131, 132, 133, 134, 135};
-s16 tex_shadow_jp[] = {136, 137, 138, 139, 140, 141, 142, 143};
+static s16 tex_shadow_jp[] = {136, 137, 138, 139, 140, 141, 142, 143};
 static s16 tex_us[] = {132, 133, 134, -1, 135, 136, -1, 137, 138, 139, 140, 141, 132, 142};
 static s16 tex_shadow_us[] = {143, 144, 145, -1, 146, 147, -1, 148, 149, 150, 151, 152, 143, 153};
 static s16 tex_lang3[] = {130, 131, 132, 133, 134, 135, 136, 137, 135, 138, 139, 135};
@@ -65,42 +81,49 @@ typedef struct TexSet {
     s16* shadow;
     s32 count;
 } TexSet;
+
 /** Banner letters, shadows and letter count for each language. */
 static TexSet texid_tbl[6] = {{tex_jp, tex_shadow_jp, 8}, {tex_us, tex_shadow_us, 14}, {tex_lang3, tex_shadow_lang3, 12}, {tex_lang4, tex_shadow_lang4, 16}, {tex_lang5, tex_shadow_lang5, 12}, {tex_lang6, tex_shadow_lang6, 8}};
-/** Rainbow (niji) texture laid over each language's banner letters. */
-u32 niji_tbl[] = {144, 154, 150, 156, 158, 144};
-/** Shakes the camera when a banner letter lands: 50 frames lightly, or 100 frames harder for the last letter (LW 1). */
-static EVT_BEGIN(evt_shake)
-    IF_INT_EQUAL(LW(1), 0)
-        CALL(evt_cam_shake, 5, FLOAT(0.01f), FLOAT(0.01f), 50)
-    ELSE
-        CALL(evt_cam_shake, 5, FLOAT(0.02f), FLOAT(0.02f), 100)
-    END_IF
-    RETURN
-EVT_END()
+
+/** Rainbow (niji) texture laid over the banner letters, one per language. */
+static u32 niji_tbl[] = {144, 154, 150, 156, 158, 144};
 #endif
-/** Shake pattern handed to an ordinary letter's camera-shake event in LW 0; evt_shake does not read it. */
-s32 shake_dt[] = {2, 6, 2, 0, -1};
-/** Stronger shake pattern handed to the last letter's shake event; also unread. */
-s32 shake_dt2[] = {12, 36, 12, 0, -1};
-#if VERSION <= VERSION_JP
+
 /** Shakes the camera when a banner letter lands: 50 frames lightly, or 100 frames harder for the last letter (LW 1). */
-static EVT_BEGIN(evt_shake)
-    IF_INT_EQUAL(LW(1), 0)
-        CALL(evt_cam_shake, 5, FLOAT(0.01f), FLOAT(0.01f), 50)
-    ELSE
-        CALL(evt_cam_shake, 5, FLOAT(0.02f), FLOAT(0.02f), 100)
-    END_IF
-    RETURN
-EVT_END()
-#endif
 #if VERSION >= VERSION_US
-/** Size percentages per frame as a banner letter pops in: it overshoots to 120% and settles near 100%. */
-static u8 scale_dt[] = {0x00, 0x00, 0x16, 0x2E, 0x47, 0x5D, 0x6E, 0x78, 0x77, 0x6E, 0x66}; /* US: trailing pad byte kept in the table */
+static EVT_BEGIN(evt_shake)
+    IF_INT_EQUAL(LW(1), 0)
+        CALL(evt_cam_shake, CAMERA_3D_EFFECTA, FLOAT(0.009765625f), FLOAT(0.009765625f), 50)
+    ELSE
+        CALL(evt_cam_shake, CAMERA_3D_EFFECTA, FLOAT(0.01953125f), FLOAT(0.01953125f), 100)
+    END_IF
+    RETURN
+EVT_END()
 #else
+#if VERSION >= VERSION_JP
+static s32 tex_jp[] = {0x9C, 0x9D, 0x9E, 0x9F, 0xA0, 0xA1, 0xA2, 0xA3};
+static s32 tex_shadow_jp[] = {0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB};
+#endif
+/** Banner letters and shadows, Japanese then English (indexed by language * 2). */
+#if VERSION >= VERSION_JP
+static s32* texid_tbl[] = {tex_jp, tex_shadow_jp, tex_us, tex_shadow_us};
+#endif
+/** Rainbow (niji) texture laid over the banner letters, Japanese then English. */
+static u32 niji_tbl[] = {0xAC, 0xB0};
+#endif
+
+/** Shake pattern handed to an ordinary letter's camera-shake event in LW 0; evt_shake does not read it. */
+#if VERSION >= VERSION_JP
+static s32 shake_dt[] = {2, 6, 2, 0, -1};
+#endif
+
+/** Stronger shake pattern handed to the last letter's shake event; also unread. */
+#if VERSION >= VERSION_JP
+static s32 shake_dt2[] = {12, 36, 12, 0, -1};
+#endif
+
 /** Size percentages per frame as a banner letter pops in: it overshoots to 120% and settles near 100%. */
 static u8 scale_dt[] = {0x00, 0x00, 0x16, 0x2E, 0x47, 0x5D, 0x6E, 0x78, 0x77, 0x6E, 0x66};
-#endif
 
 /**
  * Spawns the banner at (x, y, z): one record per letter texture,
@@ -110,7 +133,6 @@ static u8 scale_dt[] = {0x00, 0x00, 0x16, 0x2E, 0x47, 0x5D, 0x6E, 0x78, 0x77, 0x
 EffectEntry* effStageClearEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     StageClearWork* work;
-    StageClearWork* p;
     s32 i;
 #if VERSION >= VERSION_US
     s32 n;
@@ -122,7 +144,7 @@ EffectEntry* effStageClearEntry(s32 type, f32 x, f32 y, f32 z) {
     s32 n = 9;
 #endif
 
-    if (type == 1 && gp->language != 0U) {
+    if (type == 1 && gp->language != LANGUAGE_JP) {
         return effMiniGameEntry(1, x, y, z);
     }
     effect = effEntry();
@@ -134,20 +156,19 @@ EffectEntry* effStageClearEntry(s32 type, f32 x, f32 y, f32 z) {
         case 1:
             n = 7;
             break;
-    }
 #else
-    if (gp->language != 0U) {
+    if (gp->language != LANGUAGE_JP) {
         n = 14;
     }
     if (type % 10 == 1) {
         n = 7;
-    }
 #endif
+    }
     effect->type = "StageClear";
     effect->count = n;
     work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(StageClearWork));
     effect->userdata = work;
-    effect->callback = (EffectCallback)effStageClearMain;
+    effect->callback = effStageClearMain;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -157,7 +178,7 @@ EffectEntry* effStageClearEntry(s32 type, f32 x, f32 y, f32 z) {
     work->frame = 0;
     work->confetti = irand(5) + 1;
     work->done = 0;
-    for (i = 1, p = work + 1; i < effect->count; i++, p++) {
+    for (i = 1, work++; i < effect->count; i++, work++) {
 #if VERSION >= VERSION_US
         a = 0.0f;
         b = a;
@@ -183,19 +204,19 @@ EffectEntry* effStageClearEntry(s32 type, f32 x, f32 y, f32 z) {
                 b += 8.0f;
             }
         }
-        p->position.x = a - b;
+        work->position.x = a - b;
 #else
-        p->position.x = (f32)((i - 1) * 38 - (effect->count - 1) * 38 / 2 + 20);
+        work->position.x = (f32)((i - 1) * 38 - (effect->count - 1) * 38 / 2 + 20);
 #endif
-        p->position.y = 0.0f;
-        p->position.z = 0.0f;
-        p->scale = 0.0f;
-        p->delay = (s32)((f32)i * (0.2f * (f32)gp->framerate));
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->scale = 0.0f;
+        work->delay = (s32)((f32)i * (0.2f * (f32)gp->framerate));
 #if VERSION >= VERSION_US
-        p->delay = (s32)((f32)gp->framerate * (96.0f * (f32)i / (f32)texid_tbl[gp->language].count) / 60.0f);
+        work->delay = (s32)((f32)gp->framerate * (96.0f * (f32)i / (f32)texid_tbl[gp->language].count) / 60.0f);
 #endif
-        p->frame = 0;
-        p->shake = 0;
+        work->frame = 0;
+        work->shake = NULL;
     }
     return effect;
 }
@@ -212,7 +233,6 @@ static void effStageClearMain(EffectEntry* effect) {
     s32 i;
     s32 type;
     s32 n;
-    StageClearWork* p;
 
     tmp = (Vec){0.0f, 0.0f, 0.0f};
     tmp.x = work->position.x;
@@ -223,52 +243,53 @@ static void effStageClearMain(EffectEntry* effect) {
     n = 0;
     work->frame++;
     for (i = 1, work++; i < effect->count; i++, work++) {
-        p = work;
-        if (p->delay != 0) {
-            p->delay--;
-            if (p->delay == 0) {
-                psndSFXOn(SFX_NAME_WORD(type == 0 ? 0x29b : 0x82e));
+        if (work->delay != 0) {
+            work->delay--;
+            if (work->delay == 0) {
+                // BUG: tests type == 0 where the rest of the file tests type % 10, so type 10 (evt_sub's chapter clear)
+                // plays SFX_KUPPA_GOALIN1 (same sample, volume 100 instead of 50).
+                psndSFXOn(SFX_NAME_WORD(type == 0 ? PSND_SFX_EVT_STAGE_CLEAR1 : PSND_SFX_KUPPA_GOALIN1));
             }
         } else {
-            if ((u32)p->frame < 11) {
-                p->scale = (f32)scale_dt[p->frame] / 100.0f;
+            if (work->frame < sizeof(scale_dt) / sizeof(scale_dt[0])) {
+                work->scale = (f32)scale_dt[work->frame] / 100.0f;
             }
-            p->frame++;
-            if (p->scale > 0.9f) {
-                if (p->shake == NULL) {
+            work->frame++;
+            if (work->scale > 0.9f) {
+                if (work->shake == NULL) {
                     s32* d;
-                    p->shake = evtEntry(evt_shake, 0, 0);
+                    work->shake = evtEntry(evt_shake, 0, 0);
                     d = shake_dt;
                     if (i == effect->count - 1) {
                         d = shake_dt2;
                     }
-                    p->shake->lwData[0] = (EvtWord)d;
-                    p->shake->lwData[1] = (effect->count - 1 - i) == 0;
+                    work->shake->lwData[0] = (EvtWord)d;
+                    work->shake->lwData[1] = (effect->count - 1 - i) == 0;
                 }
                 n++;
             }
         }
     }
     if (n >= effect->count - 1) {
-        work = effect->userdata;
-        work->done = 1;
+        ((StageClearWork*)effect->userdata)->done = 1;
     }
     if (type % 10 == 1 && n >= effect->count - 1 && gp->retraceCount % 60 == 0) {
         work = effect->userdata;
         if (work->confetti > 0) {
-            f32 b;
-            f32 a;
-            a = pos.y + (f32)(100 - irand(200));
-            b = pos.x + (f32)(200 - irand(400));
-            effConfettiEntry(rand() % 3 + 24, 60, b, a, pos.z);
-            psndSFXOn((const char*)0x82f);
+            f32 x;
+            f32 y;
+
+            y = pos.y + (f32)(100 - irand(200));
+            x = pos.x + (f32)(200 - irand(400));
+            effConfettiEntry(rand() % 3 + 24, 60, x, y, pos.z);
+            psndSFXOn(SFX_NAME_WORD(PSND_SFX_KUPPA_FIREWORKS1));
             work->confetti--;
         }
     }
     if (type < 10) {
-        dispEntry(CAMERA_3D, dispCalcZ(&pos), 2, (DispCallback)effStageClearDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_XLU, effStageClearDisp, effect);
     } else {
-        dispEntry((CameraId)CAMERA_3D_EFFECTA, dispCalcZ(&pos), 8, (DispCallback)effStageClearDisp, effect);
+        dispEntry(CAMERA_3D_EFFECTA, dispCalcZ(&pos), DISP_MODE_CUSTOM_MID, effStageClearDisp, effect);
     }
 }
 
@@ -277,7 +298,8 @@ static void effStageClearMain(EffectEntry* effect) {
  * a dark offset shadow pass first, then the letters,
  * with a scrolling rainbow texture blended over the type 0 text.
  */
-static void effStageClearDisp(CameraId cameraId, EffectEntry* effect) {
+static void effStageClearDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     StageClearWork* work = effect->userdata;
     CameraEntry* cam;
     f32 scale;
@@ -304,7 +326,7 @@ static void effStageClearDisp(CameraId cameraId, EffectEntry* effect) {
     scale = 0.9f * (1.7f * work->scale);
     frame = work->frame;
     type = work->type;
-    if (gp->language != 0U) {
+    if (gp->language != LANGUAGE_JP) {
         scale *= 0.6f;
     }
     GXGetProjectionv(proj);
@@ -370,13 +392,13 @@ static void effStageClearDisp(CameraId cameraId, EffectEntry* effect) {
 #if VERSION >= VERSION_US
                 effGetTexObj(niji_tbl[gp->language], &tex);
 #else
-                effGetTexObj(niji_tbl[gp->language != 0], &tex);
+                effGetTexObj(niji_tbl[gp->language != LANGUAGE_JP], &tex);
 #endif
                 GXLoadTexObj(&tex, GX_TEXMAP1);
                 GXSetNumTevStages(3);
                 GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-                GXSetTevColorOp(GX_TEVSTAGE0, (GXTevOp)14, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-                GXSetTevAlphaOp(GX_TEVSTAGE0, (GXTevOp)14, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_COMP_RGB8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+                GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_COMP_A8_GT, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
                 GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_TEXC, GX_CC_ZERO, GX_CC_TEXC, GX_CC_ZERO);
                 GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_TEXA, GX_CA_ZERO, GX_CA_TEXA, GX_CA_ZERO);
                 GXSetTevSwapModeTable(GX_TEV_SWAP1, GX_CH_RED, GX_CH_GREEN, GX_CH_BLUE, GX_CH_RED);
@@ -393,7 +415,7 @@ static void effStageClearDisp(CameraId cameraId, EffectEntry* effect) {
                 GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
                 GXSetTevColor(GX_TEVREG0, (GXColor){0x36, 0x36, 0x36, 0xFF});
             } else {
-                effGetTexObj(i + 0x49 - 1 + 1, &tex);
+                effGetTexObj(i + 0x49, &tex);
                 GXLoadTexObj(&tex, GX_TEXMAP0);
                 GXSetNumTevStages(1);
                 GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -436,7 +458,5 @@ static void effStageClearDisp(CameraId cameraId, EffectEntry* effect) {
 
 /** Returns non-zero once every letter has landed (the `done` flag set by Main). */
 s32 effStageClearEndChk(EffectEntry* effect) {
-    StageClearWork* work = effect->userdata;
-
-    return work->done != 0;
+    return ((StageClearWork*)effect->userdata)->done != 0;
 }

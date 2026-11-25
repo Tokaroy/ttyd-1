@@ -1,10 +1,6 @@
 #include <dolphin.h>
 #include <dolphin/os.h>
 
-/**
- * Initializes a message queue over a caller-provided array of msgCount message slots,
- * with empty send and receive thread queues.
- */
 void OSInitMessageQueue(OSMessageQueue* mq, void* msgArray, s32 msgCount) {
     OSInitThreadQueue(&mq->queueSend);
     OSInitThreadQueue(&mq->queueReceive);
@@ -14,11 +10,6 @@ void OSInitMessageQueue(OSMessageQueue* mq, void* msgArray, s32 msgCount) {
     mq->usedCount = 0;
 }
 
-/**
- * Appends a message to the back of the queue and wakes a waiting receiver.
- * If the queue is full it sleeps until there is room when flags has bit 0 set (blocking), otherwise returns 0;
- * returns 1 on success.
- */
 int OSSendMessage(OSMessageQueue* mq, void* msg, s32 flags) {
     BOOL enabled;
     s32 lastIndex;
@@ -39,11 +30,6 @@ int OSSendMessage(OSMessageQueue* mq, void* msg, s32 flags) {
     return 1;
 }
 
-/**
- * Takes the oldest message from the queue, storing it in *msg, and wakes a waiting sender.
- * If the queue is empty it sleeps until a message arrives when flags has bit 0 set, otherwise returns 0;
- * returns 1 on success.
- */
 int OSReceiveMessage(OSMessageQueue* mq, void* msg, s32 flags) {
     BOOL enabled = OSDisableInterrupts();
 
@@ -65,7 +51,6 @@ int OSReceiveMessage(OSMessageQueue* mq, void* msg, s32 flags) {
     return 1;
 }
 
-/** Like OSSendMessage but puts the message at the front of the queue so it is received next. */
 int OSJamMessage(OSMessageQueue* mq, void* msg, s32 flags) {
     BOOL enabled = OSDisableInterrupts();
 

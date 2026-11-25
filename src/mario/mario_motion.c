@@ -1,78 +1,87 @@
 // Mario's motion table and motion changes (marioChgMot), jump and fall parameters, and the checks that start
 // jumps, hammer, spin and the paper transformations from the controls.
+
+#include "version.h"
 #include "dolphin/types.h"
 #include "mario/mario.h"
 #include "mario/mariost.h"
 #include "mario/mario_motion.h"
-#include "eff/eff_kemuri.h"
-#include "driver/casedrv.h"
 #include <string.h>
 #include "mot/mot_jump.h"
 #include "party.h"
 #include "driver/npcdrv.h"
 #include "driver/mobjdrv.h"
-#include "koopa_motion.h"
-#include "mario/mario_cam.h"
-#include "mario/mario_hit.h"
-#include "mario/mario_party.h"
-#include "mot/mot_damage.h"
-#include "mot/mot_dokan.h"
-#include "mot/mot_hip.h"
-#include "mot/mot_jabara.h"
-#include "mot/mot_plane.h"
-#include "mot/mot_stay.h"
-#include "mot/mot_walk.h"
+#include <dolphin/pad.h>
+#include "driver/camdrv.h"
 #include "motion/mot_yoshi.h"
 #include "party/party_cloud.h"
-#include "party/party_yoshi.h"
-#include "peach.h"
+#include "mario/mario_party.h"
 #include "system.h"
-#include "party/party_vivian.h"
-#include "koopa.h"
-#include "mot/mot_roll.h"
 #include "mario/mario_sbr.h"
-#include "mot/mot_ship.h"
-#include "mot/mot_hammer.h"
+#include "mario/mario_pouch.h"
+#include "mario/mario_cam.h"
+#include "koopa.h"
+#include "mot/mot_damage.h"
 #include "mot/mot_slit.h"
-#include "pmario_sound.h"
+#include "koopa_motion.h"
+#include "mario/mario_hit.h"
+#include "mot/mot_jabara.h"
+#include "mot/mot_ship.h"
+#include "mot/mot_roll.h"
+#include "mot/mot_walk.h"
+#include "mot/mot_plane.h"
+#include "mot/mot_stay.h"
+#include "peach.h"
+#include "party/party_yoshi.h"
+#include "party/party_vivian.h"
+#include "mot/mot_hammer.h"
+#include "mot/mot_hip.h"
+#include "mot/mot_dokan.h"
 #include "koopa_hit.h"
-#include "version.h"
-#include <dolphin/pad.h>
+#include "eff/eff_kemuri.h"
+#include "pmario_sound.h"
+#include "sfx_name_word.h"
+#include "driver/casedrv.h"
+#include "driver/hitdrv.h"
+
+typedef struct MarioJumpData {
+    f32 jump[4]; // 0x0
+    f32 fall[4]; // 0x10
+    f32 maxJump; // 0x20, read only by the stripped marioGetMaxJumpSpd
+    f32 minFall; // 0x24
+} MarioJumpData;
 
 typedef struct MarioMotTblEntry {
     void (*main)(void);
-    void (*unused)(void); // NULL in every entry
+    void (*unk)(void);
     void (*post)(void);
 } MarioMotTblEntry;
 
 static void mot_talk(void);
 static void mot_getItem(void);
 static void mot_kaze(void);
+static void mot_bottomless(void);
 #if VERSION <= VERSION_DEMO_JP
 static void mot_cloud(void);
 static void mot_cloud_post(void);
-#else
-void mot_cloud(void);
 #endif
-static void mot_bottomless(void);
+
 static void mot_forceReset(void);
 static void mot_shadow(void);
 static void mot_partyUse(void);
 static void mot_dummy(void);
 
-#define PCHK(x) pouchCheckItem(x)
-
 /**
  * Mario's motions by motion id (standing, walking, dashing, jumping, ... and Bowser's): the function that runs
  * each frame, an unused slot and the cleanup run when Mario leaves the motion; marioMotion calls through it.
  */
-MarioMotTblEntry marioMotTbl[] = {
+static MarioMotTblEntry marioMotTbl[] = {
     {mot_stay, NULL, mot_stay_post},
     {mot_walk, NULL, NULL},
     {mot_dash, NULL, NULL},
     {mot_jump, NULL, NULL},
 #if VERSION >= VERSION_US
-    {mot_jumpNpc, NULL, N_mot_jumpNpc_post},
+    {mot_jumpNpc, NULL, mot_jumpNpc_post},
 #else
     {mot_jumpNpc, NULL, NULL},
 #endif
@@ -129,9 +138,33 @@ MarioJumpData marioJumpData = {
     -18.0f,
 };
 
+/** Plays Mario's landing sound at pos for the floor stand he lands on (water, wood, snow, grass, metal or the default). */
+// Original name and size (0x94) from the JP demo map (UNUSED there: every call is inlined).
+static void marioLandOnSe(Vec* pos, HitEntry* stand) {
+    s32 attr;
+    s32 sfx;
+    if (stand) {
+        attr = hitGetAttr(stand);
+        if (attr & HIT_ATTR_SHALLOW_WATER) {
+            sfx = PSND_SFX_MARIO_LANDING2;
+        } else if (attr & HIT_ATTR_WOOD) {
+            sfx = PSND_SFX_MARIO_LANDING3;
+        } else if (attr & HIT_ATTR_SNOW) {
+            sfx = PSND_SFX_MARIO_LANDING4;
+        } else if (attr & HIT_ATTR_GRASS) {
+            sfx = PSND_SFX_MARIO_LANDING5;
+        } else if (attr & HIT_ATTR_METAL) {
+            sfx = PSND_SFX_MARIO_LANDING6;
+        } else {
+            sfx = PSND_SFX_MARIO_LANDING1;
+        }
+        psndSFXOn_3D(SFX_NAME_WORD(sfx), pos);
+    }
+}
+
 /**
  * Puts Mario back into stay/walk/dash from the field battle code (fbatBattleMode state 4).
- * The plane is cancelled, the tube makes the partners ride on (not in the demo),
+ * The plane is cancelled, the tube makes the partners ride on (not in the early demos),
  * and Yoshi (and, US and later, the damage motions) are left alone.
  * With no speed it switches to stay but then still to walk, as there is no return.
  */
@@ -146,15 +179,22 @@ void marioChgMoveMotion(void) {
         allPartyForceRideOn();
         return;
     }
-#endif
 #if VERSION >= VERSION_US
     if ((u16)(mario->currMotionId - MARIO_MOTION_DAMAGE) <= 1) {
         return;
     }
 #endif
+#endif
     if (mario->currMotionId == MARIO_MOTION_YOSHI) {
         return;
     }
+
+    // At zero speed this calls the stay transition and then continues into the walk/dash selection below (no return).
+    // BUG: the walk/dash change below does not check whether Mario is in the air or what the stick does. It runs
+    // on the second frame after a field battle (fbatBattleMode state 4), after control came back on the first
+    // (battle_exit). A jump started on those frames, or a jump or fall the battle began in, becomes mot_walk or
+    // mot_dash, whose first frame clears the jumping and falling flags, sets the walk or dash speed and calls
+    // marioChkJump, so A on that frame starts a new jump in mid-air.
     if (!mario->baseSpeed) {
         marioChgStayMotion();
     }
@@ -209,37 +249,36 @@ void marioChgShipMotion(void) {
 }
 
 /**
- * Puts Mario straight into the tube (roll) motion at its sub-state 50,
+ * Puts Mario straight into the tube (roll) motion at ROLL_SUB_ROLLING_DIRECT,
  * without running the old motion's post function or the first-frame setup.
  * The Pianta Parlor tube game (yuu_02) uses it; landing in tube mode too.
  */
 void marioChgRollMotion(void) {
     MarioWork* mario = marioGetPtr();
-    mario->currSubMotionId = 50;
+    mario->currSubMotionId = ROLL_SUB_ROLLING_DIRECT;
     mario->currMotionId = MARIO_MOTION_ROLL;
 }
 
 /**
  * Launches Mario off a spring (jump stand) with v as the jump height:
  * from evt_mobj and on landing on MOBJ_BlueJumpStand (100).
- * In tube mode only the height is stored (retail also puffs smoke and jumps); on Yoshi, yoshi_jumpStand jumps.
+ * In tube mode the early demos only store the height (JP and later also puff smoke and jump); on Yoshi,
+ * yoshi_jumpStand jumps.
  */
 void marioChgJumpStandMotion(f32 v) {
     MarioWork* mario = marioGetPtr();
-#if VERSION <= VERSION_DEMO_JP
-    // The demo does not follow the camera up, and in status 0x10 only stores the height.
-    if (marioChkSts(0x10)) {
-        mario->mot.jump.standHeight = v;
-    } else
-#else
+#if VERSION >= VERSION_JP
     camFollowYOn();
-    if (marioChkSts(0x10)) {
+#endif
+    if (marioChkSts(MARIO_STS_ROLL)) {
         mario->mot.jump.standHeight = v;
+#if VERSION <= VERSION_DEMO_JP
+    } else if (mario->currMotionId == MARIO_MOTION_YOSHI) {
+#else
         effKemuriEntry(0, mario->position.x, mario->position.y, mario->position.z, 0.0f);
         marioChgMot(MARIO_MOTION_JUMP_STAND);
-    } else
+    } else if (mario->currMotionId == MARIO_MOTION_YOSHI) {
 #endif
-        if (mario->currMotionId == MARIO_MOTION_YOSHI) {
         mario->mot.jump.standHeight = v;
         yoshi_jumpStand();
     } else {
@@ -273,14 +312,14 @@ void marioChgSmallJumpMotion(void) {
 BOOL marioChkItemGetMotion(void) {
     BOOL ret = FALSE;
     MarioWork* mario = marioGetPtr();
-    MarioMotion cur = mario->currMotionId;
+    u16 cur = mario->currMotionId;
     if (!cur || cur == MARIO_MOTION_WALK || cur == MARIO_MOTION_DASH ||
         cur == MARIO_MOTION_YOSHI || cur == MARIO_MOTION_ROLL || cur == MARIO_MOTION_SLIT) {
         if (!(mario->trigFlags & MARIO_TRIG_FLAG_IS_STARTING_NEW_MOTION)) {
             ret = TRUE;
         }
     } else if (cur == MARIO_MOTION_SHIP) {
-        if (marioShipChanging() == 3) {
+        if (marioShipChanging() == SHIP_STATUS_SAILING) {
             ret = TRUE;
         }
     }
@@ -295,7 +334,7 @@ BOOL marioChkTalkable(void) {
     MarioWork* mario = marioGetPtr();
     BOOL ret = FALSE;
     PartyEntry* party = partyGetPtr(marioGetPartyId());
-    if (party != NULL && (s32)(u8)party->currentMemberId == PARTY_MEMBER_YOSHI && (party->flags & PARTY_FLAG_IS_BEING_USED)) {
+    if (party != NULL && party->currentMemberId == PARTY_YOSHI && (party->flags & PARTY_FLAG_IS_BEING_USED)) {
         return FALSE;
     }
     switch (mario->currMotionId) {
@@ -317,7 +356,7 @@ BOOL marioChkTalkable(void) {
  * Per-frame air check (from marioMain, Peach's and Bowser's main) that starts the Spin Jump (MARIO_MOTION_HIP)
  * on A: Mario needs a jump input and marioChkHipAttack;
  * Bowser instead needs kpaHipAttackOk and 6 frames to his peak.
- * Never in 8-bit or paper mode; the PAL release also skips it in plane mode.
+ * Never in 8-bit or paper mode; PAL and the PAL demo also skip it in plane mode.
  */
 void marioBoots(void) {
     MarioWork* mario = marioGetPtr();
@@ -328,7 +367,7 @@ void marioBoots(void) {
     if (flags & MARIO_FLAG_PAPER_MODE) {
         return;
     }
-    if (mario->characterId == 2) {
+    if (mario->characterId == CHARACTER_BOWSER) {
         if (mario->jumpPeakAirTime < 6) {
             return;
         }
@@ -381,8 +420,8 @@ void marioChgMot(MarioMotion id) {
         if (mario->dispFlags & MARIO_DISP_FLAG_BLUR) {
             mario->dispFlags &= ~MARIO_DISP_FLAG_BLUR;
         }
-        if (mario->dispFlags & MARIO_DISP_FLAG_FRONT_POSE) {
-            mario->dispFlags &= ~MARIO_DISP_FLAG_FRONT_POSE;
+        if (mario->dispFlags & MARIO_DISP_FLAG_NO_REAR_POSE) {
+            mario->dispFlags &= ~MARIO_DISP_FLAG_NO_REAR_POSE;
         }
     }
     mario->prevMotionId = mario->currMotionId;
@@ -394,7 +433,7 @@ void marioChgMot(MarioMotion id) {
 }
 
 /**
- * marioChgMot with a choice: callPost FALSE skips the old motion's post function (retail still runs it when
+ * marioChgMot with a choice: callPost FALSE skips the old motion's post function (JP and later still run it when
  * leaving the jabara motion). Used by motion code that has already cleaned up itself.
  */
 void marioChgMotSub(MarioMotion id, s32 callPost) {
@@ -406,19 +445,24 @@ void marioChgMotSub(MarioMotion id, s32 callPost) {
         if (mario->dispFlags & MARIO_DISP_FLAG_BLUR) {
             mario->dispFlags &= ~MARIO_DISP_FLAG_BLUR;
         }
-        if (mario->dispFlags & MARIO_DISP_FLAG_FRONT_POSE) {
-            mario->dispFlags &= ~MARIO_DISP_FLAG_FRONT_POSE;
+        if (mario->dispFlags & MARIO_DISP_FLAG_NO_REAR_POSE) {
+            mario->dispFlags &= ~MARIO_DISP_FLAG_NO_REAR_POSE;
         }
     }
     mario->prevMotionId = mario->currMotionId;
     mario->currMotionId = id;
+#if VERSION >= VERSION_JP
     if (callPost) {
         if (marioMotTbl[mario->prevMotionId].post) {
             marioMotTbl[mario->prevMotionId].post();
         }
+    } else if (mario->prevMotionId == MARIO_MOTION_JABARA) {
+        if (marioMotTbl[mario->prevMotionId].post) {
+            marioMotTbl[mario->prevMotionId].post();
+        }
     }
-#if VERSION >= VERSION_JP
-    else if (mario->prevMotionId == MARIO_MOTION_JABARA) {
+#else
+    if (callPost) {
         if (marioMotTbl[mario->prevMotionId].post) {
             marioMotTbl[mario->prevMotionId].post();
         }
@@ -523,7 +567,7 @@ void marioSetJumpPara(void) {
             }
             break;
     }
-    if (mario->currMotionId != MARIO_MOTION_JUMP_3 && mario->characterId == 2) {
+    if (mario->currMotionId != MARIO_MOTION_JUMP_3 && mario->characterId == CHARACTER_BOWSER) {
         kpaSetJumpPara();
     }
 }
@@ -551,23 +595,33 @@ void marioSetFallPara(void) {
     }
 }
 
+/** The fastest rise speed (marioJumpData.maxJump, 32 units per frame). */
+// Original name and size (0x10) from the JP demo map (UNUSED there: nothing calls it), between marioSetFallPara and
+// marioGetMaxFallSpd: marioGetMaxFallSpd's form for the field before minFall.
+static f32 marioGetMaxJumpSpd(void) {
+    return marioJumpData.maxJump;
+}
+
+/** The fastest fall speed (marioJumpData.minFall, -18 units per frame). */
+// Original name and size (0x10) from the JP demo map (UNUSED there: every call is inlined).
+static f32 marioGetMaxFallSpd(void) {
+    return marioJumpData.minFall;
+}
+
 /**
  * Steps the fall curve one frame and returns the new vertical speed (units per frame),
  * capped at marioJumpData.minFall (-18); the jerk is not allowed to turn positive.
  */
 f32 marioGetFallSpd(void) {
     MarioWork* mario = marioGetPtr();
-    MarioJumpData* jd;
-    f32 min;
     mario->jumpJerkY = mario->jumpJerkY + mario->jumpSnapY;
     if (mario->jumpJerkY > 0.0f) {
         mario->jumpJerkY = 0.0f;
     }
-    jd = &marioJumpData;
     mario->jumpAccelerationY = mario->jumpAccelerationY + mario->jumpJerkY;
     mario->jumpVelocityY = mario->jumpVelocityY + mario->jumpAccelerationY;
-    if (mario->jumpVelocityY <= (min = jd->minFall)) {
-        mario->jumpVelocityY = min;
+    if (mario->jumpVelocityY <= marioGetMaxFallSpd()) {
+        mario->jumpVelocityY = marioGetMaxFallSpd();
         mario->jumpAccelerationY = 0.0f;
         mario->jumpJerkY = 0.0f;
         mario->jumpSnapY = 0.0f;
@@ -589,10 +643,10 @@ f32 marioMakeJumpPara(void) {
 }
 
 /**
- * Per-frame rise of a normal jump (marioMain and Peach):
- * letting go of A after 4 frames cuts the jump short,
- * and at the peak it records the air time and switches to falling (in tube mode it keeps the motion and sets the
- * falling flag). The spring, red switch and JUMP_2/JUMP_3 motions are skipped here.
+ * Per-frame rise of a jump: steps the jump curve (marioMakeJumpPara), cuts it short (-0.526) once A is let go after 4
+ * frames in the air, and at the peak records it and switches to falling (the fall motion, or only the falling curve
+ * while rolling, MARIO_STS_ROLL). Skipped during the roll event, before sub-motion 10, and in the switch, stand, second
+ * and third jump motions.
  */
 void marioJump(void) {
     MarioWork* mario = marioGetPtr();
@@ -609,7 +663,7 @@ void marioJump(void) {
         case MARIO_MOTION_JUMP_3:
             return;
     }
-    if ((s32)mario->currSubMotionId < 10) {
+    if (mario->currSubMotionId < 10) {
         return;
     }
     prev = mario->jumpVelocityY;
@@ -624,7 +678,7 @@ void marioJump(void) {
         marioSetPeakYpos();
         marioSetFallPara();
         marioMakeJumpPara();
-        if (!marioChkSts(0x10)) {
+        if (!marioChkSts(MARIO_STS_ROLL)) {
             marioChgMot(MARIO_MOTION_FALL);
         } else {
             mario->jumpVelocityY = -0.03f;
@@ -654,7 +708,7 @@ void marioFall(void) {
     f32 y;
     void* hit;
 
-    if (!strcmp(gp->currentMapName, "kpa_03") && mario->characterId == 2) {
+    if (!strcmp(gp->currentMapName, "kpa_03") && mario->characterId == CHARACTER_BOWSER) {
         mario->hitobjStandOn = NULL;
         kpaClearHitobjRide();
         spd = marioGetFallSpd();
@@ -690,48 +744,60 @@ void marioFall(void) {
         mario->baseSpeed = s;
     }
     mario->hitobjStandOn = NULL;
-    if (mario->characterId == 2) {
+    if (mario->characterId == CHARACTER_BOWSER) {
         kpaClearHitobjRide();
     }
-    if (marioChkSts(0x10) == TRUE) {
+    if (marioChkSts(MARIO_STS_ROLL) == TRUE) {
         mot_fall_roll();
         return;
     }
 #if VERSION >= VERSION_US
     if (!(mario->trigFlags & MARIO_TRIG_FLAG_JABARA_MOVE_CHK) && (mario->trigFlags & MARIO_TRIG_FLAG_JABARA_CHK)) {
-        rub = marioGetRub(0x100, &a, &b, &c);
+        rub = marioGetRub(PAD_BUTTON_A, &a, &b, &c);
         if (mario->buttonHold & PAD_BUTTON_A) {
             mario->trigFlags |= MARIO_TRIG_FLAG_START_JABARA_SPIN;
         }
     }
 #else
-    rub = marioGetRub(0x100, &a, &b, &c);
+    // BUG: the Spring Jump check at the landing below needs only the Ultra Boots, A held and the stick turning one
+    // way on the landing frame (marioGetRub >= 0: tilt 50 or more, at least 4 of the last 10 stick steps turning
+    // the same way and none back); marioGetRub runs on every falling frame. Nothing checks how the jump began, so
+    // a jump taken while running, with A still held and the stick swept round as Mario comes down (for example
+    // left, up, then right), lands as a Spring Jump.
+    rub = marioGetRub(PAD_BUTTON_A, &a, &b, &c);
 #endif
     spd = marioGetFallSpd();
     hit = marioChkLandon(&y, spd);
     if (hit) {
         mario->hitobjStandOn = hit;
         mario->hitobjJumpFrom = NULL;
-        if (hitGetAttr(hit) & HIT_ATTR_DEEP_WATER) {
+        if (hitGetAttr(hit) & HIT_ATTR_WATER_HAZARD) {
             mario->position.y += spd;
         } else {
             mario->position.y = y;
-#if VERSION >= VERSION_US
-            if (!(mario->trigFlags & MARIO_TRIG_FLAG_JABARA_MOVE_CHK) && (mario->trigFlags & MARIO_TRIG_FLAG_JABARA_CHK) && marioPriCheckJabara() && a != -1 && rub >= 0) {
-#else
+#if VERSION <= VERSION_DEMO_JP
             if (marioPriCheckJabara() && a != -1 && rub >= 0) {
-#endif
-#if VERSION >= VERSION_JP
-                camFollowYOn();
-#endif
                 marioChgMot(MARIO_MOTION_JABARA);
                 return;
             }
+#elif VERSION <= VERSION_JP
+            if (marioPriCheckJabara() && a != -1 && rub >= 0) {
+                camFollowYOn();
+                marioChgMot(MARIO_MOTION_JABARA);
+                return;
+            }
+#else
+            if (!(mario->trigFlags & MARIO_TRIG_FLAG_JABARA_MOVE_CHK) && (mario->trigFlags & MARIO_TRIG_FLAG_JABARA_CHK) && marioPriCheckJabara() && a != -1 && rub >= 0) {
+                camFollowYOn();
+                marioChgMot(MARIO_MOTION_JABARA);
+                return;
+            }
+#endif
         }
     } else {
         mario->position.y += spd;
     }
-    if (mario->characterId != 2) {
+    if (mario->characterId != CHARACTER_BOWSER) {
         if (mario->hitobjStandOn) {
             marioLandOn();
         }
@@ -752,17 +818,16 @@ void marioLandOn(void) {
     Vec pos;
     s32 attr;
     u32 flags;
-    s32 sfx;
     void* stand;
 
-    if (!(hitGetAttr(mario->hitobjStandOn) & HIT_ATTR_DEEP_WATER)) {
+    if (!(hitGetAttr(mario->hitobjStandOn) & HIT_ATTR_WATER_HAZARD)) {
         marioClearJumpPara();
     }
     mario->flags &= ~MARIO_FLAG_STOP_AIR_MOVEMENT;
     mario->flags &= ~MARIO_FLAG_USE_FORCE_DIRECTION;
     mario->airTimer = 0;
     mario->jumpPeakAirTime = 0;
-    if (mario->characterId != 2) {
+    if (mario->characterId != CHARACTER_BOWSER) {
         if (!marioBgmodeChk()) {
             camFollowYOn();
         }
@@ -771,23 +836,7 @@ void marioLandOn(void) {
     }
     stand = mario->hitobjStandOn;
     pos = mario->position;
-    if (stand) {
-        attr = hitGetAttr(stand);
-        if (attr & HIT_ATTR_SHALLOW_WATER) {
-            sfx = 0x150;
-        } else if (attr & 0x200000) {
-            sfx = 0x151;
-        } else if (attr & 0x100000) {
-            sfx = 0x152;
-        } else if (attr & HIT_ATTR_GRASS) {
-            sfx = 0x153;
-        } else if (attr & 0x400000) {
-            sfx = 0x154;
-        } else {
-            sfx = 0x14f;
-        }
-        psndSFXOn_3D((const char*)sfx, &pos);
-    }
+    marioLandOnSe(&pos, stand);
     if (mario->flags & MARIO_FLAG_TUBE_MODE) {
         mario->flags &= ~(MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING);
         mario->hitobjJumpFrom = NULL;
@@ -795,7 +844,7 @@ void marioLandOn(void) {
     }
     mario->mot.jump.dist = __fabsf(distABf(mario->position.x, mario->position.z, mario->lastGroundPos.x, mario->lastGroundPos.z));
     attr = hitGetAttr(mario->hitobjStandOn);
-    if (mario->currMotionId != MARIO_MOTION_DAMAGE && (attr & HIT_ATTR_DEEP_WATER)) {
+    if (mario->currMotionId != MARIO_MOTION_DAMAGE && (attr & HIT_ATTR_WATER_HAZARD)) {
         set_damage_root_ypos(mario->position.y);
         marioChgMot(MARIO_MOTION_DAMAGE);
         return;
@@ -815,7 +864,7 @@ void marioLandOn(void) {
             marioChgJumpStandMotion(100.0f);
             return;
         }
-        if (mario->characterId == 2) {
+        if (mario->characterId == CHARACTER_BOWSER) {
             marioChgMot(MARIO_MOTION_STAY);
             return;
         }
@@ -825,7 +874,7 @@ void marioLandOn(void) {
         }
         if (mario->flags & MARIO_FLAG_PAPER_MODE) {
 #if VERSION <= VERSION_DEMO_JP
-            marioChgMotSub(MARIO_MOTION_STAY, FALSE); // the demo has no slit re-entry
+            marioChgMotSub(MARIO_MOTION_STAY, FALSE);
 #else
             marioSlitReenter();
 #endif
@@ -841,7 +890,7 @@ void marioLandOn(void) {
 #else
     if (mario->controlStickSensitivity > 0.0f && !(mario->flags & MARIO_FLAG_FORCED_MOVEMENT)) {
 #endif
-        if (mario->characterId == 2) {
+        if (mario->characterId == CHARACTER_BOWSER) {
             if (kpaFireAttackCheck()) {
                 marioChgMot(MARIO_MOTION_STAY);
             } else {
@@ -851,8 +900,7 @@ void marioLandOn(void) {
             return;
         }
 #if VERSION <= VERSION_DEMO_JP
-        marioChgMot(MARIO_MOTION_WALK); // the demo does not stay in the slit after landing
-        return;
+        marioChgMot(MARIO_MOTION_WALK); // the early demos do not stay in the slit after landing
 #else
         if (!(mario->dispFlags & MARIO_DISP_FLAG_SLIT)) {
 #if VERSION >= VERSION_US
@@ -870,16 +918,16 @@ void marioLandOn(void) {
 #endif
             return;
         }
-        N_marioSlitSetAfterLand();
-        return;
+        marioSlitSetAfterLand();
 #endif
+        return;
     }
     flags = mario->flags;
     if (flags & MARIO_FLAG_TUBE_MODE) {
         marioChgRollMotion();
         return;
     }
-    if (mario->characterId == 2) {
+    if (mario->characterId == CHARACTER_BOWSER) {
         marioChgMot(MARIO_MOTION_STAY);
         quake_kpaLandOn();
         return;
@@ -906,10 +954,8 @@ void marioLandOn(void) {
 }
 
 #if VERSION <= VERSION_DEMO_JP
-// FAKE: unreferenced stand-in (deadstripped by the linker) that only creates the demo's three stray
-// .rodata doubles 0.5, 3.0 and 0.0 between the mot_talk and earlier pools; the original function that used
-// them is not in the demo DOL. A file-scope const array or <math.h> constants place them at the start of
-// the section instead.
+// FAKE: stand-in that nothing calls; it only places the doubles 0.0, 0.5 and 3.0 in the pool. The JP demo map's
+// UNUSED marioChkLandOn_roll (0x58c, body unknown) sits at this slot.
 static f32 marioDemoHalf(f32 x) {
     if (x < 0.0) {
         return x;
@@ -920,7 +966,7 @@ static f32 marioDemoHalf(f32 x) {
 
 /**
  * Talk motion: turns Mario left or right to face the NPC he touched and takes that NPC's talk pose;
- * the M_I_2 pose (M_I_3 in the PAL release) returns to M_S_1 after 60 frames.
+ * the M_I_2 pose (M_I_3 in PAL and the PAL demo) returns to M_S_1 after 60 frames.
  * Peach uses peach_talk, Bowser his own pose.
  */
 static void mot_talk(void) {
@@ -928,9 +974,9 @@ static void mot_talk(void) {
     NpcEntry* npc;
     f32 camYaw;
     f32 angle;
-    void* fbat;
+    NpcEntry* fbat;
 
-    if (mario->characterId == 1) {
+    if (mario->characterId == CHARACTER_PEACH) {
         peach_talk();
         return;
     }
@@ -960,15 +1006,13 @@ static void mot_talk(void) {
                 mario->displayDirectionTarget = 0.0f;
             }
         }
-        if (mario->characterId == 2) {
+        if (mario->characterId == CHARACTER_BOWSER) {
             kpaChgPose("KPA_S_1", "KPA2_S_1");
             return;
         }
+
         // BUG: fbatGetPointer()->npc is whichever NPC Mario last talked to or battled, from any map. If that
-        // NPC slot is unused on the current map, checkPose is not valid and marioChgPose can crash. Known case,
-        // all versions: talk to one of about twenty affected NPCs, then enter Petalburg for
-        // the first time without talking to another NPC, fighting an enemy, or saving and reloading in between;
-        // the first-entry cutscene (Mario waves at the Koopa) then crashes here.
+        // NPC slot is unused on the current map, checkPose is not valid and marioChgPose can crash.
         fbat = fbatGetPointer()->npc;
         if (fbat != NULL) {
             marioChgPose(((NpcEntry*)fbat)->checkPose);
@@ -982,7 +1026,7 @@ static void mot_talk(void) {
             mario->currSubMotionId = 10;
         }
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             return;
         case 10:
@@ -1012,7 +1056,7 @@ static void mot_getItem(void) {
 /**
  * Starts a jump on A from stand, walk or the slit unless A belongs to something else:
  * an object hint or A-button case in front or underfoot, an NPC in talk range, or Yoshi.
- * PAL also refuses on a damage floor. TRUE if Mario jumped.
+ * PAL and the PAL demo also refuse on a damage floor. TRUE if Mario jumped.
  */
 BOOL marioChkJump(void) {
     MarioWork* mario = marioGetPtr();
@@ -1028,7 +1072,7 @@ BOOL marioChkJump(void) {
             return FALSE;
         }
         ce = caseCheckHitObj(mario->hitobjFrontA);
-        if (ce && (ce->conditionId == CASE_COND_FRONT_A || ce->conditionId == CASE_COND_JUMP_FROM_A || ce->conditionId == CASE_COND_PUSH_A)) {
+        if (ce && (ce->conditionId == CASE_FRONT_A || ce->conditionId == CASE_JUMP_FROM_A || ce->conditionId == CASE_PUSH_A)) {
             return FALSE;
         }
     }
@@ -1037,7 +1081,7 @@ BOOL marioChkJump(void) {
             return FALSE;
         }
         ce = caseCheckHitObj(mario->hitobjFront);
-        if (ce && (ce->conditionId == CASE_COND_FRONT_A || ce->conditionId == CASE_COND_JUMP_FROM_A || ce->conditionId == CASE_COND_PUSH_A)) {
+        if (ce && (ce->conditionId == CASE_FRONT_A || ce->conditionId == CASE_JUMP_FROM_A || ce->conditionId == CASE_PUSH_A)) {
             return FALSE;
         }
     }
@@ -1046,7 +1090,7 @@ BOOL marioChkJump(void) {
             return FALSE;
         }
         ce = caseCheckHitObj(mario->hitobjStandOn);
-        if (ce && ce->conditionId == CASE_COND_STAND_ON_A) {
+        if (ce && ce->conditionId == CASE_STAND_ON_A) {
             return FALSE;
         }
     }
@@ -1054,7 +1098,7 @@ BOOL marioChkJump(void) {
         return FALSE;
     }
 #if VERSION >= VERSION_DEMO_EU
-    if (mario->hitobjStandOn && (hitGetAttr(mario->hitobjStandOn) & HIT_ATTR_DEEP_WATER)) {
+    if (mario->hitobjStandOn && (hitGetAttr(mario->hitobjStandOn) & HIT_ATTR_WATER_HAZARD)) {
         return FALSE;
     }
 #endif
@@ -1064,7 +1108,8 @@ BOOL marioChkJump(void) {
 
 /**
  * On Y, turns Mario into the boat or the plane when he stands on a matching panel and has the Boat
- * or Plane Curse (retail: not while a partner use is pending).
+ * or Plane Curse (JP and later: a pending partner use blocks it unless
+ * MARIO_TRIG_FLAG_SHIP_PLANE_EVT_ON is set).
  * Returns TRUE only when Y was pressed and no panel took it; callers (mot_stay, mot_walk) ignore it.
  */
 BOOL marioChkTransform(void) {
@@ -1080,11 +1125,11 @@ BOOL marioChkTransform(void) {
     if (mario->currMotionId == MARIO_MOTION_YOSHI) {
         return FALSE;
     }
-    if (PCHK(5) > 0 && marioChkShipPlace(mario->hitobjStandOn)) {
+    if (pouchCheckItem(ITEM_BOAT_CURSE) > 0 && marioChkShipPlace(mario->hitobjStandOn)) {
         marioChgMot(MARIO_MOTION_SHIP);
         return FALSE;
     }
-    if (PCHK(4) > 0 && marioChkPlanePlace(mario->hitobjStandOn)) {
+    if (pouchCheckItem(ITEM_PLANE_CURSE) > 0 && marioChkPlanePlace(mario->hitobjStandOn)) {
         marioChgMot(MARIO_MOTION_PLANE);
         return FALSE;
     }
@@ -1116,6 +1161,8 @@ BOOL marioChkItemMotion(void) {
     if (mario->flags & (MARIO_FLAG_PAPER_MODE | MARIO_FLAG_TUBE_MODE)) {
         return FALSE;
     }
+
+    // This repeats the test (trig is known nonzero here)
     if (!trig) {
         return FALSE;
     }
@@ -1123,7 +1170,10 @@ BOOL marioChkItemMotion(void) {
     return TRUE;
 }
 
-/** Always 0: a left-over stick-rub check; marioMain's air movement would skip the stick while it returned nonzero. */
+/**
+ * Always 0: a left-over stick-rub check; marioMain's air movement would skip the stick while it returned nonzero.
+ * Name from the JP demo map (marioChkRub, at this function's address in the JP demo build).
+ */
 s32 marioChkRub(void) {
 #if VERSION <= VERSION_DEMO_JP
     MarioWork* mario = marioGetPtr();
@@ -1147,13 +1197,13 @@ s32 marioRollChgChk(void) {
     if (!(mario->buttonHold & PAD_TRIGGER_R)) {
         return 0;
     }
-    if (marioGetRub(0x20, &a, &b, &c) != TRUE) {
+    if (marioGetRub(PAD_TRIGGER_R, &a, &b, &c) != TRUE) {
         return 0;
     }
     if (b < 3) {
         return 0;
     }
-    if (!PCHK(3)) {
+    if (!pouchCheckItem(ITEM_TUBE_CURSE)) {
         return 0;
     }
     if (marioSlitChkWallAround() || marioCreviceWallChk(mario->position)) {
@@ -1168,22 +1218,23 @@ s32 marioRollChgChk(void) {
 
 /**
  * Bounces Mario off an enemy he jumped on in the field (npcdrv first-strike hits) with the NPC jump motion;
- * not for Bowser in body status 2 or (retail) in the tube.
+ * not for Bowser in body status 2 or (JP and later) in the tube.
  */
 void marioChgMotJump2(void) {
     MarioWork* mario = marioGetPtr();
 #if VERSION <= VERSION_DEMO_JP
-    if (kpaGetBodyStatus() != 2) {
+    if (kpaGetBodyStatus() != KPA_BODY_SUBMERGED) {
 #else
-    if (kpaGetBodyStatus() != 2 && mario->currMotionId != MARIO_MOTION_ROLL) {
+    if (kpaGetBodyStatus() != KPA_BODY_SUBMERGED && mario->currMotionId != MARIO_MOTION_ROLL) {
 #endif
         marioChgMot(MARIO_MOTION_JUMP_NPC);
     }
 }
 
 #if VERSION <= VERSION_DEMO_JP
+
 /**
- * In the demo the Flurrie motion lives here: party_cloud.c has no mot_cloud yet,
+ * In the early demos the Flurrie motion lives here: party_cloud.c has no mot_cloud yet,
  * and the motion's post function resets the camera target.
  */
 static void mot_cloud(void) {
@@ -1198,7 +1249,7 @@ static void mot_cloud(void) {
     }
 }
 
-/** Leaving the demo's Flurrie motion: puts the camera target back on Mario (cloudResetAt). */
+/** Leaving the early demos' Flurrie motion: puts the camera target back on Mario (cloudResetAt). */
 static void mot_cloud_post(void) {
     cloudResetAt();
 }
@@ -1218,20 +1269,22 @@ static inline BOOL marioChkBackAngle(f32 a) {
  * then slows him to a stop and stands.
  * No code in the tree enters MARIO_MOTION_KAZE; marioChkSts 0x20 only tests for it.
  * Guess: a whirlwind, from the name ("kaze", wind).
+ * Resembles Paper Mario 64's spin (action_update_spin: Z, the sprite turning, ending at 0 or 180 degrees), but this one
+ * stays in place: no movement, sound, effect or attack. Same code in all versions.
  */
 static void mot_kaze(void) {
     MarioWork* mario = marioGetPtr();
     if (mario->trigFlags & MARIO_TRIG_FLAG_IS_STARTING_NEW_MOTION) {
         mario->trigFlags &= ~MARIO_TRIG_FLAG_IS_STARTING_NEW_MOTION;
         mario->flags &= ~(MARIO_FLAG_IS_JUMPING | MARIO_FLAG_IS_FALLING | MARIO_FLAG_IS_STEPPING | MARIO_FLAG_HAS_INPUT_JUMP);
-        mario->dispFlags |= MARIO_DISP_FLAG_DIR_LOCK;
+        mario->dispFlags |= MARIO_DISP_FLAG_NO_MAKE_DISP_DIR;
         mario->multiTimer = 0;
         mario->currSubMotionId = 0;
         mario->baseSpeed = 0.0f;
         mario->mot.kaze.spinSpeed = 0.0f;
         marioChgPose("M_P_2");
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             mario->mot.kaze.spinSpeed += 5.0f;
             if (mario->mot.kaze.spinSpeed > 60.0f) {
@@ -1249,7 +1302,7 @@ static void mot_kaze(void) {
             mario->mot.kaze.spinSpeed -= 6.0f;
             if (mario->mot.kaze.spinSpeed < 0.0f) {
                 mario->mot.kaze.spinSpeed = 0.0f;
-                mario->dispFlags &= ~MARIO_DISP_FLAG_DIR_LOCK;
+                mario->dispFlags &= ~MARIO_DISP_FLAG_NO_MAKE_DISP_DIR;
                 marioChgMot(MARIO_MOTION_STAY);
             }
             mario->displayDirection = revise360(mario->displayDirection + mario->mot.kaze.spinSpeed);
@@ -1261,6 +1314,8 @@ static void mot_kaze(void) {
 /**
  * Unused: lays Mario flat (rot.x 90, pose M_S_1, slit display flag cleared) until B stands him back up.
  * No code in the tree enters MARIO_MOTION_SHADOW. Guess: lying flat as a shadow, from the name.
+ * The look is like Paper Mario 64's KnockDownPlayer map scripts, but those draw a separate rotating sprite during a
+ * cutscene; this only tilts Mario and waits for B. Same code in all versions.
  */
 static void mot_shadow(void) {
     MarioWork* mario = marioGetPtr();
@@ -1275,7 +1330,7 @@ static void mot_shadow(void) {
         mario->rot.y = 0.0f;
         mario->rot.z = 0.0f;
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             if (mario->buttonTrg & PAD_BUTTON_B) {
                 mario->rot.x = 0.0f;
@@ -1285,6 +1340,14 @@ static void mot_shadow(void) {
             }
             break;
     }
+}
+
+/** Empty motion function that no motion table slot holds. */
+// Original name, size (0x20) and slot (between mot_shadow and mot_partyUse) from the JP demo map (UNUSED there:
+// nothing refers to it). Body as its empty siblings mot_partyUse and mot_dummy (same size); with it the JP demo
+// .sdata2 numbering between mot_bottomless and mot_kaze closes (one label short before). Static as its siblings.
+static void mot_zspin(void) {
+    marioGetPtr();
 }
 
 /** Empty motion slot MARIO_MOTION_PARTY_USE; nothing in the tree enters it. */
@@ -1317,6 +1380,8 @@ static void mot_bottomless(void) {
         mario->baseSpeed = 0.0f;
         mario->airTimer = 0;
         mario->currSubMotionId = 0;
+
+        // x, y and z are set below only on win_03, win_01 and tik_01, then used on every map.
         if (mario->returnPos.y < -2000.0f) {
             if (!strcmp(gp->currentMapName, "win_03")) {
                 x = 250.0f;
@@ -1350,7 +1415,7 @@ static void mot_bottomless(void) {
         mario->multiTimer = (s16)(distABf(x, z, mario->position.x, mario->position.z) / mario->mot.bottomless.speed);
         mario->mot.bottomless.angle = angleABf(mario->position.x, mario->position.z, x, z);
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             movePos(&mario->position.x, &mario->position.z, mario->mot.bottomless.speed, mario->mot.bottomless.angle);
             mario->camTarget.x = mario->position.x;
@@ -1372,9 +1437,9 @@ static void mot_bottomless(void) {
             if (hit == NULL) {
                 mario->position.y += step;
             } else {
-                psndSFXOn_3D((const char*)0xb9, &mario->position);
+                psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_VOICE_MARIO_DAMAGED1), &mario->position);
                 marioChgPose("M_D_2");
-                psndSFXOn_3D((const char*)0x197, &mario->position);
+                psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_MARIO_FALL_CRUSH1), &mario->position);
                 marioDmgRetQuakeOn();
                 mario->hitobjStandOn = hit;
                 mario->hitobjJumpFrom = NULL;
@@ -1421,7 +1486,7 @@ static void mot_forceReset(void) {
         mario->trigFlags &= ~MARIO_TRIG_FLAG_IS_STARTING_NEW_MOTION;
         mario->currSubMotionId = 0;
     }
-    switch ((s32)mario->currSubMotionId) {
+    switch (mario->currSubMotionId) {
         case 0:
             marioSlitForceCancel();
             marioChgMot(MARIO_MOTION_STAY);

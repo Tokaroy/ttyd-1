@@ -1,9 +1,25 @@
 // tou_00 (闘技場, Glitzville): the blimp landing outside the arena; exits to tou_01 and back to gor_04.
 
-#include "eff/n64/eff_kemuri12_n64.h"
 #include "version.h"
+#include "eff/n64/eff_kemuri12_n64.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_bg.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "driver/mapdrv.h"
+#include "system.h"
+#include "pmario_sound.h"
 
 #include "driver/camdrv.h"
 #include "dolphin/os.h"
@@ -11,39 +27,32 @@
 #include "manager/evtmgr_cmd.h"
 #include "driver/effdrv.h"
 #include "evt/evt_npc.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_bg.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_party.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "tou.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
+#include "driver/seqdrv.h"
+#include <dolphin/pad.h>
 
 static USER_FUNC(kemuri_move);
 static USER_FUNC(kpa_hikousen_yure);
+static USER_FUNC(time_shift);
 static USER_FUNC(npc_set_pos);
 
-const char* kemuri_name[5];
+static EvtWord evt_tou_balloon[85];
+static EvtWord evt_light[66];
+static EvtWord evt_wing[125];
 
-/**
- * Script helper: moves the 3D camera's start time back 2 s and the event's saved time back 3.5 s,
- * so the blimp fly-in scripted to a fixed duration lines up with the camera move.
- */
-static USER_FUNC(time_shift) {
-    CameraEntry* cam = camGetPtr(CAMERA_3D);
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord evt_to_tou[];
+#else
+EvtWord evt_to_tou[293];
+#endif
 
-    cam->startTimeA += OSMillisecondsToTicks((OSTime)-2000);
-    event->savedTime += OSMillisecondsToTicks((OSTime)-3500);
-    return EVT_RETURN_DONE;
-}
+static EvtWord evt_pos_keep[39];
+static EvtWord evt_to_gor[247];
+static const char* kemuri_name[5];
+static EvtWord tou_00_koopa_evt[678];
+static EvtWord hkoopa_init[7];
+static NpcSetupInfo npcEnt[2];
+static EvtWord evt_skip[43];
+EvtWord tou_00_init_evt[76];
 
 /**
  * Decoration loop for the Glitz Pit exterior: every 0.3 to 0.8 seconds a random "balloon_heiho_n64" balloon
@@ -82,7 +91,7 @@ EVT_END()
 static EVT_BEGIN(evt_light)
     SET_VALUE(LW(9), LW(0))
     LOOP(0)
-        CALL(evt_sub_intpl_init, 11, -20, 20, 60)
+        CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, -20, 20, 60)
         LOOP(61)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_mapobj_rotate, 1, LW(9), 0, 0, LW(0))
@@ -91,7 +100,7 @@ static EVT_BEGIN(evt_light)
         CALL(evt_sub_random, 120, LW(0))
         ADD(LW(0), 1)
         WAIT_FRAMES(LW(0))
-        CALL(evt_sub_intpl_init, 11, 20, -20, 60)
+        CALL(evt_sub_intpl_init, EASING_SINE_IN_OUT, 20, -20, 60)
         LOOP(61)
             CALL(evt_sub_intpl_get_value)
             CALL(evt_mapobj_rotate, 1, LW(9), 0, 0, LW(0))
@@ -107,22 +116,23 @@ EVT_END()
 /**
  * Wing flap loop for the arena's decoration: the map objects hane_1 and hane_2 swing back
  * and forth about Z by 10 degrees.
- * 20% of the time they flutter three quick strokes (10 frames each way),
+ * For random values 0..19 out of 0..100, they flutter three quick strokes (10 frames each way),
  * otherwise they take one slow stroke (30 frames each way).
  */
+// Inclusive random 0..100 selects the fast flap for values 0..19.
 static EVT_BEGIN(evt_wing)
     LOOP(0)
         CALL(evt_sub_random, 100, LW(0))
         IF_INT_LESS(LW(0), 20)
             LOOP(3)
-                CALL(evt_sub_intpl_init, 12, -10, 10, 10)
+                CALL(evt_sub_intpl_init, EASING_SINE_OUT, -10, 10, 10)
                 LOOP(11)
                     CALL(evt_sub_intpl_get_value)
                     CALL(evt_mapobj_rotate, 1, STRING("hane_1"), 0, 0, LW(0))
                     CALL(evt_mapobj_rotate, 1, STRING("hane_2"), 0, 0, LW(0))
                     WAIT_FRAMES(1)
                 END_LOOP
-                CALL(evt_sub_intpl_init, 12, 10, -10, 10)
+                CALL(evt_sub_intpl_init, EASING_SINE_OUT, 10, -10, 10)
                 LOOP(11)
                     CALL(evt_sub_intpl_get_value)
                     CALL(evt_mapobj_rotate, 1, STRING("hane_1"), 0, 0, LW(0))
@@ -131,14 +141,14 @@ static EVT_BEGIN(evt_wing)
                 END_LOOP
             END_LOOP
         ELSE
-            CALL(evt_sub_intpl_init, 12, -10, 10, 30)
+            CALL(evt_sub_intpl_init, EASING_SINE_OUT, -10, 10, 30)
             LOOP(31)
                 CALL(evt_sub_intpl_get_value)
                 CALL(evt_mapobj_rotate, 1, STRING("hane_1"), 0, 0, LW(0))
                 CALL(evt_mapobj_rotate, 1, STRING("hane_2"), 0, 0, LW(0))
                 WAIT_FRAMES(1)
             END_LOOP
-            CALL(evt_sub_intpl_init, 12, 10, -10, 30)
+            CALL(evt_sub_intpl_init, EASING_SINE_OUT, 10, -10, 30)
             LOOP(31)
                 CALL(evt_sub_intpl_get_value)
                 CALL(evt_mapobj_rotate, 1, STRING("hane_1"), 0, 0, LW(0))
@@ -151,19 +161,30 @@ static EVT_BEGIN(evt_wing)
 EVT_END()
 
 /**
+ * Script helper: moves the 3D camera's start time back 2 s and the event's saved time back 3.5 s,
+ */
+static USER_FUNC(time_shift) {
+    CameraEntry* cam = camGetPtr(CAMERA_3D);
+
+    cam->startTimeA += OSMillisecondsToTicks((OSTime)-2000);
+    event->savedTime += OSMillisecondsToTicks((OSTime)-3500);
+    return EVT_RETURN_DONE;
+}
+
+/**
  * Arrival cutscene when Mario comes from Rogueport by blimp:
  * Glitz Pit music starts, controls are locked, the camera holds on the blimp over the arena and
  * then pulls to tou_01 (Glitzville's entrance square).
  */
 EVT_BEGIN(evt_to_tou)
-    CALL(evt_cam3d_evt_set, -2000, 241, 534, -2000, 145, -8, 0, 11)
+    CALL(evt_cam3d_evt_set, -2000, 241, 534, -2000, 145, -8, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG3_URN1"), 18000)
+    CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG3_URN1"), 18000)
 #else
-    CALL(evt_snd_bgmon_f_d, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG3_URN1"), 18000, 18000)
+    CALL(evt_snd_bgmon_f_d, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG3_URN1"), 18000, 18000)
 #endif
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
@@ -172,19 +193,19 @@ EVT_BEGIN(evt_to_tou)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_mario_bgmode_on)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gondora_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hako_1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gondora_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hako_1"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_trans, 1, STRING("gondora_1"), 0, 80, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_10"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_9"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_8"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_7"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_4"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_2"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_10"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_9"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_8"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_7"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_4"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_2"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_snd_sfxon, STRING("SFX_STG3_AIR_SHIP_DRIVE3"), 0)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_cam3d_evt_set, 0, 241, 534, 0, 145, -8, 15000, 11)
-    CALL(evt_sub_intpl_msec_init, 11, -25000, 0, 18000)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_cam3d_evt_set, 0, 241, 534, 0, 145, -8, 15000, EASING_SINE_IN_OUT)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -25000, 0, 18000)
     CALL(time_shift)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
@@ -207,18 +228,18 @@ EVT_BEGIN(evt_to_tou)
         END_LOOP
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_4"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_4"), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(800)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_7"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_8"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_7"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_8"), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(800)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_10"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_9"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_10"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 0, STRING("bou_9"), MAP_OBJ_FLAG_HIDDEN)
     END_INLINE_EVENT
     CALL(evt_mapobj_get_position, STRING("gondora_1"), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG3_AIR_SHIP_GONDOLA_MOVE1"), LW(10), LW(11), LW(12), GW(11))
-    CALL(evt_sub_intpl_msec_init, 11, 80, 0, 3000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 80, 0, 3000)
     LABEL(2)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, STRING("gondora_1"), 0, LW(0), 0)
@@ -234,8 +255,9 @@ EVT_BEGIN(evt_to_tou)
     RETURN
 EVT_END()
 
-/** Loop that glues Mario and his partner to the blimp gondola (gondora_1/gondora_2 map objects) while it moves. */
-EVT_BEGIN(evt_pos_keep)
+/** Loop that places Mario and his partner relative to gondora_2 while it moves. */
+// The second lookup supplies the position used below; the first lookup is retained.
+static EVT_BEGIN(evt_pos_keep)
     LOOP(0)
         CALL(evt_mapobj_get_position, STRING("gondora_1"), LW(0), LW(1), LW(2))
         CALL(evt_mapobj_get_position, STRING("gondora_2"), LW(0), LW(1), LW(2))
@@ -250,38 +272,39 @@ EVT_BEGIN(evt_pos_keep)
 EVT_END()
 
 /**
- * Departure cutscene for the blimp ride back to Rogueport:
- * sets GSWF_TOU00_BLIMP_RETURNED and changes map to gor_04 ("hikousen_return" entrance).
+ * Departure cutscene for the blimp ride back to Rogueport: the gondola rises and the blimp flies off,
+ * then GSWF_TOU_BLIMP_TO_ROGUEPORT_UNUSED is set and the map changes to gor_04 (entrance
+ * "hikousen_return").
  */
-EVT_BEGIN(evt_to_gor)
-    CALL(evt_cam3d_evt_set, 0, 241, 534, 0, 145, -8, 0, 0)
+static EVT_BEGIN(evt_to_gor)
+    CALL(evt_cam3d_evt_set, 0, 241, 534, 0, 145, -8, 0, EASING_LINEAR)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gondora_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hako_2"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gondora_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("hako_2"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mapobj_trans, 1, STRING("hikousen"), -30, 20, 0)
     CALL(evt_mapobj_rotate, 1, STRING("hikousen"), 0, 180, 0)
     CALL(evt_mario_bgmode_on)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     SPAWN_EVENT_GET_ID(PTR(evt_pos_keep), LW(9))
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_20"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_19"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_20"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_19"), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(1000)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_17"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_18"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_17"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_18"), MAP_OBJ_FLAG_HIDDEN)
         WAIT_MS(1000)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_12"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_14"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_12"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_SINGLE, 1, STRING("bou_14"), MAP_OBJ_FLAG_HIDDEN)
     END_INLINE_EVENT
     CALL(evt_mapobj_get_position, STRING("gondora_2"), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG3_AIR_SHIP_GONDOLA_MOVE1"), LW(10), LW(11), LW(12), GW(11))
-    CALL(evt_sub_intpl_msec_init, 11, 0, 80, 3000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 80, 3000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, STRING("gondora_2"), 0, LW(0), 0)
@@ -295,10 +318,10 @@ EVT_BEGIN(evt_to_gor)
     DELETE_EVENT(LW(9))
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gondora_2"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gondora_2"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_snd_sfxon, STRING("SFX_STG3_AIR_SHIP_DRIVE4"), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, -30, -2000, 20000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -30, -2000, 20000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_mapobj_trans, 1, STRING("hikousen"), LW(0), 20, 0)
@@ -308,10 +331,10 @@ EVT_BEGIN(evt_to_gor)
             GOTO(2)
         END_IF
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -2000, 241, 534, -2000, 145, -8, 20000, 11)
+    CALL(evt_cam3d_evt_set, -2000, 241, 534, -2000, 145, -8, 20000, EASING_SINE_IN_OUT)
     WAIT_MS(8000)
     DELETE_EVENT(GW(15))
-    SET_VALUE(GSWF(GSWF_TOU00_BLIMP_RETURNED), 1)
+    SET_VALUE(GSWF_TOU_BLIMP_TO_ROGUEPORT_UNUSED, 1)
     CALL(evt_bero_mapchange, STRING("gor_04"), STRING("hikousen_return"))
     RETURN
 EVT_END()
@@ -331,7 +354,7 @@ static USER_FUNC(npc_set_pos) {
 }
 
 /** Names of the five smoke puffs that pour out of Bowser's failing airship in tou_00_koopa_evt. */
-const char* kemuri_name[] = {
+static const char* kemuri_name[] = {
     "kosyo01",
     "kosyo02",
     "kosyo03",
@@ -344,8 +367,26 @@ static USER_FUNC(kpa_hikousen_yure) {
     f32 y = evtGetFloat(event, event->args[0]);
 
     // 飛クッパ
-    npcNameToPtr("\x94\xF2\x83\x4E\x83\x62\x83\x70")->moveOffset.y = y;
+    npcNameToPtr("飛クッパ")->moveOffset.y = y;
     return EVT_RETURN_DONE;
+}
+
+/** Script helper: args[0] = smoke effect name, args[1] = distance; shifts that smoke puff along x after the first call. */
+// Follow the named effect until it disappears; the first call waits without moving it.
+static USER_FUNC(kemuri_move) {
+    EvtWord* args = event->args;
+    const char* name = (const char*)evtGetValue(event, args[0]);
+    f32 dy = evtGetFloat(event, args[1]);
+    EffectEntry* eff = effNameToPtr(name);
+
+    if (eff == NULL) {
+        return EVT_RETURN_DONE;
+    }
+    if (isFirstCall) {
+        return EVT_RETURN_BLOCK;
+    }
+    ((EffKemuri12N64Work*)eff->userdata)->position.x += dy;
+    return EVT_RETURN_BLOCK;
 }
 
 /**
@@ -353,14 +394,14 @@ static USER_FUNC(kpa_hikousen_yure) {
  * Bowser's flying fortress passes over Glitzville with the sky scrolling.
  * Bowser talks (kpa_stg4_008, kpa_stg4_009) and the script then changes map to muj_20.
  */
-EVT_BEGIN(tou_00_koopa_evt)
+static EVT_BEGIN(tou_00_koopa_evt)
     // Mario is hidden, the airship is placed off to the left and the sky starts scrolling past.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_mario_kill_party, 0)
     CALL(evt_npc_set_position, STRING("飛クッパ"), -2300, -17, 2)
     CALL(evt_npc_set_ry, STRING("飛クッパ"), 90)
-    CALL(evt_cam3d_evt_set, -2000, 186, 730, -2000, 55, -8, 0, 11)
+    CALL(evt_cam3d_evt_set, -2000, 186, 730, -2000, 55, -8, 0, EASING_SINE_IN_OUT)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_bg_auto_scroll_onoff, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.001953125f))
@@ -374,6 +415,7 @@ EVT_BEGIN(tou_00_koopa_evt)
         END_LOOP
     END_INLINE_EVENT
     SET_VALUE(GF(1), 0)
+
     // The airship bobs gently while cruising.
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
@@ -392,11 +434,12 @@ EVT_BEGIN(tou_00_koopa_evt)
             SET_FLOAT_VALUE(LW(1), LW(2))
         END_LOOP
     END_INLINE_EVENT
+
     // The airship flies in from the left over Glitzville.
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(evt_npc_set_anim, STRING("飛クッパ"), STRING("HKPA_W_1"))
     CALL(evt_snd_sfxon, STRING("SFX_KUPPA_AIRSHIP_MOVE1"), GW(2))
-    CALL(evt_sub_intpl_msec_init, 0, -2300, -2000, 7500)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, -2300, -2000, 7500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_npc_get_position, STRING("飛クッパ"), LW(2), LW(3), LW(4))
@@ -406,6 +449,7 @@ EVT_BEGIN(tou_00_koopa_evt)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
+
     // Something breaks: the music winds down and two smoke puffs stream out behind the ship.
     WAIT_MS(3750)
     SET_VALUE(GF(1), 1)
@@ -418,7 +462,7 @@ EVT_BEGIN(tou_00_koopa_evt)
             CALL(evt_snd_bgm_freq, 0, LW(0))
             WAIT_MS(50)
         END_LOOP
-        CALL(evt_snd_bgmoff_f, PSND_FADE_OUT, 2000)
+        CALL(evt_snd_bgmoff_f, PSND_FADEOUT, 2000)
     END_INLINE_EVENT
     SUBTRACT_FLOAT(LW(0), FLOAT(10.0f))
     ADD_FLOAT(LW(1), FLOAT(20.0f))
@@ -436,12 +480,13 @@ EVT_BEGIN(tou_00_koopa_evt)
         MULTIPLY_FLOAT(LW(0), FLOAT(-1000.0f))
         CALL(kemuri_move, STRING("kosyo2"), LW(0))
     END_INLINE_EVENT
+
     // The ship lurches and slows down while the engine sound drops in pitch.
     CALL(evt_npc_get_position, STRING("飛クッパ"), LW(2), LW(3), LW(4))
     SET_VALUE(GW(1), LW(3))
     BEGIN_INLINE_EVENT
         CALL(evt_npc_get_position, STRING("飛クッパ"), LW(2), LW(3), LW(4))
-        CALL(evt_sub_intpl_msec_init, 4, 180, 360, 400)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, 180, 360, 400)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_sub_get_sincos, LW(0), LW(5), LW(6))
@@ -458,7 +503,7 @@ EVT_BEGIN(tou_00_koopa_evt)
 #else
     CALL(evt_snd_sfx_pit, GW(2), -1365)
 #endif
-    CALL(evt_sub_intpl_msec_init, 0, LW(2), LW(2), 500)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, LW(2), LW(2), 500)
     LABEL(4)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_npc_set_position, STRING("飛クッパ"), LW(0), GW(1), LW(4))
@@ -466,6 +511,7 @@ EVT_BEGIN(tou_00_koopa_evt)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(4)
     END_IF
+
     // Bowser looks around, then the ship starts shaking unsteadily.
     MULTIPLY_FLOAT(GW(0), FLOAT(0.5f))
     CALL(evt_npc_set_anim, STRING("飛クッパ"), STRING("HKPA_S_1"))
@@ -515,6 +561,7 @@ EVT_BEGIN(tou_00_koopa_evt)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
+
     // Bowser wonders about the warning light while more smoke pours out and the engine dies.
     CALL(evt_msg_print, 0, STRING("kpa_stg4_008"), 0, STRING("飛クッパ"))
     CALL(evt_npc_get_position, STRING("飛クッパ"), LW(0), LW(1), LW(2))
@@ -536,7 +583,7 @@ EVT_BEGIN(tou_00_koopa_evt)
         WAIT_MS(100)
     END_LOOP
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 4, -1365, -5461, 1500)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, -1365, -5461, 1500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             CALL(evt_snd_sfx_pit, GW(2), LW(0))
@@ -547,6 +594,7 @@ EVT_BEGIN(tou_00_koopa_evt)
         END_LOOP
         CALL(evt_snd_sfxoff, GW(2))
     END_INLINE_EVENT
+
     // The sky stops scrolling and Bowser panics.
     CALL(evt_npc_set_anim, STRING("飛クッパ"), STRING("HKPA_O_1"))
     WAIT_MS(1500)
@@ -556,7 +604,8 @@ EVT_BEGIN(tou_00_koopa_evt)
     CALL(evt_npc_set_anim, STRING("飛クッパ"), STRING("HKPA_O_2"))
     WAIT_MS(200)
     WAIT_MS(500)
-    CALL(evt_npc_flag_onoff, 0, STRING("飛クッパ"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("飛クッパ"), NPC_FLAG_TALK_POSE)
+
     // Bowser screams, the ship tips over and falls out of the sky.
     BEGIN_INLINE_EVENT
         CALL(evt_msg_print, 0, STRING("kpa_stg4_009"), 0, STRING("飛クッパ"))
@@ -564,7 +613,7 @@ EVT_BEGIN(tou_00_koopa_evt)
     CALL(evt_npc_set_anim, STRING("飛クッパ"), STRING("HKPA_O_3"))
     WAIT_MS(500)
     CALL(evt_npc_set_rotate_offset, STRING("飛クッパ"), 0, 30, 0)
-    CALL(evt_sub_intpl_msec_init, 1, 0, -180, 400)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 0, -180, 400)
     LABEL(5)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_npc_set_rotate, STRING("飛クッパ"), 0, 0, LW(0))
@@ -575,7 +624,7 @@ EVT_BEGIN(tou_00_koopa_evt)
     CALL(evt_npc_get_position, STRING("飛クッパ"), LW(2), LW(3), LW(4))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_VEXATIOUS2_2"), LW(2), LW(3), LW(4), 0)
     CALL(evt_snd_sfxon, STRING("SFX_KUPPA_AIRSHIP_FALL1"), GW(1))
-    CALL(evt_sub_intpl_msec_init, 1, LW(3), -200, 800)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, LW(3), -200, 800)
     LABEL(6)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_npc_set_position, STRING("飛クッパ"), LW(2), LW(0), LW(4))
@@ -583,6 +632,7 @@ EVT_BEGIN(tou_00_koopa_evt)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(6)
     END_IF
+
     // Cut to the next scene in muj_20.
     CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_BLACK, 300, FADE_IN_BLACK, 300)
     CALL(evt_bero_mapchange, STRING("muj_20"), STRING(""))
@@ -590,37 +640,19 @@ EVT_BEGIN(tou_00_koopa_evt)
 EVT_END()
 
 /**
- * Init event of Bowser's flying fortress NPC (飛クッパ, flown across in the chapter 4 interlude tou_00_koopa_evt):
- * sets status bit 2 of its jumpFlags field (evt_npc_status_onoff), with which npcdrv takes a moving NPC's facing
- * for spotting Mario from its move direction.
+ * Init event of the flying Bowser NPC (Bowser in his airship): sets NPC_STATUS_FACE_MOVE_DIR, so it faces the way
+ * it moves.
  */
 static EVT_BEGIN(hkoopa_init)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
-
-/** Script helper: args[0] = smoke effect name, args[1] = distance; shifts that smoke puff effect along x each call. */
-static USER_FUNC(kemuri_move) {
-    EvtWord* args = event->args;
-    const char* name = (const char*)evtGetValue(event, args[0]);
-    f32 dy = evtGetFloat(event, args[1]);
-    EffectEntry* eff = effNameToPtr(name);
-
-    if (eff == NULL) {
-        return EVT_RETURN_DONE;
-    }
-    if (isFirstCall) {
-        return EVT_RETURN_BLOCK;
-    }
-    ((EffKemuri12N64Work*)eff->userdata)->position.x += dy;
-    return EVT_RETURN_BLOCK;
-}
 
 /** NPCs of this map: Bowser in his airship, who flies over Glitzville in the chapter 4 interlude. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "飛クッパ", // name
-        NPC_FLAG_TALK_ANIM, // flags
+        "飛クッパ", // name (Bowser flying in his airship)
+        NPC_FLAG_TALK_POSE, // flags
         0, // reactionFlags
         hkoopa_init, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -635,12 +667,12 @@ static NpcSetupInfo npcEnt[] = {
  * Lets the player skip the blimp scene: after 1.1 s,
  * A or B ends the scene and changes map (tou_01 normally, or back to gor_04 on the return trip).
  */
-EVT_BEGIN(evt_skip)
-    CALL(evt_seq_wait, 2)
+static EVT_BEGIN(evt_skip)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(1100)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_BITS_SET(LW(0), 768)
+        IF_BITS_SET(LW(0), PAD_BUTTON_A | PAD_BUTTON_B)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
@@ -648,7 +680,7 @@ EVT_BEGIN(evt_skip)
     CALL(evt_snd_sfxoff, GW(11))
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("modoru"))
-        SET_VALUE(GSWF(GSWF_TOU00_BLIMP_RETURNED), 1)
+        SET_VALUE(GSWF_TOU_BLIMP_TO_ROGUEPORT_UNUSED, 1)
         CALL(evt_bero_mapchange, STRING("gor_04"), STRING("hikousen_return"))
     ELSE
         CALL(evt_bero_mapchange, STRING("tou_01"), 0)
@@ -665,15 +697,15 @@ EVT_END()
 EVT_BEGIN(tou_00_init_evt)
     SET_VALUE(GW(11), 0)
     CALL(evt_npc_setup, PTR(npcEnt))
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S"), MAPOBJ_FLAG_HIDE)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG4_15_05_PEACH_X_NAUT_PHD_REPORT)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mario_set_mode, 2)
         SPAWN_EVENT(tou_00_koopa_evt)
         RETURN
     END_IF
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU8"))
-    CALL(evt_map_playanim, STRING("jet"), 1, 0)
-    CALL(evt_map_playanim, STRING("lightcoloer"), 1, 0)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU8"))
+    CALL(evt_map_playanim, STRING("jet"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("lightcoloer"), MAP_ANIM_PLAY_LOOP, 0)
     SET_VALUE(LW(0), STRING("coloer_light_1"))
     SPAWN_EVENT(evt_light)
     SET_VALUE(LW(0), STRING("coloer_light_2"))
@@ -688,7 +720,7 @@ EVT_BEGIN(tou_00_init_evt)
         SPAWN_EVENT(evt_to_tou)
     END_IF
     SPAWN_EVENT(evt_tou_balloon)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_00_WELCOME_TO_GLITZVILLE)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_00_WELCOME_TO_GLITZVILLE)
         SPAWN_EVENT_GET_ID(PTR(evt_skip), GW(15))
     END_IF
     RETURN

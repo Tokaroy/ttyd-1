@@ -1,5 +1,6 @@
 // Goombella (kuribo): partner init, follow and the tattle ability.
-#include "party/party_hit.h"
+
+#include "version.h"
 #include "party/party_kuribo.h"
 #include "evt/evt_cmd.h"
 #include "mario/mario_party.h"
@@ -7,16 +8,18 @@
 #include "pmario_sound.h"
 #include <string.h>
 #include "driver/hitdrv.h"
+#include "driver/npcdrv.h"
 #include "mario/mario_pouch.h"
 #include "driver/mobjdrv.h"
+#include "party/party_move.h"
 #include "evt/evt_msg.h"
 #include "mario/mariost.h"
-#include "party/party_move.h"
+#include "party/party_hit.h"
 #include "system.h"
-#include "version.h"
+#include "dolphin/mtx.h"
 
 //.sbss
-u32 msg_ep; // unknown since it only gets written to once and never used
+static u32 msg_ep; // cleared by kuribo_init; nothing reads it
 
 /**
  * TRUE while Goombella is the active partner and her Tattle ability is in use;
@@ -24,7 +27,7 @@ u32 msg_ep; // unknown since it only gets written to once and never used
  */
 BOOL christineGetStatus(void) {
     PartyEntry* party = partyGetPtr(marioGetPartyId());
-    if (!party || party->currentMemberId != PARTY_MEMBER_GOOMBELLA || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
+    if (!party || party->currentMemberId != PARTY_GOOMBELLA || !(party->flags & PARTY_FLAG_IS_BEING_USED)) {
         return FALSE;
     }
     return TRUE;
@@ -36,35 +39,36 @@ BOOL christineGetStatus(void) {
  * LW(0) is moved to that NPC's description (its tattle message);
  * otherwise it looks at the map object Mario pushes, faces or stands on and picks the hint for that block,
  * switch, chest or sign, falling back to the "msg_kuri_map" comment on the map itself.
- * Mutes sound effects for the duration; retail also lifts her off the floor collision,
- * and returns early when she is in paper form (the US demo instead requires her on the ground).
+ * Mutes sound effects for the duration; JP and later also lift her off the floor collision,
+ * and returns early when she is in paper form (the early demos instead require her on the ground).
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(pre_kurio_use) {
-    HitEntry* hit;
-    char* msg;
+#else
+USER_FUNC(pre_kurio_use) {
+#endif
+
+    void* hit;
+    const char* msg;
     MarioWork* mario;
     PartyEntry* party = partyGetPtr(marioGetPartyId());
 
     if (!party) {
         return EVT_RETURN_DONE;
     }
-
 #if VERSION <= VERSION_DEMO_JP
     if (!(party->flags & PARTY_FLAG_IS_GROUNDED)) {
-        return EVT_RETURN_DONE;
-    }
-
-    psndSetFlag(PSND_FLAG_MUTE_SFX);
 #else
-    if (party->flags2 & PARTY_DISP_FLAG_PAPER_ON) {
+    if (party->flags2 & PARTY_DISP_FLAG_PAPER) {
+#endif
         return EVT_RETURN_DONE;
     }
 
     psndSetFlag(PSND_FLAG_MUTE_SFX);
+#if VERSION >= VERSION_JP
     party->flags |= PARTY_FLAG_DISABLE_FLOORS;
     party->flags |= PARTY_FLAG_FORCE_FALL;
 #endif
-
     mario = party->playerPtr;
     if (event->lwData[0]) {
         event->lwData[0] += 8;
@@ -85,36 +89,41 @@ static USER_FUNC(pre_kurio_use) {
         }
         mobj = mobjHitObjPtrToPtr(hit);
         if (!strcmp(mobj->animName, "MOBJ_Lv1Block")) {
-            if (pouchGetHammerLv() < 1)
+            if (pouchGetHammerLv() < 1) {
                 msg = "obj_hlp_block_y_0";
-            else
+            } else {
                 msg = "obj_hlp_block_y_1";
+            }
         } else if (!strcmp(mobj->animName, "MOBJ_Lv1BigBlock")) {
-            if (pouchGetHammerLv() < 1)
+            if (pouchGetHammerLv() < 1) {
                 msg = "obj_hlp_block_y_0";
-            else
+            } else {
                 msg = "obj_hlp_block_y_1";
+            }
         } else if (!strcmp(mobj->animName, "MOBJ_Lv1BigBigBlock")) {
-            if (pouchGetHammerLv() < 1)
+            if (pouchGetHammerLv() < 1) {
                 msg = "obj_hlp_block_y_0";
-            else if (pouchGetHammerLv() < 2)
+            } else if (pouchGetHammerLv() < 2) {
                 msg = "obj_hlp_block_y_2";
-            else
+            } else {
                 msg = "obj_hlp_block_y_3";
+            }
         } else if (!strcmp(mobj->animName, "MOBJ_Lv2Block") || !strcmp(mobj->animName, "MOBJ_Lv2BigBlock")) {
-            if (pouchGetHammerLv() < 1)
+            if (pouchGetHammerLv() < 1) {
                 msg = "obj_hlp_block_s_0";
-            else if (pouchGetHammerLv() < 3)
+            } else if (pouchGetHammerLv() < 3) {
                 msg = "obj_hlp_block_s_1";
-            else
+            } else {
                 msg = "obj_hlp_block_s_2";
+            }
         } else if (!strcmp(mobj->animName, "MOBJ_Lv2BigBigBlock")) {
-            if (pouchGetHammerLv() < 1)
+            if (pouchGetHammerLv() < 1) {
                 msg = "obj_hlp_block_s_0";
-            else if (pouchGetHammerLv() < 3)
+            } else if (pouchGetHammerLv() < 3) {
                 msg = "obj_hlp_block_s_1";
-            else
+            } else {
                 msg = "obj_hlp_block_s_3";
+            }
         } else if (!strcmp(mobj->animName, "MOBJ_Lv3BigBigBlock") || !strcmp(mobj->animName, "MOBJ_Lv3BigBlock") || !strcmp(mobj->animName, "MOBJ_Lv3Block")) {
             msg = "obj_hlp_redyellow_block";
         } else if (!strcmp(mobj->animName, "MOBJ_Block") || !strcmp(mobj->animName, "MOBJ_PinkBlock")) {
@@ -138,9 +147,9 @@ static USER_FUNC(pre_kurio_use) {
             msg = pouchGetJumpLv() < 2 ? "obj_hlp_big_switch_1" : "obj_hlp_big_switch_2";
         } else if (!strcmp(mobj->animName, "MOBJ_TreasureBox") || !strcmp(mobj->animName, "MOBJ_GrayTreasureBox") ||
                    !strcmp(mobj->animName, "MOBJ_BigTreasureBox")) {
-            msg = mobjCheckItemboxOpen((void*)mobj) == 2 ? "obj_hlp_takara_1" : "obj_hlp_takara_0";
+            msg = mobjCheckItemboxOpen(mobj) == 2 ? "obj_hlp_takara_1" : "obj_hlp_takara_0";
         } else if (!strcmp(mobj->animName, "MOBJ_BlackTreasureBox")) {
-            msg = mobjCheckItemboxOpen((void*)mobj) == 2 ? "obj_hlp_blackbox_1" : "obj_hlp_blackbox_0";
+            msg = mobjCheckItemboxOpen(mobj) == 2 ? "obj_hlp_blackbox_1" : "obj_hlp_blackbox_0";
         } else if (!strcmp(mobj->animName, "MOBJ_RedJumpStand") || !strcmp(mobj->animName, "MOBJ_RedJumpStand2") ||
                    !strcmp(mobj->animName, "MOBJ_BlueJumpStand") || !strcmp(mobj->animName, "MOBJ_BlueJumpStand2") ||
                    !strcmp(mobj->animName, "MOBJ_MapJumpStand")) {
@@ -155,8 +164,9 @@ static USER_FUNC(pre_kurio_use) {
             msg = "obj_hlp_yuka_switch";
         } else if (!strcmp(mobj->animName, "MOBJ_BreakingFloor") || !strcmp(mobj->animName, "MOBJ_BlackBreakingFloor")) {
             msg = "obj_hlp_hip_attack";
-            if (pouchGetJumpLv() >= 2)
+            if (pouchGetJumpLv() >= 2) {
                 msg = "obj_hlp_hip_attack_1";
+            }
         } else if (!strcmp(mobj->animName, "MOBJ_BombRock")) {
             msg = "obj_hlp_bomb_rock";
         } else if (!strcmp(mobj->animName, "MOBJ_Signboard")) {
@@ -170,9 +180,11 @@ static USER_FUNC(pre_kurio_use) {
         } else {
             msg = "msg_kuri_map";
         }
+
+        // msg is always set by the chain above; the test is in the retail code all the same
         if (msg) {
             event->lwData[0] = (EvtWord)msg;
-            partyChgPoseId(party, 7);
+            partyChgPoseId(party, PARTY_POSE_TALK);
         }
         return EVT_RETURN_DONE;
     }
@@ -180,9 +192,13 @@ static USER_FUNC(pre_kurio_use) {
 
 /**
  * Last step of the field Tattle script: advances kuribo_use to its wind-down state,
- * lets Mario move again and unmutes sound effects (retail also restores her floor collision).
+ * lets Mario move again and unmutes sound effects (JP and later also restore her floor collision).
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(post_kurio_use) {
+#else
+USER_FUNC(post_kurio_use) {
+#endif
     PartyEntry* party = partyGetPtr(marioGetPartyId());
 
     if (!party) {
@@ -190,35 +206,22 @@ static USER_FUNC(post_kurio_use) {
     }
 #if VERSION <= VERSION_DEMO_JP
     party->useMotionId = 10;
-    marioStSystemLevel(0);
-    psndClearFlag(PSND_FLAG_MUTE_SFX);
 #else
     party->useMotionId = 20;
+#endif
     marioStSystemLevel(0);
     psndClearFlag(PSND_FLAG_MUTE_SFX);
-    party->flags &= ~PARTY_FLAG_DISABLE_FLOORS;
-    party->flags &= ~PARTY_FLAG_FORCE_FALL;
+#if VERSION >= VERSION_JP
+    kuribo_use_post(party);
 #endif
     return EVT_RETURN_DONE;
-}
-
-/**
- * Party table init for Goombella, also used by the walking followers that reuse her routines (Professor Frankly,
- * Marco, the guide, the gatekeepers): sets the 26 wide by 24 tall collision size.
- */
-void kuribo_init(PartyEntry* party) {
-    party->memberKind = PARTY_MEMBER_GOOMBELLA;
-    party->moveKind = 0;
-    party->height = 24.0f;
-    party->width = 26.0f;
-    msg_ep = 0;
 }
 
 /**
  * Field Tattle event: runs pre_kurio_use, prints the chosen message in Goombella's party speech balloon,
  * then post_kurio_use. Started by kuribo_use with LW(0) set to the NPC Mario faces, if any.
  */
-EVT_BEGIN(kurio_msg_evt)
+static EVT_BEGIN(kurio_msg_evt)
     CALL(pre_kurio_use)
     IF_INT_EQUAL(LW(0), 0)
         CALL(post_kurio_use)
@@ -228,86 +231,63 @@ EVT_BEGIN(kurio_msg_evt)
     CALL(post_kurio_use)
     RETURN
 EVT_END()
-f32 PSVECDistance(const Vec*, const Vec*);
+
+/** Starts the Field Tattle event (kurio_msg_evt) for the NPC Mario faces, if any, at system level 1. */
+// Original name and size (0x50) from the JP demo map (UNUSED there: every call is inlined).
+static void kurio_msg(void) {
+    EventEntry* evt = evtEntryType(kurio_msg_evt, 0, 0, 26);
+
+    marioStSystemLevel(1);
+    evt->lwData[0] = (EvtWord)fbatNpcTalkCheck();
+}
+
+/** Partner init for Goombella: member kind, ground mover, height 24 and width 26, and msg_ep cleared. */
+void kuribo_init(PartyEntry* party) {
+    party->memberKind = PARTY_GOOMBELLA;
+    party->moveKind = 0;
+    party->height = 24.0f;
+    party->width = 26.0f;
+    msg_ep = 0;
+}
 
 /**
  * Party table post_func, run when Goombella leaves use mode (partyUsePost or a run-mode change out of mode 3):
- * retail clears the floor-collision overrides kuribo_use may have set; empty in the demos.
+ * JP and later clear the floor-collision overrides kuribo_use may have set; empty in the early demos.
  */
-void kuribo_use_post(PartyEntry* party) {
 #if VERSION >= VERSION_JP
+void kuribo_use_post(PartyEntry* party) {
     party->flags &= ~PARTY_FLAG_DISABLE_FLOORS;
     party->flags &= ~PARTY_FLAG_FORCE_FALL;
+}
 #endif
-}
 
-#if VERSION <= VERSION_DEMO_JP
-/** The demo starts the message right where Goombella stands; retail first walks her next to Mario. */
-void kuribo_use(PartyEntry* party) {
-    EventEntry* evt;
-
-    if (party->trigFlags & PARTY_TRIG_FLAG_CHG_RUN_MODE) {
-        party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
-        partyChgMoveMode(party, 0);
-        partyChgMot(party, 0);
-        partyChgPoseId(party, 1);
-        party->moveFrames = 100;
-        party->useMotionId = 0;
-    }
-
-    switch (party->useMotionId) {
-        case 0:
-            evt = evtEntryType(kurio_msg_evt, 0, 0, 26);
-            marioStSystemLevel(1);
-            evt->lwData[0] = (EvtWord)fbatNpcTalkCheck();
-            party->useMotionId = 1;
-            break;
-        case 10:
-            party->moveFrames = 5;
-            party->useMotionId = 11;
-        case 11:
-            if (--party->moveFrames > 0) {
-                break;
-            }
-            partyChgRunMode(party, 2);
-            partyChgMoveMode(party, 0);
-            partyChgMot(party, 0);
-            partyChgPoseId(party, 1);
-            party->flags &= ~PARTY_FLAG_IS_BEING_USED;
-            break;
-    }
-    partyChkGnd(party);
-}
-#else
 /**
- * Retail Tattle: if Goombella is far from Mario or a wall separates them,
- * she first slides over 4 frames to a spot beside him,
- * then starts kurio_msg_evt with the NPC Mario can talk to and waits for the script to finish
- * before returning to normal follow mode.
+ * The early demos start the message right where Goombella stands; JP and later first walk her next to Mario
+ * when she is more than 125 units away or a wall lies between them.
  */
+#if VERSION >= VERSION_JP
 void kuribo_use(PartyEntry* party) {
-    MarioWork* mario = party->playerPtr;
+    MarioWork* player = party->playerPtr;
     HitEntry* wall;
     Vec pos;
-    EventEntry* evt;
 
-    if (party->trigFlags & PARTY_TRIG_FLAG_CHG_RUN_MODE) {
-        party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
-        if (PSVECDistance(&mario->position, &party->position) > 125.0f) {
+    if (party->trigFlags & PARTY_TRIG_CHG_RUN_MODE) {
+        party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
+        if (PSVECDistance(&player->position, &party->position) > 125.0f) {
             party->useMotionId = 0;
         } else {
             pos = party->position;
             wall = partySearchFrontWall(party, &pos, 150.0f,
-                                        angleABf(party->position.x, party->position.z, mario->position.x, mario->position.z));
+                                        angleABf(party->position.x, party->position.z, player->position.x, player->position.z));
             if (wall) {
-                if (party->frontWallDist < distABf(party->position.x, party->position.z, mario->position.x, mario->position.z)) {
+                if (party->frontWallDist < distABf(party->position.x, party->position.z, player->position.x, player->position.z)) {
                     party->useMotionId = 0;
                 } else {
                     wall = NULL;
                 }
             }
             if (!wall) {
-                partyChgPoseId(party, 1);
+                partyChgPoseId(party, PARTY_POSE_STAND);
                 party->moveSpeed = 0.0f;
                 party->moveFrames = 100;
                 party->useMotionId = 10;
@@ -324,8 +304,8 @@ void kuribo_use(PartyEntry* party) {
             party->moveFrames = 4;
             party->moveDir = angleABf(party->position.x, party->position.z, party->moveTarget.x, party->moveTarget.z);
             party->targetDir = party->moveDir;
-            party->displayDirection = mario->displayDirection;
-            party->displayDirectionTarget = mario->displayDirection;
+            party->displayDirection = player->displayDirection;
+            party->displayDirectionTarget = player->displayDirection;
             party->moveSpeed = distABf(party->position.x, party->position.z, party->moveTarget.x, party->moveTarget.z) / party->moveFrames;
             party->velY = 0.0f;
             party->useMotionId = 1;
@@ -341,31 +321,77 @@ void kuribo_use(PartyEntry* party) {
             if (--party->moveFrames > 0) {
                 return;
             }
-            partyChgPoseId(party, 1);
+            partyChgPoseId(party, PARTY_POSE_STAND);
             party->moveSpeed = 0.0f;
             party->moveFrames = 100;
             party->useMotionId = 10;
             break;
         case 10:
-            evt = evtEntryType(kurio_msg_evt, 0, 0, 26);
-            marioStSystemLevel(1);
-            evt->lwData[0] = (EvtWord)fbatNpcTalkCheck();
+            kurio_msg();
             party->useMotionId = 15;
             break;
         case 20:
             party->moveFrames = 5;
             party->useMotionId = 21;
+
+            // fall through
         case 21:
             if (--party->moveFrames > 0) {
                 break;
             }
-            partyChgRunMode(party, 2);
-            partyChgMoveMode(party, 0);
-            partyChgMot(party, 0);
-            partyChgPoseId(party, 1);
+            partyChgRunMode(party, PARTY_RUN_MOVE);
+            partyChgMoveMode(party, PARTY_MOVE_MODE_STAY);
+            partyChgMot(party, PARTY_MOTION_STAY);
+            partyChgPoseId(party, PARTY_POSE_STAND);
             party->flags &= ~PARTY_FLAG_IS_BEING_USED;
-            party->flags &= ~PARTY_FLAG_DISABLE_FLOORS;
-            party->flags &= ~PARTY_FLAG_FORCE_FALL;
+            kuribo_use_post(party);
+            break;
+    }
+    partyChkGnd(party);
+}
+#endif
+
+/**
+ * Party table post_func, run when Goombella leaves use mode (partyUsePost or a run-mode change out of mode 3):
+ * JP and later clear the floor-collision overrides kuribo_use may have set; empty in the early demos.
+ */
+#if VERSION <= VERSION_DEMO_JP
+void kuribo_use_post(PartyEntry* party) {
+}
+#endif
+
+/**
+ * The early demos start the message right where Goombella stands; JP and later first walk her next to Mario
+ * when she is more than 125 units away or a wall lies between them.
+ */
+#if VERSION <= VERSION_DEMO_JP
+void kuribo_use(PartyEntry* party) {
+    if (party->trigFlags & PARTY_TRIG_CHG_RUN_MODE) {
+        party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
+        partyChgMoveMode(party, 0);
+        partyChgMot(party, PARTY_MOTION_STAY);
+        partyChgPoseId(party, PARTY_POSE_STAND);
+        party->moveFrames = 100;
+        party->useMotionId = 0;
+    }
+
+    switch (party->useMotionId) {
+        case 0:
+            kurio_msg();
+            party->useMotionId = 1;
+            break;
+        case 10:
+            party->moveFrames = 5;
+            party->useMotionId = 11;
+        case 11:
+            if (--party->moveFrames > 0) {
+                break;
+            }
+            partyChgRunMode(party, PARTY_RUN_MOVE);
+            partyChgMoveMode(party, 0);
+            partyChgMot(party, PARTY_MOTION_STAY);
+            partyChgPoseId(party, PARTY_POSE_STAND);
+            party->flags &= ~PARTY_FLAG_IS_BEING_USED;
             break;
     }
     partyChkGnd(party);
@@ -377,11 +403,11 @@ void kuribo_use(PartyEntry* party) {
  * plays the standard leave-the-party motion and switches to run mode 14 once it ends.
  */
 void kuribo_bye(PartyEntry* party) {
-    if (party->trigFlags & PARTY_TRIG_FLAG_CHG_RUN_MODE) {
-        party->trigFlags &= ~PARTY_TRIG_FLAG_CHG_RUN_MODE;
+    if (party->trigFlags & PARTY_TRIG_CHG_RUN_MODE) {
+        party->trigFlags &= ~PARTY_TRIG_CHG_RUN_MODE;
         partyGoodbyeInit(party);
     }
     if (partyGoodbyeMain(party)) {
-        partyChgRunMode(party, 14);
+        partyChgRunMode(party, PARTY_RUN_DELETE);
     }
 }

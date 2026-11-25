@@ -1,4 +1,5 @@
 // Declares the battle stage object data structure and functions.
+
 #pragma once
 
 #include <dolphin/mtx.h>
@@ -6,15 +7,33 @@
 #include "battle/battle_unit.h"
 #include "battle/battle_database_common.h"
 
+// BattleStageObjectData.layer: which part of the stage the object belongs to
+typedef enum BattleStageLayer {
+    STAGE_LAYER_A1 = 0,         // map group A1
+    STAGE_LAYER_A2 = 1,         // map group A2
+    STAGE_LAYER_B = 2,          // map group B (turns with the background rotation)
+    STAGE_LAYER_C = 3,          // map group C
+    STAGE_LAYER_NOZZLE = 4,     // the three nozzles (_object_nozzle_data)
+    STAGE_LAYER_WALL = 5,       // the escape wall (_object_wall_data)
+    STAGE_LAYER_IRON_FRAME = 6, // the iron frame (if_body / if_wire)
+    STAGE_LAYER_SPOTLIGHT = 7,  // the spotlights
+} BattleStageLayer;
+
 typedef struct BattleStageObjectData {
     char* name;                 // 0x0
     u16 spawnSpecialUnitType;   // 0x4
-    u16 layer;                  // 0x6
+    u16 layer;                  // 0x6, BattleStageLayer
     Vec position;               // 0x8
     u8 numFramesToStartFalling; // 0x14
     u8 numFramesToFall;         // 0x15
-    u8 pad_16[2];               // 0x16, trailing padding
+    u8 pad_16[2];               // 0x16
 } BattleStageObjectData;
+
+// BattleStageObject.flags
+typedef enum BattleStageObjectFlags {
+    STAGE_OBJECT_FLAG_HIDDEN = (1 << 0), // 0x1, map group hidden with the object (_mobj_destroy, battle_seq_end)
+    STAGE_OBJECT_FLAG_UPDATE = (1 << 1), // 0x2, BattleStageObjectMain rebuilds the transform once
+} BattleStageObjectFlags;
 
 typedef struct BattleStageObject {
     s32 id;                      // 0x0
@@ -27,8 +46,8 @@ typedef struct BattleStageObject {
     Vec prevRotation;            // 0x4C
     Vec prevPositionOffset2;     // 0x58
     BattleStageObjectData* data; // 0x64
-    u32 flags;                   // 0x68
-    u32 battleUnitIdx;           // 0x6C
+    u32 flags;                   // 0x68, BattleStageObjectFlags
+    s32 battleUnitIdx;           // 0x6C
     u8 numFramesToStartFalling;  // 0x70
     u8 numFramesFalling;         // 0x71
     u8 reserved_72;              // 0x72, only set to 0
@@ -43,6 +62,38 @@ typedef union BattleWeaponData {
     u32 raw[0xC0 / 4];
 } BattleWeaponData;
 
+// Falling stage objects (BattleStageFallObjectData.rates/weapons index; FallObjectEntry.type). Names from the user's
+// stage prop notes; the code agrees: basin and bucket play the TUB sounds, water does no damage, the Bowser statue
+// picks a random side, the audience never throws the Bowser statue or the meteor.
+typedef enum StageFallObjectType {
+    STAGE_FALL_BASIN = 0,
+    STAGE_FALL_BUCKET = 1,
+    STAGE_FALL_SMALL_BUGS = 2,
+    STAGE_FALL_LARGE_BUG = 3,
+    STAGE_FALL_FORK = 4,
+    STAGE_FALL_WATER = 5,
+    STAGE_FALL_BOWSER_STATUE = 6,
+    STAGE_FALL_METEOR = 7,
+    STAGE_FALL_STAGE_LIGHT = 8,
+} StageFallObjectType;
+
+// BattleStageObjectWork.nozzleDir/nozzleNextDir; the index picked from BattleStageNozzleData.dirRate.
+// Yaw while turning in the turn event: 1 +45, 2 0, 3 -45; 0 is the raised nozzle (no jet).
+typedef enum BattleNozzleDir {
+    NOZZLE_DIR_RAISED = 0,
+    NOZZLE_DIR_PLUS_45 = 1,
+    NOZZLE_DIR_CENTER = 2,
+    NOZZLE_DIR_MINUS_45 = 3,
+} BattleNozzleDir;
+
+// Stage nozzle jets (BattleStageNozzleData.typeRate/weapons index; nozzleType)
+typedef enum StageNozzleType {
+    STAGE_NOZZLE_FOG = 0,
+    STAGE_NOZZLE_ICE = 1,       // ELEMENT_ICE, no damage function
+    STAGE_NOZZLE_EXPLOSION = 2, // ELEMENT_EXPLOSION
+    STAGE_NOZZLE_FIRE = 3,
+} StageNozzleType;
+
 typedef struct BattleStageNozzleData {
     u8 dirRate[3][4];            // 0x0, weights for each nozzle's next direction
     u8 typeRate[4];              // 0xC
@@ -56,29 +107,29 @@ typedef struct BattleStageFallObjectData {
 } BattleStageFallObjectData;
 
 // BattleStageObjectWork.flags
-typedef enum BattleStageObjectFlags {
-    STAGE_OBJ_FLAG_BG_A1_GONE = 0x2,          // background layer A1 destroyed or not destroyable
-    STAGE_OBJ_FLAG_BG_A2_GONE = 0x4,          // the same for layer A2
-    STAGE_OBJ_FLAG_BG_B_GONE = 0x8,           // the same for layer B
-    STAGE_OBJ_FLAG_WALL_CLOSING = 0x10,       // the closing-wall event has started (BattleStage_WallCloseCheck)
-    STAGE_OBJ_FLAG_IRON_FRAME_GONE = 0x20,    // no iron frame overhead (none on the stage, or fallen); objects may fall
-    STAGE_OBJ_FLAG_NO_IRON_FRAME_FALL = 0x40, // blocks the iron frame fall; never set
-} BattleStageObjectFlags;
+typedef enum BattleStageFlags {
+    STAGE_FLAG_NO_BG_A1_DESTROY = (1 << 1),       // 0x2, background layer A1 absent, destroyed or not destroyable
+    STAGE_FLAG_NO_BG_A2_DESTROY = (1 << 2),       // 0x4, the same for layer A2
+    STAGE_FLAG_NO_BG_B_DESTROY = (1 << 3),        // 0x8, the same for layer B
+    STAGE_FLAG_WALL_CLOSED = (1 << 4),            // 0x10, the closing-wall event has started
+    STAGE_FLAG_NO_IRON_FRAME = (1 << 5),          // 0x20, no iron frame (none on the stage, or it has fallen)
+    STAGE_FLAG_KEEP_IRON_FRAME_UNUSED = (1 << 6), // 0x40, the iron frame never falls; nothing sets it
+} BattleStageFlags;
 
 // BattleWork.stageObjectWork (0x180C0)
 typedef struct BattleStageObjectWork {
-    u8 reserved_00[0x4 - 0x0];                 // 0x0, never accessed
+    u8 pad_00[0x4 - 0x0];                      // 0x0, never accessed
     Vec bgRotation;                            // 0x4
     Vec bgRotationPrev;                        // 0x10
-    u8 flags;                                  // 0x1C, BattleStageObjectFlags
+    u8 flags;                                  // 0x1C, BattleStageFlags
     s32 bgDestroyEvtId;                        // 0x20
     s32 bgEvtId[4];                            // 0x24
     BattleStageNozzleData* nozzleData;         // 0x34
     BattleStageFallObjectData* fallObjectData; // 0x38
     BattleWeapon* nozzleWeapons[2];            // 0x3C
     BattleWeapon nozzleWeaponWork[2];          // 0x44
-    u8 nozzleDir[3];                           // 0x1C4
-    u8 nozzleNextDir[3];                       // 0x1C7
+    u8 nozzleDir[3];                           // 0x1C4, BattleNozzleDir
+    u8 nozzleNextDir[3];                       // 0x1C7, BattleNozzleDir
     s8 nozzleType;                             // 0x1CA
     s32 nozzleTurnEvtId[3];                    // 0x1CC
     s32 nozzleWorkEvtId;                       // 0x1D8
@@ -96,31 +147,13 @@ void BattleStageObjectMain(void);
 
 void BattleStageObjectInit(void);
 
-extern EvtWord _close_wall_event[];
-extern BattleUnitSetup _entry_switch_data;
-extern BattleUnitSetup _entry_tree_data;
-extern EvtWord _fall_frame_event[];
-extern EvtWord _nozzle_turn_event[];
-extern EvtWord _nozzle_work_event_0[];
-extern EvtWord _nozzle_work_event_1[];
-extern EvtWord _nozzle_work_event_core[];
-extern EvtWord _object_fall_event[];
-extern BattleStageObjectData _object_nozzle_data[];
-extern BattleStageObjectData _object_spot_light_data[];
-extern EvtWord _object_turn_event_A1[];
-extern EvtWord _object_turn_event_A2[];
-extern EvtWord _object_turn_event_B[];
-extern EvtWord _object_turn_event_core[];
-extern BattleStageObjectData _object_wall_data;
-
 BOOL BattleFogForceStop(void);
-
 void BattleStage_DestroyA1(void);
 void BattleStage_DestroyA2(void);
 void BattleStage_DestroyB(void);
-void BattleStage_NozzleDirChangeCheck(void);
-void BattleStage_WallCloseCheck(void);
 void BattleStage_IronFrameFallCheck(void);
+void BattleStage_NozzleDirChangeCheck(void);
 void BattleStage_NozzleWorkCheck(s32 type);
+void BattleStage_WallCloseCheck(void);
 BOOL BattleFogEndCheck(void);
 s32 BattleStage_ObjectFallCheck(void);

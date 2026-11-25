@@ -1,48 +1,46 @@
-// msgdrv.c: the message driver (MsgChar, MsgGlyphCode): message lookup by tag, markup parsing and speech windows.
 #pragma once
 
+#include "version.h"
 #include <dolphin/os.h>
 #include "driver/windowdrv.h"
 #include "memory.h"
-#include "version.h"
 
-// MsgChar.value of a letter entry: the text effects of the tags around it
-enum MsgCharFlags {
-    MSG_CHAR_DYNAMIC = 0x1,    // <dynamic>: the letter grows into place (rot holds its current scale)
-    MSG_CHAR_SHAKE = 0x2,      // <shake>
-    MSG_CHAR_WAVE = 0x4,       // <wave>
-    MSG_CHAR_OPTION_0 = 0x100, // <select> lists: the letter belongs to option n (MSG_CHAR_OPTION_0 << n)
-    MSG_CHAR_OPTIONS = 0xFF00,
-    MSG_CHAR_SCALE_X = 0x10000, // US <scaleX>: the letter is stretched on x only
-    MSG_CHAR_TALK = 0x8,        // a letter other than the full-width space or 0x8151: voice SE and the talk animation
-    MSG_CHAR_DOT = 0x10,        // the middle dot (0x8145): voice SE only
-};
+typedef void (*MsgWindowCallback)(s32 event, smartEntry* storage);
 
-// MsgChar.glyph values above the font's glyphs: control entries made from the message tags
-enum MsgGlyphCode {
-    MSG_GLYPH_PAPER_END = 0xFFF2, // </paper>
-    MSG_GLYPH_PAPER = 0xFFF3,     // <paper>: the speaker's paper pose (npc)
-    MSG_GLYPH_ANIM = 0xFFF4,      // <anim>
-    MSG_GLYPH_DKEY = 0xFFF5,      // <dkey> and </dkey>
-    MSG_GLYPH_NOISE = 0xFFF6,     // <noise> and </noise>
-    MSG_GLYPH_COLOR = 0xFFF7,     // <col>, </col>, <system>, <tec> (value holds the colour)
-    MSG_GLYPH_ICON = 0xFFF8,      // <icon>
-    MSG_GLYPH_VOL = 0xFFF9,       // <vol>
-    MSG_GLYPH_SE = 0xFFFA,        // <se>
-    MSG_GLYPH_NEWLINE = 0xFFFB,   // a line break
-    MSG_GLYPH_ONCE_STOP = 0xFFFC, // <o>, <once_stop>
-    MSG_GLYPH_SCROLL = 0xFFFD,    // <p>, <scrl_auto>: scroll by y
-    MSG_GLYPH_KEY = 0xFFFE,       // <k>, <key>: wait for a button (x holds the page)
-    MSG_GLYPH_END = 0xFFFF,       // the end of the message
+// MsgChar.value of a text character (msgAnalize, read by msgDisp)
+typedef enum MsgCharFlags {
+    MSG_CHAR_DYNAMIC = (1 << 0),    // 0x1, <dynamic>: drawn rotated by rot
+    MSG_CHAR_SHAKE = (1 << 1),      // 0x2, <shake>
+    MSG_CHAR_WAVE = (1 << 2),       // 0x4, <wave>
+    MSG_CHAR_TALK = (1 << 3),       // 0x8, plays the voice and moves the speaker's mouth
+    MSG_CHAR_VOICE = (1 << 4),      // 0x10, plays the voice only (set for the '・' character)
+    MSG_CHAR_SEL_ROW_MASK = 0xFF00, // <select> windows: the row of the character (MSG_CHAR_SEL_ROW)
+    MSG_CHAR_SCALE_X = (1 << 16),   // 0x10000, <scaleX> (US and later): stretched on x only
+} MsgCharFlags;
+#define MSG_CHAR_SEL_ROW(n) (0x100 << (n))
+
+// WindowEntry.state of a message window (msgWindow_Main, msgWindow_Clear_Main).
+enum {
+    MSG_WIN_STATE_PRINT = 1,
+    MSG_WIN_STATE_WAIT_TAG = 2, // stopped at <o>
+    MSG_WIN_STATE_KEY_WAIT = 3,
+    MSG_WIN_STATE_SELECT_DONE = 4,
+    MSG_WIN_STATE_OPEN = 5,
+    MSG_WIN_STATE_FADE_IN = 6,
+    MSG_WIN_STATE_CLOSE = 7,
+    MSG_WIN_STATE_FADE_OUT = 8,
+    MSG_WIN_STATE_REVIEW_UP = 9, // Z review: earlier pages
+    MSG_WIN_STATE_REVIEW_DOWN = 10,
+    MSG_WIN_STATE_REVIEW_KEY_WAIT = 11,
 };
 
 typedef struct MsgChar {
     union {
-        u32 value;            // 0x0, letters: MsgCharFlags
+        u32 value;            // 0x0
         GXColor color;        // 0x0, colour-change entries
         struct NpcEntry* npc; // 0x0, paper entries (NULL = the speaker)
     };
-    u16 glyph; // 0x4, a font glyph or a MsgGlyphCode
+    u16 glyph; // 0x4
     s16 x;     // 0x6 (page-break entries: page number)
     s16 y;     // 0x8 (page-scroll entries: scroll amount)
     s16 iconY; // 0xA, icon entries: extra y offset
@@ -51,71 +49,69 @@ typedef struct MsgChar {
     f32 rot;   // 0x14, animation entries: rotation; dynamic-scale entries: current scale
 } MsgChar;
 
+// MsgWinData.flags (msgdrv, evt_msg). 0x1 (set at creation, never read) has only LLCOOLT's name MSG_WIN_FLAG_OPEN
+// at the end of this file.
+typedef enum MsgWinFlags {
+    MSG_WIN_FLAG_START = (1 << 1),       // 0x2
+    MSG_WIN_FLAG_FAST = (1 << 2),        // 0x4
+    MSG_WIN_FLAG_BATTLE_UNIT = (1 << 3), // 0x8, speaker is a battle unit
+    MSG_WIN_FLAG_SMALL = (1 << 4),       // 0x10
+    MSG_WIN_FLAG_SELECT = (1 << 5),      // 0x20
+    MSG_WIN_FLAG_REVIEW = (1 << 6),      // 0x40
+    MSG_WIN_FLAG_NO_SKIP = (1 << 7),     // 0x80, <dkey>
+    MSG_WIN_FLAG_KEY_X = (1 << 8),       // 0x100, <keyxon>: X also advances
+    MSG_WIN_FLAG_NO_PAGE_LOG = (1 << 9), // 0x200
+} MsgWinFlags;
+
 typedef struct MsgWinData {
-    const char* tag;        // 0x0
-    u32 flags;              // 0x4
-    u16 curPage;            // 0x8, page being shown (page-break entries carry their page number)
-    u16 pageState;          // 0xA, 1: waiting for the key, 2: advance to the next page
-    u16 pageAdvanced;       // 0xC
-    u8 pad_0E[0x10 - 0xE];  // 0xE
-    s32 nextEntry;          // 0x10, index into entries
-    u8 pad_14[0x18 - 0x14]; // 0x14
-    OSTime openTime;        // 0x18, time base for the wave and selected-option character wobble (msgDisp); reset when the window opens or pages
-    s32 playTime;           // 0x20, playback clock (ms) compared with entries[].time
-    s32 scrollTarget;       // 0x24
-    s32 scrollPos;          // 0x28, eases toward scrollTarget
-    u8 pad_2C[0x30 - 0x2C]; // 0x2C
-    OSTime lastUpdateTime;  // 0x30, reset every msgMain; the delta advances the scroll
-    s32 charCount;          // 0x38, MsgChar entries in use
+    const char* tag;       // 0x0, message tag ("DIRECT" for direct text; evt_msg); msgWindow_ForceClose matches it
+    u32 flags;             // 0x4, MsgWinFlags
+    u16 curPage;           // 0x8, page being shown (page-break entries carry their page number)
+    u16 pageState;         // 0xA, 1: waiting for the key, 2: advance to the next page
+    u16 pageAdvanced;      // 0xC, set to 1 when the next page starts; never read
+    s32 nextEntry;         // 0x10, index into entries
+    OSTime openTime;       // 0x18, set when the window opens; drives the open anim (SPM openTime)
+    s32 playTime;          // 0x20, playback clock (ms) compared with entries[].time
+    s32 scrollTarget;      // 0x24, scroll position scrollPos eases toward (scroll entries lower it; msgPageAdd logs it)
+    s32 scrollPos;         // 0x28, eases toward scrollTarget
+    OSTime lastUpdateTime; // 0x30, reset every msgMain; the delta advances the scroll
+    s32 charCount;         // 0x38, MsgChar entries in use
 #if VERSION >= VERSION_US
-    MsgChar entries[0xA00]; // 0x3C (US: twice as many, so every field below moves by 0x7800)
+    MsgChar entries[0xA00]; // 0x3C (US and later: twice as many, so every field below moves by 0x7800)
 #else
     MsgChar entries[0x500]; // 0x3C
 #endif
-    s32 page;                         // 0x783C
-    s32 pageCount;                    // 0x7840, number of pageY entries
-    s32 pageY[(0x79FC - 0x7844) / 4]; // 0x7844
-    s32 callback;                     // 0x79FC, void (*)(s32 event, smartEntry*), see MSG_CB
+    s32 page;                         // 0x783C (US 0xF03C), pageY index shown while paging back with Z
+    s32 pageCount;                    // 0x7840 (US 0xF040), number of pageY entries
+    s32 pageY[(0x79FC - 0x7844) / 4]; // 0x7844 (US 0xF044), scroll position of each logged page (msgPageAdd, up to 110)
+    MsgWindowCallback callback;       // 0x79FC (US 0xF1FC), message event callback
     struct EventEntry* event;         // 0x7A00 (US 0xF200), event that opened the window; read by map msg callbacks
-    char speakerName[0x20];           // 0x7A04, speaker NPC name, passed to npcNameToPtr (SPM npcName)
-    s32 unitId;                       // 0x7A24
-    s32 talkSfxGroup;                 // 0x7A28, <se n> tag value (0xFFFA entry); not read in C
-    u8 talkVolume;                    // 0x7A2C, default 0x7F
-    u8 pad_7A2D[0x7A30 - 0x7A2D];     // 0x7A2D
-    s32 parseTime;                    // 0x7A30, msgAnalize state
-    s16 parseX;                       // 0x7A34
-    s16 parseY;                       // 0x7A36
-    s16 parsePage;                    // 0x7A38, msgAnalize: key-wait counter stored in 0xFFFE entries' x
-    s16 parseScroll;                  // 0x7A3A, msgAnalize: pending scroll stored in 0xFFFD entries' y
-    s32 parseSpeed;                   // 0x7A3C, text speed (default 25)
-    s8 numSel;                        // 0x7A40
-    s8 defSel;                        // 0x7A41
-    s8 cancel;                        // 0x7A42
-    s8 sel;                           // 0x7A43
-    s16 selWidth;                     // 0x7A44
-    s16 selY;                         // 0x7A46
-    f32 cursorY;                      // 0x7A48
-    WindowEntry* window;              // 0x7A4C
-    s32 talkTimer;                    // 0x7A50, frames until the talk pose is set
-    s32 talkPoseSet;                  // 0x7A54
+    char speakerName[0x20];           // 0x7A04 (US 0xF204), speaker NPC name, passed to npcNameToPtr (SPM npcName)
+    s32 unitId;                       // 0x7A24 (US 0xF224), battle unit that speaks (evt_msg; MSG_WIN_FLAG_BATTLE_UNIT windows)
+    s32 talkSfxGroup;                 // 0x7A28 (US 0xF228), <se n> tag value (0xFFFA entry); not read in C
+    u8 talkVolume;                    // 0x7A2C (US 0xF22C), default 0x7F
+    s32 parseTime;                    // 0x7A30 (US 0xF230), msgAnalize state
+    s16 parseX;                       // 0x7A34 (US 0xF234), msgAnalize: x of the next character
+    s16 parseY;                       // 0x7A36 (US 0xF236)
+    s16 parsePage;                    // 0x7A38 (US 0xF238), msgAnalize: key-wait counter stored in 0xFFFE entries' x
+    s16 parseScroll;                  // 0x7A3A (US 0xF23A), msgAnalize: pending scroll stored in 0xFFFD entries' y
+    s32 parseSpeed;                   // 0x7A3C (US 0xF23C), text speed (default 25)
+    s8 numSel;                        // 0x7A40 (US 0xF240), choices of the select window
+    s8 defSel;                        // 0x7A41 (US 0xF241), choice selected when it opens (first <select> number)
+    s8 cancel;                        // 0x7A42 (US 0xF242), B: -1 ignored, -2 closes with sel = -1, else closes with sel = cancel
+    s8 sel;                           // 0x7A43 (US 0xF243), selected choice (wraps)
+    s16 selWidth;                     // 0x7A44 (US 0xF244), select window width (<select> value; 0: widest row + 80)
+    s16 selY;                         // 0x7A46 (US 0xF246), select window y (<select> value)
+    f32 cursorY;                      // 0x7A48 (US 0xF248), y of the choice cursor; eases toward the selected row
+    WindowEntry* window;              // 0x7A4C (US 0xF24C), the window this data belongs to
+    s32 talkTimer;                    // 0x7A50 (US 0xF250), frames the talk pose lasts (15 from msgTalkPoseOn); at 0 the stay pose returns
+    s32 talkPoseSet;                  // 0x7A54 (US 0xF254), 1 while the talk pose is on (msgTalkPoseMain)
 } MsgWinData;
-
-// MsgWinData.flags
-#define MSG_WIN_FLAG_OPEN 0x1        // set when the window is created (msgWindow_Entry); no reader in C
-#define MSG_WIN_FLAG_FIRST_FRAME 0x2 // msgMain's first update: run the callback with event 0, then clear
-#define MSG_WIN_FLAG_FAST 0x4        // A or B held to speed the text up (cleared at each key wait)
-#define MSG_WIN_FLAG_BATTLE_UNIT 0x8 // the speaker is the battle unit unitId (else the NPC speakerName)
-#define MSG_WIN_FLAG_SMALL 0x10      // <small>: no speed-up; US: tighter line spacing
-#define MSG_WIN_FLAG_SELECT 0x20     // <select>: the text ends in a choice (numSel options)
-#define MSG_WIN_FLAG_PAGE_BACK 0x40  // showing an earlier page (Z pressed at a key wait)
-#define MSG_WIN_FLAG_NO_FAST 0x80    // <dkey>: speed-up disabled until <dkey 0>
-#define MSG_WIN_FLAG_KEY_X 0x100     // <keyxon>: X also advances the text
-#define MSG_WIN_FLAG_NO_PAGES 0x200  // small windows (type 1) keep no page list
 
 typedef struct MessageEntry {
     u32 length; // 0x0
 #if VERSION <= VERSION_DEMO_JP
-    smartEntry* address; // 0x4, the demo keeps the text in a smart heap block
+    smartEntry* address;
 #else
     void* address; // 0x4
 #endif
@@ -130,27 +126,36 @@ typedef struct MessageWork {
 
 void msgInit(void);
 void msgLoad(const char* filename, s32 index);
-void msgAnalize(smartEntry* smart, const char* msg);
 
-MessageWork* L_msgGetWork(void);
+MessageWork* msgGetWork(void);
 
 const char* msgSearch(const char* tag);
 BOOL _ismbblead(u32 c);
 
-const char* msgGetCommand(const char* msg, char* cmd, char* arg);
+char* msgGetCommand(char* msg, char* cmd, char* arg);
 s32 msgIconStr2ID(const char* str);
 
-extern const char R_no_messages_JP[];
-extern const char R_no_messages_US[];
-
-extern const char R_no_messages_DE[];
-extern const char R_no_messages_DU[];
-extern const char R_no_messages_ES[];
-extern const char R_no_messages_FR[];
-extern const char R_no_messages_IT[];
-
+s32 msgWindow_Entry(const char* msg, s32 callback, s16 priority);
 void msgWindow_Continue(s32 id);
 void msgWindow_Repeat(s32 id);
-void msgWindow_Add(const char* msg, s32 id);
-s32 msgWindow_Entry(const char* msg, s32 callback, u16 priority);
 void msgWindow_ForceClose(const char* name);
+void msgPageAdd(smartEntry* smart, s32 y);
+
+// Names from LLCOOLT's tree.
+enum {
+    MSG_GLYPH_PAPER_END = 65522,
+    MSG_GLYPH_PAPER = 65523,
+    MSG_GLYPH_ANIM = 65524,
+    MSG_GLYPH_DKEY = 65525,
+    MSG_GLYPH_NOISE = 65526,
+    MSG_GLYPH_COLOR = 65527,
+    MSG_GLYPH_ICON = 65528,
+    MSG_GLYPH_VOL = 65529,
+    MSG_GLYPH_SE = 65530,
+    MSG_GLYPH_NEWLINE = 65531,
+    MSG_GLYPH_ONCE_STOP = 65532,
+    MSG_GLYPH_SCROLL = 65533,
+    MSG_GLYPH_KEY = 65534,
+    MSG_GLYPH_END = 65535,
+};
+#define MSG_WIN_FLAG_OPEN 0x1

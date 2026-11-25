@@ -1,16 +1,30 @@
-// evt_yuugijou.c: the Pianta Parlor (yuugijou, amusement hall) work (PiantaParlorWork) and its minigame commands.
+// evt_yuugijou.c: the Pianta Parlor (yuugijou, amusement hall) work (PiantaParlorWork) and its minigame commands; also the
+// minigame driver work (MiniGameWork) shared by the yuu and gor copies of the driver.
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/types.h>
 #include "evt/evt_cmd.h"
-#include "version.h"
+#include "manager/evtmgr.h"
+#include "driver/camdrv.h"
 
-// PiantaParlorWork.flags bits.
-enum PiantaParlorFlags {
-    PARLOR_FLAG_COUNTER_SHOWN = 0x1, // the token counter is drawn (yuugijou_montemedal_disp_onoff)
-    PARLOR_FLAG_TOKENS_OUT = 0x2,    // the tokens are taken out of deposit (playing)
-    PARLOR_FLAG_COUNTER_HIGH = 0x4,  // the token counter is drawn higher on screen (yuugijou_set_yupflag)
-    PARLOR_FLAG_WINDOW_DONE = 0x8,   // the minigame pause window has finished (evtYuuWindowEndChk)
+// Minigame driver work (evt_yuuminigame in yuu, evt_goryuugijo in gor); data points at the per-game work (HikokiWork, SlitWork, ...)
+typedef struct MiniGameWork {
+    EventEntry* event;
+    EventEntry* subEvent;
+    u16 flags; // MINIGAME_FLAG_*
+    s32 type;
+    void (*init)(EventEntry* event, BOOL isFirstCall);
+    void (*main)(EventEntry* event, BOOL isFirstCall);
+    void (*disp)(CameraId camera, void* param);
+    void* data;
+} MiniGameWork;
+
+// MiniGameWork.flags
+enum {
+    MINIGAME_FLAG_QUIT = 1,           // set by the free command; the driver's main function stops on it
+    MINIGAME_FLAG_QUIT_DONE = 1 << 1, // the driver has stopped; the free command then frees the work
 };
 
 typedef struct PiantaParlorWork {
@@ -19,22 +33,22 @@ typedef struct PiantaParlorWork {
     s32 tokens;     // 0x08
     u32 dispTick;   // 0x0C, counter-animation tick
     u32 dispTokens; // 0x10, token count currently shown (counts toward tokens)
-    // four minigames x five ranks (+1 spare slot); defaults set in yuugijou_init
+    // minigame rows x five ranks (+1 spare slot); defaults set in yuugijou_init
 #if VERSION >= VERSION_US
-    // US keeps eight record rows (0x258 bytes in all): recordScore 0xD4, recordParam 0x194, pad_134 at 0x254
+    // US and later keep eight record rows (0x258 bytes in all): recordScore 0xD4, recordParam 0x194, pad_134 at 0x254
     s32 recordOn[8][6];    // 0x14
     s32 recordScore[8][6]; // 0xD4
     s32 recordParam[8][6]; // 0x194
 #else
-    s32 recordOn[4][6];    // 0x14, all set to 1 at init
+    s32 recordOn[4][6];    // 0x14, ranks 0-4 set to 1 at init
     s32 recordScore[4][6]; // 0x74, default record values (game 1 ascending: times)
-    s32 recordParam[4][6]; // 0xD4, per-rank value derived from recordScore (game 0: constants)
+    s32 recordParam[4][6]; // 0xD4, per-rank value derived from recordScore (game 0, and all games in the early demos: constants)
 #endif
     u32 pad_134; // 0x134, never accessed
 } PiantaParlorWork;
 
 // Record arrays are [minigame][rank]; ranks 0-4 hold the defaults set in yuugijou_init, rank 5 is unused there.
-// Element offsets (for patching / save editing):
+// Element offsets of the four-row layout (before US; US and later use the eight-row offsets above):
 //   0x014  recordOn[0][0]
 //   0x018  recordOn[0][1]
 //   0x01C  recordOn[0][2]
@@ -114,16 +128,29 @@ extern PiantaParlorWork* yuwp;
 
 void evtYuuWindow(void);
 s32 evtYuuWindowEndChk(void);
-
+void monteCountDisp(void);
 USER_FUNC(yuugijou_add_montemedal);
-USER_FUNC(yuugijou_get_montemedal);
-USER_FUNC(yuugijou_get_montemedal_keep);
 USER_FUNC(yuugijou_add_montemedal_moto);
+USER_FUNC(yuugijou_get_montemedal);
+#if VERSION <= VERSION_DEMO_JP
+USER_FUNC(yuugijou_set_montemedal);
+#endif
+USER_FUNC(yuugijou_set_montemedal_moto);
+USER_FUNC(yuugijou_get_montemedal_moto);
+USER_FUNC(yuugijou_get_montemedal_keep);
+USER_FUNC(yuugijou_get_takeoutflag);
 USER_FUNC(yuugijou_montemedal_disp_onoff);
-USER_FUNC(yuugijou_montemedal_wait);
 USER_FUNC(yuugijou_montemedal_keep);
 USER_FUNC(yuugijou_montemedal_return);
-USER_FUNC(yuugijou_get_takeoutflag);
+USER_FUNC(yuugijou_montemedal_wait);
 USER_FUNC(yuugijou_set_yupflag);
-void monteCountDisp(void);
+USER_FUNC(yuuminigame_get_window_evt);
 void evtYuuSetWindowEvt(EvtWord* evt);
+
+// Names from LLCOOLT's tree.
+enum {
+    PARLOR_FLAG_COUNTER_SHOWN = 1,
+    PARLOR_FLAG_TOKENS_OUT = 2,
+    PARLOR_FLAG_COUNTER_HIGH = 4,
+    PARLOR_FLAG_WINDOW_DONE = 8,
+};

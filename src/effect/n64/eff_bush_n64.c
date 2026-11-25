@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: bush, four leaves at random offsets that spin and fall; types 0-1.
+
 #include "eff/n64/eff_bush_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -8,6 +9,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffBushN64Work {
@@ -37,7 +39,7 @@ static effN64Vtx size12x12_tex64x64_vtx[] = {
 };
 
 static void effBushMain(EffectEntry* effect);
-static void effBushDisp(CameraId cameraId, EffectEntry* effect);
+static void effBushDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns four leaves at random offsets around (x, y, z).
@@ -67,6 +69,8 @@ EffectEntry* effBushN64Entry(s32 type, f32 x, f32 y, f32 z) {
         work->position.x = rand() % 30 - 15;
         work->position.y = 0.0f;
         work->position.z = (rand() & 0x1E) - 15;
+
+        // BUG: `& 360` masks with 0x168 instead of taking `% 360`, so only 16 start angles (0, 8, 32, 40, ... 360) occur.
         work->angleZ = rand() & 360;
         work->angleY = rand() & 360;
         work->spin = rand() % 100 / 10;
@@ -102,7 +106,7 @@ static void effBushMain(EffectEntry* effect) {
             case 1:
                 break;
             case 0:
-                if (marioGetPtr()->currMotionId == 0U) {
+                if (marioGetPtr()->currMotionId == MARIO_MOTION_STAY) {
                     return;
                 }
                 break;
@@ -144,11 +148,12 @@ static void effBushMain(EffectEntry* effect) {
         work->position.x += work->vx;
         work->position.y += work->vy;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBushDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effBushDisp, effect);
 }
 
 /** Draws each leaf as a two-sided quad tilted around Z and Y, with the leaf texture. */
-static void effBushDisp(CameraId cameraId, EffectEntry* effect) {
+static void effBushDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffBushN64Work* work;
     s32 i;
@@ -157,7 +162,6 @@ static void effBushDisp(CameraId cameraId, EffectEntry* effect) {
     Mtx rot;
     Mtx viewMtx;
     GXTexObj texObj;
-    GXColor color;
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;

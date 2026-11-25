@@ -1,6 +1,7 @@
 // Wheat smoke effects (mugi: wheat) using the EFF_Mugi model, or EFF_Hana on the "win" map.
 // Entries: effMugiKemuriEntry and effMugiKemuri2Entry.
-#include "eff/eff_mugi.h"
+
+#include "version.h"
 #include "driver/dispdrv.h"
 #include "driver/camdrv.h"
 #include "driver/mapdrv.h"
@@ -10,12 +11,11 @@
 #include <dolphin/mtx.h>
 #include <string.h>
 #include "libc_decls.h"
-
+#include "eff/eff_magic1_n64.h"
 #include "driver/animdrv.h"
 #include "driver/effdrv.h"
 #include "mario/mariost.h"
 #include "mario/mario.h"
-#include "version.h"
 
 typedef struct effMugiKemuriData {
     s32 flag;        // 0x0
@@ -24,9 +24,9 @@ typedef struct effMugiKemuriData {
     Vec rot;         // 0x14
     Vec scale;       // 0x20
     f32 speed;       // 0x2C
-    f32 driftScale;  // 0x30, scales the sideways drift by vy
-    f32 rising;      // 0x34, nonzero until vy turns negative
-    f32 reserved_38; // 0x38, only cleared at entry
+    f32 hSpeedScale; // 0x30, horizontal step per frame = direction * vertical speed * this
+    f32 rising;      // 0x34, 1.0 until the vertical speed turns negative
+    f32 reserved_38; // 0x38, only set to 0
     f32 vy;          // 0x3C
     f32 ay;          // 0x40
     f32 jy;          // 0x44
@@ -35,22 +35,17 @@ typedef struct effMugiKemuriData {
     f32 dirZ;        // 0x50
     s32 timer;       // 0x54
     s32 alpha;       // 0x58
-    f32 flip;        // 0x5C, random 0 or 1 at entry; never read
+    f32 flip;        // 0x5C
     s32 poseId;      // 0x60
 } effMugiKemuriData;
 
 static void effMugiKemuriMain(EffectEntry* effect);
 static void effMugiKemuriDisp(CameraId camId, void* param);
 
-/** Returns the rotation angle in radians (2 pi times the revised yaw fraction) used by the Kemuri effects. */
-inline f32 inline_fn(effMugiKemuriData* data) {
-    return 6.2831855f * reviseAngle(data->rot.y);
-}
-
 #if VERSION <= VERSION_DEMO_JP
 /**
- * The demo has one more entry function here.
- * Nothing calls it, so the linker drops it, but its type string stays at the end of the unit's .rodata.
+ * FAKE: stand-in that nothing calls (the linker strips it); it only keeps the "Mugi" type string at the end of the
+ * unit's .rodata. The JP demo map's stripped owners are effFlyMugi, effMugiMain and effMugiDisp (bodies unknown).
  */
 EffectEntry* effMugiEntry(void) {
     EffectEntry* effect = effEntry();
@@ -59,7 +54,10 @@ EffectEntry* effMugiEntry(void) {
 }
 #endif
 
-/** Spawns the wheat/flower smoke puffs behind Mario at (x, y, z) heading `angle`; called from mario_kemuri.c. */
+/**
+ * Spawns five wheat/flower puffs at (x, y, z) that spread out 72 degrees apart starting from `angle`;
+ * called from mario_kemuri.c.
+ */
 EffectEntry* effMugiKemuriEntry(f32 x, f32 y, f32 z, f32 angle) {
     EffectEntry* effect;
     effMugiKemuriData* data;
@@ -73,10 +71,10 @@ EffectEntry* effMugiKemuriEntry(f32 x, f32 y, f32 z, f32 angle) {
     effect->userdata = data;
     memset(data, 0, sizeof(effMugiKemuriData) * 5);
     effect->callback = effMugiKemuriMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     for (i = 0; i < 5; i++, data++) {
         data->flag = 1;
-        data->driftScale = 0.29999998f;
+        data->hSpeedScale = 0.29999998f;
         data->rising = 0.0f;
         data->reserved_38 = 0.0f;
         data->pos.x = x;
@@ -95,7 +93,10 @@ EffectEntry* effMugiKemuriEntry(f32 x, f32 y, f32 z, f32 angle) {
         data->jy = 0.0f;
         data->ky = 0.0f;
         data->speed = -3.9f;
-        rad = inline_fn(data) / 360.0f;
+        {
+            f32 scaledAngle = 6.2831855f * reviseAngle(data->rot.y);
+            rad = scaledAngle / 360.0f;
+        }
         data->dirX = (f32)sin(rad);
         data->dirZ = (f32)cos(rad);
         data->poseId = -1;
@@ -109,11 +110,15 @@ static void effMugiKemuri2Disp(CameraId camId, void* param);
 /** Spawns the second smoke form at (x, y, z) with `angle` and a left/right `dir`; called from mario_kemuri.c. */
 EffectEntry* effMugiKemuri2Entry(s32 type, f32 x, f32 y, f32 z, f32 angle, f32 dir) {
     EffectEntry* effect;
+    f32 rad;
     effMugiKemuriData* data;
     s32 i;
-    Vec unused = {0.0f, 0.0f, 0.0f};
 
-    __fabs(x * 0.005);
+    // Never read; unused in the original too: its stack slot and initializer template are in the retail code
+    Vec unused = {0.0f, 0.0f, 0.0f};
+    // Never read; unused in the original too: only its 0.005 constant is in the retail code
+    f64 scaledX = __fabs(x * 0.005);
+
     effect = effEntry();
 
     effect->type = "MugiKemuri2";
@@ -122,7 +127,7 @@ EffectEntry* effMugiKemuri2Entry(s32 type, f32 x, f32 y, f32 z, f32 angle, f32 d
     effect->userdata = data;
     memset(data, 0, sizeof(effMugiKemuriData) * 5);
     effect->callback = effMugiKemuri2Main;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     for (i = 0; i < 5; i++, data++) {
         data->flag = 1;
         data->type = type;
@@ -135,7 +140,7 @@ EffectEntry* effMugiKemuri2Entry(s32 type, f32 x, f32 y, f32 z, f32 angle, f32 d
         data->scale.z = 0.7f;
         data->alpha = 0xFF;
         data->rising = 1.0f;
-        data->driftScale = 5.4f;
+        data->hSpeedScale = 5.4f;
         data->speed = dir ? -10 : 10;
         data->vy = 0.5f;
         data->ay = -0.07f;
@@ -146,19 +151,36 @@ EffectEntry* effMugiKemuri2Entry(s32 type, f32 x, f32 y, f32 z, f32 angle, f32 d
         data->rot.x = 0.0f;
         data->rot.z = 0.0f;
         data->flip = ((rand() % 100) >> 4) & 1;
-        {
-            f32 rad = (6.2831855f * reviseAngle(angle + (dir ? -90 : 90))) / 360.0f;
-            data->dirX = (f32)sin(rad);
-            data->dirZ = (f32)cos(rad);
-        }
+        rad = (6.2831855f * reviseAngle(angle + (dir ? -90 : 90))) / 360.0f;
+        data->dirX = (f32)sin(rad);
+        data->dirZ = (f32)cos(rad);
         data->poseId = -1;
     }
     return effect;
 }
 
+/** One frame of a puff of the first form: slows down, drifts along its direction, rises and tilts back. */
+// Original name and size (0xb8) from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_mugi_jump(effMugiKemuriData* data) {
+    data->speed *= 0.85f;
+    data->pos.x += data->speed * data->dirX;
+    data->pos.z += data->speed * data->dirZ;
+    data->jy += data->ky;
+    data->ay += data->jy;
+    data->vy += data->ay;
+    data->pos.y += data->vy;
+    if (data->vy < 0.0f) {
+        data->jy = 0.004f;
+    }
+    data->rot.x -= 1.0f;
+    if (data->rot.x < -100.0f) {
+        data->rot.x = -100.0f;
+    }
+}
+
 /**
- * Per frame: loads the EFF_Mugi (EFF_Hana on win) pose for each puff, moves and fades them,
- * deletes the effect at the end.
+ * Per frame: loads the EFF_Mugi (EFF_Hana on win) pose for each puff, moves them (no fade: alpha stays 255),
+ * and deletes the effect when their 60-frame timers have run out.
  */
 static void effMugiKemuriMain(EffectEntry* effect) {
     s32 i;
@@ -176,8 +198,8 @@ static void effMugiKemuriMain(EffectEntry* effect) {
     pos.z = data->pos.z;
     pos2 = pos;
     group = gp->inBattle != 0;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         p = effect->userdata;
         for (i = 0; i < effect->count; i++, p++) {
             if (p->poseId != -1) {
@@ -195,7 +217,7 @@ static void effMugiKemuriMain(EffectEntry* effect) {
                 return;
             }
             p->poseId = animPoseEntry(name, group);
-            animPoseSetAnim(p->poseId, "Z_1", 1);
+            animPoseSetAnim(p->poseId, "Z_1", TRUE);
         }
     }
     data = effect->userdata;
@@ -206,20 +228,7 @@ static void effMugiKemuriMain(EffectEntry* effect) {
                 data->flag = 0;
             } else {
                 alive = 1;
-                data->speed *= 0.85f;
-                data->pos.x += data->speed * data->dirX;
-                data->pos.z += data->speed * data->dirZ;
-                data->jy += data->ky;
-                data->ay += data->jy;
-                data->vy += data->ay;
-                data->pos.y += data->vy;
-                if (data->vy < 0.0f) {
-                    data->jy = 0.004f;
-                }
-                data->rot.x -= 1.0f;
-                if (data->rot.x < -100.0f) {
-                    data->rot.x = -100.0f;
-                }
+                kemuri_mugi_jump(data);
             }
         }
     }
@@ -234,10 +243,36 @@ static void effMugiKemuriMain(EffectEntry* effect) {
         return;
     }
 
-    dispEntry(CAMERA_3D, dispCalcZ(&pos2), 2, effMugiKemuriDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_XLU, effMugiKemuriDisp, effect);
 }
 
-/** Per frame: same as effMugiKemuriMain for the second form, with sideways drift scaled by the vertical speed. */
+/**
+ * One frame of a puff of the second form: rises with a spin, drifts against its direction by the vertical speed and
+ * fades; a rising type 0 puff waits (its timer held) while Mario stands still.
+ */
+// Original name and size (0x100) from the JP demo map (UNUSED there: every call is inlined).
+static void kemuri_mugi_dash(effMugiKemuriData* data) {
+    MarioWork* mario = marioGetPtr();
+    if (data->type == 0 && data->rising && mario->currMotionId == MARIO_MOTION_STAY) {
+        data->timer++;
+        return;
+    }
+    data->jy += data->ky;
+    data->ay += data->jy;
+    data->vy += data->ay;
+    data->rot.z += data->vy * data->speed;
+    data->pos.x -= data->dirX * (data->vy * data->hSpeedScale);
+    data->pos.z -= data->dirZ * (data->vy * data->hSpeedScale);
+    data->alpha -= 12;
+    if (data->vy < 0.0f) {
+        data->rising = 0.0f;
+    }
+}
+
+/**
+ * Per frame: like effMugiKemuriMain for the second form, with sideways drift scaled by the vertical speed, a spin
+ * and a fade; type 0 puffs wait while rising and Mario stands still. Deletes the effect once all have faded.
+ */
 static void effMugiKemuri2Main(EffectEntry* effect) {
     s32 i;
     effMugiKemuriData* data;
@@ -246,7 +281,6 @@ static void effMugiKemuri2Main(EffectEntry* effect) {
     s32 group;
     s32 alive2;
     const char* name;
-    MarioWork* mario;
     Vec pos2;
     Vec pos = {0.0f, 0.0f, 0.0f};
 
@@ -256,8 +290,8 @@ static void effMugiKemuri2Main(EffectEntry* effect) {
     pos.z = data->pos.z;
     pos2 = pos;
     group = gp->inBattle != 0;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         p = effect->userdata;
         for (i = 0; i < effect->count; i++, p++) {
             if (p->poseId != -1) {
@@ -275,7 +309,7 @@ static void effMugiKemuri2Main(EffectEntry* effect) {
                 return;
             }
             p->poseId = animPoseEntry(name, group);
-            animPoseSetAnim(p->poseId, "Z_1", 1);
+            animPoseSetAnim(p->poseId, "Z_1", TRUE);
         }
     }
     data = effect->userdata;
@@ -286,21 +320,7 @@ static void effMugiKemuri2Main(EffectEntry* effect) {
                 data->flag = 0;
             } else {
                 alive = 1;
-                mario = marioGetPtr();
-                if (data->type == 0 && data->rising && mario->currMotionId == 0) {
-                    data->timer++;
-                    continue;
-                }
-                data->jy += data->ky;
-                data->ay += data->jy;
-                data->vy += data->ay;
-                data->rot.z += data->vy * data->speed;
-                data->pos.x -= data->dirX * (data->vy * data->driftScale);
-                data->pos.z -= data->dirZ * (data->vy * data->driftScale);
-                data->alpha -= 12;
-                if (data->vy < 0.0f) {
-                    data->rising = 0.0f;
-                }
+                kemuri_mugi_dash(data);
             }
         }
     }
@@ -327,7 +347,7 @@ static void effMugiKemuri2Main(EffectEntry* effect) {
         }
     }
 
-    dispEntry(CAMERA_3D, dispCalcZ(&pos2), 2, effMugiKemuri2Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_XLU, effMugiKemuri2Disp, effect);
 }
 
 /** Draws each puff's animation pose at its position, rotation and scale. */
@@ -350,7 +370,7 @@ static void effMugiKemuriDisp(CameraId camId, void* param) {
             PSMTXConcat(rz, scale, scale);
             PSMTXConcat(trans, scale, trans);
             if (data->poseId != -1) {
-                animPoseSetMaterialFlagOn(data->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                animPoseSetMaterialFlagOn(data->poseId, MAP_OBJ_FLAG_COLOR);
                 animPoseSetMaterialEvtColor(data->poseId, (GXColor){0xFF, 0xFF, 0xFF, (u8)data->alpha});
                 animPoseMain(data->poseId);
                 animPoseDrawMtx(data->poseId, trans, 1, 0.0f, 15.0f);
@@ -381,7 +401,7 @@ static void effMugiKemuri2Disp(CameraId camId, void* param) {
             PSMTXConcat(rz, scale, scale);
             PSMTXConcat(trans, scale, trans);
             if (data->poseId != -1) {
-                animPoseSetMaterialFlagOn(data->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                animPoseSetMaterialFlagOn(data->poseId, MAP_OBJ_FLAG_COLOR);
                 animPoseSetMaterialEvtColor(data->poseId, (GXColor){0xFF, 0xFF, 0xFF, (u8)data->alpha});
                 animPoseMain(data->poseId);
                 animPoseDrawMtx(data->poseId, trans, 1, 0.0f, 15.0f);

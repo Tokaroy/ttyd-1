@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: stamp: seven sprites spread out from a point over 30 frames, tinted by type.
+
 #include "eff/n64/eff_stamp_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -6,9 +7,10 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
-/** Tapered quad for each stamp piece, clear at its base by the centre and solid at its outer end. */
+/** Tapered quad for each stamp piece; its vertex alpha (0 at the base by the centre, 255 at the outer end) blends the two tint colours. */
 static effN64Vtx size16x16_tex64x32_vtx[] = {
     {-8, 0, 0, 0, 0, 0, 0, 0, 0},
     {8, 0, 0, 2048, 0, 0, 0, 0, 0},
@@ -17,16 +19,16 @@ static effN64Vtx size16x16_tex64x32_vtx[] = {
 };
 
 static void effStampMain(EffectEntry* effect);
-static void effStampDisp(CameraId cameraId, EffectEntry* effect);
+static void effStampDisp(CameraId cameraId, void* param);
 
-/** Spawns the stamp burst at (x, y, z); type 0-2 picks the tint. Used by the battle damage code (battle_damage.c). */
+/** Spawns the stamp burst at (x, y, z); type 0-2 picks the tint. Used by battle_damage.c, sac_genki.c, sac_muki.c, eff_kiss.c and evt_eff. */
 EffectEntry* effStampN64Entry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffStampN64Work* work;
     s32 i;
     f32 rad;
     f32 angle;
-    f32 one = 1.0f;
+    f32 radius = 1.0f;
 
     effect = effEntry();
     effect->type = "StampN64";
@@ -71,15 +73,15 @@ EffectEntry* effStampN64Entry(s32 type, f32 x, f32 y, f32 z) {
     for (i = 1; i < 8; i++, work++) {
         angle = (f32)((i - 1) * 360 / 7);
         rad = 6.2831855f * (90.0f + angle) / 360.0f;
-        work->position.x = one * (f32)cos(rad);
-        work->position.y = one * (f32)sin(rad);
+        work->position.x = radius * (f32)cos(rad);
+        work->position.y = radius * (f32)sin(rad);
         work->position.z = 0.0f;
         work->velocity.x = 0.0f;
         work->velocity.y = 0.0f;
         work->velocity.z = 0.0f;
         work->scaleY = 0.1f;
         work->scaleX = 0.1f;
-        work->radius = one;
+        work->radius = radius;
         work->angle = angle;
     }
     return effect;
@@ -127,14 +129,15 @@ static void effStampMain(EffectEntry* effect) {
         work->position.x = work->radius * (f32)cos(6.2831855f * (90.0f + work->angle) / 360.0f);
         work->position.y = work->radius * (f32)sin(6.2831855f * (90.0f + work->angle) / 360.0f);
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effStampDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effStampDisp, effect);
 }
 
 /**
  * Draws each piece as a 16x16 quad of texture 0x2B facing the camera and turned to its angle,
  * shaded between the work's two colours by the vertex alpha.
  */
-static void effStampDisp(CameraId cameraId, EffectEntry* effect) {
+static void effStampDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffStampN64Work* work;
     s32 i;

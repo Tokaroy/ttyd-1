@@ -1,7 +1,9 @@
 // Script commands for system windows: item and party selection lists, name entry and
 // single-message windows.
-#include "evt/evt_window.h"
+
+#include "version.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_window.h"
 #include "driver/icondrv.h"
 #include "driver/msgdrv.h"
 #include "manager/evtmgr_cmd.h"
@@ -9,19 +11,21 @@
 #include "manager/winmgr.h"
 #include "mario/mario.h"
 #include "mario/mario_pouch.h"
-#include "mario/mariost.h"
 #include "memory.h"
 #include "system.h"
 #include "win/win_main.h"
 #include <dolphin/mtx.h>
-#include "nameent.h"
-#include "statuswindow.h"
 #include <string.h>
 #include "pmario_sound.h"
-#include "version.h"
 #include <dolphin/pad.h>
+#include "sfx_name_word.h"
+#include "nameent.h"
+#include "statuswindow.h"
+#include "icon_ids.h"
 
-#define RAW_GET(fn) ((s32 (*)(void))(fn))
+#if VERSION <= VERSION_DEMO_JP
+#include "mario/mariost.h"
+#endif
 
 typedef struct CoinWin {
     s32 id;    // 0x0
@@ -36,15 +40,10 @@ typedef struct OneMsgWin {
     s32 id;    // 0x8
 } OneMsgWin;
 
-#if VERSION >= VERSION_US
-#define EW_ICON_OFS 8
-#else
-#define EW_ICON_OFS 0
-#endif
-// icon draw flags (the demo passes 4)
 #if VERSION >= VERSION_JP
 s32 coinwin_se_wait;
 #endif
+
 static void coin_disp(WinMgrEntry* entry);
 static void oneMessageDisp(WinMgrEntry* entry);
 
@@ -52,51 +51,35 @@ static void oneMessageDisp(WinMgrEntry* entry);
  * The pale yellow one-line message window near the top of the screen (the new mail notice)
  * that evt_win_one_message opens.
  */
-WinMgrDesc one_msg_desc = {
+static WinMgrDesc one_msg_desc = {
     0, 0, 8, -175, 120, 350, 42, {0xD7, 0xD0, 0x88, 0xFF}, NULL, oneMessageDisp
 };
+
 /**
  * The small counter window for coins, Shine Sprites or Star Pieces that shops show while buying;
  * see evt_win_coin_on.
  */
-WinMgrDesc coin_desc = {
+static WinMgrDesc coin_desc = {
     2, 0, 8, -250, -75, 150, 45, {0xF0, 0xF0, 0xF0, 0xFF}, NULL, coin_disp
 };
 
-/** The release versions take a flag first and, when it is set, also return the select window's cursor */
-#if VERSION <= VERSION_DEMO_JP
-USER_FUNC(evt_win_item_select) {
-    EvtWord* args = event->args;
-    s32 type = evtGetValue(event, args[0]);
-    WinMgrSelect* sel;
-    s32 result;
-    if (isFirstCall) {
-        event->userdatap[0] = winMgrSelectEntry(type, 0, 1);
-        marioKeyOff();
-    }
-    sel = event->userdatap[0];
-    result = winMgrSelect(sel);
-    if (result == 0) {
-        return EVT_RETURN_BLOCK;
-    }
-    winMgrSelectDelete(sel);
-    marioKeyOn();
-    evtSetValue(event, args[1], result);
-    return EVT_RETURN_DONE;
-}
-#else
 /**
- * Retail: args[0] flag, args[1] select window type;
+ * JP and later: args[0] flag, args[1] select window type;
  * args[2] gets the chosen entry (-1 if cancelled) and, when the flag is set, args[3] the cursor slot.
+ * The early demos take the type in args[0] and write the entry to args[1].
  * Mario's controls are locked while the window is open.
  */
 USER_FUNC(evt_win_item_select) {
     EvtWord* args = event->args;
-    s32 flag = evtGetValue(event, args[0]);
+#if VERSION <= VERSION_DEMO_JP
+    s32 type = evtGetValue(event, args[0]);
+#else
+    s32 getCursor = evtGetValue(event, args[0]);
     s32 type = evtGetValue(event, args[1]);
+#endif
     WinMgrSelect* sel;
     s32 result;
-    s32 extra;
+    s32 cursor;
     if (isFirstCall) {
         event->userdatap[0] = winMgrSelectEntry(type, 0, 1);
         marioKeyOff();
@@ -106,16 +89,21 @@ USER_FUNC(evt_win_item_select) {
     if (result == 0) {
         return EVT_RETURN_BLOCK;
     }
-    extra = winMgrSelectGetCursor(sel);
+#if VERSION >= VERSION_JP
+    cursor = winMgrSelectGetCursor(sel);
+#endif
     winMgrSelectDelete(sel);
     marioKeyOn();
+#if VERSION <= VERSION_DEMO_JP
+    evtSetValue(event, args[1], result);
+#else
     evtSetValue(event, args[2], result);
-    if (flag != 0) {
-        evtSetValue(event, args[3], extra);
+    if (getCursor != 0) {
+        evtSetValue(event, args[3], cursor);
     }
+#endif
     return EVT_RETURN_DONE;
 }
-#endif
 
 /**
  * Opens select window type args[0] for partners, stat upgrades or shop lists and waits;
@@ -152,17 +140,17 @@ USER_FUNC(evt_win_other_select) {
  * if he has none.
  */
 USER_FUNC(evt_win_item_maketable) {
-    s32* src;
+    s32* dst;
     s32* item;
-    s32* t;
+    s32* list;
     EvtWord* args = event->args;
     s32* table;
     s32 count;
     s32 i;
     s32 n;
-    t = (s32*)evtGetValue(event, args[0]);
+    list = (s32*)evtGetValue(event, args[0]);
     count = 0;
-    item = t;
+    item = list;
     for (;;) {
         if (*item == -1) {
             break;
@@ -174,20 +162,22 @@ USER_FUNC(evt_win_item_maketable) {
         evtSetValue(event, args[1], 0);
         return EVT_RETURN_DONE;
     }
-    table = _mapAlloc((count + 1) * 4);
-    item = t;
+    table = _mapAlloc((count + 1) * sizeof(*table));
+    item = list;
     i = 0;
     n = 0;
-    src = table;
+    dst = table;
     for (; i < count; i++) {
         s32 has = pouchCheckItem(*item);
         if (has) {
-            *src++ = *item;
+            *dst++ = *item;
             n++;
         }
         item++;
     }
     table[n] = -1;
+
+    // BUG: when no item is carried the block is dropped without _mapFree, so it stays allocated on the map heap.
     if (n == 0) {
         table = NULL;
     }
@@ -243,6 +233,8 @@ static void oneMessageDisp(WinMgrEntry* entry) {
     OneMsgWin* w = entry->param;
     const char* msg;
     if (winMgrAction(w->id) == 0) {
+
+        // BUG: only type 0 assigns msg before it is used below.
         switch (w->type) {
             case 0:
                 msg = msgSearch("msg_you_gotta_mail");
@@ -319,36 +311,40 @@ USER_FUNC(evt_win_one_message) {
 static void coin_disp(WinMgrEntry* entry) {
     CoinWin* w;
     s32 target;
+#if VERSION >= VERSION_US
     u16 icon;
+#else
+    s16 icon;
+#endif
     Mtx pos;
     Mtx scale;
     s32 diff;
     pouchGetPtr();
     w = entry->param;
-    if (entry->flags & 4) {
+    if (entry->flags & WINMGR_FLAG_ANIMATING) {
         return;
     }
     switch (w->type) {
-        case 0:
+        case COIN_WINDOW_COINS:
             target = pouchGetCoin();
-            icon = 0x18B + EW_ICON_OFS;
+            icon = ICON_ITEM_COIN;
             break;
-        case 1:
-            target = RAW_GET(pouchGetSuperCoin)();
-            icon = 0x102 + EW_ICON_OFS;
+        case COIN_WINDOW_SHINE_SPRITES:
+            target = pouchGetSuperCoin();
+            icon = ICON_ITEM_SHINE_SPRITE;
             break;
-        case 2:
-            target = RAW_GET(pouchGetStarPiece)();
-            icon = 0x18D + EW_ICON_OFS;
+        case COIN_WINDOW_STAR_PIECES:
+            target = pouchGetStarPiece();
+            icon = ICON_ITEM_STAR_PIECE;
             break;
     }
-    PSMTXTrans(pos, -220.f, -113.f, 0.f);
+    PSMTXTrans(pos, -220.0f, -113.0f, 0.0f);
     PSMTXScale(scale, 0.7f, 0.7f, 0.7f);
     PSMTXConcat(pos, scale, pos);
-    iconDispGx2(pos, ICON_DISP_2D, icon);
-    PSMTXTrans(pos, -192.f, -113.f, 0.f);
-    iconDispGx2(pos, ICON_DISP_2D, 0x1D6 + EW_ICON_OFS);
-    PSMTXTrans(pos, -126.f, -113.f, 0.f);
+    iconDispGx2(pos, ICON_FLAG_2D, icon);
+    PSMTXTrans(pos, -192.0f, -113.0f, 0.0f);
+    iconDispGx2(pos, ICON_FLAG_2D, ICON_TIMES);
+    PSMTXTrans(pos, -126.0f, -113.0f, 0.0f);
     {
         GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
         iconNumberDispGx(pos, w->coins, 0, white);
@@ -368,13 +364,12 @@ static void coin_disp(WinMgrEntry* entry) {
 #if VERSION <= VERSION_DEMO_JP
         if (__abs(target - w->coins) == 1 || gp->retraceCount % 6 == 0) {
             psndSFXOn("SFX_COUNT_COIN1");
-        }
 #else
         if (coinwin_se_wait == 0) {
-            psndSFXOn(SFX_NAME_WORD(0x2005B));
+            psndSFXOn(SFX_NAME_WORD(PSND_SFX_COUNT_COIN1 | PSND_SFX_BYPASS_MUTE));
             coinwin_se_wait = 7;
-        }
 #endif
+        }
     }
 #if VERSION >= VERSION_JP
     if (coinwin_se_wait > 0) {
@@ -384,7 +379,7 @@ static void coin_disp(WinMgrEntry* entry) {
 }
 
 /**
- * Opens the counter window of type args[0] (0 coins, 1 Shine Sprites, 2 Star Pieces) at the top left,
+ * Opens the counter window of type args[0] (0 coins, 1 Shine Sprites, 2 Star Pieces) on the left, below the middle of the screen (x -250, y -75),
  * as shops do while buying; args[1] gets the window handle for evt_win_coin_off/wait.
  */
 USER_FUNC(evt_win_coin_on) {
@@ -395,14 +390,14 @@ USER_FUNC(evt_win_coin_on) {
     w->id = winMgrEntry(&coin_desc);
     w->timer = 0;
     switch (type) {
-        case 0:
+        case COIN_WINDOW_COINS:
             w->coins = pouchGetCoin();
             break;
-        case 1:
-            w->coins = RAW_GET(pouchGetSuperCoin)();
+        case COIN_WINDOW_SHINE_SPRITES:
+            w->coins = pouchGetSuperCoin();
             break;
-        case 2:
-            w->coins = RAW_GET(pouchGetStarPiece)();
+        case COIN_WINDOW_STAR_PIECES:
+            w->coins = pouchGetStarPiece();
             break;
     }
     winMgrSetParam(w->id, w);
@@ -416,14 +411,14 @@ USER_FUNC(evt_win_coin_off) {
     CoinWin* w = (CoinWin*)evtGetValue(event, event->args[0]);
     s32 coins;
     switch (w->type) {
-        case 0:
+        case COIN_WINDOW_COINS:
             coins = pouchGetCoin();
             break;
-        case 1:
-            coins = RAW_GET(pouchGetSuperCoin)();
+        case COIN_WINDOW_SHINE_SPRITES:
+            coins = pouchGetSuperCoin();
             break;
-        case 2:
-            coins = RAW_GET(pouchGetStarPiece)();
+        case COIN_WINDOW_STAR_PIECES:
+            coins = pouchGetStarPiece();
             break;
     }
     if (w->coins != coins) {
@@ -439,14 +434,14 @@ USER_FUNC(evt_win_coin_wait) {
     CoinWin* w = (CoinWin*)evtGetValue(event, event->args[0]);
     s32 coins;
     switch (w->type) {
-        case 0:
+        case COIN_WINDOW_COINS:
             coins = pouchGetCoin();
             break;
-        case 1:
-            coins = RAW_GET(pouchGetSuperCoin)();
+        case COIN_WINDOW_SHINE_SPRITES:
+            coins = pouchGetSuperCoin();
             break;
-        case 2:
-            coins = RAW_GET(pouchGetStarPiece)();
+        case COIN_WINDOW_STAR_PIECES:
+            coins = pouchGetStarPiece();
             break;
     }
     return w->coins != coins ? EVT_RETURN_BLOCK : EVT_RETURN_DONE;

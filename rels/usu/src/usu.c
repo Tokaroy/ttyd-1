@@ -9,9 +9,15 @@
 #include "string.h"
 #include "data/party_data.h"
 #include "usu.h"
-#include "rel_module.h"
 
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
 static void* pose_buf;
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Script helper: replaces entry args[0] of Vivian's pose table (partyPoseTbl[6]) with the pose name string in
@@ -20,7 +26,7 @@ static void* pose_buf;
 USER_FUNC(evt_usu_vivian_pose_set) {
     EvtWord* args = event->args;
     s32 index = evtGetValue(event, args[0]);
-    partyPoseTbl[6][index] = (char*)evtGetValue(event, args[1]);
+    partyPoseTbl[PARTY_VIVIAN][index] = (char*)evtGetValue(event, args[1]);
     return EVT_RETURN_DONE;
 }
 
@@ -36,8 +42,8 @@ void _prolog(void) {
     }
     relSetEvtAddr("usu_00", usu_00_init_evt);
     relSetEvtAddr("usu_01", usu_01_init_evt);
-    pose_buf = _mapAlloc(sizeof(partyPoseTbl[6]));
-    memcpy(pose_buf, partyPoseTbl[6], sizeof(partyPoseTbl[6]));
+    pose_buf = _mapAlloc(sizeof(partyPoseTbl[PARTY_VIVIAN]));
+    memcpy(pose_buf, partyPoseTbl[PARTY_VIVIAN], sizeof(partyPoseTbl[PARTY_VIVIAN]));
 }
 
 /**
@@ -50,7 +56,7 @@ void _epilog(void) {
     for (dtor = _dtors; *dtor != NULL; dtor++) {
         (*dtor)();
     }
-    memcpy(partyPoseTbl[6], pose_buf, sizeof(partyPoseTbl[6]));
+    memcpy(partyPoseTbl[PARTY_VIVIAN], pose_buf, sizeof(partyPoseTbl[PARTY_VIVIAN]));
     _mapFree(pose_buf);
 }
 

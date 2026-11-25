@@ -1,10 +1,11 @@
 typedef unsigned long size_t;
 
+/* Zero-byte test for the word loops of strcmp and strcpy: (w + K2) & K1, i.e. (w - 0x01010101) & 0x80808080, is
+   nonzero when a byte of w may be zero (bytes of 0x81 and above also set it), and the loop then falls back to
+   byte steps. The casts used as lvalues, such as ++((int*)(left)), are an MWCC extension. */
 #define K1 0x80808080
 #define K2 0xfefefeff
 
-#ifdef VERSION_G8ME01
-/** US only: strstr (used by evt_msg). */
 char* strstr(const char* str, const char* pat) {
     const unsigned char* s1 = (const unsigned char*)str - 1;
     const unsigned char* p1 = (const unsigned char*)pat;
@@ -28,9 +29,23 @@ char* strstr(const char* str, const char* pat) {
 
     return 0;
 }
-#endif
 
-/** Standard strchr(): first occurrence of chr in the string; searching for 0 returns the terminator. */
+char* strrchr(const char* str, int chr) {
+    const unsigned char* p = (unsigned char*)str - 1;
+    const unsigned char* q = 0;
+    unsigned long c = (chr & 0xff);
+    unsigned long ch;
+
+    while (ch = *++p)
+        if (ch == c)
+            q = p;
+
+    if (q)
+        return ((char*)q);
+
+    return (c ? 0 : (char*)p);
+}
+
 char* strchr(const char* str, int chr) {
     const unsigned char* p = (unsigned char*)str - 1;
     unsigned long c = (chr & 0xff);
@@ -43,10 +58,6 @@ char* strchr(const char* str, int chr) {
     return (c ? 0 : (char*)p);
 }
 
-/**
- * Standard strncmp(): compares up to n bytes as unsigned chars;
- * returns the difference of the first differing bytes, 0 if equal or both end.
- */
 int strncmp(const char* str1, const char* str2, size_t n) {
     const unsigned char* p1 = (unsigned char*)str1 - 1;
     const unsigned char* p2 = (unsigned char*)str2 - 1;
@@ -63,12 +74,6 @@ int strncmp(const char* str1, const char* str2, size_t n) {
     return (0);
 }
 
-/**
- * Standard strcmp(): compares as unsigned chars;
- * the optimized version aligns and compares a word at a time
- * when both strings have the same alignment (using the K1/K2 zero-byte test), falling back to bytes otherwise.
- * Returns a byte difference, or +1/-1 from a word compare.
- */
 int strcmp(const char* str1, const char* str2) {
     register unsigned char* left = (unsigned char*)str1;
     register unsigned char* right = (unsigned char*)str2;
@@ -141,10 +146,8 @@ bytecopy:
             return 0;
         }
     } while (1);
-    return 0;
 }
 
-/** Standard strcat(): appends a string to the end of another and returns the destination. */
 char* strcat(char* dst, const char* src) {
     const unsigned char* p = (unsigned char*)src - 1;
     unsigned char* q = (unsigned char*)dst - 1;
@@ -160,7 +163,6 @@ char* strcat(char* dst, const char* src) {
     return (dst);
 }
 
-/** Standard strncpy(): copies at most n characters, padding with nul bytes if the source is shorter. */
 char* strncpy(char* dst, const char* src, size_t n) {
     const unsigned char* p = (const unsigned char*)src - 1;
     unsigned char* q = (unsigned char*)dst - 1;
@@ -177,11 +179,6 @@ char* strncpy(char* dst, const char* src, size_t n) {
     return (dst);
 }
 
-/**
- * Standard strcpy(): copies the string and terminator,
- * a word at a time when source and destination are equally aligned (stopping at the word holding the
- * terminator), else byte by byte; returns dst.
- */
 char* strcpy(char* dst, const char* src) {
     register unsigned char *destb, *fromb;
     register unsigned long w, t, align;
@@ -235,11 +232,8 @@ bytecopy:
         if ((*(++destb) = *(++fromb)) == 0)
             return (dst);
     } while (1);
-
-    return (dst);
 }
 
-/** Standard strlen(): number of characters before the terminator. */
 size_t strlen(const char* str) {
     size_t len = -1;
     unsigned char* p = (unsigned char*)str - 1;

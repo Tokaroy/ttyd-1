@@ -1,6 +1,5 @@
 #include "fdlibm.h"
 
-/** High parts of atan(0.5), atan(1), atan(1.5) and atan(infinity). */
 static const double atanhi[] = {
     4.63647609000806093515e-01,
     7.85398163397448278999e-01,
@@ -8,7 +7,6 @@ static const double atanhi[] = {
     1.57079632679489655800e+00,
 };
 
-/** Low parts of the same four atan values. */
 static const double atanlo[] = {
     2.26987774529616870924e-17,
     3.06161699786838301793e-17,
@@ -16,7 +14,6 @@ static const double atanlo[] = {
     6.12323399573676603587e-17,
 };
 
-/** Polynomial coefficients for the atan approximation. */
 static const double aT[] = {
     3.33333333333329318027e-01,
     -1.99999999998764832476e-01,
@@ -35,7 +32,6 @@ static const double
 one = 1.0,
 huge = 1.0e300;
 
-/** Arc tangent of x in radians (fdlibm), result in (-pi/2, pi/2). */
 double atan(double x) {
     double w, s1, s2, z;
     int ix, hx, id;

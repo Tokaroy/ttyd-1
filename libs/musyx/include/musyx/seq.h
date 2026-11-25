@@ -4,6 +4,12 @@
 #include "musyx/musyx.h"
 #include "musyx/voice.h"
 
+// Names follow AxioDL's MusyX decompilation (invented there, not original names).
+// SEQ_INSTANCE.state
+#define SEQ_STATE_FREE 0
+#define SEQ_STATE_PLAYING 1
+#define SEQ_STATE_PAUSED 2
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -67,7 +73,7 @@ typedef struct NOTE_DATA {
 } NOTE_DATA;
 
 typedef struct PRG_STATE {
-  // total size: 0x4 (>=2.0: 0x6)
+  // total size: 0x4 (>=2.0.1: 0x6)
   u16 macId;    // offset 0x0, size 0x2
   u8 priority;  // offset 0x2, size 0x1
   u8 maxVoices; // offset 0x3, size 0x1

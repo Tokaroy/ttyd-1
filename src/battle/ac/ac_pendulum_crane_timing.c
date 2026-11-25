@@ -1,4 +1,6 @@
-// Action command: pendulum crane timing (ac_pendulum_crane_timing); swing with the stick and time A.
+// Action command: pendulum crane timing (ac_pendulum_crane_timing); press A in time on the swinging marker.
+
+#include "version.h"
 #include "battle/battle.h"
 #include "battle/battle_ac.h"
 #include "battle/battle_disp.h"
@@ -6,33 +8,30 @@
 #include "battle/battle_unit.h"
 #include "driver/camdrv.h"
 #include "driver/icondrv.h"
-#include "battle/battle_sub.h"
 #include "pmario_sound.h"
 #include "system.h"
 #include <string.h>
+#include "battle/battle_sub.h"
 
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 #include <stdlib.h>
 #include "icon_ids.h"
-#include "version.h"
 
-typedef struct PendulumParams {
-    u8 header[0x3C - 0x0]; // 0x0, BattleActions header up to params[1]
-    s32 unitId;            // 0x3C
-    s32 partsId;           // 0x40
-    s32 rotOffset;         // 0x44
-    s32 period;            // 0x48
-    s32 maxFrames;         // 0x4C
-} PendulumParams;
+// BattleActions.params slots this command reads (btlevtcmd_AcSetParamAll)
+typedef enum PendulumCraneParam {
+    PENDULUM_PARAM_UNIT_ID = 1,
+    PENDULUM_PARAM_PARTS_ID = 2,
+    PENDULUM_PARAM_ROT_OFFSET = 3,
+    PENDULUM_PARAM_PERIOD = 4,
+    PENDULUM_PARAM_MAX_FRAMES = 5,
+} PendulumCraneParam;
 
 typedef struct PendulumWork {
     s32 button;  // 0x0
     s32 frame;   // 0x4
     Vec basePos; // 0x8
     Vec pos;     // 0x14
-    f32 speed;   // 0x20, set to 0.5 at start, never read (crane timing layout)
-    s32 delay;   // 0x24, never used (crane timing layout)
+    f32 speed;   // 0x20
+    s32 delay;   // 0x24
     f32 force;   // 0x28
     f32 angle;   // 0x2C
     f32 ang360;  // 0x30
@@ -44,35 +43,25 @@ typedef struct PendulumWork {
 #if VERSION >= VERSION_JP
     s32 zone; // 0x48
 #endif
-    s32 endTimer; // 0x4C (0x48 in the demo)
+    s32 endTimer; // 0x4C (0x48 in the early demos)
 } PendulumWork;
 
-#define CALC_DIR(d)                                   \
-    if (cw->ang360 >= 90.0f && cw->ang360 < 270.0f) { \
-        d = -1.0f;                                    \
-    } else {                                          \
-        d = 1.0f;                                     \
-    }
-
-#define PC_PARAMS(work) ((PendulumParams*)&(work)->actionCommands)
-
-// FAKE: inlining off for the whole file (FAKES.md); without it 2 functions change length, e.g. battleAcDisp_PendulumCraneTiming 64 -> 341 instructions
-#pragma dont_inline on
 /**
  * Shell Shield HP by swing position, as pairs of (upper end of the position range 0-100, HP):
  * 2 at the ends rising to 8 in the middle. Used by Koops's Shell Shield and to colour its gauge.
  */
-u16 _hp_tbl[] = {20, 2, 35, 4, 45, 6, 55, 8, 65, 6, 80, 4, 100, 2};
+static u16 _hp_tbl[] = {20, 2, 35, 4, 45, 6, 55, 8, 65, 6, 80, 4, 100, 2};
 
 static s32 _get_angle_hp(s32 hp);
 static s32 _get_angle_rate(f32 angle);
 
 /**
  * Per-frame driver of action command 12, used by Koops's Shell Shield.
- * Swings unit params[1] (part params[2]) up to 45 degrees each way, a full swing every params[4] x 2 frames;
- * pressing A stops it, and outputParams[1] gives the shield's HP for that angle (2 at the ends, 8 in the middle,
- * see _hp_tbl). Fails after params[5] frames. With acFlags bit 0 the stick can damp the swing.
- * The releases tick a sound on entering either end of the gauge.
+ * Swings unit params[1] (part params[2]) up to 45 degrees each way, a full swing every params[4] x 2 / 3 frames
+ * (the phase advances 3 a frame); pressing A stops it, and outputParams[1] gives the shield's HP for that angle
+ * (2 at the ends, 8 in the middle, see _hp_tbl). Fails after params[5] frames. With acFlags bit 0 the analog
+ * L and R triggers can slow the swing.
+ * JP and later tick a sound on entering either end of the gauge.
  */
 s32 battleAcMain_PendulumCraneTiming(BattleWork* work) {
     PendulumWork* cw;
@@ -83,78 +72,80 @@ s32 battleAcMain_PendulumCraneTiming(BattleWork* work) {
     BattleActions* ac;
     f32 dir;
     f32 dir2;
-    u8* stick;
+    PADStatus* pad;
     f32 accel;
     f32 mag;
-#if VERSION >= VERSION_JP
     s32 zone;
-#endif
     s32 rate;
 
     ac = &work->actionCommands;
     autoCommand = FALSE;
     cw = (PendulumWork*)ac->work;
-    disp = (BattleACDispParams*)&ac->disp;
+    disp = &ac->disp;
     if (work->actionCommands.acUnit->badgesEquipped.AutoCommand) {
         autoCommand = TRUE;
     }
-    unit = BattleGetUnitPtr(work, PC_PARAMS(work)->unitId);
-    BtlUnit_GetPartsPtr(unit, PC_PARAMS(work)->partsId);
+    unit = BattleGetUnitPtr(work, work->actionCommands.params[PENDULUM_PARAM_UNIT_ID]);
+    BtlUnit_GetPartsPtr(unit, work->actionCommands.params[PENDULUM_PARAM_PARTS_ID]);
 
     switch (work->actionCommands.acState) {
-        case 0:
+        case AC_STATE_INIT:
             memset(disp, 0, sizeof(BattleACDispParams));
             disp->iconX = -300.0f;
             disp->iconY = 0.0f;
             disp->slideTimer = 20;
             cw->frame = 0;
             cw->angle = 0.0f;
-            cw->cur = PC_PARAMS(work)->period;
+            cw->cur = work->actionCommands.params[PENDULUM_PARAM_PERIOD];
             cw->vel = 0;
             cw->force = 3.0f;
 #if VERSION >= VERSION_JP
             cw->zone = -1;
 #endif
-            cw->button = 0x100;
+            cw->button = PAD_BUTTON_A;
             work->actionCommands.outputParams[0] = 0;
             work->actionCommands.outputParams[1] = _get_angle_hp(50);
             work->actionCommands.outputParams[2] = _get_angle_hp(0);
             cw->rate = 50;
-            work->actionCommands.acState = 99;
-            work->actionCommands.result = 1;
+            work->actionCommands.acState = AC_STATE_WAIT_START;
+            work->actionCommands.result = AC_RESULT_RUNNING;
             cw->sfxId = -1;
             break;
-        case 100:
-            BtlUnit_SetRotateOffset(unit, 0.0f, (f32)PC_PARAMS(work)->rotOffset, 0.0f);
-            unit = BattleGetUnitPtr(work, PC_PARAMS(work)->unitId);
-            BtlUnit_GetPartsPtr(unit, PC_PARAMS(work)->partsId);
+        case AC_STATE_START:
+            BtlUnit_SetRotateOffset(unit, 0.0f, (f32)work->actionCommands.params[PENDULUM_PARAM_ROT_OFFSET], 0.0f);
+            unit = BattleGetUnitPtr(work, work->actionCommands.params[PENDULUM_PARAM_UNIT_ID]);
+            BtlUnit_GetPartsPtr(unit, work->actionCommands.params[PENDULUM_PARAM_PARTS_ID]);
             BtlUnit_GetPos(unit, &cw->pos.x, &cw->pos.y, &cw->pos.z);
             cw->basePos = cw->pos;
             cw->frame = 0;
             cw->speed = 0.5f;
             cw->flag = 1;
-            work->actionCommands.acState = 1000;
-        case 1000:
+            work->actionCommands.acState = AC_STATE_RUN;
+        case AC_STATE_RUN:
             cw->frame++;
-            cw->ang360 = (f32)(((cw->cur + cw->vel) % (PC_PARAMS(work)->period * 2)) * 360 /
-                               (PC_PARAMS(work)->period * 2));
+            cw->ang360 = (f32)(((cw->cur + cw->vel) % (work->actionCommands.params[PENDULUM_PARAM_PERIOD] * 2)) * 360 /
+                               (work->actionCommands.params[PENDULUM_PARAM_PERIOD] * 2));
             cw->angle = reviseAngle(45.0f * sinfd(cw->ang360));
-            stick = (u8*)_battleWorkPointer;
+            pad = &_battleWorkPointer->padWork[0].padData[0];
             accel = 0.0f;
-            CALC_DIR(dir)
-            if (ac->acFlags & 1) {
-                if (stick[0xF33] > 10 && stick[0xF32] < 10) {
+            if (cw->ang360 >= 90.0f && cw->ang360 < 270.0f) {
+                dir = -1.0f;
+            } else {
+                dir = 1.0f;
+            }
+            if (ac->acFlags & AC_PENDULUM_CRANE_FLAG_TRIGGER_BRAKE_UNUSED) {
+                if (pad->triggerRight > 10 && pad->triggerLeft < 10) {
                     if (dir < 0.0f) {
-                        mag = stick[0xF33] / 128.0f;
+                        mag = pad->triggerRight / 128.0f;
                         if (mag > 1.0f) {
                             mag = 1.0f;
                         }
                         accel = 0.95f * -cw->force * mag;
                     }
-                } else if (stick[0xF33] < 10) {
-                    if (stick[0xF32] > 10) {
+                } else if (pad->triggerRight < 10) {
+                    if (pad->triggerLeft > 10) {
                         if (dir > 0.0f) {
-                            mag = stick[0xF32] / 128.0f;
+                            mag = pad->triggerLeft / 128.0f;
                             if (mag > 1.0f) {
                                 mag = 1.0f;
                             }
@@ -164,13 +155,21 @@ s32 battleAcMain_PendulumCraneTiming(BattleWork* work) {
                 }
             }
             cw->vel = (s32)((f32)cw->vel + accel);
-            CALC_DIR(dir)
+            if (cw->ang360 >= 90.0f && cw->ang360 < 270.0f) {
+                dir = -1.0f;
+            } else {
+                dir = 1.0f;
+            }
             cw->cur = (s32)((f32)cw->cur + cw->force);
-            cw->ang360 = (f32)(((cw->cur + cw->vel) % (PC_PARAMS(work)->period * 2)) * 360 /
-                               (PC_PARAMS(work)->period * 2));
+            cw->ang360 = (f32)(((cw->cur + cw->vel) % (work->actionCommands.params[PENDULUM_PARAM_PERIOD] * 2)) * 360 /
+                               (work->actionCommands.params[PENDULUM_PARAM_PERIOD] * 2));
             cw->angle = reviseAngle(45.0f * sinfd(cw->ang360));
             BtlUnit_SetRotate(unit, 0.0f, 0.0f, cw->angle);
-            CALC_DIR(dir2)
+            if (cw->ang360 >= 90.0f && cw->ang360 < 270.0f) {
+                dir2 = -1.0f;
+            } else {
+                dir2 = 1.0f;
+            }
             if (dir != dir2) {
                 cw->flag = 0;
             }
@@ -179,10 +178,8 @@ s32 battleAcMain_PendulumCraneTiming(BattleWork* work) {
             cw->rate = rate;
             rate = _get_angle_rate(cw->angle);
 #if VERSION <= VERSION_DEMO_JP
-            // The demo ticks only at the exact ends of the gauge.
+            // The early demos tick only at the exact ends of the gauge.
             if (rate == 0 || rate == 100) {
-                psndSFXOn("SFX_AC_GAUGE_MOVE1");
-            }
 #else
             zone = -1;
             if (rate <= 5) {
@@ -191,41 +188,43 @@ s32 battleAcMain_PendulumCraneTiming(BattleWork* work) {
                 zone = 1;
             }
             if (zone != -1 && zone != cw->zone) {
-                psndSFXOn("SFX_AC_GAUGE_MOVE1");
-                cw->zone = zone;
-            }
 #endif
+                psndSFXOn("SFX_AC_GAUGE_MOVE1");
+#if VERSION >= VERSION_JP
+                cw->zone = zone;
+#endif
+            }
             inRange = FALSE;
-            if (autoCommand && (s32)work->actionCommands.outputParams[1] >= _get_angle_hp(50)) {
+            if (autoCommand && work->actionCommands.outputParams[1] >= _get_angle_hp(50)) {
                 inRange = TRUE;
             }
             if (BattlePadCheckTrigger(cw->button) || inRange) {
                 work->actionCommands.outputParams[0] = 1;
-                work->actionCommands.result = 2;
+                work->actionCommands.result = AC_RESULT_SUCCESS;
                 work->actionCommands.resultCount++;
-                work->actionCommands.acState = 1002;
+                work->actionCommands.acState = AC_STATE_RUN + 2;
                 break;
             }
-            if (cw->frame > PC_PARAMS(work)->maxFrames) {
+            if (cw->frame > work->actionCommands.params[PENDULUM_PARAM_MAX_FRAMES]) {
                 work->actionCommands.result = 0;
-                work->actionCommands.acState = 1002;
+                work->actionCommands.acState = AC_STATE_RUN + 2;
             }
             break;
-        case 1002:
+        case AC_STATE_RUN + 2:
             ac->doneFlags |= AC_DONE_FLAG_FINISHED;
             cw->endTimer = 60;
             if (cw->sfxId != 0xFFFFFFFF) {
                 psndSFXOff(cw->sfxId);
             }
-            work->actionCommands.acState = 1003;
-        case 1003:
+            work->actionCommands.acState = AC_STATE_RUN + 3;
+        case AC_STATE_RUN + 3:
             cw->endTimer--;
             if (cw->endTimer > 0) {
                 break;
             }
-            work->actionCommands.acState = 1004;
+            work->actionCommands.acState = AC_STATE_RUN + 4;
             break;
-        case 1004:
+        case AC_STATE_RUN + 4:
             work->actionCommands.maincb = NULL;
             work->actionCommands.dispcb = NULL;
             work->actionCommands.resultcb = NULL;
@@ -252,19 +251,19 @@ void battleAcDisp_PendulumCraneTiming(CameraId cameraId, void* param) {
     BattleActions* ac = &w->actionCommands;
     disp = &ac->disp;
     switch (ac->acState) {
-        case 99:
-            disp->iconX = intplGetValue(4, -300.0f, 30.0f, 20 - disp->slideTimer, 20);
-        case 100:
-        case 1000:
+        case AC_STATE_WAIT_START:
+            disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, -300.0f, 30.0f, 20 - disp->slideTimer, 20);
+        case AC_STATE_START:
+        case AC_STATE_RUN:
             actionCommandDisp(disp->iconX, disp->iconY);
             if (disp->slideTimer > 0) {
                 disp->slideTimer--;
             }
             break;
-        case 1002:
-        case 1003:
+        case AC_STATE_RUN + 2:
+        case AC_STATE_RUN + 3:
             if (disp->slideTimer >= 40) {
-                disp->iconX = intplGetValue(4, 30.0f, -300.0f, disp->slideTimer - 40, 20);
+                disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, 30.0f, -300.0f, disp->slideTimer - 40, 20);
             } else {
                 disp->iconX = 30.0f;
             }
@@ -276,16 +275,19 @@ void battleAcDisp_PendulumCraneTiming(CameraId cameraId, void* param) {
     }
 }
 
-/** Called by btlevtcmd_StopAC: unless the command already finished, stops its sound and starts the end wait. */
+/**
+ * Called by btlevtcmd_StopAC: unless the command already finished, starts the end wait
+ * (which would stop sfxId, but this command never starts a sound: it stays -1).
+ */
 void battleAcDelete_PendulumCraneTiming(BattleWork* work) {
-    if ((u32)work->actionCommands.doneFlags & AC_DONE_FLAG_FINISHED) {
+    if (work->actionCommands.doneFlags & AC_DONE_FLAG_FINISHED) {
         return;
     }
-    work->actionCommands.acState = 1002;
+    work->actionCommands.acState = AC_STATE_RUN + 2;
 }
 
 /**
- * Draws the A icon, the gauge as seven bands shaded by HP (brightest in the middle)
+ * Draws the gauge frame icon, the gauge as seven bands by HP (blue at the ends shading to red in the middle)
  * and the marker at the current swing position.
  */
 static void actionCommandDisp(f32 x, f32 y) {
@@ -302,11 +304,11 @@ static void actionCommandDisp(f32 x, f32 y) {
         Vec pos = {0.0f, 0.0f, 0.0f};
         pos.x = px = -200.0f + x;
         pos.y = 25.0f + y;
-        iconDispGx(&pos, ICON_DISP_2D, ICON_08C, 1.0f);
+        iconDispGx(&pos, ICON_FLAG_2D, 1.0f, ICON_AC_GAUGE_FRAME);
     }
     cam = camGetPtr(CAMERA_2D);
     btlDispGXInit2DRasta();
-    GXLoadPosMtxImm(cam->view, 0);
+    GXLoadPosMtxImm(cam->view, GX_PNMTX0);
     baseX = px - 88.0f;
     baseY = 50.0f + y;
     baseB = baseY - 18.0f;
@@ -318,7 +320,7 @@ static void actionCommandDisp(f32 x, f32 y) {
         Vec pos2 = {0.0f, 0.0f, 0.0f};
         pos2.x = (-288.0f + x) + (f32)(((PendulumWork*)work->actionCommands.work)->rate * 176) / 100.0f;
         pos2.y = 45.0f + y;
-        iconDispGx(&pos2, ICON_DISP_2D, ICON_096, 1.0f);
+        iconDispGx(&pos2, ICON_FLAG_2D, 1.0f, ICON_AC_GAUGE_MARKER);
     }
 }
 

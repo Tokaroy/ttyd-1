@@ -1,17 +1,13 @@
 // Battle information: the data passed in and out of a battle (mode, party, first strike, result, item drops).
+
+#include "version.h"
 #include "battle/battle_information.h"
 #include "battle/battle.h"
 #include "evt/evt_cmd.h"
 #include "mario/mario_pouch.h"
 #include "system.h"
 #include "manager/evtmgr_cmd.h"
-#include "version.h"
-#include "evt/evt_story.h"
-
-// no automatic inlining in this unit, as in the original (the object differs without it)
-#pragma auto_inline off
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
+#include "battle/battle_unit.h"
 
 /** Stores the battle mode in the info passed from the field to the battle. */
 void BattleInformationSetMode(FieldBattleInfo* info, u32 mode) {
@@ -29,10 +25,10 @@ void BattleInformationSetParty(FieldBattleInfo* info, BattleUnitType party) {
 /**
  * Stores how the battle started: seq_battle passes 0 when no first strike happened, else 1, 2, 3, ...
  * from the field hit kind (fbat->hitKind) that began it.
- * The field is named partyId but holds this first-strike kind.
+ * The firstAttack field holds this first-strike kind.
  */
-void BattleInformationSetFirstAttack(FieldBattleInfo* info, u32 partyId) {
-    info->partyId = partyId;
+void BattleInformationSetFirstAttack(FieldBattleInfo* info, u32 type) {
+    info->firstAttack = type;
 }
 
 /**
@@ -41,9 +37,9 @@ void BattleInformationSetFirstAttack(FieldBattleInfo* info, u32 partyId) {
  */
 void BattleInformationInit(FieldBattleInfo* info) {
     BattleInformationSetMode(info, 0);
-    BattleInformationSetParty(info, 0);
-    BattleInformationSetFirstAttack(info, 0);
-    BattleInformationSetResult(info, 0);
+    BattleInformationSetParty(info, UNIT_NULL);
+    BattleInformationSetFirstAttack(info, FIRST_ATTACK_NONE);
+    BattleInformationSetResult(info, BATTLE_RESULT_NONE);
     info->setup = NULL;
     info->coins = 0;
     info->ruleType = 0;
@@ -66,31 +62,16 @@ void BattleInformationSetResult(FieldBattleInfo* info, u32 result) {
 s32 BattleInformationGetResult(FieldBattleInfo* info) {
     return info->result;
 }
-typedef struct ItemHogTable {
-#if VERSION >= VERSION_US
-    ItemType items[25];
-#else
-    ItemType items[20];
-#endif
-} ItemHogTable;
-
-/**
- * Item Hog drops: Dried Shrooms (three times), Fright Mask, Mushroom, Honey Syrup, Tasty Tonic, Fire Flower,
- * Volt Shroom and POW Block. BattleInformationSetDropMaterial picks one of the 20 (US on: 25) slots at random,
- * so the empty slots leave about half the rolls without an item.
- */
-const ItemHogTable N_item_hog_table = {
-    {0x98, 0x98, 0x98, 0xA2, 0x94, 0x9A, 0x99, 0x84, 0x87, 0x8B}
-};
 
 /**
  * Rolls the drops after a won battle into the NPC's battle setup:
  * hearts and flowers from the group's HP and FP drop tables according to Mario's remaining HP and FP percentage,
  * then one item, chosen by weight between none,
  * a random pick from the enemy's drop table and one of the enemy's held items.
- * Item Hog multiplies the item weights (by 2n+2 for n badges in the demos, n+1 later)
- * and adds a pick from N_item_hog_table: in the demos and JP only when the held-item roll finds nothing to drop,
- * from US on whenever no item dropped. From JP on, nothing drops before Frankly's house.
+ * Item Hog multiplies the item weights (by 2n+2 for n badges in the early demos, n+1 later)
+ * and adds a pick from the item hog table: in the early demos and JP only when the held-item roll finds nothing to drop,
+ * from US on whenever no item dropped. From JP on, before Frankly's house the normal held/random item roll
+ * is disabled, but hearts and flowers are not.
  */
 void BattleInformationSetDropMaterial(FieldBattleInfo* info) {
     NpcBattleInfo* setup = info->setup;
@@ -108,7 +89,6 @@ void BattleInformationSetDropMaterial(FieldBattleInfo* info) {
     ItemDropData* drop;
     ItemDropData* p;
     ItemType item;
-    ItemHogTable hog;
 
     pct = mario->currentHp * 100 / mario->maxHp;
     if (pct > 100) {
@@ -154,19 +134,19 @@ void BattleInformationSetDropMaterial(FieldBattleInfo* info) {
     random = group->randomItemWeight;
     none = group->noItemWeight;
     type = 0;
-#if VERSION >= VERSION_JP
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) <= STORY_STG0_16_FRANKLYS_HOUSE) {
+#if VERSION <= VERSION_DEMO_JP
+    n = pouchEquipCheckBadge(ITEM_ITEM_HOG);
+    if (n >= 1) {
+        held *= n * 2 + 2;
+        random *= n * 2 + 2;
+#else
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) <= STG0_16_FRANKLYS_HOUSE) {
         random = 0;
         held = 0;
         none = 100;
     }
-#endif
     n = pouchEquipCheckBadge(ITEM_ITEM_HOG);
     if (n >= 1) {
-#if VERSION <= VERSION_DEMO_JP
-        held *= n * 2 + 2;
-        random *= n * 2 + 2;
-#else
         held *= n + 1;
         random *= n + 1;
 #endif
@@ -177,7 +157,7 @@ void BattleInformationSetDropMaterial(FieldBattleInfo* info) {
     } else if ((r -= held) < 0) {
         type = 2;
     }
-    setup->itemDropped = 0;
+    setup->itemDropped = ITEM_NULL;
     switch (type) {
         case 0:
             break;
@@ -186,7 +166,7 @@ void BattleInformationSetDropMaterial(FieldBattleInfo* info) {
             p = drop;
             if (drop) {
                 sum = 0;
-                for (; p->dropWeight > 0 || p->type != 0; p++) {
+                for (; p->dropWeight > 0 || p->type != ITEM_NULL; p++) {
                     sum += p->dropWeight;
                 }
                 if (sum > 0) {
@@ -216,21 +196,21 @@ void BattleInformationSetDropMaterial(FieldBattleInfo* info) {
                     }
                 }
                 if (i >= 8) {
-                    setup->itemDropped = 0;
+                    setup->itemDropped = ITEM_NULL;
                 }
             }
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
             else if (pouchEquipCheckBadge(ITEM_ITEM_HOG) >= 1) {
-                hog = N_item_hog_table;
-                setup->itemDropped = hog.items[irand(20)];
+                ItemType hog[20] = {ITEM_DRIED_SHROOM, ITEM_DRIED_SHROOM, ITEM_DRIED_SHROOM, ITEM_FRIGHT_MASK, ITEM_MUSHROOM, ITEM_HONEY_SYRUP, ITEM_TASTY_TONIC, ITEM_FIRE_FLOWER, ITEM_VOLT_SHROOM, ITEM_POW_BLOCK};
+                setup->itemDropped = hog[irand(20)];
             }
 #endif
             break;
     }
 #if VERSION >= VERSION_US
-    if (setup->itemDropped == 0 && pouchEquipCheckBadge(ITEM_ITEM_HOG) >= 1) {
-        hog = N_item_hog_table;
-        setup->itemDropped = hog.items[irand(25)];
+    if (setup->itemDropped == ITEM_NULL && pouchEquipCheckBadge(ITEM_ITEM_HOG) >= 1) {
+        ItemType hog[25] = {ITEM_DRIED_SHROOM, ITEM_DRIED_SHROOM, ITEM_DRIED_SHROOM, ITEM_FRIGHT_MASK, ITEM_MUSHROOM, ITEM_HONEY_SYRUP, ITEM_TASTY_TONIC, ITEM_FIRE_FLOWER, ITEM_VOLT_SHROOM, ITEM_POW_BLOCK};
+        setup->itemDropped = hog[irand(25)];
     }
 #endif
 }

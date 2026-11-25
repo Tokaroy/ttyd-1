@@ -1,4 +1,5 @@
 // Paper Mario 64 magic effect 3 at a point for a given life.
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,6 +9,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "eff/n64/eff_magic3_n64.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include <math.h>
 
@@ -22,19 +24,24 @@ typedef struct EffMagic3N64Work {
     s32 age;      // 0x2C
 } EffMagic3N64Work;
 
-static void effMagic3Main(EffectEntry* effect);
-static void effMagic3Disp(CameraId cameraId, EffectEntry* effect);
+// Stripped: nothing reads it (JP demo map: UNUSED, 0x24, first in this file's .data). Every 0x24 color_rotation_data
+// table of the other effects (eff_damage_star, eff_kiss, eff_recovery, eff_onpu_n64, eff_peach_dust_n64, ...) holds
+// these twelve colours, so this one takes them.
+static u8 color_rotation_data[] = {
+    0xFE, 0xAC, 0xAC, 0xFE, 0xAC, 0xD5, 0xFE, 0xB4, 0x9A, 0xD5, 0xB4, 0xFE,
+    0xB4, 0xB4, 0xFE, 0xB4, 0xDD, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5,
+    0xB4, 0xFE, 0xB4, 0xD5, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5, 0xAC,
+};
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_propagation off
-// FAKE: strength reduction optimisation off for effMagic3N64Entry: the original register allocation and scheduling need it
-#pragma opt_strength_reduction off
+static void effMagic3Main(EffectEntry* effect);
+static void effMagic3Disp(CameraId cameraId, void* payload);
+static effN64Vtx size32x16_tex64x32_vtx[4];
+
 /**
  * Spawns five sparks at (x, y, z) that shoot upward in a 100-degree fan facing the camera and
  * then die out over life frames. Via evt_eff64 "magic3_n64"; no script callers found.
  */
 EffectEntry* effMagic3N64Entry(s32 type, f32 x, f32 y, f32 z, s32 life) {
-    s32 j;
     EffectEntry* effect;
     EffMagic3N64Work* w;
     f32 nx, ny, nz;
@@ -46,10 +53,10 @@ EffectEntry* effMagic3N64Entry(s32 type, f32 x, f32 y, f32 z, s32 life) {
     Vec axis;
 
     effect = effEntry();
-    nz = 0.0f;
+    nx = nz = 0.0f;
     ny = -1.0f;
-    nx = 0.0f;
-    inv = nz + (nx * nx + 1.0f);
+
+    inv = nx * nx + ny * ny + nz * nz;
     if (!inv) {
         return NULL;
     }
@@ -57,6 +64,8 @@ EffectEntry* effMagic3N64Entry(s32 type, f32 x, f32 y, f32 z, s32 life) {
     nx *= inv;
     ny *= inv;
     nz *= inv;
+
+    // The perpendicular vector (px, py, pz) and the second inv are computed but never used; retail code, kept.
     if (nx) {
         px = -ny / nx;
         py = 1.0f;
@@ -85,7 +94,7 @@ EffectEntry* effMagic3N64Entry(s32 type, f32 x, f32 y, f32 z, s32 life) {
     w = __memAlloc(HEAP_EFFECT, sizeof(EffMagic3N64Work) * 5);
     effect->userdata = w;
     effect->callback = effMagic3Main;
-    for (i = 0, j = 0; i < 5; i++, w++, j += 100) {
+    for (i = 0; i < 5; i++, w++) {
         rad = 6.2831855f * camGetPtr(CAMERA_3D)->viewYaw / 360.0f;
         {
             Vec dir = {0.0f, 0.0f, 0.0f};
@@ -101,7 +110,7 @@ EffectEntry* effMagic3N64Entry(s32 type, f32 x, f32 y, f32 z, s32 life) {
         w->velocity.x = 0.6f * (mtx[0][0] * nx + mtx[0][1] * ny + mtx[0][2] * nz);
         w->velocity.y = mtx[1][0] * nx + mtx[1][1] * ny + mtx[1][2] * nz;
         w->velocity.z = 0.6f * (mtx[2][0] * nx + mtx[2][1] * ny + mtx[2][2] * nz);
-        w->rot = -(j / 4 - 50);
+        w->rot = -(i * 100 / 4 - 50);
         w->scale = 0.5f;
         w->life = life;
         w->age = 0;
@@ -110,9 +119,7 @@ EffectEntry* effMagic3N64Entry(s32 type, f32 x, f32 y, f32 z, s32 life) {
     return effect;
 }
 
-#pragma opt_propagation reset
-#pragma opt_strength_reduction reset
-/** Returns 3 * a + b (a size term used while the sparks fade out). */
+/** Returns 3 * a + b: the spark size from its two sine waves (alpha wave a, time wave b). */
 inline f32 magic3_scale(f32 a, f32 b) {
     return 3.0f * a + b;
 }
@@ -144,13 +151,14 @@ static void effMagic3Main(EffectEntry* effect) {
             work->velocity.y *= 0.8f;
             work->velocity.z *= 0.8f;
             work->alpha = (s32)(0.4f * (f32)(255 - work->alpha) + (f32)work->alpha);
-            work->scale = (f32)sin(t / 360.0f) + 3.0f * (f32)sin(6.2831855f * (f32)(work->alpha / 2) / 360.0f);
+            work->scale = magic3_scale((f32)sin(6.2831855f * (f32)(work->alpha / 2) / 360.0f), (f32)sin(t / 360.0f));
         }
         if (life < 5) {
             work->alpha *= 0.6f;
             work->velocity.x *= 0.7f;
             work->velocity.y *= 0.7f;
             work->velocity.z *= 0.7f;
+
             work->scale = (f32)(255 - work->alpha) / 30.0f +
                           magic3_scale((f32)sin(6.2831855f * (f32)(work->alpha / 2) / 360.0f), (f32)sin(t / 360.0f));
         }
@@ -158,11 +166,12 @@ static void effMagic3Main(EffectEntry* effect) {
         work->position.y += work->velocity.y;
         work->position.z += work->velocity.z;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMagic3Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effMagic3Disp, effect);
 }
 
 /** Draws each spark as a camera-facing, rotated streak quad (32x16, effect texture 0x1E). */
-static void effMagic3Disp(CameraId cameraId, EffectEntry* effect) {
+static void effMagic3Disp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffMagic3N64Work* work;
     GXTexObj texObj;
@@ -210,7 +219,7 @@ static void effMagic3Disp(CameraId cameraId, EffectEntry* effect) {
 }
 
 /** Camera-facing 32x16 streak each magic spark is drawn with. */
-effN64Vtx size32x16_tex64x32_vtx[] = {
+static effN64Vtx size32x16_tex64x32_vtx[] = {
     {-16, -8, 0, 0, 0, 0, 0, 0, 255},
     {16, -8, 0, 2048, 0, 0, 0, 0, 255},
     {16, 8, 0, 2048, 1024, 0, 0, 0, 255},

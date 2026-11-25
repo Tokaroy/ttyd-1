@@ -1,4 +1,6 @@
 // Dust and splash effects under Mario's feet (walking, landing, running on water).
+
+#include "version.h"
 #include "mario/mario.h"
 #include "mario/mariost.h"
 #include "driver/effdrv.h"
@@ -14,28 +16,26 @@
 #include "eff/n64/eff_water_damage_n64.h"
 #include "koopa.h"
 #include "libc_decls.h"
-#include "version.h"
+#include "mario/mario_kemuri.h"
 
-// FAKE: keeps the following function(s) out of line as in the target; removing it changes the code
-#pragma dont_inline on
 static void kemuri(void);
 static void kemuri_mugi(void);
-#if VERSION <= VERSION_DEMO_JP
-static inline void mario_kemuri_landon(void);
-#else
-void mario_kemuri_landon(void);
-#endif
+void kemuri_water(void);
+static void partyKemuri(PartyEntry* party);
 
 /**
  * Per-frame footstep effects for the player character,
  * run from marioMain and from Peach's and Bowser's main loops.
  * Picks by the floor's hit attribute: 0x1000 floors use kemuri_mugi,
- * water (0x100) splashes via mario_kemuri_landon,
+ * water (0x100) splashes via kemuri_water,
  * 0x100000 floors leave the N64-style kemuri7 puffs while walking,
  * and other floors get the normal dust from kemuri (not for Peach).
  * Nothing in tube mode, while entering a pipe or at a raised system level.
  */
 void mario_kemuri(void) {
+#if VERSION >= VERSION_JP
+    void kemuri_water(void);
+#endif
     static s32 ct = 8;
     static s32 left_or_right = 0;
     MarioWork* mario = marioGetPtr();
@@ -45,7 +45,7 @@ void mario_kemuri(void) {
     attr = 0;
 
     // no dust at a raised system level, in tube mode or while going through a pipe
-    if ((u32)marioStGetSystemLevel() != 0 || (mario->flags & MARIO_FLAG_TUBE_MODE) ||
+    if (marioStGetSystemLevel() != 0 || (mario->flags & MARIO_FLAG_TUBE_MODE) ||
         mario->currMotionId == MARIO_MOTION_DOKAN) {
         return;
     }
@@ -61,10 +61,10 @@ void mario_kemuri(void) {
         return;
     }
     if (attr & HIT_ATTR_SHALLOW_WATER) {
-        mario_kemuri_landon();
+        kemuri_water();
         return;
     }
-    if (attr & 0x100000) {
+    if (attr & HIT_ATTR_SNOW) {
         mario = marioGetPtr();
         if (mario->currMotionId != MARIO_MOTION_DASH && mario->currMotionId != MARIO_MOTION_WALK) {
             ct = 8;
@@ -81,7 +81,8 @@ void mario_kemuri(void) {
         }
         return;
     }
-    if (!(mario->flags & MARIO_FLAG_TUBE_MODE) && kpaGetBodyStatus() <= 0 && mario->characterId != 1) {
+    if (!(mario->flags & MARIO_FLAG_TUBE_MODE) && kpaGetBodyStatus() <= KPA_BODY_DRY &&
+        mario->characterId != CHARACTER_PEACH) {
         kemuri();
     }
 }
@@ -104,7 +105,12 @@ void mario_simple_kemuri(void) {
  * a 0x1000-floor effect, a water splash, or a dust puff, depending on the floor.
  * Skipped once if MARIO_TRIG_FLAG_DISABLE_JUMP_KEMURI is set, which it clears.
  */
-void mario_land_kemuri(void) {
+// Original name from the JP demo map, where mot_jabara calls it; there the water splash below is the stripped
+// kemuri_water (0x1a4, inlined everywhere).
+void mario_kemuri_landon(void) {
+#if VERSION >= VERSION_JP
+    void kemuri_water(void);
+#endif
     MarioWork* mario = marioGetPtr();
     HitEntry* hit = mario->hitobjStandOn;
     u32 attr;
@@ -118,7 +124,7 @@ void mario_land_kemuri(void) {
             if (attr & HIT_ATTR_GRASS) {
                 kemuri_mugi();
             } else if (attr & HIT_ATTR_SHALLOW_WATER) {
-                mario_kemuri_landon();
+                kemuri_water();
             } else {
                 eff = effKemuriEntry(0, mario->position.x, mario->position.y, mario->position.z, 0.0f);
                 if (mario->flags & MARIO_FLAG_BG_MODE) {
@@ -129,16 +135,20 @@ void mario_land_kemuri(void) {
     }
 }
 
-// The demo has no mri_05 splash type, and the function is inlined into its two callers.
+/**
+ * Water effects at Mario's feet: a splash and a ripple on the first frame of a jump (at most every 10 frames), a
+ * ripple every 30 to 49 frames while he stands, walks or dashes (and at once on landing), and a splash every 20 frames
+ * while he walks or dashes and on landing. JP and later use other splash types in mri_05.
+ */
 #if VERSION <= VERSION_DEMO_JP
 static inline
 #endif
-    void mario_kemuri_landon(void) {
+
+    void kemuri_water(void) {
     static s32 cnt = 0;
     static s32 cnt2 = 10;
     MarioWork* mario = marioGetPtr();
     s32 type = 0;
-
 #if VERSION >= VERSION_JP
     if (strcmp(gp->currentMapName, "mri_05") == 0) {
         type = 10;
@@ -170,10 +180,9 @@ static inline
 }
 
 /**
- * Effects for floors with hit attribute 0x1000.
- * On the Great Tree maps (mri) it makes water-drop effects while standing and walking;
- * elsewhere it throws up mugi (wheat) puffs on jumping and every few frames while walking or dashing.
- * Guess: 0x1000 marks tall grass or wet ground, from the effects used.
+ * Effects for floors with HIT_ATTR_GRASS. On the Great Tree maps (mri) water-drop effects: every 30 frames while
+ * Mario stands, every 20 frames (and on landing) while he walks or dashes. Elsewhere mugi (wheat) puffs: on the first
+ * frame of a jump (at most every 10 frames) and every few frames while he walks or dashes.
  */
 static void kemuri_mugi(void) {
     static f32 dir = 0;
@@ -218,7 +227,7 @@ static void kemuri_mugi(void) {
 
 /**
  * Normal dust: a puff when Mario lands on a floor after being airborne,
- * and trailing dust every 7 frames while dashing.
+ * and trailing dust every eight calls while Mario dashes (Bowser's interval depends on his size level).
  * For Bowser (characterId 2) the landing puff and the dash dust grow with his size level (kpaGetLevel).
  */
 static void kemuri(void) {
@@ -236,7 +245,7 @@ static void kemuri(void) {
             x = mario->position.x;
             y = mario->position.y;
             z = mario->position.z;
-            if (mario->characterId == 2) {
+            if (mario->characterId == CHARACTER_BOWSER) {
                 eff = effKemuriEntry(0, x, y, 10.0f + z, 0.0f);
                 ((effKemuriData*)eff->userdata)->scale = kpaGetBaseScale(kpaGetLevel());
             } else {
@@ -245,16 +254,14 @@ static void kemuri(void) {
         }
     } else if (mario->currMotionId != MARIO_MOTION_DASH) {
         ct = 7;
-    } else if (mario->characterId != 2) {
+    } else if (mario->characterId != CHARACTER_BOWSER) {
         if (ct++ > 6) {
             ct = 0;
             sincosf(&s, &c, 6.2831855f * reviseAngle(-mario->directionView) / 360.0f);
-            {
-                x = mario->position.x + 0.2f * (mario->wPlayerCollisionBox.x * s);
-                y = 1.5f + mario->position.y;
-                z = mario->position.z + 0.2f * (mario->wPlayerCollisionBox.x * c);
-                eff = effKemuri2Entry(0, x, y, z, s, c);
-            }
+            x = mario->position.x + 0.2f * (mario->wPlayerCollisionBox.x * s);
+            y = 1.5f + mario->position.y;
+            z = mario->position.z + 0.2f * (mario->wPlayerCollisionBox.x * c);
+            eff = effKemuri2Entry(0, x, y, z, s, c);
             if (mario->flags & MARIO_FLAG_BG_MODE) {
                 ((effKemuri2Data*)eff->userdata)->scale2 = 0.6f;
             }
@@ -262,7 +269,7 @@ static void kemuri(void) {
     } else if (--ct <= 0) {
         f32 scale, dist;
         sincosf(&s, &c, 6.2831855f * reviseAngle(-mario->directionView) / 360.0f);
-        sincosf(&s, &c, toMovedirSimple(180.0f + (kpaGetStageViewType() == 0 ? mario->displayDirectionTarget : mario->displayDirection)));
+        sincosf(&s, &c, toMovedirSimple(180.0f + (kpaGetStageViewType() == KPA_VIEW_SIDE ? mario->displayDirectionTarget : mario->displayDirection)));
         switch (kpaGetLevel()) {
             case 0:
                 ct = 4;
@@ -293,91 +300,71 @@ static void kemuri(void) {
     }
 }
 
-/** US and PAL make no dust at a raised system level, in run mode 10 or on hit attribute 0x100 */
-#if VERSION >= VERSION_US
-void party_kemuri(PartyEntry* party) {
-
-    if ((u32)marioStGetSystemLevel() == 0) {
-        if (party->runMode != 10) {
-            if (party->moveKind != 1) {
-                if (party->runMode == 3 && party->currentMemberId == PARTY_MEMBER_YOSHI) {
-                    if (party->hitobjStandOn != NULL) {
-                        if (!(hitGetAttr(party->hitobjStandOn) & HIT_ATTR_SHALLOW_WATER)) {
-                            if (party->moveSpeed < 2.0f) {
-                            } else if (party->kemuriTimer++ > 6) {
-                                {
-                                    f32 x, y, z;
-                                    f32 c, s;
-                                    party->kemuriTimer = 0;
-                                    sincosf(&s, &c, 6.2831855f * reviseAngle(-party->targetDir) / 360.0f);
-                                    effKemuri2Entry(0, party->position.x + 0.2f * (party->width * s), 1.5f + party->position.y, party->position.z + 0.2f * (party->width * c), s, c);
-                                }
-                            }
-                        }
-                    } else {
-                        party->kemuriTimer = 4;
-                    }
-                } else if (party->motionId == 1) {
-                    if (party->hitobjStandOn != NULL) {
-                        if (!(hitGetAttr(party->hitobjStandOn) & HIT_ATTR_SHALLOW_WATER)) {
-                            if (party->moveSpeed < 2.0f) {
-                            } else if (party->kemuriTimer++ > 6) {
-                                {
-                                    f32 x, y, z;
-                                    f32 c, s;
-                                    party->kemuriTimer = 0;
-                                    sincosf(&s, &c, 6.2831855f * reviseAngle(-party->targetDir) / 360.0f);
-                                    effKemuri2Entry(0, party->position.x + 0.2f * (party->width * s), 1.5f + party->position.y, party->position.z + 0.2f * (party->width * c), s, c);
-                                }
-                            }
-                        }
-                    } else {
-                        party->kemuriTimer = 4;
-                    }
-                }
-            }
-        }
-    }
-}
-#else
 /**
  * Dust trail behind the partner, run each frame from party.c:
- * every 7 frames while it walks at speed 2 or more, or while Yoshi carries Mario.
- * The demo version also puffs over water and at any system level.
+ * every eight qualifying updates while it walks at speed 2 or more, or while Yoshi carries Mario.
+ * JP and the early demos also puff over water, in pipe mode and at any system level.
  */
 void party_kemuri(PartyEntry* party) {
-
-    if (party->moveKind != 1) {
-        if (party->runMode == 3 && party->currentMemberId == PARTY_MEMBER_YOSHI) {
-            if (party->hitobjStandOn != NULL) {
-                if (party->moveSpeed < 2.0f) {
-                    party->kemuriTimer = 7;
-                } else if (party->kemuriTimer++ > 6) {
-                    f32 c, s;
-                    f32 x, y, z;
-                    party->kemuriTimer = 0;
-                    sincosf(&s, &c, 6.2831855f * reviseAngle(-party->targetDir) / 360.0f);
-                    effKemuri2Entry(0, party->position.x + 0.2f * (party->width * s), 1.5f + party->position.y, party->position.z + 0.2f * (party->width * c), s, c);
+#if VERSION >= VERSION_US
+    if (marioStGetSystemLevel() == 0) {
+        if (party->runMode != PARTY_RUN_PIPE) {
+            if (party->moveKind != 1) {
+                if (party->runMode == PARTY_RUN_USE && party->currentMemberId == PARTY_YOSHI) {
+                    if (party->hitobjStandOn != NULL) {
+                        if (!(hitGetAttr(party->hitobjStandOn) & HIT_ATTR_SHALLOW_WATER)) {
+                            partyKemuri(party);
+                        }
+                    } else {
+                        party->kemuriTimer = 4;
+                    }
+                } else if (party->motionId == PARTY_MOTION_WALK) {
+                    if (party->hitobjStandOn != NULL) {
+                        if (!(hitGetAttr(party->hitobjStandOn) & HIT_ATTR_SHALLOW_WATER)) {
+                            partyKemuri(party);
+                        }
+                    } else {
+                        party->kemuriTimer = 4;
+                    }
                 }
+#else
+    if (party->moveKind != 1) {
+        if (party->runMode == PARTY_RUN_USE && party->currentMemberId == PARTY_YOSHI) {
+            if (party->hitobjStandOn != NULL) {
+                partyKemuri(party);
             } else {
                 party->kemuriTimer = 4;
             }
-        } else if (party->motionId == 1) {
+        } else if (party->motionId == PARTY_MOTION_WALK) {
             if (party->hitobjStandOn != NULL) {
-                if (party->moveSpeed < 2.0f) {
-                    party->kemuriTimer = 7;
-                } else if (party->kemuriTimer++ > 6) {
-                    f32 c, s;
-                    f32 x, y, z;
-                    party->kemuriTimer = 0;
-                    sincosf(&s, &c, 6.2831855f * reviseAngle(-party->targetDir) / 360.0f);
-                    effKemuri2Entry(0, party->position.x + 0.2f * (party->width * s), 1.5f + party->position.y, party->position.z + 0.2f * (party->width * c), s, c);
-                }
+                partyKemuri(party);
             } else {
                 party->kemuriTimer = 4;
+#endif
             }
         }
     }
 }
+
+/**
+ * One step of the partner's dust trail (party_kemuri): a puff every eight calls at speed 2 or more, offset
+ * behind the partner by a fifth of its width. Below speed 2 there is no puff; JP and the early demos then set
+ * the timer so the next faster step puffs at once.
+ */
+// Original name and size (0xc8) from the JP demo map (UNUSED there: every call is inlined). Where the US water
+// test sits (here or in the callers) is not fixed by the bytes.
+static void partyKemuri(PartyEntry* party) {
+    f32 s, c;
+
+    if (party->moveSpeed < 2.0f) {
+#if VERSION >= VERSION_US
+        return;
+#else
+        party->kemuriTimer = 7;
 #endif
-#pragma dont_inline reset
+    } else if (party->kemuriTimer++ > 6) {
+        party->kemuriTimer = 0;
+        sincosf(&s, &c, 6.2831855f * reviseAngle(-party->targetDir) / 360.0f);
+        effKemuri2Entry(0, party->position.x + 0.2f * (party->width * s), 1.5f + party->position.y, party->position.z + 0.2f * (party->width * c), s, c);
+    }
+}

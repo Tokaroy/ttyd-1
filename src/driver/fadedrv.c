@@ -1,5 +1,7 @@
 // Fade driver: screen transitions (iris, spot and colour fades, curtains, pipe and page-flip animations,
 // story-book frames) and the tec/soft-focus/white-out overlays.
+
+#include "version.h"
 #include "driver/fadedrv.h"
 #include "driver/animdrv.h"
 #include "driver/arcdrv.h"
@@ -14,27 +16,15 @@
 #include "memory.h"
 #include "system.h"
 #include <dolphin/dvd.h>
-#include "evt/evt_img.h"
 #include <string.h>
-#include "version.h"
 #include "libc_decls.h"
-
-#if VERSION >= VERSION_US
-// US-only named constant (dispdrv reads it by name), followed by a zero word
-#pragma force_active on
-/** 1.0 and 0.0 kept as named constants: the screen draw (dispdrv) reads the 1.0 for its depth scale. */
-const f32 fadeConstOne = 1.0f;
-const f32 fadeConstZero = 0.0f;
-#pragma force_active reset
-#endif
+#include "evt/evt_img.h"
+#include "driver/mapdrv.h"
 
 static FadeWork* wp;
 
 // local prototypes
-static void _callback(s32 error, DVDFileInfo* info);
 static void disp_texture(CameraId camId, void* param);
-static f32 z(void);
-static void zFill(void);
 static void disp_maku(CameraId camId, void* param);
 static void disp_tec(CameraId camId, void* param);
 static void disp_dummy_black(CameraId camId, void* param);
@@ -103,11 +93,39 @@ void fadeTexSetup(void) {
 }
 
 /**
+ * Calls evt_img_alloc_capture with these eight values as its script arguments: image name, capture slot,
+ * offscreen name (or 0), allocation mode and the screen rectangle x, y, width, height.
+ */
+// Original name, size (0x50) and slot (between fadeTexSetup and fadeEntry) from the JP demo map (UNUSED there:
+// every call is inlined). The body is the one that fits 0x50 with every value a parameter; the same function
+// sits in evt_mobj.c and (as _img_alloc_capture) in evt_cloud.c, whose written-out copies build the same as
+// calls. EvtWord parameters (no casts inside): the JP demo @N numbering leaves room for one label here, the
+// form with two casts takes three.
+static void test_img_alloc_capture(EvtWord name, EvtWord slot, EvtWord off, EvtWord mode, EvtWord x, EvtWord y,
+                                   EvtWord w, EvtWord h) {
+    EventEntry evt;
+    EvtWord args[10];
+
+    evt.args = args;
+    args[0] = name;
+    args[1] = slot;
+    args[2] = off;
+    args[3] = mode;
+    args[4] = x;
+    args[5] = y;
+    args[6] = w;
+    args[7] = h;
+    evt_img_alloc_capture(&evt, TRUE);
+}
+
+/**
  * Starts screen transition type over duration milliseconds in color.
- * The white fades become the colour fades in light grey; iris and spot fades last at least one second.
- * Slot 0 takes iris, spot and colour fades, slot 1 the curtain and stage animations,
- * slot 2 the pipe transitions, and the later slots the page flips
- * and the story-book frames (Mario, Peach, Bowser), each with the animation file it plays.
+ * The white fades become the colour fades in light grey; iris and spot fades last at least one second
+ * (except JP and later's FADE_IN_SPOT2/FADE_OUT_SPOT2, which become spot fades without that minimum).
+ * Slot 0 takes iris, spot and colour fades, slot 1 the curtain and stage animations (and the four-page flip),
+ * slot 2 the pipe transitions, slot 3 the page flips
+ * and the story-book frames (Mario, Peach, Bowser), slot 4 the two curtain-sides _TOP fades,
+ * each with the animation file it plays.
  */
 void fadeEntry(s32 type, s32 duration, GXColor color) {
     FadeEntry* entry;
@@ -116,7 +134,9 @@ void fadeEntry(s32 type, s32 duration, GXColor color) {
     if (!type) {
         return;
     }
-    if (type == FADE_IN_WHITE) { // the white fades are the colour fades in (240, 240, 240)
+
+    // types 16-21 are types 9, 10, 11, 12, 14 and 15 in near-white (0xF0F0F0) (JP and later numbers)
+    if (type == FADE_IN_WHITE) {
         type = FADE_IN_BLACK;
         color = (GXColor){0xF0, 0xF0, 0xF0, 0xFF};
     }
@@ -143,18 +163,21 @@ void fadeEntry(s32 type, s32 duration, GXColor color) {
     if ((type == FADE_IN_IRIS || type == FADE_OUT_IRIS) && duration < 1000) {
         duration = 1000;
     }
-#if VERSION >= VERSION_JP
-    if (type == FADE_IN_SPOT2) {
-        type = FADE_IN_SPOT;
-    } else if (type == FADE_OUT_SPOT2) {
-        type = FADE_OUT_SPOT;
-    } else
+#if VERSION <= VERSION_DEMO_JP
+    if ((type == 3 || type == 4 || type == 5 || type == 6) && duration < 1000) {
+#else
+    if (type == 7) {
+        type = 3;
+    } else if (type == 8) {
+        type = 4;
+    } else if ((type == 3 || type == 4 || type == 5 || type == 6) && duration < 1000) {
 #endif
-        if (((u32)(type - FADE_IN_SPOT) <= FADE_IN_SPOT_3D - FADE_IN_SPOT || type == FADE_OUT_SPOT_3D) && duration < 1000) {
         duration = 1000;
     }
+
     // no default: a type without a case here would go on with entry and id uninitialised
     switch (type) {
+#if VERSION <= VERSION_DEMO_JP
         case FADE_IN_IRIS:
         case FADE_OUT_IRIS:
         case FADE_IN_SPOT:
@@ -168,26 +191,62 @@ void fadeEntry(s32 type, s32 duration, GXColor color) {
         case FADE_COVER_BLACK_2D:
         case FADE_IN_BLACK_3D:
         case FADE_OUT_BLACK_3D:
+#else
+        case 0x1:
+        case 0x2:
+        case 0x3:
+        case 0x4:
+        case 0x5:
+        case 0x6:
+        case 0x9:
+        case 0xA:
+        case 0xB:
+        case 0xC:
+        case 0xD:
+        case 0xE:
+        case 0xF:
+#endif
             id = 0;
             entry = &wp->entries[0];
             fadeReset(2);
 #if VERSION >= VERSION_JP
             entry->delayFrames = 0;
             switch (type) {
-                case FADE_IN_IRIS:
-                case FADE_IN_SPOT:
-                case FADE_IN_SPOT_3D:
-                case FADE_IN_BLACK:
-                case FADE_IN_BLACK_2D:
-                case FADE_IN_BLACK_3D:
+                case 1:
+                case 3:
+                case 5:
+                case 9:
+                case 11:
+                case 14:
                     if (duration) {
                         entry->delayFrames = 2;
                     }
                     break;
             }
-#endif
             break;
-        case FADE_CURTAIN_VERTICAL_A1:
+        case FADE_CURTAIN_UP_DOWN_A1:
+        case 0x17:
+        case 0x18:
+        case 0x19:
+        case 0x1A:
+        case 0x1B:
+        case 0x1C:
+        case 0x1D:
+        case 0x1E:
+        case 0x1F:
+        case 0x20:
+        case 0x21:
+        case 0x22:
+        case 0x23:
+        case 0x24:
+        case 0x25:
+        case 0x26:
+        case 0x27:
+        case 0x28:
+        case 0x33:
+#else
+            break;
+        case FADE_CURTAIN_UP_DOWN_A1:
         case FADE_CURTAIN_VERTICAL_A2:
         case FADE_CURTAIN_SIDES_A1_3D:
         case FADE_CURTAIN_SIDES_A2_3D:
@@ -207,9 +266,11 @@ void fadeEntry(s32 type, s32 duration, GXColor color) {
         case FADE_CURTAIN_LEAVE:
         case FADE_CURTAIN_ENTER:
         case FADE_PAGE_FLIP_FOUR:
+#endif
             id = 1;
             entry = &wp->entries[1];
             break;
+#if VERSION <= VERSION_DEMO_JP
         case FADE_PIPE_UP_A1:
         case FADE_PIPE_UP_A2:
         case FADE_PIPE_DOWN_A1:
@@ -218,10 +279,21 @@ void fadeEntry(s32 type, s32 duration, GXColor color) {
         case FADE_PIPE_LEFT_A2:
         case FADE_PIPE_RIGHT_A1:
         case FADE_PIPE_RIGHT_A2:
+#else
+        case 0x29:
+        case 0x2A:
+        case 0x2B:
+        case 0x2C:
+        case 0x2D:
+        case 0x2E:
+        case 0x2F:
+        case 0x30:
+#endif
             id = 2;
             entry = &wp->entries[2];
             fadeReset(0);
             break;
+#if VERSION <= VERSION_DEMO_JP
         case FADE_PAGE_FLIP_Z1:
         case FADE_PAGE_FLIP_A1:
         case FADE_PAGE_FLIP_Z1_OFFSCREEN:
@@ -235,26 +307,54 @@ void fadeEntry(s32 type, s32 duration, GXColor color) {
         case FADE_STORY_MARIO_A2:
         case FADE_STORY_PEACH_A2:
         case FADE_STORY_BOWSER_A2:
+#else
+        case 0x31:
+        case 0x32:
+        case 0x34:
+        case 0x35:
+        case 0x36:
+        case 0x37:
+        case 0x38:
+        case 0x39:
+        case 0x3A:
+        case 0x3B:
+        case 0x3C:
+        case 0x3D:
+        case 0x3E:
+#endif
             id = 3;
             entry = &wp->entries[3];
             switch (type) {
+#if VERSION <= VERSION_DEMO_JP
                 case FADE_PAGE_FLIP_A1:
                 case FADE_PAGE_FLIP_A1_OFFSCREEN:
                 case FADE_STORY_MARIO_A3:
                 case FADE_STORY_PEACH_A3:
                 case FADE_STORY_BOWSER_A3:
+#else
+                case 0x32:
+                case 0x35:
+                case 0x36:
+                case 0x38:
+                case 0x3A:
+#endif
                     fadeReset(0);
                     break;
             }
             break;
+#if VERSION <= VERSION_DEMO_JP
         case FADE_CURTAIN_SIDES_A1_TOP:
         case FADE_CURTAIN_SIDES_A2_TOP:
+#else
+        case 0x3F:
+        case 0x40:
+#endif
             id = 4;
             entry = &wp->entries[4];
             break;
     }
     entry->flags = 0;
-    entry->flags |= FADE_ENTRY_ACTIVE;
+    entry->flags |= FADE_FLAG_ACTIVE;
     entry->type = type;
     entry->duration = duration;
     entry->color = color;
@@ -313,7 +413,7 @@ void fadeEntry(s32 type, s32 duration, GXColor color) {
             entry->animName = "A_2";
             entry->imageType = 2;
             break;
-        case FADE_CURTAIN_VERTICAL_A1:
+        case FADE_CURTAIN_UP_DOWN_A1:
             entry->animFile = "OFF_d_maku_up_down";
             entry->animName = "A_1";
             entry->imageType = 2;
@@ -450,13 +550,13 @@ void fadeTecOff(void) {
 
 /** Turns the tec overlay on, fading it in over about 25 frames. */
 void fadeTecSoftOn(void) {
-    wp->flags |= FADE_WORK_TEC | FADE_WORK_TEC_SOFT_IN;
+    wp->flags |= (FADE_WORK_TEC_SOFT_IN | FADE_WORK_TEC);
     wp->softness = 0.0f;
 }
 
 /** Fades the tec overlay out over about 25 frames. */
 void fadeTecSoftOff(void) {
-    wp->flags |= FADE_WORK_TEC | FADE_WORK_TEC_SOFT_OUT;
+    wp->flags |= (FADE_WORK_TEC_SOFT_OUT | FADE_WORK_TEC);
     wp->softness = 1.0f;
 }
 
@@ -470,7 +570,7 @@ void fadeSoftFocusOff(void) {
     wp->flags &= ~FADE_WORK_SOFT_FOCUS;
 }
 
-/** Covers the 3D scene with white (no fade in this driver); no caller in this tree. */
+/** Covers the 3D scene with white (no fade in this driver); called from usu_00's room code. */
 void fadeWhiteOutOn(void) {
     wp->flags |= FADE_WORK_WHITE_OUT;
 }
@@ -501,7 +601,7 @@ void fadeSetAnimOfsPos(f32 x, f32 y) {
 void fadeSetAnimVirtualPos(f32 x, f32 y, f32 z) {
     FadeEntry* entry = &wp->entries[1];
     entry->VirtualPos = (Vec){x, y, z};
-    entry->flags |= FADE_ENTRY_VIRTUAL_POS;
+    entry->flags |= FADE_FLAG_VIRTUAL_POS;
 }
 
 /**
@@ -512,26 +612,6 @@ void fadeSetOffscreenCallback(OffscreenCallback callback, void* param) {
     FadeEntry* entry = &wp->entries[3];
     entry->callback = callback;
     entry->offparam = param;
-}
-
-/**
- * Captures the current frame (608x480) into image name through the evt_img capture helper,
- * for the pipe and page-flip transitions to animate.
- */
-static inline void fadeCapture(const char* name, const char* off, s32 mode) {
-    EventEntry evt;
-    EvtWord args[10];
-
-    evt.args = args;
-    args[0] = (EvtWord)name;
-    args[1] = 0;
-    args[2] = (EvtWord)off;
-    args[3] = mode;
-    args[4] = 0;
-    args[5] = 0;
-    args[6] = 608;
-    args[7] = 480;
-    evt_img_alloc_capture(&evt, TRUE);
 }
 
 /**
@@ -546,31 +626,30 @@ void fadeMain(void) {
 
     entry = &wp->entries[0];
     for (i = 0; i < 5; i++, entry++) {
-        if (!(entry->flags & FADE_ENTRY_ACTIVE)) {
+        if (!(entry->flags & FADE_FLAG_ACTIVE)) {
             continue;
         }
         switch (entry->type) {
+#if VERSION <= VERSION_DEMO_JP
             case FADE_IN_IRIS:
             case FADE_IN_SPOT:
             case FADE_IN_SPOT_3D:
             case FADE_IN_BLACK:
             case FADE_IN_BLACK_2D:
             case FADE_IN_BLACK_3D:
+#else
+            case 1:
+            case 3:
+            case 5:
+            case 9:
+            case 11:
+            case 14:
+#endif
                 switch (entry->state) {
                     case 0:
-#if VERSION <= VERSION_DEMO_JP
-                        entry->elapsed += VERSION_PICK(16.666666f, 1000.0f / gp->framerate);
-                        entry->progress = entry->elapsed / entry->duration;
-                        entry->progress = 1.0f - entry->progress;
-                        entry->rotation += 10.0f;
-                        if (entry->progress < 0.0f) {
-                            entry->progress = 0.0f;
-                            entry->flags |= FADE_ENTRY_FINISHED;
-                            entry->state++;
-                        }
-#else
+#if VERSION >= VERSION_JP
                         if (entry->duration != 0) {
-                            if ((s32)entry->delayFrames != 0) {
+                            if (entry->delayFrames != 0) {
                                 entry->delayFrames--;
                             } else {
                                 entry->elapsed += VERSION_PICK(16.666666f, 1000.0f / gp->framerate);
@@ -580,18 +659,29 @@ void fadeMain(void) {
                             entry->rotation += 10.0f;
                             if (entry->progress < 0.0f) {
                                 entry->progress = 0.0f;
-                                entry->flags |= FADE_ENTRY_FINISHED;
+                                entry->flags |= FADE_FLAG_DONE;
                                 entry->state++;
                             }
                         } else {
                             entry->progress = 0.0f;
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
+                            entry->state++;
+                        }
+#else
+                        entry->elapsed += VERSION_PICK(16.666666f, 1000.0f / gp->framerate);
+                        entry->progress = entry->elapsed / entry->duration;
+                        entry->progress = 1.0f - entry->progress;
+                        entry->rotation += 10.0f;
+                        if (entry->progress < 0.0f) {
+                            entry->progress = 0.0f;
+                            entry->flags |= FADE_FLAG_DONE;
                             entry->state++;
                         }
 #endif
                         break;
                 }
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_OUT_IRIS:
             case FADE_OUT_SPOT:
             case FADE_OUT_SPOT_3D:
@@ -599,36 +689,46 @@ void fadeMain(void) {
             case FADE_OUT_BLACK_2D:
             case FADE_COVER_BLACK_2D:
             case FADE_OUT_BLACK_3D:
+#else
+            case 2:
+            case 4:
+            case 6:
+            case 10:
+            case 12:
+            case 13:
+            case 15:
+#endif
                 switch (entry->state) {
                     case 0:
-#if VERSION <= VERSION_DEMO_JP
-                        entry->elapsed += VERSION_PICK(16.666666f, 1000.0f / gp->framerate);
-                        entry->progress = entry->elapsed / entry->duration;
-                        entry->rotation -= 10.0f;
-                        if (entry->progress > 1.0f) {
-                            entry->progress = 1.0f;
-                            entry->flags |= FADE_ENTRY_FINISHED;
-                            entry->state++;
-                        }
-#else
+#if VERSION >= VERSION_JP
                         if (entry->duration != 0) {
                             entry->elapsed += VERSION_PICK(16.666666f, 1000.0f / gp->framerate);
                             entry->progress = entry->elapsed / entry->duration;
                             entry->rotation -= 10.0f;
                             if (entry->progress > 1.0f) {
                                 entry->progress = 1.0f;
-                                entry->flags |= FADE_ENTRY_FINISHED;
+                                entry->flags |= FADE_FLAG_DONE;
                                 entry->state++;
                             }
                         } else {
                             entry->progress = 1.0f;
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
+                            entry->state++;
+                        }
+#else
+                        entry->elapsed += VERSION_PICK(16.666666f, 1000.0f / gp->framerate);
+                        entry->progress = entry->elapsed / entry->duration;
+                        entry->rotation -= 10.0f;
+                        if (entry->progress > 1.0f) {
+                            entry->progress = 1.0f;
+                            entry->flags |= FADE_FLAG_DONE;
                             entry->state++;
                         }
 #endif
                         break;
                 }
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_PIPE_UP_A1:
             case FADE_PIPE_UP_A2:
             case FADE_PIPE_DOWN_A1:
@@ -637,15 +737,25 @@ void fadeMain(void) {
             case FADE_PIPE_LEFT_A2:
             case FADE_PIPE_RIGHT_A1:
             case FADE_PIPE_RIGHT_A2:
+#else
+            case 0x29:
+            case 0x2A:
+            case 0x2B:
+            case 0x2C:
+            case 0x2D:
+            case 0x2E:
+            case 0x2F:
+            case 0x30:
+#endif
                 switch (entry->state) {
                     case 0:
-                        if ((s32)animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
+                        if (animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
                             if (entry->paperPoseId < 0 && (entry->type == FADE_PIPE_UP_A2 || entry->type == FADE_PIPE_DOWN_A2 || entry->type == FADE_PIPE_LEFT_A2 || entry->type == FADE_PIPE_RIGHT_A2)) {
-                                wp->flags |= FADE_WORK_BLACK_SCREEN;
+                                wp->flags |= FADE_WORK_LOAD_BLACK;
                             }
                             break;
                         }
-                        wp->flags &= ~FADE_WORK_BLACK_SCREEN;
+                        wp->flags &= ~FADE_WORK_LOAD_BLACK;
                         if (entry->paperPoseId >= 0) {
                             imgRelease(entry->image, entry->imageType);
                             animPaperPoseRelease(entry->paperPoseId);
@@ -659,62 +769,55 @@ void fadeMain(void) {
                         entry->image->animTime = animTimeGetTime(entry->imageType);
                         entry->image->animName = entry->animName;
                         imgClearVirtualPoint(entry->image);
-                        fadeCapture("fImg_dokan", NULL, 0);
+                        test_img_alloc_capture((EvtWord) "fImg_dokan", 0, 0, 0, 0, 0, 608, 480);
                         switch (entry->type) {
                             case FADE_PIPE_LEFT_A1:
 #if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN1"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403AB));
-#endif
                                 break;
                             case FADE_PIPE_RIGHT_A1:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN2"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403AC));
-#endif
                                 break;
                             case FADE_PIPE_UP_A1:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN3"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403AD));
-#endif
                                 break;
                             case FADE_PIPE_DOWN_A1:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN4"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403AE));
-#endif
                                 break;
                             case FADE_PIPE_LEFT_A2:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN5"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403AF));
-#endif
                                 break;
                             case FADE_PIPE_RIGHT_A2:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN6"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403B0));
-#endif
                                 break;
                             case FADE_PIPE_UP_A2:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN7"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403B1));
-#endif
                                 break;
                             case FADE_PIPE_DOWN_A2:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_MAP_DOKAN8"));
 #else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x403B2));
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN1 | PSND_SFX_KEEP));
+                                break;
+                            case FADE_PIPE_RIGHT_A1:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN2 | PSND_SFX_KEEP));
+                                break;
+                            case FADE_PIPE_UP_A1:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN3 | PSND_SFX_KEEP));
+                                break;
+                            case FADE_PIPE_DOWN_A1:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN4 | PSND_SFX_KEEP));
+                                break;
+                            case FADE_PIPE_LEFT_A2:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN5 | PSND_SFX_KEEP));
+                                break;
+                            case FADE_PIPE_RIGHT_A2:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN6 | PSND_SFX_KEEP));
+                                break;
+                            case FADE_PIPE_UP_A2:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN7 | PSND_SFX_KEEP));
+                                break;
+                            case FADE_PIPE_DOWN_A2:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_MAP_DOKAN8 | PSND_SFX_KEEP));
 #endif
                                 break;
                         }
@@ -722,12 +825,19 @@ void fadeMain(void) {
                         break;
                     case 1:
                         if (entry->image->loopTimes >= 1.0f) {
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
                             switch (entry->type) {
+#if VERSION <= VERSION_DEMO_JP
                                 case FADE_PIPE_UP_A2:
                                 case FADE_PIPE_DOWN_A2:
                                 case FADE_PIPE_LEFT_A2:
                                 case FADE_PIPE_RIGHT_A2:
+#else
+                                case 0x2A:
+                                case 0x2C:
+                                case 0x2E:
+                                case 0x30:
+#endif
                                     imgRelease(entry->image, entry->imageType);
                                     animPaperPoseRelease(entry->paperPoseId);
                                     entry->paperPoseId = -1;
@@ -739,6 +849,7 @@ void fadeMain(void) {
                         break;
                 }
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_PAGE_FLIP_Z1:
             case FADE_PAGE_FLIP_Z1_OFFSCREEN:
             case FADE_STORY_MARIO_A1:
@@ -747,9 +858,19 @@ void fadeMain(void) {
             case FADE_STORY_MARIO_A2:
             case FADE_STORY_PEACH_A2:
             case FADE_STORY_BOWSER_A2:
+#else
+            case 0x31:
+            case 0x34:
+            case 0x37:
+            case 0x39:
+            case 0x3B:
+            case 0x3C:
+            case 0x3D:
+            case 0x3E:
+#endif
                 switch (entry->state) {
                     case 0:
-                        if ((s32)animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
+                        if (animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
                             break;
                         }
                         if (entry->paperPoseId >= 0) {
@@ -759,7 +880,7 @@ void fadeMain(void) {
                             entry->image = NULL;
                         }
                         entry->paperPoseId = animPaperPoseEntry(entry->animFile, entry->imageType);
-                        animPoseSetMaterialFlagOn(entry->paperPoseId, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+                        animPoseSetMaterialFlagOn(entry->paperPoseId, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
                         imgEntry("fImg_peron", entry->imageType);
                         entry->image = imgNameToPtr("fImg_peron", entry->imageType);
                         entry->image->poseId = animPaperPoseGetId(entry->animFile, entry->imageType);
@@ -769,29 +890,42 @@ void fadeMain(void) {
                         switch (entry->type) {
                             case FADE_PAGE_FLIP_Z1_OFFSCREEN:
                                 offscreenEntry("fOff_peron");
-                                fadeCapture("fImg_peron", "fOff_peron", 0);
+                                test_img_alloc_capture((EvtWord) "fImg_peron", 0, (EvtWord) "fOff_peron", 0, 0, 0,
+                                                       608, 480);
                                 break;
+#if VERSION <= VERSION_DEMO_JP
                             case FADE_STORY_MARIO_A1:
                             case FADE_STORY_PEACH_A1:
                             case FADE_STORY_BOWSER_A1:
-                                fadeCapture("fImg_peron", NULL, 2);
-                                entry->image->camId = 10;
-                                entry->image->dispCamId = 10;
+#else
+                            case 0x37:
+                            case 0x39:
+                            case 0x3B:
+#endif
+                                test_img_alloc_capture((EvtWord) "fImg_peron", 0, 0, 2, 0, 0, 608, 480);
+                                entry->image->camId = CAMERA_FADE2;
+                                entry->image->dispCamId = CAMERA_FADE2;
 #if VERSION <= VERSION_DEMO_JP
                                 psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_STORY1"));
 #else
-                                psndSFXOn(SFX_NAME_WORD(0x403B4));
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_STORY1 | PSND_SFX_KEEP));
 #endif
                                 break;
+#if VERSION <= VERSION_DEMO_JP
                             case FADE_STORY_MARIO_A2:
                             case FADE_STORY_PEACH_A2:
                             case FADE_STORY_BOWSER_A2:
-                                fadeCapture("fImg_peron", NULL, 2);
-                                entry->image->camId = 9;
-                                entry->image->dispCamId = 9;
+#else
+                            case 0x3C:
+                            case 0x3D:
+                            case 0x3E:
+#endif
+                                test_img_alloc_capture((EvtWord) "fImg_peron", 0, 0, 2, 0, 0, 608, 480);
+                                entry->image->camId = CAMERA_FADE;
+                                entry->image->dispCamId = CAMERA_FADE;
                                 break;
                             default:
-                                fadeCapture("fImg_peron", NULL, 2);
+                                test_img_alloc_capture((EvtWord) "fImg_peron", 0, 0, 2, 0, 0, 608, 480);
                                 break;
                         }
                         entry->state++;
@@ -799,17 +933,26 @@ void fadeMain(void) {
                     case 1:
                         if (entry->image->loopTimes >= 1.0f) {
                             switch (entry->type) {
+#if VERSION <= VERSION_DEMO_JP
                                 case FADE_STORY_MARIO_A1:
                                 case FADE_STORY_PEACH_A1:
                                 case FADE_STORY_BOWSER_A1:
                                 case FADE_STORY_MARIO_A2:
                                 case FADE_STORY_PEACH_A2:
                                 case FADE_STORY_BOWSER_A2:
+#else
+                                case 0x37:
+                                case 0x39:
+                                case 0x3B:
+                                case 0x3C:
+                                case 0x3D:
+                                case 0x3E:
+#endif
                                     entry->image->animTime = animTimeGetTime(entry->imageType);
                                     entry->image->animName = "A_2";
                                     break;
                                 default:
-                                    entry->flags |= FADE_ENTRY_FINISHED;
+                                    entry->flags |= FADE_FLAG_DONE;
                                     break;
                             }
                             entry->state++;
@@ -817,17 +960,25 @@ void fadeMain(void) {
                         break;
                     case 2:
                         if (entry->image->loopTimes >= 1.0f) {
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
                             entry->state++;
                         }
                         break;
                 }
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_PAGE_FLIP_A1:
             case FADE_PAGE_FLIP_A1_OFFSCREEN:
             case FADE_STORY_MARIO_A3:
             case FADE_STORY_PEACH_A3:
             case FADE_STORY_BOWSER_A3:
+#else
+            case 0x32:
+            case 0x35:
+            case 0x36:
+            case 0x38:
+            case 0x3A:
+#endif
                 switch (entry->state) {
                     case 0:
                         entry->image = imgNameToPtr("fImg_peron", entry->imageType);
@@ -836,21 +987,26 @@ void fadeMain(void) {
                         entry->image->animName = entry->animName;
                         imgClearVirtualPoint(entry->image);
                         switch (entry->type) {
+#if VERSION <= VERSION_DEMO_JP
                             case FADE_STORY_MARIO_A3:
                             case FADE_STORY_PEACH_A3:
                             case FADE_STORY_BOWSER_A3:
-#if VERSION <= VERSION_DEMO_JP
                                 psndSFXOn(SFX_NAME_WORD("SFX_OFF_CHANGE_STORY2"));
 #else
-                                psndSFXOn(SFX_NAME_WORD(0x403B5));
+                            case 0x36:
+                            case 0x38:
+                            case 0x3A:
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_CHANGE_STORY2 | PSND_SFX_KEEP));
 #endif
                                 break;
+#if VERSION <= VERSION_DEMO_JP
                             case FADE_PAGE_FLIP_A1:
                             case FADE_PAGE_FLIP_A1_OFFSCREEN:
-#if VERSION <= VERSION_DEMO_JP
                                 psndSFXOn(SFX_NAME_WORD("SFX_OFF3_MAP_CHANGE1"));
 #else
-                                psndSFXOn(SFX_NAME_WORD(0x40365));
+                            case 0x32:
+                            case 0x35:
+                                psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF3_MAP_CHANGE1 | PSND_SFX_KEEP));
 #endif
                                 break;
                         }
@@ -858,7 +1014,7 @@ void fadeMain(void) {
                         break;
                     case 1:
                         if (entry->image->loopTimes >= 1.0f) {
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
                             imgRelease(entry->image, entry->imageType);
                             animPaperPoseRelease(entry->paperPoseId);
                             entry->paperPoseId = -1;
@@ -871,25 +1027,25 @@ void fadeMain(void) {
                         break;
                 }
                 break;
-            case FADE_CURTAIN_VERTICAL_A1:
+            case FADE_CURTAIN_UP_DOWN_A1:
                 switch (entry->state) {
                     case 0:
-                        if ((s32)animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
+                        if (animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
                             break;
                         }
                         if (entry->poseId >= 0) {
                             animPoseRelease(entry->poseId);
                         }
                         entry->poseId = animPoseEntry(entry->animFile, entry->imageType);
-                        animPoseSetMaterialFlagOn(entry->poseId, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+                        animPoseSetMaterialFlagOn(entry->poseId, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
                         animPoseSetAnim(entry->poseId, entry->animName, TRUE);
                         entry->animColor = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
-                        animPoseSetMaterialFlagOff(entry->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                        animPoseSetMaterialFlagOff(entry->poseId, MAP_OBJ_FLAG_COLOR);
                         entry->state++;
                     case 1:
                         animPoseMain(entry->poseId);
                         if (animPoseGetLoopTimes(entry->poseId) >= 1.0f) {
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
                             entry->state++;
                         }
                         break;
@@ -901,17 +1057,17 @@ void fadeMain(void) {
             case FADE_CURTAIN_VERTICAL_A2:
                 switch (entry->state) {
                     case 0:
-                        if ((s32)animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
+                        if (animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
                             break;
                         }
                         if (entry->poseId >= 0) {
                             animPoseRelease(entry->poseId);
                         }
                         entry->poseId = animPoseEntry(entry->animFile, entry->imageType);
-                        animPoseSetMaterialFlagOn(entry->poseId, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+                        animPoseSetMaterialFlagOn(entry->poseId, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
                         animPoseSetAnim(entry->poseId, entry->animName, TRUE);
                         entry->animColor = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
-                        animPoseSetMaterialFlagOff(entry->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                        animPoseSetMaterialFlagOff(entry->poseId, MAP_OBJ_FLAG_COLOR);
                         entry->state++;
                     case 1:
                         if (animPoseGetLoopTimes(entry->poseId) >= 0.5f) {
@@ -919,11 +1075,11 @@ void fadeMain(void) {
                             entry->animColor.g *= 0.98f;
                             entry->animColor.b *= 0.98f;
                             animPoseSetMaterialEvtColor(entry->poseId, entry->animColor);
-                            animPoseSetMaterialFlagOn(entry->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                            animPoseSetMaterialFlagOn(entry->poseId, MAP_OBJ_FLAG_COLOR);
                         }
                         animPoseMain(entry->poseId);
                         if (animPoseGetLoopTimes(entry->poseId) >= 1.0f) {
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
                             entry->state++;
                             animPoseRelease(entry->poseId);
                             entry->poseId = -1;
@@ -931,6 +1087,7 @@ void fadeMain(void) {
                         break;
                 }
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_CURTAIN_SIDES_A1_3D:
             case FADE_CURTAIN_SIDES_A2_3D:
             case FADE_CURTAIN_SIDES_Z1_3D:
@@ -949,44 +1106,68 @@ void fadeMain(void) {
             case FADE_PAGE_FLIP_FOUR:
             case FADE_CURTAIN_SIDES_A1_TOP:
             case FADE_CURTAIN_SIDES_A2_TOP:
+#else
+            case 0x18:
+            case 0x19:
+            case 0x1A:
+            case 0x1B:
+            case 0x1C:
+            case 0x1D:
+            case 0x1E:
+            case 0x1F:
+            case 0x20:
+            case 0x22:
+            case 0x23:
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x28:
+            case 0x33:
+            case 0x3F:
+            case 0x40:
+#endif
                 switch (entry->state) {
                     case 0:
-                        if ((s32)animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
+                        if (animGroupBaseAsync(entry->animFile, entry->imageType, NULL) == 0) {
                             break;
                         }
                         switch (entry->type) {
+#if VERSION <= VERSION_DEMO_JP
                             case FADE_CURTAIN_SIDES_A1_3D:
                             case FADE_CURTAIN_SIDES_A1:
                             case FADE_CURTAIN_SIDES_A1_TOP:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_BTL_KORTESS_CHANGE1"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x40325));
-#endif
                                 break;
                             case FADE_CURTAIN_SIDES_A2_3D:
                             case FADE_CURTAIN_SIDES_A2:
                             case FADE_CURTAIN_SIDES_A2_TOP:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_BTL_KORTESS_CHANGE2"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x40326));
-#endif
                                 break;
                             case FADE_CURTAIN_CENTER_A1_3D:
                             case FADE_CURTAIN_CENTER_A1:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_STG_START_CURTAIN_UP1"));
-#else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x40321));
-#endif
                                 break;
                             case FADE_CURTAIN_CENTER_A2_3D:
                             case FADE_CURTAIN_CENTER_A2:
-#if VERSION <= VERSION_DEMO_JP
                                 entry->sfxId = psndSFXOn(SFX_NAME_WORD("SFX_OFF_STG_START_CURTAIN_DOWN1"));
 #else
-                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(0x40322));
+                            case 0x18:
+                            case 0x1B:
+                            case 0x3F:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_BTL_KORTESS_CHANGE1 | PSND_SFX_KEEP));
+                                break;
+                            case 0x19:
+                            case 0x1C:
+                            case 0x40:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_BTL_KORTESS_CHANGE2 | PSND_SFX_KEEP));
+                                break;
+                            case 0x1D:
+                            case 0x23:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_STG_START_CURTAIN_UP1 | PSND_SFX_KEEP));
+                                break;
+                            case 0x1E:
+                            case 0x24:
+                                entry->sfxId = psndSFXOn(SFX_NAME_WORD(PSND_SFX_OFF_STG_START_CURTAIN_DOWN1 | PSND_SFX_KEEP));
 #endif
                                 break;
                         }
@@ -994,7 +1175,7 @@ void fadeMain(void) {
                             animPoseRelease(entry->poseId);
                         }
                         entry->poseId = animPoseEntry(entry->animFile, entry->imageType);
-                        animPoseSetMaterialFlagOn(entry->poseId, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+                        animPoseSetMaterialFlagOn(entry->poseId, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
                         animPoseSetAnim(entry->poseId, entry->animName, TRUE);
                         entry->state++;
                         if (entry->type == FADE_CURTAIN_ENTER_3D || entry->type == FADE_CURTAIN_ENTER) {
@@ -1004,31 +1185,27 @@ void fadeMain(void) {
                     case 1:
                         animPoseMain(entry->poseId);
                         if (entry->type == FADE_CURTAIN_ENTER_3D || entry->type == FADE_CURTAIN_ENTER) {
-                            if (!(entry->flags & FADE_ENTRY_FAST)) {
+                            if (!(entry->flags & FADE_FLAG_NARROW_FAST)) {
                                 if (entry->scaleTimer < FPS_FRAMES(180)) {
-                                    entry->scale = intplGetValue(12, 3.0f, 1.0f, ++entry->scaleTimer, FPS_FRAMES(180));
+                                    entry->scale = intplGetValue(EASING_SINE_OUT, 3.0f, 1.0f, ++entry->scaleTimer, FPS_FRAMES(180));
                                 }
-                            } else {
-                                if (entry->scaleTimer < FPS_FRAMES(90)) {
-                                    entry->scale = intplGetValue(12, 1.5f, 1.0f, ++entry->scaleTimer, FPS_FRAMES(90));
-                                }
+                            } else if (entry->scaleTimer < FPS_FRAMES(90)) {
+                                entry->scale = intplGetValue(EASING_SINE_OUT, 1.5f, 1.0f, ++entry->scaleTimer, FPS_FRAMES(90));
                             }
                         }
                         if (animPoseGetLoopTimes(entry->poseId) >= 1.0f) {
                             if (entry->type == FADE_CURTAIN_ENTER_3D || entry->type == FADE_CURTAIN_ENTER) {
-                                if (!(entry->flags & FADE_ENTRY_FAST)) {
+                                if (!(entry->flags & FADE_FLAG_NARROW_FAST)) {
                                     if (entry->scaleTimer == FPS_FRAMES(180)) {
-                                        entry->flags |= FADE_ENTRY_FINISHED;
+                                        entry->flags |= FADE_FLAG_DONE;
                                         entry->state++;
                                     }
-                                } else {
-                                    if (entry->scaleTimer == FPS_FRAMES(90)) {
-                                        entry->flags |= FADE_ENTRY_FINISHED;
-                                        entry->state++;
-                                    }
+                                } else if (entry->scaleTimer == FPS_FRAMES(90)) {
+                                    entry->flags |= FADE_FLAG_DONE;
+                                    entry->state++;
                                 }
                             } else {
-                                entry->flags |= FADE_ENTRY_FINISHED;
+                                entry->flags |= FADE_FLAG_DONE;
                                 entry->state++;
                                 psndSFXOff(entry->sfxId);
                                 if (entry->type == FADE_CURTAIN_SIDES_A2_3D || entry->type == FADE_CURTAIN_SIDES_A2 || entry->type == FADE_CURTAIN_SIDES_A2_TOP) {
@@ -1045,8 +1222,13 @@ void fadeMain(void) {
                         break;
                 }
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_CURTAIN_LEAVE_3D:
             case FADE_CURTAIN_LEAVE:
+#else
+            case 0x21:
+            case 0x27:
+#endif
                 switch (entry->state) {
                     case 0:
                         entry->scale = 1.0f;
@@ -1055,9 +1237,9 @@ void fadeMain(void) {
                     case 1:
                         animPoseMain(entry->poseId);
                         if (entry->scaleTimer < FPS_FRAMES(120)) {
-                            entry->scale = intplGetValue(12, 1.0f, 3.0f, ++entry->scaleTimer, FPS_FRAMES(120));
+                            entry->scale = intplGetValue(EASING_SINE_OUT, 1.0f, 3.0f, ++entry->scaleTimer, FPS_FRAMES(120));
                         } else {
-                            entry->flags |= FADE_ENTRY_FINISHED;
+                            entry->flags |= FADE_FLAG_DONE;
                             entry->state++;
                             animPoseRelease(entry->poseId);
                             entry->poseId = -1;
@@ -1067,7 +1249,8 @@ void fadeMain(void) {
                 break;
         }
         switch (entry->type) {
-            case FADE_CURTAIN_VERTICAL_A1:
+#if VERSION <= VERSION_DEMO_JP
+            case FADE_CURTAIN_UP_DOWN_A1:
             case FADE_CURTAIN_VERTICAL_A2:
             case FADE_CURTAIN_CENTER_A1:
             case FADE_CURTAIN_CENTER_A2:
@@ -1075,13 +1258,13 @@ void fadeMain(void) {
             case FADE_CURTAIN_CENTER_Z1:
             case FADE_CURTAIN_LEAVE:
             case FADE_CURTAIN_ENTER:
-                dispEntry(CAMERA_FADE, 0.0f, 0, disp_maku, entry);
+                dispEntry(CAMERA_FADE, 0.0f, DISP_MODE_OPAQUE, disp_maku, entry);
                 break;
             case FADE_CURTAIN_SIDES_A1:
             case FADE_CURTAIN_SIDES_A2:
             case FADE_CURTAIN_SIDES_A1_TOP:
             case FADE_CURTAIN_SIDES_A2_TOP:
-                dispEntry(CAMERA_FADE2, 0.0f, 0, disp_maku, entry);
+                dispEntry(CAMERA_FADE2, 0.0f, DISP_MODE_OPAQUE, disp_maku, entry);
                 break;
             case FADE_CURTAIN_SIDES_A1_3D:
             case FADE_CURTAIN_SIDES_A2_3D:
@@ -1093,7 +1276,7 @@ void fadeMain(void) {
             case FADE_CURTAIN_LEAVE_3D:
             case FADE_CURTAIN_ENTER_3D:
             case FADE_PAGE_FLIP_FOUR:
-                dispEntry(CAMERA_3D_IMAGE, 0.0f, 0, disp_maku, entry);
+                dispEntry(CAMERA_3D_IMAGE, 0.0f, DISP_MODE_OPAQUE, disp_maku, entry);
                 break;
             case FADE_PAGE_FLIP_Z1:
             case FADE_PAGE_FLIP_A1:
@@ -1108,21 +1291,78 @@ void fadeMain(void) {
             case FADE_STORY_MARIO_A2:
             case FADE_STORY_PEACH_A2:
             case FADE_STORY_BOWSER_A2:
+#else
+            case FADE_CURTAIN_UP_DOWN_A1:
+            case 0x17:
+            case 0x23:
+            case 0x24:
+            case 0x25:
+            case 0x26:
+            case 0x27:
+            case 0x28:
+                dispEntry(CAMERA_FADE, 0.0f, DISP_MODE_OPAQUE, disp_maku, entry);
+                break;
+            case 0x1B:
+            case 0x1C:
+            case 0x3F:
+            case 0x40:
+                dispEntry(CAMERA_FADE2, 0.0f, DISP_MODE_OPAQUE, disp_maku, entry);
+                break;
+            case 0x18:
+            case 0x19:
+            case 0x1A:
+            case 0x1D:
+            case 0x1E:
+            case 0x1F:
+            case 0x20:
+            case 0x21:
+            case 0x22:
+            case 0x33:
+                dispEntry(CAMERA_3D_IMAGE, 0.0f, DISP_MODE_OPAQUE, disp_maku, entry);
+                break;
+            case 0x31:
+            case 0x32:
+            case 0x34:
+            case 0x35:
+            case 0x36:
+            case 0x37:
+            case 0x38:
+            case 0x39:
+            case 0x3A:
+            case 0x3B:
+            case 0x3C:
+            case 0x3D:
+            case 0x3E:
+#endif
                 if (entry->paperPoseId >= 0 && entry->callback) {
-                    dispEntry(CAMERA_OFFSCREEN2, 0.0f, 0, entry->callback, entry->offparam);
+                    dispEntry(CAMERA_OFFSCREEN2, 0.0f, DISP_MODE_OPAQUE, entry->callback, entry->offparam);
                 }
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_IN_BLACK_2D:
             case FADE_OUT_BLACK_2D:
             case FADE_COVER_BLACK_2D:
-                dispEntry(CAMERA_2D, 1000.0f, 0, disp_texture, wp);
+#else
+            case 0xB:
+            case 0xC:
+            case 0xD:
+#endif
+                dispEntry(CAMERA_2D, 1000.0f, DISP_MODE_OPAQUE, disp_texture, wp);
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_IN_SPOT_3D:
             case FADE_OUT_SPOT_3D:
             case FADE_IN_BLACK_3D:
             case FADE_OUT_BLACK_3D:
-                dispEntry(CAMERA_3D, 0.0f, 7, disp_texture, wp);
+#else
+            case 5:
+            case 6:
+            case 0xE:
+            case 0xF:
+#endif
+                dispEntry(CAMERA_3D, 0.0f, DISP_MODE_CUSTOM_LAST, disp_texture, wp);
                 break;
+#if VERSION <= VERSION_DEMO_JP
             case FADE_PIPE_UP_A1:
             case FADE_PIPE_UP_A2:
             case FADE_PIPE_DOWN_A1:
@@ -1131,30 +1371,40 @@ void fadeMain(void) {
             case FADE_PIPE_LEFT_A2:
             case FADE_PIPE_RIGHT_A1:
             case FADE_PIPE_RIGHT_A2:
+#else
+            case 0x29:
+            case 0x2A:
+            case 0x2B:
+            case 0x2C:
+            case 0x2D:
+            case 0x2E:
+            case 0x2F:
+            case 0x30:
+#endif
                 break;
             default:
-                dispEntry(CAMERA_FADE, 0.0f, 0, disp_texture, wp);
+                dispEntry(CAMERA_FADE, 0.0f, DISP_MODE_OPAQUE, disp_texture, wp);
                 break;
         }
     }
     if (wp->flags & (FADE_WORK_TEC | FADE_WORK_SOFT_FOCUS)) {
-        dispEntry(CAMERA_2D, 999.0f, 0, disp_tec, wp);
+        dispEntry(CAMERA_2D, 999.0f, DISP_MODE_OPAQUE, disp_tec, wp);
     }
-    if (wp->flags & FADE_WORK_BLACK_SCREEN) {
-        dispEntry(CAMERA_FADE, -100.0f, 0, disp_dummy_black, wp);
+    if (wp->flags & FADE_WORK_LOAD_BLACK) {
+        dispEntry(CAMERA_FADE, -100.0f, DISP_MODE_OPAQUE, disp_dummy_black, wp);
     }
     if (wp->flags & FADE_WORK_WHITE_OUT) {
-        dispEntry(CAMERA_3D, 1000.0f, 7, disp_dummy_black, wp);
+        dispEntry(CAMERA_3D, 1000.0f, DISP_MODE_CUSTOM_LAST, disp_dummy_black, wp);
     }
 }
 
 /**
- * Draws slot 0's fade on the fade camera: the iris
+ * Draws slot 0's fade (with the 2D camera's projection, on the fade, 2D or 3D camera fadeMain queues it on): the iris
  * or spot texture scaled around the spot position (growing with the fifth power of progress) or a flat colour,
  * and nothing more once a fade-in has finished.
  */
 static void disp_texture(CameraId camId, void* param) {
-    static u8 i4tex[1] ATTRIBUTE_ALIGN(32) = {0xFF}; // GX texture data; 32-aligned in every version
+    static u8 i4tex[1] ATTRIBUTE_ALIGN(32) = {0xFF};
     FadeWork* work;
     CameraEntry* camera;
     f32 scale;
@@ -1165,7 +1415,7 @@ static void disp_texture(CameraId camId, void* param) {
     Mtx mtx3;
     Mtx mtx4;
     GXTexObj obj;
-    f32 proj[7];
+    f32 proj[GX_PROJECTION_SZ];
 
     camera = camGetPtr(CAMERA_2D);
     work = wp;
@@ -1176,7 +1426,7 @@ static void disp_texture(CameraId camId, void* param) {
         case FADE_IN_BLACK:
         case FADE_IN_BLACK_2D:
         case FADE_IN_BLACK_3D:
-            if (work->entries[0].flags & FADE_ENTRY_FINISHED) {
+            if (work->entries[0].flags & FADE_FLAG_DONE) {
                 return;
             }
     }
@@ -1184,7 +1434,7 @@ static void disp_texture(CameraId camId, void* param) {
     GXSetProjection(camera->projection, camera->projType);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, (GXLogicOp)7);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_OR);
     GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     GXSetNumChans(0);
     GXSetNumTevStages(1);
@@ -1203,11 +1453,11 @@ static void disp_texture(CameraId camId, void* param) {
     switch (work->entries[0].type) {
         case FADE_IN_IRIS:
         case FADE_OUT_IRIS:
-            GXLoadPosMtxImm(camera->view, 0);
-            GXSetCurrentMtx(0);
+            GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             TEXGetGXTexObjFromPalette(wp->texture, &obj, 0);
             GXLoadTexObj(&obj, GX_TEXMAP0);
-            if (!(work->entries[0].flags & FADE_ENTRY_FINISHED)) {
+            if (!(work->entries[0].flags & FADE_FLAG_DONE)) {
                 p = work->entries[0].progress;
                 scale = p * (p * (p * (100.0f * p * p)));
                 PSMTXTrans(mtx1, 0.5f, 0.5f, 0.0f);
@@ -1223,11 +1473,11 @@ static void disp_texture(CameraId camId, void* param) {
         case FADE_OUT_SPOT:
         case FADE_IN_SPOT_3D:
         case FADE_OUT_SPOT_3D:
-            GXLoadPosMtxImm(camera->view, 0);
-            GXSetCurrentMtx(0);
+            GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             TEXGetGXTexObjFromPalette(wp->texture, &obj, 1);
             GXLoadTexObj(&obj, GX_TEXMAP0);
-            if (!(work->entries[0].flags & FADE_ENTRY_FINISHED)) {
+            if (!(work->entries[0].flags & FADE_FLAG_DONE)) {
                 p = work->entries[0].progress;
                 scale = p * (p * (p * (100.0f * p * p)));
                 PSMTXTrans(mtx1, 0.5f, 0.5f, 0.0f);
@@ -1248,16 +1498,16 @@ static void disp_texture(CameraId camId, void* param) {
         case FADE_OUT_BLACK_2D:
         case FADE_IN_BLACK_3D:
         case FADE_OUT_BLACK_3D:
-            GXLoadPosMtxImm(camera->view, 0);
-            GXSetCurrentMtx(0);
+            GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             GXInitTexObj(&obj, i4tex, 1, 1, GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
             GXLoadTexObj(&obj, GX_TEXMAP0);
             PSMTXIdentity(work->entries[0].texMtx);
             work->entries[0].color.a = 255.0f * work->entries[0].progress;
             break;
         case FADE_COVER_BLACK_2D:
-            GXLoadPosMtxImm(camera->view, 0);
-            GXSetCurrentMtx(0);
+            GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             GXInitTexObj(&obj, i4tex, 1, 1, GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
             GXLoadTexObj(&obj, GX_TEXMAP0);
             PSMTXIdentity(work->entries[0].texMtx);
@@ -1279,8 +1529,6 @@ static void disp_texture(CameraId camId, void* param) {
     GXSetProjectionv(proj);
 }
 
-// FAKE: #pragma dont_inline on: keeps z out of line as in the target; without it z is inlined into disp_maku (206 -> 258 instructions)
-#pragma dont_inline on
 /**
  * Depth scale for the curtain animation drawn at a world position:
  * how its depth on the 3D camera compares with its depth on the fade camera, so it hides behind closer scenery.
@@ -1291,6 +1539,8 @@ static f32 z(void) {
     CameraEntry* camera;
     Vec pos;
     f32 base;
+
+    // `one` (1.0f) is only a factor in the returned depth (the multiply is in the retail code)
     f32 one = 1.0f;
     f32 pz;
 
@@ -1309,8 +1559,6 @@ static f32 z(void) {
                                       (one * (camera->projection[2][2] * pos.z + camera->projection[2][3]))) /
            base;
 }
-
-#pragma dont_inline reset
 
 /**
  * Writes the far depth into the depth buffer over the whole camera view without touching colour,
@@ -1354,8 +1602,8 @@ static void zFill(void) {
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     PSMTXIdentity(mtx);
-    GXLoadPosMtxImm(camera->view, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     zpos = -10000.0f;
     GXPosition3f32(x0, y0, zpos);
@@ -1370,16 +1618,13 @@ static void zFill(void) {
     GXSetColorUpdate(GX_TRUE);
 }
 
-/** Returns a * b + c; an inline helper of disp_maku. */
-static inline f32 fadeMadd(f32 a, f32 b, f32 c) {
-    return a * b + c;
-}
 /**
- * Draws slot 1's curtain or stage animation (maku is Japanese for curtain) on its camera,
+ * Draws slot 1's or slot 4's curtain or stage animation (maku is Japanese for curtain) on its camera,
  * scaled to the screen and offset by fadeSetAnimOfsPos or placed at the virtual world position,
  * with the depth set up by z or zFill.
  */
 static void disp_maku(CameraId camId, void* param) {
+    f32 z(void);
     FadeEntry* entry = param;
     CameraEntry* camera;
     f32 scale, depth, sx, mag;
@@ -1394,7 +1639,7 @@ static void disp_maku(CameraId camId, void* param) {
         case FADE_CURTAIN_SIDES_A2_3D:
         case FADE_CURTAIN_SIDES_A2:
         case FADE_CURTAIN_SIDES_A2_TOP:
-            if (entry->flags & FADE_ENTRY_FINISHED) {
+            if (entry->flags & FADE_FLAG_DONE) {
                 return;
             }
     }
@@ -1428,12 +1673,13 @@ static void disp_maku(CameraId camId, void* param) {
     if (entry->poseId < 0) {
         return;
     }
-    if (entry->flags & FADE_ENTRY_VIRTUAL_POS) {
+    if (entry->flags & FADE_FLAG_VIRTUAL_POS) {
         camera = camGetPtr(CAMERA_3D);
+        mag = 3.141592f;
         depth = camera->fovY;
-        depth *= 0.5f;
-        mag = depth / 180.0f; // half the vertical field of view, in units of pi
-        depth = tan(3.141592f * mag);
+
+        depth = (depth *= 0.5f) / 180.0f;
+        depth = tan(mag * depth);
         depth = 24.0f / depth;
         PSVECSubtract(&camGetPtr(CAMERA_3D)->cameraPos, &entry->VirtualPos, &dist);
         camera = camGetPtr(CAMERA_3D);
@@ -1452,8 +1698,13 @@ static void disp_maku(CameraId camId, void* param) {
         depth = 0.0f;
         zFill();
     }
-    PSMTXTrans(mtx, 64.0f * (fadeMadd(entry->animOffsetX, scale, 0.0f) / gp->fbWidth),
-               48.0f * (fadeMadd(entry->animOffsetY, scale, 0.0f) / gp->efbHeight), depth);
+    {
+        // zero offset; the retail code adds it with fmadds (a literal 0.0f would fold away)
+        f32 ofs = 0.0f;
+
+        PSMTXTrans(mtx, 64.0f * ((entry->animOffsetX * scale + ofs) / gp->fbWidth),
+                   48.0f * ((entry->animOffsetY * scale + ofs) / gp->efbHeight), depth);
+    }
     PSMTXTrans(mtx2, -32.0f, 24.0f, 0.0f);
     PSMTXConcat(mtx, mtx2, mtx);
     sx = 608.0f / gp->fbWidth;
@@ -1467,11 +1718,10 @@ static void disp_maku(CameraId camId, void* param) {
     sysWaitDrawSync();
 }
 
-/**
- * Stand-in for a function the linker stripped: it is in no version's symbols and nothing calls it,
- * so the link drops it; it only creates pi in the file's float pool at this point.
- */
-// FAKE: uncalled stand-in for a stripped function; puts pi ahead of 0.5f and 180.0f in .sdata2
+// FAKE: stand-in that nothing calls; it only adds its 3.141592f literal to this object's constant pool. The JP demo
+// map has no stripped function here: 3.141592f is disp_maku's own, numbered right before its other constants (@1222,
+// then 0.5f, 180.0f, 24.0f ... @1223-@1232), while disp_maku as written numbers it after 0.5f and 180.0f. Writing the
+// tan argument as one expression gets that order but colours the three constant registers differently (10 lines).
 void fadeStrippedPool(f32* f) {
     f[0] = 3.141592f;
 }
@@ -1494,7 +1744,7 @@ static void disp_tec(CameraId camId, void* param) {
     camera = camGetPtr(camId);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, (GXLogicOp)7);
+    GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_OR);
     GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     GXSetNumChans(0);
     GXSetNumTexGens(1);
@@ -1546,8 +1796,8 @@ static void disp_tec(CameraId camId, void* param) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    GXLoadPosMtxImm(camera->view, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3s16(-308, 244, 0);
     GXTexCoord2f32(0.0f, 0.0f);
@@ -1565,18 +1815,18 @@ static void disp_tec(CameraId camId, void* param) {
  */
 static void disp_dummy_black(CameraId camId, void* param) {
     CameraEntry* camera;
-    f32 proj[7];
+    f32 proj[GX_PROJECTION_SZ];
 
     camera = camGetPtr(CAMERA_FADE);
     GXGetProjectionv(proj);
     GXSetProjection(camera->projection, camera->projType);
     GXSetZCompLoc(GX_FALSE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, (GXLogicOp)7);
+    GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_OR);
     GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
-    if (wp->flags & FADE_WORK_BLACK_SCREEN) {
+    if (wp->flags & FADE_WORK_LOAD_BLACK) {
         GXSetChanMatColor(GX_COLOR0A0, (GXColor){0x00, 0x00, 0x00, 0xFF});
     } else {
         GXSetChanMatColor(GX_COLOR0A0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
@@ -1587,8 +1837,8 @@ static void disp_dummy_black(CameraId camId, void* param) {
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevOp(GX_TEVSTAGE0, GX_PASSCLR);
-    GXLoadPosMtxImm(camera->view, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_BACK);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -1606,13 +1856,13 @@ static void disp_dummy_black(CameraId camId, void* param) {
  * scripts and sequences wait on it.
  */
 BOOL fadeIsFinish(void) {
-    FadeEntry* entry;
+    FadeEntry* e;
 
     if (wp->lastEntryId == -1) {
         return TRUE;
     }
-    entry = &wp->entries[wp->lastEntryId];
-    return (entry->flags >> 1) & 1; // FADE_ENTRY_FINISHED
+    e = &wp->entries[wp->lastEntryId];
+    return (e->flags >> 1) & 1;
 }
 
 /** Stops fade slot id at once: releases its animation poses and captured image and resets it to the defaults. */
@@ -1639,12 +1889,15 @@ void fadeReset(s32 id) {
     entry->scale = 1.0f;
 }
 
-/** Returns fade.tpl; the name entry screen draws its frame textures from it. */
+/** Returns fade.tpl; the name entry screen's mask (nameMaskGX) draws its image 1 (the spot texture). */
 TEXPalette* fadeGetTpl(void) {
     return wp->texture;
 }
 
-/** Makes the next curtain or stage animation in slot 1 play fast; used by the title screen. */
+/**
+ * Shortens the narrowing of the curtain-enter fade now in slot 1 (scale 1.5 to 1 over 90 frames, not 3 to 1 over
+ * 180); called after fadeEntry, which clears the flag. Used by the title screen.
+ */
 void fadeSetNarrowFast(void) {
-    wp->entries[1].flags |= FADE_ENTRY_FAST;
+    wp->entries[1].flags |= FADE_FLAG_NARROW_FAST;
 }

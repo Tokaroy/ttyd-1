@@ -5,7 +5,14 @@
 
 #include "data/mapdata.h"
 #include "moo.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Module prolog of the moon: runs the static constructors and registers the init scripts of moo_00 to moo_07
@@ -36,6 +43,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Unresolved-symbol stub of the moon module; does nothing. */
 void _unresolved(void) {
 }

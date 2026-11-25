@@ -1,5 +1,7 @@
 // Scripts and commands for house doors: opening, walking in and out, inside/outside map groups
 // and NPC visibility.
+
+#include "version.h"
 #include "data_tables.h"
 #include "evt/evt_door.h"
 #include "evt/evt_cmd.h"
@@ -17,33 +19,49 @@
 #include "memory.h"
 #include "pmario_sound.h"
 #include <dolphin/mtx.h>
+#include "libc_decls.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_case.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
-#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
 #include "evt/evt_sub.h"
-#include "version.h"
+#include "evt/evt_party.h"
+#include "system.h"
 #include "driver/casedrv.h"
-#include "libc_decls.h"
 
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(snd_door_in);
 static USER_FUNC(snd_door_out);
+#endif
+
+static USER_FUNC(npc_hide_onoff);
+static USER_FUNC(get_noclip_map);
+static USER_FUNC(npc_light);
+static USER_FUNC(npc_dark);
+static USER_FUNC(animation);
+static USER_FUNC(init_inside_group);
+static USER_FUNC(inside_group);
+static USER_FUNC(door_group);
+static USER_FUNC(outside_group);
+static USER_FUNC(in_pos);
+static USER_FUNC(out_pos);
+static USER_FUNC(inout_hit);
 
 typedef struct HouseData {
-    s32 type;            // 0x0
-    const char* hit[4];  // 0x4, hit object names
-    s32 anim[4];         // 0x14
-    s32 outside;         // 0x24
-    s32 door;            // 0x28
-    s32 inside[2];       // 0x2C
-    s32 initInside[2];   // 0x34
-    const char** npcs;   // 0x3C
-    const char** noclip; // 0x40
-    const char** mobjs;  // 0x44
-    const char** items;  // 0x48
+    s32 type;                  // 0x0
+    const char* hit[4];        // 0x4, hit object names
+    const char* anim[4];       // 0x14
+    const char* outside;       // 0x24
+    const char* door;          // 0x28
+    const char* inside[2];     // 0x2C
+    const char* initInside[2]; // 0x34
+    const char** npcs;         // 0x3C
+    const char** noclip;       // 0x40
+    const char** mobjs;        // 0x44
+    const char** items;        // 0x48
 } HouseData;
 
 typedef struct HouseWork {
@@ -52,45 +70,64 @@ typedef struct HouseWork {
     Vec out;         // 0x10
 } HouseWork;
 
-s32 DoorFLAG;
-s32 door_mapflag;
+static s32 DoorFLAG;
+static s32 door_mapflag;
 
-void door_dark_flag_sub(BOOL on, const char** npcs, const char** mobjs, const char** items);
+EvtWord door_open_se[151];
+EvtWord door_close_se[151];
+EvtWord door_down_se[33];
+EvtWord house_open_se[32];
+static EvtWord evt_dark[34];
+static EvtWord evt_dark2[34];
+static EvtWord evt_light[30];
+static EvtWord evt_light2[30];
+EvtWord door_up_se[2];
+EvtWord house_close_se[4];
+static EvtWord in_houseanim[80];
+static EvtWord out_houseanim[72];
+static EvtWord in_dooranim[134];
+static EvtWord out_dooranim[121];
 
-static USER_FUNC(animation);
-static USER_FUNC(door_group);
-static USER_FUNC(get_noclip_map);
-static USER_FUNC(in_pos);
-static USER_FUNC(init_inside_group);
-static USER_FUNC(inout_hit);
-static USER_FUNC(inside_group);
-static USER_FUNC(npc_dark);
-static USER_FUNC(npc_hide_onoff);
-static USER_FUNC(npc_light);
-static USER_FUNC(out_pos);
-static USER_FUNC(outside_group);
-
-extern EvtWord door_down_se[];
-extern EvtWord house_open_se[];
-extern EvtWord evt_dark[];
-extern EvtWord evt_dark2[];
-extern EvtWord evt_light2[];
-extern EvtWord in_houseanim[];
-extern EvtWord out_houseanim[];
-extern EvtWord in_dooranim[];
-extern EvtWord out_dooranim[];
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord house_in[];
 extern EvtWord house_out[];
-extern EvtWord door_dark2[];
+#else
+EvtWord house_in[216];
+EvtWord house_out[196];
+#endif
+
+EvtWord evt_door_setup[56];
+EvtWord door_dark[34];
+EvtWord door_dark2[34];
+EvtWord door_light[30];
+EvtWord door_light2[30];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord evt_door_open[];
+#else
+EvtWord evt_door_open[508];
+#endif
+
+#if VERSION == VERSION_JP
+EvtWord evt_door_open_bom_01[338];
+#else
+EvtWord evt_door_open_bom_01[336];
+#endif
+
+EvtWord evt_door_open_roll[225];
+EvtWord evt_door_close[447];
+EvtWord evt_door_close_roll[247];
+EvtWord evt_door_open_quick[220];
+EvtWord evt_door_entry[77];
 
 /**
- * Plays the door-open sound for a DoorParam (LW(0)) at its map object's position;
+ * Plays the door-open sound for a DoorParam (LW(0)) at its hitIn hit object's position;
  * the sound comes from DoorParam.se (1 plain, 2-4 wood, 5-6 iron, 7 grille, 8 sliding, 9 turning, 10 electric,
  * 11 stone, 12-13 castle, 14 metal); 0 stays silent.
  */
 EVT_BEGIN(door_open_se)
-    CALL(evt_door_param, LW(0), 8, LW(1))
-    CALL(evt_door_param, LW(0), 1, LW(2), LW(3), LW(4))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_SE, LW(1))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(2), LW(3), LW(4))
     CALL(evt_hit_get_position, LW(3), LW(10), LW(11), LW(12))
     SWITCH(LW(1))
         CASE_EQUAL(0)
@@ -127,12 +164,12 @@ EVT_BEGIN(door_open_se)
 EVT_END()
 
 /**
- * Plays the door-shut sound matching DoorParam.se at the door's map object;
+ * Plays the door-shut sound matching DoorParam.se at the door's hitIn hit object;
  * same table as door_open_se, except se 4 reuses the second wood sound.
  */
 EVT_BEGIN(door_close_se)
-    CALL(evt_door_param, LW(0), 8, LW(1))
-    CALL(evt_door_param, LW(0), 1, LW(2), LW(3), LW(4))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_SE, LW(1))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(2), LW(3), LW(4))
     CALL(evt_hit_get_position, LW(3), LW(10), LW(11), LW(12))
     SWITCH(LW(1))
         CASE_EQUAL(0)
@@ -169,12 +206,12 @@ EVT_BEGIN(door_close_se)
 EVT_END()
 
 /**
- * Plays SFX_DOOR_FALL1 at the door's map object for any nonzero DoorParam.se;
- * spawned by evt_door_open when the door has a wall event (evtWall).
+ * Plays SFX_DOOR_FALL1 at the door's hitIn hit object for any nonzero DoorParam.se;
+ * spawned by evt_door_open and evt_door_open_bom_01 when the door has an out event (evtOut).
  */
 EVT_BEGIN(door_down_se)
-    CALL(evt_door_param, LW(0), 8, LW(1))
-    CALL(evt_door_param, LW(0), 1, LW(2), LW(3), LW(4))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_SE, LW(1))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(2), LW(3), LW(4))
     CALL(evt_hit_get_position, LW(3), LW(10), LW(11), LW(12))
     SWITCH(LW(1))
         CASE_EQUAL(0)
@@ -185,34 +222,30 @@ EVT_BEGIN(door_down_se)
 EVT_END()
 
 /**
- * Plays SFX_HOUSE_OPEN1 at the door's map object when the house front swings open,
- * unless DoorParam.flags bit 2 asks for no sound.
+ * Plays SFX_HOUSE_OPEN1 at the door's hitIn hit object when the house front swings open,
+ * unless DoorParam.flags has DOOR_FLAG_NO_OPEN_SE (0x2).
  */
 EVT_BEGIN(house_open_se)
-    CALL(evt_door_param, LW(0), 9, LW(1))
-    IF_BITS_SET(LW(1), 2)
+    CALL(evt_door_param, LW(0), DOOR_PARAM_FLAGS, LW(1))
+    IF_BITS_SET(LW(1), DOOR_FLAG_NO_OPEN_SE)
         RETURN
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(2), LW(3), LW(4))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(2), LW(3), LW(4))
     CALL(evt_hit_get_position, LW(3), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_HOUSE_OPEN1"), LW(10), LW(11), LW(12), 0)
     RETURN
 EVT_END()
 
-/**
- * Sets PSND_FLAG_MUTE_DOOR_SFX once Mario is inside,
- * silencing door-muted sounds until he leaves (snd_door_out) or the map changes.
- * The demo defines this pair at the end of the file.
- */
 #if VERSION >= VERSION_JP
-static USER_FUNC(snd_door_in) {
-    psndSetFlag(PSND_FLAG_MUTE_DOOR_SFX);
+/** Sets PSND_FLAG_DOOR_IN: door-muted sound effects stay silent until snd_door_out or psndMapChange clears it. */
+USER_FUNC(snd_door_in) {
+    psndSetFlag(PSND_FLAG_DOOR_IN);
     return EVT_RETURN_DONE;
 }
 
-/** Clears PSND_FLAG_MUTE_DOOR_SFX after Mario walks back out, letting door-muted sounds play again. */
-static USER_FUNC(snd_door_out) {
-    psndClearFlag(PSND_FLAG_MUTE_DOOR_SFX);
+/** Clears PSND_FLAG_DOOR_IN, set by snd_door_in. */
+USER_FUNC(snd_door_out) {
+    psndClearFlag(PSND_FLAG_DOOR_IN);
     return EVT_RETURN_DONE;
 }
 #endif
@@ -268,7 +301,7 @@ static USER_FUNC(door_entry) {
 }
 
 #if VERSION <= VERSION_DEMO_JP
-/** the demo defines house_close_se right after house_open_se */
+/** the early demos define house_close_se right after house_open_se */
 EVT_BEGIN(house_close_se)
     CALL_CHILD(house_open_se)
     RETURN
@@ -276,11 +309,11 @@ EVT_END()
 #endif
 
 /**
- * Fades the map's first blend colour from white to black over 300 ms,
- * darkening everything not flagged NO_BLEND (the town around a house); spawned by house_in.
+ * Fades the first map blend colour (mapSetBlend) from white to black over 300 ms, then sets it to black with alpha 0;
+ * spawned by house_in.
  */
-EVT_BEGIN(evt_dark)
-    CALL(evt_sub_intpl_msec_init, 11, 255, 0, 300)
+static EVT_BEGIN(evt_dark)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 300)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_map_set_blend, 0, LW(0), LW(0), LW(0), 255)
@@ -293,9 +326,9 @@ EVT_BEGIN(evt_dark)
     RETURN
 EVT_END()
 
-/** Same fade as evt_dark on the map's second blend colour (objects not flagged NO_BLEND2). */
-EVT_BEGIN(evt_dark2)
-    CALL(evt_sub_intpl_msec_init, 11, 255, 0, 300)
+/** evt_dark for the second map blend colour (mapSetBlend2); spawned by house_in after in_houseanim. */
+static EVT_BEGIN(evt_dark2)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 300)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_map_set_blend, 1, LW(0), LW(0), LW(0), 255)
@@ -308,9 +341,12 @@ EVT_BEGIN(evt_dark2)
     RETURN
 EVT_END()
 
-/** Fades the first blend colour back from black to white over 300 ms, then turns the blend off; house_out. */
+/**
+ * Fades the first map blend colour from black back to white over 300 ms, then turns that blend off (evt_map_blend_off);
+ * spawned by house_out.
+ */
 static EVT_BEGIN(evt_light)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 300)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 300)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_map_set_blend, 0, LW(0), LW(0), LW(0), 255)
@@ -323,9 +359,9 @@ static EVT_BEGIN(evt_light)
     RETURN
 EVT_END()
 
-/** Fades the second blend colour back from black to white over 300 ms, then turns it off; house_out. */
-EVT_BEGIN(evt_light2)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 300)
+/** evt_light for the second map blend colour; spawned by house_out before out_houseanim. */
+static EVT_BEGIN(evt_light2)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 300)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_map_set_blend, 1, LW(0), LW(0), LW(0), 255)
@@ -338,12 +374,12 @@ EVT_BEGIN(evt_light2)
     RETURN
 EVT_END()
 
-/** Empty: evt_door_close spawns it where a door-raise sound would go, but it plays nothing. */
+/** Empty: the closing counterpart of door_down_se plays no sound. Spawned by evt_door_close. */
 EVT_BEGIN(door_up_se)
     RETURN
 EVT_END()
 
-/** House-front closing sound for evt_door_close: just plays house_open_se again. */
+/** Plays the house sound on closing: runs house_open_se, so the same SFX_HOUSE_OPEN1 is heard. */
 #if VERSION >= VERSION_JP
 EVT_BEGIN(house_close_se)
     CALL_CHILD(house_open_se)
@@ -352,11 +388,11 @@ EVT_END()
 #endif
 
 /**
- * Plays the house's opening map animation (HouseData.anim[0]) when Mario goes in,
- * with the shop-shutter rattle for "S_mise_open" or the plain house-open sound otherwise,
- * and waits for the animation to finish.
+ * House entry animation for house_in (house in LW(10)): after 500 ms plays the house's opening map animation
+ * (HouseData.anim[0]) once and waits for it to end, with SFX_HOUSE_OPEN1 at the door group; the shop shutter
+ * "S_mise_open" also plays SFX_HOUSE_DOWN1 four times.
  */
-EVT_BEGIN(in_houseanim)
+static EVT_BEGIN(in_houseanim)
     WAIT_MS(500)
     CALL(animation, LW(10), LW(0), LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(0), 0)
@@ -375,7 +411,7 @@ EVT_BEGIN(in_houseanim)
                 CALL(evt_snd_sfxon_3d, STRING("SFX_HOUSE_OPEN1"), LW(2), LW(3), LW(4), 0)
             END_IF
         END_INLINE_EVENT
-        CALL(evt_map_playanim, LW(0), 0, 0)
+        CALL(evt_map_playanim, LW(0), MAP_ANIM_PLAY_ONCE, 0)
         CALL(evt_map_checkanim, LW(0), LW(4), LW(5))
         WAIT_MS(LW(5))
     END_IF
@@ -383,10 +419,11 @@ EVT_BEGIN(in_houseanim)
 EVT_END()
 
 /**
- * Plays the house's closing map animation (HouseData.anim[2]) when Mario leaves,
- * with the shutter rattle for "S_mise_close", waits for it, then plays the house-shut sound.
+ * House exit animation for house_out (house in LW(10)): plays the closing map animation (HouseData.anim[2]) once and
+ * waits for it, then plays SFX_HOUSE_SHUT1 at the door group; the shop shutter "S_mise_close" plays SFX_HOUSE_DOWN1
+ * four times while it runs.
  */
-EVT_BEGIN(out_houseanim)
+static EVT_BEGIN(out_houseanim)
     CALL(animation, LW(10), LW(0), LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(2), 0)
         BEGIN_INLINE_EVENT
@@ -399,7 +436,7 @@ EVT_BEGIN(out_houseanim)
                 END_LOOP
             END_IF
         END_INLINE_EVENT
-        CALL(evt_map_playanim, LW(2), 0, 0)
+        CALL(evt_map_playanim, LW(2), MAP_ANIM_PLAY_ONCE, 0)
         CALL(evt_map_checkanim, LW(2), LW(4), LW(5))
         WAIT_MS(LW(5))
         BEGIN_INLINE_EVENT
@@ -412,10 +449,10 @@ EVT_BEGIN(out_houseanim)
 EVT_END()
 
 /**
- * Swings the house's door group open 80 degrees and shut again, then tips it 90 degrees over, with the open,
- * shut and fall sounds; spawned by house_in.
+ * Swings the house's door map group (house in LW(10)) for house_in: opens it 80 degrees about Y, holds it 500 ms, shuts
+ * it, then tips it 90 degrees about X; plays SFX_DOOR_OPEN1, SFX_DOOR_SHUT1 and SFX_DOOR_FALL1 at the door.
  */
-EVT_BEGIN(in_dooranim)
+static EVT_BEGIN(in_dooranim)
     CALL(door_group, LW(10), LW(9))
     BEGIN_INLINE_EVENT
         CALL(evt_mapobj_get_position, LW(9), LW(2), LW(3), LW(4))
@@ -427,7 +464,7 @@ EVT_BEGIN(in_dooranim)
         CALL(evt_mapobj_get_position, LW(9), LW(2), LW(3), LW(4))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_FALL1"), LW(2), LW(3), LW(4), 0)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 5, 0, 80, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 80, 500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_rotate, 1, LW(9), 0, LW(0), 0)
@@ -436,7 +473,7 @@ EVT_BEGIN(in_dooranim)
         GOTO(0)
     END_IF
     WAIT_MS(500)
-    CALL(evt_sub_intpl_msec_init, 2, 80, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 80, 0, 500)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_rotate, 1, LW(9), 0, LW(0), 0)
@@ -444,7 +481,7 @@ EVT_BEGIN(in_dooranim)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(1)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 2, 0, 90, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 90, 500)
     LABEL(2)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_rotate, 1, LW(9), LW(0), 0, 0)
@@ -455,8 +492,11 @@ EVT_BEGIN(in_dooranim)
     RETURN
 EVT_END()
 
-/** Reverse of in_dooranim for house_out: stands the door back up, swings it open and shut with sounds. */
-EVT_BEGIN(out_dooranim)
+/**
+ * Reverse of in_dooranim for house_out: tips the door group back up from 90 degrees about X, opens it 80 degrees about
+ * Y, holds it 500 ms and shuts it; plays SFX_DOOR_OPEN1 and SFX_DOOR_SHUT1.
+ */
+static EVT_BEGIN(out_dooranim)
     CALL(door_group, LW(10), LW(9))
     BEGIN_INLINE_EVENT
         WAIT_MS(500)
@@ -466,7 +506,7 @@ EVT_BEGIN(out_dooranim)
         CALL(evt_mapobj_get_position, LW(9), LW(2), LW(3), LW(4))
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT1"), LW(2), LW(3), LW(4), 0)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 5, 90, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 90, 0, 500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_rotate, 1, LW(9), LW(0), 0, 0)
@@ -474,7 +514,7 @@ EVT_BEGIN(out_dooranim)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 5, 0, 80, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 80, 500)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_rotate, 1, LW(9), 0, LW(0), 0)
@@ -483,7 +523,7 @@ EVT_BEGIN(out_dooranim)
         GOTO(1)
     END_IF
     WAIT_MS(500)
-    CALL(evt_sub_intpl_msec_init, 5, 80, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 80, 0, 500)
     LABEL(2)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_rotate, 1, LW(9), 0, LW(0), 0)
@@ -495,10 +535,12 @@ EVT_BEGIN(out_dooranim)
 EVT_END()
 
 /**
- * Case event (from evt_door_setup) that takes Mario into a house:
- * dips the music, locks controls, shows the inside groups and hits,
- * walks Mario and partners in while the town fades dark and the front opens.
- * LW(10) is the HouseWork; DoorFLAG blocks re-entry while it runs.
+ * Case script of a house's outside hit object (house in LW(10), set by evt_door_setup): takes Mario inside. Does
+ * nothing while another house script runs (DoorFLAG). Lowers the music and environment sound, takes Mario's controls,
+ * moves the camera to the inside spot, turns view culling off for the HouseData.noclip groups, shows the interior and
+ * its hit object, walks Mario to the door and then inside (in_dooranim with the door), fades the map blend colours to
+ * black (evt_dark, evt_dark2) while npc_dark keeps the house's NPCs lit, and runs in_houseanim. Gives the controls back
+ * and waits for the door animation. JP and later also halve the party hitbox for the walk and call snd_door_in.
  */
 EVT_BEGIN(house_in)
     PEEK_INT(LW(0), PTR(&DoorFLAG))
@@ -506,8 +548,8 @@ EVT_BEGIN(house_in)
         RETURN
     END_IF
     POKE_INT(1, PTR(&DoorFLAG))
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-    CALL(evt_snd_envoff, PSND_FADE_DIP_TO(50))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+    CALL(evt_snd_envoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
     CALL(evt_snd_env_lpf, 0, 800)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_cam_letter_box_disable, 1)
@@ -515,7 +557,7 @@ EVT_BEGIN(house_in)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(in_pos, LW(10), LW(0), LW(2))
         ADD(LW(1), 1)
-        CALL(evt_cam3d_evt_set_xyz, LW(0), LW(1), LW(2), 0, 150, 11)
+        CALL(evt_cam3d_evt_set_xyz, LW(0), LW(1), LW(2), 0, 150, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
     SET_VALUE(LW(0), 0)
     LOOP(0)
@@ -523,21 +565,21 @@ EVT_BEGIN(house_in)
         IF_INT_EQUAL(LW(1), -1)
             BREAK_LOOP
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_BBOX_CULL)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_CLIP)
         ADD(LW(0), 1)
     END_LOOP
     CALL(outside_group, LW(10), LW(0))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_BLEND)
+    CALL(evt_mapobj_flag_onoff, 1, 1, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND)
     CALL(door_group, LW(10), LW(0))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_BLEND2)
+    CALL(evt_mapobj_flag_onoff, 1, 1, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, 1, 1, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     CALL(inside_group, LW(10), LW(0), LW(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, 1, 0, LW(0), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, LW(1), 1, 1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_BLEND2)
+    CALL(evt_mapobj_flag_onoff, 1, 1, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, 1, 1, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND2)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_mario_party_door_halve_hitbox)
+    CALL(evt_mario_party_door_halve_hitbox)
 #endif
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(out_pos, LW(10), LW(0), LW(2))
@@ -555,7 +597,7 @@ EVT_BEGIN(house_in)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(in_pos, LW(10), LW(0), LW(2))
     CALL(evt_mario_party_door_move, LW(0), LW(2), FLOAT(135.0f))
-    CALL(evt_cam3d_evt_xyz_off, 0, 11)
+    CALL(evt_cam3d_evt_xyz_off, 0, EASING_SINE_IN_OUT)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_letter_box_disable, 0)
     LOOP(0)
@@ -573,9 +615,11 @@ EVT_BEGIN(house_in)
 EVT_END()
 
 /**
- * Case event that walks Mario back out of a house:
- * restores the music, plays the closing animation, fades the town back in,
- * then hides the inside groups and hits and resets the blend flags. LW(10) is the HouseWork.
+ * Case script of a house's inside hit object: takes Mario back out, the reverse of house_in. Restores the music and
+ * environment sound, moves the camera to the outside spot, fades the blend colours back (evt_light2, out_houseanim,
+ * evt_light), swings the door (out_dooranim) and walks Mario out, turns view culling back on, hides the interior and
+ * its hit object and clears the no-blend flags. JP and later also halve the party hitbox for the walk and call
+ * snd_door_out.
  */
 EVT_BEGIN(house_out)
     PEEK_INT(LW(0), PTR(&DoorFLAG))
@@ -583,8 +627,8 @@ EVT_BEGIN(house_out)
         RETURN
     END_IF
     POKE_INT(1, PTR(&DoorFLAG))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-    CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_snd_envon, PSND_CONTINUE | PSND_UNSILENT, 0)
     CALL(evt_snd_env_lpf, 0, 0)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_cam_letter_box_disable, 1)
@@ -592,7 +636,7 @@ EVT_BEGIN(house_out)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(out_pos, LW(10), LW(0), LW(2))
         ADD(LW(1), 1)
-        CALL(evt_cam3d_evt_set_xyz, LW(0), LW(1), LW(2), 0, 150, 11)
+        CALL(evt_cam3d_evt_set_xyz, LW(0), LW(1), LW(2), 0, 150, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
         SPAWN_EVENT(evt_light2)
@@ -602,7 +646,7 @@ EVT_BEGIN(house_out)
     SPAWN_EVENT_GET_ID(PTR(out_dooranim), LW(15))
     WAIT_MS(1000)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_mario_party_door_halve_hitbox)
+    CALL(evt_mario_party_door_halve_hitbox)
 #endif
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(out_pos, LW(10), LW(0), LW(2))
@@ -613,10 +657,10 @@ EVT_BEGIN(house_out)
         IF_INT_EQUAL(LW(1), -1)
             BREAK_LOOP
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_BBOX_CULL)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_CLIP)
         ADD(LW(0), 1)
     END_LOOP
-    CALL(evt_cam3d_evt_xyz_off, 100, 11)
+    CALL(evt_cam3d_evt_xyz_off, 100, EASING_SINE_IN_OUT)
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_cam_letter_box_disable, 0)
     LOOP(0)
@@ -628,15 +672,15 @@ EVT_BEGIN(house_out)
     END_LOOP
     POKE_INT(0, PTR(&DoorFLAG))
     CALL(inside_group, LW(10), LW(0), LW(1))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, 1, 1, LW(0), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, LW(1), 1, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_NO_BLEND2)
+    CALL(evt_mapobj_flag_onoff, 1, 0, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, 1, 0, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     CALL(outside_group, LW(10), LW(0))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_NO_BLEND)
+    CALL(evt_mapobj_flag_onoff, 1, 0, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND)
     CALL(door_group, LW(10), LW(0))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_NO_BLEND2)
+    CALL(evt_mapobj_flag_onoff, 1, 0, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, 1, 0, LW(0), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     CALL(npc_light, LW(10))
 #if VERSION >= VERSION_JP
     CALL(snd_door_out)
@@ -645,15 +689,15 @@ EVT_BEGIN(house_out)
 EVT_END()
 
 /**
- * Map-init setup for a house whose whole front opens (Koopa Village, nok_00/nok_01): LW(0) is its HouseData.
- * Hides the inside, then registers house_in and house_out as case events on the entry and exit hits.
+ * Sets up a house from the HouseData in LW(0) (door_entry; the HouseWork goes to LW(10)): hides the initial interior
+ * group and its hit object, and registers case events on the house's hit objects that run house_in and house_out.
  */
 EVT_BEGIN(evt_door_setup)
     CALL(door_entry, LW(0), LW(10))
     POKE_INT(0, PTR(&DoorFLAG))
     CALL(init_inside_group, LW(10), LW(0), LW(1))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(0), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     IF_INT_NOT_EQUAL(LW(1), 0)
         CALL(evt_hitobj_onoff, LW(1), 1, 0)
@@ -665,12 +709,12 @@ EVT_BEGIN(evt_door_setup)
 EVT_END()
 
 /**
- * Fades the map's first blend colour from white to black over 300 ms,
- * darkening the outside (anything not flagged NO_BLEND) once Mario steps through a door;
- * used by the evt_door_open family.
+ * Fades the first map blend colour (mapSetBlend) from white to black over 300 ms, then sets it to black with alpha 0;
+ * spawned by the door scripts when Mario goes through a door: evt_door_open (unless DOOR_OPT_NO_DARK),
+ * evt_door_open_roll and evt_door_open_bom_01.
  */
 EVT_BEGIN(door_dark)
-    CALL(evt_sub_intpl_msec_init, 11, 255, 0, 300)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 300)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_map_set_blend, 0, LW(0), LW(0), LW(0), 255)
@@ -682,9 +726,9 @@ EVT_BEGIN(door_dark)
     RETURN
 EVT_END()
 
-/** Same as door_dark on the map's second blend colour (objects not flagged NO_BLEND2). */
+/** door_dark for the second map blend colour (mapSetBlend2); spawned later in the same door scripts. */
 EVT_BEGIN(door_dark2)
-    CALL(evt_sub_intpl_msec_init, 11, 255, 0, 300)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 300)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_map_set_blend, 1, LW(0), LW(0), LW(0), 255)
@@ -697,11 +741,11 @@ EVT_BEGIN(door_dark2)
 EVT_END()
 
 /**
- * Fades the first blend colour back from black to white over 300 ms and turns the blend off;
- * used when Mario leaves through a door (evt_door_close, evt_door_close_roll).
+ * Fades the first map blend colour from black back to white over 300 ms and turns that blend off; spawned by
+ * evt_door_close (unless DOOR_OPT_NO_DARK) and evt_door_close_roll.
  */
 EVT_BEGIN(door_light)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 300)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 300)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_map_set_blend, 0, LW(0), LW(0), LW(0), 255)
@@ -713,9 +757,12 @@ EVT_BEGIN(door_light)
     RETURN
 EVT_END()
 
-/** Same as door_light on the map's second blend colour; also spawned directly by usu_01 (Twilight Town). */
+/**
+ * door_light for the second map blend colour; spawned at the start of evt_door_close (unless DOOR_OPT_NO_DARK) and
+ * evt_door_close_roll.
+ */
 EVT_BEGIN(door_light2)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 255, 300)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 255, 300)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_map_set_blend, 1, LW(0), LW(0), LW(0), 255)
@@ -728,69 +775,68 @@ EVT_BEGIN(door_light2)
 EVT_END()
 
 /**
- * Front-A case event (registered by evt_door_entry) that takes Mario in through a door:
- * shows the inside, keeps Mario, partners and the listed NPCs lit, swings the door open,
- * walks the party in and darkens the outside.
- * LW(0) is the DoorParam; LW(15) bits: 2 = no darkening, 4 = start the wall event early.
+ * Takes Mario and the partners through a door into the room behind it (DoorParam in LW(0), DOOR_OPT_* options in
+ * LW(15)); run by evt_door_entry's case event on the hitOut hit object and by map scripts. Takes the controls and sets
+ * DoorFLAG, runs the door's open script (evtOpen), saves and unclips the outside group, moves the camera to the inside
+ * spot, shows the inside group and its hit object, exempts the door's NPCs, map objects and items from the blend
+ * (door_dark_flag) and shows the DoorParam's NPCs (DOOR_FLAG_HIDE_NPCS). Walks Mario to the outside spot and then
+ * inside while the door script (evtIn) runs from 0 to 180 and back and the house wall (evtWall) and out-piece (evtOut)
+ * scripts from 0 to 180, with their sounds, and the outside darkens (door_dark, door_dark2; not with DOOR_OPT_NO_DARK).
+ * Ends with the camera back on Mario, the controls back and snd_door_in. JP and later halve the party hitbox for the
+ * walk.
  */
 EVT_BEGIN(evt_door_open)
-    // Lock the controls and run the door's own open script, if it has one.
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_mario_key_onoff, 0)
     POKE_INT(1, PTR(&DoorFLAG))
-    CALL(evt_door_param, LW(0), 7, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OPEN_CLOSE_EVTS, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         SET_VALUE(LF(0), 0)
         SPAWN_EVENT(LW(1))
     END_IF
-    // Set up the rooms: the outside stops culling and fading, the camera heads for the door,
-    // the door itself stays solid, and the inside is revealed with its collision switched on.
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         CALL(evt_door_save_mapflag, LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_BBOX_CULL)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_CLIP)
     END_IF
     BEGIN_INLINE_EVENT
-        CALL(evt_door_param, LW(0), 4, LW(1), LW(2), LW(3))
+        CALL(evt_door_param, LW(0), DOOR_PARAM_IN_POS, LW(1), LW(2), LW(3))
         CALL(evt_mario_get_pos, 0, LW(4), LW(5), LW(6))
         ADD(LW(5), 2)
-        CALL(evt_cam3d_evt_set_xyz, LW(1), LW(5), LW(3), 0, 150, 11)
+        CALL(evt_cam3d_evt_set_xyz, LW(1), LW(5), LW(3), 0, 150, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
-    CALL(evt_door_param, LW(0), 3, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_INSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
     IF_INT_NOT_EQUAL(LW(2), 0)
         CALL(evt_hitobj_onoff, LW(2), 1, 1)
     END_IF
-    // Hide the door's NPCs if it asks for that,
-    // and keep Mario, partners and NPCs lit while the outside darkens.
-    CALL(evt_door_param, LW(0), 9, LW(1))
-    IF_BITS_SET(LW(1), 1)
+    CALL(evt_door_param, LW(0), DOOR_PARAM_FLAGS, LW(1))
+    IF_BITS_SET(LW(1), DOOR_FLAG_HIDE_NPCS)
         CALL(npc_hide_onoff, LW(0), 0)
     END_IF
     CALL(door_dark_flag, LW(0), 1)
-    // With bit 4 the house wall swings open early, half a second in.
-    IF_BITS_SET(LW(15), 4)
-        CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    IF_BITS_SET(LW(15), DOOR_OPT_HOUSE_ANIM_FIRST)
+        CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
         IF_INT_NOT_EQUAL(LW(9), 0)
             BEGIN_INLINE_EVENT
                 WAIT_MS(500)
                 SPAWN_EVENT(house_open_se)
-                CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+                CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
                 SET_VALUE(LW(6), 0)
-                CALL(evt_sub_intpl_msec_init, 2, 0, 180, 500)
+                CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 180, 500)
                 LABEL(2)
                 CALL(evt_sub_intpl_msec_get_value)
                 SET_VALUE(LW(5), LW(1))
@@ -806,24 +852,21 @@ EVT_BEGIN(evt_door_open)
         END_IF
     END_IF
 #if VERSION >= VERSION_JP
-    CALL(N_evt_mario_party_door_halve_hitbox)
+    CALL(evt_mario_party_door_halve_hitbox)
 #endif
-    // Mario walks to the spot outside the door with the partners beside him,
-    // and the outside starts to darken.
-    CALL(evt_door_param, LW(0), 5, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUT_POS, LW(1), LW(2), LW(3))
     CALL(evt_mario_mov_pos2, LW(1), LW(3), FLOAT(135.0f))
     CALL(evt_party_move_beside_mario, 0)
     CALL(evt_party_move_beside_mario, 1)
-    IF_BITS_CLEAR(LW(15), 2)
+    IF_BITS_CLEAR(LW(15), DOOR_OPT_NO_DARK)
         SPAWN_EVENT(door_dark)
     END_IF
-    // The door swings open with its sound.
     SPAWN_EVENT(door_open_se)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(7), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 5, 0, 180, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 180, 500)
             LABEL(0)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -836,18 +879,17 @@ EVT_BEGIN(evt_door_open)
             END_IF
         END_INLINE_EVENT
     END_IF
-    // The party walks in to the inside spot while the door swings shut behind them.
     WAIT_MS(500)
-    CALL(evt_door_param, LW(0), 4, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_IN_POS, LW(1), LW(2), LW(3))
     CALL(evt_mario_party_door_move, LW(1), LW(3), FLOAT(135.0f))
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(7), 0)
         BEGIN_INLINE_EVENT
             SPAWN_EVENT(door_close_se)
         END_INLINE_EVENT
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 2, 180, 0, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 180, 0, 500)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -860,15 +902,14 @@ EVT_BEGIN(evt_door_open)
             END_IF
         END_INLINE_EVENT
     END_IF
-    // Otherwise the house wall swings open now.
-    IF_BITS_CLEAR(LW(15), 4)
-        CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    IF_BITS_CLEAR(LW(15), DOOR_OPT_HOUSE_ANIM_FIRST)
+        CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
         IF_INT_NOT_EQUAL(LW(9), 0)
             BEGIN_INLINE_EVENT
                 SPAWN_EVENT(house_open_se)
-                CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+                CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
                 SET_VALUE(LW(6), 0)
-                CALL(evt_sub_intpl_msec_init, 2, 0, 180, 500)
+                CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 180, 500)
                 LABEL(2)
                 CALL(evt_sub_intpl_msec_get_value)
                 SET_VALUE(LW(5), LW(1))
@@ -883,20 +924,19 @@ EVT_BEGIN(evt_door_open)
             END_INLINE_EVENT
         END_IF
     END_IF
-    // The outside finishes darkening, and the door's out-piece, if any, swings down with its sound.
     WAIT_MS(500)
-    IF_BITS_CLEAR(LW(15), 2)
+    IF_BITS_CLEAR(LW(15), DOOR_OPT_NO_DARK)
         SPAWN_EVENT(door_dark2)
     END_IF
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(8), 0)
         BEGIN_INLINE_EVENT
             WAIT_MS(500)
             SPAWN_EVENT(door_down_se)
         END_INLINE_EVENT
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 2, 0, 180, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 180, 500)
             LABEL(3)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LF(0), 0)
@@ -907,9 +947,8 @@ EVT_BEGIN(evt_door_open)
             END_IF
         END_INLINE_EVENT
     END_IF
-    // The camera is released, the controls come back and the indoor sound takes over.
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_xyz_off, 0, 11)
+    CALL(evt_cam3d_evt_xyz_off, 0, EASING_SINE_IN_OUT)
     POKE_INT(0, PTR(&DoorFLAG))
     WAIT_FRAMES(2)
     CALL(evt_mario_key_onoff, 1)
@@ -919,49 +958,52 @@ EVT_BEGIN(evt_door_open)
 EVT_END()
 
 /**
- * Fahr Outpost (bom_01) cutscene variant of evt_door_open: no camera or Mario movement;
- * sets GF(0) and holds the door open until the map's script clears it, then closes it and darkens the outside.
+ * evt_door_open for bom_01: the same room set-up and door swings, without moving the camera, walking Mario or taking
+ * the controls; holds the door open with GF(0) set until the map's cutscene clears it. JP alone halves the party
+ * hitbox.
  */
 EVT_BEGIN(evt_door_open_bom_01)
     // Run the door's open script, then set up the rooms as evt_door_open does, without moving the camera.
-    CALL(evt_door_param, LW(0), 7, LW(1), LW(2))
+    // The indoor sound takes over.
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OPEN_CLOSE_EVTS, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         SPAWN_EVENT(LW(1))
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         CALL(evt_door_save_mapflag, LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_BBOX_CULL)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_CLIP)
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
-    CALL(evt_door_param, LW(0), 3, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_INSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
     IF_INT_NOT_EQUAL(LW(2), 0)
         CALL(evt_hitobj_onoff, LW(2), 1, 1)
     END_IF
     CALL(door_dark_flag, LW(0), 1)
-    // The door swings open with its sound.
     SPAWN_EVENT(door_open_se)
+
+    // The door swings open with its sound.
 #if VERSION == VERSION_JP
-    CALL(N_evt_mario_party_door_halve_hitbox)
+    CALL(evt_mario_party_door_halve_hitbox)
 #endif
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(7), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 5, 0, 180, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 180, 500)
             LABEL(0)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -973,6 +1015,7 @@ EVT_BEGIN(evt_door_open_bom_01)
             END_IF
         END_INLINE_EVENT
     END_IF
+
     // Hold the door open until the map's cutscene clears GF(0).
     WAIT_MS(500)
     SET_VALUE(GF(0), 1)
@@ -982,16 +1025,17 @@ EVT_BEGIN(evt_door_open_bom_01)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // The outside darkens and the door swings shut.
     SPAWN_EVENT(door_dark)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(7), 0)
         BEGIN_INLINE_EVENT
             SPAWN_EVENT(door_close_se)
         END_INLINE_EVENT
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 2, 180, 0, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 180, 0, 500)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -1003,14 +1047,15 @@ EVT_BEGIN(evt_door_open_bom_01)
             END_IF
         END_INLINE_EVENT
     END_IF
+
     // The house wall swings open, the outside finishes darkening and the out-piece swings down.
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(9), 0)
         BEGIN_INLINE_EVENT
             SPAWN_EVENT(house_open_se)
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
             SET_VALUE(LW(6), 0)
-            CALL(evt_sub_intpl_msec_init, 2, 0, 180, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 180, 500)
             LABEL(2)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -1025,15 +1070,15 @@ EVT_BEGIN(evt_door_open_bom_01)
     END_IF
     WAIT_MS(500)
     SPAWN_EVENT(door_dark2)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(8), 0)
         BEGIN_INLINE_EVENT
             WAIT_MS(500)
             SPAWN_EVENT(door_down_se)
         END_INLINE_EVENT
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 2, 0, 180, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 180, 500)
             LABEL(3)
             CALL(evt_sub_intpl_msec_get_value)
             SPAWN_EVENT(LW(8))
@@ -1043,56 +1088,53 @@ EVT_BEGIN(evt_door_open_bom_01)
             END_IF
         END_INLINE_EVENT
     END_IF
-    // The indoor sound takes over.
     WAIT_MS(500)
     CALL(snd_door_in)
     RETURN
 EVT_END()
 
 /**
- * Opens a house without the door swing or Mario walking in: shows the inside, darkens the outside
- * and runs the wall events.
- * Run by the case events of Rogueport houses with unusual entrances: gor_02 house 03, after Mario rolls in
- * (SFX_STG4_MARIO_ROLL_DOWN1/2), and gor_03 house 3, entered through a chest of drawers.
- * Guess: "roll" refers to that rolling entrance.
+ * evt_door_open without Mario's walk, the camera move or the door (evtIn) swing, run by map scripts: takes the
+ * controls, sets up the rooms, darkens the outside and runs only the house wall (evtWall) and out-piece (evtOut)
+ * scripts; ends with snd_door_in.
  */
 EVT_BEGIN(evt_door_open_roll)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_door_param, LW(0), 7, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OPEN_CLOSE_EVTS, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         SPAWN_EVENT(LW(1))
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         CALL(evt_door_save_mapflag, LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_BBOX_CULL)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_CLIP)
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
-    CALL(evt_door_param, LW(0), 3, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_INSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
     IF_INT_NOT_EQUAL(LW(2), 0)
         CALL(evt_hitobj_onoff, LW(2), 1, 1)
     END_IF
     CALL(door_dark_flag, LW(0), 1)
     SPAWN_EVENT(door_dark)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(9), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
             SET_VALUE(LW(6), 0)
-            CALL(evt_sub_intpl_msec_init, 2, 0, 180, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 180, 500)
             LABEL(2)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -1107,11 +1149,11 @@ EVT_BEGIN(evt_door_open_roll)
     END_IF
     WAIT_MS(500)
     SPAWN_EVENT(door_dark2)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(8), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 2, 0, 180, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 0, 180, 500)
             LABEL(3)
             CALL(evt_sub_intpl_msec_get_value)
             SPAWN_EVENT(LW(8))
@@ -1122,48 +1164,49 @@ EVT_BEGIN(evt_door_open_roll)
         END_INLINE_EVENT
     END_IF
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_xyz_off, 0, 11)
+    CALL(evt_cam3d_evt_xyz_off, 0, EASING_SINE_IN_OUT)
     CALL(evt_mario_key_onoff, 1)
     CALL(snd_door_in)
     RETURN
 EVT_END()
 
 /**
- * Front-A case event (registered by evt_door_entry) that takes Mario back out:
- * undoes evt_door_open, walking the party out, closing the door, restoring the outside and hiding the inside.
- * LW(15) bits: 1 = keep the inside shown, 2 = no fade, 8 = don't walk Mario,
- * 16 = use the exit spot measured from Mario (evt_door_param 11).
+ * Takes Mario and the partners back out through a door (DoorParam in LW(0), DOOR_OPT_* options in LW(15)); run by
+ * evt_door_entry's case event on the hitIn hit object and by map scripts. The reverse of evt_door_open: the camera
+ * moves to the outside spot (or one measured from Mario, DOOR_OPT_POS_FROM_MARIO), the outside lights up (door_light2,
+ * door_light; not with DOOR_OPT_NO_DARK), the out-piece and house wall swing back from 180 to 0, the door opens (0 to
+ * 180), Mario walks out (unless DOOR_OPT_NO_MARIO_MOVE) and the door shuts (180 to 0), then the inside group is hidden
+ * (unless DOOR_OPT_KEEP_INSIDE_SHOWN) with its hit object, the no-blend flags and the outside group's saved flags are
+ * restored, the DoorParam's NPCs are hidden (DOOR_FLAG_HIDE_NPCS), and snd_door_out ends it.
  */
 EVT_BEGIN(evt_door_close)
-    // Lock the controls, run the door's close script and send the camera to the spot outside the door.
     CALL(evt_cam_letter_box_disable, 1)
     CALL(evt_mario_key_onoff, 0)
     POKE_INT(1, PTR(&DoorFLAG))
-    CALL(evt_door_param, LW(0), 7, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OPEN_CLOSE_EVTS, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(2), 0)
         SET_VALUE(LF(0), 1)
         SPAWN_EVENT(LW(2))
     END_IF
     BEGIN_INLINE_EVENT
-        IF_BITS_CLEAR(LW(15), 16)
-            CALL(evt_door_param, LW(0), 5, LW(1), LW(2), LW(3))
+        IF_BITS_CLEAR(LW(15), DOOR_OPT_POS_FROM_MARIO)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_OUT_POS, LW(1), LW(2), LW(3))
         ELSE
-            CALL(evt_door_param, LW(0), 11, LW(1), LW(2), LW(3))
+            CALL(evt_door_param, LW(0), DOOR_PARAM_OUT_POS_FROM_MARIO, LW(1), LW(2), LW(3))
         END_IF
         CALL(evt_mario_get_pos, 0, LW(4), LW(5), LW(6))
         ADD(LW(5), 2)
-        CALL(evt_cam3d_evt_set_xyz, LW(1), LW(5), LW(3), 0, 150, 11)
+        CALL(evt_cam3d_evt_set_xyz, LW(1), LW(5), LW(3), 0, 150, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
-    // The outside starts to light up again and the out-piece swings back up with its sound.
-    IF_BITS_CLEAR(LW(15), 2)
+    IF_BITS_CLEAR(LW(15), DOOR_OPT_NO_DARK)
         SPAWN_EVENT(door_light2)
     END_IF
     SPAWN_EVENT(door_up_se)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(8), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 5, 180, 0, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 180, 0, 500)
             LABEL(3)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LF(0), 1)
@@ -1174,17 +1217,16 @@ EVT_BEGIN(evt_door_close)
             END_IF
         END_INLINE_EVENT
     END_IF
-    // The house wall swings shut with its sound.
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(9), 0)
         BEGIN_INLINE_EVENT
             WAIT_MS(400)
             SPAWN_EVENT(house_close_se)
         END_INLINE_EVENT
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
             SET_VALUE(LW(6), 0)
-            CALL(evt_sub_intpl_msec_init, 5, 180, 0, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 180, 0, 500)
             LABEL(2)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -1198,17 +1240,16 @@ EVT_BEGIN(evt_door_close)
             END_IF
         END_INLINE_EVENT
     END_IF
-    // The outside finishes lighting up and the door swings open.
     WAIT_MS(500)
-    IF_BITS_CLEAR(LW(15), 2)
+    IF_BITS_CLEAR(LW(15), DOOR_OPT_NO_DARK)
         SPAWN_EVENT(door_light)
     END_IF
     SPAWN_EVENT(door_open_se)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(7), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 5, 0, 180, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 180, 500)
             LABEL(1)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -1221,24 +1262,23 @@ EVT_BEGIN(evt_door_close)
             END_IF
         END_INLINE_EVENT
     END_IF
-    // The party walks out (unless bit 8) and the door swings shut behind them.
     WAIT_MS(500)
-    IF_BITS_CLEAR(LW(15), 16)
-        CALL(evt_door_param, LW(0), 5, LW(1), LW(2), LW(3))
+    IF_BITS_CLEAR(LW(15), DOOR_OPT_POS_FROM_MARIO)
+        CALL(evt_door_param, LW(0), DOOR_PARAM_OUT_POS, LW(1), LW(2), LW(3))
     ELSE
-        CALL(evt_door_param, LW(0), 11, LW(1), LW(2), LW(3))
+        CALL(evt_door_param, LW(0), DOOR_PARAM_OUT_POS_FROM_MARIO, LW(1), LW(2), LW(3))
     END_IF
-    IF_BITS_CLEAR(LW(15), 8)
+    IF_BITS_CLEAR(LW(15), DOOR_OPT_NO_MARIO_MOVE)
         CALL(evt_mario_party_door_move, LW(1), LW(3), FLOAT(135.0f))
     END_IF
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(7), 0)
         BEGIN_INLINE_EVENT
             SPAWN_EVENT(door_close_se)
         END_INLINE_EVENT
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 5, 180, 0, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 180, 0, 500)
             LABEL(0)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -1252,39 +1292,36 @@ EVT_BEGIN(evt_door_close)
         END_INLINE_EVENT
         WAIT_MS(500)
     END_IF
-    // The camera returns to normal, the door's NPCs show again and the inside is hidden (kept with bit 1).
-    CALL(evt_cam3d_evt_xyz_off, 100, 11)
+    CALL(evt_cam3d_evt_xyz_off, 100, EASING_SINE_IN_OUT)
     CALL(door_dark_flag, LW(0), 0)
-    CALL(evt_door_param, LW(0), 9, LW(1))
-    IF_BITS_SET(LW(1), 1)
+    CALL(evt_door_param, LW(0), DOOR_PARAM_FLAGS, LW(1))
+    IF_BITS_SET(LW(1), DOOR_FLAG_HIDE_NPCS)
         CALL(npc_hide_onoff, LW(0), 1)
     END_IF
-    CALL(evt_door_param, LW(0), 3, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_INSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        IF_BITS_CLEAR(LW(15), 1)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
+        IF_BITS_CLEAR(LW(15), DOOR_OPT_KEEP_INSIDE_SHOWN)
+            CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
     IF_INT_NOT_EQUAL(LW(2), 0)
         CALL(evt_hitobj_onoff, LW(2), 1, 0)
     END_IF
-    // The outside and the door are drawn as before, and the outside's saved culling state is restored.
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         CALL(evt_door_load_mapflag, LW(1))
     END_IF
-    // The controls come back and the outdoor sound returns.
     POKE_INT(0, PTR(&DoorFLAG))
     WAIT_FRAMES(2)
     CALL(evt_mario_key_onoff, 1)
@@ -1294,27 +1331,27 @@ EVT_BEGIN(evt_door_close)
 EVT_END()
 
 /**
- * Counterpart of evt_door_open_roll: restores the outside and hides the inside without the door swing
- * or Mario walking out. gor_03's case script for house 4 runs it.
+ * evt_door_close without Mario's walk or the door (evtIn) swing, run by map scripts: runs the close script (evtClose),
+ * lights the outside again, swings the out-piece and house wall back and restores the rooms; ends with snd_door_out.
  */
 EVT_BEGIN(evt_door_close_roll)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_door_param, LW(0), 7, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OPEN_CLOSE_EVTS, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(2), 0)
         SPAWN_EVENT(LW(2))
     END_IF
     BEGIN_INLINE_EVENT
-        CALL(evt_door_param, LW(0), 5, LW(1), LW(2), LW(3))
+        CALL(evt_door_param, LW(0), DOOR_PARAM_OUT_POS, LW(1), LW(2), LW(3))
         CALL(evt_mario_get_pos, 0, LW(4), LW(5), LW(6))
         ADD(LW(5), 2)
-        CALL(evt_cam3d_evt_set_xyz, LW(1), LW(5), LW(3), 0, 150, 11)
+        CALL(evt_cam3d_evt_set_xyz, LW(1), LW(5), LW(3), 0, 150, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
     SPAWN_EVENT(door_light2)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(8), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
-            CALL(evt_sub_intpl_msec_init, 5, 180, 0, 500)
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 180, 0, 500)
             LABEL(3)
             CALL(evt_sub_intpl_msec_get_value)
             SPAWN_EVENT(LW(8))
@@ -1324,12 +1361,12 @@ EVT_BEGIN(evt_door_close_roll)
             END_IF
         END_INLINE_EVENT
     END_IF
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(9), 0)
         BEGIN_INLINE_EVENT
-            CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+            CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
             SET_VALUE(LW(6), 0)
-            CALL(evt_sub_intpl_msec_init, 5, 180, 0, 500)
+            CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 180, 0, 500)
             LABEL(2)
             CALL(evt_sub_intpl_msec_get_value)
             SET_VALUE(LW(5), LW(1))
@@ -1344,29 +1381,29 @@ EVT_BEGIN(evt_door_close_roll)
     END_IF
     WAIT_MS(500)
     SPAWN_EVENT(door_light)
-    CALL(evt_cam3d_evt_xyz_off, 100, 11)
+    CALL(evt_cam3d_evt_xyz_off, 100, EASING_SINE_IN_OUT)
     CALL(door_dark_flag, LW(0), 0)
-    CALL(evt_door_param, LW(0), 3, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_INSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        IF_BITS_CLEAR(LW(15), 1)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
+        IF_BITS_CLEAR(LW(15), DOOR_OPT_KEEP_INSIDE_SHOWN)
+            CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
     IF_INT_NOT_EQUAL(LW(2), 0)
         CALL(evt_hitobj_onoff, LW(2), 1, 0)
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         CALL(evt_door_load_mapflag, LW(1))
     END_IF
@@ -1376,52 +1413,53 @@ EVT_BEGIN(evt_door_close_roll)
 EVT_END()
 
 /**
- * Puts a door straight into its "inside" state with no animation or fade:
- * blend colours black, wall events at their end angle, camera snapped.
- * Used when a map starts with Mario indoors (aaa_00, Rogueport maps).
+ * Sets a door's rooms to the open state at once, with no walk, sound or fade (map scripts, e.g. gor_03): runs the open
+ * script (evtOpen), unclips the outside group, sets the camera for the inside spot at once (evt_cam3d_event_from_road),
+ * shows the inside group and its hit object, sets both map blend colours to (0, 0, 0, 0) and calls the house wall
+ * (evtWall) and out-piece (evtOut) scripts once at 180; ends with snd_door_in.
  */
 EVT_BEGIN(evt_door_open_quick)
-    CALL(evt_door_param, LW(0), 7, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OPEN_CLOSE_EVTS, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         SPAWN_EVENT(LW(1))
     END_IF
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
         CALL(evt_door_save_mapflag, LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_BBOX_CULL)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_CLIP)
     END_IF
     BEGIN_INLINE_EVENT
         SET_VALUE(LW(10), LW(0))
-        CALL(evt_door_param, LW(10), 4, LW(0), LW(1), LW(2))
+        CALL(evt_door_param, LW(10), DOOR_PARAM_IN_POS, LW(0), LW(1), LW(2))
         CALL(evt_mario_get_pos, 0, LW(4), LW(5), LW(6))
         SET_VALUE(LW(1), LW(5))
         CALL(evt_cam3d_get_shift, LW(0), LW(1), LW(2), LW(3))
         CALL(evt_cam3d_event_from_road, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7), LW(8), LW(9))
-        CALL(evt_cam3d_evt_set, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9), 0, 11)
+        CALL(evt_cam3d_evt_set, LW(4), LW(5), LW(6), LW(7), LW(8), LW(9), 0, EASING_SINE_IN_OUT)
         WAIT_FRAMES(1)
-        CALL(evt_cam3d_evt_off, 0, 11)
+        CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
-    CALL(evt_door_param, LW(0), 2, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_OUTSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
-    CALL(evt_door_param, LW(0), 3, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_INSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(1), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_NO_BLEND2)
+        CALL(evt_mapobj_flag_onoff, 1, 0, LW(1), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_NO_MAP_BLEND2)
     END_IF
     IF_INT_NOT_EQUAL(LW(2), 0)
         CALL(evt_hitobj_onoff, LW(2), 1, 1)
     END_IF
     CALL(door_dark_flag, LW(0), 1)
     CALL(evt_map_set_blend, 0, 0, 0, 0, 0)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(9), 0)
         BEGIN_INLINE_EVENT
             SET_VALUE(LW(0), 180)
@@ -1429,7 +1467,7 @@ EVT_BEGIN(evt_door_open_quick)
         END_INLINE_EVENT
     END_IF
     CALL(evt_map_set_blend, 1, 0, 0, 0, 0)
-    CALL(evt_door_param, LW(0), 6, LW(7), LW(8), LW(9))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_EVTS, LW(7), LW(8), LW(9))
     IF_INT_NOT_EQUAL(LW(8), 0)
         BEGIN_INLINE_EVENT
             SET_VALUE(LW(0), 180)
@@ -1441,38 +1479,35 @@ EVT_BEGIN(evt_door_open_quick)
 EVT_END()
 
 /**
- * Map-init setup for an ordinary door (DoorParam in LW(0)):
- * hides the inside and its hits, registers evt_door_open on hitOut
- * and evt_door_close on hitIn as A-in-front case events, and hides the listed NPCs.
+ * Sets up a door from the DoorParam in LW(0), called by map set-up scripts: hides the inside group and its hit object,
+ * registers A-button case events (CASE_FRONT_A) on hitIn running evt_door_close and on hitOut running evt_door_open
+ * (both with LW(15) 0), and hides the DoorParam's NPCs (DOOR_FLAG_HIDE_NPCS).
  */
 EVT_BEGIN(evt_door_entry)
-    CALL(evt_door_param, LW(0), 3, LW(1), LW(2))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_INSIDE, LW(1), LW(2))
     IF_INT_NOT_EQUAL(LW(1), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, 1, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     IF_INT_NOT_EQUAL(LW(2), 0)
         CALL(evt_hitobj_onoff, LW(2), 1, 0)
     END_IF
-    CALL(evt_door_param, LW(0), 1, LW(1), LW(2), LW(3))
+    CALL(evt_door_param, LW(0), DOOR_PARAM_HITS, LW(1), LW(2), LW(3))
     IF_INT_NOT_EQUAL(LW(2), 0)
         SET_VALUE(LW(15), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(2), 0, PTR(evt_door_close), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(2), 0, PTR(evt_door_close), 0)
     END_IF
     IF_INT_NOT_EQUAL(LW(3), 0)
         SET_VALUE(LW(15), 0)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(3), 0, PTR(evt_door_open), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(3), 0, PTR(evt_door_open), 0)
     END_IF
-    CALL(evt_door_param, LW(0), 9, LW(1))
-    IF_BITS_SET(LW(1), 1)
+    CALL(evt_door_param, LW(0), DOOR_PARAM_FLAGS, LW(1))
+    IF_BITS_SET(LW(1), DOOR_FLAG_HIDE_NPCS)
         CALL(npc_hide_onoff, LW(0), 1)
     END_IF
     RETURN
 EVT_END()
 
-/**
- * Returns HouseData.hit[0..3] of the HouseWork in args[0] into args[1..4]:
- * case condition and hit name pairs for the way in and the way out (evt_door_setup).
- */
+/** Returns the four hit object names of the house args[0] (its HouseWork) in args[1] to args[4]. */
 static USER_FUNC(inout_hit) {
     EvtWord* args = event->args;
     HouseWork* w = (HouseWork*)evtGetValue(event, args[0]);
@@ -1505,7 +1540,7 @@ static USER_FUNC(in_pos) {
 static USER_FUNC(outside_group) {
     EvtWord* args = event->args;
     HouseWork* w = (HouseWork*)evtGetValue(event, args[0]);
-    evtSetValue(event, args[1], w->data->outside);
+    evtSetValue(event, args[1], (EvtWord)w->data->outside);
     return EVT_RETURN_DONE;
 }
 
@@ -1513,7 +1548,7 @@ static USER_FUNC(outside_group) {
 static USER_FUNC(door_group) {
     EvtWord* args = event->args;
     HouseWork* w = (HouseWork*)evtGetValue(event, args[0]);
-    evtSetValue(event, args[1], w->data->door);
+    evtSetValue(event, args[1], (EvtWord)w->data->door);
     return EVT_RETURN_DONE;
 }
 
@@ -1521,8 +1556,8 @@ static USER_FUNC(door_group) {
 static USER_FUNC(inside_group) {
     EvtWord* args = event->args;
     HouseWork* w = (HouseWork*)evtGetValue(event, args[0]);
-    evtSetValue(event, args[1], w->data->inside[0]);
-    evtSetValue(event, args[2], w->data->inside[1]);
+    evtSetValue(event, args[1], (EvtWord)w->data->inside[0]);
+    evtSetValue(event, args[2], (EvtWord)w->data->inside[1]);
     return EVT_RETURN_DONE;
 }
 
@@ -1530,8 +1565,8 @@ static USER_FUNC(inside_group) {
 static USER_FUNC(init_inside_group) {
     EvtWord* args = event->args;
     HouseWork* w = (HouseWork*)evtGetValue(event, args[0]);
-    evtSetValue(event, args[1], w->data->initInside[0]);
-    evtSetValue(event, args[2], w->data->initInside[1]);
+    evtSetValue(event, args[1], (EvtWord)w->data->initInside[0]);
+    evtSetValue(event, args[2], (EvtWord)w->data->initInside[1]);
     return EVT_RETURN_DONE;
 }
 
@@ -1539,64 +1574,58 @@ static USER_FUNC(init_inside_group) {
 static USER_FUNC(animation) {
     EvtWord* args = event->args;
     HouseWork* w = (HouseWork*)evtGetValue(event, args[0]);
-    evtSetValue(event, args[1], w->data->anim[0]);
-    evtSetValue(event, args[2], w->data->anim[1]);
-    evtSetValue(event, args[3], w->data->anim[2]);
-    evtSetValue(event, args[4], w->data->anim[3]);
+    evtSetValue(event, args[1], (EvtWord)w->data->anim[0]);
+    evtSetValue(event, args[2], (EvtWord)w->data->anim[1]);
+    evtSetValue(event, args[3], (EvtWord)w->data->anim[2]);
+    evtSetValue(event, args[4], (EvtWord)w->data->anim[3]);
     return EVT_RETURN_DONE;
 }
 
-// the item flag the dark/light helpers toggle on field items: 0x80 in the demo, 0x40 in retail
-#if VERSION <= VERSION_DEMO_JP
-#define DOOR_ITEM_DARK_FLAG 0x80
-#else
-#define DOOR_ITEM_DARK_FLAG 0x40
-#endif
-
-#define NPC_LIGHT_BODY(FN, ICONFN)                               \
-    HouseWork* w = (HouseWork*)evtGetValue(event, *event->args); \
-    MarioWork* mario = marioGetPtr();                            \
-    PartyEntry* party = partyGetPtr(0);                          \
-    PartyEntry* follower = partyGetPtr(1);                       \
-    const char** list;                                           \
-    if (mario) {                                                 \
-        FN(marioGetPtr()->paperAnimGroupId[0], 0x1800);          \
-        FN(marioGetPtr()->paperAnimGroupId[1], 0x1800);          \
-        FN(marioGetPtr()->paperAnimGroupId[2], 0x1800);          \
-    }                                                            \
-    if (party) {                                                 \
-        FN(party->paperAnimGroup, 0x1800);                       \
-    }                                                            \
-    if (follower) {                                              \
-        FN(follower->paperAnimGroup, 0x1800);                    \
-    }                                                            \
-    list = w->data->npcs;                                        \
-    if (list) {                                                  \
-        for (; *list; list++) {                                  \
-            NpcEntry* npc = npcNameToPtr_NoAssert(*list);        \
-            if (npc) {                                           \
-                FN(npc->poseId, 0x1800);                         \
-            }                                                    \
-        }                                                        \
-    }                                                            \
-    list = w->data->mobjs;                                       \
-    if (list) {                                                  \
-        for (; *list; list++) {                                  \
-            MapObjectEntry* mobj = mobjNameToPtrNoAssert(*list); \
-            if (mobj) {                                          \
-                FN(mobj->poseId, 0x1800);                        \
-            }                                                    \
-        }                                                        \
-    }                                                            \
-    list = w->data->items;                                       \
-    if (list) {                                                  \
-        for (; *list; list++) {                                  \
-            ItemEntry* item = itemNameToPtr((char*)*list);       \
-            if (item) {                                          \
-                ICONFN(item->name, DOOR_ITEM_DARK_FLAG);         \
-            }                                                    \
-        }                                                        \
-    }                                                            \
+// Generator: the same body for the On and Off variants (FN, ICONFN).
+#define NPC_LIGHT_BODY(FN, ICONFN)                                                                      \
+    HouseWork* w = (HouseWork*)evtGetValue(event, *event->args);                                        \
+    MarioWork* mario = marioGetPtr();                                                                   \
+    PartyEntry* party = partyGetPtr(0);                                                                 \
+    PartyEntry* follower = partyGetPtr(1);                                                              \
+    const char** list;                                                                                  \
+    if (mario) {                                                                                        \
+        FN(marioGetPtr()->paperAnimGroupId[0], MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2); \
+        FN(marioGetPtr()->paperAnimGroupId[1], MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2); \
+        FN(marioGetPtr()->paperAnimGroupId[2], MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2); \
+    }                                                                                                   \
+    if (party) {                                                                                        \
+        FN(party->paperAnimGroup, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);              \
+    }                                                                                                   \
+    if (follower) {                                                                                     \
+        FN(follower->paperAnimGroup, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);           \
+    }                                                                                                   \
+    list = w->data->npcs;                                                                               \
+    if (list) {                                                                                         \
+        for (; *list; list++) {                                                                         \
+            NpcEntry* npc = npcNameToPtr_NoAssert(*list);                                               \
+            if (npc) {                                                                                  \
+                FN(npc->poseId, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);                \
+            }                                                                                           \
+        }                                                                                               \
+    }                                                                                                   \
+    list = w->data->mobjs;                                                                              \
+    if (list) {                                                                                         \
+        for (; *list; list++) {                                                                         \
+            MapObjectEntry* mobj = mobjNameToPtrNoAssert(*list);                                        \
+            if (mobj) {                                                                                 \
+                FN(mobj->poseId, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);               \
+            }                                                                                           \
+        }                                                                                               \
+    }                                                                                                   \
+    list = w->data->items;                                                                              \
+    if (list) {                                                                                         \
+        for (; *list; list++) {                                                                         \
+            ItemEntry* item = itemNameToPtr((char*)*list);                                              \
+            if (item) {                                                                                 \
+                ICONFN(item->name, ICON_FLAG_NO_MAP_BLEND);                                             \
+            }                                                                                           \
+        }                                                                                               \
+    }                                                                                                   \
     return EVT_RETURN_DONE;
 
 /**
@@ -1630,18 +1659,11 @@ static USER_FUNC(get_noclip_map) {
     return EVT_RETURN_DONE;
 }
 
-#define DOOR_POS_GET(HIT)              \
-    if (!mario) {                      \
-        hitObjGetPos(HIT, &pos);       \
-    } else {                           \
-        pos = marioGetPtr()->position; \
-    }                                  \
-    hitObjGetNormal(HIT, &nrm);
-
 /**
  * Works out where Mario stands outside (out) and inside (in) a door from the hit objects' positions and normals;
  * the outside spot is offset sideways by half the door map object's width according to the hinge side (type).
- * With mario set, Mario's own position replaces the hit positions. Only X and Z are written.
+ * With mario set, Mario's own position replaces the hit positions. Only X and Z are written, except that a missing
+ * hit object makes that spot Mario's whole position.
  */
 void door_position_sub(s32 type, const char* map, const char* hitIn, const char* hitOut, Vec* in, Vec* out, BOOL mario) {
     Mtx inv;
@@ -1655,6 +1677,7 @@ void door_position_sub(s32 type, const char* map, const char* hitIn, const char*
     f32 w = 10.0f;
     f32 a, b;
     f32 t;
+    f32 half;
 
     if (!mario) {
         a = 40.0f;
@@ -1671,25 +1694,34 @@ void door_position_sub(s32 type, const char* map, const char* hitIn, const char*
         PSVECSubtract(&max, &min, &d);
         if (d.x) {
             t = d.x / (f32)cos((f32)atan(d.z / d.x));
-            w = t / 2.0f;
+            half = t / 2.0f;
         } else {
-            w = d.z / 2.0f;
+            half = d.z / 2.0f;
         }
-        t = w;
-        w = t;
+        w = half;
     }
     switch (type) {
         case 0:
         case 1:
             if (hitOut) {
-                DOOR_POS_GET(hitOut)
+                if (!mario) {
+                    hitObjGetPos(hitOut, &pos);
+                } else {
+                    pos = marioGetPtr()->position;
+                }
+                hitObjGetNormal(hitOut, &nrm);
                 out->x = pos.x + nrm.x * a - nrm.z * w;
                 out->z = pos.z + nrm.z * a + nrm.x * w;
             } else {
                 *out = marioGetPtr()->position;
             }
             if (hitIn) {
-                DOOR_POS_GET(hitIn)
+                if (!mario) {
+                    hitObjGetPos(hitIn, &pos);
+                } else {
+                    pos = marioGetPtr()->position;
+                }
+                hitObjGetNormal(hitIn, &nrm);
                 in->x = pos.x + nrm.x * b;
                 in->z = pos.z + nrm.z * b;
             } else {
@@ -1698,14 +1730,24 @@ void door_position_sub(s32 type, const char* map, const char* hitIn, const char*
             break;
         case 2:
             if (hitOut) {
-                DOOR_POS_GET(hitOut)
+                if (!mario) {
+                    hitObjGetPos(hitOut, &pos);
+                } else {
+                    pos = marioGetPtr()->position;
+                }
+                hitObjGetNormal(hitOut, &nrm);
                 out->x = pos.x + nrm.x * a + nrm.z * w;
                 out->z = pos.z + nrm.z * a - nrm.x * w;
             } else {
                 *out = marioGetPtr()->position;
             }
             if (hitIn) {
-                DOOR_POS_GET(hitIn)
+                if (!mario) {
+                    hitObjGetPos(hitIn, &pos);
+                } else {
+                    pos = marioGetPtr()->position;
+                }
+                hitObjGetNormal(hitIn, &nrm);
                 in->x = pos.x + nrm.x * b;
                 in->z = pos.z + nrm.z * b;
             } else {
@@ -1714,14 +1756,24 @@ void door_position_sub(s32 type, const char* map, const char* hitIn, const char*
             break;
         case 3:
             if (hitOut) {
-                DOOR_POS_GET(hitOut)
+                if (!mario) {
+                    hitObjGetPos(hitOut, &pos);
+                } else {
+                    pos = marioGetPtr()->position;
+                }
+                hitObjGetNormal(hitOut, &nrm);
                 out->x = pos.x + nrm.x * a;
                 out->z = pos.z + nrm.z * a;
             } else {
                 *out = marioGetPtr()->position;
             }
             if (hitIn) {
-                DOOR_POS_GET(hitIn)
+                if (!mario) {
+                    hitObjGetPos(hitIn, &pos);
+                } else {
+                    pos = marioGetPtr()->position;
+                }
+                hitObjGetNormal(hitIn, &nrm);
                 in->x = pos.x + nrm.x * a;
                 in->z = pos.z + nrm.z * a;
             } else {
@@ -1731,41 +1783,55 @@ void door_position_sub(s32 type, const char* map, const char* hitIn, const char*
     }
 }
 
-#define DARK_SUB_BODY(FN, ICONFN)                                \
-    if (mario) {                                                 \
-        FN(mario->paperAnimGroupId[0], 0x1800);                  \
-        FN(mario->paperAnimGroupId[1], 0x1800);                  \
-        FN(mario->paperAnimGroupId[2], 0x1800);                  \
-    }                                                            \
-    if (party) {                                                 \
-        FN(party->paperAnimGroup, 0x1800);                       \
-    }                                                            \
-    if (follower) {                                              \
-        FN(follower->paperAnimGroup, 0x1800);                    \
-    }                                                            \
-    if (npcs) {                                                  \
-        for (list = npcs; *list; list++) {                       \
-            NpcEntry* npc = npcNameToPtr_NoAssert(*list);        \
-            if (npc) {                                           \
-                FN(npc->poseId, 0x1800);                         \
-            }                                                    \
-        }                                                        \
-    }                                                            \
-    if (mobjs) {                                                 \
-        for (list = mobjs; *list; list++) {                      \
-            MapObjectEntry* mobj = mobjNameToPtrNoAssert(*list); \
-            if (mobj) {                                          \
-                FN(mobj->poseId, 0x1800);                        \
-            }                                                    \
-        }                                                        \
-    }                                                            \
-    if (items) {                                                 \
-        for (list = items; *list; list++) {                      \
-            ItemEntry* item = itemNameToPtr((char*)*list);       \
-            if (item) {                                          \
-                ICONFN(item->name, DOOR_ITEM_DARK_FLAG);         \
-            }                                                    \
-        }                                                        \
+/** The standing spots inside and outside door d, measured from the door (door_position_sub). */
+// door_position and door_position_mario: original names and sizes (0x40 each) from the JP demo map (UNUSED there:
+// every call is inlined); the map lists them after door_position_sub, and evt_door_param calls each twice.
+void door_position(DoorParam* d, Vec* in, Vec* out) {
+    door_position_sub(d->type, d->mapobj, d->hitIn, d->hitOut, in, out, FALSE);
+}
+
+/** The standing spots inside and outside door d, measured from Mario's position. */
+// Original name and size from the JP demo map (see door_position).
+void door_position_mario(DoorParam* d, Vec* in, Vec* out) {
+    door_position_sub(d->type, d->mapobj, d->hitIn, d->hitOut, in, out, TRUE);
+}
+
+// Generator: the same body for the On and Off variants (FN, ICONFN).
+#define DARK_SUB_BODY(FN, ICONFN)                                                               \
+    if (mario) {                                                                                \
+        FN(mario->paperAnimGroupId[0], MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2); \
+        FN(mario->paperAnimGroupId[1], MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2); \
+        FN(mario->paperAnimGroupId[2], MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2); \
+    }                                                                                           \
+    if (party) {                                                                                \
+        FN(party->paperAnimGroup, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);      \
+    }                                                                                           \
+    if (follower) {                                                                             \
+        FN(follower->paperAnimGroup, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);   \
+    }                                                                                           \
+    if (npcs) {                                                                                 \
+        for (list = npcs; *list; list++) {                                                      \
+            NpcEntry* npc = npcNameToPtr_NoAssert(*list);                                       \
+            if (npc) {                                                                          \
+                FN(npc->poseId, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);        \
+            }                                                                                   \
+        }                                                                                       \
+    }                                                                                           \
+    if (mobjs) {                                                                                \
+        for (list = mobjs; *list; list++) {                                                     \
+            MapObjectEntry* mobj = mobjNameToPtrNoAssert(*list);                                \
+            if (mobj) {                                                                         \
+                FN(mobj->poseId, MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2);       \
+            }                                                                                   \
+        }                                                                                       \
+    }                                                                                           \
+    if (items) {                                                                                \
+        for (list = items; *list; list++) {                                                     \
+            ItemEntry* item = itemNameToPtr((char*)*list);                                      \
+            if (item) {                                                                         \
+                ICONFN(item->name, ICON_FLAG_NO_MAP_BLEND);                                     \
+            }                                                                                   \
+        }                                                                                       \
     }
 
 /**
@@ -1797,12 +1863,6 @@ USER_FUNC(door_dark_flag) {
     return EVT_RETURN_DONE;
 }
 
-#define DOOR_PARAM_POS(V, M)                                                  \
-    door_position_sub(d->type, d->mapobj, d->hitIn, d->hitOut, &in, &out, M); \
-    evtSetValue(event, args[2], V.x);                                         \
-    evtSetValue(event, args[3], V.y);                                         \
-    evtSetValue(event, args[4], V.z);
-
 /**
  * Reads a field of the DoorParam in args[0] into args[2..];
  * args[1] picks it: 0 type, 1 map object and hits, 2 outside, 3 inside, 4/5 inside/outside standing spot,
@@ -1817,48 +1877,60 @@ USER_FUNC(evt_door_param) {
     Vec out = {0.0f, 0.0f, 0.0f};
 
     switch (kind) {
-        case 0:
+        case DOOR_PARAM_TYPE:
             evtSetValue(event, args[2], d->type);
             break;
-        case 1:
+        case DOOR_PARAM_HITS:
             evtSetValue(event, args[2], (EvtWord)d->mapobj);
             evtSetValue(event, args[3], (EvtWord)d->hitIn);
             evtSetValue(event, args[4], (EvtWord)d->hitOut);
             break;
-        case 2:
+        case DOOR_PARAM_OUTSIDE:
             evtSetValue(event, args[2], (EvtWord)d->outside);
             evtSetValue(event, args[3], (EvtWord)d->outsideHit);
             break;
-        case 3:
+        case DOOR_PARAM_INSIDE:
             evtSetValue(event, args[2], (EvtWord)d->inside);
             evtSetValue(event, args[3], (EvtWord)d->insideHit);
             break;
-        case 4:
-            DOOR_PARAM_POS(in, FALSE)
+        case DOOR_PARAM_IN_POS:
+            door_position(d, &in, &out);
+            evtSetValue(event, args[2], in.x);
+            evtSetValue(event, args[3], in.y);
+            evtSetValue(event, args[4], in.z);
             break;
-        case 5:
-            DOOR_PARAM_POS(out, FALSE)
+        case DOOR_PARAM_OUT_POS:
+            door_position(d, &in, &out);
+            evtSetValue(event, args[2], out.x);
+            evtSetValue(event, args[3], out.y);
+            evtSetValue(event, args[4], out.z);
             break;
-        case 6:
+        case DOOR_PARAM_EVTS:
             evtSetValue(event, args[2], (EvtWord)d->evtIn);
             evtSetValue(event, args[3], (EvtWord)d->evtOut);
             evtSetValue(event, args[4], (EvtWord)d->evtWall);
             break;
-        case 7:
+        case DOOR_PARAM_OPEN_CLOSE_EVTS:
             evtSetValue(event, args[2], (EvtWord)d->evtOpen);
             evtSetValue(event, args[3], (EvtWord)d->evtClose);
             break;
-        case 8:
+        case DOOR_PARAM_SE:
             evtSetValue(event, args[2], d->se);
             break;
-        case 9:
+        case DOOR_PARAM_FLAGS:
             evtSetValue(event, args[2], d->flags);
             break;
-        case 10:
-            DOOR_PARAM_POS(in, TRUE)
+        case DOOR_PARAM_IN_POS_FROM_MARIO:
+            door_position_mario(d, &in, &out);
+            evtSetValue(event, args[2], in.x);
+            evtSetValue(event, args[3], in.y);
+            evtSetValue(event, args[4], in.z);
             break;
-        case 11:
-            DOOR_PARAM_POS(out, TRUE)
+        case DOOR_PARAM_OUT_POS_FROM_MARIO:
+            door_position_mario(d, &in, &out);
+            evtSetValue(event, args[2], out.x);
+            evtSetValue(event, args[3], out.y);
+            evtSetValue(event, args[4], out.z);
             break;
     }
     return EVT_RETURN_DONE;
@@ -1906,9 +1978,9 @@ static USER_FUNC(npc_hide_onoff) {
         NpcEntry* npc = npcNameToPtr_NoAssert(list[i]);
         if (npc) {
             if (on) {
-                npc->flags |= NPC_FLAG_NO_DISPLAY;
+                npc->flags |= NPC_FLAG_HIDE;
             } else {
-                npc->flags &= ~NPC_FLAG_NO_DISPLAY;
+                npc->flags &= ~NPC_FLAG_HIDE;
             }
         }
     }
@@ -1916,15 +1988,13 @@ static USER_FUNC(npc_hide_onoff) {
 }
 
 #if VERSION <= VERSION_DEMO_JP
-/** the demo defines these with the door helpers at the end of the file */
+/** the early demos define these with the door helpers at the end of the file */
 static USER_FUNC(snd_door_in) {
-    psndSetFlag(PSND_FLAG_MUTE_DOOR_SFX);
+    psndSetFlag(PSND_FLAG_DOOR_IN);
     return EVT_RETURN_DONE;
 }
-
-/** Clears PSND_FLAG_MUTE_DOOR_SFX after Mario walks back out. */
 static USER_FUNC(snd_door_out) {
-    psndClearFlag(PSND_FLAG_MUTE_DOOR_SFX);
+    psndClearFlag(PSND_FLAG_DOOR_IN);
     return EVT_RETURN_DONE;
 }
 #endif

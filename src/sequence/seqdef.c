@@ -1,31 +1,23 @@
 // Sequence table: the init, main and exit functions of every game sequence.
+
+#include "version.h"
 #include "driver/seqdrv.h"
 #include "seq/seq_logo.h"
 #include "seq/seq_title.h"
 #include "seq/seq_game.h"
 #include "seq/seq_mapchange.h"
-#include "seq/seq_battle.h"
 #include "seq/seq_gameover.h"
 #include "seq/seq_load.h"
 #include "seq/seq_e3.h"
-#include "version.h"
-#if VERSION <= VERSION_DEMO_JP
-#include "seq/seq_demo.h"
-#endif
+#include "seq/seq_battle.h"
 
 #if VERSION <= VERSION_DEMO_JP
-/**
- * The game's sequences (logo, title, game, map change, battle, game over, file select, demo playback, E3 menu):
- * init, main and exit of each; seqMain runs them.
- */
+#include "seq/seq_demo.h"
 SequenceCallback seq_data[9][3] = {
 #else
-/**
- * The game's sequences (logo, title, game, map change, battle, game over, file select, E3 menu):
- * init, main and exit of each; seqMain runs them.
- */
 SequenceCallback seq_data[8][3] = {
 #endif
+
     {seq_logoInit, seq_logoMain, seq_logoExit},
     {seq_titleInit, seq_titleMain, seq_titleExit},
     {seq_gameInit, seq_gameMain, seq_gameExit},

@@ -9,7 +9,6 @@
 
 static BOOL OnReset(BOOL final);
 
-/** Registers OnReset (priority 0x7F) with the OS so memory protection is opened up again before a reset. */
 static OSResetFunctionInfo ResetFunctionInfo = {
     OnReset,
     0x7F,
@@ -17,7 +16,6 @@ static OSResetFunctionInfo ResetFunctionInfo = {
     NULL
 };
 
-/** Returns the console's physical main memory size from the boot info (24 MB on a retail GameCube). */
 u32 OSGetPhysicalMemSize(void) {
 #if DEBUG
     OSBootInfo* BootInfo = (OSBootInfo*)OSPhysicalToCached(0);
@@ -28,7 +26,6 @@ u32 OSGetPhysicalMemSize(void) {
 #endif
 }
 
-/** Returns the memory size the console was told to simulate (what the memory map is set up for). */
 u32 OSGetConsoleSimulatedMemSize(void) {
 #if DEBUG
     u32* memSize = (u32*)OSPhysicalToCached(0xF0);
@@ -39,13 +36,9 @@ u32 OSGetConsoleSimulatedMemSize(void) {
 #endif
 }
 
-/**
- * Reset callback: on the final pass it opens up all memory-protection channels again
- * and masks the memory protection interrupts.
- */
 static BOOL OnReset(BOOL final) {
     if (final != FALSE) {
-        __MEMRegs[8] = 0xFF;
+        __MEMRegs[MI_PROT_TYPE] = 0xFF;
         __OSMaskInterrupts(OS_INTERRUPTMASK_MEM_RESET);
     }
     return TRUE;
@@ -53,18 +46,13 @@ static BOOL OnReset(BOOL final) {
 
 void (*__OSErrorTable[])(u16, OSContext*, ...);
 
-/**
- * Interrupt handler for the memory protection hardware:
- * reads the cause and faulting address and passes them to the memory-protection error handler,
- * or to __OSUnhandledException if none is installed.
- */
 static void MEMIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     u32 addr;
     u32 cause;
 
-    cause = __MEMRegs[0xf];
-    addr = (((u32)__MEMRegs[0x12] & 0x3ff) << 16) | __MEMRegs[0x11];
-    __MEMRegs[0x10] = 0;
+    cause = __MEMRegs[MI_IRQFLAG];
+    addr = (((u32)__MEMRegs[MI_PROT_ADDR_HI] & 0x3ff) << 16) | __MEMRegs[MI_PROT_ADDR_LO];
+    __MEMRegs[16] = 0;
 
     if (__OSErrorTable[__OS_EXCEPTION_MEMORY_PROTECTION]) {
         __OSErrorTable[__OS_EXCEPTION_MEMORY_PROTECTION](__OS_EXCEPTION_MEMORY_PROTECTION, context, cause, addr);
@@ -74,12 +62,6 @@ static void MEMIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     __OSUnhandledException(__OS_EXCEPTION_MEMORY_PROTECTION, context, cause, addr);
 }
 
-/**
- * Limits access to the 1 KB-aligned range around addr on one of the four memory-protection channels.
- * control is the allowed access (0 none, 1 read, 2 write, 3 both);
- * anything less than 3 enables the protection interrupt for that channel.
- * The range is flushed from the data cache first.
- */
 void OSProtectRange(u32 chan, void* addr, u32 nBytes, u32 control) {
     BOOL enabled;
     u32 start;
@@ -93,7 +75,7 @@ void OSProtectRange(u32 chan, void* addr, u32 nBytes, u32 control) {
         return;
     }
 
-    control &= 3;
+    control &= OS_PROTECT_CONTROL_RDWR;
 
     end = (u32)addr + nBytes;
     start = TRUNC(addr, 1u << 10);
@@ -105,23 +87,24 @@ void OSProtectRange(u32 chan, void* addr, u32 nBytes, u32 control) {
 
     __OSMaskInterrupts(OS_INTERRUPTMASK(__OS_INTERRUPT_MEM_0 + chan));
 
-    __MEMRegs[0 + 2 * chan] = (u16)(start >> 10);
-    __MEMRegs[1 + 2 * chan] = (u16)(end >> 10);
+    __MEMRegs[MI_REGION0_FIRST + 2 * chan] = (u16)(start >> 10);
+    __MEMRegs[MI_REGION0_LAST + 2 * chan] = (u16)(end >> 10);
 
-    reg = __MEMRegs[8];
-    reg &= ~(3 << 2 * chan);
+    reg = __MEMRegs[MI_PROT_TYPE];
+    reg &= ~(OS_PROTECT_CONTROL_RDWR << 2 * chan);
     reg |= control << 2 * chan;
-    __MEMRegs[8] = reg;
+    __MEMRegs[MI_PROT_TYPE] = reg;
 
-    if (control != 3) {
+    if (control != OS_PROTECT_CONTROL_RDWR) {
         __OSUnmaskInterrupts(OS_INTERRUPTMASK(__OS_INTERRUPT_MEM_0 + chan));
     }
 
     OSRestoreInterrupts(enabled);
 }
 
-/** Assembly: sets the BATs for the retail 24 MB memory map and returns with address translation on. */
 #ifdef __GEKKO__
+// Maps the cached region 0x80000000 onto 24 MB with BAT 0 (16 MB) and BAT 2 (8 MB at 0x81000000), data
+// and instruction BATs alike, then returns to the caller through rfi with translation on.
 static asm void Config24MB(void) {
     nofralloc
     li r7, 0x0
@@ -151,7 +134,7 @@ static asm void Config24MB(void) {
     mtibatu 2, r5
     isync
     mfmsr r3
-    ori r3, r3, 0x30
+    ori r3, r3, MSR_IR | MSR_DR
     mtsrr1 r3
     mflr r3
     mtsrr0 r3
@@ -159,8 +142,8 @@ static asm void Config24MB(void) {
 }
 #endif
 
-/** Assembly: sets the BATs for the 48 MB development-kit memory map and returns with address translation on. */
 #ifdef __GEKKO__
+// As Config24MB for 48 MB: BAT 0 covers 32 MB, BAT 2 16 MB at 0x82000000.
 static asm void Config48MB(void) {
     nofralloc
     li r7, 0x0
@@ -190,7 +173,7 @@ static asm void Config48MB(void) {
     mtibatu 2, r5
     isync
     mfmsr r3
-    ori r3, r3, 0x30
+    ori r3, r3, MSR_IR | MSR_DR
     mtsrr1 r3
     mflr r3
     mtsrr0 r3
@@ -198,10 +181,6 @@ static asm void Config48MB(void) {
 }
 #endif
 
-/**
- * Assembly: jumps to a function by physical address with address translation turned off (so the BATs can be
- * rewritten).
- */
 #ifdef __GEKKO__
 static asm void RealMode(register u32 addr) {
     nofralloc
@@ -214,14 +193,9 @@ static asm void RealMode(register u32 addr) {
 }
 #endif
 
-/**
- * Sets up memory protection and the BATs for the console's memory size (24 MB or 48 MB map),
- * installs the memory interrupt handlers and the reset callback. Skipped when running under the IPL.
- * Called from OSInit.
- */
 void __OSInitMemoryProtection(void) {
 #ifndef DEBUG
-    u32 padding[9];
+    u32 padding[9]; // unused; the original had it too (its stack space is in the retail code)
     u32 temp;
 #endif
     BOOL enabled;
@@ -231,7 +205,7 @@ void __OSInitMemoryProtection(void) {
     enabled = OSDisableInterrupts();
 
     __MEMRegs[16] = 0;
-    __MEMRegs[8] = 0xFF;
+    __MEMRegs[MI_PROT_TYPE] = 0xFF;
 
     __OSMaskInterrupts(OS_INTERRUPTMASK_MEM_0 | OS_INTERRUPTMASK_MEM_1 | OS_INTERRUPTMASK_MEM_2 |
                        OS_INTERRUPTMASK_MEM_3);
@@ -245,7 +219,7 @@ void __OSInitMemoryProtection(void) {
 #ifdef DEBUG
     if (OSGetConsoleSimulatedMemSize() < OSGetPhysicalMemSize() && OSGetConsoleSimulatedMemSize() == 0x1800000)
 #else
-    temp = OSGetConsoleSimulatedMemSize();  // not sure how else to get the order right on retail
+    temp = OSGetConsoleSimulatedMemSize();  // Read simulated size before checking physical size.
     if (temp < OSGetPhysicalMemSize() && temp == 0x1800000)
 #endif
     {

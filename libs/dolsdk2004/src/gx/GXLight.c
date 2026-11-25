@@ -14,7 +14,6 @@ typedef struct {
     f32 ldir[3];
 } __GXLightObjInt_struct;
 
-/** Stores all six attenuation coefficients in a light object: angular a0, a1, a2 and distance k0, k1, k2. */
 void GXInitLightAttn(GXLightObj* lt_obj, f32 a0, f32 a1, f32 a2, f32 k0, f32 k1, f32 k2) {
     __GXLightObjInt_struct* obj;
 
@@ -29,7 +28,6 @@ void GXInitLightAttn(GXLightObj* lt_obj, f32 a0, f32 a1, f32 a2, f32 k0, f32 k1,
     obj->k[2] = k2;
 }
 
-/** Sets only the three angular attenuation coefficients (a0..a2) of a light object. */
 void GXInitLightAttnA(GXLightObj* lt_obj, f32 a0, f32 a1, f32 a2) {
     __GXLightObjInt_struct* obj;
 
@@ -41,7 +39,6 @@ void GXInitLightAttnA(GXLightObj* lt_obj, f32 a0, f32 a1, f32 a2) {
     obj->a[2] = a2;
 }
 
-/** Reads the three angular attenuation coefficients out of a light object. */
 void GXGetLightAttnA(const GXLightObj* lt_obj, f32* a0, f32* a1, f32* a2) {
     __GXLightObjInt_struct* obj;
 
@@ -53,7 +50,6 @@ void GXGetLightAttnA(const GXLightObj* lt_obj, f32* a0, f32* a1, f32* a2) {
     *a2 = obj->a[2];
 }
 
-/** Sets only the three distance attenuation coefficients (k0..k2) of a light object. */
 void GXInitLightAttnK(GXLightObj* lt_obj, f32 k0, f32 k1, f32 k2) {
     __GXLightObjInt_struct* obj;
 
@@ -65,7 +61,6 @@ void GXInitLightAttnK(GXLightObj* lt_obj, f32 k0, f32 k1, f32 k2) {
     obj->k[2] = k2;
 }
 
-/** Reads the three distance attenuation coefficients out of a light object. */
 void GXGetLightAttnK(const GXLightObj* lt_obj, f32* k0, f32* k1, f32* k2) {
     __GXLightObjInt_struct* obj;
 
@@ -77,11 +72,6 @@ void GXGetLightAttnK(const GXLightObj* lt_obj, f32* k0, f32* k1, f32* k2) {
     *k2 = obj->k[2];
 }
 
-/**
- * Turns a light into a spotlight by computing the angular attenuation a0..a2 from the cosine of the cut-off
- * angle (degrees) for the chosen falloff (flat, cos, cos squared, sharp, ring1, ring2);
- * a cut-off outside 0 to 90 degrees, or GX_SP_OFF, gives a0 = 1, a1 = a2 = 0 (no angular falloff).
- */
 void GXInitLightSpot(GXLightObj* lt_obj, f32 cutoff, GXSpotFn spot_func) {
     f32 a0, a1, a2;
     f32 r;
@@ -93,8 +83,9 @@ void GXInitLightSpot(GXLightObj* lt_obj, f32 cutoff, GXSpotFn spot_func) {
     obj = (__GXLightObjInt_struct*)lt_obj;
     CHECK_GXBEGIN(200, "GXInitLightSpot");
 
-    if (cutoff <= 0.0f || cutoff > 90.0f)
+    if (cutoff <= 0.0f || cutoff > 90.0f) {
         spot_func = GX_SP_OFF;
+    }
 
     r = (3.1415927f * cutoff) / 180.0f;
     cr = cosf(r);
@@ -145,11 +136,6 @@ void GXInitLightSpot(GXLightObj* lt_obj, f32 cutoff, GXSpotFn spot_func) {
     obj->a[2] = a2;
 }
 
-/**
- * Computes the distance attenuation k0..k2 so the light has brightness ref_br at distance ref_dist,
- * with a gentle (linear), medium (half linear, half quadratic) or steep (quadratic) curve;
- * a negative distance, a brightness outside 0 to 1 or GX_DA_OFF gives k0 = 1, k1 = k2 = 0.
- */
 void GXInitLightDistAttn(GXLightObj* lt_obj, f32 ref_dist, f32 ref_br, GXDistAttnFn dist_func) {
     f32 k0, k1, k2;
     __GXLightObjInt_struct* obj;
@@ -158,10 +144,12 @@ void GXInitLightDistAttn(GXLightObj* lt_obj, f32 ref_dist, f32 ref_br, GXDistAtt
     obj = (__GXLightObjInt_struct*)lt_obj;
     CHECK_GXBEGIN(275, "GXInitLightDistAttn");
 
-    if (ref_dist < 0.0f)
+    if (ref_dist < 0.0f) {
         dist_func = GX_DA_OFF;
-    if (ref_br <= 0.0f || ref_br >= 1.0f)
+    }
+    if (ref_br <= 0.0f || ref_br >= 1.0f) {
         dist_func = GX_DA_OFF;
+    }
 
     switch (dist_func) {
     case GX_DA_GENTLE:
@@ -192,7 +180,6 @@ void GXInitLightDistAttn(GXLightObj* lt_obj, f32 ref_dist, f32 ref_br, GXDistAtt
     obj->k[2] = k2;
 }
 
-/** Stores the light's position (view space) in the light object. */
 void GXInitLightPos(GXLightObj* lt_obj, f32 x, f32 y, f32 z) {
     __GXLightObjInt_struct* obj;
 
@@ -205,7 +192,6 @@ void GXInitLightPos(GXLightObj* lt_obj, f32 x, f32 y, f32 z) {
     obj->lpos[2] = z;
 }
 
-/** Reads the position of a light object. */
 void GXGetLightPos(const GXLightObj* lt_obj, f32* x, f32* y, f32* z) {
     __GXLightObjInt_struct* obj;
 
@@ -218,7 +204,6 @@ void GXGetLightPos(const GXLightObj* lt_obj, f32* x, f32* y, f32* z) {
     *z = obj->lpos[2];
 }
 
-/** Stores the direction the light points in, negated, which is how the hardware light RAM expects it. */
 void GXInitLightDir(GXLightObj* lt_obj, f32 nx, f32 ny, f32 nz) {
     __GXLightObjInt_struct* obj;
 
@@ -230,7 +215,6 @@ void GXInitLightDir(GXLightObj* lt_obj, f32 nx, f32 ny, f32 nz) {
     obj->ldir[2] = -nz;
 }
 
-/** Reads the light direction, undoing the negation GXInitLightDir applies. */
 void GXGetLightDir(const GXLightObj* lt_obj, f32* nx, f32* ny, f32* nz) {
     __GXLightObjInt_struct* obj;
 
@@ -242,11 +226,6 @@ void GXGetLightDir(const GXLightObj* lt_obj, f32* nx, f32* ny, f32* nz) {
     *nz = -obj->ldir[2];
 }
 
-/**
- * Sets up a light for specular highlights from a direction (nx, ny, nz):
- * the stored direction is the normalised half- vector (-nx, -ny, 1 - nz)
- * and the position is placed 1e18 units away along -n, so it acts as an infinite light.
- */
 void GXInitSpecularDir(GXLightObj* lt_obj, f32 nx, f32 ny, f32 nz) {
     f32 mag;
     f32 vx;
@@ -275,7 +254,6 @@ void GXInitSpecularDir(GXLightObj* lt_obj, f32 nx, f32 ny, f32 nz) {
     obj->lpos[2] = nz * -1000000000000000000.0f;
 }
 
-/** Same as GXInitSpecularDir but takes the half-angle vector (hx, hy, hz) to store directly. */
 void GXInitSpecularDirHA(GXLightObj* lt_obj, f32 nx, f32 ny, f32 nz, f32 hx, f32 hy, f32 hz) {
     __GXLightObjInt_struct* obj;
 
@@ -291,7 +269,6 @@ void GXInitSpecularDirHA(GXLightObj* lt_obj, f32 nx, f32 ny, f32 nz, f32 hx, f32
     obj->lpos[2] = nz * -1000000000000000000.0f;
 }
 
-/** Stores the light's colour (RGBA, packed in one word) in the light object. */
 void GXInitLightColor(GXLightObj* lt_obj, GXColor color) {
     __GXLightObjInt_struct* obj;
 
@@ -302,7 +279,6 @@ void GXInitLightColor(GXLightObj* lt_obj, GXColor color) {
     *(u32*)&obj->Color = *(u32*)&color;
 }
 
-/** Reads the light's colour out of the light object. */
 void GXGetLightColor(const GXLightObj* lt_obj, GXColor* color) {
     __GXLightObjInt_struct* obj;
 
@@ -332,7 +308,6 @@ do {  \
 #define WRITE_SOME_LIGHT_REG2(val, addr) GX_WRITE_F32(val)
 #endif
 
-/** Converts a GXLightID bit mask (GX_LIGHT0..GX_LIGHT7) to the light number 0..7; any other value gives 8. */
 static inline u32 ConvLightID2Num(GXLightID id) {
     switch (id) {
     case GX_LIGHT0: return 0;
@@ -347,11 +322,8 @@ static inline u32 ConvLightID2Num(GXLightID id) {
     }
 }
 
-/**
- * Writes a light object to the FIFO as the 16 words of hardware light data:
- * three zero words, the colour, then the twelve floats of attenuation,
- * position and direction (paired-single assembly).
- */
+// Release builds copy the light object into the FIFO with this paired-single block; the DEBUG build of
+// GXLoadLightObjImm writes the same sixteen words one by one.
 static inline void PushLight(const register GXLightObj* lt_obj, register void* dest) {
     register u32 zero, color;
     register f32 a0_a1, a2_k0, k1_k2;
@@ -381,10 +353,6 @@ static inline void PushLight(const register GXLightObj* lt_obj, register void* d
 #endif  // clang-format on
 }
 
-/**
- * Loads a light object into hardware light slot light by writing it into the FIFO as an XF load at 0x600 + 0x10
- * * slot (16 words).
- */
 void GXLoadLightObjImm(const GXLightObj* lt_obj, GXLightID light) {
     u32 addr;
     u32 idx;
@@ -431,10 +399,6 @@ void GXLoadLightObjImm(const GXLightObj* lt_obj, GXLightID light) {
     __GXData->bpSentNot = 1;
 }
 
-/**
- * Loads a light into hardware light slot light from entry lt_obj_indx of the light array (set by GXSetArray),
- * as an indexed XF load (command 0x38, array 7) that the GPU fetches itself.
- */
 void GXLoadLightObjIndx(u32 lt_obj_indx, GXLightID light) {
     u32 reg;
     u32 addr;
@@ -466,11 +430,6 @@ void GXLoadLightObjIndx(u32 lt_obj_indx, GXLightID light) {
 
 #define GXCOLOR_AS_U32(color) (*((u32*)&(color)))
 
-/**
- * Sets the ambient colour of a colour or alpha channel (XF registers 10 and 11):
- * GX_COLOR0/1 change only RGB, GX_ALPHA0/1 only alpha, GX_COLOR0A0/1A1 all four components;
- * the new value is also cached.
- */
 void GXSetChanAmbColor(GXChannelID chan, GXColor amb_color) {
     u32 reg;
     u32 rgb;
@@ -519,11 +478,6 @@ void GXSetChanAmbColor(GXChannelID chan, GXColor amb_color) {
     __GXData->ambColor[colIdx] = reg;
 }
 
-/**
- * Sets the material colour of a colour or alpha channel (XF registers 12 and 13):
- * GX_COLOR0/1 change only RGB, GX_ALPHA0/1 only alpha, GX_COLOR0A0/1A1 all four components;
- * the new value is also cached.
- */
 void GXSetChanMatColor(GXChannelID chan, GXColor mat_color) {
     u32 reg;
     u32 rgb;
@@ -572,25 +526,15 @@ void GXSetChanMatColor(GXChannelID chan, GXColor mat_color) {
     __GXData->matColor[colIdx] = reg;
 }
 
-/**
- * Sets the number of colour channels (0 to 2) the transform unit produces,
- * in XF register 9 and in the general mode (flagged dirty).
- */
 void GXSetNumChans(u8 nChans) {
     CHECK_GXBEGIN(857, "GXSetNumChans");
     ASSERTMSGLINE(858, nChans <= 2, "GXSetNumChans: nChans > 2");
 
     SET_REG_FIELD(860, __GXData->genMode, 3, 4, nChans);
     GX_WRITE_XF_REG(9, nChans);
-    __GXData->dirtyState |= 4;
+    __GXData->dirtyState |= GX_DIRTY_GEN_MODE;
 }
 
-/**
- * Writes the channel control word of a lighting channel (XF register 14 + channel,
- * and 16 or 17 for the combined colour/alpha channel):
- * lighting on/off, ambient and material source (register or vertex), the lights (light_mask bits 0-3 and 4-7),
- * the diffuse function and whether attenuation is used (spot or specular).
- */
 void GXSetChanCtrl(GXChannelID chan, GXBool enable, GXColorSrc amb_src, GXColorSrc mat_src, u32 light_mask, GXDiffuseFn diff_fn, GXAttnFn attn_fn) {
     u32 reg;
     u32 idx;
@@ -600,12 +544,13 @@ void GXSetChanCtrl(GXChannelID chan, GXBool enable, GXColorSrc amb_src, GXColorS
     ASSERTMSGLINE(895, chan >= GX_COLOR0 && chan <= GX_COLOR1A1, "GXSetChanCtrl: Invalid Channel Id");
 
 #if DEBUG
-    if (chan == GX_COLOR0A0)
+    if (chan == GX_COLOR0A0) {
         idx = 0;
-    else if (chan == GX_COLOR1A1)
+    } else if (chan == GX_COLOR1A1) {
         idx = 1;
-    else
+    } else {
         idx = chan;
+    }
 #else
     idx = chan & 0x3;
 #endif

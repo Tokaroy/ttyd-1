@@ -1,33 +1,61 @@
 // hom_10 (途中駅ホーム, Excess Express platform): the train running between stations; the scene between the days of the
 // journey.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
-
-#include "manager/evtmgr_cmd.h"
-#include "mario/mariost.h"
-#include "driver/mapdrv.h"
-#include "evt/evt_sub.h"
-#include "driver/envdrv.h"
+#include "eff/eff_magic1_n64.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
+#include "party/party_motion.h"
 #include "evt/evt_snd.h"
-#include "hom.h"
+#include "system.h"
+#include "pmario_sound.h"
+#include "driver/envdrv.h"
+
+#include "manager/evtmgr_cmd.h"
+#include "mario/mariost.h"
+#include "driver/mapdrv.h"
+#include "evt/evt_sub.h"
 #include "data_tables.h"
+#include "driver/seqdrv.h"
 #include "map/sharin.h"
-#include "evt/evt_story.h"
+#include "map/sharin.h"
 
 static USER_FUNC(ramp_r);
 static void resha_tev(MapTevCallbackInfo* info);
 
 static SharinData sharinDt[29];
+static EvtWord evt_sharin_main[87];
+static EvtWord evt_sharin[19];
 static ClankData clankDt[9];
+static EvtWord evt_clank_main[104];
+static EvtWord evt_clank[21];
+static EvtWord evt_bg[81];
+static EvtWord evt_hoshi[88];
+EvtWord hom_10_evt_resha_start[244];
+EvtWord hom_10_evt_resha_start2[259];
+EvtWord hom_10_evt_resha_start3[11];
+EvtWord hom_10_evt_resha_start4[11];
+static EvtWord stop_1[90];
+static EvtWord stop_2[90];
+EvtWord hom_10_evt_resha_stop[36];
+static EvtWord evt_ramp[33];
 static const char* pika_tbl[15];
 static const char* pika_tbl_rsh_06[10];
+static EvtWord hom_10_evt_resha_sub[102];
+EvtWord hom_10_evt_resha_right[35];
+EvtWord hom_10_evt_resha_left[28];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord hom_10_init_evt[];
+#else
+EvtWord hom_10_init_evt[140];
+#endif
 
 /** Wheels of the train that spin while it runs: map object, wheel size, speed source and spin direction. */
 static SharinData sharinDt[] = {
@@ -98,7 +126,7 @@ static EVT_BEGIN(evt_sharin_main)
         CALL(evt_mapobj_rotate, 1, LW(0), 0, 0, LW(12))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -120,10 +148,6 @@ static EVT_BEGIN(evt_sharin)
     RETURN
 EVT_END()
 
-/**
- * Connecting rods of the train's wheels that move in a circle with them (bou_1 to bou_4, and the _c copies
- * that turn the other way).
- */
 static ClankData clankDt[] = {
     {"bou_1", 0, 0, FLOAT(20.0f), FLOAT(1.0f)},
     {"bou_2", 1, 1, FLOAT(16.5f), FLOAT(1.0f)},
@@ -137,8 +161,8 @@ static ClankData clankDt[] = {
 };
 
 /**
- * Moves one connecting rod (bou_n) in a small circle every frame according to the wheel speed,
- * so the rods move with the wheels.
+ * Moves one connecting rod (map object LW(0)) round a small circle each frame in step with the wheels,
+ * from the train speed GW(0) or GW(1) (chosen by LW(2)); waits while GSWF_HOM_TRAIN_MOVING is clear.
  */
 static EVT_BEGIN(evt_clank_main)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
@@ -176,7 +200,7 @@ static EVT_BEGIN(evt_clank_main)
         CALL(evt_mapobj_trans, 1, LW(0), LW(14), LW(13), FLOAT(0.0f))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -227,7 +251,7 @@ static EVT_BEGIN(evt_bg)
         CALL(evt_mapobj_trans, 1, STRING("iwayama"), LW(11), 0, 0)
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -237,8 +261,8 @@ static EVT_BEGIN(evt_bg)
 EVT_END()
 
 /**
- * Rotates the star objects (hosi_left, hosi_center,
- * hosi_right and the _c copies) every frame by the train speed GW(0).
+ * Rotates the star objects (hosi_left, hosi_center, hosi_right and their _c copies) each frame by the
+ * train speed GW(0); waits while GSWF_HOM_TRAIN_MOVING is clear.
  */
 static EVT_BEGIN(evt_hoshi)
     SET_FLOAT_VALUE(LW(10), FLOAT(0.0f))
@@ -261,7 +285,7 @@ static EVT_BEGIN(evt_hoshi)
         CALL(evt_mapobj_rotate, 0, STRING("hosi_center_c"), LW(10), 0, 0)
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -279,21 +303,22 @@ EVT_END()
  */
 EVT_BEGIN(hom_10_evt_resha_start)
     // The train is marked as moving and no longer at any station; its bell rings twice.
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
     CALL(evt_mapobj_get_position, STRING("ranpu"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(200)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
+
     // The engine sound for this station (Rogueport, the platform or Poshley Heights) starts.
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("gor_04"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1"), 0)
     END_IF
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_54_WELCOME_BACK)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG6_54_WELCOME_BACK)
             CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_2"), 0)
         ELSE
             CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_2_2"), 0)
@@ -302,6 +327,7 @@ EVT_BEGIN(hom_10_evt_resha_start)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_3"), 0)
     END_IF
+
     // On the platform and in Rogueport the train model itself slides away from the stop.
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
@@ -324,10 +350,11 @@ EVT_BEGIN(hom_10_evt_resha_start)
             END_LOOP
         END_INLINE_EVENT
     END_IF
+
     // The train accelerates over 20 seconds to full speed.
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-        CALL(evt_sub_intpl_msec_init, 11, 0, -1500, 20000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -1500, 20000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -341,6 +368,7 @@ EVT_BEGIN(hom_10_evt_resha_start)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
+
     // The drive wheels follow the train's speed; after 1.5 seconds they spin up to 10 faster and settle back.
     BEGIN_INLINE_EVENT
         SPAWN_EVENT_GET_ID(PTR(evt_sub_stopwatch), LW(0))
@@ -352,7 +380,7 @@ EVT_BEGIN(hom_10_evt_resha_start)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, 0, -1000, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -1000, 1000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -362,7 +390,7 @@ EVT_BEGIN(hom_10_evt_resha_start)
         IF_INT_EQUAL(LW(1), 1)
             GOTO(1)
         END_IF
-        CALL(evt_sub_intpl_msec_init, 11, -1000, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -1000, 0, 1000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -383,14 +411,15 @@ EVT_END()
 /** Same as hom_10_evt_resha_start but for the return trip: the train accelerates in the opposite direction to +15. */
 EVT_BEGIN(hom_10_evt_resha_start2)
     // The train is marked as moving and no longer at any station; its bell rings twice.
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_POSHLEY), 0)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_ROGUEPORT), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_POSHLEY, 0)
+    SET_VALUE(GSWF_HOM_TRAIN_AT_ROGUEPORT, 0)
     CALL(evt_mapobj_get_position, STRING("ranpu"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
     WAIT_MS(200)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_TRAIN_BELL1"), LW(0), LW(1), LW(2), 0)
+
     // The engine sound for this station starts.
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("gor_04"))
@@ -402,6 +431,7 @@ EVT_BEGIN(hom_10_evt_resha_start2)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE1_3"), 0)
     END_IF
+
     // The train model slides away from the stop.
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
@@ -434,10 +464,11 @@ EVT_BEGIN(hom_10_evt_resha_start2)
             END_LOOP
         END_INLINE_EVENT
     END_IF
+
     // The train accelerates over 20 seconds to full speed in the opposite direction.
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
-        CALL(evt_sub_intpl_msec_init, 11, 0, 1500, 20000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1500, 20000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -451,6 +482,7 @@ EVT_BEGIN(hom_10_evt_resha_start2)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
+
     // The drive wheels follow the train's speed; after 1.5 seconds they spin up to 10 faster and settle back.
     BEGIN_INLINE_EVENT
         SPAWN_EVENT_GET_ID(PTR(evt_sub_stopwatch), LW(0))
@@ -462,7 +494,7 @@ EVT_BEGIN(hom_10_evt_resha_start2)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, 0, 1000, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 1000, 1000)
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -472,7 +504,7 @@ EVT_BEGIN(hom_10_evt_resha_start2)
         IF_INT_EQUAL(LW(1), 1)
             GOTO(1)
         END_IF
-        CALL(evt_sub_intpl_msec_init, 11, 1000, 0, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1000, 0, 1000)
         LABEL(2)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -495,7 +527,7 @@ EVT_END()
  * without the departure acceleration; used by the running-train scenes.
  */
 EVT_BEGIN(hom_10_evt_resha_start3)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(-15.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(-15.0f))
     RETURN
@@ -506,18 +538,19 @@ EVT_END()
  * without the departure acceleration.
  */
 EVT_BEGIN(hom_10_evt_resha_start4)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(15.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(15.0f))
     RETURN
 EVT_END()
 
 /**
- * Arrival braking of the outbound train: plays the stop sounds and slows the wheel speeds to 0,
- * then clears GSWF_TRAIN_MOVING.
+ * Train braking: sets GSWF_HOM_TRAIN_MOVING while it runs, plays this map's stop sound (gor_04, hom_00
+ * or pik_00) and eases the train model's x offset from 3000 to 0 over 10 seconds, writing each frame's change
+ * (new minus old) into the train speeds GW(0) and GW(1); then clears GSWF_HOM_TRAIN_MOVING.
  */
 static EVT_BEGIN(stop_1)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(3000.0f))
@@ -531,7 +564,7 @@ static EVT_BEGIN(stop_1)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE2_3"), 0)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 11, 3000, 0, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 3000, 0, 10000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     MULTIPLY_FLOAT(LW(0), FLOAT(1.0f))
@@ -546,13 +579,13 @@ static EVT_BEGIN(stop_1)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     RETURN
 EVT_END()
 
-/** Arrival braking of the return-trip train: like stop_1 with the return-trip sound variants. */
+/** Arrival braking for a train coming in from the other side (starts at -3000 instead of 3000): like stop_1, with its own platform sound for hom_00. */
 static EVT_BEGIN(stop_2)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 1)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SET_FLOAT_VALUE(LW(2), FLOAT(-3000.0f))
@@ -566,7 +599,7 @@ static EVT_BEGIN(stop_2)
     IF_STR_EQUAL(LW(0), STRING("pik_00"))
         CALL(evt_snd_sfxon, STRING("SFX_STG6_TRAIN_MOVE2_3"), 0)
     END_IF
-    CALL(evt_sub_intpl_msec_init, 11, -3000, 0, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -3000, 0, 10000)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     MULTIPLY_FLOAT(LW(0), FLOAT(1.0f))
@@ -581,7 +614,7 @@ static EVT_BEGIN(stop_2)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(0)
     END_IF
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     RETURN
 EVT_END()
 
@@ -601,7 +634,7 @@ EVT_BEGIN(hom_10_evt_resha_stop)
     END_IF
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("hom_00"))
-        IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+        IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
             SPAWN_EVENT(stop_1)
         ELSE
             SPAWN_EVENT(stop_2)
@@ -618,7 +651,7 @@ static EVT_BEGIN(evt_ramp)
         CALL(evt_mapobj_rotate, 1, STRING("ranpu_c"), 0, 0, LW(10))
         WAIT_FRAMES(1)
         LOOP(0)
-            IF_INT_EQUAL(GSWF(GSWF_TRAIN_MOVING), 1)
+            IF_INT_EQUAL(GSWF_HOM_TRAIN_MOVING, 1)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -627,10 +660,6 @@ static EVT_BEGIN(evt_ramp)
     RETURN
 EVT_END()
 
-/**
- * Map object groups of the train (pika_*) that hom_10_evt_resha_sub hooks to the TEV callback resha_tev,
- * which adds environment effect 7 (an env.tpl reflection or shine texture) to them; NULL ends the list.
- */
 static const char* pika_tbl[] = {
     "pika_1_1",
     "pika_1_2",
@@ -649,7 +678,6 @@ static const char* pika_tbl[] = {
     NULL,
 };
 
-/** The shorter list used instead on the map rsh_06_a: the same groups without the *_c ones. */
 static const char* pika_tbl_rsh_06[] = {
     "pika_1_1",
     "pika_1_2",
@@ -666,10 +694,11 @@ static const char* pika_tbl_rsh_06[] = {
 /**
  * Common start of the train-exterior scenes: marks the train as not moving,
  * zeroes the wheel speeds and spawns the wheel, rod,
- * background and star scripts (plus lamp and sparks on the maps that have them).
+ * star and lamp scripts (the background scroll only on hom_10 to hom_12 and rsh_06_a),
+ * and marks the lit (pika) objects to use the train light callback.
  */
 static EVT_BEGIN(hom_10_evt_resha_sub)
-    SET_VALUE(GSWF(GSWF_TRAIN_MOVING), 0)
+    SET_VALUE(GSWF_HOM_TRAIN_MOVING, 0)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(1), FLOAT(0.0f))
     SPAWN_EVENT(evt_sharin)
@@ -704,68 +733,70 @@ static EVT_BEGIN(hom_10_evt_resha_sub)
         IF_INT_EQUAL(LW(0), 0)
             BREAK_LOOP
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_TEV_CALLBACK(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAPOBJ_FLAG_DISPLAY_LIST)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAPOBJ_FLAG_NO_COLOR_STAGE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, LW(0), MAP_OBJ_FLAG_DISPLAY_LIST)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(0), MAP_OBJ_FLAG_NO_COLOR_STAGE)
     END_LOOP
     RETURN
 EVT_END()
 
 /**
- * Sets up the train scene with the outbound (right-moving) train:
- * runs the shared set-up and hides the rear cars unless the map is rsh_06_a.
+ * Runs hom_10_evt_resha_sub, then (outside rsh_06_a) hides train cars 7 and 8 and couplers 6 and 7. Used by
+ * hom_10_init_evt, hom_00, hom_11 and hom_12.
  */
 EVT_BEGIN(hom_10_evt_resha_right)
     CALL_CHILD(hom_10_evt_resha_sub)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_NOT_EQUAL(LW(0), STRING("rsh_06_a"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_8"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_6"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_7"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_7"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_8"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_6"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_7"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Sets up the train scene with the return (left-moving) train:
- * runs the shared set-up and hides the cars that are not part of the return view.
+ * Runs hom_10_evt_resha_sub, then hides train cars 1 and 6 and couplers 1 and 5. Used by hom_10_init_evt, hom_00,
+ * hom_11 and hom_12.
  */
 EVT_BEGIN(hom_10_evt_resha_left)
     CALL_CHILD(hom_10_evt_resha_sub)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_5"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu_5"), MAP_OBJ_FLAG_HIDDEN)
     RETURN
 EVT_END()
 
 /**
- * Excess Express exterior scene (hom_10): Mario and his partners are hidden,
- * the train is set to cruising speed in the trip's direction,
- * a letterboxed camera pans along it for 8 seconds and then the map changes to rsh_02_a (nidome).
+ * Map init of hom_10 (relSetEvtAddr in hom.c): no music, ENV_STG6_RSH2, Mario and the partners parked out of sight at y
+ * -1000 without control. Before GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT the train is set up for the right-hand run
+ * (hom_10_evt_resha_right, hom_10_evt_resha_start3; JP and later show couplers 1 to 5 in place of renketu), otherwise
+ * for the left-hand run (resha_left, resha_start4, train at x -1500). The letterboxed camera pans along the train for 8
+ * s and after 4 s the map changes to rsh_02_a at the nidome entrance.
  */
 EVT_BEGIN(hom_10_init_evt)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_RSH2"))
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_RSH2"))
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_party_cont_onoff, 1, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_party_set_pos, 1, 0, -1000, 0)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         CALL_CHILD(hom_10_evt_resha_right)
         CALL_CHILD(hom_10_evt_resha_start3)
         SET_VALUE(LW(0), 500)
         SET_VALUE(LW(1), -500)
 #if VERSION >= VERSION_JP
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_3"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_4"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_5"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("renketu"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_3"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_4"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("renketu_5"), MAP_OBJ_FLAG_HIDDEN)
 #endif
     ELSE
         CALL_CHILD(hom_10_evt_resha_left)
@@ -775,21 +806,19 @@ EVT_BEGIN(hom_10_init_evt)
         CALL(evt_mapobj_trans, 1, STRING("train"), -1500, 0, 0)
     END_IF
     CALL(evt_cam_letter_box_onoff, 1, 1)
-    CALL(evt_cam3d_evt_set, LW(0), 300, 1400, LW(0), 125, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, LW(0), 300, 1400, LW(0), 125, 0, 0, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
-        CALL(evt_seq_wait, 2)
-        CALL(evt_cam3d_evt_set, LW(1), 300, 1400, LW(1), 125, 0, 8000, 0)
+        CALL(evt_seq_wait, SEQ_GAME)
+        CALL(evt_cam3d_evt_set, LW(1), 300, 1400, LW(1), 125, 0, 8000, EASING_LINEAR)
         WAIT_MS(4000)
         CALL(evt_bero_mapchange, STRING("rsh_02_a"), STRING("nidome"))
     END_INLINE_EVENT
     RETURN
 EVT_END()
 
-double sin(double x);
-
 /**
- * Script helper: sets LW(10) to a wave (1.8 * |train speed| * sin(time)) that makes the lamps (ranpu) on the
- * cars sway while the train moves.
+ * Script helper: writes into LW(10) a sine wobble (1.8 times |GW(0)| times sin(retraceCount / 15)), which evt_ramp uses
+ * to sway the lamps.
  */
 static USER_FUNC(ramp_r) {
     f32 amp = __fabsf(evtGetFloat(event, GW(0)));
@@ -801,7 +830,7 @@ static USER_FUNC(ramp_r) {
 
 /**
  * Texture-environment callback for the train's lights (the pika objects):
- * hands the TEV info to envAddTev with stage 7.
+ * hands the TEV info to envAddTev with effect type 7.
  */
 static void resha_tev(MapTevCallbackInfo* info) {
     envAddTev(7, info);

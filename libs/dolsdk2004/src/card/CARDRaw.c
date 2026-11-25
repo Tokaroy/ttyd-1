@@ -2,10 +2,6 @@
 
 #include "__card.h"
 
-/**
- * Reads 'length' bytes at card address 'offset' straight into 'buf',
- * bypassing the file system and its permission checks.
- */
 s32 __CARDRawReadAsync(s32 chan, void* buf, s32 length, s32 offset, CARDCallback callback) {
     CARDControl* card;
     s32 result;
@@ -28,7 +24,6 @@ s32 __CARDRawReadAsync(s32 chan, void* buf, s32 length, s32 offset, CARDCallback
     return result;
 }
 
-/** Blocking __CARDRawReadAsync. */
 s32 __CARDRawRead(s32 chan, void* buf, s32 length, s32 offset) {
     s32 result = __CARDRawReadAsync(chan, buf, length, offset, __CARDSyncCallback);
     if (result < 0) {
@@ -38,7 +33,6 @@ s32 __CARDRawRead(s32 chan, void* buf, s32 length, s32 offset) {
     return __CARDSync(chan);
 }
 
-/** Completion callback for the raw sector erase: releases the channel and calls the user callback. */
 static void EraseCallback(s32 chan, s32 result) {
     CARDControl* card;
     CARDCallback callback;
@@ -53,10 +47,6 @@ static void EraseCallback(s32 chan, s32 result) {
     callback(chan, result);
 }
 
-/**
- * Erases the sector at card address 'offset' (must be sector aligned and inside the card) without regard to the
- * file system.
- */
 s32 __CARDRawEraseAsync(s32 chan, s32 offset, CARDCallback callback) {
     CARDControl* card;
     s32 result;
@@ -82,7 +72,6 @@ s32 __CARDRawEraseAsync(s32 chan, s32 offset, CARDCallback callback) {
     return result;
 }
 
-/** Blocking __CARDRawEraseAsync. */
 s32 __CARDRawErase(s32 chan, s32 offset) {
     s32 result = __CARDRawEraseAsync(chan, offset, __CARDSyncCallback);
     if (result < 0) {

@@ -1,17 +1,34 @@
 // las_07 (ラストダンジョン, Palace of Shadow): a connecting hall.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_seq.h"
 #include "evt/evt_snd.h"
-#include "las.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mobj.h"
+#include "driver/seqdrv.h"
+#include "pmario_sound.h"
 
+static EvtWord w1_door_close[22];
+static EvtWord w1_door_open[22];
+static EvtWord w2_door_close[22];
+static EvtWord w2_door_open[22];
+static EvtWord e1_door_close[22];
+static EvtWord e1_door_open[22];
+static EvtWord e2_door_close[22];
+static EvtWord e2_door_open[22];
+static EvtWord door_matigai_evt[16];
 static BeroEntry bero_entry_data[5];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_07_init_evt[];
+#else
+EvtWord las_07_init_evt[57];
+#endif
 
 /**
  * Door animation script (closing) for the west (door 1) door,
@@ -126,14 +143,13 @@ static EVT_BEGIN(e2_door_open)
 EVT_END()
 
 /**
- * Event script (bero callback): the wrong-door check for the first door puzzle.
- * If GSWF_LAS_WRONG_DOOR_TAKEN is set it plays the buzzer sound (SFX_STG8_DOOR_NG_OPEN1) and clears the flag;
- * always returns 0 in LW(0), so the door never blocks Mario.
+ * Entry event of all four las_07 exits: if GSWF_LAS_WRONG_DOOR_SFX_PENDING is set (las_08's door_matigai_evt
+ * sets it), plays SFX_STG8_DOOR_NG_OPEN1 and clears the flag; returns 0 in LW(0).
  */
 static EVT_BEGIN(door_matigai_evt)
-    IF_INT_EQUAL(GSWF(GSWF_LAS_WRONG_DOOR_TAKEN), 1)
+    IF_INT_EQUAL(GSWF_LAS_WRONG_DOOR_SFX_PENDING, 1)
         CALL(evt_snd_sfxon, STRING("SFX_STG8_DOOR_NG_OPEN1"), 0)
-        SET_VALUE(GSWF(GSWF_LAS_WRONG_DOOR_TAKEN), 0)
+        SET_VALUE(GSWF_LAS_WRONG_DOOR_SFX_PENDING, 0)
     END_IF
     SET_VALUE(LW(0), 0)
     RETURN
@@ -152,7 +168,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)door_matigai_evt, // enterEvent
+        door_matigai_evt, // enterEvent
         -1, // caseType
         NULL, // exitEvent
         "las_06", // nextMapName
@@ -170,7 +186,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)door_matigai_evt, // enterEvent
+        door_matigai_evt, // enterEvent
         -1, // caseType
         NULL, // exitEvent
         "las_08", // nextMapName
@@ -188,7 +204,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)door_matigai_evt, // enterEvent
+        door_matigai_evt, // enterEvent
         -1, // caseType
         NULL, // exitEvent
         "las_08", // nextMapName
@@ -206,7 +222,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)door_matigai_evt, // enterEvent
+        door_matigai_evt, // enterEvent
         -1, // caseType
         NULL, // exitEvent
         "las_08", // nextMapName
@@ -221,12 +237,12 @@ static BeroEntry bero_entry_data[] = {
 
 /**
  * Map init script for las_07: music and ambience,
- * the four doors (two to las_06 and las_08 each of which can be the wrong door of the Palace's door puzzle),
- * and three hidden blocks with a Coin, Jammin' Jelly and P-Up, D-Down, P.
+ * the four doors (one to las_06 and three to las_08, each of which can be the wrong door of the Palace's door puzzle),
+ * two ? blocks with a Coin and a Jammin' Jelly, and a badge block with P-Up, D-Down, P.
  */
 EVT_BEGIN(las_07_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
@@ -234,11 +250,11 @@ EVT_BEGIN(las_07_init_evt)
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     BEGIN_INLINE_EVENT
-        CALL(evt_seq_wait, 2)
+        CALL(evt_seq_wait, SEQ_GAME)
         CALL(evt_cam_road_reset)
     END_INLINE_EVENT
-    CALL(evt_mobj_badgeblk, STRING("mobj00"), -100, 60, -300, ITEM_COIN, 0, GSWF(GSWF_LAS07_COIN_BLOCK_HIT), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj01"), 100, 60, -300, ITEM_JAMMIN_JELLY, 0, GSWF(GSWF_LAS07_JAMMIN_JELLY_BLOCK_HIT), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_badge_gat"), 0, 60, -300, ITEM_P_UP_D_DOWN_P, 0, GSWF(GSWF_LAS07_P_UP_D_DOWN_P_BLOCK_HIT), 1)
+    CALL(evt_mobj_badgeblk, STRING("mobj00"), -100, 60, -300, ITEM_COIN, 0, GSWF_LAS_07_COIN_BLOCK, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj01"), 100, 60, -300, ITEM_JAMMIN_JELLY, 0, GSWF_LAS_07_JAMMIN_JELLY_BLOCK, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_badge_gat"), 0, 60, -300, ITEM_P_UP_D_DOWN_P, 0, GSWF_LAS_07_P_UP_D_DOWN_P_BADGE_BLOCK, 1)
     RETURN
 EVT_END()

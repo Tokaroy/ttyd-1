@@ -1,13 +1,31 @@
-// gor_10 (ゴロツキタウン, Rogueport): prologue scenes (the letter and Mario waking up), leading to pro_04 and then gor_00.
+// gor_10 (ゴロツキタウン, Rogueport): prologue scenes (the letter and Mario waking up), leading to aaa_00 (prologue2) and then gor_00.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "driver/fadedrv.h"
+#include "evt/evt_snd.h"
 #include "evt/evt_cmd.h"
+#include "eff/eff_magic1_n64.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_party.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_cam.h"
+#include "poly_trig.h"
+#include "rels/gor/include/gor.h"
+#include "driver/mapdrv.h"
+#include "mario/mario.h"
+#include "party.h"
 
 #include "manager/evtmgr_cmd.h"
 #include "driver/camdrv.h"
 #include "mario/mariost.h"
 #include "driver/dispdrv.h"
-#include "evt/evt_cmd.h"
 #include "dolphin/gx.h"
 #include "memory.h"
 #include "system.h"
@@ -15,110 +33,21 @@
 #include "manager/filemgr.h"
 #include "string.h"
 #include "win/win_main.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_party.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_snd.h"
-#include "party.h"
-#include "gor.h"
 #include "pmario_sound.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
-/**
- * Sine of x (radians, 0 to 2*pi) by a short odd polynomial after folding x into the first quadrant.
- * Used by depthDisp to place its eight shifted copies of the screen.
- */
-static inline f32 dd_sin(f32 x) {
-    f32 a = 0.00761f;
-    f32 b = 0.16605f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-    if (x <= 3.1415927f) {
-        if (x <= 1.5707964f) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        } else {
-            y = 1.5707964f - (x - 1.5707964f);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * y;
-        }
-    } else if (x < 4.712389f) {
-        y = x - 3.1415927f;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    } else {
-        y = 1.5707964f - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    }
-    return a;
-}
+#include "driver/seqdrv.h"
 
-/**
- * Cosine of x (radians, 0 to 2*pi) by a short even polynomial after folding x into the first quadrant.
- * The companion of dd_sin.
- */
-static inline f32 dd_cos(f32 x) {
-    f32 a = 0.03705f;
-    f32 b = 0.4967f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-    if (x <= 3.1415927f) {
-        if (x <= 1.5707964f) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-        } else {
-            y = 1.5707964f - (x - 1.5707964f);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = -a;
-        }
-    } else if (x < 4.712389f) {
-        y = x - 3.1415927f;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = -a;
-    } else {
-        y = 1.5707964f - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-    }
-    return a;
-}
-
+static void depthDisp(CameraId camera, void* param);
 typedef struct TegamiWork {
     s32 alpha;
     FileEntry* tpl;
 } TegamiWork;
-// cam_yure's state. The demo map has both as its static locals (view_dy$598, view_trg$599); as locals they would
-// be emitted before wp in .bss, so they stay at file scope.
-static f32 view_dy;
-static s32 view_trg;
-static TegamiWork* wp;
+static TegamiWork* wp = NULL;
+static void draw(CameraId camera, void* param);
 
+static USER_FUNC(cam_yure);
 static USER_FUNC(depth);
+static USER_FUNC(mabuta);
+static USER_FUNC(tegami);
 
 /**
  * Draw callback of the letter: draws the letter picture (from mariost.tpl, texture 4) centred at y -74 with the
@@ -139,13 +68,13 @@ static USER_FUNC(tegami) {
         wp = _mapAlloc(sizeof(TegamiWork));
         memset(wp, 0, sizeof(TegamiWork));
         wp->alpha = 0;
-        wp->tpl = fileAllocf(4, "%s/mariost.tpl", getMarioStDvdRoot());
+        wp->tpl = fileAllocf(FILE_TYPE_TPL, "%s/mariost.tpl", getMarioStDvdRoot());
     }
     wp->alpha += 2;
     if (wp->alpha > 128) {
         wp->alpha = 128;
     }
-    dispEntry(CAMERA_2D, 0.0f, 0, draw, wp);
+    dispEntry(CAMERA_2D, 0.0f, DISP_MODE_OPAQUE, draw, wp);
     return EVT_RETURN_BLOCK;
 }
 
@@ -156,27 +85,26 @@ void tegami_delete(void) {
     }
 }
 
-// FAKE: optimisation pragmas: without them the function's code differs from the original (checked by removing them).
+// Kept (pattern): propagation and lifetimes off for the extdrv, npc_jump and depthDisp functions of bom_01, eki_00,
+// gor_10, hei_10, rsh_05, rsh_06, tik_05 and tou_02 (one half is a -opt file flag where configure.py sets it); the
+// target needs it and no natural form was found (cleanup_notes/mweppc_pilot.md, pragma review rels).
 #pragma opt_propagation off
 #pragma opt_lifetimes off
 /**
  * Draw callback of the wake-up blur: copies the frame to a texture
- * and draws eight copies of it shifted in a circle by GW(0)/100 units, each at 1/8 weight,
+ * and samples it eight times around a circle of radius GW(0)/10000 in texture coordinates, each at 1/8 weight,
  * giving the dizzy double vision of Mario waking up.
- * Compiled with propagation and lifetime optimisations off to match the original.
  */
 static void depthDisp(CameraId camera, void* param) {
     f32 amp = evtGetFloat(NULL, GW(0)) / 100.0f;
     CameraEntry* cam = camGetPtr(camera);
-    smartEntry* buf = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_RGB565, GX_FALSE, 0), 3);
+    smartEntry* buf = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_RGB565, GX_FALSE, 0), SMART_GROUP_TEMP);
     GXTexObj obj;
     Mtx mtx;
     f32 a;
     f32 s;
     f32 c;
     s32 i;
-    BOOL first;
-    GXTevColorArg carg;
 
     GXSetTexCopySrc(0, 0, 608, 480);
     GXSetTexCopyDst(608, 480, GX_TF_RGB565, GX_FALSE);
@@ -195,8 +123,8 @@ static void depthDisp(CameraId camera, void* param) {
     GXSetNumTevStages(8);
     for (i = 0; i < 8; i++) {
         a = 6.2831855f * i / 8.0f;
-        s = dd_sin(a);
-        c = dd_cos(a);
+        s = polySinf(a);
+        c = polyCosf(a);
         MTXTrans(mtx, (amp * s) / 100.0f, (amp * c) / 100.0f, 0.0f);
         GXLoadTexMtxImm(mtx, GX_TEXMTX0 + i * 3, GX_MTX2x4);
         GXSetTexCoordGen2((GXTexCoordID)i, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0 + i * 3, GX_FALSE, GX_PTIDENTITY);
@@ -205,10 +133,8 @@ static void depthDisp(CameraId camera, void* param) {
         GXSetTevOrder((GXTevStageID)i, (GXTexCoordID)i, GX_TEXMAP0, GX_COLOR_NULL);
         GXSetTevColorOp((GXTevStageID)i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
         GXSetTevAlphaOp((GXTevStageID)i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        first = !i;
-        carg = first ? GX_CC_ZERO : GX_CC_CPREV;
-        GXSetTevColorIn((GXTevStageID)i, GX_CC_ZERO, GX_CC_TEXC, GX_CC_KONST, carg);
-        GXSetTevAlphaIn((GXTevStageID)i, GX_CA_ZERO, GX_CA_TEXA, GX_CA_KONST, first ? GX_CA_ZERO : GX_CA_APREV);
+        GXSetTevColorIn((GXTevStageID)i, GX_CC_ZERO, GX_CC_TEXC, GX_CC_KONST, !i ? GX_CC_ZERO : GX_CC_CPREV);
+        GXSetTevAlphaIn((GXTevStageID)i, GX_CA_ZERO, GX_CA_TEXA, GX_CA_KONST, !i ? GX_CA_ZERO : GX_CA_APREV);
         GXSetTevSwapMode((GXTevStageID)i, GX_TEV_SWAP0, GX_TEV_SWAP0);
     }
     GXLoadPosMtxImm(cam->view, GX_PNMTX0);
@@ -236,26 +162,42 @@ static void depthDisp(CameraId camera, void* param) {
 
 /** Script helper that queues depthDisp every frame (priority 1200). Never finishes. */
 static USER_FUNC(depth) {
-    dispEntry(CAMERA_2D, 1200.0f, 0, depthDisp, NULL);
+    dispEntry(CAMERA_2D, 1200.0f, DISP_MODE_OPAQUE, depthDisp, NULL);
     return EVT_RETURN_BLOCK;
 }
 
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord tegami_init_evt[];
+#else
+EvtWord tegami_init_evt[78];
+#endif
+
+static EvtWord evt_mezame[226];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord mezame_init_evt[];
+extern EvtWord gor_10_init_evt[];
+#else
+EvtWord mezame_init_evt[61];
+EvtWord gor_10_init_evt[29];
+#endif
+
 /**
- * Prologue of the game (before STORY_STG0_02_MARIOS_HOUSE):
+ * Prologue of the game (before STG0_02_MARIOS_HOUSE):
  * ambience fades down, Mario and the partner are hidden, the letter fades in,
  * the diary text "pro_04" is shown over it, then a white fade changes the map to aaa_00 ("prologue2").
  */
 EVT_BEGIN(tegami_init_evt)
-    CALL(evt_snd_envoff, PSND_FADE_HOLD)
-    CALL(evt_snd_envon, PSND_FADE_IN | PSND_CH(1), STRING("ENV_STG0_GOR6"))
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(50))
-    CALL(evt_snd_envoff, PSND_FADE_DIP_TO(50))
+    CALL(evt_snd_envoff, PSND_PAUSE)
+    CALL(evt_snd_envon, PSND_FADEIN | PSND_SLOT(1), STRING("ENV_STG0_GOR6"))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
+    CALL(evt_snd_envoff, PSND_SILENT | PSND_SILENT_LEVEL(4))
     CALL(evt_snd_env_lpf, 0, 800)
-    CALL(evt_cam_ctrl_onoff, 4, 0)
+    CALL(evt_cam_ctrl_onoff, CAMERA_3D, 0)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_map_playanim, STRING("anm_umi"), 1, 0)
     CALL(evt_map_playanim, STRING("anm_nami"), 1, 0)
@@ -264,11 +206,11 @@ EVT_BEGIN(tegami_init_evt)
         CALL(tegami)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_seq_wait, 2)
+        CALL(evt_seq_wait, SEQ_GAME)
         CALL(evt_fade_end_wait)
         CALL(evt_cam_letter_box_camid, 8)
         WAIT_MS(200)
-        CALL(evt_msg_print, 1, STRING("<diary><nowinse><once_stop>"), 0, 0)
+        CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, STRING("<diary><nowinse><once_stop>"), 0, 0)
         CALL(evt_msg_print_add, 0, STRING("pro_04"))
         CALL(evt_cam_letter_box_camid, 10)
         CALL(evt_fade_set_mapchange_type, 1, FADE_OUT_WHITE, 800, FADE_IN_WHITE, 800)
@@ -278,8 +220,8 @@ EVT_BEGIN(tegami_init_evt)
 EVT_END()
 
 /**
- * Draw callback of the eyelids: draws two black bars from the top and bottom of the screen,
- * each GW(1) units tall (240 is closed).
+ * Draw callback: draws two black bars, GW(1) units tall, down from the top and up from the bottom edge of the screen
+ * (the eyelids, mabuta).
  */
 static void mabutaDisp(CameraId camera, void* param) {
     f32 h = evtGetFloat(NULL, GW(1));
@@ -313,16 +255,18 @@ static void mabutaDisp(CameraId camera, void* param) {
 
 /** Script helper that queues mabutaDisp every frame (priority 1100). Never finishes. */
 static USER_FUNC(mabuta) {
-    dispEntry(CAMERA_2D, 1100.0f, 0, mabutaDisp, NULL);
+    dispEntry(CAMERA_2D, 1100.0f, DISP_MODE_OPAQUE, mabutaDisp, NULL);
     return EVT_RETURN_BLOCK;
 }
 
 /**
  * Script helper that makes the camera sway like a ship at sea:
  * nudges the 3D camera's vertical view offset with a slow sine
- * and plays a ship creak each time it crosses its start height. Never finishes.
+ * and plays a ship creak when it falls below its start height after rising above it. Never finishes.
  */
 static USER_FUNC(cam_yure) {
+    static f32 view_dy;
+    static s32 view_trg;
     CameraEntry* cam = camGetPtr(CAMERA_3D);
     f32 s;
 
@@ -348,11 +292,12 @@ static USER_FUNC(cam_yure) {
  * snoring, the first lines (mac_0_012 and mac_0_013), the eyelids open and blink while the blur clears,
  * the last line mac_0_013_01, then the map changes to gor_00 (Rogueport).
  */
-EVT_BEGIN(evt_mezame)
+static EVT_BEGIN(evt_mezame)
     // Mario is asleep aboard the ship to Rogueport; the screen fades in.
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     WAIT_MS(1000)
     CALL(evt_fade_end_wait)
+
     // Mario snores in the background while the scene waits.
     BEGIN_INLINE_EVENT_GET_ID(LW(10))
         WAIT_MS(2000)
@@ -362,11 +307,13 @@ EVT_BEGIN(evt_mezame)
         END_LOOP
     END_INLINE_EVENT
     WAIT_MS(3000)
+
     // A ship's crewman politely wakes Mario and tells him Rogueport has come into view; the sea ambience starts.
     CALL(evt_msg_print, 0, STRING("mac_0_012"), 0, 0)
     WAIT_MS(2000)
     CALL(evt_msg_print, 0, STRING("mac_0_013"), 0, 0)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_GOR0"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_GOR0"))
+
     // The snoring stops and Mario wakes with a start.
     DELETE_EVENT(LW(10))
     WAIT_MS(300)
@@ -375,8 +322,9 @@ EVT_BEGIN(evt_mezame)
         CALL(evt_snd_sfxoff, GW(2))
     END_IF
     CALL(evt_snd_sfxon, STRING("SFX_VOICE_MARIO_FIND1_2"), 0)
+
     // The eyelids slowly open a little...
-    CALL(evt_sub_intpl_msec_init, 11, 2400, 1200, 2000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 2400, 1200, 2000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -386,8 +334,9 @@ EVT_BEGIN(evt_mezame)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // ...flutter closed and open again twice as Mario blinks...
-    CALL(evt_sub_intpl_msec_init, 1, 1200, 2400, 100)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 1200, 2400, 100)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -397,7 +346,7 @@ EVT_BEGIN(evt_mezame)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_sub_intpl_msec_init, 1, 2400, 1200, 100)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 2400, 1200, 100)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -407,7 +356,7 @@ EVT_BEGIN(evt_mezame)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_sub_intpl_msec_init, 1, 1200, 2400, 100)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 1200, 2400, 100)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -417,10 +366,11 @@ EVT_BEGIN(evt_mezame)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // ...and open fully as the eyelid overlay clears.
     WAIT_MS(500)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, 500, 0, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 500, 0, 2000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -431,7 +381,7 @@ EVT_BEGIN(evt_mezame)
             END_IF
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 1, 2400, 0, 2000)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 2400, 0, 2000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -441,11 +391,13 @@ EVT_BEGIN(evt_mezame)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // The crewman says they will arrive shortly and asks Mario to prepare to disembark.
     WAIT_MS(3000)
     CALL(evt_msg_print, 0, STRING("mac_0_013_01"), 0, 0)
     WAIT_MS(300)
     WAIT_MS(2000)
+
     // Mario is sent on to Rogueport (gor_00).
     CALL(evt_bero_mapchange, STRING("gor_00"), 0)
     RETURN
@@ -457,19 +409,19 @@ EVT_END()
  * then starts evt_mezame.
  */
 EVT_BEGIN(mezame_init_evt)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envoff, PSND_FADEOUT)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_map_playanim, STRING("anm_umi"), 1, 0)
     CALL(evt_map_playanim, STRING("anm_nami"), 1, 0)
 #endif
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("marukongou"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("densha"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("pukupuku"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("marukongou"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("densha"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("pukupuku"), MAP_OBJ_FLAG_HIDDEN)
     SET_FLOAT_VALUE(GW(0), FLOAT(50.0f))
     BEGIN_INLINE_EVENT
         CALL(depth)
@@ -486,20 +438,20 @@ EVT_BEGIN(mezame_init_evt)
 EVT_END()
 
 /**
- * Init script of gor_10: before STORY_STG0_02_MARIOS_HOUSE it plays the prologue letter,
+ * Init script of gor_10: before STG0_02_MARIOS_HOUSE it plays the prologue letter,
  * afterwards the waking-up scene on the ship.
  * In JP and later it starts the sea animations and does nothing else if map events are being skipped.
  */
 EVT_BEGIN(gor_10_init_evt)
 #if VERSION >= VERSION_JP
-    CALL(evt_map_playanim, STRING("anm_umi"), 1, 0)
-    CALL(evt_map_playanim, STRING("anm_nami"), 1, 0)
+    CALL(evt_map_playanim, STRING("anm_umi"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("anm_nami"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_SET(LW(0), GLOBAL_FLAG_SKIP_MAP_EVENTS)
+    IF_BITS_SET(LW(0), GW_FLAG_NO_ENTRANCE)
         RETURN
     END_IF
 #endif
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG0_02_MARIOS_HOUSE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG0_02_MARIOS_HOUSE)
         CALL_CHILD(tegami_init_evt)
     ELSE
         CALL_CHILD(mezame_init_evt)

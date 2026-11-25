@@ -1,8 +1,8 @@
 // Star-power special move Sweet Treat (sac_genki): the target game and its recovery effects.
+
 #include "version.h"
 #include "icon_ids.h"
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
+#include "mario/mario_pouch.h"
 #include "battle/battle.h"
 #include "eff/n64/eff_stamp_n64.h"
 #include "battle/battle_audience.h"
@@ -19,28 +19,25 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <string.h>
-#include "version.h"
 #include "battle/battle_event_cmd.h"
 #include "battle/battle_camera.h"
 #include "battle/sac/sac_common.h"
 #include "evt/evt_eff.h"
-#include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "battle/sac/sac_genki.h"
-#include "battle/battle_sub.h"
-#include "eff/eff_hit.h"
+#include "sfx_name_word.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
 #include "eff/eff_recovery.h"
-#include "eff/eff_stardust.h"
 #include "eff/eff_starstone.h"
 #include "eff/n64/eff_stardust_n64.h"
-#include "libc_decls.h"
+#include "eff/eff_hit.h"
 #include "statuswindow.h"
 #include "battle/battle_disp.h"
+#include "battle/battle_sub.h"
+#include "eff/eff_stardust.h"
 
-static void weapon_entry(void);
-// FAKE: sac_genki.c calls weapon_entry through this prototype (the types it was compiled with) instead of the one in battle/sac/sac_genki.h; same registers, behaviour-identical.
-typedef void (*Weapon_entryLocalFn)(void);
-// US battle texture ids are 0x16 higher for these entries.
-#define BTL_TEX(id) ((id) + VERSION_PICK(0, 0x16))
+static EvtWord status_recover_evt[180];
 
 typedef struct GenkiRing {
     s32 timer;
@@ -58,18 +55,29 @@ typedef struct GenkiWeapon {
     EffectEntry* effs[3]; // 0x48
 } GenkiWeapon;
 
+// GenkiObject.kind: what a falling object restores when caught (large: 3 instead of 1); the hazard dizzies Mario
+typedef enum GenkiObjectKind {
+    GENKI_MARIO_HEART = 0,
+    GENKI_MARIO_HEART_LARGE = 1,
+    GENKI_PARTNER_HEART = 2,
+    GENKI_PARTNER_HEART_LARGE = 3,
+    GENKI_FLOWER = 4,
+    GENKI_FLOWER_LARGE = 5,
+    GENKI_HAZARD = 6,
+} GenkiObjectKind;
+
 typedef struct GenkiObject {
-    s32 state;                   // 0x00
-    s32 timer;                   // 0x04
-    s32 kind;                    // 0x08
-    Vec pos;                     // 0x0C
-    u8 reserved_18[0x2C - 0x18]; // 0x18, never accessed
+    s32 state; // 0x00
+    s32 timer; // 0x04
+    s32 kind;  // 0x08, GenkiObjectKind
+    Vec pos;   // 0x0C
+    u8 pad[0x2C - 0x18];
 } GenkiObject;
 
 typedef struct GenkiStar {
     s32 state;        // 0x00
     s32 timer;        // 0x04
-    s32 isStone;      // 0x08, 1: the star stone (star_stone_appear), never read
+    s32 isStone;      // 0x08
     Vec pos;          // 0x0C
     Vec start;        // 0x18
     Vec end;          // 0x24
@@ -83,48 +91,51 @@ typedef struct GenkiStar {
 } GenkiStar;
 
 typedef struct GenkiWork {
-    s32 reserved_00;        // 0x00, never accessed
-    s32 state;              // 0x04
-    s32 reserved_08;        // 0x08, never accessed
-    s32 mode;               // 0x0C
-    s32 score0;             // 0x10
-    s32 score1;             // 0x14
-    s32 score2;             // 0x18
-    f32 disp0;              // 0x1C
-    f32 disp1;              // 0x20
-    f32 disp2;              // 0x24
-    s32 blink0;             // 0x28
-    s32 blink1;             // 0x2C
-    s32 blink2;             // 0x30
-    EffectEntry* rec0;      // 0x34
-    EffectEntry* rec1;      // 0x38
-    EffectEntry* rec2;      // 0x3C
-    s32 timeLeft;           // 0x40
-    s32 marioState;         // 0x44
-    s32 marioTimer;         // 0x48
-    s32 objTimer;           // 0x4C
-    s32 partyArg;           // 0x50
-    s32 marioCnt;           // 0x54
-    s32 weaponNum;          // 0x58
-    s32* table;             // 0x5C
-    s32 tableIdx;           // 0x60
-    s32 targetState;        // 0x64
-    s32 targetAngle;        // 0x68
-    f32 targetRad;          // 0x6C
-    f32 targetSpeed;        // 0x70
-    Vec targetPos;          // 0x74
-    GenkiRing ring[7];      // 0x80
-    GenkiWeapon weapon[7];  // 0x10C
-    GenkiObject object[10]; // 0x358
-    GenkiStar star[7];      // 0x510
+    s32 pad0;
+    s32 state; // 0x04, game state: 0 idle, 1 start (start_game), 2 running, 3 over (wait_game_end)
+    s32 pad8;
+    s32 mode;                // 0x0C, 0 Sweet Treat, 1 Sweet Feast (main_genki's second argument)
+    s32 marioHp;             // 0x10, Mario's HP score (at most 99; get_score)
+    s32 partyHp;             // 0x14, the partner's HP score (at most 99)
+    s32 fp;                  // 0x18, FP score (at most 99)
+    f32 marioHpDisp;         // 0x1C, shown total, steps 1 a frame toward marioHp
+    f32 partyHpDisp;         // 0x20, shown total, steps 1 a frame toward partyHp
+    f32 fpDisp;              // 0x24, shown total, steps 1 a frame toward fp
+    s32 marioHpBlink;        // 0x28, 60 while its shown total changes, counts down (genki_blink)
+    s32 partyHpBlink;        // 0x2C, as marioHpBlink for the partner's total
+    s32 fpBlink;             // 0x30, as marioHpBlink for the FP total
+    EffectEntry* marioHpEff; // 0x34, effRecoveryEntry type 2 that shows the total over Mario
+    EffectEntry* partyHpEff; // 0x38, effRecoveryEntry type 2 over the partner
+    EffectEntry* fpEff;      // 0x3C, effRecoveryEntry type 3 for the FP total
+    s32 timeLeft;            // 0x40, frames left for new drops (900 at the start)
+    s32 marioState;          // 0x44, main_mario: 1 ready, 2 aiming, 3/4 dizzy, 5 done
+    s32 marioTimer;          // 0x48, frames of the dizzy state (stands up at 180)
+    s32 objTimer;            // 0x4C, frames until the next drop (37; Sweet Feast 18)
+    s32 partyUnitId;         // 0x50, the partner's unit (-1: none; partner hearts drop as Mario hearts)
+    s32 marioCnt;            // 0x54, aiming countdown from 10: pose change at 2, Sweet Feast fires at 0
+    s32 weaponNum;           // 0x58, shot slots in use (3; Sweet Feast 7)
+    s32* table;              // 0x5C, shuffled deck of GenkiObjectKind drops (25; Sweet Feast 50), then random
+    s32 tableIdx;            // 0x60, next card of the deck
+    s32 targetState;         // 0x64, main_target: 1 start, 2 swing up, 3 swing down, 4 hidden
+    s32 reticleSpin;         // 0x68, reticle texture spin (0-359); a fired ring's scale gets twice this
+    f32 aimAngle;            // 0x6C, aim in degrees, 0 to 60
+    f32 targetSpeed;         // 0x70, aim step a frame (+1.25 or -1.25)
+    Vec targetPos;           // 0x74, start position of a fired ring; never written (0 from the memset)
+    GenkiRing ring[7];       // 0x80
+    GenkiWeapon weapon[7];   // 0x10C
+    GenkiObject object[10];  // 0x358
+    GenkiStar star[7];       // 0x510
 } GenkiWork;
 
 static USER_FUNC(recover_cmd_disable);
 static USER_FUNC(star_appear);
 static USER_FUNC(status_on);
 static USER_FUNC(get_score);
-static USER_FUNC(object_get_num);
-static USER_FUNC(object_entry);
+static s32 object_get_num(void);
+static void object_entry(void);
+static void weapon_entry(void);
+static USER_FUNC(main_genki);
+static USER_FUNC(end_genki);
 static USER_FUNC(star_stone_appear);
 static USER_FUNC(wait_game_end);
 static USER_FUNC(start_game);
@@ -155,11 +166,11 @@ static USER_FUNC(main_genki) {
     if (isFirstCall) {
         args = event->args;
         memset(w, 0, sizeof(GenkiWork));
-        w->partyArg = evtGetValue(event, args[0]);
+        w->partyUnitId = evtGetValue(event, args[0]);
         w->mode = evtGetValue(event, args[1]);
         w->timeLeft = 900;
-        w->score0 = w->score1 = w->score2 = 0;
-        w->disp0 = w->disp1 = w->disp2 = 0.0f;
+        w->marioHp = w->partyHp = w->fp = 0;
+        w->marioHpDisp = w->partyHpDisp = w->fpDisp = 0.0f;
         if (w->mode == 0) {
             w->weaponNum = 3;
         } else {
@@ -170,9 +181,9 @@ static USER_FUNC(main_genki) {
         } else {
             w->table = BattleAlloc(200);
         }
-        w->rec0 = effRecoveryEntry(2, 0, 0.0f, -1000.0f, 0.0f);
-        w->rec1 = effRecoveryEntry(2, 0, 0.0f, -1000.0f, 0.0f);
-        w->rec2 = effRecoveryEntry(3, 0, 0.0f, -1000.0f, 0.0f);
+        w->marioHpEff = effRecoveryEntry(2, 0, 0.0f, -1000.0f, 0.0f);
+        w->partyHpEff = effRecoveryEntry(2, 0, 0.0f, -1000.0f, 0.0f);
+        w->fpEff = effRecoveryEntry(3, 0, 0.0f, -1000.0f, 0.0f);
         for (i = 0; i < 7; i++) {
             w->weapon[i].eff = effStarStoneEntry(i, 0.0f, -1000.0f, 0.0f, 1.0f);
             for (j = 0; j < 3; j++) {
@@ -190,9 +201,9 @@ static USER_FUNC(main_genki) {
         main_object(i);
     }
     main_star();
-    dispEntry((CameraId)CAMERA_2D, 901.0f, 1, disp_2D, NULL);
-    dispEntry((CameraId)CAMERA_3D, 0.0f, 1, disp_3D, NULL);
-    dispEntry((CameraId)CAMERA_3D, 0.0f, 2, disp_3D_alpha, NULL);
+    dispEntry(CAMERA_2D, 901.0f, DISP_MODE_ALPHA_TEST, disp_2D, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, disp_3D, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, disp_3D_alpha, NULL);
     return 0;
 }
 
@@ -209,38 +220,38 @@ static void main_base(void) {
     s32 a;
     s32 n;
 
-    if (w->disp0 > w->score0) {
-        w->disp0 -= 1.0f;
-        w->blink0 = 60;
+    if (w->marioHpDisp > w->marioHp) {
+        w->marioHpDisp -= 1.0f;
+        w->marioHpBlink = 60;
     }
-    if (w->disp0 < w->score0) {
-        w->disp0 += 1.0f;
-        w->blink0 = 60;
+    if (w->marioHpDisp < w->marioHp) {
+        w->marioHpDisp += 1.0f;
+        w->marioHpBlink = 60;
     }
-    if (w->disp1 > w->score1) {
-        w->disp1 -= 1.0f;
-        w->blink1 = 60;
+    if (w->partyHpDisp > w->partyHp) {
+        w->partyHpDisp -= 1.0f;
+        w->partyHpBlink = 60;
     }
-    if (w->disp1 < w->score1) {
-        w->disp1 += 1.0f;
-        w->blink1 = 60;
+    if (w->partyHpDisp < w->partyHp) {
+        w->partyHpDisp += 1.0f;
+        w->partyHpBlink = 60;
     }
-    if (w->disp2 > w->score2) {
-        w->disp2 -= 1.0f;
-        w->blink2 = 60;
+    if (w->fpDisp > w->fp) {
+        w->fpDisp -= 1.0f;
+        w->fpBlink = 60;
     }
-    if (w->disp2 < w->score2) {
-        w->disp2 += 1.0f;
-        w->blink2 = 60;
+    if (w->fpDisp < w->fp) {
+        w->fpDisp += 1.0f;
+        w->fpBlink = 60;
     }
-    if (w->blink0 > 0) {
-        w->blink0--;
+    if (w->marioHpBlink > 0) {
+        w->marioHpBlink--;
     }
-    if (w->blink1 > 0) {
-        w->blink1--;
+    if (w->partyHpBlink > 0) {
+        w->partyHpBlink--;
     }
-    if (w->blink2 > 0) {
-        w->blink2--;
+    if (w->fpBlink > 0) {
+        w->fpBlink--;
     }
 
     switch (w->state) {
@@ -312,8 +323,7 @@ static void main_base(void) {
                     w->objTimer = 18;
                 }
                 if (w->timeLeft > 0) {
-                    // FAKE: called through a cast so deferred codegen does not inline object_entry here (FAKES.md)
-                    ((void (*)(void))object_entry)();
+                    object_entry();
                 }
             }
             if (w->timeLeft <= 0) {
@@ -356,8 +366,7 @@ static void main_mario(void) {
     EffectEntry* eff;
 
     if (w->marioState >= 1 && w->marioState <= 4 && w->timeLeft <= 0 &&
-        // FAKE: object_get_num through a cast so it is not inlined into main_mario (FAKES.md)
-        ((s32 (*)(void))object_get_num)() == 0) {
+        object_get_num() == 0) {
         w->marioState = 5;
         w->targetState = 4;
         BtlUnit_SetAnim(part, "M_S_1");
@@ -374,7 +383,7 @@ static void main_mario(void) {
         case 2:
             if (stick > -20) {
                 w->marioState = 1;
-                ((Weapon_entryLocalFn)weapon_entry)();
+                weapon_entry();
             } else {
                 w->marioCnt--;
                 if (w->marioCnt == 2) {
@@ -382,7 +391,7 @@ static void main_mario(void) {
                 }
                 if (w->marioCnt <= 0 && w->mode == 1) {
                     w->marioCnt = 10;
-                    ((Weapon_entryLocalFn)weapon_entry)();
+                    weapon_entry();
                 }
             }
             break;
@@ -414,11 +423,9 @@ static void main_mario(void) {
     }
 }
 
-// FAKE: inlining off (FAKES.md); without it main_target is inlined into main_genki (144 -> 233 instructions)
-#pragma dont_inline on
 /**
  * Swings the aim reticle between 0 and 60 degrees and back, 1.25 degrees a frame;
- * main_weapon launches stars in that direction. targetAngle only spins the reticle texture.
+ * main_weapon launches stars in that direction. reticleSpin only spins the reticle texture.
  */
 static void main_target(void) {
     GenkiWork* w = get_ptr();
@@ -426,30 +433,30 @@ static void main_target(void) {
         case 0:
             break;
         case 1:
-            w->targetAngle = 0;
-            w->targetRad = 30.0f;
+            w->reticleSpin = 0;
+            w->aimAngle = 30.0f;
             w->targetSpeed = 1.25f;
             w->targetState = 2;
         case 2:
-            w->targetAngle++;
-            if (w->targetAngle >= 360) {
-                w->targetAngle = w->targetAngle - 360.0f;
+            w->reticleSpin++;
+            if (w->reticleSpin >= 360) {
+                w->reticleSpin = w->reticleSpin - 360.0f;
             }
-            w->targetRad += w->targetSpeed;
-            if (w->targetRad >= 60.0f) {
-                w->targetRad = 60.0f;
+            w->aimAngle += w->targetSpeed;
+            if (w->aimAngle >= 60.0f) {
+                w->aimAngle = 60.0f;
                 w->targetSpeed = -1.25f;
                 w->targetState = 3;
             }
             break;
         case 3:
-            w->targetAngle++;
-            if (w->targetAngle >= 360) {
-                w->targetAngle = w->targetAngle - 360.0f;
+            w->reticleSpin++;
+            if (w->reticleSpin >= 360) {
+                w->reticleSpin = w->reticleSpin - 360.0f;
             }
-            w->targetRad += w->targetSpeed;
-            if (w->targetRad <= 0.0f) {
-                w->targetRad = 0.0f;
+            w->aimAngle += w->targetSpeed;
+            if (w->aimAngle <= 0.0f) {
+                w->aimAngle = 0.0f;
                 w->targetSpeed = 1.25f;
                 w->targetState = 2;
             }
@@ -458,7 +465,6 @@ static void main_target(void) {
             break;
     }
 }
-#pragma dont_inline reset
 
 /**
  * Moves one of Mario's shots (with a three-point trail):
@@ -470,7 +476,7 @@ static void main_weapon(s32 idx) {
     GenkiWork* w = get_ptr();
     GenkiWeapon* wp = &w->weapon[idx];
     BattleUnit* mario = BattleGetMarioPtr(_battleWorkPointer);
-    f32 ang = 3.141592f * (2.0f * w->targetRad) / 360.0f;
+    f32 ang = 3.141592f * (2.0f * w->aimAngle) / 360.0f;
     s32 audience = BattleAudience_GetAudienceNum();
     f32 x, y, z;
     s32 i;
@@ -503,11 +509,11 @@ static void main_weapon(s32 idx) {
                 if (r->timer <= 0) {
                     r->timer = 30;
                     r->pos = w->targetPos;
-                    r->scale = 2.0f * w->targetAngle;
+                    r->scale = 2.0f * w->reticleSpin;
                     break;
                 }
             }
-            BtlUnit_snd_se(mario, "SFX_BTL_SAC_HEART_SHOOT2", -250000000, 0);
+            BtlUnit_snd_se(mario, "SFX_BTL_SAC_HEART_SHOOT2", EVT_NULLPTR, 0);
         case 2:
             wp->pos.x += wp->vel.x;
             wp->pos.y += wp->vel.y;
@@ -538,12 +544,12 @@ static void main_weapon(s32 idx) {
             {
                 f32 thr;
                 switch (o->kind) {
-                    case 6:
+                    case GENKI_HAZARD:
                         thr = 344.0f;
                         break;
-                    case 0:
-                    case 2:
-                    case 4:
+                    case GENKI_MARIO_HEART:
+                    case GENKI_PARTNER_HEART:
+                    case GENKI_FLOWER:
                         thr = 576.0f;
                         break;
                     default:
@@ -563,60 +569,60 @@ static void main_weapon(s32 idx) {
             effHitEntry(0, 5, o->pos.x, o->pos.y, o->pos.z, 1.0f);
 #endif
             switch (o->kind) {
-                case 0:
-                    psndSFXOn_3D((const char*)0xA64, &wp->pos);
-                    w->score0 += 1;
-                    if (w->score0 >= 99) {
-                        w->score0 = 99;
+                case GENKI_MARIO_HEART:
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_BTL_SAC_HEART_SHOOT3), &wp->pos);
+                    w->marioHp += 1;
+                    if (w->marioHp >= 99) {
+                        w->marioHp = 99;
                     }
                     break;
-                case 1:
-                    psndSFXOn_3D((const char*)0xA66, &wp->pos);
-                    w->score0 += 3;
-                    if (w->score0 >= 99) {
-                        w->score0 = 99;
+                case GENKI_MARIO_HEART_LARGE:
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_BTL_SAC_HEART_SHOOT5), &wp->pos);
+                    w->marioHp += 3;
+                    if (w->marioHp >= 99) {
+                        w->marioHp = 99;
                     }
                     break;
-                case 2:
-                    psndSFXOn_3D((const char*)0xA64, &wp->pos);
-                    w->score1 += 1;
-                    if (w->score1 >= 99) {
-                        w->score1 = 99;
+                case GENKI_PARTNER_HEART:
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_BTL_SAC_HEART_SHOOT3), &wp->pos);
+                    w->partyHp += 1;
+                    if (w->partyHp >= 99) {
+                        w->partyHp = 99;
                     }
                     break;
-                case 3:
-                    psndSFXOn_3D((const char*)0xA66, &wp->pos);
-                    w->score1 += 3;
-                    if (w->score1 >= 99) {
-                        w->score1 = 99;
+                case GENKI_PARTNER_HEART_LARGE:
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_BTL_SAC_HEART_SHOOT5), &wp->pos);
+                    w->partyHp += 3;
+                    if (w->partyHp >= 99) {
+                        w->partyHp = 99;
                     }
                     break;
-                case 4:
-                    psndSFXOn_3D((const char*)0xA65, &wp->pos);
-                    w->score2 += 1;
-                    if (w->score2 >= 99) {
-                        w->score2 = 99;
+                case GENKI_FLOWER:
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_BTL_SAC_HEART_SHOOT4), &wp->pos);
+                    w->fp += 1;
+                    if (w->fp >= 99) {
+                        w->fp = 99;
                     }
                     break;
-                case 5:
-                    psndSFXOn_3D((const char*)0xA67, &wp->pos);
-                    w->score2 += 3;
-                    if (w->score2 >= 99) {
-                        w->score2 = 99;
+                case GENKI_FLOWER_LARGE:
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_BTL_SAC_HEART_SHOOT6), &wp->pos);
+                    w->fp += 3;
+                    if (w->fp >= 99) {
+                        w->fp = 99;
                     }
                     break;
-                case 6:
-                    psndSFXOn_3D((const char*)0xA68, &wp->pos);
+                case GENKI_HAZARD:
+                    psndSFXOn_3D(SFX_NAME_WORD(PSND_SFX_BTL_SAC_HEART_SHOOT7), &wp->pos);
                     w->marioState = 3;
                     break;
             }
             switch (o->kind) {
-                case 0:
-                case 1:
-                case 2:
-                case 3:
-                case 4:
-                case 5:
+                case GENKI_MARIO_HEART:
+                case GENKI_MARIO_HEART_LARGE:
+                case GENKI_PARTNER_HEART:
+                case GENKI_PARTNER_HEART_LARGE:
+                case GENKI_FLOWER:
+                case GENKI_FLOWER_LARGE:
                     if (audience >= 1 && audience <= 49) {
                         BattleAudienceSoundCallKind(1);
                     }
@@ -632,7 +638,7 @@ static void main_weapon(s32 idx) {
                         BattleAudienceSoundHandBeat();
                     }
                     break;
-                case 6:
+                case GENKI_HAZARD:
                     if (audience >= 1 && audience <= 49) {
                         BattleAudienceSoundBooingKind(1);
                     }
@@ -680,7 +686,7 @@ static void main_object(s32 idx) {
     GenkiWork* w = get_ptr();
     GenkiObject* o = &w->object[idx];
     BattleUnit* mario = BattleGetMarioPtr(_battleWorkPointer);
-    s32 kinds[3] = {0, 4, 2};
+    s32 kinds[3] = {GENKI_MARIO_HEART, GENKI_FLOWER, GENKI_PARTNER_HEART};
     f32 x, y, z;
     GenkiStar* s;
     s32 n;
@@ -699,32 +705,32 @@ static void main_object(s32 idx) {
             if (w->tableIdx < n) {
                 o->kind = w->table[w->tableIdx];
             } else if (irand(w->mode == 0 ? 7 : 14) == 0) {
-                o->kind = 6;
+                o->kind = GENKI_HAZARD;
             } else {
-                if (w->partyArg != -1) {
+                if (w->partyUnitId != -1) {
                     o->kind = kinds[irand(3)];
                 } else {
                     o->kind = kinds[irand(2)];
                 }
                 if (irand(5) == 0 && w->mode == 1) {
                     switch (o->kind) {
-                        case 0:
-                            o->kind = 1;
+                        case GENKI_MARIO_HEART:
+                            o->kind = GENKI_MARIO_HEART_LARGE;
                             break;
-                        case 2:
-                            o->kind = 3;
+                        case GENKI_PARTNER_HEART:
+                            o->kind = GENKI_PARTNER_HEART_LARGE;
                             break;
-                        case 4:
-                            o->kind = 5;
+                        case GENKI_FLOWER:
+                            o->kind = GENKI_FLOWER_LARGE;
                             break;
                     }
                 }
             }
-            if (w->partyArg == -1 && o->kind == 2) {
-                o->kind = 0;
+            if (w->partyUnitId == -1 && o->kind == GENKI_PARTNER_HEART) {
+                o->kind = GENKI_MARIO_HEART;
             }
-            if (w->partyArg == -1 && o->kind == 3) {
-                o->kind = 1;
+            if (w->partyUnitId == -1 && o->kind == GENKI_PARTNER_HEART_LARGE) {
+                o->kind = GENKI_MARIO_HEART_LARGE;
             }
             w->tableIdx++;
             if (w->mode == 0) {
@@ -758,8 +764,6 @@ static void main_object(s32 idx) {
     }
 }
 
-// FAKE: inlining off (FAKES.md); without it main_star is inlined into main_genki (144 -> 155 instructions)
-#pragma dont_inline on
 /** Animates the stars that drop the items: seven small stars in Sweet Treat, one big star in Sweet Feast. */
 static void main_star(void) {
     GenkiWork* w = get_ptr();
@@ -772,7 +776,6 @@ static void main_star(void) {
         main_star1();
     }
 }
-#pragma dont_inline reset
 
 /**
  * Sweet Treat star idx: rises spinning out of Mario's head,
@@ -784,7 +787,7 @@ static void main_star0(s32 idx) {
     GenkiStar* s = &w->star[idx];
     BattleUnit* mario = BattleGetMarioPtr(_battleWorkPointer);
     f32 x, y, z;
-    EffStarStoneWork* star;
+    EffStarStoneWork* ew;
 
     switch (s->state) {
         case 1:
@@ -804,13 +807,13 @@ static void main_star0(s32 idx) {
         case 2:
             s->timer++;
             if (s->timer <= 100) {
-                s->pos.y = intplGetValue(0, s->start.y, s->end.y, s->timer, 100);
+                s->pos.y = intplGetValue(EASING_LINEAR, s->start.y, s->end.y, s->timer, 100);
                 BtlUnit_GetPos(mario, &x, &y, &z);
-                s->radius = intplGetValue(0, 0.0f, 40.0f, s->timer, 100);
+                s->radius = intplGetValue(EASING_LINEAR, 0.0f, 40.0f, s->timer, 100);
                 s->angle += s->angleSpeed;
                 s->pos.x = s->radius * (f32)cos(s->angle) + x;
                 s->pos.z = s->radius * (f32)sin(s->angle) + z;
-                s->scale.x = s->scale.y = s->scale.z = intplGetValue(0, 0.0f, 0.75f, s->timer, 100);
+                s->scale.x = s->scale.y = s->scale.z = intplGetValue(EASING_LINEAR, 0.0f, 0.75f, s->timer, 100);
             } else {
                 s->pos.y = s->end.y;
                 BtlUnit_GetPos(mario, &x, &y, &z);
@@ -819,7 +822,7 @@ static void main_star0(s32 idx) {
                 s->pos.z = s->radius * (f32)sin(s->angle) + z;
                 s->scale.x = s->scale.y = s->scale.z = 0.75f;
             }
-            s->rot.y = intplGetValue(4, 0.0f, 2160.0f, s->timer, 120);
+            s->rot.y = intplGetValue(EASING_QUADRATIC_OUT, 0.0f, 2160.0f, s->timer, 120);
             if (s->timer >= 120) {
                 s->state = 3;
                 s->timer = 0;
@@ -831,7 +834,7 @@ static void main_star0(s32 idx) {
             break;
         case 3:
             s->timer++;
-            s->pos.x = intplGetValue(4, s->start.x, s->end.x, s->timer, 60);
+            s->pos.x = intplGetValue(EASING_QUADRATIC_OUT, s->start.x, s->end.x, s->timer, 60);
             s->pos.y += s->vel.y;
             s->vel.y += 0.2f - 0.01f * idx;
             s->rot.y = 0.0f;
@@ -839,6 +842,8 @@ static void main_star0(s32 idx) {
             if (s->timer >= 60) {
                 s->state = 4;
                 s->timer = 0;
+
+                // BUG: the leftward speed set here is always overwritten by the statement after the if.
                 if (irand(2) == 0) {
                     s->vel.x = -2.0f - 0.05f * idx;
                 }
@@ -869,22 +874,25 @@ static void main_star0(s32 idx) {
             break;
     }
     if (s->eff) {
-        star = s->eff->userdata;
-        star->position.x = s->pos.x;
-        star->position.y = s->pos.y;
-        star->position.z = s->pos.z;
-        star->spinY = s->rot.x;
-        star->rotY = s->rot.y;
-        star->tiltZ = s->rot.z;
-        star->scale = 1.5f * s->scale.x;
+        ew = s->eff->userdata;
+        ew->position.x = s->pos.x;
+        ew->position.y = s->pos.y;
+        ew->position.z = s->pos.z;
+        ew->rot.x = s->rot.x;
+        ew->rot.y = s->rot.y;
+        ew->rot.z = s->rot.z;
+        ew->scale = 1.5f * s->scale.x;
     }
 }
 
-/** Sweet Feast's single big star: the same rise, fly-up and sway as main_star0, larger and alone. */
+/**
+ * Sweet Feast's single big star: the same fly-up and sway as main_star0, larger and alone;
+ * it rises straight up 50 instead of circling Mario.
+ */
 static void main_star1(void) {
     GenkiWork* w = get_ptr();
     BattleUnit* mario = BattleGetMarioPtr(_battleWorkPointer);
-    EffStarStoneWork* star;
+    EffStarStoneWork* ew;
 
     switch (w->star[0].state) {
         case 1:
@@ -902,18 +910,18 @@ static void main_star1(void) {
         case 2:
             w->star[0].timer++;
             if (w->star[0].timer <= 100) {
-                w->star[0].pos.x = intplGetValue(0, w->star[0].start.x, w->star[0].end.x, w->star[0].timer, 100);
-                w->star[0].pos.y = intplGetValue(0, w->star[0].start.y, w->star[0].end.y, w->star[0].timer, 100);
-                w->star[0].pos.z = intplGetValue(0, w->star[0].start.z, w->star[0].end.z, w->star[0].timer, 100);
+                w->star[0].pos.x = intplGetValue(EASING_LINEAR, w->star[0].start.x, w->star[0].end.x, w->star[0].timer, 100);
+                w->star[0].pos.y = intplGetValue(EASING_LINEAR, w->star[0].start.y, w->star[0].end.y, w->star[0].timer, 100);
+                w->star[0].pos.z = intplGetValue(EASING_LINEAR, w->star[0].start.z, w->star[0].end.z, w->star[0].timer, 100);
                 w->star[0].scale.x = w->star[0].scale.y = w->star[0].scale.z =
-                    intplGetValue(0, 0.0f, 2.0f, w->star[0].timer, 100);
+                    intplGetValue(EASING_LINEAR, 0.0f, 2.0f, w->star[0].timer, 100);
             } else {
                 w->star[0].pos.x = w->star[0].end.x;
                 w->star[0].pos.y = w->star[0].end.y;
                 w->star[0].pos.z = w->star[0].end.z;
                 w->star[0].scale.x = w->star[0].scale.y = w->star[0].scale.z = 2.0f;
             }
-            w->star[0].rot.y = intplGetValue(4, 0.0f, 2160.0f, w->star[0].timer, 120);
+            w->star[0].rot.y = intplGetValue(EASING_QUADRATIC_OUT, 0.0f, 2160.0f, w->star[0].timer, 120);
             if (w->star[0].timer >= 120) {
                 w->star[0].state = 3;
                 w->star[0].timer = 0;
@@ -925,7 +933,7 @@ static void main_star1(void) {
             break;
         case 3:
             w->star[0].timer++;
-            w->star[0].pos.x = intplGetValue(4, w->star[0].start.x, w->star[0].end.x, w->star[0].timer, 60);
+            w->star[0].pos.x = intplGetValue(EASING_QUADRATIC_OUT, w->star[0].start.x, w->star[0].end.x, w->star[0].timer, 60);
             w->star[0].pos.y += w->star[0].vel.y;
             w->star[0].vel.y += 0.2f;
             w->star[0].rot.y = 0.0f;
@@ -933,6 +941,8 @@ static void main_star1(void) {
             if (w->star[0].timer >= 60) {
                 w->star[0].state = 4;
                 w->star[0].timer = 0;
+
+                // BUG: the leftward speed set here is always overwritten by the statement after the if.
                 if (irand(2) == 0) {
                     w->star[0].vel.x = -2.0f;
                 }
@@ -963,14 +973,14 @@ static void main_star1(void) {
             break;
     }
     if (w->star[0].eff) {
-        star = w->star[0].eff->userdata;
-        star->position.x = w->star[0].pos.x;
-        star->position.y = w->star[0].pos.y;
-        star->position.z = w->star[0].pos.z;
-        star->spinY = w->star[0].rot.x;
-        star->rotY = w->star[0].rot.y;
-        star->tiltZ = w->star[0].rot.z;
-        star->scale = 1.5f * w->star[0].scale.x;
+        ew = w->star[0].eff->userdata;
+        ew->position.x = w->star[0].pos.x;
+        ew->position.y = w->star[0].pos.y;
+        ew->position.z = w->star[0].pos.z;
+        ew->rot.x = w->star[0].rot.x;
+        ew->rot.y = w->star[0].rot.y;
+        ew->rot.z = w->star[0].rot.z;
+        ew->scale = 1.5f * w->star[0].scale.x;
     }
 }
 
@@ -999,9 +1009,9 @@ static USER_FUNC(end_genki) {
             }
         }
     }
-    effDelete(w->rec0);
-    effDelete(w->rec1);
-    effDelete(w->rec2);
+    effDelete(w->marioHpEff);
+    effDelete(w->partyHpEff);
+    effDelete(w->fpEff);
     BattleFree(w->table);
     return 2;
 }
@@ -1015,7 +1025,7 @@ static void disp_2D(CameraId cam, void* param) {
 /**
  * Draws the game: the running HP / partner HP / FP totals over Mario's
  * and the partner's heads (blinking when they change),
- * each falling item's icon (big items at double size and flashing,
+ * each falling item's icon (big items at size 2 instead of 1.25 and flashing,
  * the partner icon picked per partner and Yoshi colour), and the spinning aim reticle in front of Mario.
  */
 static void disp_3D(CameraId cam, void* param) {
@@ -1025,7 +1035,7 @@ static void disp_3D(CameraId cam, void* param) {
     BattleUnit* party;
     u16 flags;
     s32 i;
-    u16 icon;
+    s32 icon;
     f32 ang;
     f32 mx, my, mz;
     f32 px, py, pz;
@@ -1039,72 +1049,72 @@ static void disp_3D(CameraId cam, void* param) {
     w = get_ptr();
     mario = BattleGetMarioPtr(_battleWorkPointer);
     party = BattleGetPartyPtr(_battleWorkPointer);
-    ang = 3.141592f * w->targetRad / 180.0f;
+    ang = 3.141592f * w->aimAngle / 180.0f;
 
     if (w->state) {
         BtlUnit_GetHomePos(mario, &mx, &my, &mz);
         my += 60.0f;
-        rec = w->rec0->userdata;
+        rec = w->marioHpEff->userdata;
         rec->position.x = mx;
         rec->position.y = my - 10.0f;
         rec->position.z = 5.0f + mz;
-        if (w->disp0 >= 10.0f) {
+        if (w->marioHpDisp >= 10.0f) {
             p = (Vec){6.0f + mx, my, 8.0f + mz};
         } else {
             p = (Vec){mx, my, 8.0f + mz};
         }
         PSMTXTrans(m, p.x, p.y, p.z);
-        if (genki_blink(w->blink0)) {
-            iconNumberDispGx3D(m, w->disp0, 0, (GXColor){255, 255, 255, 255});
+        if (genki_blink(w->marioHpBlink)) {
+            iconNumberDispGx3D(m, w->marioHpDisp, 0, (GXColor){255, 255, 255, 255});
         }
-        if (w->partyArg != -1) {
+        if (w->partyUnitId != -1) {
             BtlUnit_GetHomePos(party, &px, &py, &pz);
             py += 60.0f;
-            rec = w->rec1->userdata;
+            rec = w->partyHpEff->userdata;
             rec->position.x = px;
             rec->position.y = py - 10.0f;
             rec->position.z = 5.0f + pz;
-            if (w->disp1 >= 10.0f) {
+            if (w->partyHpDisp >= 10.0f) {
                 p1 = (Vec){6.0f + px, py, 8.0f + pz};
             } else {
                 p1 = (Vec){px, py, 8.0f + pz};
             }
             PSMTXTrans(m, p1.x, p1.y, p1.z);
-            if (genki_blink(w->blink1)) {
-                iconNumberDispGx3D(m, w->disp1, 0, (GXColor){255, 255, 255, 255});
+            if (genki_blink(w->partyHpBlink)) {
+                iconNumberDispGx3D(m, w->partyHpDisp, 0, (GXColor){255, 255, 255, 255});
             }
             BtlUnit_GetHomePos(mario, &mx, &my, &mz);
             BtlUnit_GetHomePos(party, &px, &py, &pz);
             mx = 0.5f * (mx + px);
             my += 90.0f;
-            rec = w->rec2->userdata;
+            rec = w->fpEff->userdata;
             rec->position.x = mx;
             rec->position.y = my - 10.0f;
             rec->position.z = 5.0f + mz;
-            if (w->disp2 >= 10.0f) {
+            if (w->fpDisp >= 10.0f) {
                 p = (Vec){6.0f + mx, my, 8.0f + mz};
             } else {
                 p = (Vec){mx, my, 8.0f + mz};
             }
             PSMTXTrans(m, p.x, p.y, p.z);
-            if (genki_blink(w->blink2)) {
-                iconNumberDispGx3D(m, w->disp2, 0, (GXColor){255, 255, 255, 255});
+            if (genki_blink(w->fpBlink)) {
+                iconNumberDispGx3D(m, w->fpDisp, 0, (GXColor){255, 255, 255, 255});
             }
         } else {
             BtlUnit_GetHomePos(mario, &mx, &my, &mz);
             my += 90.0f;
-            rec = w->rec2->userdata;
+            rec = w->fpEff->userdata;
             rec->position.x = mx;
             rec->position.y = my - 10.0f;
             rec->position.z = 5.0f + mz;
-            if (w->disp2 >= 10.0f) {
+            if (w->fpDisp >= 10.0f) {
                 p = (Vec){6.0f + mx, my, 8.0f + mz};
             } else {
                 p = (Vec){mx, my, 8.0f + mz};
             }
             PSMTXTrans(m, p.x, p.y, p.z);
-            if (genki_blink(w->blink2)) {
-                iconNumberDispGx3D(m, w->disp2, 0, (GXColor){255, 255, 255, 255});
+            if (genki_blink(w->fpBlink)) {
+                iconNumberDispGx3D(m, w->fpDisp, 0, (GXColor){255, 255, 255, 255});
             }
         }
     }
@@ -1115,85 +1125,85 @@ static void disp_3D(CameraId cam, void* param) {
             flags = 0;
             s = 1.25f;
             switch (o->kind) {
-                case 0:
-                case 1:
-                    icon = ICON_1A3;
-                    if (o->kind == 1) {
+                case GENKI_MARIO_HEART:
+                case GENKI_MARIO_HEART_LARGE:
+                    icon = ICON_STATUS_MARIO;
+                    if (o->kind == GENKI_MARIO_HEART_LARGE) {
                         s = 2.0f;
                         if (genki_blink(o->timer)) {
-                            flags |= ICON_FLAG_GRAYSCALE;
+                            flags |= ICON_FLAG_GRAY;
                         }
                     }
                     break;
-                case 2:
-                case 3:
+                case GENKI_PARTNER_HEART:
+                case GENKI_PARTNER_HEART_LARGE:
                     switch (party->currentKind) {
-                        case 0xE0:
-                            icon = ICON_1A4;
+                        case UNIT_GOOMBELLA:
+                            icon = ICON_STATUS_GOOMBELLA;
                             break;
-                        case 0xE1:
-                            icon = ICON_1A5;
+                        case UNIT_KOOPS:
+                            icon = ICON_STATUS_KOOPS;
                             break;
-                        case 0xE3:
-                            icon = ICON_1AE;
+                        case UNIT_FLURRIE:
+                            icon = ICON_STATUS_FLURRIE;
                             break;
-                        case 0xE2:
-                            switch (pouchGetPartyColor(4)) {
+                        case UNIT_YOSHI:
+                            switch (pouchGetPartyColor(PARTY_YOSHI)) {
                                 case 1:
-                                    icon = ICON_1A8;
+                                    icon = ICON_STATUS_YOSHI_1;
                                     break;
                                 case 2:
-                                    icon = ICON_1A9;
+                                    icon = ICON_STATUS_YOSHI_2;
                                     break;
                                 case 3:
-                                    icon = ICON_1AA;
+                                    icon = ICON_STATUS_YOSHI_3;
                                     break;
                                 case 4:
-                                    icon = ICON_1AB;
+                                    icon = ICON_STATUS_YOSHI_4;
                                     break;
                                 case 5:
-                                    icon = ICON_1AC;
+                                    icon = ICON_STATUS_YOSHI_5;
                                     break;
                                 case 6:
-                                    icon = ICON_1AD;
+                                    icon = ICON_STATUS_YOSHI_6;
                                     break;
                                 case 0:
-                                    icon = ICON_1A7;
+                                    icon = ICON_STATUS_YOSHI;
                                     break;
                             }
                             break;
-                        case 0xE4:
-                            icon = ICON_1AF;
+                        case UNIT_VIVIAN:
+                            icon = ICON_STATUS_VIVIAN;
                             break;
-                        case 0xE5:
-                            icon = ICON_1A6;
+                        case UNIT_BOBBERY:
+                            icon = ICON_STATUS_BOBBERY;
                             break;
-                        case 0xE6:
-                            icon = ICON_1B0;
+                        case UNIT_MS_MOWZ:
+                            icon = ICON_STATUS_MS_MOWZ;
                             break;
                         default:
                             icon = 0;
                             break;
                     }
-                    if (o->kind == 3) {
+                    if (o->kind == GENKI_PARTNER_HEART_LARGE) {
                         s = 2.0f;
                         if (genki_blink(o->timer)) {
-                            flags |= ICON_FLAG_GRAYSCALE;
+                            flags |= ICON_FLAG_GRAY;
                         }
                     }
                     break;
-                case 4:
-                case 5:
-                    icon = ICON_1B1;
-                    if (o->kind == 5) {
+                case GENKI_FLOWER:
+                case GENKI_FLOWER_LARGE:
+                    icon = ICON_STATUS_FP;
+                    if (o->kind == GENKI_FLOWER_LARGE) {
                         s = 2.0f;
                         if (genki_blink(o->timer)) {
-                            flags |= ICON_FLAG_GRAYSCALE;
+                            flags |= ICON_FLAG_GRAY;
                         }
                     }
                     break;
-                case 6:
-                    icon = ICON_143;
+                case GENKI_HAZARD:
+                    icon = ICON_SAC_GENKI_HAZARD;
                     break;
             }
             PSMTXScale(m, s, s, 1.0f);
@@ -1210,9 +1220,9 @@ static void disp_3D(CameraId cam, void* param) {
         mx += 10.0f;
         my += 30.0f;
         mz += 10.0f;
-        btlDispTex4(BTL_TEX(0x41), (Vec){mx, my, mz}, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, 6.0f * w->targetAngle},
+        btlDispTex4(BTL_TEX(0x41), (Vec){mx, my, mz}, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, 6.0f * w->reticleSpin},
                     (GXColor){255, 255, 255, 255});
-        btlDispTex4(BTL_TEX(0x42), (Vec){mx, my, mz}, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, 6.0f * -(f32)w->targetAngle},
+        btlDispTex4(BTL_TEX(0x42), (Vec){mx, my, mz}, (Vec){0.5f, 0.5f, 1.0f}, (Vec){0.0f, 0.0f, 6.0f * -(f32)w->reticleSpin},
                     (GXColor){255, 255, 255, 255});
     }
 }
@@ -1221,36 +1231,30 @@ static void disp_3D(CameraId cam, void* param) {
 static void disp_3D_alpha(CameraId cam, void* param) {
 }
 
-static USER_FUNC(start_game);
-
-static GenkiWork* get_ptr(void);
 /**
  * Shared body of Sweet Treat and Sweet Feast; LW(15) is the mode (0 or 1).
  * Pays the Star Power, plays the star intro, moves Mario left, runs the shooting game, then restores Mario's HP,
  * the partner's HP and FP by the three scores, cures both of bad statuses and slides the enemies back.
  */
-EVT_BEGIN(genki_evt_common)
-    // A knocked-out partner is left out of the healing.
-    CALL(btlevtcmd_GetUnitId, BTL_UNIT_PARTNER, LW(13))
+static EVT_BEGIN(genki_evt_common)
+    CALL(btlevtcmd_GetUnitId, UNIT_ID_PARTNER, LW(13))
     CALL(btlevtcmd_GetBodyId, LW(13), LW(14))
-    CALL(btlevtcmd_CheckStatus, LW(13), STATUS_INSTANT_KILL, LW(0))
+    CALL(btlevtcmd_CheckStatus, LW(13), STATUS_DEAD, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         SET_VALUE(LW(13), -1)
     END_IF
-    // Mario pays the Star Power, the minigame work starts and the enemies slide off to the side.
     CALL(btlevtcmd_reset_move_color_lv_all)
-    CALL(btlevtcmd_CommandPayWeaponCost, BTL_UNIT_SELF)
+    CALL(btlevtcmd_CommandPayWeaponCost, UNIT_ID_SELF)
     BEGIN_SIBLING_EVENT
         CALL(main_genki, LW(13), LW(15))
     END_SIBLING_EVENT
     CALL_CHILD(sac_start_camera_evt)
     WAIT_MS(500)
     CALL(sac_enemy_slide_go)
-    // Crystal Star opening: Mario holds up the star item; Sweet Treat sends up small stars, Sweet Feast one.
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL_CHILD(sac_mario_item_on_evt)
     WAIT_MS(500)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START2"), EVT_NULLPTR, 0, LW(11))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START2"), EVT_NULLPTR, 0, LW(11))
     IF_INT_EQUAL(LW(15), 0)
         CALL(star_appear)
     ELSE
@@ -1260,19 +1264,17 @@ EVT_BEGIN(genki_evt_common)
         CALL_CHILD(sac_start_stardust)
     END_SIBLING_EVENT
     WAIT_FRAMES(100)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_HEART_SHOOT1"), EVT_NULLPTR, 0, LW(10))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_HEART_SHOOT1"), EVT_NULLPTR, 0, LW(10))
     CALL(evt_snd_sfxoff, LW(11))
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_FRAMES(40)
-    // Mario puts the item away and walks left to make room for the shooting game.
     CALL_CHILD(sac_mario_item_on_end_evt)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(3.0f))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, -75, LW(1), LW(2), 0, -1, 0)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("M_I_Y"))
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(3.0f))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, -75, LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("M_I_Y"))
     WAIT_FRAMES(40)
-    // The shooting game runs with the help shown; it scores Mario's HP, the partner's HP and FP.
     CALL(evt_snd_sfxoff, LW(10))
     CALL(sac_ac_help_on)
     CALL(start_game)
@@ -1280,36 +1282,33 @@ EVT_BEGIN(genki_evt_common)
     CALL(sac_ac_help_off)
     CALL(get_score, LW(10), LW(11), LW(12))
     WAIT_FRAMES(70)
-    // Mario walks back home, the HP/FP window opens and the camera closes in on him.
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_RUN)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(3.0f))
-    CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
-#if VERSION <= VERSION_JP
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_WALK)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_RUN)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(3.0f))
+    CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
+#if VERSION >= VERSION_US
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
 #else
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_WALK)
 #endif
     CALL(status_on)
-    CALL(evt_btl_camera_set_mode, 0, 7)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, BTL_UNIT_NONE)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, -1)
     CALL(evt_btl_camera_set_zoom, 0, 200)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoomSpeedLv, 0, 2)
-    // The crowd reacts if anything was won.
     SET_VALUE(LW(15), LW(10))
     ADD(LW(15), LW(11))
     ADD(LW(15), LW(12))
     IF_INT_GREATER_OR_EQUAL(LW(15), 1)
         CALL(sac_wao)
     END_IF
-    // Both are cured of bad statuses and healed by their scores, then FP is restored (Mario only if alone).
     IF_INT_NOT_EQUAL(LW(13), -1)
         CALL(evt_snd_sfxon, STRING("SFX_HP_RECOVER_SHINE2"), 0)
         SET_VALUE(LW(9), -2)
         CALL_CHILD(status_recover_evt)
-        CALL(btlevtcmd_RecoverHp, BTL_UNIT_SELF, 1, LW(10))
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_RecoverHp, UNIT_ID_SELF, 1, LW(10))
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         CALL(evt_eff, STRING(""), STRING("stardust"), 2, LW(0), LW(1), LW(2), 50, 50, 50, 100, 0, 0, 0, 0)
         SET_VALUE(LW(9), LW(13))
         CALL_CHILD(status_recover_evt)
@@ -1317,28 +1316,27 @@ EVT_BEGIN(genki_evt_common)
         CALL(btlevtcmd_RecoverHp, LW(13), LW(14), LW(11))
         CALL(btlevtcmd_GetPos, LW(13), LW(0), LW(1), LW(2))
         CALL(evt_eff, STRING(""), STRING("stardust"), 2, LW(0), LW(1), LW(2), 50, 50, 50, 100, 0, 0, 0, 0)
-        CALL(btlevtcmd_RecoverFp, BTL_UNIT_SELF, 1, LW(12))
+        CALL(btlevtcmd_RecoverFp, UNIT_ID_SELF, 1, LW(12))
     ELSE
         CALL(evt_snd_sfxon, STRING("SFX_HP_RECOVER_SHINE2"), 0)
         SET_VALUE(LW(9), -2)
         CALL_CHILD(status_recover_evt)
-        CALL(btlevtcmd_RecoverHp, BTL_UNIT_SELF, 1, LW(10))
-        CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_RecoverHp, UNIT_ID_SELF, 1, LW(10))
+        CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
         CALL(evt_eff, STRING(""), STRING("stardust"), 2, LW(0), LW(1), LW(2), 50, 50, 50, 100, 0, 0, 0, 0)
-        CALL(btlevtcmd_RecoverFp, BTL_UNIT_SELF, 1, LW(12))
+        CALL(btlevtcmd_RecoverFp, UNIT_ID_SELF, 1, LW(12))
     END_IF
     WAIT_MS(1000)
-    // The enemies slide back and the camera returns to normal.
     CALL(sac_enemy_slide_return)
     WAIT_MS(1000)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_MS(1000)
     CALL(end_genki)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
-/** After genki_evt_common, where the demo's .data places them (retail keeps them in .sdata). */
+/** Attack event of Sweet Treat (marioWeapon_Genki0): runs genki_evt_common in mode 0. */
 EVT_BEGIN(marioAttackEvent_Genki0)
     SET_VALUE(LW(15), 0)
     CALL_CHILD(genki_evt_common)
@@ -1356,7 +1354,7 @@ EVT_END()
  * Cures the unit in LW(9) of sleep, stop, dizzy, poison, confusion, burn, freeze, tiny, attack down,
  * defense down and slow, then clears the command-blocking turns (recover_cmd_disable).
  */
-EVT_BEGIN(status_recover_evt)
+static EVT_BEGIN(status_recover_evt)
     CALL(btlevtcmd_CheckStatus, LW(9), STATUS_SLEEP, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL(btlevtcmd_OnOffStatus, LW(9), STATUS_SLEEP, 0, 0, 0)
@@ -1405,13 +1403,10 @@ EVT_BEGIN(status_recover_evt)
     RETURN
 EVT_END()
 
-// FAKE: inlining off (FAKES.md); without it get_ptr is inlined into its callers (15 shrink, e.g. object_get_num 20 -> 14 instructions)
-#pragma dont_inline on
 /** The minigame's work area, kept in the battle's shared action-command work buffer. */
 static GenkiWork* get_ptr(void) {
     return (GenkiWork*)_battleWorkPointer->actionCommands.work;
 }
-#pragma dont_inline reset
 
 /**
  * Fires a star: picks a random idle shot slot (3 in Sweet Treat, 7 in Sweet Feast),
@@ -1424,6 +1419,7 @@ static void weapon_entry(void) {
     s32 i;
     BattleUnit* mario = BattleGetMarioPtr(_battleWorkPointer);
     BattleUnitPart* part = BtlUnit_GetPartsPtr(mario, BtlUnit_GetBodyPartsId(mario));
+    GenkiWeapon* wp;
     for (i = 0; i < w->weaponNum; i++) {
         if (w->weapon[i].state == 0) {
             idx[cnt] = i;
@@ -1432,21 +1428,18 @@ static void weapon_entry(void) {
     }
     if (cnt >= 1) {
         i = idx[irand(cnt)];
-        {
-            GenkiWeapon* wp = &w->weapon[i];
-            wp->state = 1;
-            wp->timer = 7;
-        }
+        wp = &w->weapon[i];
+        wp->state = 1;
+        wp->timer = 7;
         BtlUnit_SetAnim(part, "M_C_2C");
     }
 }
 
 /**
  * Starts the first idle object.
- * main_genki calls it directly, not from a script, so it is called through a cast;
- * it returns nothing (r3 still holds the work pointer), which main_genki ignores.
+ * main_base calls it at each drop interval while time is left.
  */
-static USER_FUNC(object_entry) {
+static void object_entry(void) {
     GenkiWork* w = get_ptr();
     s32 i;
     for (i = 0; i < 10; i++) {
@@ -1458,8 +1451,8 @@ static USER_FUNC(object_entry) {
     }
 }
 
-/** Counts the objects in state 2 (called directly by main_genki through a cast). */
-static USER_FUNC(object_get_num) {
+/** Counts the objects in state 2 (called by main_mario to see whether any item is still falling). */
+static s32 object_get_num(void) {
     GenkiWork* w = get_ptr();
     s32 i;
     s32 n;
@@ -1487,9 +1480,9 @@ static USER_FUNC(wait_game_end) {
 static USER_FUNC(get_score) {
     GenkiWork* w = get_ptr();
     EvtWord* args = event->args;
-    evtSetValue(event, args[0], w->score0);
-    evtSetValue(event, args[1], w->score1);
-    evtSetValue(event, args[2], w->score2);
+    evtSetValue(event, args[0], w->marioHp);
+    evtSetValue(event, args[1], w->partyHp);
+    evtSetValue(event, args[2], w->fp);
     return 2;
 }
 
@@ -1520,21 +1513,20 @@ static USER_FUNC(star_stone_appear) {
 }
 
 /**
- * Clears the turns left on the command blocks set by Bowser's command-blocking attacks (US and PAL keep two of
+ * Clears the turns left on the command blocks set by Bowser's command-blocking attacks (US and later keep two of
  * them on the partner unit); part of status_recover_evt's cure.
  */
 static USER_FUNC(recover_cmd_disable) {
     BattleWork* w = _battleWorkPointer;
+    BattleUnit* party;
     w->commandDisabled[0] = 0;
     w->commandDisabled[1] = 0;
     w->commandDisabled[2] = 0;
 #if VERSION >= VERSION_US
-    {
-        BattleUnit* party = BattleGetPartyPtr(w);
-        if (party != NULL) {
-            party->usCommandDisabled[0] = 0;
-            party->usCommandDisabled[1] = 0;
-        }
+    party = BattleGetPartyPtr(w);
+    if (party != NULL) {
+        party->usCommandDisabled[0] = 0;
+        party->usCommandDisabled[1] = 0;
     }
 #else
     w->commandDisabled[3] = 0;

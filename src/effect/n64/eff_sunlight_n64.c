@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: sunlight: soft white light beams that fade in and out over `lifetime` frames.
+
 #include "version.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -8,7 +9,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "eff/n64/eff_sunlight_n64.h"
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 
 typedef struct EffSunlightN64Work {
     s32 type;      // 0x0
@@ -17,16 +18,17 @@ typedef struct EffSunlightN64Work {
     s32 frame;     // 0x14
     u8 color[7];   // 0x18
     f32 offset[5]; // 0x20
-    f32 entryArg;  // 0x34, the last entry argument; never read
+    f32 entryArg;  // 0x34
     s32 alpha;     // 0x38
     s32 alphaMax;  // 0x3C
 } EffSunlightN64Work;
 
 static void effSunlightMain(EffectEntry* effect);
-static void effSunlightDisp(CameraId cameraId, EffectEntry* effect);
+static void effSunlightDisp(CameraId cameraId, void* payload);
+static effN64Vtx testsrc__s_v[28];
 
 /**
- * Spawns sunlight beams at (x, y, z) of width `w`; a lifetime of 0 or less lasts until soft-deleted.
+ * Spawns sunlight beams at (x, y, z); `w` is stored but never read. A lifetime of 0 or less lasts until soft-deleted.
  * Spawned by event scripts through evt_eff.
  */
 EffectEntry* effSunlightN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 w) {
@@ -39,7 +41,7 @@ EffectEntry* effSunlightN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f3
     work = __memAlloc(HEAP_EFFECT, sizeof(EffSunlightN64Work));
     effect->userdata = work;
     effect->callback = effSunlightMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -70,9 +72,10 @@ EffectEntry* effSunlightN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f3
 
 /**
  * Eases the alpha 8 per frame toward alphaMax (clamped 0-255),
- * drops it 16 per frame over the last 16 frames (a delete request starts that; lifetime 1000 means endless)
+ * drops it 16 per frame over the last 16 frames, before that ease, so the net drop is 8 per frame
+ * (a delete request starts that; lifetime 1000 means endless)
  * and drifts each of the five shafts' texture scroll on two sine waves.
- * Drawn on layer 2 in JP and the demos, 10 in US and PAL.
+ * Drawn on layer 2 in JP and the early demos, 10 in US and later.
  */
 static void effSunlightMain(EffectEntry* effect) {
     Vec position;
@@ -87,15 +90,15 @@ static void effSunlightMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
         work->lifetime--;
     }
     work->frame++;
-    if (work->frame > 0x50000 - 0xE60) {
+    if (work->frame > 324000) {
         work->frame = 256;
     }
     if (work->lifetime < 0) {
@@ -137,7 +140,7 @@ static void effSunlightMain(EffectEntry* effect) {
             work->offset[i] -= 256.0f;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), VERSION_PICK(2, 10), (DispCallback)effSunlightDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), VERSION_PICK(DISP_MODE_XLU, DISP_MODE_XLU_AFTER), effSunlightDisp, effect);
 }
 
 /**
@@ -145,7 +148,8 @@ static void effSunlightMain(EffectEntry* effect) {
  * mirrored left-right for type 0: shaft shape from texture 0x42, shimmer from texture 0x43 scrolled per shaft,
  * shaded between the work's two colours at half alpha. Skipped while alpha is 0.
  */
-static void effSunlightDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSunlightDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera = camGetPtr(cameraId);
     EffSunlightN64Work* work = effect->userdata;
     s32 alpha = work->alpha;
@@ -173,7 +177,7 @@ static void effSunlightDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetProjection(ortho, GX_ORTHOGRAPHIC);
     MTXLookAt(view, &pos, &up, &target);
     GXLoadPosMtxImm(view, GX_PNMTX0);
-    GXSetCurrentMtx(0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetTevColor(GX_TEVREG0, (GXColor){work->color[0], work->color[1], work->color[2], alpha >> 1});
     GXSetTevColor(GX_TEVREG1, (GXColor){work->color[3], work->color[4], work->color[5], work->color[6]});
     GXSetNumChans(1);
@@ -238,8 +242,8 @@ static void effSunlightDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetProjectionv(proj);
 }
 
-/** Five long slanted light shafts in screen space, each a textured quad, drawn for the sunlight beams. */
-effN64Vtx testsrc__s_v[] = {
+/** Five long slanted light shafts in screen space (shafts 0 and 3 two quads each, the rest one), drawn for the sunlight beams. */
+static effN64Vtx testsrc__s_v[] = {
     {531, 442, 25, 0, 0, 255, 255, 255, 255},
     {707, 284, 25, 512, 0, 255, 255, 255, 255},
     {1610, 1287, 25, 512, 2048, 255, 255, 255, 255},
@@ -267,4 +271,5 @@ effN64Vtx testsrc__s_v[] = {
     {483, -973, 2, -559, 68, 255, 255, 255, 126},
     {811, -1148, 2, -47, 68, 255, 255, 255, 126},
     {2078, 1236, 2, -47, 2116, 255, 255, 255, 126},
-    {1750, 1411, 2, -559, 2116, 255, 255, 255, 126},};
+    {1750, 1411, 2, -559, 2116, 255, 255, 255, 126},
+};

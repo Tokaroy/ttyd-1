@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 11 (kemuri: smoke) at a point; types 0-5 pick the smoke pattern.
+
 #include "eff/n64/eff_kemuri11_n64.h"
 #include "eff/n64/eff_kemuri1_n64.h"
 #include "eff/eff_n64.h"
@@ -8,6 +9,7 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffKemuri11N64Work {
@@ -27,10 +29,9 @@ typedef struct EffKemuri11N64Work {
     s32 delay;     // 0x4C
     u8 r1, g1, b1; // 0x50
     u8 r2, g2, b2; // 0x53
-    u8 pad[2];     // 0x56
 } EffKemuri11N64Work;
 
-/** Smoke body mesh (54 vertices) each puff of smoke effect 11 is drawn with. */
+/** Smoke body mesh (20 vertices, drawn as 18 triangles) each puff of smoke effect 11 is drawn with. */
 static effN64Vtx stg_thruhammer_v[] = {
     {-34, -2, 20, 4267, 1024, 255, 255, 255, 255},
     {-52, 50, 0, 3840, 2048, 255, 255, 255, 0},
@@ -56,18 +57,17 @@ static effN64Vtx stg_thruhammer_v[] = {
 
 static void effKemuri11Main(EffectEntry* effect);
 static void effKemuri11Disp(CameraId cameraId, EffectEntry* effect);
-static void main_dl(EffectEntry* effect, Mtx mtx);
+static void main_dl(EffectEntry* effect, Mtx camMtx);
 
 /**
- * Spawns smoke effect 11 at (x, y, z).
- * Script type 0-5 is remapped to an internal pattern (3, 2, 4, 5, 6, 7);
- * it makes one to three smoke puffs, and the last two patterns also start effKemuri1 smoke. Event scripts only.
+ * Spawns smoke effect 11 at (x, y, z): types 0-5 become the internal patterns 3, 2, 4, 5, 6 and 7 (other types 5), with
+ * three puffs for patterns 2 and 5 and two for the others. Patterns 6 and 7 also spawn effKemuri1N64Entry types 5
+ * and 6.
  */
 EffectEntry* effKemuri11N64Entry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffKemuri11N64Work* work;
     s32 n;
-    s32 ang;
     s32 i;
 
     effect = effEntry();
@@ -181,7 +181,7 @@ EffectEntry* effKemuri11N64Entry(s32 type, f32 x, f32 y, f32 z) {
             break;
     }
     work++;
-    for (i = 1, ang = 30; i < n + 1; i++, work++) {
+    for (i = 1; i < n + 1; i++, work++) {
         switch (type) {
             case 0:
             case 1:
@@ -192,8 +192,7 @@ EffectEntry* effKemuri11N64Entry(s32 type, f32 x, f32 y, f32 z) {
                 break;
         }
         work->rotZ = 0.0f;
-        work->rotY = (f32)ang;
-        ang += 30;
+        work->rotY = (f32)(i * 30);
     }
     if (type == 6) {
         effKemuri1N64Entry(5, x, y, z, 0.0f);
@@ -204,8 +203,9 @@ EffectEntry* effKemuri11N64Entry(s32 type, f32 x, f32 y, f32 z) {
 }
 
 /**
- * Runs for 60 frames.
- * Each puff is released after its delay with its own scale and texture scroll speeds, then drifts;
+ * Runs for 60 frames (internal types 2, 3, 5) or 50 (types 4, 6, 7).
+ * Each puff is released after its delay with its own scale and texture scroll speeds, then grows by 0.2% per
+ * frame while its textures scroll (the velocity it is given is never applied);
  * the whole effect fades after the first 8 frames.
  */
 static void effKemuri11Main(EffectEntry* effect) {
@@ -324,7 +324,7 @@ static void effKemuri11Main(EffectEntry* effect) {
             work->texS = 128.0f;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKemuri11Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effKemuri11Disp, effect);
 }
 
 /**
@@ -428,14 +428,13 @@ static void effKemuri11Disp(CameraId cameraId, EffectEntry* effect) {
     main_dl(effect, mtx);
 }
 
-/** Draws every released puff as a 54-vertex smoke body under the matrix camMtx, scrolling its two textures. */
+/** Draws every released puff as an 18-triangle smoke body under the matrix camMtx, scrolling its two textures. */
 static void main_dl(EffectEntry* effect, Mtx camMtx) {
     EffKemuri11N64Work* work = effect->userdata;
     s32 i;
     Mtx m;
     Mtx rot;
     Mtx scale;
-    f32 t;
 
     for (i = 1, work++; i < effect->count; i++, work++) {
         if (work->delay < 0) {
@@ -452,8 +451,7 @@ static void main_dl(EffectEntry* effect, Mtx camMtx) {
         GXLoadPosMtxImm(m, GX_PNMTX0);
         GXSetCurrentMtx(GX_PNMTX0);
         PSMTXScale(scale, 0.015625f, 0.03125f, 1.0f);
-        t = work->texS;
-        PSMTXTrans(m, 0.0f, -t / 4.0f, 0.0f);
+        PSMTXTrans(m, 0.0f, -work->texS / 4.0f, 0.0f);
         PSMTXConcat(scale, m, scale);
         GXLoadTexMtxImm(scale, GX_TEXMTX0, GX_MTX2x4);
         PSMTXScale(scale, 0.125f, 0.125f, 1.0f);

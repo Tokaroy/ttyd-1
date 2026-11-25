@@ -1,4 +1,5 @@
 // evt_movefloor.c: scripts and commands for moving floors, platforms that follow a path.
+
 #pragma once
 
 #include "dolphin/types.h"
@@ -7,5 +8,4 @@
 
 extern EvtWord moving_floor[];
 extern EvtWord ridedown_floor[];
-
 USER_FUNC(evt_moving_floor_delete);

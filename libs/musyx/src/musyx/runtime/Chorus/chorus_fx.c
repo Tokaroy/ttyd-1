@@ -3,7 +3,6 @@
 #include "musyx/sal.h"
 #include "musyx/assert.h"
 
-/** Resampling filter taps for the 12 kHz chorus delay line. */
 static float rsmpTab12khz[512] = {
     0.097503662109f,  0.802215576172f,  0.101593017578f,  -0.000976562500f, 0.093505859375f,
     0.802032470703f,  0.105804443359f,  -0.001037597656f, 0.089599609375f,  0.801696777344f,
@@ -110,8 +109,7 @@ static float rsmpTab12khz[512] = {
     0.802215576172f,  0.097503662109f,
 };
 
-/** Constant for fast integer-to-float conversion. */
-const double i2fMagic = 4.503601774854144E15;
+static const double i2fMagic = 4.503601774854144E15; // 0x4330000080000000 (2^52 + 2^31): int-to-float constant of the asm kernels
 
 #ifdef __MWERKS__
 // clang-format off
@@ -176,7 +174,7 @@ static asm void do_src1(_SND_CHORUS_SRCINFO* src) {
   
   li r9, 0xa0
   mtctr r9
-lbl_803B6D5C:
+loop:
   rlwinm r10, r4, 7, 0x15, 0x1b
 
   addc r4, r4, r6
@@ -187,7 +185,7 @@ lbl_803B6D5C:
 
   lfs f5, 0(r10)
 
-  beq lbl_803B6DA4
+  beq skip
 
   lfs f6, 4(r10)
 
@@ -209,12 +207,12 @@ lbl_803B6D5C:
 
   stfiwx f10, r26, r30
 
-  bdnz lbl_803B6D5C
+  bdnz loop
   
-  b lbl_803B6E10
+  b done
 
 
-lbl_803B6DA4:
+skip:
   addi r5, r5, 1
 
   lfs f6, 4(r10)
@@ -239,15 +237,15 @@ lbl_803B6DA4:
   
   fmr f3, f4
   
-  bne+ lbl_803B6DDC
+  bne+ skip2
   mr r5, r7
   
-lbl_803B6DDC:
+skip2:
   fmadds f10, f4, f8, f10
 
   slwi r9, r5, 2
 
-  bdz lbl_803B6E08
+  bdz skip3
 
   lwzx r10, r9, r31
   
@@ -263,15 +261,15 @@ lbl_803B6DDC:
   
   fsubs f4, f4, f9
   
-  b lbl_803B6D5C
+  b loop
 
 
-lbl_803B6E08:
+skip3:
   fctiwz f10, f10
   stfiwx f10, r26, r30
 
 
-lbl_803B6E10:
+done:
   lwz r9, 8(r3)
   
   fctiwz f1, f1
@@ -291,10 +289,11 @@ lbl_803B6E10:
   addi r1, r1, 0x40
   blr
 }
+
 /* clang-format on */
 #else
 static void do_src1(_SND_CHORUS_SRCINFO* src) {
-  // No C version: the original MusyX asm above stays asm (project rule).
+  // Non-MWCC builds: no C form of this kernel exists; the game uses the assembly above
 }
 #endif
 
@@ -311,6 +310,7 @@ static asm void do_src2(register _SND_CHORUS_SRCINFO* src) {
 #define smpBasePtr r31
 
   nofralloc;
+
   /* Save stack state to stack */
   stwu r1, -0x40(sp);
   stmw r26, 0x28(sp);
@@ -328,6 +328,7 @@ static asm void do_src2(register _SND_CHORUS_SRCINFO* src) {
   lwz destPtr, src->dest;
 
   lwz oldPtr, src->old;
+
   /* Store upper portion of int->float conversion constant */
   lis r10, 0x4330;
   stw r10, 0x08(sp);
@@ -361,6 +362,7 @@ static asm void do_src2(register _SND_CHORUS_SRCINFO* src) {
   lfd f4, 0x20(sp);
   fsubs f3, f3, f9;
   fsubs f4, f4, f9;
+
   /* Some offset? */
   li r26, -4;
 
@@ -369,7 +371,7 @@ static asm void do_src2(register _SND_CHORUS_SRCINFO* src) {
 
   li r9, 0xa0;
   mtctr r9;
-lbl_803B6EF4:
+loop:
   rlwinm r10, posLoV, 7, 0x15, 0x1b;
 
   addc posLoV, posLoV, pitchLoV;
@@ -382,7 +384,7 @@ lbl_803B6EF4:
 
   lfs f5, 0(r10);
 
-  beq lbl_803B6F70;
+  beq skip2;
 
   lfs f6, 4(r10);
 
@@ -406,15 +408,15 @@ lbl_803B6EF4:
 
   fmr f3, f4;
 
-  bne + lbl_803B6F44;
+  bne + skip;
   mr posHiV, targetV;
 
-lbl_803B6F44:
+skip:
   fmadds f10, f4, f8, f10;
 
   slwi r9, posHiV, 2;
 
-  bdz lbl_803B6FF4;
+  bdz done;
 
   lwzx r10, r9, smpBasePtr;
 
@@ -430,18 +432,18 @@ lbl_803B6F44:
 
   fsubs f4, f4, f9;
 
-  b lbl_803B6EF4;
+  b loop;
 
-lbl_803B6F70:
+skip2:
 
   cmpw posHiV, triggerV;
 
   lfs f6, 4(r10);
 
-  bne + lbl_803B6F80;
+  bne + skip3;
   mr posHiV, targetV;
 
-lbl_803B6F80:
+skip3:
 
   slwi r11, posHiV, 2;
   addi posHiV, posHiV, 1;
@@ -473,16 +475,16 @@ lbl_803B6F80:
 
   fsubs f3, f3, f9;
 
-  bne + lbl_803B6FC8;
+  bne + skip4;
   mr posHiV, targetV;
 
-lbl_803B6FC8:
+skip4:
 
   fmadds f10, f4, f8, f10;
 
   slwi r9, posHiV, 2;
 
-  bdz lbl_803B6FF4;
+  bdz done;
 
   lwzx r10, r9, smpBasePtr;
 
@@ -496,9 +498,9 @@ lbl_803B6FC8:
   lfd f4, 8(sp);
   fsubs f4, f4, f9;
 
-  b lbl_803B6EF4;
+  b loop;
 
-lbl_803B6FF4:
+done:
 
   fctiwz f10, f10;
   stfiwx f10, r26, destPtr;
@@ -517,7 +519,7 @@ lbl_803B6FF4:
   stw posLoV, src->posLo;
   stw posHiV, src->posHi;
 
-  /* Pop and restore LR to original values */
+  /* Restore the saved GPRs and stack pointer. */
   lmw r26, 0x28(sp);
   addi r1, r1, 0x40;
   blr;
@@ -532,16 +534,11 @@ lbl_803B6FF4:
 #undef smpBasePtr
 }
 #else
-/** Empty non-Metrowerks placeholder for the assembly do_src2 above, which writes 160 samples, each a 4-tap filter of the
- * history with rsmpTab12khz weights, stepping one sample plus a fraction (sndAuxCallbackChorus's pitchHi == 1 case). */
 static void do_src2(register _SND_CHORUS_SRCINFO* src) {
-  // No C version: the original MusyX asm above stays asm (project rule).
+  // Non-MWCC builds: no C form of this kernel exists; the game uses the assembly above
 }
 #endif
 
-/** Aux effect callback for the chorus: copies the incoming frame into a 3-frame history, then for each channel
- * resamples the delayed history with a slowly varying pitch offset (that flips sign every half period) and writes the
- * result to the output buffers; parameter updates are ignored. */
 void sndAuxCallbackChorus(u8 reason, SND_AUX_INFO* info, void* user) {
   SND_AUX_CHORUS* c;
   s32 *leftD, *rightD, *surD, *leftS, *rightS, *surS;
@@ -550,7 +547,7 @@ void sndAuxCallbackChorus(u8 reason, SND_AUX_INFO* info, void* user) {
   switch (reason) {
   case SND_AUX_REASON_BUFFERUPDATE:
     c = (SND_AUX_CHORUS*)user;
-    nextCurrentLast = (c->work.currentLast + 1) % 3;
+    nextCurrentLast = (c->work.currentLast + 1) % _SND_CHORUS_NUM_BLOCKS;
     leftD = c->work.lastLeft[nextCurrentLast];
     rightD = c->work.lastRight[nextCurrentLast];
     surD = c->work.lastSur[nextCurrentLast];
@@ -558,7 +555,7 @@ void sndAuxCallbackChorus(u8 reason, SND_AUX_INFO* info, void* user) {
     rightS = info->data.bufferUpdate.right;
     surS = info->data.bufferUpdate.surround;
 
-    for (i = 0; i < 160; ++i) {
+    for (i = 0; i < SND_AUX_BLOCKSIZE; ++i) {
       *leftD = *leftS++;
       leftD++;
       *rightD = *rightS++;
@@ -595,6 +592,8 @@ void sndAuxCallbackChorus(u8 reason, SND_AUX_INFO* info, void* user) {
         break;
       }
 
+      // pitchHi is 0 while pitchOffset is negative and 1 while it is positive (below 0x10000); no other
+      // value runs a resampler.
       switch (c->work.src.pitchHi) {
       case 0:
         do_src1(&c->work.src);
@@ -605,55 +604,51 @@ void sndAuxCallbackChorus(u8 reason, SND_AUX_INFO* info, void* user) {
       }
     }
 
-    c->work.currentPosHi = c->work.src.posHi % 480;
+    c->work.currentPosHi = c->work.src.posHi % (_SND_CHORUS_NUM_BLOCKS * SND_AUX_BLOCKSIZE);
     c->work.currentPosLo = c->work.src.posLo;
     c->work.currentLast = nextCurrentLast;
     break;
   case SND_AUX_REASON_PARAMETERUPDATE:
     break;
   default:
-  #line 957
+#line 957 // the original source line of the assert below
     MUSY_ASSERT(FALSE);
     break;
   }
 }
 
-/** Recomputes the chorus parameters from the user's settings: read position from the base delay (ms), the pitch
- * variation period (in 5 ms frames) and its step. Returns TRUE. */
 bool sndAuxCallbackUpdateSettingsChorus(SND_AUX_CHORUS* ch) {
-  ch->work.currentPosHi = 0x140 - ((ch->baseDelay - 5) << 5);
+  ch->work.currentPosHi = 2 * SND_AUX_BLOCKSIZE - ((ch->baseDelay - 5) << 5);
   ch->work.currentPosLo = 0;
-  ch->work.currentPosHi = (ch->work.currentPosHi + (ch->work.currentLast - 1) * 0xa0) % 0x1e0;
+  ch->work.currentPosHi = (ch->work.currentPosHi + (ch->work.currentLast - 1) * SND_AUX_BLOCKSIZE) % (_SND_CHORUS_NUM_BLOCKS * SND_AUX_BLOCKSIZE);
   ch->work.pitchOffsetPeriod = (ch->period / 5) + 1 & ~1;
   ch->work.pitchOffsetPeriodCount = (u32)ch->work.pitchOffsetPeriod >> 1;
   ch->work.pitchOffset = (ch->variation << 16) / (ch->work.pitchOffsetPeriod * 5);
   return TRUE;
 }
 
-/** Allocates and clears the chorus history buffers (3 frames per channel) and its resampler state, then applies the
- * settings. Returns FALSE if the allocation fails. */
 bool sndAuxCallbackPrepareChorus(SND_AUX_CHORUS* chorus) {
   u32 i;
   s32* lastLeft;
   s32* lastRight;
   s32* lastSur;
 
-  chorus->work.lastLeft[0] = (s32*)salMalloc(0x1680);
+  chorus->work.lastLeft[0] = (s32*)salMalloc(3 * _SND_CHORUS_NUM_BLOCKS * SND_AUX_BLOCKSIZE * sizeof(s32));
 
   if (chorus->work.lastLeft[0] != NULL) {
-    chorus->work.lastRight[0] = chorus->work.lastLeft[0] + 0x1e0;
-    chorus->work.lastSur[0] = chorus->work.lastRight[0] + 0x1e0;
+    chorus->work.lastRight[0] = chorus->work.lastLeft[0] + (_SND_CHORUS_NUM_BLOCKS * SND_AUX_BLOCKSIZE);
+    chorus->work.lastSur[0] = chorus->work.lastRight[0] + (_SND_CHORUS_NUM_BLOCKS * SND_AUX_BLOCKSIZE);
 
-    for (i = 1; i < 3; ++i) {
-      chorus->work.lastLeft[i] = chorus->work.lastLeft[0] + i * 0xa0;
-      chorus->work.lastRight[i] = chorus->work.lastRight[0] + i * 0xa0;
-      chorus->work.lastSur[i] = chorus->work.lastSur[0] + i * 0xa0;
+    for (i = 1; i < _SND_CHORUS_NUM_BLOCKS; ++i) {
+      chorus->work.lastLeft[i] = chorus->work.lastLeft[0] + i * SND_AUX_BLOCKSIZE;
+      chorus->work.lastRight[i] = chorus->work.lastRight[0] + i * SND_AUX_BLOCKSIZE;
+      chorus->work.lastSur[i] = chorus->work.lastSur[0] + i * SND_AUX_BLOCKSIZE;
     }
 
     lastLeft = chorus->work.lastLeft[0];
     lastRight = chorus->work.lastRight[0];
     lastSur = chorus->work.lastSur[0];
-    for (i = 0; i < 0x140; i += 1) {
+    for (i = 0; i < 2 * SND_AUX_BLOCKSIZE; i += 1) {
       *lastLeft++ = 0;
       *lastRight++ = 0;
       *lastSur++ = 0;
@@ -663,14 +658,13 @@ bool sndAuxCallbackPrepareChorus(SND_AUX_CHORUS* chorus) {
     chorus->work.oldLeft[0] = chorus->work.oldLeft[1] = chorus->work.oldLeft[2] = chorus->work.oldLeft[3] = 0;
     chorus->work.oldRight[0] = chorus->work.oldRight[1] = chorus->work.oldRight[2] = chorus->work.oldRight[3] = 0;
     chorus->work.oldSur[0] = chorus->work.oldSur[1] = chorus->work.oldSur[2] = chorus->work.oldSur[3] = 0;
-    chorus->work.src.trigger = 480;
+    chorus->work.src.trigger = _SND_CHORUS_NUM_BLOCKS * SND_AUX_BLOCKSIZE;
     chorus->work.src.target = 0;
     return sndAuxCallbackUpdateSettingsChorus(chorus);
   }
   return FALSE;
 }
 
-/** Frees the chorus buffers. Returns TRUE. */
 bool sndAuxCallbackShutdownChorus(SND_AUX_CHORUS* ch) {
   salFree(ch->work.lastLeft[0]);
   return TRUE;

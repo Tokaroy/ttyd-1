@@ -1,8 +1,9 @@
 // Declares the battle unit structure, flags and unit control functions.
+
 #pragma once
 
-#include <dolphin/types.h>
 #include "version.h"
+#include <dolphin/types.h>
 #include "evt/evt_word.h"
 #include "battle/battle_damage.h"
 #include "battle/battle_status_effect.h"
@@ -10,381 +11,477 @@
 #include "driver/effdrv.h"
 #include "mario/mario_pouch.h"
 
-#define UNIT_ALLIANCE_PARTY (unit->alliance == 0) // Mario's side
-#define UNIT_ALLIANCE_ENEMY (unit->alliance == 1) // the enemy side
+struct BattleWeapon;
 
-// BattleUnit.flags (btlevtcmd_OnUnitFlag / OffUnitFlag / CheckUnitFlag).
-typedef enum BattleUnit_Flags {
-    UNIT_FLAG_SHOW_HP_GAUGE = 0x1,              // HP gauge shown after damage until its timer runs out
-    UNIT_FLAG_MOVE_COLOR_CHANGING = 0x2,        // moveColorLvDisp is still moving toward moveColorLv
-    UNIT_FLAG_KIND_CHANGED = 0x4,               // the unit changed kind in battle (a winged enemy lost its wings)
-    UNIT_FLAG_NOT_ACTIVE_PARTNER = 0x8,         // skipped by BattleGetPartyPtr; nothing in C sets it
-    UNIT_FLAG_FUSE_LIT = 0x10,                  // Bulky Bob-omb's fuse is lit (set by its scripts; no C reader)
-    UNIT_FLAG_SHARED_SHADOW = 0x10000,          // Vivian's Veil: one shadow between the unit and its partner
-    UNIT_FLAG_FLOAT = 0x100000,                 // the unit hovers (floatOffsetControl)
-    UNIT_FLAG_FLOAT_ACTIVE = 0x200000,          // the hover bob runs (cleared around jumps and moves)
-    UNIT_FLAG_NO_BACKFACE_FLIP = 0x1000000,     // big boss models: no mirror flip when facing away, material light flag 8
-    UNIT_FLAG_FORCE_SHOW_ITEM = 0x2000000,      // draw the held item even with UNIT_FLAG_TURN_SKIPPED
-    UNIT_FLAG_TURN_SKIPPED = 0x4000000,         // spending this act unable to move; held item hidden
-    UNIT_FLAG_HIDE_HELD_ITEM = 0x8000000,       // no held/stolen item sprite (dying, dead)
-    UNIT_FLAG_HOLDING_STOLEN_ITEM = 0x40000000, // heldItem was stolen from Mario
-    UNIT_FLAG_DELETE_PENDING = 0x80000000,      // killed; BattleCheckUnitBroken deletes it
-} BattleUnit_Flags;
+// BattleUnit.alliance: the side a unit fights on.
+typedef enum BattleUnitAlliance {
+    ALLIANCE_PLAYER, // Mario and his partners
+    ALLIANCE_ENEMY,
+    ALLIANCE_NEUTRAL, // stage objects
+} BattleUnitAlliance;
 
-// BattleUnit.statusFlags.
-typedef enum BattleUnitStatus_Flags {
-    STATUS_FLAG_FLIPPED = 0x1,          // a shelled unit (or Koops) is flipped over and can't act
-    STATUS_FLAG_DEFENDING = 0x1000000,  // the Defend command: +1 defense this turn
-    STATUS_FLAG_EXTRA_MOVE = 0x2000000, // a pending bonus action (Rally Wink)
-    STATUS_FLAG_DANGER = 0x10000000,    // HP at or below dangerHP
-    STATUS_FLAG_PERIL = 0x20000000,     // HP at or below perilHP
-} BattleUnitStatus_Flags;
-
-// BattleUnit.tokenFlags: per-action and per-turn state of a unit.
 typedef enum BattleUnitToken_Flags {
-    TOKEN_FLAG_WAS_HIT = (1 << 0),           // 0x1, set at the end of BattleDamageDirect; such a unit can't step in to guard
-    TOKEN_FLAG_GUARDING = (1 << 1),          // 0x2, this unit stepped in to protect another (its hits get damage flag 0x1000)
-    TOKEN_FLAG_GUARD_DECLARED = (1 << 2),    // 0x4, a guard step-in was declared for or by this unit this action
-    TOKEN_FLAG_CHARGE_EXPENDED = (1 << 3),   // 0x8, Charge was used up; its status is cleared at the end of the action
-    TOKEN_FLAG_CONFUSED_ACTION = (1 << 4),   // 0x10, acting while confused
-    TOKEN_FLAG_KNOCKED_AWAY = (1 << 5),      // 0x20, a hammer knockback hit sent the unit flying (subsetevt_shot_damage)
-    TOKEN_FLAG_OFF_STAGE = (1 << 6),         // 0x40, Ultra Hammer: the unit waits off stage until Mario's script clears it
-    TOKEN_FLAG_KNOCKBACK_LANDED = (1 << 7),  // 0x80, the knocked-away unit has landed back home
-    TOKEN_FLAG_UNUSED_8 = (1 << 8),          // 0x100, polled by Mario's Ultra Hammer wait (empty branch); nothing sets it
-    TOKEN_FLAG_CURRENTLY_ACTING = (1 << 12), // 0x1000
-    TOKEN_FLAG_RALLY_WINK = (1 << 13),       // 0x2000, an extra (Rally Wink) turn while slowed; kept over the turn reset
-    TOKEN_FLAG_PERSISTENT = (1 << 31)        // 0x80000000, kept by the turn-start reset; nothing sets it
+    kDamagedThisTurn = (1 << 0),        // 0x1, took damage (cleared each turn); such a unit does not bodyguard
+    kBodyguarding = (1 << 1),           // 0x2, took a hit meant for another unit (hit event DAMAGE_CODE_BODYGUARD_MOVE)
+    kProtectedByBodyguard = (1 << 2),   // 0x4, a bodyguard took the hit meant for it (DAMAGE_CODE_PROTECTED)
+    kChargeExpended = (1 << 3),         // 0x8, the attack used up the Charge; cleared with the status when the action ends
+    kConfusedAction = (1 << 4),         // 0x10
+    kKnockedAway = (1 << 5),            // 0x20, knocked flying by the Spin/Ultra Hammer knock-away
+    kKnockedAwayWaiting = (1 << 6),     // 0x40, waiting off the stage edge until Mario lets it come back
+    kKnockedAwayReturned = (1 << 7),    // 0x80, back at home before the finishing hit
+    kTokenTested_UNUSED = (1 << 8),     // 0x100, tested once (battle_mario, an empty IF); nothing sets it
+    kCurrentlyActing = (1 << 12),       // 0x1000
+    kHasRallyWinkStatus = (1 << 13),    // 0x2000
+    kTokenPersistent_UNUSED = (1 << 31) // 0x80000000, kept when battle_seq clears the tokens; nothing sets it
 } BattleUnitToken_Flags;
 
-// BattleUnitPart.attributes. JP and the demo number two bits lower than US/PAL in the 0x10-0x80 range.
-typedef enum PartsAttribute_Flags {      // 32-bit size
-    PART_ATTR_MAIN = (1 << 0),           // 0x1
-    PART_ATTR_IMPORTANT = (1 << 1),      // 0x2
-    PART_ATTR_SEMI_IMPORTANT = (1 << 2), // 0x4
-    PART_ATTR_GUARD_COVER = (1 << 3),    // 0x8, the part a protecting unit offers when it steps in to guard
-#if VERSION >= VERSION_US
-    PART_ATTR_NOT_ANY_PART_TARGET = (1 << 4), // 0x10, not a TARGET_CLASS_ANY_PART target (US only)
-    PART_ATTR_INTANGIBLE = (1 << 6),          // 0x40, every hit passes through (BattlePreCheckDamage returns 4)
-    PART_ATTR_WEAK_TO_ATTACK_FX_R = (1 << 7), // 0x80, defense changed by the unit's work[1] (Hooktail: Attack FX R)
-#else
-    PART_ATTR_INTANGIBLE = (1 << 4),          // 0x10, every hit passes through (BattlePreCheckDamage returns 4)
-    PART_ATTR_WEAK_TO_ATTACK_FX_R = (1 << 5), // 0x20, defense changed by the unit's work[1] (Hooktail: Attack FX R)
-#endif
-    PART_ATTR_WEAK_TO_ICE_POWER = (1 << 8),             // 0x100
-    PART_ATTR_WINGED = (1 << 11),                       // 0x800
-    PART_ATTR_SHELLED = (1 << 12),                      // 0x1000
-    PART_ATTR_BOMB_FLIPPABLE = (1 << 13),               // 0x2000
-    PART_ATTR_EVASIVE = (1 << 14),                      // 0x4000, always dodges unless the weapon has SPECIAL_HITS_EVASIVE_PARTS
-    PART_ATTR_NO_TRANSLUCENT_POSE = (1 << 15),          // 0x8000, Dodgy/Invisible don't make it translucent
-    PART_ATTR_NOT_TARGETABLE = (1 << 16),               // 0x10000
-    PART_ATTR_NO_TARGET_SORT_OFFSET = (1 << 17),        // 0x20000, exempt from the unit's UNIT_ATTR_TARGET_SORT_OFFSET
-    PART_ATTR_NOT_PART_TARGET = (1 << 18),              // 0x40000, not a TARGET_CLASS_MAIN_PARTS or ANY_PART target
-    PART_ATTR_UNTATTLEABLE = (1 << 19),                 // 0x80000
-    PART_ATTR_JUMPLIKE_CANNOT_TARGET = (1 << 20),       // 0x100000
-    PART_ATTR_HAMMERLIKE_CANNOT_TARGET = (1 << 21),     // 0x200000
-    PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET = (1 << 22), // 0x400000
-    PART_ATTR_NO_HP_LOSS = (1 << 23),                   // 0x800000, damage doesn't lower HP
-    PART_ATTR_HIDDEN = (1 << 24),                       // 0x1000000, not drawn
-    PART_ATTR_NO_SHADOW = (1 << 25),                    // 0x2000000, no shadow
-    PART_ATTR_BLUR = (1 << 26),                         // 0x4000000, drawn with afterimages
-    PART_ATTR_IGNORE_UNIT_SCALE = (1 << 27),            // 0x8000000, a world-position part ignores the unit's size
-    PART_ATTR_WORLD_POSITION = (1 << 28),               // 0x10000000, position is absolute, not relative to the unit
-    PART_ATTR_IMMUNE_TO_DAMAGE_OR_STATUS = (1 << 29),   // 0x20000000, no HP, FP or status damage
-    PART_ATTR_IMMUNE_TO_MOST_STATUS = (1 << 30),        // 0x40000000, blocks most status types (BattleSetStatusDamage)
-    PART_ATTR_IMMUNE_TO_STATUS = (1 << 31)              // 0x80000000, blocks every status
+typedef enum PartsAttribute_Flags { // 32-bit size
+    kMainPart = (1 << 0),           // 0x1
+    kImportantPart = (1 << 1),      // 0x2
+    kSemiImportantPart = (1 << 2),  // 0x4
+    kGuardTargetPart = (1 << 3),    // 0x8, the part an attack is redirected to when this unit bodyguards
+    // 0x10: US and later: TARGET_CLASS_ONLY_MAIN_OR_SEMI_PARTS skips the part (battle_detect); JP and the early demos
+    // test this bit where US and later test kIntangiblePart.
+    // 0x40, US and later: every attack precheck gives PRECHECK_INTANGIBLE, and TARGET_PROP_ONLY_FRONTMOST neither
+    // filters this part nor lets it hide the parts behind it (battle_detect). JP and the early demos test bit 0x10.
+    kIntangiblePart = (1 << 6),
+    // 0x80, US and later: the unit's UNIT_WORK_PART_DEFENSE slot is added to this part's defence (BattleCalculateDamage);
+    // Hooktail's two body parts, whose damage event lowers the slot when Attack FX R hits. JP and the early demos test
+    // bit 0x20 there instead, which their Hooktail parts carry.
+    kPartUnitWorkDefense = (1 << 7),
+    kWeakToIcePower = (1 << 8),             // 0x100
+    kIsWinged = (1 << 11),                  // 0x800, grounded by SPECIAL_GROUND_WINGED
+    kIsShelled = (1 << 12),                 // 0x1000, flipped by SPECIAL_FLIP_SHELLED
+    kIsBombFlippable = (1 << 13),           // 0x2000, flipped by SPECIAL_FLIP_BOMB_FLIPPABLE
+    kClone = (1 << 14),                     // 0x4000, attacks pass through unless SPECIAL_CONTACTS_CLONES
+    kNoTranslucentLook = (1 << 15),         // 0x8000, keeps its normal look while the unit is invisible/dodgy
+    kNotTargetable = (1 << 16),             // 0x10000, skipped by target sampling and the audience
+    kIgnoreMapObjectOffset = (1 << 17),     // 0x20000, not moved back by its unit's kUnitMapObject
+    kNotMainTarget = (1 << 18),             // 0x40000, never chosen as the main/important target part (battle_detect)
+    kUntattleable = (1 << 19),              // 0x80000, TARGET_PROP_TATTLE skips it
+    kJumplikeCannotTarget = (1 << 20),      // 0x100000, TARGET_PROP_JUMPLIKE attacks skip it
+    kHammerlikeCannotTarget = (1 << 21),    // 0x200000, TARGET_PROP_HAMMERLIKE attacks skip it (except recoil on itself)
+    kShellTosslikeCannotTarget = (1 << 22), // 0x400000, TARGET_PROP_SHELL_TOSSLIKE attacks skip it
+    kNoHpLoss = (1 << 23),                  // 0x800000, damage is counted but HP does not go down
+    kHidden = (1 << 24),                    // 0x1000000, not drawn
+    kNoShadow = (1 << 25),                  // 0x2000000, no shadow
+    kMotionBlur = (1 << 26),                // 0x4000000, also drawn with btlUnitPartsBlurDisp
+    kIgnoreUnitSize = (1 << 27),            // 0x8000000, scaled without the unit's sizeMultiplier
+    kAbsolutePosition = (1 << 28),          // 0x10000000, position is the world position, not an offset from the unit
+    kImmuneToDamageAndStatus = (1 << 29),   // 0x20000000, no HP/FP damage and no status (battle_damage.c)
+    kImmuneToNegativeStatus = (1 << 30),    // 0x40000000, sleep, stop, poison, ... and instant kill blocked
+    kImmuneToStatus = (1 << 31)             // 0x80000000, no status at all
 } PartsAttribute_Flags;
 
-// BattleUnit.attributeFlags.
-typedef enum BattleUnitAttribute_Flags {        // 32-bit size
-    UNIT_ATTR_TARGET_SORT_OFFSET = (1 << 0),    // 0x1, target order shifted by direction * 300 (switches, trees)
-    UNIT_ATTR_CEILING = (1 << 1),               // 0x2
-    UNIT_ATTR_FLOATING = (1 << 2),              // 0x4
-    UNIT_ATTR_INTANGIBLE = (1 << 3),            // 0x8, hits pass through and the unit is drawn at half alpha
-    UNIT_ATTR_VEILED = (1 << 4),                // 0x10
-    UNIT_ATTR_SHELL_SHIELDED = (1 << 5),        // 0x20
-    UNIT_ATTR_NOT_SAMPLED_AS_TARGET = (1 << 6), // 0x40, skipped when building target lists
-    UNIT_ATTR_NO_LAST_HIT_RESULT = (1 << 8),    // 0x100, suppresses damage result bit 0x10000 (see SPECIAL_FORCE_RESULT_10000)
-    UNIT_ATTR_NO_GRAVITY_BOB = (1 << 12),       // 0x1000, no zero-gravity bobbing
-    UNIT_ATTR_ACTS_IN_ZERO_GRAVITY = (1 << 13), // 0x2000, may still act in zero gravity
-    UNIT_ATTR_NO_HAMMER_KNOCKBACK = (1 << 14),  // 0x4000, hammer knockback damage patterns 0xE and 0x10 become 0
-    UNIT_ATTR_REVIVES_AFTER_KO = (1 << 16),     // 0x10000, keeps taking turns while KO'd (Dry Bones)
-    UNIT_ATTR_INACTIVE = (1 << 17),             // 0x20000
-    UNIT_ATTR_REQUIRED_FOR_CLEAR = (1 << 18),   // 0x40000, the battle is won when no living unit has this
-    UNIT_ATTR_NO_TURN = (1 << 19),              // 0x80000, never in the phase move queue
-    UNIT_ATTR_NO_KNOCKBACK_POSE = (1 << 21),    // 0x200000, damage patterns 0x15-0x18 become 0
-    UNIT_ATTR_NO_DAMAGE_NUMBER = (1 << 22),     // 0x400000, no damage-star number
-    UNIT_ATTR_HIDDEN = (1 << 24),               // 0x1000000, body not drawn
-    UNIT_ATTR_NO_HP_GAUGE = (1 << 25),          // 0x2000000, no enemy HP gauge
-    UNIT_ATTR_BILLBOARD = (1 << 26),            // 0x4000000, parts face the camera
-    UNIT_ATTR_IGNORE_FOR_CLEAR = (1 << 28),     // 0x10000000, not counted by the battle-clear checks
-    UNIT_ATTR_NO_SHADOW = (1 << 29),            // 0x20000000
-    UNIT_ATTR_HP_LOCKED = (1 << 30)             // 0x40000000, HP unchanged by damage, regeneration and healing
+// BattleUnit.statusFlags (BtlUnit_*StatusFlag, btlevtcmd_On/Off/CheckStatusFlag). Danger = 5 HP, Peril = 1 HP as in
+// the US game text (the original sound and audience symbol names say "pinch" and "danger" for the two states).
+typedef enum BattleUnitStatusFlags {
+    UNIT_STATUS_FLAG_FLIPPED = (1 << 0), // 0x1, set by the flip damage scripts: cannot act, guard or get an AC
+    UNIT_STATUS_FLAG_DEFEND = (1 << 24), // 0x1000000, Defend command: +1 defense until the next turn
+    UNIT_STATUS_FLAG_HUSTLE = (1 << 25), // 0x2000000, _set_hustle: the next action costs no move
+} BattleUnitStatusFlags;
+// Unsigned constants: btlseqEnd's repeated Danger/Peril test compares the and results unsigned (cmplwi).
+#define UNIT_STATUS_FLAG_DANGER 0x10000000U // HP <= dangerHP (BtlUnit_CheckPinchStatus)
+#define UNIT_STATUS_FLAG_PERIL 0x20000000U  // HP <= perilHP
+
+typedef enum BattleUnit_Flags {
+    BATTLE_UNIT_FLAG_SHOW_HP = (1 << 0),                 // 0x1, enemy HP shown until the gauge timer runs out
+    BATTLE_UNIT_FLAG_MOVE_COLOR_FADING = (1 << 1),       // 0x2, set while the move colour fades towards its level
+    BATTLE_UNIT_FLAG_KIND_CHANGED = (1 << 2),            // 0x4, tattle check also looks at initialKind
+    BATTLE_UNIT_FLAG_SWAPPED_OUT = (1 << 3),             // 0x8, partner replaced by another (BattleGetPartyPtr skips it)
+    BATTLE_UNIT_FLAG_FUSE_LIT_UNUSED = (1 << 4),         // 0x10, set when a bomb enemy lights its fuse; never read
+    BATTLE_UNIT_FLAG_SHADOW_WITH_PARTNER = (1 << 16),    // 0x10000, drawn and shadowed together with its partner (Veil)
+    BATTLE_UNIT_FLAG_FLOAT_CAPABLE = (1 << 20),          // 0x100000, floats (bobs) when FLOAT_ACTIVE is also set
+    BATTLE_UNIT_FLAG_FLOAT_ACTIVE = (1 << 21),           // 0x200000, float bob running (off during some attacks)
+    BATTLE_UNIT_FLAG_SOLID_MODEL = (1 << 24),            // 0x1000000, 3D model (bosses and some others): not mirrored like paper when
+                                                         // it turns away from the camera; model lighting on
+    BATTLE_UNIT_FLAG_SHOW_ITEM_WHILE_ACTING = (1 << 25), // 0x2000000
+    BATTLE_UNIT_FLAG_ACTING = (1 << 26),                 // 0x4000000, its attack event has started
+    BATTLE_UNIT_FLAG_HIDE_HELD_ITEM = (1 << 27),         // 0x8000000
+    BATTLE_UNIT_FLAG_STOLEN_ITEM = (1 << 30),            // 0x40000000, holds an item stolen from the player
+    BATTLE_UNIT_FLAG_BROKEN = (1 << 31)                  // 0x80000000, deleted by BattleCheckUnitBroken
+} BattleUnit_Flags;
+
+typedef enum BattleUnitAttribute_Flags {     // 32-bit size
+    kUnitMapObject = (1 << 0),               // 0x1, map object: target sampling puts it 300 units further back
+                                             // (unless the part has kIgnoreMapObjectOffset)
+    kCeiling = (1 << 1),                     // 0x2, hangs from the ceiling (targeting and damage positions)
+    kFloating = (1 << 2),                    // 0x4, off the ground (targeting height class; zero-gravity bob)
+    kPermanentlyInvisible = (1 << 3),        // 0x8, drawn translucent and attacks miss (like STATUS_INVISIBLE)
+    kVeiled = (1 << 4),                      // 0x10, hidden in Vivian's Veil: attacks miss
+    kShellShielded = (1 << 5),               // 0x20, under Koops's Shell Shield (TARGET_PROP_NO_SHELL_SHIELDED)
+    kUnitNeverTargetable = (1 << 6),         // 0x40, skipped by target sampling (battle_detect)
+    kUnitNoFinalHitResult_UNUSED = (1 << 8), // 0x100, a final hit on it does not add result bit 0x10000 (unless
+                                             // SPECIAL_FORCE_RESULT_10000); nothing sets it
+    kNoGravityBob = (1 << 12),               // 0x1000, no zero-gravity bob (like kFloating)
+    kActsInZeroGravity = (1 << 13),          // 0x2000, not stopped by the zero-gravity cannot-act event
+    kUnitNoHammerKnockback = (1 << 14),      // 0x4000, Super/Ultra Hammer knock-away damage patterns are dropped
+    kUndead = (1 << 16),                     // 0x10000, keeps taking turns while KO'd (STATUS_DEAD)
+    kInactive = (1 << 17),                   // 0x20000
+    kUnitLeader = (1 << 18),                 // 0x40000, the side whose leaders are all down is defeated
+    kNoTurn = (1 << 19),                     // 0x80000, never put in the turn order
+    kUnitNoHpFpSwap_UNUSED = (1 << 20),      // 0x100000, the HP/FP swap item skips the unit; nothing sets it
+    kUnitNoSpin = (1 << 21),                 // 0x200000, never spins when hit (slap patterns dropped, sac_deka skips it)
+    kNoDamageNumber = (1 << 22),             // 0x400000, the damage star with the HP number is not shown
+    kUnitHidden = (1 << 24),                 // 0x1000000, no part is drawn
+    kUnitNoHpGauge = (1 << 25),              // 0x2000000, no HP gauge (BattleDrawEnemyHP)
+    kUnitFaceCamera = (1 << 26),             // 0x4000000, parts are turned to face the camera
+    kUnitNoncombatant = (1 << 28),           // 0x10000000, not counted when checking whether its side is defeated
+    kUnitNoShadow = (1 << 29),               // 0x20000000, no part casts a shadow
+    kUnitHpFixed = (1 << 30)                 // 0x40000000, HP neither falls from damage nor rises from HP Regen (lecture mode)
 } BattleUnitAttribute_Flags;
 
-typedef enum PartsCounterAttribute_Flags {          // 32-bit size
-    COUNTER_ATTR_TOP_SPIKY = (1 << 0),              // 0x1
-    COUNTER_ATTR_PREEMPTIVE_FRONT_SPIKY = (1 << 1), // 0x2
-    COUNTER_ATTR_FRONT_SPIKY = (1 << 2),            // 0x4
-    COUNTER_ATTR_FIERY = (1 << 4),                  // 0x10
-    COUNTER_ATTR_FIERY_STATUS = (1 << 5),           // 0x20
-    COUNTER_ATTR_ICY = (1 << 6),                    // 0x40
-    COUNTER_ATTR_ICY_STATUS = (1 << 7),             // 0x80
-    COUNTER_ATTR_POISON = (1 << 8),                 // 0x100
-    COUNTER_ATTR_POISON_STATUS = (1 << 9),          // 0x200
-    COUNTER_ATTR_ELECTRIC = (1 << 10),              // 0x400
-    COUNTER_ATTR_ELECTRIC_STATUS = (1 << 11),       // 0x800
-    COUNTER_ATTR_EXPLOSIVE = (1 << 12),             // 0x1000
-    COUNTER_ATTR_VOLATILE_EXPLOSIVE = (1 << 13)     // 0x2000
+typedef enum PartsCounterAttribute_Flags {   // 32-bit size
+    kCounterTopSpiky = (1 << 0),             // 0x1
+    kCounterPreemptiveFrontSpiky = (1 << 1), // 0x2
+    kCounterFrontSpiky = (1 << 2),           // 0x4
+    kCounterFiery = (1 << 4),                // 0x10
+    kCounterFieryStatus = (1 << 5),          // 0x20
+    kCounterIcy = (1 << 6),                  // 0x40
+    kCounterIcyStatus = (1 << 7),            // 0x80
+    kCounterPoison = (1 << 8),               // 0x100
+    kCounterPoisonStatus = (1 << 9),         // 0x200
+    kCounterElectric = (1 << 10),            // 0x400
+    kCounterElectricStatus = (1 << 11),      // 0x800
+    kCounterExplosive = (1 << 12),           // 0x1000
+    kCounterVolatileExplosive = (1 << 13)    // 0x2000
 } PartsCounterAttribute_Flags;
 
 typedef enum BattleUnitType {
-    UNIT_NULL,                            // 0x0
-    UNIT_GOOMBA,                          // 0x1
-    UNIT_PARAGOOMBA,                      // 0x2
-    UNIT_SPIKY_GOOMBA,                    // 0x3
-    UNIT_SPINIA,                          // 0x4
-    UNIT_SPANIA,                          // 0x5
-    UNIT_LORD_CRUMP_PROLOGUE,             // 0x6
-    UNIT_GUS,                             // 0x7
-    UNIT_BLOOPER,                         // 0x8
-    UNIT_BLOOPER_LEFT_TENTACLE,           // 0x9
-    UNIT_BLOOPER_RIGHT_TENTACLE,          // 0xA
-    UNIT_KOOPATROL,                       // 0xB
-    UNIT_MAGIKOOPA,                       // 0xC
-    UNIT_MAGIKOOPA_CLONE,                 // 0xD
-    UNIT_KOOPA_TROOPA,                    // 0xE
-    UNIT_PARATROOPA,                      // 0xF
-    UNIT_FUZZY,                           // 0x10
-    UNIT_DULL_BONES,                      // 0x11
-    UNIT_BALD_CLEFT,                      // 0x12
-    UNIT_BRISTLE,                         // 0x13
-    UNIT_GOLD_FUZZY,                      // 0x14
-    UNIT_FUZZY_HORDE,                     // 0x15
-    UNIT_RED_BONES,                       // 0x16
-    UNIT_HOOKTAIL,                        // 0x17
-    UNIT_DARK_PUFF,                       // 0x18
-    UNIT_PALE_PIRANHA,                    // 0x19
-    UNIT_CLEFT,                           // 0x1A
-    UNIT_PIDER,                           // 0x1B
-    UNIT_X_NAUT,                          // 0x1C
-    UNIT_YUX,                             // 0x1D
-    UNIT_MINI_YUX,                        // 0x1E
-    UNIT_BELDAM_CHAPTER2,                 // 0x1F
-    UNIT_MARILYN_CHAPTER2,                // 0x20
-    UNIT_VIVIAN_CHAPTER2,                 // 0x21
-    UNIT_MAGNUS,                          // 0x22
-    UNIT_X_FIST,                          // 0x23
-    UNIT_GOOMBA_GLITZVILLE,               // 0x24
-    UNIT_KP_KOOPA,                        // 0x25
-    UNIT_KP_PARATROOPA,                   // 0x26
-    UNIT_POKEY,                           // 0x27
-    UNIT_LAKITU,                          // 0x28
-    UNIT_SPINY,                           // 0x29
-    UNIT_HYPER_BALD_CLEFT,                // 0x2A
-    UNIT_BOB_OMB,                         // 0x2B
-    UNIT_BANDIT,                          // 0x2C
-    UNIT_BIG_BANDIT,                      // 0x2D
-    UNIT_RED_SPIKY_BUZZY,                 // 0x2E
-    UNIT_SHADY_KOOPA,                     // 0x2F
-    UNIT_SHADY_PARATROOPA,                // 0x30
-    UNIT_RED_MAGIKOOPA,                   // 0x31
-    UNIT_RED_MAGIKOOPA_CLONE,             // 0x32
-    UNIT_WHITE_MAGIKOOPA,                 // 0x33
-    UNIT_WHITE_MAGIKOOPA_CLONE,           // 0x34
-    UNIT_GREEN_MAGIKOOPA,                 // 0x35
-    UNIT_GREEN_MAGIKOOPA_CLONE,           // 0x36
-    UNIT_DARK_CRAW,                       // 0x37
-    UNIT_HAMMER_BRO,                      // 0x38
-    UNIT_BOOMERANG_BRO,                   // 0x39
-    UNIT_FIRE_BRO,                        // 0x3A
-    UNIT_RED_CHOMP,                       // 0x3B
-    UNIT_DARK_KOOPATROL,                  // 0x3C
-    UNIT_IRON_CLEFT_RED,                  // 0x3D
-    UNIT_IRON_CLEFT_GREEN,                // 0x3E
-    UNIT_BOWSER_CHAPTER3,                 // 0x3F
-    UNIT_RAWK_HAWK,                       // 0x40
-    UNIT_MACHO_GRUBBA,                    // 0x41
-    UNIT_HYPER_GOOMBA,                    // 0x42
-    UNIT_HYPER_PARAGOOMBA,                // 0x43
-    UNIT_HYPER_SPIKY_GOOMBA,              // 0x44
-    UNIT_CRAZEE_DAYZEE,                   // 0x45
-    UNIT_AMAZY_DAYZEE,                    // 0x46
-    UNIT_HYPER_CLEFT,                     // 0x47
-    UNIT_BUZZY_BEETLE,                    // 0x48
-    UNIT_SPIKE_TOP,                       // 0x49
-    UNIT_SWOOPER,                         // 0x4A
-    UNIT_BOO,                             // 0x4B
-    UNIT_ATOMIC_BOO,                      // 0x4C
-    UNIT_DOOPLISS_CHAPTER4_FIGHT1,        // 0x4D
-    UNIT_DOOPLISS_CHAPTER4_INVINCIBLE,    // 0x4E
-    UNIT_DOOPLISS_CHAPTER4_FIGHT2,        // 0x4F
-    UNIT_GOOMBELLA_CHAPTER4,              // 0x50
-    UNIT_KOOPS_CHAPTER4,                  // 0x51
-    UNIT_YOSHI_CHAPTER4,                  // 0x52
-    UNIT_FLURRIE_CHAPTER4,                // 0x53
-    UNIT_EMBER,                           // 0x54
-    UNIT_LAVA_BUBBLE,                     // 0x55
-    UNIT_GREEN_FUZZY,                     // 0x56
-    UNIT_FLOWER_FUZZY,                    // 0x57
-    UNIT_PUTRID_PIRANHA,                  // 0x58
-    UNIT_PARABUZZY,                       // 0x59
-    UNIT_BILL_BLASTER,                    // 0x5A
-    UNIT_BULLET_BILL,                     // 0x5B
-    UNIT_BULKY_BOB_OMB,                   // 0x5C
-    UNIT_CORTEZ,                          // 0x5D
-    UNIT_CORTEZ_BONE_PILE,                // 0x5E
-    UNIT_CORTEZ_SWORD,                    // 0x5F
-    UNIT_CORTEZ_HOOK,                     // 0x60
-    UNIT_CORTEZ_RAPIER,                   // 0x61
-    UNIT_CORTEZ_SABER,                    // 0x62
-    UNIT_LORD_CRUMP_CHAPTER5,             // 0x63
-    UNIT_X_NAUTS_CRUMP_FORMATION1,        // 0x64
-    UNIT_X_NAUTS_CRUMP_FORMATION2,        // 0x65
-    UNIT_X_NAUTS_CRUMP_FORMATION3,        // 0x66
-    UNIT_RUFF_PUFF,                       // 0x67
-    UNIT_POISON_POKEY,                    // 0x68
-    UNIT_SPIKY_PARABUZZY,                 // 0x69
-    UNIT_DARK_BOO,                        // 0x6A
-    UNIT_SMORG,                           // 0x6B
-    UNIT_SMORG_MIASMA_TENTACLE_A,         // 0x6C
-    UNIT_SMORG_MIASMA_TENTACLE_B,         // 0x6D
-    UNIT_SMORG_MIASMA_TENTACLE_C,         // 0x6E
-    UNIT_SMORG_MIASMA_CLAW,               // 0x6F
-    UNIT_ICE_PUFF,                        // 0x70
-    UNIT_FROST_PIRANHA,                   // 0x71
-    UNIT_MOON_CLEFT,                      // 0x72
-    UNIT_Z_YUX,                           // 0x73
-    UNIT_MINI_Z_YUX,                      // 0x74
-    UNIT_X_YUX,                           // 0x75
-    UNIT_MINI_X_YUX,                      // 0x76
-    UNIT_X_NAUT_PHD,                      // 0x77
-    UNIT_ELITE_X_NAUT,                    // 0x78
-    UNIT_MAGNUS2_0,                       // 0x79
-    UNIT_X_PUNCH,                         // 0x7A
-    UNIT_SWOOPULA,                        // 0x7B
-    UNIT_PHANTOM_EMBER,                   // 0x7C
-    UNIT_BOMBSHELL_BILL_BLASTER,          // 0x7D
-    UNIT_BOMBSHELL_BILL,                  // 0x7E
-    UNIT_CHAIN_CHOMP,                     // 0x7F
-    UNIT_DARK_WIZZERD,                    // 0x80
-    UNIT_DARK_WIZZERD_CLONE,              // 0x81
-    UNIT_DRY_BONES,                       // 0x82
-    UNIT_DARK_BONES,                      // 0x83
-    UNIT_GLOOMTAIL,                       // 0x84
-    UNIT_BELDAM_CHAPTER8,                 // 0x85
-    UNIT_MARILYN_CHAPTER8,                // 0x86
-    UNIT_DOOPLISS_CHAPTER8,               // 0x87
-    UNIT_DOOPLISS_CHAPTER8_MARIO,         // 0x88
-    UNIT_DOOPLISS_CHAPTER8_GOOMBELLA,     // 0x89
-    UNIT_DOOPLISS_CHAPTER8_KOOPS,         // 0x8A
-    UNIT_DOOPLISS_CHAPTER8_YOSHI,         // 0x8B
-    UNIT_DOOPLISS_CHAPTER8_FLURRIE,       // 0x8C
-    UNIT_DOOPLISS_CHAPTER8_VIVIAN,        // 0x8D
-    UNIT_DOOPLISS_CHAPTER8_BOBBERY,       // 0x8E
-    UNIT_DOOPLISS_CHAPTER8_MS_MOWZ,       // 0x8F
-    UNIT_BOWSER_CHAPTER8,                 // 0x90
-    UNIT_KAMMY_KOOPA,                     // 0x91
-    UNIT_GRODUS,                          // 0x92
-    UNIT_GRODUS_X,                        // 0x93
-    UNIT_SHADOW_QUEEN_PEACH,              // 0x94
-    UNIT_SHADOW_QUEEN_INVINCIBLE,         // 0x95
-    UNIT_SHADOW_QUEEN_DEMON,              // 0x96
-    UNIT_SHADOW_QUEEN_LEFT_RIGHT_HAND,    // 0x97
-    UNIT_SHADOW_QUEEN_DEAD_HANDS,         // 0x98
-    UNIT_GLOOMBA,                         // 0x99
-    UNIT_PARAGLOOMBA,                     // 0x9A
-    UNIT_SPIKY_GLOOMBA,                   // 0x9B
-    UNIT_DARK_KOOPA,                      // 0x9C
-    UNIT_DARK_PARATROOPA,                 // 0x9D
-    UNIT_BADGE_BANDIT,                    // 0x9E
-    UNIT_DARK_LAKITU,                     // 0x9F
-    UNIT_SKY_BLUE_SPINY,                  // 0xA0
-    UNIT_WIZZERD,                         // 0xA1
-    UNIT_PIRANHA_PLANT,                   // 0xA2
-    UNIT_SPUNIA,                          // 0xA3
-    UNIT_ARANTULA,                        // 0xA4
-    UNIT_DARK_BRISTLE,                    // 0xA5
-    UNIT_POISON_PUFF,                     // 0xA6
-    UNIT_SWAMPIRE,                        // 0xA7
-    UNIT_BOB_ULK,                         // 0xA8
-    UNIT_ELITE_WIZZERD,                   // 0xA9
-    UNIT_ELITE_WIZZERD_CLONE,             // 0xAA
-    UNIT_BONETAIL,                        // 0xAB
-    UNIT_UNUSED_RED_BUZZY,                // 0xAC
-    UNIT_UNUSED_RED_PARABUZZY,            // 0xAD
-    UNIT_UNUSED_RED_SPIKY_PARABUZZY,      // 0xAE
-    UNIT_UNUSED_HYPER_BOB_OMB,            // 0xAF
-    UNIT_UNUSED_ULTRA_BOB_OMB,            // 0xB0
-    UNIT_TUTORIAL_GOOMBELLA,              // 0xB1
-    UNIT_TUTORIAL_FRANKLY_B2,             // 0xB2
-    UNIT_TUTORIAL_FRANKLY_B3,             // 0xB3
-    UNIT_TUTORIAL_FRANKLY_B4,             // 0xB4
-    UNIT_EPILOGUE_DOOPLISS_MARIO,         // 0xB5
-    UNIT_EPILOGUE_FLURRIE,                // 0xB6
-    UNIT_EPILOGUE_BOO,                    // 0xB7
-    UNIT_EPILOGUE_ATOMIC_BOO,             // 0xB8
-    UNIT_EPILOGUE_MALE_TOAD,              // 0xB9
-    UNIT_EPILOGUE_FEMALE_TOAD,            // 0xBA
-    UNIT_UNUSED_TEST,                     // 0xBB
-    UNIT_UNUSED_CRUMP2,                   // 0xBC
-    UNIT_UNUSED_BELDAM2,                  // 0xBD
-    UNIT_UNUSED_MARILYN2,                 // 0xBE
-    UNIT_UNUSED_VIVIAN2,                  // 0xBF
-    UNIT_UNUSED_BELDAM3,                  // 0xC0
-    UNIT_UNUSED_MARILYN3,                 // 0xC1
-    UNIT_UNUSED_MECHA_KURI,               // 0xC2
-    UNIT_UNUSED_MECHA_KAME,               // 0xC3
-    UNIT_UNUSED_OKORL,                    // 0xC4
-    UNIT_UNUSED_YOWARL,                   // 0xC5
-    UNIT_UNUSED_TUYONARL,                 // 0xC6
-    UNIT_UNUSED_WANAWANA,                 // 0xC7
-    UNIT_UNUSED_MINARAI_KAMEC,            // 0xC8
-    UNIT_UNUSED_SHY_GUY,                  // 0xC9
-    UNIT_UNUSED_GROOVE_GUY,               // 0xCA
-    UNIT_UNUSED_PYRO_GUY,                 // 0xCB
-    UNIT_UNUSED_SPY_GUY,                  // 0xCC
-    UNIT_UNUSED_ANTI_GUY,                 // 0xCD
-    UNIT_UNUSED_BZZAP,                    // 0xCE
-    UNIT_UNUSED_MINI_BZZAP,               // 0xCF
-    UNIT_UNUSED_UFO,                      // 0xD0
-    UNIT_UNUSED_PENNINGTON,               // 0xD1
-    UNIT_UNUSED_FIGHTER,                  // 0xD2
-    UNIT_UNUSED_ZESS_T,                   // 0xD3
-    UNIT_UNUSED_MASTER,                   // 0xD4
-    UNIT_UNUSED_REPORTER,                 // 0xD5
-    UNIT_UNUSED_HOTDOG_MASTER,            // 0xD6
-    UNIT_UNUSED_FLAVIO,                   // 0xD7
-    UNIT_UNUSED_TREE,                     // 0xD8
-    UNIT_UNUSED_SWITCH,                   // 0xD9
-    UNIT_UNUSED_TESTNPC,                  // 0xDA
-    UNIT_BOMB_SQUAD_BOMB,                 // 0xDB
-    UNIT_SYSTEM,                          // 0xDC
-    UNIT_PROLOGUE_GOOMBELLA,              // 0xDD
-    UNIT_MARIO,                           // 0xDE
-    UNIT_SHELL_SHIELD,                    // 0xDF
-    UNIT_GOOMBELLA,                       // 0xE0
-#define TYPE_PARTNER_MIN UNIT_GOOMBELLA   // 0xE0
-    UNIT_KOOPS,                           // 0xE1
-    UNIT_YOSHI,                           // 0xE2
-    UNIT_FLURRIE,                         // 0xE3
-    UNIT_VIVIAN,                          // 0xE4
-    UNIT_BOBBERY,                         // 0xE5
-    UNIT_MS_MOWZ,                         // 0xE6
-#define TYPE_PARTNER_MAX UNIT_MS_MOWZ + 1 // 0xE7
-    UNIT_MAX,                             // 0xE7
+    UNIT_NULL,                              // 0x0
+    UNIT_GOOMBA,                            // 0x1
+    UNIT_PARAGOOMBA,                        // 0x2
+    UNIT_SPIKY_GOOMBA,                      // 0x3
+    UNIT_SPINIA,                            // 0x4
+    UNIT_SPANIA,                            // 0x5
+    UNIT_LORD_CRUMP_PROLOGUE,               // 0x6
+    UNIT_GUS,                               // 0x7
+    UNIT_BLOOPER,                           // 0x8
+    UNIT_BLOOPER_LEFT_TENTACLE,             // 0x9
+    UNIT_BLOOPER_RIGHT_TENTACLE,            // 0xA
+    UNIT_KOOPATROL,                         // 0xB
+    UNIT_MAGIKOOPA,                         // 0xC
+    UNIT_MAGIKOOPA_CLONE,                   // 0xD
+    UNIT_KOOPA_TROOPA,                      // 0xE
+    UNIT_PARATROOPA,                        // 0xF
+    UNIT_FUZZY,                             // 0x10
+    UNIT_DULL_BONES,                        // 0x11
+    UNIT_BALD_CLEFT,                        // 0x12
+    UNIT_BRISTLE,                           // 0x13
+    UNIT_GOLD_FUZZY,                        // 0x14
+    UNIT_FUZZY_HORDE,                       // 0x15
+    UNIT_RED_BONES,                         // 0x16
+    UNIT_HOOKTAIL,                          // 0x17
+    UNIT_DARK_PUFF,                         // 0x18
+    UNIT_PALE_PIRANHA,                      // 0x19
+    UNIT_CLEFT,                             // 0x1A
+    UNIT_PIDER,                             // 0x1B
+    UNIT_X_NAUT,                            // 0x1C
+    UNIT_YUX,                               // 0x1D
+    UNIT_MINI_YUX,                          // 0x1E
+    UNIT_BELDAM_CHAPTER2,                   // 0x1F
+    UNIT_MARILYN_CHAPTER2,                  // 0x20
+    UNIT_VIVIAN_CHAPTER2,                   // 0x21
+    UNIT_MAGNUS,                            // 0x22
+    UNIT_X_FIST,                            // 0x23
+    UNIT_GOOMBA_GLITZVILLE,                 // 0x24
+    UNIT_KP_KOOPA,                          // 0x25
+    UNIT_KP_PARATROOPA,                     // 0x26
+    UNIT_POKEY,                             // 0x27
+    UNIT_LAKITU,                            // 0x28
+    UNIT_SPINY,                             // 0x29
+    UNIT_HYPER_BALD_CLEFT,                  // 0x2A
+    UNIT_BOB_OMB,                           // 0x2B
+    UNIT_BANDIT,                            // 0x2C
+    UNIT_BIG_BANDIT,                        // 0x2D
+    UNIT_RED_SPIKY_BUZZY,                   // 0x2E
+    UNIT_SHADY_KOOPA,                       // 0x2F
+    UNIT_SHADY_PARATROOPA,                  // 0x30
+    UNIT_RED_MAGIKOOPA,                     // 0x31
+    UNIT_RED_MAGIKOOPA_CLONE,               // 0x32
+    UNIT_WHITE_MAGIKOOPA,                   // 0x33
+    UNIT_WHITE_MAGIKOOPA_CLONE,             // 0x34
+    UNIT_GREEN_MAGIKOOPA,                   // 0x35
+    UNIT_GREEN_MAGIKOOPA_CLONE,             // 0x36
+    UNIT_DARK_CRAW,                         // 0x37
+    UNIT_HAMMER_BRO,                        // 0x38
+    UNIT_BOOMERANG_BRO,                     // 0x39
+    UNIT_FIRE_BRO,                          // 0x3A
+    UNIT_RED_CHOMP,                         // 0x3B
+    UNIT_DARK_KOOPATROL,                    // 0x3C
+    UNIT_IRON_CLEFT_RED,                    // 0x3D
+    UNIT_IRON_CLEFT_GREEN,                  // 0x3E
+    UNIT_BOWSER_CHAPTER3,                   // 0x3F
+    UNIT_RAWK_HAWK,                         // 0x40
+    UNIT_MACHO_GRUBBA,                      // 0x41
+    UNIT_HYPER_GOOMBA,                      // 0x42
+    UNIT_HYPER_PARAGOOMBA,                  // 0x43
+    UNIT_HYPER_SPIKY_GOOMBA,                // 0x44
+    UNIT_CRAZEE_DAYZEE,                     // 0x45
+    UNIT_AMAZY_DAYZEE,                      // 0x46
+    UNIT_HYPER_CLEFT,                       // 0x47
+    UNIT_BUZZY_BEETLE,                      // 0x48
+    UNIT_SPIKE_TOP,                         // 0x49
+    UNIT_SWOOPER,                           // 0x4A
+    UNIT_BOO,                               // 0x4B
+    UNIT_ATOMIC_BOO,                        // 0x4C
+    UNIT_DOOPLISS_CHAPTER4_FIGHT1,          // 0x4D
+    UNIT_DOOPLISS_CHAPTER4_INVINCIBLE,      // 0x4E
+    UNIT_DOOPLISS_CHAPTER4_FIGHT2,          // 0x4F
+    UNIT_GOOMBELLA_CHAPTER4,                // 0x50
+    UNIT_KOOPS_CHAPTER4,                    // 0x51
+    UNIT_YOSHI_CHAPTER4,                    // 0x52
+    UNIT_FLURRIE_CHAPTER4,                  // 0x53
+    UNIT_EMBER,                             // 0x54
+    UNIT_LAVA_BUBBLE,                       // 0x55
+    UNIT_GREEN_FUZZY,                       // 0x56
+    UNIT_FLOWER_FUZZY,                      // 0x57
+    UNIT_PUTRID_PIRANHA,                    // 0x58
+    UNIT_PARABUZZY,                         // 0x59
+    UNIT_BILL_BLASTER,                      // 0x5A
+    UNIT_BULLET_BILL,                       // 0x5B
+    UNIT_BULKY_BOB_OMB,                     // 0x5C
+    UNIT_CORTEZ,                            // 0x5D
+    UNIT_CORTEZ_BONE_PILE,                  // 0x5E
+    UNIT_CORTEZ_HOOK,                       // 0x5F, btl_un_cortez_claw ("Cortez Hook")
+    UNIT_CORTEZ_RAPIER,                     // 0x60, btl_un_cortez_rapier
+    UNIT_CORTEZ_SWORD,                      // 0x61, btl_un_cortez_sword
+    UNIT_CORTEZ_SABER,                      // 0x62
+    UNIT_LORD_CRUMP_CHAPTER5,               // 0x63
+    UNIT_X_NAUTS_CRUMP_FORMATION1,          // 0x64
+    UNIT_X_NAUTS_CRUMP_FORMATION2,          // 0x65
+    UNIT_X_NAUTS_CRUMP_FORMATION3,          // 0x66
+    UNIT_RUFF_PUFF,                         // 0x67
+    UNIT_POISON_POKEY,                      // 0x68
+    UNIT_SPIKY_PARABUZZY,                   // 0x69
+    UNIT_DARK_BOO,                          // 0x6A
+    UNIT_SMORG,                             // 0x6B
+    UNIT_SMORG_MIASMA_TENTACLE_A,           // 0x6C
+    UNIT_SMORG_MIASMA_TENTACLE_B,           // 0x6D
+    UNIT_SMORG_MIASMA_TENTACLE_C,           // 0x6E
+    UNIT_SMORG_MIASMA_CLAW,                 // 0x6F
+    UNIT_ICE_PUFF,                          // 0x70
+    UNIT_FROST_PIRANHA,                     // 0x71
+    UNIT_MOON_CLEFT,                        // 0x72
+    UNIT_Z_YUX,                             // 0x73
+    UNIT_MINI_Z_YUX,                        // 0x74
+    UNIT_X_YUX,                             // 0x75
+    UNIT_MINI_X_YUX,                        // 0x76
+    UNIT_X_NAUT_PHD,                        // 0x77
+    UNIT_ELITE_X_NAUT,                      // 0x78
+    UNIT_MAGNUS2_0,                         // 0x79
+    UNIT_X_PUNCH,                           // 0x7A
+    UNIT_SWOOPULA,                          // 0x7B
+    UNIT_PHANTOM_EMBER,                     // 0x7C
+    UNIT_BOMBSHELL_BILL_BLASTER,            // 0x7D
+    UNIT_BOMBSHELL_BILL,                    // 0x7E
+    UNIT_CHAIN_CHOMP,                       // 0x7F
+    UNIT_DARK_WIZZERD,                      // 0x80
+    UNIT_DARK_WIZZERD_CLONE,                // 0x81
+    UNIT_DRY_BONES,                         // 0x82
+    UNIT_DARK_BONES,                        // 0x83
+    UNIT_GLOOMTAIL,                         // 0x84
+    UNIT_BELDAM_CHAPTER8,                   // 0x85
+    UNIT_MARILYN_CHAPTER8,                  // 0x86
+    UNIT_DOOPLISS_CHAPTER8,                 // 0x87
+    UNIT_DOOPLISS_CHAPTER8_MARIO,           // 0x88
+    UNIT_DOOPLISS_CHAPTER8_GOOMBELLA,       // 0x89
+    UNIT_DOOPLISS_CHAPTER8_KOOPS,           // 0x8A
+    UNIT_DOOPLISS_CHAPTER8_YOSHI,           // 0x8B
+    UNIT_DOOPLISS_CHAPTER8_FLURRIE,         // 0x8C
+    UNIT_DOOPLISS_CHAPTER8_VIVIAN,          // 0x8D
+    UNIT_DOOPLISS_CHAPTER8_BOBBERY,         // 0x8E
+    UNIT_DOOPLISS_CHAPTER8_MS_MOWZ,         // 0x8F
+    UNIT_BOWSER_CHAPTER8,                   // 0x90
+    UNIT_KAMMY_KOOPA,                       // 0x91
+    UNIT_GRODUS,                            // 0x92
+    UNIT_GRODUS_X,                          // 0x93
+    UNIT_SHADOW_QUEEN_PEACH,                // 0x94
+    UNIT_SHADOW_QUEEN_INVINCIBLE,           // 0x95
+    UNIT_SHADOW_QUEEN_DEMON,                // 0x96
+    UNIT_SHADOW_QUEEN_LEFT_RIGHT_HAND,      // 0x97
+    UNIT_SHADOW_QUEEN_DEAD_HANDS,           // 0x98
+    UNIT_GLOOMBA,                           // 0x99
+    UNIT_PARAGLOOMBA,                       // 0x9A
+    UNIT_SPIKY_GLOOMBA,                     // 0x9B
+    UNIT_DARK_KOOPA,                        // 0x9C
+    UNIT_DARK_PARATROOPA,                   // 0x9D
+    UNIT_BADGE_BANDIT,                      // 0x9E
+    UNIT_DARK_LAKITU,                       // 0x9F
+    UNIT_SKY_BLUE_SPINY,                    // 0xA0
+    UNIT_WIZZERD,                           // 0xA1
+    UNIT_PIRANHA_PLANT,                     // 0xA2
+    UNIT_SPUNIA,                            // 0xA3
+    UNIT_ARANTULA,                          // 0xA4
+    UNIT_DARK_BRISTLE,                      // 0xA5
+    UNIT_POISON_PUFF,                       // 0xA6
+    UNIT_SWAMPIRE,                          // 0xA7
+    UNIT_BOB_ULK,                           // 0xA8
+    UNIT_ELITE_WIZZERD,                     // 0xA9
+    UNIT_ELITE_WIZZERD_CLONE,               // 0xAA
+    UNIT_BONETAIL,                          // 0xAB
+    UNIT_UNUSED_RED_BUZZY,                  // 0xAC
+    UNIT_UNUSED_RED_PARABUZZY,              // 0xAD
+    UNIT_UNUSED_RED_SPIKY_PARABUZZY,        // 0xAE
+    UNIT_UNUSED_HYPER_BOB_OMB,              // 0xAF
+    UNIT_UNUSED_ULTRA_BOB_OMB,              // 0xB0
+    UNIT_TUTORIAL_GOOMBELLA,                // 0xB1
+    UNIT_TUTORIAL_FRANKLY_B2,               // 0xB2
+    UNIT_TUTORIAL_FRANKLY_B3,               // 0xB3
+    UNIT_TUTORIAL_FRANKLY_B4,               // 0xB4
+    UNIT_EPILOGUE_DOOPLISS_MARIO,           // 0xB5
+    UNIT_EPILOGUE_FLURRIE,                  // 0xB6
+    UNIT_EPILOGUE_BOO,                      // 0xB7
+    UNIT_EPILOGUE_ATOMIC_BOO,               // 0xB8
+    UNIT_EPILOGUE_MALE_TOAD,                // 0xB9
+    UNIT_EPILOGUE_FEMALE_TOAD,              // 0xBA
+    UNIT_UNUSED_TEST,                       // 0xBB
+    UNIT_UNUSED_CRUMP2,                     // 0xBC
+    UNIT_UNUSED_BELDAM2,                    // 0xBD
+    UNIT_UNUSED_MARILYN2,                   // 0xBE
+    UNIT_UNUSED_VIVIAN2,                    // 0xBF
+    UNIT_UNUSED_BELDAM3,                    // 0xC0
+    UNIT_UNUSED_MARILYN3,                   // 0xC1
+    UNIT_UNUSED_MECHA_KURI,                 // 0xC2
+    UNIT_UNUSED_MECHA_KAME,                 // 0xC3
+    UNIT_UNUSED_OKORL,                      // 0xC4
+    UNIT_UNUSED_YOWARL,                     // 0xC5
+    UNIT_UNUSED_TUYONARL,                   // 0xC6
+    UNIT_UNUSED_WANAWANA,                   // 0xC7
+    UNIT_UNUSED_MINARAI_KAMEC,              // 0xC8
+    UNIT_UNUSED_SHY_GUY,                    // 0xC9
+    UNIT_UNUSED_GROOVE_GUY,                 // 0xCA
+    UNIT_UNUSED_PYRO_GUY,                   // 0xCB
+    UNIT_UNUSED_SPY_GUY,                    // 0xCC
+    UNIT_UNUSED_ANTI_GUY,                   // 0xCD
+    UNIT_UNUSED_BZZAP,                      // 0xCE
+    UNIT_UNUSED_MINI_BZZAP,                 // 0xCF
+    UNIT_UNUSED_UFO,                        // 0xD0
+    UNIT_UNUSED_PENNINGTON,                 // 0xD1
+    UNIT_UNUSED_FIGHTER,                    // 0xD2
+    UNIT_UNUSED_ZESS_T,                     // 0xD3
+    UNIT_UNUSED_MASTER,                     // 0xD4
+    UNIT_UNUSED_REPORTER,                   // 0xD5
+    UNIT_UNUSED_HOTDOG_MASTER,              // 0xD6
+    UNIT_UNUSED_FLAVIO,                     // 0xD7
+    UNIT_UNUSED_TREE,                       // 0xD8
+    UNIT_UNUSED_SWITCH,                     // 0xD9
+    UNIT_UNUSED_TESTNPC,                    // 0xDA
+    UNIT_BOMB_SQUAD_BOMB,                   // 0xDB
+    UNIT_SYSTEM,                            // 0xDC
+    UNIT_PROLOGUE_GOOMBELLA,                // 0xDD
+    UNIT_MARIO,                             // 0xDE
+    UNIT_SHELL_SHIELD,                      // 0xDF
+    UNIT_GOOMBELLA,                         // 0xE0
+#define TYPE_PARTNER_MIN UNIT_GOOMBELLA     // 0xE0
+    UNIT_KOOPS,                             // 0xE1
+    UNIT_YOSHI,                             // 0xE2
+    UNIT_FLURRIE,                           // 0xE3
+    UNIT_VIVIAN,                            // 0xE4
+    UNIT_BOBBERY,                           // 0xE5
+    UNIT_MS_MOWZ,                           // 0xE6
+#define TYPE_PARTNER_MAX (UNIT_MS_MOWZ + 1) // 0xE7
+    UNIT_MAX,                               // 0xE7
 } BattleUnitType;
 
+// BattleDataEntry.tag: slots of a unit's data table, named after the (original) events the units put there;
+// avoid events use tag = damage code + 6 (codes 0x1F..0x28, except Lucky 0x26 -> 45 and Dodgy 0x27 -> 44),
+// counter-damage overrides tag = code - 19
+// (codes 0x2B..0x37). Tags 68/69 hold weapons, not events.
+typedef enum BattleDataTag {
+    UNIT_DATA_TECH_MENU_FUNC = 1,                       // __makeTechMenuFunc
+    UNIT_DATA_WAKEUP_EVENT = 2,                         // wakeup_event: recovery from the flipped state
+    UNIT_DATA_HIDE_EVENT = 3,                           // vivian_hide_event: Veil / hidden-state action
+    UNIT_DATA_CHANGE_PARTY_SPAWN_INIT_EVENT = 4,        // change_party_spawn_init_event: run when the partner is swapped in
+    UNIT_DATA_APPEAL_EVENT = 5,                         // *_appeal_event
+    UNIT_DATA_ATTACK_AUDIENCE = 6,                      // attack_audience_event
+    UNIT_DATA_ATTACK_READY_EVENT = 7,                   // subset_attack_ready_jump_event: run before an attack, after the cost
+    UNIT_DATA_STATUS_RECOVERY_EVENT = 8,                // replaces subsetevt_status_recovery's default
+    UNIT_DATA_DAMAGE_SUB_EVENT = 9,                     // *damage_sub_event
+    UNIT_DATA_DAMAGE_POSE_EVENT = 10,                   // gesso_arm_damage_pose_event: run as a sibling right after a damage pose is set
+    UNIT_DATA_DAMAGE_FIRE_EXPLOSION_EVENT = 11,         // damage_fire_explosion_event
+    UNIT_DATA_DAMAGE_EXPLOSION_EVENT = 12,              // explosion damage (damage code 0x19; 11 is the fire one)
+    UNIT_DATA_DAMAGE_TURN_EVENT = 13,                   // dmg_turn_event
+    UNIT_DATA_DAMAGE_FALL_EVENT = 14,                   // dmg_fall_event
+    UNIT_DATA_FAKE_DEAD_EVENT = 15,                     // fake_dead_event
+    UNIT_DATA_DAMAGE_SHELL_ATTACK_EVENT = 16,           // subsetevt_damage override for ATTACKPATTERN_SHELL_ATTACK
+    UNIT_DATA_DAMAGE_ROTATE_SHELL_ATTACK_EVENT = 17,    // ... for the rotating shell attack pattern
+    UNIT_DATA_DAMAGE_KAITEN_HAMMER_EVENT = 18,          // damage_event_kaiten_hammer
+    UNIT_DATA_DAMAGE_KAITEN_HAMMER_INVOLVED_EVENT = 19, // ... for units caught by the spinning hammer
+    UNIT_DATA_DAMAGE_BINTA_L_EVENT = 20,                // ... for the slap patterns (left, right, last left, last right)
+    UNIT_DATA_DAMAGE_BINTA_R_EVENT = 21,
+    UNIT_DATA_DAMAGE_BINTA_L_LAST_EVENT = 22,
+    UNIT_DATA_DAMAGE_BINTA_R_LAST_EVENT = 23,
+    UNIT_DATA_COUNTER_TOP_SPIKY_EVENT = 24,          // counter damage of kind top_spiky (damage code 0x2B)
+    UNIT_DATA_COUNTER_PREEMPTIVE_SPIKY_EVENT = 25,   // counter damage of kind preemptive_spiky (damage code 0x2C)
+    UNIT_DATA_COUNTER_FRONT_SPIKY_EVENT = 26,        // counter damage of kind front_spiky (damage code 0x2D)
+    UNIT_DATA_COUNTER_FIERY_EVENT = 27,              // counter damage of kind fiery (damage code 0x2E)
+    UNIT_DATA_COUNTER_ICY_EVENT = 28,                // counter damage of kind icy (damage code 0x2F)
+    UNIT_DATA_COUNTER_ELECTRIC_EVENT = 29,           // counter damage of kind electric (damage code 0x30)
+    UNIT_DATA_COUNTER_EXPLOSIVE_EVENT = 30,          // counter damage of kind explosive (damage code 0x31)
+    UNIT_DATA_COUNTER_VOLATILE_EXPLOSIVE_EVENT = 31, // counter damage of kind volatile_explosive (damage code 0x32)
+    UNIT_DATA_COUNTER_POISON_EVENT = 32,             // counter damage of kind poison (damage code 0x33)
+    UNIT_DATA_COUNTER_ELECTRIFIED_EVENT = 33,        // counter damage of kind electrified (damage code 0x34)
+    UNIT_DATA_COUNTER_PAYBACK_EVENT = 34,            // counter damage of kind payback (damage code 0x35)
+    UNIT_DATA_COUNTER_HOLD_FAST_EVENT = 35,          // counter damage of kind hold_fast (damage code 0x36)
+    UNIT_DATA_COUNTER_SUPERGUARD_EVENT = 36,         // counter damage of kind superguard (damage code 0x37)
+    UNIT_DATA_AVOID_THORN_HEAD_EVENT = 37,           // dmg_avoid_counter_thorn_head_event
+    UNIT_DATA_AVOID_THORN_FRONT_EVENT = 38,          // dmg_avoid_counter_thorn_front_event
+    UNIT_DATA_AVOID_THORN_EVENT = 39,                // dmg_avoid_counter_thorn_event
+    UNIT_DATA_AVOID_FIRE_EVENT = 40,                 // avoid_fire_event
+    UNIT_DATA_AVOID_ICE_EVENT = 41,                  // counter_event: icy contact avoided (damage code 0x23)
+    UNIT_DATA_AVOID_ELECTRIC_EVENT = 42,             // counter_event: electric contact avoided (0x24)
+    UNIT_DATA_AVOID_POISON_EVENT = 43,               // counter_event: poison contact avoided (0x25)
+    UNIT_DATA_AVOID_DODGY_EVENT = 44,                // Dodgy avoid (0x27)
+    UNIT_DATA_AVOID_LUCKY_EVENT = 45,                // Lucky avoid (0x26)
+    UNIT_DATA_AVOID_MISS_EVENT = 46,                 // avoid_miss_event; looked up for damage code 0x28
+    UNIT_DATA_AVOID_COUNTER_EVENT = 47,              // btldefaultevt_avoid_counter
+    UNIT_DATA_FIRST_ATTACK_POS_EVENT = 48,           // dmg_first_attack_pos; most units list btldefaultevt_Dummy
+    UNIT_DATA_DEAD_EVENT = 49,                       // dead_event
+    UNIT_DATA_PRE_DEAD_EVENT = 50,                   // dead_subevent: run before the KO spin/smoke/drops
+    UNIT_DATA_EMERGENCY_REVIVAL_EVENT = 51,          // *_emergency_revival_event
+    UNIT_DATA_EXPLOSION_EVENT = 52,                  // explosion_event
+    UNIT_DATA_EXPLOSION_EVENT_BOMZOU = 53,           // explosion_event of bomzou, queued with btlevtcmd_AfterReactionEntry
+    UNIT_DATA_SWALLOW_BODY_EVENT = 54,               // damage_swallow_body
+    UNIT_DATA_DAMAGE_SWALLOW_FAILED_EVENT = 55,      // ... for the swallow patterns (failed, spew, shot)
+    UNIT_DATA_DAMAGE_SWALLOW_SPEW_EVENT = 56,
+    UNIT_DATA_DAMAGE_SWALLOW_SHOT_EVENT = 57,
+    UNIT_DATA_BLOW_DEAD_EVENT = 58,        // blow_dead_event
+    UNIT_DATA_KOURA_OPEN_EVENT = 59,       // koura_open
+    UNIT_DATA_KOURA_CLOSE_EVENT = 60,      // koura_close
+    UNIT_DATA_POSE_TABLE_RESET_EVENT = 61, // pose_tbl_reset
+    UNIT_DATA_DESTROY_EVENT = 62,          // destroy_event
+    UNIT_DATA_BATTLE_END_EVENT = 63,       // battle_end_event
+    UNIT_DATA_WIN_REACTION_EVENT = 64,     // *_win_reaction
+    UNIT_DATA_RIDE_ENTRY_EVENT = 65,       // mario_ride_btl_entry_event
+    UNIT_DATA_BATTLE_END_HIDE_EVENT = 66,  // sanders_battle_end_event: replaces hiding the unit at battle end
+    UNIT_DATA_REVIVE_EVENT = 67,           // nokotarou_revive_event: partner revival after the Life Shroom display
+    UNIT_DATA_LECTURE_JUMP_WEAPON = 68,    // _lec_weapon_jump: a weapon, not an event
+    UNIT_DATA_LECTURE_HAMMER_WEAPON = 69,  // _lec_weapon_hammer: a weapon, not an event
+    UNIT_DATA_LECTURE_END_EVENT = 70,      // lecture_end_event
+    UNIT_DATA_WEAPON_BREAK_EVENT = 71,     // cortez_weapon_break_event (Cortez family)
+} BattleDataTag;
+
 typedef struct BattleDataEntry {
-    s32 tag;    // 0x0, lookup key for BtlUnit_GetData, 0 ends the table
+    s32 tag;    // 0x0
     void* data; // 0x4
 } BattleDataEntry;
 
+// BattleUnitDefenseAttr.defenseAttrs: what a hit of that element does (BattleCalculateDamage)
+typedef enum BattleDefenseAttr {
+    DEFENSE_ATTR_NONE,
+    DEFENSE_ATTR_WEAK,               // +1 damage
+    DEFENSE_ATTR_IMMUNE,             // no damage
+    DEFENSE_ATTR_ABSORB,             // defense ignored, the damage heals instead
+    DEFENSE_ATTR_IMMUNE_EXCEPT_GULP, // no damage unless the damage flags have DAMAGE_RESULT_GULP
+} BattleDefenseAttr;
+
 typedef struct BattleUnitDefense {
-    s8 defenses[5]; // 0x0
+    s8 defenses[5]; // 0x0, indexed by BattleWeaponElement
 } BattleUnitDefense;
 
 typedef struct BattleUnitDefenseAttr {
-    s8 defenseAttrs[5]; // 0x0
+    s8 defenseAttrs[5]; // 0x0, BattleDefenseAttr, indexed by BattleWeaponElement
 } BattleUnitDefenseAttr;
 
 typedef struct StatusVulnerability {
@@ -412,83 +509,110 @@ typedef struct StatusVulnerability {
     u8 ohko;        // 0x15
 } StatusVulnerability;
 
+// PoseTableEntry.poseType: descriptive names from the code that selects each type (battle_disp, the default
+// events, BtlUnit_SetAnimType); unnamed types (32-34, 53-55) are selected by no code found (only Mario's table lists 32).
+typedef enum BattlePoseType {
+    POSE_TYPE_ALLERGIC = 0, // 0..27: the StatusEffectType of the unit's priority status (_GetStatusPoseType)
+    POSE_TYPE_SLEEP = 1,
+    POSE_TYPE_STOP = 2,
+    POSE_TYPE_DIZZY = 3,
+    POSE_TYPE_POISON = 4,
+    POSE_TYPE_CONFUSE = 5,
+    POSE_TYPE_ELECTRIC = 6,
+    POSE_TYPE_DODGY = 7,
+    POSE_TYPE_BURN = 8,
+    POSE_TYPE_FREEZE = 9,
+    POSE_TYPE_HUGE = 10,
+    POSE_TYPE_TINY = 11,
+    POSE_TYPE_ATTACK_UP = 12,
+    POSE_TYPE_ATTACK_DOWN = 13,
+    POSE_TYPE_DEFENSE_UP = 14,
+    POSE_TYPE_DEFENSE_DOWN = 15,
+    POSE_TYPE_CHARGE = 16,
+    POSE_TYPE_FLIPPED = 17,
+    POSE_TYPE_INVISIBLE = 18,
+    POSE_TYPE_FAST = 19,
+    POSE_TYPE_SLOW = 20,
+    POSE_TYPE_PAYBACK = 21,
+    POSE_TYPE_HOLD_FAST = 22,
+    POSE_TYPE_HP_REGEN = 23,
+    POSE_TYPE_FP_REGEN = 24,
+    POSE_TYPE_FRIGHT = 25,
+    POSE_TYPE_GALE_FORCE = 26,
+    POSE_TYPE_KO = 27,
+    POSE_TYPE_NORMAL = 28,               // no priority status; fallback of 0..28
+    POSE_TYPE_DAMAGE_FIRE = 29,          // fire/explosion hit
+    POSE_TYPE_DAMAGE_FIRE_2_UNUSED = 30, // handled like 29 by BtlUnit_SetAnimType; nothing selects it
+    POSE_TYPE_DAMAGE_GUARDED = 31,       // guarded hit
+    POSE_TYPE_DAMAGE_STATUS = 35,        // status-only hit
+    POSE_TYPE_DAMAGE_TOP_SPIKY = 36,     // top-spike counter damage
+    POSE_TYPE_DAMAGE_DRAINED = 37,       // set on the target of a Fuzzy's drain (Mario/partner tables)
+    POSE_TYPE_DAMAGE_SURPRISED = 38,     // surprise damage
+    POSE_TYPE_DAMAGE = 39,               // general damage; fallback of 29..39
+    POSE_TYPE_WALK = 40,
+    POSE_TYPE_RUN_HOME = 41, // running back to the home position
+    POSE_TYPE_RUN = 42,      // also the battle-exit run
+    POSE_TYPE_NEUTRAL = 43,  // staging pose (appeal entry, curtain, many attacks)
+    POSE_TYPE_JUMP = 44,
+    POSE_TYPE_DEFEND = 45,
+    POSE_TYPE_BODYGUARD = 46,
+    POSE_TYPE_AVOID_SPIKY_SIDE = 47, // dodging a side spike counter (Pokey)
+    POSE_TYPE_AVOID_DODGY = 48,
+    POSE_TYPE_AVOID_COUNTER = 49, // counter avoided / superguard
+    POSE_TYPE_ATTACK = 50,
+    POSE_TYPE_ATTACK_2 = 51, // second attack pose (switched to partway through an attack)
+    POSE_TYPE_ITEM = 52,     // receives or uses an item
+    POSE_TYPE_DANGER = 56,
+    POSE_TYPE_PERIL = 57,
+#if VERSION <= VERSION_DEMO_JP     // the early demos have no kissed poses
+    POSE_TYPE_ESCAPE_STUMBLE = 58, // failed escape
+    POSE_TYPE_ESCAPE_RECOVER = 59,
+    POSE_TYPE_HAPPY_HEART = 60,
+    POSE_TYPE_HAPPY_FLOWER = 61,
+    POSE_TYPE_ZERO_GRAVITY = 62, // cannot act in zero gravity
+    POSE_TYPE_TALK = 63,
+    POSE_TYPE_APPEAL = 64,
+    POSE_TYPE_COMMAND = 65, // command selection
+    POSE_TYPE_SHELL_SHIELD_OPEN = 66,
+    POSE_TYPE_ACTION = 67, // fallback of 40..67
+    POSE_TYPE_MAX = 68,    // types are below this; a larger table entry ends the search
+#else
+    POSE_TYPE_KISSED_CHRISTINE = 58,  // Goombella's kiss
+    POSE_TYPE_KISSED_CHUCHURINA = 59, // Ms. Mowz's kiss
+    POSE_TYPE_ESCAPE_STUMBLE = 60,    // failed escape
+    POSE_TYPE_ESCAPE_RECOVER = 61,
+    POSE_TYPE_HAPPY_HEART = 62,
+    POSE_TYPE_HAPPY_FLOWER = 63,
+    POSE_TYPE_ZERO_GRAVITY = 64, // cannot act in zero gravity
+    POSE_TYPE_TALK = 65,
+    POSE_TYPE_APPEAL = 66,
+    POSE_TYPE_COMMAND = 67, // command selection
+    POSE_TYPE_SHELL_SHIELD_OPEN = 68,
+    POSE_TYPE_ACTION = 69, // fallback of 40..69
+    POSE_TYPE_MAX = 70,    // types are below this; a larger table entry ends the search
+#endif
+} BattlePoseType;
+
 typedef struct PoseTableEntry {
-    s32 poseType;         // 0x0
+    s32 poseType;         // 0x0, BattlePoseType
     const char* poseName; // 0x4
 } PoseTableEntry;
 
-// PoseTableEntry.poseType. A table is scanned in order for the requested type or its group's fallback (the first
-// match wins), up to the first entry >= BTL_POSE_MAX: status poses up to 28 fall back to BTL_POSE_NORMAL, hurt
-// poses 29-39 to BTL_POSE_DAMAGE, action poses 40-69 to BTL_POSE_STAY_DEFAULT (BtlUnit_GetPoseNameFromType).
-// Types up to 28 are StatusEffectType ids. Retail added two poses at 58 and 59 (kissed by Goombella's and
-// Ms. Mowz's kiss moves), so every pose from 60 up is 2 lower in the demo.
-typedef enum BattlePoseType {
-    BTL_POSE_NORMAL = 28, // no status; fallback for the status poses
-    BTL_POSE_DAMAGE = 39, // generic hurt; fallback for 29-39
-    BTL_POSE_WALK = 40,
-    BTL_POSE_RUN = 42,
-    BTL_POSE_STAY = 43,     // unit->stayPose
-    BTL_POSE_DEFEND = 45,   // the Defend command
-    BTL_POSE_ITEM_USE = 52, // holding up an item
-    BTL_POSE_DANGER = 56,   // low HP (status flag 0x10000000)
-    BTL_POSE_PERIL = 57,    // very low HP (status flag 0x20000000)
-#if VERSION <= VERSION_DEMO_JP
-    BTL_POSE_ESCAPE_FAIL = 58, // failed Run Away: tumble
-#else
-    BTL_POSE_KISSED_CHRISTINE = 58, // target of Goombella's kiss move
-    BTL_POSE_KISSED_CHUCHURINA,     // target of Ms. Mowz's kiss move
-    BTL_POSE_ESCAPE_FAIL,           // failed Run Away: tumble
-#endif
-    BTL_POSE_ESCAPE_FAIL_END, // failed Run Away: aftermath
-    BTL_POSE_HAPPY_HEART,     // Happy Heart restores HP
-    BTL_POSE_HAPPY_FLOWER,    // Happy Flower restores FP
-    BTL_POSE_ZERO_GRAVITY,    // can't move in zero gravity
-    BTL_POSE_TALK,            // unit->talkPose
-    BTL_POSE_APPEAL,          // appealing to the audience
-    BTL_POSE_COMMAND_WAIT,    // waiting at the command menu
-    BTL_POSE_SHELL_SHIELD,    // Koops' shell shield (unit_koura)
-    BTL_POSE_STAY_DEFAULT,    // standing; fallback for the action poses
-    BTL_POSE_MAX,             // end of the pose type range
-} BattlePoseType;
-
-// BattleUnitPart.animFlags (battle_disp.c; scripts set them through btlevtcmd_AnimeFlagOnOff).
-typedef enum BattlePartAnimFlags {
-    PART_ANIM_CHANGE = 0x1,        // pose change pending: btlDispMain starts the new pose next frame
-    PART_ANIM_MANUAL_POSE = 0x2,   // the pose was set by name (btlDispChangeAnime), not picked from the pose table
-    PART_ANIM_PERA = 0x4,          // a paper effect animation runs (btlDispChangePeraAnime): no translucency change
-    PART_ANIM_HURT_POSE = 0x8,     // a hurt pose (29-39) set by name: still gets the status draw type
-    PART_ANIM_BLACKEN = 0x10,      // drawn black (hurt poses 29 and 30)
-    PART_ANIM_BLACKEN_EVT = 0x20,  // drawn black, set by scripts
-    PART_ANIM_XLU = 0x40,          // the pose is drawn translucent
-    PART_ANIM_COMMAND_WAIT = 0x80, // the command-wait pose (BtlUnit_SetCommandAnimPose): still gets the status draw type
-    PART_ANIM_NO_DISP = 0x100,     // not drawn (Ms. Mowz's screen copy, set by scripts)
-    PART_ANIM_RESTART = 0x200,     // set by scripts; see the BUG note in btlDispMain
-} BattlePartAnimFlags;
-
-// BattleUnit.attackEventFlags: how battle_seq's act step runs the unit's attackEventCode (set by the command menu).
-typedef enum BattleAttackEventFlags {
-    ATTACK_EVENT_KEEP_STATUS_WINDOW = 0x1, // the status window stays up during the act
-    ATTACK_EVENT_IGNORE_STATUS = 0x2,      // runs even when sleep, stop, freeze or KO would block the act
-    ATTACK_EVENT_SHELL_FOLLOWS = 0x4,      // a Shell Shield in front keeps tracking the unit while the event runs
-    ATTACK_EVENT_ZERO_GRAVITY_OK = 0x8,    // allowed in zero gravity
-    ATTACK_EVENT_ALWAYS_RUN = 0x10,        // runs whatever the status or gravity (nothing if there is no event)
-} BattleAttackEventFlags;
-
 typedef struct BattleUnitKindPart {
-    s32 partNum;                                   // 0x0
-    const char* partName;                          // 0x4
-    const char* modelName;                         // 0x8
-    Vec positionOffset;                            // 0xC
-    Vec hitBaseOffset;                             // 0x18
-    Vec hitCursorBaseOffset;                       // 0x24
-    s16 shadowSize;                                // 0x30, -> BattleUnitPart.shadowSize
-    s16 hitHeight;                                 // 0x32, -> BattleUnitPart.hitHeight
-    s16 baseAlpha;                                 // 0x34
-    BattleUnitDefense* defense;                    // 0x38
-    BattleUnitDefenseAttr* defenseAttr;            // 0x3C
-    PartsAttribute_Flags attributes;               // 0x40
-    PartsCounterAttribute_Flags counterAttributes; // 0x44
-    PoseTableEntry* poseTable;                     // 0x48
+    s32 partNum;                                   // 0x0, part id (BtlUnit_GetPartsPtr); kMainPart's is the talkPartId
+    const char* partName;                          // 0x4, -> BattleUnitPart.partName
+    const char* modelName;                         // 0x8, model for animPoseEntry (battle_disp); NULL = no model
+    Vec positionOffset;                            // 0xC, -> BattleUnitPart.positionOffset
+    Vec hitBaseOffset;                             // 0x18, -> BattleUnitPart.hitBaseOffset
+    Vec hitCursorBaseOffset;                       // 0x24, -> BattleUnitPart.hitCursorBaseOffset
+    s16 shadowSize;                                // 0x30, -> BattleWorkUnitPart.shadowSize
+    s16 hitHeight;                                 // 0x32, -> BattleWorkUnitPart.hitHeight, never read
+    s16 baseAlpha;                                 // 0x34, alpha each frame, before Invisible and the part colour
+    BattleUnitDefense* defense;                    // 0x38, -> BattleUnitPart.defense
+    BattleUnitDefenseAttr* defenseAttr;            // 0x3C, -> BattleUnitPart.defenseAttr
+    PartsAttribute_Flags attributes;               // 0x40, -> BattleUnitPart.attributes
+    PartsCounterAttribute_Flags counterAttributes; // 0x44, -> BattleUnitPart.counterAttributes
+    PoseTableEntry* poseTable;                     // 0x48, -> BattleUnitPart.poseTable
 } BattleUnitKindPart;
 
 // movement sound loop state (BtlUnit_SetSeMode / _MoveSoundControlCore)
@@ -502,7 +626,7 @@ typedef struct BecSndWork {
     s16 period1;       // 0x10
     s16 timer;         // 0x12
     s16 count;         // 0x14
-    s32 sfxId;         // 0x18
+    u32 sfxId;         // 0x18 (u32: its -1 tests are unsigned compares in the retail code)
 } BecSndWork;
 
 // one movement sound set (BtlUnit_LoadSeMode)
@@ -527,8 +651,16 @@ typedef struct BtlPoseSoundData {
     s32 (*callback)(struct BattleUnit*, struct BtlPoseSoundData*, void*); // 0x8
     const char* sfxName;                                                  // 0xC
     s16 pitch;                                                            // 0x10
-    u16 flags;                                                            // 0x12
+    u16 flags;                                                            // 0x12, BtlPoseSoundFlags
 } BtlPoseSoundData;
+
+// BtlPoseSoundData.flags and the units' PoseSoundTiming.flags (data_tables.h), read by BtlUnit_ControlPoseSoundMain.
+// Every table entry in the game sets POSE_SOUND_FLAG_PHASE_VOLUME.
+typedef enum BtlPoseSoundFlags {
+    // Set the sound to full volume, then to 70% when the owner's attackPhase is not the current battle phase.
+    // Clear: the sound keeps its default volume.
+    POSE_SOUND_FLAG_PHASE_VOLUME = 0x1,
+} BtlPoseSoundFlags;
 
 typedef struct BtlPartPoseSound {
     BtlPoseSoundData* table; // 0x0
@@ -539,85 +671,114 @@ typedef struct BtlPartPoseSound {
     u8 flag;                 // 0x14
 } BtlPartPoseSound;
 
+// BattleUnitPart.look: the paper look applied through animPoseSetEffect "p_b_st". Only
+// NONE, NORMAL, DODGY and XLU are ever set; the others are named by the effect animation battle_disp.c plays for them.
+enum {
+    PART_LOOK_NONE = 0,
+    PART_LOOK_NORMAL = 1,
+    PART_LOOK_PM_C_UNUSED = 2,  // PM_C_1A
+    PART_LOOK_PM_F_UNUSED = 3,  // PM_F_1A
+    PART_LOOK_DODGY = 4,        // PM_Y_1B, two-frame pattern, STATUS_DODGY
+    PART_LOOK_PM_C2_UNUSED = 5, // PM_C_1A + PM_C_1B
+    PART_LOOK_PM_F2_UNUSED = 6, // PM_F_2
+    PART_LOOK_XLU = 7,          // PM_Y_1A, invisible or part color not fully opaque
+};
+
+#define PART_BLUR_ENTRY_DRAW 0x1 // BattleWorkUnitPartBlurEntry.flags: the part had kMotionBlur that frame, the copy is drawn
+
 typedef struct BattleWorkUnitPartBlurEntry {
-    s32 flags;            // 0x0
+    s32 flags;            // 0x0, PART_BLUR_ENTRY_DRAW
     Mtx orientation;      // 0x4
     f32 rotation;         // 0x34
     GXColor base;         // 0x38
     GXColor blurColor[2]; // 0x3C, newest / oldest after-image tint (copied from BattleWorkUnitPartBlur.color)
 } BattleWorkUnitPartBlurEntry;
 
+// BattleWorkUnitPartBlur.flags: nothing sets it; battle_disp would then keep only every other frame
+#define PART_BLUR_SKIP_FRAME_UNUSED 0x1
+
 typedef struct BattleWorkUnitPartBlur {
-    s32 flags;                            // 0x0
+    s32 flags;                            // 0x0, PART_BLUR_SKIP_FRAME_UNUSED
     GXColor color[2];                     // 0x4, after-image tint, newest / oldest (btlevtcmd_SetPartsBlur)
     BattleWorkUnitPartBlurEntry work[10]; // 0xC
 } BattleWorkUnitPartBlur;
 
-typedef struct BattleUnitPart {
-    struct BattleUnitPart* nextPart;    // 0x0
-    BattleUnitKindPart* kindPartParams; // 0x4
-    const char* partName;               // 0x8
-    Vec homePosition;                   // 0xC
-    Vec position;                       // 0x18
-    Vec positionOffset;                 // 0x24
-    Vec displayOffset;                  // 0x30
-    Vec baseRotation;                   // 0x3C
-    Vec rotation;                       // 0x48
-    Vec rotationOffset;                 // 0x54
-    Vec scale;                          // 0x60
-    Vec baseScale;                      // 0x6C
-    f32 shadowScale;                    // 0x78, extra shadow size multiplier
-    Vec moveStartPos;                   // 0x7C
-    Vec moveCurrentPos;                 // 0x88
-    Vec moveTargetPos;                  // 0x94
-    s32 moveTotalFrames;                // 0xA0, frame count of the current parts move/jump
-    f32 moveSpeedXZ;                    // 0xA4
-    f32 fallAccel;                      // 0xA8
-    f32 moveSpeedY;                     // 0xAC, jump vertical speed, minus fallAccel per frame
-    f32 moveAngle;                      // 0xB0, XZ angle to the move target
-    f32 moveDistance;                   // 0xB4, XZ distance to the move target (then the per-frame remainder)
-    f32 moveFrame;                      // 0xB8, current frame of an interpolated parts move
-    s8 moveDirection;                   // 0xBC
-    s8 faceDirection;                   // 0xBD
-    BecSndWork moveSnd;                 // 0xC0, move-sound loop (BtlUnit_LoadSeMode / _MoveSoundControlCore)
-    u8 reserved_DC[0xF8 - 0xDC];        // 0xDC, never accessed
-    BtlPoseSoundTable moveSndTable;     // 0xF8, btlevtcmd_SetPartsJump/Run/Walk/DiveSound
-    union {
-        EvtWord work[16];  // 0x130, part work words (btlevtcmd_SetPartsWork / GetPartsWork): numbers and table pointers
-        void* workPtr[16]; // 0x130, the same words when they hold a pointer
-    };
-    Vec hitBaseOffset;                                 // 0x170, guess
-    Vec hitOffset;                                     // 0x17C
-    Vec hitCursorBaseOffset;                           // 0x188, guess
-    Vec hitCursorOffset;                               // 0x194
-    s16 hitOffsetX;                                    // 0x1A0, target-cursor X offset (btl_hitoffsetx)
-    s16 shadowSize;                                    // 0x1A2, from kind part 0x30; scales shadowEntry
-    s16 hitHeight;                                     // 0x1A4, copied from BattleUnitKindPart.hitHeight; height of the part's box (shadowSize wide) in PAL battle_ufo, its only reader
-    u16 gravityTimer;                                  // 0x1A6, frame counter for the gravity bob offset
-    u16 floatTimer;                                    // 0x1A8, frame counter for the floating offset
-    PartsAttribute_Flags attributes;                   // 0x1AC
-    PartsCounterAttribute_Flags counterAttributes;     // 0x1B0
-    BattleUnitDefense* defense;                        // 0x1B4
-    BattleUnitDefenseAttr* defenseAttr;                // 0x1B8
-    PoseTableEntry* poseTable;                         // 0x1BC
-    s32 poseId;                                        // 0x1C0
-    char poseName[0x40];                               // 0x1C4, current pose name (strcmp'd in unit scripts)
-    u32 animFlags;                                     // 0x204, BattlePartAnimFlags
-    f32 animSpeed;                                     // 0x208, init 1.0
-    f32 animSpeed2;                                    // 0x20C, init 1.0
-    void (*dispCallback)(struct BattleUnitPart*, s32); // 0x210, called before (0) and after (1) drawing
-    u8 poseState;                                      // 0x214
-    u8 poseType;                                       // 0x215
-    u16 poseTimer;                                     // 0x216
-    GXColor drawColor;                                 // 0x218, material colour set per frame from dispColor
-    BattleWorkUnitPartBlur blurWork;                   // 0x21C
-    BtlPartPoseSound poseSound;                        // 0x4D0, btlevtcmd_AnimeSetPoseSoundTable
-    s32 handle;                                        // 0x4E8, -1 at entry, reset to -1 on unit delete; never set otherwise in C
-    struct BattleUnit* owner;                          // 0x4EC
-    GXColor color;                                     // 0x4F0
-    GXColor dispColor;                                 // 0x4F4, color with alpha = baseAlpha * color.a
-    f32 dispZOffset;                                   // 0x4F8, added to z for the display sort
-    s8 rotationOrder;                                  // 0x4FC, selects the rotation matrix concat order
+// BattleUnitPart.animFlags (battle_disp's per-frame pose update, btlDispChangeAnime, btlevtcmd_AnimeFlagOnOff)
+typedef enum BattlePartAnimFlags {
+    PART_ANIM_CHANGED = (1 << 0),      // 0x1, pose changed: applied (animPoseSetAnim) on the next display update
+    PART_ANIM_EVENT_POSE = (1 << 1),   // 0x2, pose set by name or type; clear = the pose of the unit's status
+    PART_ANIM_PERA = (1 << 2),         // 0x4, paper effect animation (btlDispChangePeraAnime)
+    PART_ANIM_DAMAGE_POSE = (1 << 3),  // 0x8, damage pose (types 29..39): the Invisible / Dodgy look still applies
+    PART_ANIM_BURNT = (1 << 4),        // 0x10, fire damage pose: drawn black
+    PART_ANIM_INKED = (1 << 5),        // 0x20, hit by ink (ATTACKPATTERN_IKASUMI): drawn black
+    PART_ANIM_XLU = (1 << 6),          // 0x40, drawn translucent
+    PART_ANIM_COMMAND_POSE = (1 << 7), // 0x80, command-selection pose (BtlUnit_SetCommandAnimPose)
+    PART_ANIM_NO_DISP = (1 << 8),      // 0x100, not drawn
+    PART_ANIM_RESTART = (1 << 9),      // 0x200, restart the animation when the pose is applied
+} BattlePartAnimFlags;
+
+typedef struct BattleWorkUnitPart {
+    struct BattleWorkUnitPart* nextPart;                   // 0x0, next part of the same unit, NULL after the last
+    BattleUnitKindPart* kindPartParams;                    // 0x4, the unit kind's data for this part
+    const char* partName;                                  // 0x8, from kindPartParams
+    Vec homePosition;                                      // 0xC
+    Vec position;                                          // 0x18, own position (used for kAbsolutePosition parts)
+    Vec positionOffset;                                    // 0x24, offset from the unit position (x mirrored)
+    Vec displayOffset;                                     // 0x30, draw-only translation
+    Vec baseRotation;                                      // 0x3C, added to rotation when drawing
+    Vec rotation;                                          // 0x48, rotation in degrees
+    Vec rotationOffset;                                    // 0x54, rotation pivot
+    Vec mScale;                                            // 0x60, scale, times baseScale when drawing
+    Vec baseScale;                                         // 0x68, base scale
+    f32 shadowScale;                                       // 0x78, extra shadow size multiplier
+    Vec moveStartPos;                                      // 0x7C, start of a parts move/jump
+    Vec moveCurrentPos;                                    // 0x88, current point of a parts move/jump
+    Vec moveTargetPos;                                     // 0x94, target of a parts move/jump
+    s32 moveTotalFrames;                                   // 0xA0, frame count of the current parts move/jump
+    f32 moveSpeedXZ;                                       // 0xA4, horizontal speed per frame of a parts move
+    f32 fallAccel;                                         // 0xA8, jump gravity per frame
+    f32 moveSpeedY;                                        // 0xAC, jump vertical speed, minus fallAccel per frame
+    f32 moveAngle;                                         // 0xB0, XZ angle to the move target
+    f32 moveDistance;                                      // 0xB4, XZ distance to the move target (then the per-frame remainder)
+    f32 moveFrame;                                         // 0xB8, current frame of an interpolated parts move
+    s8 moveDirection;                                      // 0xBC, +1/-1 move direction; 0 = use faceDirection
+    s8 faceDirection;                                      // 0xBD, facing: >= 0 right, < 0 left
+    BecSndWork moveSnd;                                    // 0xC0, move-sound loop (BtlUnit_LoadSeMode / _MoveSoundControlCore)
+    u8 pad_DC[0xF8 - 0xDC];                                // 0xDC, never accessed
+    BtlPoseSoundTable moveSndTable;                        // 0xF8, btlevtcmd_SetPartsJump/Run/Walk/DiveSound
+    EvtWord work[16];                                      // 0x130, part work words (btlevtcmd_SetPartsWork / GetPartsWork): numbers and table pointers
+    Vec hitBaseOffset;                                     // 0x170, copied from the kind part's hitBaseOffset
+    Vec hitOffset;                                         // 0x17C, added after hitBaseOffset (BtlUnit_GetHitPos)
+    Vec hitCursorBaseOffset;                               // 0x188, copied from the kind part's hitCursorBaseOffset
+    Vec hitCursorOffset;                                   // 0x194, added to hitCursorBaseOffset for the target cursor
+    s16 hitOffsetX;                                        // 0x1A0, target-cursor X offset (btl_hitoffsetx)
+    s16 shadowSize;                                        // 0x1A2, from kind part 0x30; scales shadowEntry
+    s16 hitHeight;                                         // 0x1A4, copied from BattleUnitKindPart.hitHeight, never read
+    u16 gravityTimer;                                      // 0x1A6, frame counter for the gravity bob offset
+    u16 floatTimer;                                        // 0x1A8, frame counter for the floating offset
+    PartsAttribute_Flags attributes;                       // 0x1AC, PartsAttribute_Flags
+    PartsCounterAttribute_Flags counterAttributes;         // 0x1B0, PartsCounterAttribute_Flags: counters on contact
+    BattleUnitDefense* defense;                            // 0x1B4, defense per element
+    BattleUnitDefenseAttr* defenseAttr;                    // 0x1B8, BattleDefenseAttr per element
+    PoseTableEntry* poseTable;                             // 0x1BC, pose type -> anim name
+    s32 poseId;                                            // 0x1C0, animPose of the part, -1 = none
+    char poseName[0x40];                                   // 0x1C4, current pose name (strcmp'd in unit scripts)
+    u32 animFlags;                                         // 0x204, BattlePartAnimFlags
+    f32 animSpeed;                                         // 0x208, init 1.0
+    f32 animSpeed2;                                        // 0x20C, init 1.0
+    void (*dispCallback)(struct BattleWorkUnitPart*, s32); // 0x210, called before (0) and after (1) drawing
+    u8 poseState;                                          // 0x214, step of the look effect (_pose_*)
+    u8 look;                                               // 0x215, PART_LOOK_*
+    u16 poseTimer;                                         // 0x216, frames until the look effect's next step
+    GXColor drawColor;                                     // 0x218, material colour set per frame from dispColor
+    BattleWorkUnitPartBlur blurWork;                       // 0x21C, after-image work (btlevtcmd_SetPartsBlur)
+    BtlPartPoseSound poseSound;                            // 0x4D0, btlevtcmd_AnimeSetPoseSoundTable
+    s32 handle;                                            // 0x4E8, -1 at entry, reset to -1 on unit delete; never set otherwise in C
+    struct BattleUnit* owner;                              // 0x4EC, unit the part belongs to
+    GXColor color;                                         // 0x4F0, white at entry; alpha < 255 draws translucent
+    GXColor dispColor;                                     // 0x4F4, color with alpha = baseAlpha * color.a
+    f32 dispZOffset;                                       // 0x4F8, added to z for the display sort
+    s8 rotationOrder;                                      // 0x4FC, selects the rotation matrix concat order
 } BattleUnitPart;
 
 typedef struct BattleWorkUnitBadgesEquipped {
@@ -664,13 +825,13 @@ typedef struct BattleWorkUnitBadgesEquipped {
 } BattleWorkUnitBadgesEquipped;
 
 // BattleWorkHpGauge.flags
-enum BattleHpGaugeFlags {
-    HP_GAUGE_FADE_OUT = 0x1, // fades out over the last 20 visible frames (set by the last hit of an attack)
-};
+typedef enum HpGaugeFlags {
+    HP_GAUGE_FLAG_TIMED = (1 << 0), // 0x1, the gauge hides when visibleTimer runs out
+} HpGaugeFlags;
 
 typedef struct BattleWorkHpGauge {
     u16 mode;          // 0x0, gauge style; 1 = trailing bar
-    u16 flags;         // 0x2, BattleHpGaugeFlags
+    u16 flags;         // 0x2, HpGaugeFlags
     s16 drainTimer;    // 0x4, frames left of the bar animation
     s16 drainLength;   // 0x6, bar animation length (20, or 40 in mode 1)
     s16 visibleTimer;  // 0x8, frames the gauge stays up; fades out below 20
@@ -687,7 +848,6 @@ typedef struct ItemDropData {
     s16 dropWeight; // 0x6
 } ItemDropData;
 
-// note to self: +4 is near mUnk_HpGauge at 0x1FC
 typedef struct StChgInfo {
     s8 type;         // 0x0, -1 = free
     s8 strength;     // 0x1, status strength being announced
@@ -701,56 +861,75 @@ typedef struct BtlStatusCopy {
     u8 data[0x1E]; // BattleUnit status turns/strengths from sleepTurns, copied as one block
 } BtlStatusCopy;
 
+// BattleUnit.moveState: how the current action counts against the unit's moves (battle_seq.c, battle_seq_command.c).
+// Anything but NORMAL does not spend a move. Dip states step at act end (badgeWeapon_3KaiItem, badgeWeapon_2KaiItem).
+typedef enum BattleMoveState {
+    MOVE_STATE_NORMAL = 0,
+    MOVE_STATE_POSITION_CHANGE = 1, // btldefaultevt_ChangePosition
+    MOVE_STATE_QUICK_CHANGE = 3,    // partner change with BATTLE_BADGE_QUICK_CHANGE
+    MOVE_STATE_AUDIENCE_ATTACK = 4, // audience attack (X button, btlataudGetAttackEventPtr)
+    MOVE_STATE_TRIPLE_DIP_1 = 5,
+    MOVE_STATE_TRIPLE_DIP_2 = 6,
+    MOVE_STATE_TRIPLE_DIP_3 = 7,
+    MOVE_STATE_DOUBLE_DIP_1 = 8,
+    MOVE_STATE_DOUBLE_DIP_2 = 9,
+    MOVE_STATE_DONE = 10, // no moves left this turn
+} BattleMoveState;
+
+// BattleUnit.moveColorLv: battle_disp scales the unit's colour by it (moveColorLvDisp eases toward it)
+#define MOVE_COLOR_LV_FULL 0xFF // normal colour
+#define MOVE_COLOR_LV_DONE 0x60 // a player-side unit with no moves left this phase, shaded dark
+
 typedef struct BattleUnit {
-    s32 unitId;                               // 0x0
-    BattleUnitType initialKind;               // 0x4
-    BattleUnitType currentKind;               // 0x8
-    s8 alliance;                              // 0xC, 0 Mario's side, 1 the enemies, 2 stage objects
-    u8 level;                                 // 0xD
-    s8 groupSetupId;                          // 0xE
-    struct BattleUnitKind* kindParams;        // 0x10
-    BattleUnitPart* parts;                    // 0x14
-    BattleDataEntry* dataTable;               // 0x18
-    s32 flags;                                // 0x1C
-    s8 moveState;                             // 0x20
-    s8 maxMoveCount;                          // 0x21
-    s8 movesRemaining;                        // 0x22
-    s8 maxMovesThisTurn;                      // 0x23
-    s8 activeTurns;                           // 0x24
-    s8 swallowRate;                           // 0x25
-    s8 swallowAttribute;                      // 0x26
-    s32 movePriority;                         // 0x28
-    s32 attackPhase;                          // 0x2C, BattlePhase in which the unit acts
-    Vec homePosition;                         // 0x30
-    Vec position;                             // 0x3C
-    Vec positionOffset;                       // 0x48
-    Vec displayOffset;                        // 0x54
-    Vec baseRotation;                         // 0x60
-    Vec rotation;                             // 0x6C
-    Vec rotationOffset;                       // 0x78
-    Vec offsetCenter;                         // 0x84
-    Vec scale;                                // 0x90
-    Vec baseScale;                            // 0x9C
-    Vec togeOffset;                           // 0xA8
+    s32 unitId;                               // 0x0, slot in the battle unit table
+    BattleUnitType initialKind;               // 0x4, unit kind at entry
+    BattleUnitType currentKind;               // 0x8, unit kind now
+    s8 alliance;                              // 0xC, side (ALLIANCE_PLAYER, ...)
+    u8 level;                                 // 0xD, kind level; Mario/partners: Mario's (pouch)
+    s8 groupSetupId;                          // 0xE, index in the enemy group setup; -1 = none
+    struct BattleUnitKind* kindParams;        // 0x10, the unit kind's data
+    BattleUnitPart* parts;                    // 0x14, first part (list via nextPart)
+    BattleDataEntry* dataTable;               // 0x18, tagged scripts/data (BtlUnit_GetData)
+    s32 flags;                                // 0x1C, BATTLE_UNIT_FLAG_*
+    s8 moveState;                             // 0x20, BattleMoveState
+    s8 maxMoveCount;                          // 0x21, moves per turn; caps movesRemaining
+    s8 movesRemaining;                        // 0x22, moves left this turn
+    s8 maxMovesThisTurn;                      // 0x23, movesRemaining at the turn start
+    s8 activeTurns;                           // 0x24, +1 per turn; 0 once its moves run out
+    s8 swallowRate;                           // 0x25, chance Yoshi can swallow it (kind swallowChance)
+    s8 swallowAttribute;                      // 0x26, from the kind's swallowAttributes
+    s32 movePriority;                         // 0x28, turn order: turnOrder + irand(var) - var / 2
+    s32 attackPhase;                          // 0x2C, phase the unit acts in
+    Vec homePosition;                         // 0x30, position set at entry (BtlUnit_SetHomePos)
+    Vec position;                             // 0x3C, battle position (stage coordinates)
+    Vec positionOffset;                       // 0x48, set to the entry position; never read
+    Vec displayOffset;                        // 0x54, draw offset, added after rotation
+    Vec baseRotation;                         // 0x60, degrees, added to rotation when drawn
+    Vec rotation;                             // 0x6C, rotation in degrees (BtlUnit_SetRotate, 0..360)
+    Vec rotationOffset;                       // 0x78, pivot the unit rotates around
+    Vec offsetCenter;                         // 0x84, rotation centre (btlevtcmd)
+    Vec mScale;                               // 0x90, animated scale, times baseScale
+    Vec baseScale;                            // 0x9C, normal scale (BtlUnit_SetBaseScale)
+    Vec togeOffset;                           // 0xA8, speech bubble tail offset (GetTalkTogePos)
     Vec heldItemBaseOffset;                   // 0xB4, copied from BattleUnitKind.heldItemBaseOffset
-    Vec heldItemOffset;                       // 0xC0
-    s16 width;                                // 0xCC
-    s16 height;                               // 0xCE
-    s16 statusIconOffset[2];                  // 0xD0
-    s16 hpGaugeOffset[2];                     // 0xD4
-    Vec cutBaseOffset;                        // 0xD8
-    f32 cutWidth;                             // 0xE4
-    f32 cutHeight;                            // 0xE8
+    Vec heldItemOffset;                       // 0xC0, draw offset of the held item
+    s16 width;                                // 0xCC, from the kind (BtlUnit_GetWidth)
+    s16 height;                               // 0xCE, from the kind; BtlUnit_SetHeight changes it
+    s16 statusIconOffset[2];                  // 0xD0, status icon x/y offset
+    s16 hpGaugeOffset[2];                     // 0xD4, HP gauge x/y offset
+    Vec cutBaseOffset;                        // 0xD8, sac_scissor cut box offset
+    f32 cutWidth;                             // 0xE4, sac_scissor cut box width
+    f32 cutHeight;                            // 0xE8, sac_scissor cut box height
     Vec bintaHitOffset;                       // 0xEC, Love Slap
     Vec kissHitOffset;                        // 0xF8, Lip Lock
-    BattleUnitAttribute_Flags attributeFlags; // 0x104
-    s16 maxHp;                                // 0x108
-    s16 baseMaxHp;                            // 0x10A
+    BattleUnitAttribute_Flags attributeFlags; // 0x104, from the kind's attributeFlags
+    s16 maxHp;                                // 0x108, baseMaxHp + 5 per HP Plus (BtlUnit_ReviseHpFp)
+    s16 baseMaxHp;                            // 0x10A, max HP before badges (kind or pouch)
     s16 currentHp;                            // 0x10C
-    s16 maxFp;                                // 0x10E
-    s16 baseMaxFp;                            // 0x110
-    s16 currentFp;                            // 0x112
-    f32 sizeMultiplier;                       // 0x114
+    s16 maxFp;                                // 0x10E, baseMaxFp + 5 per FP Plus; partners: Mario's
+    s16 baseMaxFp;                            // 0x110, max FP before badges (kind or pouch)
+    s16 currentFp;                            // 0x112, partners use Mario's (BtlUnit_GetFp)
+    f32 sizeMultiplier;                       // 0x114, size scale from Huge/Tiny (battle_disp)
     union {
         struct {
             s8 sleepTurns;          // 0x118
@@ -786,169 +965,169 @@ typedef struct BattleUnit {
         };
         BtlStatusCopy statusTurns; // 0x118, the 0x1E status bytes as one block (party info save/restore)
     };
-    s32 statusFlags; // 0x138
+    s32 statusFlags; // 0x138, UNIT_STATUS_FLAG_* (flipped, danger, peril, ...)
 #if VERSION >= VERSION_US
-    u16 usCommandDisabled[2]; // US only (+4 from here): per-unit turns left for the two command blocks JP keeps in BattleWork commandDisabled[3..4]
+    u16 usCommandDisabled[2]; // US and later (+4 from here): per-unit turns left for the two command blocks JP keeps in BattleWork commandDisabled[3..4]
 #endif
-    s32 protectId;                      // 0x13C
-    BattleVulnerableStatus* vulnStatus; // 0x140
-    Vec moveStartPos;                   // 0x144
-    Vec moveCurrentPos;                 // 0x150
-    Vec moveTargetPos;                  // 0x15C
-    s32 moveFrames;                     // 0x168, move/jump frame count (BEC_MVFRAME)
-    f32 moveSpeedXZ;                    // 0x16C
-    f32 fallAccel;                      // 0x170
-    f32 moveSpeedY;                     // 0x174
-    f32 moveAngle;                      // 0x178
-    f32 moveDistance;                   // 0x17C, XZ distance of the move (moveSpeedXZ = this / moveFrames)
-    f32 moveProgress;                   // 0x180, elapsed frames of a move (intpl_sub cur); the jump commands use it as the arc height and the fall step
-    s8 moveDirection;                   // 0x184
-    s8 faceDirection;                   // 0x185
-    BecSndWork moveSnd;                 // 0x188 (US 0x18C)
+    s32 protectId;                      // 0x13C (US 0x140), unit it guards (SetGuard); -1 = none
+    BattleVulnerableStatus* vulnStatus; // 0x140 (US 0x144), status vulnerability (kind)
+    Vec moveStartPos;                   // 0x144 (US 0x148), scripted move start (walk, jump)
+    Vec moveCurrentPos;                 // 0x150 (US 0x154), position along the scripted move
+    Vec moveTargetPos;                  // 0x15C (US 0x160), end of the scripted move
+    s32 moveFrames;                     // 0x168 (US 0x16C), move/jump frame count (BEC_MVFRAME)
+    f32 moveSpeedXZ;                    // 0x16C (US 0x170), horizontal speed of scripted moves
+    f32 fallAccel;                      // 0x170 (US 0x174), gravity of scripted jumps and falls
+    f32 moveSpeedY;                     // 0x174 (US 0x178), vertical speed of scripted jumps
+    f32 mMoveDirection;                 // 0x178 (US 0x17C), XZ angle of a unit move
+    f32 moveDistance;                   // 0x17C (US 0x180), XZ distance of the move;
+                                        // moveSpeedXZ = this / moveFrames
+    f32 moveTotalFrames;                // 0x180 (US 0x184), elapsed frames (f32); jump arc height
+    s8 moveDirection;                   // 0x184 (US 0x188), last move's x sign (1/-1), 0 before
+    s8 faceDirection;                   // 0x185 (US 0x189), 1 or -1; starts as attackDirection
+    BecSndWork moveSnd;                 // 0x188 (US 0x18C), move-sound loop (BtlUnit_LoadSeMode)
     Vec jumpStep;                       // 0x1A4 (US 0x1A8), per-frame XZ/Y step of btlevtcmd_MarioJumpPosition
     f32 jumpAngle;                      // 0x1B0 (US 0x1B4), arc angle in degrees
     f32 jumpAngleStep;                  // 0x1B4 (US 0x1B8), arc angle added per frame
     f32 jumpBaseY;                      // 0x1B8 (US 0x1BC), last Y position of the jump
-    u8 reserved_1BC[0x1C0 - 0x1BC];     // 0x1BC (US 0x1C0), never accessed
+    u8 pad_1BC[0x1C0 - 0x1BC];          // 0x1BC (US 0x1C0), never accessed
     BtlPoseSoundTable moveSndTable;     // 0x1C0 (US 0x1C4), jump names + run/walk/dive entries (btlevtcmd_SetJump/Run/Walk/DiveSound)
-    BattleWorkHpGauge hpGauge;          // 0x1F8
-    union {
-        EvtWord work[16];  // 0x214, unit work words (btlevtcmd_SetUnitWork / GetUnitWork): numbers, effect and work pointers; floats stored in the word (SetUnitWorkFloat / GetUnitWorkFloat)
-        void* workPtr[16]; // 0x214, the same words when they hold an effect or a BTL_ALLOC block
-    };
-    BattleUnitPart* currentTarget;    // 0x254
-    s32 reserved_258;                 // 0x258 (US 0x25C), only cleared at turn start (battle_seq)
-    s16 hpDamageCount;                // 0x25C, number of damaging moves
-    s32 totalHpDamageTaken;           // 0x260
-    s32 totalFpDamageTaken;           // 0x264 (US 0x268), sum of fpDamageTaken this turn
-    s32 totalFpLost;                  // 0x268 (US 0x26C), sum of fpLost this turn
-    s8 hpDamageTaken;                 // 0x26C
-    s8 fpDamageTaken;                 // 0x26D
-    s8 fpLost;                        // 0x26E (US 0x272), FP actually lost by the last hit (fpDamageTaken clamped to current FP)
-    s8 superguardCountTaken;          // 0x26F (US 0x273), attacker's superguardedCount when this unit superguarded it
-    s32 damagePattern;                // 0x270, damage pattern of the last hit (selects the hurt pose), 0 when cleared
-    s32 damageCode;                   // 0x274
-    BattleUnitToken_Flags tokenFlags; // 0x278
-    s32 superguardedCount;            // 0x27C (US 0x280), times this unit was superguarded this turn; weapon special 0x20 subtracts it from damage
-    s32 totalDamageDealt;             // 0x280, damage this unit dealt as attacker
-    s32 initEventId;                  // 0x284
-    EvtWord* waitEventCode;           // 0x288
-    s32 waitEventId;                  // 0x28C
-    EvtWord* unisonPhaseEventCode;    // 0x290
-    EvtWord* phaseEventCode;          // 0x294
-    s32 phaseEventId;                 // 0x298
-    EvtWord* attackEventCode;         // 0x29C, btlevtcmd_SetEventAttack / BtlUnit_GetData(unit, 2/3)
-    EvtWord* confusionEventCode;      // 0x2A0, btlevtcmd_SetEventConfusion
-    s32 attackEventId;                // 0x2A4
-    s32 attackEventFlags;             // 0x2A8, BattleAttackEventFlags (0 by SetEventAttack)
-    EvtWord* damageEventCode;         // 0x2AC
-    s32 damageEventId;                // 0x2B0
-    EvtWord* entryEventCode;          // 0x2B4 (US 0x2B8), btlevtcmd_SetEventEntry
-    s32 entryEventId;                 // 0x2B8 (US 0x2BC)
-    EvtWord* ceilFallEventCode;       // 0x2BC (US 0x2C0), btlevtcmd_SetEventCeilFall, run by the stage ceiling fall
-    s32 ceilFallEventId;              // 0x2C0 (US 0x2C4)
-    EvtWord* actEndEvent;             // 0x2C4 (US 0x2C8), run when the unit's action ends (battle_seq)
-    s32 actEndEventId;                // 0x2C8 (US 0x2CC)
+    BattleWorkHpGauge hpGauge;          // 0x1F8 (US 0x1FC), HP gauge state (BtlUnit_HpGaugeMain)
+    EvtWord work[16];                   // 0x214 (US 0x218), unit work words: numbers, effect and
+                                        // work pointers, floats stored in the word
+                                        // (btlevtcmd_SetUnitWork / GetUnitWork,
+                                        // SetUnitWorkFloat / GetUnitWorkFloat)
+    BattleUnitPart* currentTarget;      // 0x254 (US 0x258), part hit last (battle_damage)
+    s32 reserved_258;                   // 0x258 (US 0x25C), cleared when the unit's action ends (btlseqAct 0x6000009)
+    s16 hpDamageCount;                  // 0x25C (US 0x260), hits taken this action;
+                                        // BattleCheckDamage counts them, SPECIAL_DIMINISH_BY_HIT
+                                        // subtracts it
+    s32 totalHpDamageTaken;             // 0x260 (US 0x264), HP damage this action (reset per act)
+    s32 totalFpDamageTaken;             // 0x264 (US 0x268), sum of fpDamageTaken this action
+    s32 totalFpLost;                    // 0x268 (US 0x26C), sum of fpLost this action
+    s8 hpDamageTaken;                   // 0x26C (US 0x270), HP damage of the last hit
+    s8 fpDamageTaken;                   // 0x26D (US 0x271), FP damage of the last hit
+    s8 fpLost;                          // 0x26E (US 0x272), FP actually lost by the last hit (fpDamageTaken clamped to current FP)
+    s8 attackerHitCountTaken;           // 0x26F (US 0x273), the attacker's attackHitCount after its hit on this unit
+    u32 damagePattern;                  // 0x270 (US 0x274), damage pattern of the last hit
+                                        // (selects the hurt pose), 0 when cleared
+    s32 damageCode;                     // 0x274 (US 0x278), code of the last hit event + flags
+    BattleUnitToken_Flags tokenFlags;   // 0x278 (US 0x27C), BattleUnitToken_Flags
+    s32 attackHitCount;                 // 0x27C (US 0x280), hits this unit resolved as attacker
+                                        // this action (BattleCheckDamage counts every one);
+                                        // SPECIAL_DIMINISH_BY_TARGET subtracts it from damage
+    s32 totalDamageDealt;               // 0x280 (US 0x284), damage this unit dealt as attacker
+    s32 initEventId;                    // 0x284 (US 0x288), id of the running init event
+    EvtWord* waitEventCode;             // 0x288 (US 0x28C), idle script (btlevtcmd)
+    s32 waitEventId;                    // 0x28C (US 0x290), id of the running idle script
+    EvtWord* unisonPhaseEventCode;      // 0x290 (US 0x294), phase script run by all units at once
+    EvtWord* phaseEventCode;            // 0x294 (US 0x298), phase script, after the unison ones
+    s32 phaseEventId;                   // 0x298 (US 0x29C), id of the running phase script
+    EvtWord* attackEventCode;           // 0x29C (US 0x2A0), btlevtcmd_SetEventAttack /
+                                        // BtlUnit_GetData(unit, 2/3)
+    EvtWord* confusionEventCode;        // 0x2A0 (US 0x2A4), btlevtcmd_SetEventConfusion
+    s32 attackEventId;                  // 0x2A4 (US 0x2A8), id of the running attack event
+    s32 attackEventFlags;               // 0x2A8 (US 0x2AC), ActEventFlags (0 by SetEventAttack)
+    EvtWord* damageEventCode;           // 0x2AC (US 0x2B0), damage reaction script
+    s32 damageEventId;                  // 0x2B0 (US 0x2B4), id of the running damageEventCode
+    EvtWord* entryEventCode;            // 0x2B4 (US 0x2B8), btlevtcmd_SetEventEntry
+    s32 entryEventId;                   // 0x2B8 (US 0x2BC), id of the battle entry event
+    EvtWord* ceilFallEventCode;         // 0x2BC (US 0x2C0), btlevtcmd_SetEventCeilFall, run by the stage ceiling fall
+    s32 ceilFallEventId;                // 0x2C0 (US 0x2C4), id of the falling-from-ceiling event
+    EvtWord* actEndEvent;               // 0x2C4 (US 0x2C8), run when the unit's action ends (battle_seq)
+    s32 actEndEventId;                  // 0x2C8 (US 0x2CC), id of the running actEndEvent
 #if VERSION >= VERSION_DEMO_EU
-    s32 slideReturnEventId; // PAL and the EU demo (+4 from here): enemy_slide_return_evt of sac_enemy_slide_return, waited on by BattleWaitAllActiveEvtEnd_NoBgSetEndWait
+    s32 slideReturnEventId; // PAL and the PAL demo (+4 from here): enemy_slide_return_evt of sac_enemy_slide_return, waited on by BattleWaitAllActiveEvtEnd_NoBgSetEndWait
 #endif
     EvtWord* hitEventCode; // 0x2CC (US 0x2D0), run on the attacker by BattleRunHitEventDirect
-    s32 talkPartId;        // 0x2D0 (US 0x2D4)
-    const char* talkPose;  // 0x2D4 (US 0x2D8), pose type 0x41 (btlevtcmd talk anim)
-    const char* stayPose;  // 0x2D8 (US 0x2DC), pose type 0x2B
+    s32 talkPartId;        // 0x2D0 (US 0x2D4), part for talkPose / stayPose
+    const char* talkPose;  // 0x2D4 (US 0x2D8), POSE_TYPE_TALK (btlevtcmd talk anim)
+    const char* stayPose;  // 0x2D8 (US 0x2DC), POSE_TYPE_NEUTRAL
     union {
-        BattleWorkUnitBadgesEquipped badgesEquipped;          // 0x2DC
-        u8 badgeCounts[sizeof(BattleWorkUnitBadgesEquipped)]; // 0x2DC, the same 40 counters by index
+        BattleWorkUnitBadgesEquipped badgesEquipped;          // 0x2DC (US 0x2E0)
+        u8 badgeCounts[sizeof(BattleWorkUnitBadgesEquipped)]; // 0x2DC (US 0x2E0), the same 40 counters by index
     };
-    ItemType heldItem;                      // 0x304, 4 bytes
-    ItemDropData* dropTable;                // 0x308
-    u8 stolenCoins;                         // 0x30C, coins a Bandit (borodo) stole; dropped back as its held coin item
-    u8 moveColorLv;                         // 0x30D
-    u8 moveColorLvDisp;                     // 0x30E, current move colour level, ramps toward moveColorLv
-    struct BattleWeapon* countersetWeapon;  // 0x310
+    ItemType heldItem;                      // 0x304 (US 0x308), 4 bytes
+    ItemDropData* dropTable;                // 0x308 (US 0x30C), item drop list (enemy setup)
+    u8 stolenCoins;                         // 0x30C (US 0x310), coins a Bandit (borodo) stole;
+                                            // heldItem is ITEM_COIN then; never read
+    u8 moveColorLv;                         // 0x30D (US 0x311), MOVE_COLOR_LV_*, colour scale x/255
+    u8 moveColorLvDisp;                     // 0x30E (US 0x312), shown level, ramps toward moveColorLv
+    struct BattleWeapon* countersetWeapon;  // 0x310 (US 0x314), spare weapon (chuchurina,
+                                            // clauda, sanders); the UFO keeps its UfoWork here
     void (*deleteFunc)(struct BattleUnit*); // 0x314 (US 0x318), called by BtlUnit_Delete
     struct smartEntry* screenTexBuf;        // 0x318 (US 0x31C), smartAlloc EFB copy (0x260x0x1E0, unit_party_chuchurina), freed on unit delete
-    u8 reserved_31C[0x320 - 0x31C];         // 0x31C (US 0x320), never accessed
-    EffectEntry* sleepEff;                  // 0x320, BSE_Sleep
-    EffectEntry* fireEff;                   // 0x324
-    EffectEntry* iceEff;                    // 0x328
-    EffectEntry* sparkEff;                  // 0x32C
-    struct IconEntry* kageIcon;             // 0x330, BSE_Kagegakure
-    u16 burnDamageFlameState;               // 0x334
-    u16 burnDamageFlameActive;              // 0x336
-    s32 burnDamageFlameAnimTimer;           // 0x338
-    f32 burnDamageFlameScale;               // 0x33C
-    EffectEntry* burnDamageFlameEff;        // 0x340
-    BattleWorkStatusIcon statusIconWork;    // 0x344
-    StChgInfo statusChangeInfo[6];          // 0xAE4, BattleStatusChangeInfoWorkInit
-    s32 stageObjectId;                      // 0xB2C
+    u8 pad_31C[0x320 - 0x31C];              // 0x31C (US 0x320), never accessed
+    EffectEntry* sleepEff;                  // 0x320 (US 0x324), BSE_Sleep
+    EffectEntry* fireEff;                   // 0x324 (US 0x328), burn status effect
+    EffectEntry* iceEff;                    // 0x328 (US 0x32C), freeze status effect
+    EffectEntry* sparkEff;                  // 0x32C (US 0x330), electric status effect
+    struct IconEntry* kageIcon;             // 0x330 (US 0x334), BSE_Kagegakure
+    u16 burnDamageFlameState;               // 0x334 (US 0x338), Burn flame step:
+                                            // 0 off, 1 spawn, 2 pulse, 3 end
+    u16 mbBurnDamageFlameActive;            // 0x336 (US 0x33A), BSE_TurnFirstProcessEffectEntry;
+                                            // 0 = none
+    s32 burnDamageFlameAnimTimer;           // 0x338 (US 0x33C), flame pulse frames (ends at 60)
+    f32 burnDamageFlameScale;               // 0x33C (US 0x340), flame scale, 0.4 to 2.0
+    EffectEntry* burnDamageFlameEff;        // 0x340 (US 0x344), the Burn flame effect (effFireEntry)
+    BattleWorkStatusIcon statusIconWork;    // 0x344 (US 0x348), icon state (battle_status_icon)
+    StChgInfo statusChangeInfo[6];          // 0xAE4 (US 0xAE8), BattleStatusChangeInfoWorkInit
+    s32 stageObjectId;                      // 0xB2C (US 0xB30), stage object the unit stands for
+                                            // (tree, switch)
 } BattleUnit;
 
 typedef struct BattleUnitKind {
-    BattleUnitType unitType;                  // 0x0
-    const char* name;                         // 0x4
-    s16 maxHp;                                // 0x8
-    s16 maxFp;                                // 0xA
-    u8 dangerHP;                              // 0xC
-    u8 perilHP;                               // 0xD
-    u8 level;                                 // 0xE
-    u8 bonusExp;                              // 0xF
-    u8 bonusCoin;                             // 0x10
-    u8 bonusCoinRate;                         // 0x11
-    u8 baseCoin;                              // 0x12
-    u8 runRate;                               // 0x13
-    u16 pbSoftCap;                            // 0x14
-    s16 width;                                // 0x16
-    s16 height;                               // 0x18
-    s16 hitOffset[2];                         // 0x1A
-    Vec centerOffset;                         // 0x20
-    s16 hpGaugeOffset[2];                     // 0x2C
-    Vec talkTogeBaseOffset;                   // 0x30
-    Vec heldItemBaseOffset;                   // 0x3C
-    Vec burnFlameOffset;                      // 0x48
+    BattleUnitType unitType;                  // 0x0, -> BattleUnit.initialKind and currentKind
+    const char* name;                         // 0x4, msg tag of the name (msgSearch; protect-partner menu)
+    s16 maxHp;                                // 0x8, -> BattleUnit.baseMaxHp, maxHp and currentHp
+    s16 maxFp;                                // 0xA, -> BattleUnit.baseMaxFp, maxFp and currentFp
+    u8 dangerHP;                              // 0xC, HP at or below it (under max) sets UNIT_STATUS_FLAG_DANGER
+    u8 perilHP;                               // 0xD, HP at or below it (under max) sets UNIT_STATUS_FLAG_PERIL
+    u8 level;                                 // 0xE, -> BattleUnit.level; npcdrv compares it with Mario's level
+    u8 bonusExp;                              // 0xF, Star Points added on defeat (BtlUnit_GetExp)
+    u8 bonusCoin;                             // 0x10, bonus coin rolls on defeat (BtlUnit_GetCoin)
+    u8 bonusCoinRate;                         // 0x11, percent chance of each bonus coin roll
+    u8 baseCoin;                              // 0x12, coins always dropped; also the field NPC's baseCoinCount
+    u8 runRate;                               // 0x13, escape rate of the group's first enemy (_get_escape_rate)
+    u16 pbSoftCap;                            // 0x14, Power Bounce soft cap (mario_get_renzoku_count_max)
+    s16 width;                                // 0x16, -> BattleUnit.width
+    s16 height;                               // 0x18, -> BattleUnit.height
+    s16 hitOffset[2];                         // 0x1A, -> BattleUnit.statusIconOffset
+    Vec centerOffset;                         // 0x20, -> BattleUnit.offsetCenter
+    s16 hpGaugeOffset[2];                     // 0x2C, -> BattleUnit.hpGaugeOffset
+    Vec talkTogeBaseOffset;                   // 0x30, speech bubble tail offset, plus BattleUnit.togeOffset
+    Vec heldItemBaseOffset;                   // 0x3C, -> BattleUnit.heldItemBaseOffset
+    Vec burnFlameOffset;                      // 0x48, offset of the Burn status flame, scaled by size
     f32 vivianOffsetX;                        // 0x54, _get_vivian_attack_position: x offset (times facing and scale x)
     f32 vivianOffsetZ;                        // 0x58, _get_vivian_attack_position: z offset (times scale z)
-    Vec bintaHitOffset;                       // 0x5C
-    Vec kissHitOffset;                        // 0x68
-    Vec cutBaseOffset;                        // 0x74
-    f32 cutWidth;                             // 0x80
-    f32 cutHeight;                            // 0x84
-    s8 turnOrder;                             // 0x88
-    s8 turnOrderVariance;                     // 0x89
-    s8 swallowChance;                         // 0x8A
-    u8 swallowAttributes;                     // 0x8B
-    u8 hammerKnockbackChance;                 // 0x8C
-    u8 itemStealParam;                        // 0x8D
-    Vec starPointDispOffset;                  // 0x90
-    const char* damageSfxName;                // 0x9C
-    const char* fireDamageSfxName;            // 0xA0
-    const char* iceDamageSfxName;             // 0xA4
-    const char* explosionDamageSfxName;       // 0xA8
-    u32 attributeFlags;                       // 0xAC
-    StatusVulnerability* statusVulnerability; // 0xB0
-    s8 numParts;                              // 0xB4
-    BattleUnitKindPart* parts;                // 0xB8
-    EvtWord* initEventCode;                   // 0xBC
-    BattleDataEntry* dataTable;               // 0xC0
+    Vec bintaHitOffset;                       // 0x5C, -> BattleUnit.bintaHitOffset
+    Vec kissHitOffset;                        // 0x68, -> BattleUnit.kissHitOffset
+    Vec cutBaseOffset;                        // 0x74, -> BattleUnit.cutBaseOffset
+    f32 cutWidth;                             // 0x80, -> BattleUnit.cutWidth
+    f32 cutHeight;                            // 0x84, -> BattleUnit.cutHeight
+    s8 turnOrder;                             // 0x88, base of BattleUnit.movePriority
+    s8 turnOrderVariance;                     // 0x89, random spread of movePriority around turnOrder
+    s8 swallowChance;                         // 0x8A, -> BattleUnit.swallowRate
+    u8 swallowAttributes;                     // 0x8B, -> BattleUnit.swallowAttribute (Gulp)
+    u8 hammerKnockbackChance;                 // 0x8C, percent chance Spin/Ultra Hammer knocks it away
+    u8 itemStealParam;                        // 0x8D, Kiss Thief (_get_itemsteal_param) returns 100 - this
+    Vec starPointDispOffset;                  // 0x90, where the Star Points pop up, from the unit
+    const char* damageSfxName;                // 0x9C, hurt sound of a damaging hit without an FX or guard sound
+    const char* fireDamageSfxName;            // 0xA0, extra hurt sound on fire hits
+    const char* iceDamageSfxName;             // 0xA4, extra hurt sound on ice hits
+    const char* electricDamageSfxName;        // 0xA8, extra hurt sound on electric hits
+    u32 attributeFlags;                       // 0xAC, -> BattleUnit.attributeFlags (BattleUnitAttribute_Flags)
+    StatusVulnerability* statusVulnerability; // 0xB0, -> BattleUnit.vulnStatus
+    s8 numParts;                              // 0xB4, entries in parts
+    BattleUnitKindPart* parts;                // 0xB8, the kind's parts, one BattleUnitPart each
+    EvtWord* initEventCode;                   // 0xBC, run at entry (BtlUnit_Entry)
+    BattleDataEntry* dataTable;               // 0xC0, -> BattleUnit.dataTable
 } BattleUnitKind;
-
-// SEQ_PHASE steps (BattleGetSeq(wp, SEQ_PHASE)): each turn runs phases 1-5 in order, and a unit takes its
-// actions in the phase its attackPhase names (btlseqMove queues the units whose attackPhase equals the step).
-typedef enum BattlePhase {
-    BATTLE_PHASE_INIT = 0x4000000,          // first step of a turn's phase sequence; moves on to phase 1
-    BATTLE_PHASE_BEFORE_PLAYER = 0x4000001, // tutorial helpers, Koops's Shell Shield and Bobbery's bombs act here
-    BATTLE_PHASE_PLAYER = 0x4000002,        // Mario, the partner and the system unit
-    BATTLE_PHASE_AFTER_PLAYER = 0x4000003,  // no unit setup uses it
-    BATTLE_PHASE_ENEMY = 0x4000004,         // enemies; the audience throws items and reacts in this phase
-    BATTLE_PHASE_AFTER_ENEMY = 0x4000005,   // stage objects (trees, switches)
-    BATTLE_PHASE_END = 0x4000006            // the turn's phases are over: next SEQ_TURN step
-} BattlePhase;
 
 typedef struct BattleUnitSetup {
     BattleUnitKind* unitKindParams; // 0x0
     s8 alliance;                    // 0x4, -> BattleUnit.alliance (BtlUnit_Entry); 2 for stage objects
     u8 pad_05[3];                   // 0x5, never read
-    s32 attackPhase;                // 0x8, BattlePhase; -> BattleUnit.attackPhase
+    s32 attackPhase;                // 0x8, -> BattleUnit.attackPhase
     Vec position;                   // 0xC, -> unit pos/offset pos/home pos
     s32 hitOffsetX;                 // 0x18, -> every BattleUnitPart.hitOffsetX
     s32 unitWork[4];                // 0x1C, -> BattleUnit.work[0..3]
@@ -958,10 +1137,15 @@ typedef struct BattleUnitSetup {
 BOOL BtlUnit_Init(void);
 BattleUnit* BtlUnit_Entry(BattleUnitSetup* setup);
 BOOL BtlUnit_Delete(BattleUnit* unit);
+
+// BtlUnit_Spawn flags (btlevtcmd_SpawnUnit passes its third argument; every retail script passes 0)
+#define BTL_SPAWN_QUEUE_BACK 0x1  // enters movePriorityQueue from its last slot
+#define BTL_SPAWN_QUEUE_FRONT 0x2 // enters movePriorityQueue at slot 0
 BattleUnit* BtlUnit_Spawn(BattleUnitSetup* setup, s32 flags);
 s32 BtlUnit_GetUnitId(BattleUnit* unit);
 BattleUnitPart* BtlUnit_GetPartsPtr(BattleUnit* unit, s32 partNum);
 s32 BtlUnit_GetBodyPartsId(BattleUnit* unit);
+s32 BtlUnit_GetGuardBodyPartsId(BattleUnit* unit);
 void BtlUnit_GetPos(BattleUnit* unit, f32* x, f32* y, f32* z);
 void BtlUnit_SetPos(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_AddPos(BattleUnit* unit, f32 x, f32 y, f32 z);
@@ -975,7 +1159,9 @@ void BtlUnit_SetHitCursorOffset(BattleUnit* unit, BattleUnitPart* part, f32 x, f
 void BtlUnit_GetHomePos(BattleUnit* unit, f32* x, f32* y, f32* z);
 void BtlUnit_SetHomePos(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_AddHomePos(BattleUnit* unit, f32 x, f32 y, f32 z);
+void BtlUnit_GetPartsHomePos(BattleUnitPart* part, f32* x, f32* y, f32* z);
 void BtlUnit_SetPartsHomePos(BattleUnitPart* part, f32 x, f32 y, f32 z);
+void BtlUnit_AddPartsHomePos(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_SetRotate(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_GetRotate(BattleUnit* unit, f32* x, f32* y, f32* z);
 void BtlUnit_AddRotate(BattleUnit* unit, f32 x, f32 y, f32 z);
@@ -987,26 +1173,42 @@ void BtlUnit_GetBaseRotate(BattleUnit* unit, f32* x, f32* y, f32* z);
 void BtlUnit_SetPartsBaseRotate(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_GetPartsBaseRotate(BattleUnitPart* part, f32* x, f32* y, f32* z);
 void BtlUnit_SetRotateOffset(BattleUnit* unit, f32 x, f32 y, f32 z);
+void BtlUnit_GetRotateOffset(BattleUnit* unit, f32* x, f32* y, f32* z);
+void BtlUnit_AddRotateOffset(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_SetPartsRotateOffset(BattleUnitPart* part, f32 x, f32 y, f32 z);
+void BtlUnit_GetPartsRotateOffset(BattleUnitPart* part, f32* x, f32* y, f32* z);
 void BtlUnit_AddPartsRotateOffset(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_SetBaseScale(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_GetScale(BattleUnit* unit, f32* x, f32* y, f32* z);
 void BtlUnit_SetScale(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_AddScale(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_SetPartsBaseScale(BattleUnitPart* part, f32 x, f32 y, f32 z);
+void BtlUnit_GetPartsScale(BattleUnitPart* part, f32* x, f32* y, f32* z);
 void BtlUnit_SetPartsScale(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_AddPartsScale(BattleUnitPart* part, f32 x, f32 y, f32 z);
 s32 BtlUnit_GetWidth(BattleUnit* unit);
 s32 BtlUnit_GetHeight(BattleUnit* unit);
 void BtlUnit_SetHeight(BattleUnit* unit, s16 height);
+void BtlUnit_SetWidth(BattleUnit* unit, s16 width);
+void BtlUnit_GetOffsetPos(BattleUnit* unit, f32* x, f32* y, f32* z);
 void BtlUnit_SetOffsetPos(BattleUnit* unit, f32 x, f32 y, f32 z);
+void BtlUnit_AddOffsetPos(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_GetPartsOffsetPos(BattleUnitPart* part, f32* x, f32* y, f32* z);
 void BtlUnit_SetPartsOffsetPos(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_AddPartsOffsetPos(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_SetDispOffset(BattleUnit* unit, f32 x, f32 y, f32 z);
+void BtlUnit_GetDispOffset(BattleUnit* unit, f32* x, f32* y, f32* z);
+void BtlUnit_AddDispOffset(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_SetPartsDispOffset(BattleUnitPart* part, f32 x, f32 y, f32 z);
+void BtlUnit_GetPartsDispOffset(BattleUnitPart* part, f32* x, f32* y, f32* z);
 void BtlUnit_AddPartsDispOffset(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_SetMoveStartPos(BattleUnit* unit, f32 x, f32 y, f32 z);
+void BtlUnit_GetMoveStartPos(BattleUnit* unit, f32* x, f32* y, f32* z);
+void BtlUnit_GetPartsMoveStartPos(BattleUnitPart* part, f32* x, f32* y, f32* z);
+void BtlUnit_GetMoveCurrentPos(BattleUnit* unit, f32* x, f32* y, f32* z);
+void BtlUnit_GetPartsMoveCurrentPos(BattleUnitPart* part, f32* x, f32* y, f32* z);
+void BtlUnit_GetMoveTargetPos(BattleUnit* unit, f32* x, f32* y, f32* z);
+void BtlUnit_GetPartsMoveTargetPos(BattleUnitPart* part, f32* x, f32* y, f32* z);
 void BtlUnit_SetPartsMoveStartPos(BattleUnitPart* part, f32 x, f32 y, f32 z);
 void BtlUnit_SetMoveCurrentPos(BattleUnit* unit, f32 x, f32 y, f32 z);
 void BtlUnit_SetPartsMoveCurrentPos(BattleUnitPart* part, f32 x, f32 y, f32 z);
@@ -1017,13 +1219,36 @@ void BtlUnit_SetPartsFallAccel(BattleUnitPart* part, f32 fallAccel);
 void BtlUnit_SetMoveSpeed(BattleUnit* unit, f32 moveSpeedXZ);
 void BtlUnit_SetPartsMoveSpeed(BattleUnitPart* part, f32 moveSpeedXZ);
 void BtlUnit_SetJumpSpeed(BattleUnit* unit, f32 moveSpeedY);
+void BtlUnit_SetPartsJumpSpeed(BattleUnitPart* part, f32 moveSpeedY);
+void BtlUnit_SetBelong(BattleUnit* unit, s8 alliance);
 s8 BtlUnit_GetBelong(BattleUnit* unit);
-// The status functions take the StatusEffectType as s8, so callers sign-extend a variable id.
+
+#if VERSION <= VERSION_DEMO_JP && defined(BATTLE_UNIT_STATUS_ENUM)
+void BtlUnit_GetStatus(BattleUnit* unit, StatusEffectType type, s8* turns, s8* strength);
+#else
 void BtlUnit_GetStatus(BattleUnit* unit, s8 type, s8* turns, s8* strength);
+#endif
+
+#if VERSION <= VERSION_DEMO_JP && defined(BATTLE_UNIT_STATUS_ENUM)
+BOOL BtlUnit_SetStatus(BattleUnit* unit, StatusEffectType type, s8 turns, s8 strength);
+#else
 BOOL BtlUnit_SetStatus(BattleUnit* unit, s8 type, s8 turns, s8 strength);
+#endif
+
 void BtlUnit_ClearStatus(BattleUnit* unit);
+
+#if VERSION <= VERSION_DEMO_JP && defined(BATTLE_UNIT_STATUS_ENUM)
+BOOL BtlUnit_CheckRecoveryStatus(BattleUnit* unit, StatusEffectType type);
+#else
 BOOL BtlUnit_CheckRecoveryStatus(BattleUnit* unit, s8 type);
+#endif
+
+#if VERSION <= VERSION_DEMO_JP && defined(BATTLE_UNIT_STATUS_ENUM)
+BOOL BtlUnit_CheckStatus(BattleUnit* unit, StatusEffectType type);
+#else
 BOOL BtlUnit_CheckStatus(BattleUnit* unit, s8 type);
+#endif
+
 s32 BtlUnit_CheckStatusFlag(BattleUnit* unit, s32 flags);
 void BtlUnit_OnStatusFlag(BattleUnit* unit, s32 flags);
 void BtlUnit_OffStatusFlag(BattleUnit* unit, s32 flags);
@@ -1032,7 +1257,7 @@ void BtlUnit_OnUnitFlag(BattleUnit* unit, s32 flags);
 void BtlUnit_OffUnitFlag(BattleUnit* unit, s32 flags);
 const char* BtlUnit_GetPoseNameFromType(BattleUnitPart* part, s32 type);
 
-void BtlUnit_CheckPinchStatus(BattleUnit* unit, BOOL a2);
+void BtlUnit_CheckPinchStatus(BattleUnit* unit, BOOL noAudience);
 
 void BtlUnit_SetParamToPouch(BattleUnit* unit);
 
@@ -1045,47 +1270,68 @@ void BtlUnit_SetMaxFp(BattleUnit* unit, s32 value);
 void BtlUnit_RecoverHp(BattleUnit* unit, s32 value);
 void BtlUnit_RecoverFp(BattleUnit* unit, s32 value);
 s32 BtlUnit_GetHitDamage(BattleUnit* unit);
+void BtlUnit_SetHitDamage(BattleUnit* unit, s8 damage);
 s32 BtlUnit_GetTotalHitDamage(BattleUnit* unit);
 void* BtlUnit_GetData(BattleUnit* unit, s32 tag);
 BOOL BtlUnit_CheckData(BattleUnit* unit, s32 tag);
-BOOL BtlUnit_GetEnemyBelong(BattleUnit* unit);
+s32 BtlUnit_GetEnemyBelong(BattleUnit* unit);
 void BtlUnit_ReviseHpFp(BattleUnit* unit);
 void BtlUnit_SetParamFromPouch(BattleUnit* unit);
 s32 BtlUnit_snd_se(BattleUnit* unit, const char* sfxName, s32 volume, s16 pitch);
 s32 BtlUnit_snd_se_pos(BattleUnit* unit, const char* sfxName, s32 volume, s16 pitch, Vec* pos);
 BattleUnit* BtlUnit_GetGuardKouraPtr(BattleUnit* unit);
 
+// BattleUnit.attackEventFlags: how battle_seq starts the unit's act event (attackEventCode)
+typedef enum ActEventFlags {
+    ACT_EVENT_KEEP_STATUS_WINDOW = (1 << 0), // 0x1, the status window stays on
+    ACT_EVENT_IGNORE_STATUS = (1 << 1),      // 0x2, run the event whatever the unit's status
+    ACT_EVENT_SHELL_FOLLOWS = (1 << 2),      // 0x4, a shell shield keeps following its unit (position swap)
+    ACT_EVENT_IN_ZERO_GRAVITY = (1 << 3),    // 0x8, runs in zero gravity too
+    ACT_EVENT_ALWAYS = (1 << 4),             // 0x10, run the event, if any, before every other check (hide event)
+} ActEventFlags;
+
 BOOL BtlUnit_CanActStatus(BattleUnit* unit);
 void BtlUnit_SetAnim(BattleUnitPart* part, const char* name);
-// BtlUnit_EquipItem flags
-typedef enum EquipFlags {
-    EQUIP_RESET = 1 << 0,   // 0x1, clear the equipped badges first
-    EQUIP_MARIO = 1 << 1,   // 0x2, equip Mario's (non-P) badges
-    EQUIP_PARTNER = 1 << 2, // 0x4, equip the partner (P) badges
-} EquipFlags;
-void BtlUnit_EquipItem(BattleUnit* unit, s32 flags, ItemType type); // flags: EquipFlags
+
+// BtlUnit_LoadSeMode kind: the movement sound of btlevtcmd_MovePosition / JumpPosition / DivePosition ...
+typedef enum BattleMoveSound {
+    MOVE_SOUND_NONE = 0,
+    MOVE_SOUND_FROM_TABLE = -1, // the unit's own sound table entry for this kind of move
+    MOVE_SOUND_KEEP = -2,       // keep the sound already set up (btlevtcmd_SetSeMode ...)
+} BattleMoveSound;
 void BtlUnit_SetAnimType(BattleUnitPart* part, s32 type);
 void BtlUnit_SetBodyAnim(BattleUnit* unit, const char* name);
 void BtlUnit_SetBodyAnimType(BattleUnit* unit, s32 type);
-
-struct BattleWeapon;
-
-void BtlUnit_ChangeTalkAnim(s32 unitId);
-void BtlUnit_ChangeStayAnim(s32 unitId);
-void BtlUnit_GetTalkTogePos(s32 unitId, f32* x, f32* y, f32* z);
-BOOL BtlUnit_GetACPossibility(BattleUnit* unit);
 BOOL BtlUnit_CanGuardStatus(BattleUnit* unit);
-s32 BtlUnit_GetExp(BattleUnit* unit);
+void BtlUnit_ChangeStayAnim(s32 unitId);
+void BtlUnit_SetTalkAnim(BattleUnit* unit, const char* name);
+void BtlUnit_SetStayAnim(BattleUnit* unit, const char* name);
+void BtlUnit_ChangeTalkAnim(s32 unitId);
+BOOL BtlUnit_GetACPossibility(BattleUnit* unit);
 s32 BtlUnit_GetCoin(BattleUnit* unit);
+s32 BtlUnit_GetExp(BattleUnit* unit);
+void BtlUnit_GetTalkTogePos(s32 unitId, f32* x, f32* y, f32* z);
+void BtlUnit_HpGaugeMain(BattleUnit* unit);
+void BtlUnit_LoadSeMode(s32 mode, s32 kind, BtlPoseSoundTable* table, BecSndWork* work);
+void BtlUnit_SetCommandAnimPose(BattleUnit* unit);
+void BtlUnit_SetSeMode(BecSndWork* work, const char* name0, const char* name1, s16 delay, s16 period, s16 unused, s16 a, s16 b);
+BOOL BtlUnit_CheckShadowGuard(BattleUnit* unit);
+s32 BtlUnit_EnemyItemCanUseCheck(s32 item);
+void BtlUnit_SetTotalHitDamage(BattleUnit* unit, s16 damage);
+void BtlUnit_ControlPoseSoundMain(BattleUnitPart* part);
+void BtlUnit_PoseSoundInit(BattleUnitPart* part);
+BOOL BtlUnit_CheckWeaponCost(BattleUnit* unit, struct BattleWeapon* weapon);
 s32 BtlUnit_GetWeaponCost(BattleUnit* unit, struct BattleWeapon* weapon);
 void BtlUnit_PayWeaponCost(BattleUnit* unit, struct BattleWeapon* weapon);
-void BtlUnit_LoadSeMode(s32 mode, s32 kind, BtlPoseSoundTable* table, BecSndWork* work);
-void BtlUnit_SetSeMode(BecSndWork* work, const char* name0, const char* name1, s16 c, s16 e, s16 unused, s16 a, s16 b);
-void BtlUnit_SetCommandAnimPose(BattleUnit* unit);
-void BtlUnit_PoseSoundInit(BattleUnitPart* part);
-void BtlUnit_ControlPoseSoundMain(BattleUnitPart* part);
-void BtlUnit_HpGaugeMain(BattleUnit* unit);
-BOOL BtlUnit_CheckShadowGuard(BattleUnit* unit);
-BOOL BtlUnit_CheckWeaponCost(BattleUnit* unit, struct BattleWeapon* weapon);
-BOOL BtlUnit_EnemyItemCanUseCheck(s32 item);
-void BtlUnit_SetTotalHitDamage(BattleUnit* unit, s16 damage);
+
+// SEQ_PHASE steps (BattleSetSeq(wp, SEQ_PHASE, ...)); phase events compare the phase they get with them.
+// Names from LLCOOLT's tree.
+typedef enum BattlePhase {
+    BATTLE_PHASE_INIT = 0x4000000,
+    BATTLE_PHASE_BEFORE_PLAYER = 0x4000001,
+    BATTLE_PHASE_PLAYER = 0x4000002,
+    BATTLE_PHASE_AFTER_PLAYER = 0x4000003,
+    BATTLE_PHASE_ENEMY = 0x4000004,
+    BATTLE_PHASE_AFTER_ENEMY = 0x4000005,
+    BATTLE_PHASE_END = 0x4000006,
+} BattlePhase;

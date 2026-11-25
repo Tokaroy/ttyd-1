@@ -1,15 +1,27 @@
 // Rogueport Sewers (tik, chika: underground): the paper demon's (peramajin) lecture on the plane power
 // (plane_majin_lecture).
+
+#include "version.h"
 #include "icon_ids.h"
 #include "eff/eff_fukidashi.h"
 #include "eff/eff_itemget.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "pmario_sound.h"
+#include "statuswindow.h"
+#include "driver/hitdrv.h"
+#include "evt/evt_lecture.h"
+#include "mot/mot_slit.h"
+#include "mot/mot_roll.h"
+#include "driver/npcdrv.h"
+
+#if VERSION <= VERSION_DEMO_JP
+#include "evt/evt_window.h"
+#endif
 
 #include "mario/mario.h"
 #include "manager/evtmgr_cmd.h"
 #include "dolphin/os.h"
-#include "dolphin/pad.h"
 #include "driver/icondrv.h"
 #include "driver/dispdrv.h"
 #include "string.h"
@@ -29,34 +41,14 @@
 #include "evt/evt_msg.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
-#include "evt/evt_window.h"
+#include <dolphin/pad.h>
 #include "evt/evt_lect.h"
-#include "evt/evt_lecture.h"
-#include "mot/mot_slit.h"
-#include "pmario_sound.h"
-#include "statuswindow.h"
-#include "tik.h"
-#include "driver/hitdrv.h"
-#include "mot/mot_roll.h"
 
 static OSTime wwstart;
 static s32 x_flag_data[2];
 static void lecture_button_disp(CameraId camera, void* param);
 static LectButton lbtn[2];
-/**
- * Jumps the camera 3D by the offset ofs (position and look-at both) with an immediate transition;
- * used to move the view to the item-get stage and back.
- */
-static inline void effitemget_cam_move(CameraEntry* camera, Vec ofs) {
-    camera->presetPos = camera->cameraPos;
-    camera->presetAt = camera->cameraAt;
-    PSVECAdd(&camera->cameraPos, &ofs, &camera->storedPos);
-    PSVECAdd(&camera->cameraAt, &ofs, &camera->storedAt);
-    camera->startTimeA = gp->renderTime;
-    camera->durationA = 0;
-    camera->stateA = 3;
-    camera->curveA = 11;
-}
+
 static Vec daiv;
 
 static USER_FUNC(lect_map_cam_chg);
@@ -67,7 +59,7 @@ static USER_FUNC(evtflash);
 static USER_FUNC(lect_slit_check);
 static USER_FUNC(dai_moveti_get);
 static USER_FUNC(dai_moveti_set);
-static USER_FUNC(lect_mobj_hit_nasi);
+USER_FUNC(lect_mobj_hit_nasi);
 static USER_FUNC(effitemget_busaiku);
 static USER_FUNC(effitemget_open_ptr);
 static USER_FUNC(effitemget_open);
@@ -82,7 +74,6 @@ static USER_FUNC(lecture_button_flag_on_off);
 static USER_FUNC(lecture_button_set_alpha);
 static USER_FUNC(lecture_button_set_icon_id);
 static USER_FUNC(lecture_button_rtn);
-static void lecture_button_disp(CameraId camera, void* param);
 static USER_FUNC(x_flag_wait);
 static USER_FUNC(x_flag_get);
 static USER_FUNC(x_flag_add);
@@ -92,9 +83,18 @@ static USER_FUNC(lect_status_off);
 static USER_FUNC(lect_mario_ido_sum);
 static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start);
 
+EvtWord plane_majin_lecture_init[73];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord plane_majin_lecture[];
+#else
+EvtWord plane_majin_lecture[714];
+#endif
+
 /**
- * Linear interpolation helper for lect_mario_ido_sum:
- * returns the weighted blend of end and start, ((total - elapsed) * end + elapsed * start) / total.
+ * Linear interpolation for the lecture walking helpers:
+ * returns (total - elapsed) / total * end + elapsed / total * start,
+ * so at elapsed 0 it is end and at elapsed == total it is start.
  */
 static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
     f32 rem = total - elapsed;
@@ -103,14 +103,14 @@ static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
 }
 
 /**
- * Script helper that moves Mario in a straight line during the lecture.
- * args[0] is the duration in ms; on the first call it saves Mario's position into LW(0) to LW(2),
- * then each frame moves him toward the target held in LW(3) to LW(5) until the time is up.
+ * Script helper: slides Mario in a straight line over args[0] milliseconds. The first call saves his position
+ * in LW(0) to LW(2); each call then places him on the line from LW(3), LW(4), LW(5) (at the start) to that
+ * saved position (at the end). Blocks until the time is up.
  */
 static USER_FUNC(lect_mario_ido_sum) {
     EvtWord* args = event->args;
     MarioWork* mario = marioGetPtr();
-    s32 frames = evtGetValue(event, args[0]);
+    s32 durationMs = evtGetValue(event, args[0]);
     s32 elapsed;
 
     if (isFirstCall) {
@@ -119,14 +119,14 @@ static USER_FUNC(lect_mario_ido_sum) {
         evtSetFloat(event, LW(1), mario->position.y);
         evtSetFloat(event, LW(2), mario->position.z);
     }
-    elapsed = OSTicksToMilliseconds((u64)(s32)((u32)event->lifetime - (u32)wwstart));
-    if (elapsed > frames) {
-        elapsed = frames;
+    elapsed = OSTicksToMilliseconds((u64)OSDiffTick(event->lifetime, wwstart));
+    if (elapsed > durationMs) {
+        elapsed = durationMs;
     }
-    mario->position.x = lect_mario_ido_sub(elapsed, frames, evtGetFloat(event, LW(3)), evtGetFloat(event, LW(0)));
-    mario->position.y = lect_mario_ido_sub(elapsed, frames, evtGetFloat(event, LW(4)), evtGetFloat(event, LW(1)));
-    mario->position.z = lect_mario_ido_sub(elapsed, frames, evtGetFloat(event, LW(5)), evtGetFloat(event, LW(2)));
-    if (elapsed >= frames) {
+    mario->position.x = lect_mario_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(3)), evtGetFloat(event, LW(0)));
+    mario->position.y = lect_mario_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(4)), evtGetFloat(event, LW(1)));
+    mario->position.z = lect_mario_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(5)), evtGetFloat(event, LW(2)));
+    if (elapsed >= durationMs) {
         return EVT_RETURN_DONE;
     }
     return EVT_RETURN_BLOCK;
@@ -188,9 +188,9 @@ static USER_FUNC(x_flag_wait) {
 }
 
 /**
- * Draw callback for the two on-screen button icons of the lecture.
- * For each visible button it draws its icon at its position with its alpha on the 2D camera;
- * the arrow icons (ICON_075 to ICON_07D) are drawn 15 units lower.
+ * 2D draw callback of the two lecture button icons (lbtn): draws each one without LECT_BUTTON_FLAG_HIDDEN at its
+ * position with its alpha; the nine stick icons (ICON_STICK_DOWN_LEFT to ICON_STICK_UP_RIGHT) are drawn with
+ * y lowered by 15.
  */
 static void lecture_button_disp(CameraId camera, void* param) {
     s32 i;
@@ -204,15 +204,15 @@ static void lecture_button_disp(CameraId camera, void* param) {
             Vec pos;
 
             switch (btn->iconId) {
-                case ICON_075:
-                case ICON_076:
-                case ICON_077:
-                case ICON_078:
-                case ICON_079:
-                case ICON_07A:
-                case ICON_07B:
-                case ICON_07C:
-                case ICON_07D:
+                case ICON_STICK_DOWN_LEFT:
+                case ICON_STICK_DOWN:
+                case ICON_STICK_DOWN_RIGHT:
+                case ICON_STICK_LEFT:
+                case ICON_STICK_NEUTRAL:
+                case ICON_STICK_RIGHT:
+                case ICON_STICK_UP_LEFT:
+                case ICON_STICK_UP:
+                case ICON_STICK_UP_RIGHT:
                     ofs = -15.0f;
                     break;
                 default:
@@ -221,7 +221,7 @@ static void lecture_button_disp(CameraId camera, void* param) {
             }
             pos = disp->pos;
             pos.y += ofs;
-            iconDispGxAlpha(&pos, ICON_FLAG_NO_MAP_BLEND | ICON_FLAG_2D, btn->iconId, btn->alpha, 1.0f);
+            iconDispGxAlpha(&pos, ICON_FLAG_NO_MAP_BLEND | ICON_FLAG_2D, 1.0f, btn->iconId, btn->alpha);
         }
     }
 }
@@ -252,7 +252,7 @@ static USER_FUNC(lecture_button_rtn) {
         btn = &lbtn[i];
         switch (btn->seq) {
             case 0:
-                btn->iconId = ICON_068;
+                btn->iconId = ICON_BUTTON_X;
                 btn->seq = 1;
                 break;
             case 2:
@@ -278,7 +278,7 @@ static USER_FUNC(lecture_button_rtn) {
     if (done >= 2) {
         return EVT_RETURN_DONE;
     }
-    dispEntry(CAMERA_2D, 0.0f, 1, lecture_button_disp, NULL);
+    dispEntry(CAMERA_2D, 0.0f, DISP_MODE_ALPHA_TEST, lecture_button_disp, NULL);
     return EVT_RETURN_BLOCK;
 }
 
@@ -375,6 +375,7 @@ static USER_FUNC(lecture_button_set_pos) {
  * Recursive helper for lect_map_cam_chg: puts a map object,
  * its children and (if siblings is set) its siblings onto the camera camId.
  */
+// Descend through this subtree; only recursive calls include following siblings.
 static void lect_map_cam_chg_sub(MapObject* obj, s32 camId, BOOL siblings) {
     obj->cameraId = camId;
     if (obj->child != NULL) {
@@ -433,13 +434,7 @@ static USER_FUNC(effitemget_open_ptr) {
     return EVT_RETURN_DONE;
 }
 
-/**
- * Script helper.
- * With args[0] nonzero moves the 3D camera (position and look-at) up by 2016 units, otherwise down by 2016.
- * Nothing in this file calls it; the identical copies in evt_lect_eki.c and evt_lect_tou.c lift the view, with
- * the lecture actor moved up 2016 units too, while the item-get screen is captured into a paper image, then
- * move both back down.
- */
+/** Script helper: moves the 3D camera and its target 2016 units up (args[0] nonzero) or down (args[0] zero). */
 static USER_FUNC(effitemget_busaiku) {
     s32 up = evtGetValue(event, event->args[0]);
     CameraEntry* camera = camGetPtr(CAMERA_3D);
@@ -450,16 +445,22 @@ static USER_FUNC(effitemget_busaiku) {
     } else {
         ofs = (Vec){0.0f, -2016.0f, 0.0f};
     }
-    effitemget_cam_move(camera, ofs);
+    camera->presetPos = camera->cameraPos;
+    camera->presetAt = camera->cameraAt;
+    PSVECAdd(&camera->cameraPos, &ofs, &camera->storedPos);
+    PSVECAdd(&camera->cameraAt, &ofs, &camera->storedAt);
+    camera->startTimeA = gp->renderTime;
+    camera->durationA = 0;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = EASING_SINE_IN_OUT;
     return EVT_RETURN_DONE;
 }
 
 /**
- * Script helper.
- * Turns the hit areas (nasi = none) of the named map object (or "me") on;
- * each of its two hit entries with a name is switched on with hitGrpFlagOn.
+ * Script helper: switches off the collision of the map object named args[0] ("me" for the running one): each
+ * of its (up to two) named hit objects gets HIT_FLAG_OFF through hitGrpFlagOn (nasi = none).
  */
-static USER_FUNC(lect_mobj_hit_nasi) {
+USER_FUNC(lect_mobj_hit_nasi) {
     const char* name = (const char*)evtGetValue(event, event->args[0]);
     MapObjectEntry* mobj;
     s32 i;
@@ -470,9 +471,8 @@ static USER_FUNC(lect_mobj_hit_nasi) {
         mobj = event->thisMapObj;
     }
     for (i = 0; i < 2; i++) {
-        // name is an array inside MapObjectHitEntry, so the NULL test is always true (as in the game); strcmp does the work
         if (mobj->hitObj[i].name != NULL && strcmp(mobj->hitObj[i].name, "") != 0) {
-            hitGrpFlagOn(mobj->hitObj[i].name, 1);
+            hitGrpFlagOn(mobj->hitObj[i].name, HIT_FLAG_OFF);
         }
     }
     return EVT_RETURN_DONE;
@@ -574,16 +574,16 @@ static USER_FUNC(evtflash) {
 EVT_BEGIN(plane_majin_lecture_init)
     CALL(lect_set_systemlevel, 0)
     CALL(lect_test_systemlevel)
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, 0)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, EASING_LINEAR)
     WAIT_MS(1000)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_mario_set_pos, -300, -600, 0)
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, 11)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, EASING_SINE_IN_OUT)
     CALL(evt_mario_set_pos, LW(0), LW(1), LW(2))
     WAIT_FRAMES(1)
     CALL(evt_mario_set_pos, -300, -600, 0)
     CALL(evt_mario_set_dir, 90, 300, 0)
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, 11)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, EASING_SINE_IN_OUT)
     CALL(lect_map_cam_chg, STRING("hikou"), 7)
     WAIT_FRAMES(1)
     RETURN
@@ -617,8 +617,8 @@ EVT_BEGIN(plane_majin_lecture)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("ペラ魔人"), NPC_FLAG_NO_HIT | NPC_FLAG_NO_WALL_COLLISION)
     CALL(evt_npc_set_camid, STRING("ペラ魔人"), CAMERA_3D_EFFECTB)
     WAIT_FRAMES(1)
     BEGIN_SIBLING_EVENT
@@ -629,10 +629,11 @@ EVT_BEGIN(plane_majin_lecture)
             WAIT_FRAMES(1)
         END_LOOP
     END_SIBLING_EVENT
+
     // The demon reveals his trick, laughs at Mario and curses him in flashes of light.
     CALL(evt_npc_set_anim, STRING("ペラ魔人"), STRING("P_1"))
     WAIT_MS(200)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("mac_majin_13"), 0, STRING("ペラ魔人"))
     CALL(evt_mario_set_pose, STRING("M_N_H"))
     LOOP(4)
@@ -641,10 +642,11 @@ EVT_BEGIN(plane_majin_lecture)
         CALL(evtflash)
     END_LOOP
     CALL(evt_mario_set_pose, STRING("M_S_1"))
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("mac_majin_14"), 0, STRING("ペラ魔人"))
+
     // The camera pans as the airplane panel slides in beside Mario.
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(80.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, 11)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(80.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, EASING_SINE_IN_OUT)
     SET_FLOAT_VALUE(LW(1), FLOAT(2.6660156f))
     CALL(dai_moveti_get, LW(0), LW(2), LW(3))
     LOOP(0)
@@ -658,8 +660,9 @@ EVT_BEGIN(plane_majin_lecture)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // The demon explains airplane panels; the lesson below repeats until Mario says he gets it.
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("mac_majin_15"), 0, STRING("ペラ魔人"))
     LOOP(0)
         CALL(x_flag_set, 0, 1)
@@ -702,14 +705,14 @@ EVT_BEGIN(plane_majin_lecture)
                 WAIT_FRAMES(1)
             END_LOOP
             LOOP(0)
-#if VERSION <= VERSION_DEMO_JP
-                CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, 11)
-#endif
-                CALL(x_flag_get, 1, LW(0))
 #if VERSION >= VERSION_JP
+                CALL(x_flag_get, 1, LW(0))
                 IF_INT_NOT_EQUAL(LW(0), 3)
-                    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, 11)
+                    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, EASING_SINE_IN_OUT)
                 END_IF
+#else
+                CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, EASING_SINE_IN_OUT)
+                CALL(x_flag_get, 1, LW(0))
 #endif
                 IF_INT_EQUAL(LW(0), 2)
                     BREAK_LOOP
@@ -717,24 +720,25 @@ EVT_BEGIN(plane_majin_lecture)
                 WAIT_FRAMES(1)
             END_LOOP
         END_SIBLING_EVENT
+
         // Mario walks onto the panel and is told to press the button; its icon flashes until he does.
         CALL(evt_mario_mov_pos2, FLOAT(-200.0f), FLOAT(0.0f), FLOAT(80.0f))
         CALL(evt_msg_print_add, 0, STRING("mac_majin_15_1"))
         CALL(lecture_button_set_pos, 0, FLOAT(-200.0f), FLOAT(-25.0f), FLOAT(0.0f))
         CALL(lecture_button_flag_on_off, 0, 2, 1)
-        CALL(lecture_button_set_icon_id, 0, ICON_06A)
+        CALL(lecture_button_set_icon_id, 0, ICON_BUTTON_Y)
         CALL(lecture_button_set_seq, 0, 2)
         CALL(lecture_button_seq_wait, 0, 1)
         CALL(x_flag_set, 0, 1)
         BEGIN_INLINE_EVENT
             LOOP(0)
-                CALL(lecture_button_set_icon_id, 0, ICON_06B)
+                CALL(lecture_button_set_icon_id, 0, ICON_BUTTON_Y_PRESSED)
                 WAIT_MS(300)
                 CALL(x_flag_get, 0, LW(0))
                 IF_INT_EQUAL(LW(0), 2)
                     BREAK_LOOP
                 END_IF
-                CALL(lecture_button_set_icon_id, 0, ICON_06A)
+                CALL(lecture_button_set_icon_id, 0, ICON_BUTTON_Y)
                 WAIT_MS(300)
                 CALL(x_flag_get, 0, LW(0))
                 IF_INT_EQUAL(LW(0), 2)
@@ -750,24 +754,14 @@ EVT_BEGIN(plane_majin_lecture)
         CALL(evt_mario_set_enable_key, 2048)
         CALL(evt_mario_key_onoff, 1)
         CALL(evt_mario_key_onoff, 1)
-#endif
         LOOP(0)
-#if VERSION <= VERSION_DEMO_JP
             CALL(lect_status_off)
             WAIT_FRAMES(1)
             CALL(evt_mario_get_motion, LW(3))
             IF_INT_EQUAL(LW(3), 24)
-#else
-            CALL(evt_key_get_buttontrg, 0, LW(0))
-            IF_BITS_SET(LW(0), 2048)
-#endif
                 BREAK_LOOP
             END_IF
-#if VERSION >= VERSION_JP
-            WAIT_FRAMES(1)
-#endif
         END_LOOP
-#if VERSION <= VERSION_DEMO_JP
         CALL(evt_mario_key_onoff, 0)
         CALL(evt_mario_key_onoff, 0)
         CALL(lect_status_on)
@@ -777,9 +771,17 @@ EVT_BEGIN(plane_majin_lecture)
         CALL(mainwindow_openenable)
         CALL(evt_cam_letter_box_disable, 0)
 #else
+        LOOP(0)
+            CALL(evt_key_get_buttontrg, 0, LW(0))
+            IF_BITS_SET(LW(0), PAD_BUTTON_Y)
+                BREAK_LOOP
+            END_IF
+            WAIT_FRAMES(1)
+        END_LOOP
         CALL(evt_msg_continue)
         CALL(evt_mario_paper_plane, 1)
 #endif
+
         // Mario turns into a paper airplane and glides off the panel, and the view follows him down.
         CALL(x_flag_set, 0, 2)
         CALL(lecture_button_set_seq, 0, 3)
@@ -804,7 +806,7 @@ EVT_BEGIN(plane_majin_lecture)
             SET_VALUE(LW(1), -490)
             SET_VALUE(LW(2), 0)
             CALL(evt_mario_set_pos, LW(0), LW(1), LW(2))
-            CALL(evt_cam3d_evt_set, FLOAT(-297.0f), FLOAT(-351.0f), FLOAT(457.0f), FLOAT(-297.0f), FLOAT(-449.0f), FLOAT(-101.799805f), 1000, 0)
+            CALL(evt_cam3d_evt_set, FLOAT(-297.0f), FLOAT(-351.0f), FLOAT(457.0f), FLOAT(-297.0f), FLOAT(-449.0f), FLOAT(-101.799805f), 1000, EASING_LINEAR)
             CALL(evt_mario_cont_onoff, 0)
             CALL(lect_mario_ido_sum, 1000)
             CALL(evt_mario_cont_onoff, 1)
@@ -820,6 +822,7 @@ EVT_BEGIN(plane_majin_lecture)
                 WAIT_FRAMES(1)
             END_LOOP
         END_INLINE_EVENT
+
         // The demon explains steering and asks whether Mario got all that.
         CALL(lecture_button_seq_wait, 0, 1)
         CALL(lecture_button_flag_on_off, 0, 2, 0)
@@ -831,7 +834,7 @@ EVT_BEGIN(plane_majin_lecture)
         CALL(dai_moveti_set, LW(0), LW(1), LW(2))
         CALL(evt_msg_print_add, 0, STRING("mac_majin_16"))
 #else
-        CALL(evt_msg_toge, 1, 0, 0, 0)
+        CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
         CALL(evt_msg_print, 0, STRING("mac_majin_16"), 0, STRING("ペラ魔人"))
 #endif
         CALL(evt_msg_select, 0, STRING("mac_majin_17"))
@@ -841,38 +844,39 @@ EVT_BEGIN(plane_majin_lecture)
             CALL(x_flag_set, 0, 2)
             CALL(evt_mario_paper_plane, 0)
             CALL(dai_moveti_set, FLOAT(0.0f), FLOAT(0.0f), FLOAT(0.0f))
+#else
+        SET_VALUE(LW(3), LW(0))
+#endif
             LOOP(0)
                 CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+#if VERSION <= VERSION_DEMO_JP
                 IF_INT_LESS_OR_EQUAL(LW(1), -900)
+#else
+            IF_INT_GREATER_OR_EQUAL(LW(1), -550)
+#endif
                     BREAK_LOOP
                 END_IF
                 WAIT_FRAMES(1)
             END_LOOP
+#if VERSION <= VERSION_DEMO_JP
             CALL(evt_mario_cont_onoff, 0)
             CALL(evt_mario_set_pos, -300, -600, 0)
-            CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), 0, 11)
+            CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(0.0f), FLOAT(42.0f), FLOAT(-101.799805f), EASING_LINEAR, 11)
             CALL(evt_mario_set_pos, -300, -400, 0)
             WAIT_MS(1000)
             CALL(evt_mario_cont_onoff, 1)
 #else
-        SET_VALUE(LW(3), LW(0))
-        LOOP(0)
-            CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-            IF_INT_GREATER_OR_EQUAL(LW(1), -550)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
         IF_INT_EQUAL(LW(3), 0)
             CALL(x_flag_set, 1, 2)
             WAIT_FRAMES(2)
-            CALL(evt_cam3d_evt_set, FLOAT(-300.0f), FLOAT(-460.0f), FLOAT(457.0f), FLOAT(-300.0f), FLOAT(-558.0f), FLOAT(-101.799805f), 1200, 0)
+            CALL(evt_cam3d_evt_set, FLOAT(-300.0f), FLOAT(-460.0f), FLOAT(457.0f), FLOAT(-300.0f), FLOAT(-558.0f), FLOAT(-101.799805f), 1200, EASING_LINEAR)
             CALL(x_flag_set, 0, 2)
             CALL(evt_mario_paper_plane, 0)
 #endif
+
             // After "I zoned out", Mario lands, the panel slides back in and the demon goes over it again.
             CALL(evt_mario_wait_landon)
-            CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(80.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, 11)
+            CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(98.0f), FLOAT(558.0f), FLOAT(80.0f), FLOAT(42.0f), FLOAT(-101.799805f), 1000, EASING_SINE_IN_OUT)
             SET_FLOAT_VALUE(LW(1), FLOAT(2.6660156f))
             CALL(dai_moveti_get, LW(0), LW(2), LW(3))
             LOOP(0)
@@ -891,12 +895,13 @@ EVT_BEGIN(plane_majin_lecture)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // The demon hints at how to change back; Mario drops out of plane mode and the demon leaves.
     CALL(evt_msg_print_add, 0, STRING("mac_majin_18_1"))
 #if VERSION >= VERSION_JP
     CALL(x_flag_set, 1, 2)
     WAIT_FRAMES(2)
-    CALL(evt_cam3d_evt_set, FLOAT(-300.0f), FLOAT(-460.0f), FLOAT(457.0f), FLOAT(-300.0f), FLOAT(-558.0f), FLOAT(-101.799805f), 1200, 0)
+    CALL(evt_cam3d_evt_set, FLOAT(-300.0f), FLOAT(-460.0f), FLOAT(457.0f), FLOAT(-300.0f), FLOAT(-558.0f), FLOAT(-101.799805f), 1200, EASING_LINEAR)
 #endif
     CALL(x_flag_set, 0, 2)
     CALL(evt_mario_paper_plane, 0)
@@ -917,13 +922,10 @@ EVT_BEGIN(plane_majin_lecture)
     CALL(evt_npc_set_camid, STRING("ペラ魔人"), CAMERA_3D)
     CALL(evt_npc_set_position, STRING("ペラ魔人"), 0, -1000, 0)
     RETURN
-#if VERSION <= VERSION_DEMO_JP
 EVT_END()
-#else
-EVT_END_PAD()
-#endif
 
 /** Script helper. Stores TRUE in args[0] while the R trigger is held on controller 0, otherwise FALSE. */
+#if VERSION >= VERSION_JP
 static USER_FUNC(lect_push_r_check) {
     EvtWord* args = event->args;
 
@@ -934,6 +936,20 @@ static USER_FUNC(lect_push_r_check) {
     }
     return EVT_RETURN_DONE;
 }
+#endif
+
+#if VERSION <= VERSION_DEMO_JP
+static USER_FUNC(lect_push_r_check) {
+    EvtWord* args = event->args;
+
+    if (keyGetButton(0) & PAD_TRIGGER_R) {
+        evtSetValue(event, args[0], TRUE);
+    } else {
+        evtSetValue(event, args[0], FALSE);
+    }
+    return EVT_RETURN_DONE;
+}
+#endif
 
 /**
  * Script helper (normal change).

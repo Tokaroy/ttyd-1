@@ -1,19 +1,19 @@
-// Saved work driver: the event flags and words kept in the save file: the global ones (GSW/GSWF)
-// and the area-local ones (LSW/LSWF).
+/* "swdrv" - Saved Work Driver (for evt)
+ * Helper driver for accessing the "saved work" data for evt scripts.
+ */
 #include "driver/swdrv.h"
 #include "mario/mariost.h"
 #include <string.h>
 
 /**
  * Clears all saved work: the global flags (GSWF) and words (GSW, including GSW0)
- * and the area-local ones (LSWF, LSW). Runs at boot, on a new or loaded file (seq_load) and in the E3 demo.
+ * and the area-local ones (LSWF, LSW). Runs at boot, when a new file starts (seq_load) and in the E3 demo.
  */
 void swInit(void) {
-    memset(gp->gswf, 0, sizeof(gp->gswf));
-    memset(gp->gsw, 0, sizeof(gp->gsw));
-    memset(gp->lswf, 0, sizeof(gp->lswf));
-    memset(gp->lsw, 0, sizeof(gp->lsw));
-    gp->gsw0 = 0;
+    memset(gp->gSWF, 0, sizeof(gp->gSWF));
+    memset(gp->gSW, 0, sizeof(gp->gSW));
+    swReInit();
+    gp->gSW0 = 0;
 }
 
 /**
@@ -21,64 +21,94 @@ void swInit(void) {
  * the map-change sequence calls it when Mario enters a different area.
  */
 void swReInit(void) {
-    memset(gp->lswf, 0, sizeof(gp->lswf));
-    memset(gp->lsw, 0, sizeof(gp->lsw));
+    memset(gp->lSWF, 0, sizeof(gp->lSWF));
+    memset(gp->lSW, 0, sizeof(gp->lSW));
 }
 
-/** Global Saved Work Flags -------------------------------------- */
-void swSet(s32 index) { // set specific bit
-    gp->gswf[index / 32] |= (1 << (index % 32));
+// Global Saved Work Flags --------------------------------------
+
+/** Sets global saved flag GSWF(index). */
+void swSet(s32 index) {
+    gp->gSWF[index / 32] |= (1 << (index % 32));
 }
 
 /** Returns whether global saved flag GSWF(index) is set. */
-BOOL swGet(s32 index) { // get specific bit
-    return (gp->gswf[index / 32] & (1 << (index % 32))) != 0;
+BOOL swGet(s32 index) {
+    return (gp->gSWF[index / 32] & (1 << (index % 32))) != 0;
 }
 
 /** Clears global saved flag GSWF(index). */
-void swClear(s32 index) { // clear specific bit
-    gp->gswf[index / 32] &= ~(1 << (index % 32));
+void swClear(s32 index) {
+    gp->gSWF[index / 32] &= ~(1 << (index % 32));
 }
 
-/** Global Saved Work -------------------------------------------- */
+/** Flips global saved flag GSWF(index). */
+// swToggle and _swToggle: original names and sizes (0x54 each) from the JP demo map (UNUSED there: nothing calls
+// them); each follows its Set, Get and Clear in the map. The size is the inlined Get test with the Clear and the Set
+// as its two arms (a plain exclusive-or would be 0x40).
+void swToggle(s32 index) {
+    if (swGet(index)) {
+        swClear(index);
+    } else {
+        swSet(index);
+    }
+}
+
+// Global Saved Work --------------------------------------------
+
+/** Sets global saved word GSW(index); GSW(0), the story progress, is a full 32-bit value, the others are bytes. */
 void swByteSet(s32 index, s32 value) {
     if (index == 0) {
-        gp->gsw0 = value;
+        gp->gSW0 = value;
     } else {
-        gp->gsw[index] = (u8)value;
+        gp->gSW[index] = (u8)value;
     }
 }
 
 /** Returns global saved word GSW(index). GSW(0), the story progress, is a full 32-bit value; the others are bytes. */
 s32 swByteGet(s32 index) {
     if (index == 0) {
-        return gp->gsw0;
+        return gp->gSW0;
     } else {
-        return gp->gsw[index];
+        return gp->gSW[index];
     }
 }
 
-/** Local Saved Work Flags --------------------------------------- */
-void _swSet(s32 index) { // set specific bit
-    gp->lswf[index / 32] |= (1 << (index % 32));
+// Local Saved Work Flags ---------------------------------------
+
+/** Sets area-local saved flag LSWF(index). */
+void _swSet(s32 index) {
+    gp->lSWF[index / 32] |= (1 << (index % 32));
 }
 
 /** Returns whether area-local saved flag LSWF(index) is set. */
-BOOL _swGet(s32 index) { // get specific bit
-    return (gp->lswf[index / 32] & (1 << (index % 32))) != 0;
+BOOL _swGet(s32 index) {
+    return (gp->lSWF[index / 32] & (1 << (index % 32))) != 0;
 }
 
 /** Clears area-local saved flag LSWF(index). */
-void _swClear(s32 index) { // clear specific bit
-    gp->lswf[index / 32] &= ~(1 << (index % 32));
+void _swClear(s32 index) {
+    gp->lSWF[index / 32] &= ~(1 << (index % 32));
 }
 
-/** Local Saved Work --------------------------------------------- */
+/** Flips area-local saved flag LSWF(index). */
+// Original name and size from the JP demo map (see swToggle).
+void _swToggle(s32 index) {
+    if (_swGet(index)) {
+        _swClear(index);
+    } else {
+        _swSet(index);
+    }
+}
+
+// Local Saved Work ---------------------------------------------
+
+/** Sets area-local saved byte LSW(index). */
 void _swByteSet(s32 index, u8 value) {
-    gp->lsw[index] = value;
+    gp->lSW[index] = value;
 }
 
 /** Returns area-local saved byte LSW(index). */
 s32 _swByteGet(s32 index) {
-    return gp->lsw[index];
+    return gp->lSW[index];
 }

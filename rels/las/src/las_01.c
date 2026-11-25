@@ -1,15 +1,28 @@
 // las_01 (ラストダンジョン, Palace of Shadow): the first hall inside the palace.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_item.h"
 #include "evt/evt_map.h"
 #include "evt/evt_snd.h"
-#include "las.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
 static BeroEntry bero_entry_data[3];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord las_01_init_evt[];
+#else
+EvtWord las_01_init_evt[35];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -109,15 +122,15 @@ static BeroEntry bero_entry_data[] = {
  * the ripple animation "hamon", and a Stopwatch item lying in the hall.
  */
 EVT_BEGIN(las_01_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS2"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS2"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_map_playanim, STRING("hamon"), 1, 0)
-    CALL(evt_item_entry, STRING("item_01"), ITEM_STOPWATCH, -710, 448, -175, ITEM_ENTRY_FIXED, GSWF(GSWF_LAS01_STOPWATCH_ITEM_01), 0)
+    CALL(evt_map_playanim, STRING("hamon"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_item_entry, STRING("item_01"), ITEM_STOPWATCH, -710, 448, -175, ITEM_TYPE_STILL, GSWF_LAS_01_STOPWATCH, 0)
     RETURN
 EVT_END()

@@ -1,5 +1,6 @@
 // Sheep (hituji: sheep): a herd of 50 sheep (EFF_hituji model) running and hopping across the screen
 // with the item sleep sounds and puffs of smoke.
+
 #include "eff/eff_sheep.h"
 #include "eff/eff_kemu_test.h"
 #include "battle/battle.h"
@@ -16,8 +17,8 @@ typedef struct EffSheepWork {
     s32 type;      // 0x0
     Vec position;  // 0x4
     f32 scale;     // 0x10
-    s32 hopFrames; // 0x14, frames per hop
-    f32 hopVelY;   // 0x18
+    s32 hopFrames; // 0x14
+    f32 velY;      // 0x18
     f32 gravity;   // 0x1C
     s32 poseId;    // 0x20
     s32 state;     // 0x24
@@ -26,7 +27,7 @@ typedef struct EffSheepWork {
     s32 sfxId;     // 0x30
 } EffSheepWork;
 
-static void effSheepDisp(CameraId cameraId, EffectEntry* effect);
+static void effSheepDisp(CameraId cameraId, void* param);
 static void effSheepMain(EffectEntry* effect);
 
 /**
@@ -38,7 +39,6 @@ static void effSheepMain(EffectEntry* effect);
 EffectEntry* effSheepEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffSheepWork* work;
-    EffSheepWork* p;
     s32 i;
 
     effect = effEntry();
@@ -50,34 +50,34 @@ EffectEntry* effSheepEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(EffSheepWork));
     effect->userdata = work;
     effect->callback = effSheepMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
     work->position.z = z;
     work->scale = 1.0f;
     work->state = 0;
-    for (i = 1, p = work + 1; i < effect->count; i++, p++) {
-        p->type = irand(100) < 20;
-        p->position.x = -500.0f;
-        p->position.y = 0.0f;
-        p->position.z = 0.0f;
-        p->poseId = -1;
-        p->state = 0;
-        p->scale = (irand(5) + 8) / 10.0f;
-        p->speed = (irand(20) + 20) / 10.0f;
-        p->timer = i + irand(30);
-        p->position.z = 100 - irand(200);
-        if (p->type != 0) {
-            p->hopFrames = (s32)((irand(50) + 50) / p->speed);
-            p->gravity = 0.2f;
-            p->hopVelY = p->gravity * p->hopFrames / 2.0f;
+    for (i = 1, work++; i < effect->count; i++, work++) {
+        work->type = irand(100) < 20;
+        work->position.x = -500.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->poseId = -1;
+        work->state = 0;
+        work->scale = (irand(5) + 8) / 10.0f;
+        work->speed = (irand(20) + 20) / 10.0f;
+        work->timer = i + irand(30);
+        work->position.z = 100 - irand(200);
+        if (work->type != 0) {
+            work->hopFrames = (s32)((irand(50) + 50) / work->speed);
+            work->gravity = 0.2f;
+            work->velY = work->gravity * work->hopFrames / 2.0f;
         }
         if (effect->count - 1 == i) {
-            p->position.z = 0.0f;
-            p->type = 0;
-            p->scale = 1.0f;
-            p->timer = effect->count + 200;
+            work->position.z = 0.0f;
+            work->type = 0;
+            work->scale = 1.0f;
+            work->timer = effect->count + 200;
         }
     }
     return effect;
@@ -98,6 +98,8 @@ static void effSheepMain(EffectEntry* effect) {
     s32 inBattle;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
+    EffSheepWork* q;
+    s32 k;
 
     tmp.x = work->position.x;
     tmp.y = work->position.y;
@@ -105,18 +107,14 @@ static void effSheepMain(EffectEntry* effect) {
     position = tmp;
     inBattle = gp->inBattle != 0;
 
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
-        {
-            EffSheepWork* q;
-            s32 k;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
 
-            q = effect->userdata;
-            q++;
-            for (k = 1; k < effect->count; k++, q++) {
-                if (q->poseId != -1) {
-                    animPoseRelease(q->poseId);
-                }
+        q = effect->userdata;
+        q++;
+        for (k = 1; k < effect->count; k++, q++) {
+            if (q->poseId != -1) {
+                animPoseRelease(q->poseId);
             }
         }
         psndSFXOff(((EffSheepWork*)effect->userdata)[1].sfxId);
@@ -166,11 +164,11 @@ static void effSheepMain(EffectEntry* effect) {
                 if (p->position.x < 500.0f) {
                     p->position.x += p->speed;
                     if (p->type == 1) {
-                        p->position.y += p->hopVelY;
-                        p->hopVelY -= p->gravity;
+                        p->position.y += p->velY;
+                        p->velY -= p->gravity;
                         if (p->position.y < 0.0f) {
                             p->position.y = 0.0f;
-                            p->hopVelY *= -1.0f;
+                            p->velY *= -1.0f;
                         }
                     }
                 } else {
@@ -203,12 +201,13 @@ static void effSheepMain(EffectEntry* effect) {
     if (done >= effect->count - 1) {
         effDelete(effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 1, (DispCallback)effSheepDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_ALPHA_TEST, effSheepDisp, effect);
     }
 }
 
 /** Draws every active sheep pose at its offset and scale relative to the effect position. */
-static void effSheepDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSheepDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffSheepWork* work = effect->userdata;
     Mtx trans;
     Mtx scale;

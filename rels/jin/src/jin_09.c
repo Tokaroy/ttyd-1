@@ -1,20 +1,24 @@
 // jin_09 (ダイム寺院, Creepy Steeple): dripping room with a jump stand and a power-up block; door to jin_10.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
+#include "jin.h"
 #include "evt/evt_cam.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "jin.h"
-#include "evt/evt_story.h"
+#include "evt/evt_mobj.h"
+#include "driver/seqdrv.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[2];
-extern EvtWord jin_09_jumpstand[];
+static EvtWord jin_09_jumpstand[21];
+EvtWord jin_09_init_evt[214];
 
 /** Doors of this room: the east exit (e_bero) to jin_10. */
 static BeroEntry bero_entry_data[] = {
@@ -38,7 +42,7 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /** Script for the red jump stand: Mario is launched up in an arc by the stand. */
-EVT_BEGIN(jin_09_jumpstand)
+static EVT_BEGIN(jin_09_jumpstand)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_jump_jumpstand, 0, 0, 0, -10, 700, 0, 50, 0, 0, 1800, 1)
     CALL(evt_mario_key_onoff, 1)
@@ -50,22 +54,23 @@ EVT_END()
  * adds the Shine Sprite power-up block, the random water-drip animations and sounds,
  * the red jump stand and the drop-in entrance from above.
  */
+// Scripted entry waits for Mario to fall below Y=365 before rearming the upward exit at that height.
 EVT_BEGIN(jin_09_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_JIN1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_JIN1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_JIN1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_JIN1"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_usu_kagemario_party_kill)
-    CALL(evt_mobj_powerupblk, STRING("blk00"), -120, 60, 90, 0, GSWF(GSWF_JIN09_SHINE_SPRITE), 0)
+    CALL(evt_mobj_powerupblk, STRING("blk00"), -120, 60, 90, 0, GSWF_SHINE_25, 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
             CALL(evt_sub_random, 3000, LW(0))
             ADD(LW(0), 1000)
             WAIT_MS(LW(0))
-            CALL(evt_map_playanim, STRING("sizuku_01"), 0, 0)
+            CALL(evt_map_playanim, STRING("sizuku_01"), MAP_ANIM_PLAY_ONCE, 0)
             CALL(evt_map_checkanim, STRING("sizuku_01"), LW(0), LW(1))
             WAIT_MS(LW(1))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_AMB_WATERDROP1"), -76, 0, 13, 0)
@@ -76,15 +81,15 @@ EVT_BEGIN(jin_09_init_evt)
             CALL(evt_sub_random, 3000, LW(0))
             ADD(LW(0), 1000)
             WAIT_MS(LW(0))
-            CALL(evt_map_playanim, STRING("sizuku_02"), 0, 0)
+            CALL(evt_map_playanim, STRING("sizuku_02"), MAP_ANIM_PLAY_ONCE, 0)
             CALL(evt_map_checkanim, STRING("sizuku_02"), LW(0), LW(1))
             WAIT_MS(LW(1))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG4_AMB_WATERDROP1"), 32, 0, -64, 0)
         END_LOOP
     END_INLINE_EVENT
     CALL(evt_mobj_jumpstand_red, 0, STRING("jumpstand"), 0, 0, 0, PTR(jin_09_jumpstand), 0)
-    IF_INT_NOT_EQUAL(GSWF(GSWF_STG4_DROP_IN_ENTRANCE), 0)
-        SET_VALUE(GSWF(GSWF_STG4_DROP_IN_ENTRANCE), 0)
+    IF_INT_NOT_EQUAL(GSWF_JIN_SCRIPTED_ENTRY_PENDING, 0)
+        SET_VALUE(GSWF_JIN_SCRIPTED_ENTRY_PENDING, 0)
         BEGIN_INLINE_EVENT
             CALL(evt_mario_key_onoff, 0)
             CALL(evt_mario_cont_onoff, 0)
@@ -95,7 +100,7 @@ EVT_BEGIN(jin_09_init_evt)
                 CALL(evt_party_set_pos, 0, 0, 395, 0)
             END_IF
             CALL(evt_cam_road_reset)
-            CALL(evt_seq_wait, 2)
+            CALL(evt_seq_wait, SEQ_GAME)
             CALL(evt_mario_cont_onoff, 1)
             WAIT_MS(180)
             CALL(evt_party_cont_onoff, 0, 1)
@@ -107,7 +112,7 @@ EVT_BEGIN(jin_09_init_evt)
     END_IF
     BEGIN_INLINE_EVENT
         IF_INT_NOT_EQUAL(LW(0), 0)
-            CALL(evt_seq_wait, 2)
+            CALL(evt_seq_wait, SEQ_GAME)
             LOOP(0)
                 CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
                 IF_INT_LESS(LW(1), 365)

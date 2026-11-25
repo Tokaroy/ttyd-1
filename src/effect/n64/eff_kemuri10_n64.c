@@ -1,4 +1,6 @@
-// Paper Mario 64 smoke effect 10 (kemuri: smoke) moving along a direction vector with a scale.
+// Paper Mario 64 smoke effect 10 (kemuri: smoke) drifting against a direction vector, with a scale.
+
+#include "version.h"
 #include "eff/n64/eff_kemuri10_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -10,9 +12,8 @@
 #include <dolphin/mtx.h>
 #include "libc_decls.h"
 #include <math.h>
-#include "version.h"
 
-/** Smoke cloud mesh (192 vertices) of the puff left beside a moving NPC. */
+/** Smoke cloud mesh (36 vertices, drawn as 64 triangles) of the puff left behind Kammy's broom (evt_npc.c). */
 static effN64Vtx stg_houki_kemuri_v[] = {
     {0, -50, 20, 0, 512, 255, 255, 255, 255},
     {35, -35, 20, 256, 512, 255, 255, 255, 255},
@@ -53,45 +54,44 @@ static effN64Vtx stg_houki_kemuri_v[] = {
 };
 
 static void effKemuri10Main(EffectEntry* effect);
-static void effKemuri10Disp(CameraId cameraId, EffectEntry* effect);
+static void effKemuri10Disp(CameraId cameraId, void* payload);
 
 /**
- * Spawns smoke effect 10 at (x, y, z) heading along (dx, dy, dz);
- * a zero direction makes no effect (NULL is returned).
- * Spawned by evt_npc.c beside a moving NPC and by event scripts through evt_eff.
+ * Spawns smoke effect 10 at (x, y, z), oriented by (dx, dy, dz) and drifting the opposite way
+ * (velocity -4 times the unit direction); a zero direction returns NULL.
+ * Spawned by evt_npc.c (_kamek_houki_kemuri, behind the broom of a flying NPC) and by event scripts through evt_eff64.
  */
 EffectEntry* effKemuri10N64Entry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz, f32 scale) {
     EffectEntry* effect;
     EffKemuri10N64Work* work;
     f32 inv;
-    f32 zr;
     f32 az, ay, ax;
     f32 bx, by, bz;
 
     effect = effEntry();
-    zr = 0.0f;
-    if (dx == zr && dy == zr && dz == zr) {
+
+    if (!dx && !dy && !dz) {
         return NULL;
     }
     inv = dx * dx + dy * dy + dz * dz;
-    if (inv == zr) {
+    if (!inv) {
         return NULL;
     }
     inv = 1.0f / sqrtf(inv);
     dx *= inv;
     dy *= inv;
     dz *= inv;
-    if (dx != zr || dz != zr) {
+    if (dx || dz) {
         az = dz;
-        ay = zr;
+        ay = 0.0f;
         ax = -dx;
     } else {
         az = 1.0f;
-        ax = zr;
-        ay = zr;
+        ax = 0.0f;
+        ay = 0.0f;
     }
     inv = az * az + ay * ay + ax * ax;
-    if (inv == zr) {
+    if (!inv) {
         return NULL;
     }
     inv = 1.0f / sqrtf(inv);
@@ -102,7 +102,7 @@ EffectEntry* effKemuri10N64Entry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dy, 
     by = ax * dx - az * dz;
     bz = az * dy - ay * dx;
     inv = bx * bx + by * by + bz * bz;
-    if (inv == zr) {
+    if (!inv) {
         return NULL;
     }
     inv = 1.0f / sqrtf(inv);
@@ -141,19 +141,19 @@ EffectEntry* effKemuri10N64Entry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dy, 
     work->rot[0][2] = dx;
     work->rot[1][2] = dy;
     work->rot[2][2] = dz;
-    work->rot[0][3] = zr;
-    work->rot[1][3] = zr;
-    work->rot[2][3] = zr;
+    work->rot[0][3] = 0.0f;
+    work->rot[1][3] = 0.0f;
+    work->rot[2][3] = 0.0f;
     work->scale = 0.1f * scale;
 #if VERSION >= VERSION_JP
-    work->camera = 4;
+    work->camera = CAMERA_3D;
 #endif
     return effect;
 }
 
 /**
  * Lives 16 frames.
- * The alpha rises and the velocity decays for the first 11 frames, then both drop off quickly;
+ * The alpha rises and the velocity decays for the first 10 frames, then (after one frame with neither) both drop off quickly;
  * the scale grows by 5% per frame and the texture offset scrolls.
  */
 static void effKemuri10Main(EffectEntry* effect) {
@@ -161,7 +161,7 @@ static void effKemuri10Main(EffectEntry* effect) {
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 i;
-    s32 camera;
+    CameraId camera;
     s32 timer;
 
     work = effect->userdata;
@@ -169,6 +169,7 @@ static void effKemuri10Main(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
+
     timer = work->timer;
 #if VERSION >= VERSION_JP
     camera = work->camera;
@@ -180,18 +181,15 @@ static void effKemuri10Main(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    for (i = 0; i < effect->count; i++) {
+    for (i = 0; i < effect->count; i++, work++) {
         if (timer > 5) {
-            work->alpha = (s32)((f32)work->alpha + 0.3f * (f32)(255 - work->alpha));
+            work->alpha += 0.3f * (255 - work->alpha);
             work->velocity.x *= 0.8f;
             work->velocity.y *= 0.8f;
             work->velocity.z *= 0.8f;
         }
         if (timer < 5) {
-            {
-                f32 fa = work->alpha;
-                work->alpha = (fa *= 0.6f);
-            }
+            work->alpha *= 0.6f;
             work->velocity.x *= 0.7f;
             work->velocity.y *= 0.7f;
             work->velocity.z *= 0.7f;
@@ -201,17 +199,17 @@ static void effKemuri10Main(EffectEntry* effect) {
         work->position.z += work->velocity.z;
         work->texOffset += work->texSpeed;
         work->scale *= 1.05f;
-        work++;
     }
 #if VERSION <= VERSION_DEMO_JP
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKemuri10Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effKemuri10Disp, effect);
 #else
-    dispEntry((CameraId)camera, dispCalcZ(&position), 2, (DispCallback)effKemuri10Disp, effect);
+    dispEntry(camera, dispCalcZ(&position), DISP_MODE_XLU, effKemuri10Disp, effect);
 #endif
 }
 
-/** Draws the smoke cloud mesh (stg_houki_kemuri_v, 192 vertices) with texture 0x1F, oriented by the direction frame. */
-static void effKemuri10Disp(CameraId cameraId, EffectEntry* effect) {
+/** Draws the smoke cloud mesh (stg_houki_kemuri_v, 64 triangles = 192 vertex indices) with texture 0x1F, oriented by the direction frame. */
+static void effKemuri10Disp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera = camGetPtr(cameraId);
     EffKemuri10N64Work* work = effect->userdata;
     s32 idx;

@@ -1,8 +1,28 @@
 // yuu_03 (遊技場, Pianta Parlor): minigame 4, Paper Mode (slit, squeezing through slots); entered from gor_03 or mon_10.
 
 #include "version.h"
+#include "evt/evt_yuuranking.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "cam_shift.h"
+#include "libc_decls.h"
+#include "party.h"
+#include "driver/mapdrv.h"
+#include "evt/evt_map.h"
+#include "evt/evt_bero.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_fade.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "mot/mot_slit.h"
+#include "evt/evt_yuugijou.h"
+#include "mot/mot_roll.h"
+#include "rels/yuu/include/yuu.h"
+#include "pmario_sound.h"
 
 #include "manager/evtmgr_cmd.h"
 #include "driver/camdrv.h"
@@ -15,30 +35,11 @@
 #include "dolphin/gx.h"
 #include "dolphin/mtx.h"
 #include "driver/effdrv.h"
-#include "cam_shift.h"
-#include "evt/evt_bero.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_fade.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_yuugijou.h"
-#include "evt/evt_yuuranking.h"
-#include "mot/mot_slit.h"
-#include "party.h"
 #include "system.h"
 #include "icon_ids.h"
 #include "yuu.h"
-#include "libc_decls.h"
-#include "evt/evt_story.h"
-#include "driver/mapdrv.h"
-#include "mot/mot_roll.h"
-#if VERSION >= VERSION_US
-USER_FUNC(evt_sub_get_language);
-#endif
+#include "driver/seqdrv.h"
+#include <dolphin/pad.h>
 
 typedef struct RyushiWork {
     s32 flag;
@@ -56,27 +57,71 @@ typedef struct RyushiWork {
     s32 b2;
 } RyushiWork;
 static void* yuunpc_wp;
-s32 ryuwp;
-RyushiWork* xwp;
+static s32 ryuwp;
+static RyushiWork* xwp;
+
 #if VERSION >= VERSION_JP
 Monte* yuu_03_monte_p;
 #endif
+
+static void polygon(f32 x, f32 y, f32 w, f32 h, f32 u, f32 v);
+static f32 randf(f32 min, f32 max);
 static USER_FUNC(evt_ryushi_init);
 BOOL yuuminigame4_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp, SlitWork* data);
-#define REVISE360(a) ((3600.0f + (a)) - (s32)((3600.0f + (a)) / 360.0f) * 360)
 
+/** Brings angle a (above -3600) into [0, 360) by whole turns, in one step (mario_sbr revise360 loops). */
+static inline f32 wrap360(f32 a) {
+    return (3600.0f + a) - (s32)((3600.0f + a) / 360.0f) * 360;
+}
+
+USER_FUNC(evt_ryushi);
+static USER_FUNC(evt_ryushi_clr);
+static USER_FUNC(re_init_yuunpc);
+USER_FUNC(yuu_03_icon_monte_entry);
+USER_FUNC(yuu_03_cam_shift_reset);
+static USER_FUNC(yuuminigame4_opening_chk);
+static USER_FUNC(yuuminigame4_opening_on_off);
+static USER_FUNC(yuuminigame4_set_phase);
+static USER_FUNC(yuunpc_go);
 static USER_FUNC(evt_nomal_cange);
+static USER_FUNC(evt_slit_cancel);
+USER_FUNC(yuu_03_icon_monte_restart);
 
 #if VERSION >= VERSION_JP
+EvtWord yuu_03_icon_monte_entry_evt[4];
+#endif
+
+static EvtWord ryushi_event[25];
+EvtWord yuu_03_kaijo_init[12];
+EvtWord yuu_03_kaijo_init2[12];
+static EvtWord minigame04_main[33];
+static EvtWord minigame04_start_cam[40];
+static EvtWord minigame04_start_cam_cancel[20];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord minigame04_start[];
+extern EvtWord minigame04_end[];
+#else
+EvtWord minigame04_start[91];
+EvtWord minigame04_end[256];
+#endif
+
+EvtWord yuu_03_init_evt[VERSION_PICK(26, 140)];
+
 /** Resets the camera shift offset (camShiftReset) so the camera returns to its normal framing after the minigame. */
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_0000371c, JP yuu .text+0x3650. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 USER_FUNC(yuu_03_cam_shift_reset) {
     camShiftReset();
     return EVT_RETURN_DONE;
 }
+#endif
 
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_0000365c, JP yuu .text+0x3590. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 /**
- * Draw callback for the marker icon (ICON_1B6) that floats above Mario during Paper Mode;
- * it bobs up 5 units for part of each 32-frame cycle.
+ * Draw callback of the marker icon (ICON_ARROW_DOWN) that yuu_03_icon_monte_entry keeps above Mario: draws each
+ * shown entry at its position, 5 units higher for 9 of every 32 frames.
  */
 void yuu_03_icon_monte_disp(CameraId camera, void* param) {
     Monte* monte = param;
@@ -86,27 +131,30 @@ void yuu_03_icon_monte_disp(CameraId camera, void* param) {
     if (monte != NULL) {
         for (i = 0; i < monte->num; i++) {
             if (monte[i].hidden == 0) {
-                pos = monte[i].icon.position;
+                pos = monte[i].sub.pos;
                 if ((gp->retraceCount & 0x1F) < 9) {
                     pos.y += 5.0f;
                 }
-                iconDispGx(&pos, 0, ICON_1B6, 1.0f);
+                iconDispGx(&pos, 0, 1.0f, ICON_ARROW_DOWN);
             }
         }
     }
 }
+#endif
 
 /**
  * View event that creates the single marker icon on its first call,
  * keeps it 40 units above Mario every frame and draws it through yuu_03_icon_monte_disp. Blocks forever.
  */
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_000034bc, JP yuu .text+0x33F0. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 USER_FUNC(yuu_03_icon_monte_entry) {
     BOOL exists = FALSE;
     MiniGameWork* wp = (MiniGameWork*)event->lwData[0];
     MarioWork* mario = marioGetPtr();
     s32 total;
     s32 i;
-    IconEntry* sub;
+    MonteSub* sub;
     Monte* m;
 
     if (isFirstCall) {
@@ -122,9 +170,9 @@ USER_FUNC(yuu_03_icon_monte_entry) {
         yuu_03_monte_p->num = total;
         yuu_03_monte_p->wp = wp;
         for (i = 0; i < yuu_03_monte_p->num; i++) {
-            sub = &yuu_03_monte_p[i].icon;
-            sub->position = mario->position;
-            sub->position.y += 40.0f;
+            sub = &yuu_03_monte_p[i].sub;
+            sub->pos = mario->position;
+            sub->pos.y += 40.0f;
             sub->scale = 1.0f;
         }
     }
@@ -132,23 +180,26 @@ USER_FUNC(yuu_03_icon_monte_entry) {
         m = &yuu_03_monte_p[i];
         switch (m->state) {
             case 0:
-                m->icon.position = mario->position;
-                m->icon.position.y += 40.0f;
+                m->sub.pos = mario->position;
+                m->sub.pos.y += 40.0f;
                 break;
             case 1:
                 break;
         }
     }
     if (!exists) {
-        dispEntry(CAMERA_3D, 0.0f, 1, yuu_03_icon_monte_disp, yuu_03_monte_p);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, yuu_03_icon_monte_disp, yuu_03_monte_p);
     }
     return EVT_RETURN_BLOCK;
 }
+#endif
 
 /**
  * Rebuilds the marker icon view event for the next round:
  * stops the old event, frees the icon array and starts a new one.
  */
+// Descriptive name (not in the symbol maps); placeholder unk_yuu_0000341c, JP yuu .text+0x3350. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 USER_FUNC(yuu_03_icon_monte_restart) {
     SlitWork* data;
 
@@ -189,7 +240,7 @@ static USER_FUNC(evt_slit_cancel) {
     return EVT_RETURN_DONE;
 }
 
-/** Script call that re-runs the Paper Mode NPC (Pianta) set-up for the next round (ext_yuunpc_minigame4_init_sub). */
+/** Script call that re-runs the Paper Mode racer set-up for the next round (ext_yuunpc_minigame4_init_sub). */
 static USER_FUNC(re_init_yuunpc) {
     ext_yuunpc_minigame4_init_sub();
     return EVT_RETURN_DONE;
@@ -197,16 +248,16 @@ static USER_FUNC(re_init_yuunpc) {
 
 /**
  * Script call that clears bit 1 of the NPC work flags (yuunpc_wp_flag_off),
- * letting the Pianta NPC move once the game starts.
+ * letting the racers move once the game starts.
  */
 static USER_FUNC(yuunpc_go) {
-    yuunpc_wp_flag_off(1);
+    yuunpc_wp_flag_off(YUUNPC_WP_FLAG_WAIT);
     return EVT_RETURN_DONE;
 }
 
 /**
- * Script call that returns Mario to his normal form:
- * cancels any roll and the paper-mode slit squeeze, then blocks until he is no longer in a slit.
+ * Script call that requests cancellation of Tube Mode and the paper-mode slit squeeze,
+ * then waits for roll transitions and the slit display flag to clear.
  * "nomal cange" is "normal change".
  */
 static USER_FUNC(evt_nomal_cange) {
@@ -230,29 +281,29 @@ static USER_FUNC(evt_nomal_cange) {
 
 /**
  * args[0] = minigame work pointer, args[1] = on/off.
- * Sets or clears the "opening cutscene pending" bit (flags bit 0).
+ * Sets or clears SLIT_FLAG_OPENING (the opening cutscene is pending).
  */
 static USER_FUNC(yuuminigame4_opening_on_off) {
     EvtWord* args = event->args;
     SlitWork* data = ((MiniGameWork*)evtGetValue(event, args[0]))->data;
 
     if (evtGetValue(event, args[1])) {
-        data->flags |= 1;
+        data->flags |= SLIT_FLAG_OPENING;
     } else {
-        data->flags &= ~1;
+        data->flags &= ~SLIT_FLAG_OPENING;
     }
     return EVT_RETURN_DONE;
 }
 
 /**
  * args[0] = minigame work pointer, args[1] = output.
- * Writes 1 if the opening cutscene is still pending (flags bit 0), else 0.
+ * Writes 1 if the opening cutscene is still pending (SLIT_FLAG_OPENING), else 0.
  */
 static USER_FUNC(yuuminigame4_opening_chk) {
     EvtWord* args = event->args;
     MiniGameWork* wp = (MiniGameWork*)evtGetValue(event, args[0]);
 
-    if (((SlitWork*)wp->data)->flags & 1) {
+    if (((SlitWork*)wp->data)->flags & SLIT_FLAG_OPENING) {
         evtSetValue(event, args[1], 1);
     } else {
         evtSetValue(event, args[1], 0);
@@ -430,7 +481,12 @@ static USER_FUNC(evt_ryushi_clr) {
  * Per-frame update of the wind particles: moves them at a speed set by the current Paper Mode wind state,
  * wraps them around the view, fades them in and out with the state timer, and queues ryushi_disp.
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(evt_ryushi) {
+#else
+USER_FUNC(evt_ryushi) {
+#endif
+
     RyushiWork* hdr = xwp;
     Vec pos2;
     Vec pos = {0.0f, 0.0f, 0.0f};
@@ -544,12 +600,12 @@ static USER_FUNC(evt_ryushi) {
         p->alpha = 0.7 * (255.0f * ((100.0f - d) / 100.0f) * alphaScale);
         p->scale = scale;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&pos2), 2, ryushi_disp, NULL);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_XLU, ryushi_disp, NULL);
     return EVT_RETURN_DONE;
 }
 
-#if VERSION >= VERSION_JP
 /** Event wrapper that runs yuu_03_icon_monte_entry as a blocking view event. */
+#if VERSION >= VERSION_JP
 EVT_BEGIN(yuu_03_icon_monte_entry_evt)
     CALL(yuu_03_icon_monte_entry)
     RETURN
@@ -560,7 +616,7 @@ EVT_END()
  * Runs the wind particle effect for one gust: clears the particles for the direction in LW(1)
  * and updates them each frame until GW(0) becomes 1 (gust over) or 2 (abort).
  */
-EVT_BEGIN(ryushi_event)
+static EVT_BEGIN(ryushi_event)
     SET_VALUE(GW(0), 0)
     CALL(evt_ryushi_clr, LW(1))
     LOOP(0)
@@ -594,7 +650,7 @@ EVT_END()
  * Set-up for minigame 4 (Paper Mode): freezes Mario's controls, allocates the minigame work area,
  * dismisses the partners, starts the crowd sound and sets phase 1.
  */
-EVT_BEGIN(minigame04_main)
+static EVT_BEGIN(minigame04_main)
     CALL(evt_mario_key_onoff, 0)
     CALL_CHILD(yuu_03_kaijo_init)
     CALL(evt_yuuminigame_alloc, LW(0), 3)
@@ -611,14 +667,14 @@ EVT_END()
  * Opening cutscene of Paper Mode: pans the 3D camera along the course,
  * then shows the "menu_title_minigame4" title card.
  */
-EVT_BEGIN(minigame04_start_cam)
-    CALL(evt_cam3d_evt_set, FLOAT(-1520.0f), FLOAT(335.0f), FLOAT(850.0f), FLOAT(-1520.0f), FLOAT(65.0f), FLOAT(-25.0f), 0, 11)
+static EVT_BEGIN(minigame04_start_cam)
+    CALL(evt_cam3d_evt_set, FLOAT(-1520.0f), FLOAT(335.0f), FLOAT(850.0f), FLOAT(-1520.0f), FLOAT(65.0f), FLOAT(-25.0f), 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_cam3d_evt_set, FLOAT(1285.0f), FLOAT(334.0f), FLOAT(850.0f), FLOAT(1285.0f), FLOAT(65.0f), FLOAT(-25.0f), 5000, 0)
+    CALL(evt_cam3d_evt_set, FLOAT(1285.0f), FLOAT(334.0f), FLOAT(850.0f), FLOAT(1285.0f), FLOAT(65.0f), FLOAT(-25.0f), 5000, EASING_LINEAR)
 #else
-    CALL(evt_cam3d_evt_set, FLOAT(1285.0f), FLOAT(334.0f), FLOAT(850.0f), FLOAT(1285.0f), FLOAT(65.0f), FLOAT(-25.0f), 10000, 0)
+    CALL(evt_cam3d_evt_set, FLOAT(1285.0f), FLOAT(334.0f), FLOAT(850.0f), FLOAT(1285.0f), FLOAT(65.0f), FLOAT(-25.0f), 10000, EASING_LINEAR)
 #endif
     WAIT_MS(1000)
     CALL(evt_yuutitle_alloc, 0, 0, STRING("menu_title_minigame4"))
@@ -636,10 +692,10 @@ EVT_END()
  * Cleans up when the player skips the opening camera:
  * frees the title card, turns off the event camera and puts Mario at the start spot.
  */
-EVT_BEGIN(minigame04_start_cam_cancel)
-    CALL(evt_seq_wait, 2)
+static EVT_BEGIN(minigame04_start_cam_cancel)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(evt_yuutitle_free)
-    CALL(evt_cam3d_evt_off, 0, 11)
+    CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_mario_wait_move_end)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
@@ -649,7 +705,8 @@ EVT_END()
 
 /**
  * Phase 1 of Paper Mode: plays the opening camera (skippable), starts the minigame music,
- * shows the countdown effect, gives Mario control, lets the Pianta NPC go and starts the counter (limit 701).
+ * shows the countdown effect, gives Mario control, lets the racers go and starts the rank counter at (0, 70),
+ * with a start count of 701.
  */
 EVT_BEGIN(minigame04_start)
     CALL(yuuminigame4_opening_chk, LW(0), LW(1))
@@ -658,13 +715,13 @@ EVT_BEGIN(minigame04_start)
         LOOP(0)
             IS_EVENT_RUNNING(LW(8), LW(9))
             IF_INT_EQUAL(LW(9), 0)
-                CALL(evt_seq_wait, 2)
+                CALL(evt_seq_wait, SEQ_GAME)
                 BREAK_LOOP
             ELSE
                 CALL(evt_key_get_buttontrg, 0, LW(9))
-                IF_BITS_SET(LW(9), 768)
+                IF_BITS_SET(LW(9), PAD_BUTTON_A | PAD_BUTTON_B)
                     DELETE_EVENT(LW(8))
-                    CALL(evt_seq_wait, 2)
+                    CALL(evt_seq_wait, SEQ_GAME)
                     CALL_CHILD(minigame04_start_cam_cancel)
                     BREAK_LOOP
                 END_IF
@@ -673,10 +730,10 @@ EVT_BEGIN(minigame04_start)
         END_LOOP
         CALL(yuuminigame4_opening_on_off, LW(0), 0)
         CALL_CHILD(yuu_03_kaijo_init2)
-        CALL(evt_cam3d_evt_off, 0, 11)
+        CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
         WAIT_FRAMES(1)
     END_IF
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_MINIGAME1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_MINIGAME1"))
     CALL(eff_call_minigame, 0, 0, 0, 500)
     WAIT_MS(3000)
 #if VERSION <= VERSION_DEMO_JP
@@ -695,14 +752,14 @@ EVT_BEGIN(minigame04_start)
 EVT_END()
 
 /**
- * Ends a Paper Mode round: lets Mario land and walks him to the goal side,
- * shows the success or failure effect (the counter reaching 701 means failure), the score and monte rewards,
- * and pays out the medals.
- * Then asks whether to play again: quitting (or having fewer than 10 medals) sets GSWF_YUU_MINIGAME_QUIT
- * and returns Mario to gor_03; playing again charges 10 medals and resets the course.
+ * Ends a Paper Mode round: lets Mario land and walks him to x 1650 (from JP on only when LW(0) is below 701 and he
+ * landed above y -100; otherwise he is just normalized once he stands); plays the failure effect (LW(0) 701 or
+ * more) or the success effect, shows the score and ranking screens and adds the Piantas won.
+ * Then asks whether to play again: with fewer than 10 Piantas, or on Quit, it sets
+ * GSWF_GOR_RETURNING_FROM_MINIGAME and sends Mario back through pipe A_dokan_02 of gor_03;
+ * continuing pays 10 Piantas and resets the course.
  */
 EVT_BEGIN(minigame04_end)
-    // The round is over: the controls lock and the crowd reacts.
 #if VERSION >= VERSION_JP
     CALL(evt_cam_letter_box_onoff, 1, 0)
     CALL(evt_cam_letter_box_disable, 0)
@@ -720,7 +777,6 @@ EVT_BEGIN(minigame04_end)
     SET_VALUE(GF(0), 1)
     SET_VALUE(LW(3), 1)
     BEGIN_INLINE_EVENT
-        // Both early demos watch Mario's height in an extra event (cancel the slit below -100, clamp him at -500); the releases wait for him to land instead
 #if VERSION <= VERSION_DEMO_JP
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         LOOP(0)
@@ -742,90 +798,15 @@ EVT_BEGIN(minigame04_end)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
-    // Once Mario lands on something, he walks on to the goal side (x 1650) if he stopped short of it.
+#endif
+
+        // Retail walks Mario to x 1650 after landing if his final rank is below 701 and y is above -100;
+        // otherwise it waits for him to stand and normalizes him. Demos attempt the goal walk without those rank/height tests.
+#if VERSION <= VERSION_DEMO_JP
     BEGIN_INLINE_EVENT
-        LOOP(0)
-            CALL(evt_mario_get_name_hitobj_ride, LW(0))
-            IF_STR_NOT_EQUAL(LW(0), 0)
-                BREAK_LOOP
-            END_IF
-            IF_INT_EQUAL(GF(0), 0)
-                BREAK_LOOP
-            END_IF
-            WAIT_FRAMES(1)
-        END_LOOP
-        IF_INT_NOT_EQUAL(GF(0), 0)
-            CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-            IF_INT_LESS(LW(0), 1650)
-                CALL(evt_nomal_cange)
-                CALL(evt_mario_mov_pos2, 1650, LW(2), 120)
-            END_IF
-        END_IF
-    END_INLINE_EVENT
-    // Running the counter out to 701 plays the failure effect; otherwise the success effect plays.
-    IF_INT_GREATER_OR_EQUAL(LW(0), 701)
-        CALL(eff_call_minigame, 2, 0, 0, 500)
-        WAIT_MS(4000)
-    ELSE
-        CALL(eff_call_minigame, 1, 0, 0, 500)
-        WAIT_MS(4000)
-    END_IF
-    // The tally screen shows the score and Mario receives his piantas, then the ranking screen records it.
-    CALL(evt_yuucounter_free)
-    CALL(yuugijou_montemedal_disp_onoff, 1)
-    CALL(evt_yuuranking_alloc, 0, 0, 1, 0, LW(0), 0, LW(1), 701)
-    WAIT_FRAMES(1)
-    CALL(yuuranking_wait_button)
-    CALL(yuuranking_get_monte, LW(3))
-    CALL(yuugijou_add_montemedal, 0, LW(3))
-    CALL(yuugijou_montemedal_wait)
-    CALL(evt_yuuranking_free)
-    WAIT_MS(200)
-    CALL(evt_yuuranking_alloc, 0, 0, 1, 1, LW(0), 0, LW(1), 701)
-    WAIT_FRAMES(1)
-    CALL(yuuranking_wait_button)
-    CALL(evt_yuuranking_free)
-    // With fewer than 10 piantas the game ends; otherwise the player picks Continue (10 piantas) or Quit.
-    SET_VALUE(LW(1), 10)
-    CALL(yuugijou_get_montemedal, LW(0))
-    IF_INT_LESS(LW(0), LW(1))
-        SET_VALUE(LW(0), 1)
-    ELSE
-        CALL(evt_msg_select, 0, STRING("sysyuu_03_00"))
-    END_IF
-    // Quitting sends Mario back through the pipe to gor_03.
-    IF_INT_NOT_EQUAL(LW(0), 0)
-        SET_VALUE(GSWF(GSWF_YUU_MINIGAME_QUIT), 1)
-        CALL(evt_mario_set_prev_party_pos, 0, 0, -1000, 0)
-        CALL(evt_mario_set_prev_party_pos, 1, 0, -1000, 0)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-        CALL(evt_bero_mapchange, STRING("gor_03"), STRING("A_dokan_02"))
-        RETURN
-    END_IF
-    // Continuing pays 10 piantas; the course fades out, Mario goes back to the start and the racers line up.
-    MULTIPLY(LW(1), -1)
-    CALL(yuugijou_add_montemedal, 0, LW(1))
-    CALL(yuugijou_montemedal_wait)
-    WAIT_MS(200)
-    CALL(yuugijou_montemedal_disp_onoff, 0)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_sfxoff, GW(10))
-    CALL(evt_fade_out, 1000)
-    SET_VALUE(GF(0), 0)
-    CALL(evt_mario_set_pose, STRING("M_S_1"))
-    CALL_CHILD(yuu_03_kaijo_init2)
-    CALL(evt_cam_road_reset)
-    CALL(evt_slit_cancel)
-    CALL(evt_mario_normalize)
-    WAIT_MS(500)
-    CALL(re_init_yuunpc)
-    CALL(evt_snd_sfxon, STRING("SFX_EVT_GAME_AUDIENCE1"), GW(10))
-    CALL(evt_fade_in, 1000)
-    RETURN
 #else
-        // If Mario finished in time and is above the course, he walks on to the goal side (x 1650) on landing;
-        // otherwise the event just waits until he is standing on something.
         IF_INT_LESS(LW(0), 701)
+#endif
             LOOP(0)
                 CALL(evt_mario_get_name_hitobj_ride, LW(0))
                 IF_STR_NOT_EQUAL(LW(0), 0)
@@ -836,14 +817,21 @@ EVT_BEGIN(minigame04_end)
                 END_IF
                 WAIT_FRAMES(1)
             END_LOOP
+#if VERSION >= VERSION_JP
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             IF_INT_GREATER(LW(1), -100)
+#endif
                 IF_INT_NOT_EQUAL(GF(0), 0)
                     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
                     IF_INT_LESS(LW(0), 1650)
+#if VERSION <= VERSION_DEMO_JP
+                CALL(evt_nomal_cange)
+#else
                         CALL(evt_mario_normalize)
+#endif
                         CALL(evt_mario_mov_pos2, 1650, LW(2), 120)
                     END_IF
+#if VERSION >= VERSION_JP
                 END_IF
             ELSE
                 CALL(evt_mario_wait_rideon)
@@ -852,9 +840,11 @@ EVT_BEGIN(minigame04_end)
         ELSE
             CALL(evt_mario_wait_rideon)
             CALL(evt_mario_normalize)
+#endif
         END_IF
     END_INLINE_EVENT
-    // Running the counter out to 701 plays the failure effect; otherwise the success effect plays.
+
+    // A final rank value of 701 or more plays the failure effect; otherwise the success effect plays.
     IF_INT_GREATER_OR_EQUAL(LW(0), 701)
         CALL(eff_call_minigame, 2, 0, 0, 500)
         WAIT_MS(4000)
@@ -862,6 +852,7 @@ EVT_BEGIN(minigame04_end)
         CALL(eff_call_minigame, 1, 0, 0, 500)
         WAIT_MS(4000)
     END_IF
+
     // The tally screen shows the score and Mario receives his piantas, then the ranking screen records it.
     CALL(evt_yuucounter_free)
     CALL(yuugijou_montemedal_disp_onoff, 1)
@@ -877,6 +868,7 @@ EVT_BEGIN(minigame04_end)
     WAIT_FRAMES(1)
     CALL(yuuranking_wait_button)
     CALL(evt_yuuranking_free)
+
     // With fewer than 10 piantas the game ends; otherwise the player picks Continue (10 piantas) or Quit.
     SET_VALUE(LW(1), 10)
     CALL(yuugijou_get_montemedal, LW(0))
@@ -885,114 +877,106 @@ EVT_BEGIN(minigame04_end)
     ELSE
         CALL(evt_msg_select, 0, STRING("sysyuu_03_00"))
     END_IF
+
     // Quitting sends Mario back through the pipe to gor_03.
     IF_INT_NOT_EQUAL(LW(0), 0)
-        SET_VALUE(GSWF(GSWF_YUU_MINIGAME_QUIT), 1)
+        SET_VALUE(GSWF_GOR_RETURNING_FROM_MINIGAME, 1)
         CALL(evt_mario_set_prev_party_pos, 0, 0, -1000, 0)
         CALL(evt_mario_set_prev_party_pos, 1, 0, -1000, 0)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT)
         CALL(evt_bero_mapchange, STRING("gor_03"), STRING("A_dokan_02"))
         RETURN
     END_IF
+
     // Continuing pays 10 piantas; the course fades out, Mario goes back to the start and the racers line up.
     MULTIPLY(LW(1), -1)
     CALL(yuugijou_add_montemedal, 0, LW(1))
     CALL(yuugijou_montemedal_wait)
     WAIT_MS(200)
     CALL(yuugijou_montemedal_disp_onoff, 0)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
     CALL(evt_snd_sfxoff, GW(10))
     CALL(evt_fade_out, 1000)
-    CALL(evt_cam3d_evt_off, 0, 11)
+#if VERSION >= VERSION_JP
+    CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
+#endif
     SET_VALUE(GF(0), 0)
     CALL(evt_mario_set_pose, STRING("M_S_1"))
     CALL_CHILD(yuu_03_kaijo_init2)
     CALL(evt_cam_road_reset)
+#if VERSION <= VERSION_DEMO_JP
+    CALL(evt_slit_cancel)
+    CALL(evt_mario_normalize)
+#else
     CALL(yuu_03_cam_shift_reset)
+#endif
     WAIT_MS(500)
     CALL(re_init_yuunpc)
     CALL(evt_snd_sfxon, STRING("SFX_EVT_GAME_AUDIENCE1"), GW(10))
     CALL(evt_fade_in, 1000)
     RETURN
-#endif
 EVT_END()
 
-#if VERSION >= VERSION_US
 /**
- * Map init for yuu_03 (Paper Mode room): starts the arrow, ball, grade and audience animations,
- * the minigame set- up and the NPC script, and (US and later) hides all
- * but the current game-language sign graphics.
+ * Init script of yuu_03: loops the yajirushi, tama, gurade and kyaku animations, spawns minigame04_main and sets up the
+ * minigame NPCs (evt_yuunpc_minigame4). US and later enable only the sign groups for the current language (J_mon,
+ * E_mon, D_mon, F_mon, Sp_mon, I_mon, with mon_10 for languages 0, 2 and 4).
  */
 EVT_BEGIN(yuu_03_init_evt)
-    CALL(evt_map_playanim, STRING("yajirushi"), 1, 0)
-    CALL(evt_map_playanim, STRING("tama"), 1, 0)
-    CALL(evt_map_playanim, STRING("gurade"), 1, 0)
-    CALL(evt_map_playanim, STRING("kyaku"), 1, 0)
+    CALL(evt_map_playanim, STRING("yajirushi"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("tama"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("gurade"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("kyaku"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(minigame04_main)
     CALL_CHILD(evt_yuunpc_minigame4)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("J_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_mon"), MAPOBJ_FLAG_DISABLE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mon_10"), MAPOBJ_FLAG_DISABLE)
+#if VERSION >= VERSION_US
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("J_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("E_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("D_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("F_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("Sp_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("I_mon"), MAP_OBJ_FLAG_DISABLED)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mon_10"), MAP_OBJ_FLAG_DISABLED)
     CALL(evt_sub_get_language, LW(0))
     SWITCH(LW(0))
         CASE_EQUAL(0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("J_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("mon_10"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("J_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("mon_10"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(1)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_mon"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("E_mon"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(2)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("mon_10"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("D_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("mon_10"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(3)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_mon"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("F_mon"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(4)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_mon"), MAPOBJ_FLAG_DISABLE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("mon_10"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("Sp_mon"), MAP_OBJ_FLAG_DISABLED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("mon_10"), MAP_OBJ_FLAG_DISABLED)
         CASE_EQUAL(5)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_mon"), MAPOBJ_FLAG_DISABLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("I_mon"), MAP_OBJ_FLAG_DISABLED)
     END_SWITCH
-    RETURN
-EVT_END()
-#else
-/**
- * Map init for yuu_03 (Paper Mode room): starts the arrow, ball, grade and audience animations,
- * the minigame set- up and the NPC script, and (US and later) hides all
- * but the current game-language sign graphics.
- */
-EVT_BEGIN(yuu_03_init_evt)
-    CALL(evt_map_playanim, STRING("yajirushi"), 1, 0)
-    CALL(evt_map_playanim, STRING("tama"), 1, 0)
-    CALL(evt_map_playanim, STRING("gurade"), 1, 0)
-    CALL(evt_map_playanim, STRING("kyaku"), 1, 0)
-    SPAWN_EVENT(minigame04_main)
-    CALL_CHILD(evt_yuunpc_minigame4)
-    RETURN
-EVT_END()
 #endif
+    RETURN
+EVT_END()
 
 /**
- * Init callback for minigame 4: (JP and later) starts the marker icon event,
- * marks the opening cutscene as pending and allocates the wind particles.
+ * Start of the slit minigame: starts the coin icon event yuu_03_icon_monte_entry_evt (JP and later), sets
+ * SLIT_FLAG_OPENING and runs evt_ryushi_init.
  */
 void yuuminigame_init_4slit(EventEntry* event, BOOL isFirstCall) {
     SlitWork* data = ((MiniGameWork*)event->lwData[0])->data;
-
 #if VERSION >= VERSION_JP
     data->viewEvent = evtEntryType(yuu_03_icon_monte_entry_evt, 0, 0, 0);
     data->viewEvent->lwData[0] = event->lwData[0];
 #endif
-    data->flags |= 1;
+    data->flags |= SLIT_FLAG_OPENING;
     evt_ryushi_init(event, isFirstCall);
 }
 
 /**
  * Per-frame state machine for Paper Mode: phase 1 starts minigame04_start, phase 2 picks the first wind delay,
- * phases 2 and 3 run the rules check, phase 4 launches minigame04_end with the final counter
- * and a result code chosen from the coin total (special repeated-digit totals pay out more).
+ * phases 2 and 3 run the rules check, phase 4 launches minigame04_end with the final zero-based race rank
+ * and a result code chosen from that rank (special repeated-digit finishing places pay out more).
  * It also spins the "puro" and "pera" map objects (the course's turning bars) every frame.
  */
 void yuuminigame_main_4slit(EventEntry* event, BOOL isFirstCall) {
@@ -1023,28 +1007,27 @@ void yuuminigame_main_4slit(EventEntry* event, BOOL isFirstCall) {
             wp->subEvent = evtEntry(minigame04_end, 0, 0);
             wp->subEvent->lwData[0] = data->coins;
             switch (data->coins) {
-                // Both early demos give other results for zero to two coins
+                case 0:
 #if VERSION <= VERSION_DEMO_JP
-                case 0:
                     data->result = 0x2;
-                    break;
-                case 1:
-                    data->result = 0x10A;
-                    break;
-                case 2:
-                    data->result = 0x105;
-                    break;
 #else
-                case 0:
                     data->result = 0x105;
+#endif
                     break;
                 case 1:
+#if VERSION <= VERSION_DEMO_JP
+                    data->result = 0x10A;
+#else
                     data->result = 0x103;
+#endif
                     break;
                 case 2:
+#if VERSION <= VERSION_DEMO_JP
+                    data->result = 0x105;
+#else
                     data->result = 0x101;
-                    break;
 #endif
+                    break;
                 case 10:
                 case 21:
                 case 32:
@@ -1100,7 +1083,7 @@ void yuuminigame_main_4slit(EventEntry* event, BOOL isFirstCall) {
     mapObjRotate("pera_9", 0.0f, 0.0f, data->rot2);
 }
 
-/** Draw callback for minigame 4: draws the collected-coin counter (monteCountDisp). */
+/** Draw callback for minigame 4: draws Mario's Pianta token balance (monteCountDisp). */
 void yuuminigame_disp_4slit(CameraId camera, void* param) {
     monteCountDisp();
 }
@@ -1190,28 +1173,28 @@ BOOL yuuminigame4_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp
         case 1:
         case 2:
             data->rot1 += 36.0f * (120.0f - (data->timer - 1)) / 120.0f;
-            data->rot1 = REVISE360(data->rot1);
+            data->rot1 = wrap360(data->rot1);
             break;
         case 3:
             data->rot1 += 36.0f;
-            data->rot1 = REVISE360(data->rot1);
+            data->rot1 = wrap360(data->rot1);
             break;
         case 4:
             data->rot1 += 36.0f * (data->timer - 1) / 48.0f;
-            data->rot1 = REVISE360(data->rot1);
+            data->rot1 = wrap360(data->rot1);
             break;
         case 5:
         case 6:
             data->rot2 += 36.0f * (120.0f - (data->timer - 1)) / 120.0f;
-            data->rot2 = REVISE360(data->rot2);
+            data->rot2 = wrap360(data->rot2);
             break;
         case 7:
             data->rot2 += 36.0f;
-            data->rot2 = REVISE360(data->rot2);
+            data->rot2 = wrap360(data->rot2);
             break;
         case 8:
             data->rot2 += 36.0f * (data->timer - 1) / 48.0f;
-            data->rot2 = REVISE360(data->rot2);
+            data->rot2 = wrap360(data->rot2);
             break;
     }
     if (mario->position.x < 1500.0f) {
@@ -1271,7 +1254,7 @@ BOOL yuuminigame4_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp
     if (mario->position.y <= -100.0f || mario->position.x >= 1500.0f) {
         if (mario->position.y <= -100.0f) {
             data->coins = 701;
-            yuucounter_flag_on(1);
+            yuucounter_flag_on(YUUCOUNTER_FLAG_HIDE);
         } else {
             data->coins = yuucounter_get_data();
         }
@@ -1279,7 +1262,7 @@ BOOL yuuminigame4_gamerule(EventEntry* event, BOOL isFirstCall, MiniGameWork* wp
         data->timer = (irand(3901) + 100) * 60 / 1000;
         marioKeyOff();
         partyKeyOff();
-        yuucounter_flag_on(2);
+        yuucounter_flag_on(YUUCOUNTER_FLAG_FREEZE);
         return TRUE;
     }
     return FALSE;

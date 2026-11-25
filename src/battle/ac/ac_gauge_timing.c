@@ -1,4 +1,5 @@
-// Action command: gauge timing (ac_gauge_timing); stop the moving gauge marker inside the success zone.
+// Action command: gauge timing (ac_gauge_timing); a gauge driven by stick left, A or R (held, pressed or released).
+
 #include "icon_ids.h"
 #include "battle/battle.h"
 #include "battle/battle_ac.h"
@@ -6,39 +7,21 @@
 #include "battle/battle_unit.h"
 #include "driver/camdrv.h"
 #include "driver/icondrv.h"
-#include "battle/battle_disp.h"
 #include "pmario_sound.h"
 #include "system.h"
 #include <string.h>
-
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
+#include "battle/battle_disp.h"
 
 static void actionCommandDisp(f32 x, f32 y);
 
-typedef struct GaugeAC {
-    struct BattleUnit* unit;     // 0x0
-    s32 setupFlags;              // 0x4
-    s32 setupParam;              // 0x8
-    s32 state;                   // 0xC
-    void* maincb;                // 0x10
-    void* resultcb;              // 0x14
-    void* dispcb;                // 0x18
-    void* deletecb;              // 0x1C
-    s32 defenseResult;           // 0x20, not used here
-    s32 resultCount;             // 0x24
-    s32 result;                  // 0x28
-    u8 difficulty[4];            // 0x2C, base and current difficulty, not used here
-    u32 flags;                   // 0x30
-    u32 opts;                    // 0x34
-    s32 type;                    // 0x38
-    s32 maxFrames;               // 0x3C
-    s32 mode;                    // 0x40
-    s32 target;                  // 0x44
-    s32 period;                  // 0x48
-    u8 reserved_4C[0x58 - 0x4C]; // 0x4C, never accessed (params[5..7], unused here)
-    u32 out0;                    // 0x58
-} GaugeAC;
+// BattleActions.params slots this command reads (btlevtcmd_AcSetParamAll)
+typedef enum GaugeTimingParam {
+    GAUGE_PARAM_TYPE = 0,
+    GAUGE_PARAM_MAX_FRAMES = 1,
+    GAUGE_PARAM_MODE = 2,
+    GAUGE_PARAM_TARGET = 3,
+    GAUGE_PARAM_PERIOD = 4,
+} GaugeTimingParam;
 
 typedef struct GaugeWork {
     s32 frame;     // 0x0
@@ -48,15 +31,13 @@ typedef struct GaugeWork {
     s32 inRange;   // 0x10
     s8 passed;     // 0x14
     s8 phase;      // 0x15
-    s8 hold;       // 0x16
+    s8 pressMode;  // 0x16
     u32 button;    // 0x18
     s32 timer;     // 0x1C
     s32 hits;      // 0x20
     u32 sfxId;     // 0x24
     s32 endTimer;  // 0x28
 } GaugeWork;
-
-#define GAC(work) ((GaugeAC*)&(work)->actionCommands)
 
 /**
  * Per-frame driver of action command 19, used by Koops's Shell Toss and Power Shell.
@@ -70,6 +51,7 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
     BOOL autoCommand;
     BattleACDispParams* disp;
     BattleActions* ac;
+    f32 angle;
 
     ac = &work->actionCommands;
     autoCommand = FALSE;
@@ -80,7 +62,7 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
     }
 
     switch (work->actionCommands.acState) {
-        case 0:
+        case AC_STATE_INIT:
             memset(disp, 0, sizeof(BattleACDispParams));
             disp->iconX = -300.0f;
             disp->iconY = 0.0f;
@@ -89,119 +71,116 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
             disp->color = (GXColor){255, 255, 255, 255};
             cw->frame = 0;
             cw->cnt = 0;
-            GAC(work)->out0 = 0;
-            work->actionCommands.acState = 99;
-            work->actionCommands.result = 1;
-            cw->maxFrames = GAC(work)->maxFrames;
+            work->actionCommands.outputParams[0] = 0;
+            work->actionCommands.acState = AC_STATE_WAIT_START;
+            work->actionCommands.result = AC_RESULT_RUNNING;
+            cw->maxFrames = work->actionCommands.params[GAUGE_PARAM_MAX_FRAMES];
             cw->inRange = 0;
             cw->timer = 0;
             cw->hits = 0;
             cw->sfxId = -1;
-            switch (GAC(work)->type) {
+            switch (work->actionCommands.params[GAUGE_PARAM_TYPE]) {
                 case 0:
-                    cw->hold = 1;
-                    cw->button = 0x20;
+                    cw->pressMode = 1;
+                    cw->button = PAD_TRIGGER_R;
                     cw->phase = 1;
-                    GAC(work)->out0 = 1;
+                    work->actionCommands.outputParams[0] = 1;
                     break;
                 case 2:
-                    cw->hold = 0;
-                    cw->button = 0x40000;
+                    cw->pressMode = 0;
+                    cw->button = BATTLE_PAD_STICK_LEFT;
                     cw->phase = 0;
                     break;
                 case 1:
                 default:
-                    cw->hold = 1;
-                    cw->button = 0x100;
+                    cw->pressMode = 1;
+                    cw->button = PAD_BUTTON_A;
                     cw->phase = 1;
-                    GAC(work)->out0 = 1;
+                    work->actionCommands.outputParams[0] = 1;
                     break;
             }
-            switch (GAC(work)->mode) {
+            switch (work->actionCommands.params[GAUGE_PARAM_MODE]) {
                 case 1:
                     cw->gauge = 0.0f;
-                    GAC(work)->period &= ~1;
+                    work->actionCommands.params[GAUGE_PARAM_PERIOD] &= ~1;
                     break;
                 default:
                     cw->gauge = 50.0f;
                     break;
             }
             break;
-        case 99:
+        case AC_STATE_WAIT_START:
             break;
-        case 100:
-            if ((GAC(work)->setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && ((u32)work->actionCommands.acUnit->tokenFlags & TOKEN_FLAG_CONFUSED_ACTION)) {
+        case AC_STATE_START:
+            if ((work->actionCommands.setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && (work->actionCommands.acUnit->tokenFlags & kConfusedAction)) {
+                // irand(100) is never negative: a confused auto-play always fails
                 if (irand(100) >= 0) {
-                    GAC(work)->setupParam = 30;
+                    work->actionCommands.setupParam = 30;
                     cw->passed = 0;
                 } else {
                     cw->passed = 1;
-                    GAC(work)->setupParam = 30;
+                    work->actionCommands.setupParam = 30;
                 }
-                work->actionCommands.acState = 1002;
+                work->actionCommands.acState = AC_STATE_RUN + 2;
                 break;
             }
-            if (cw->hold) {
-                work->actionCommands.acState = 1001;
+            if (cw->pressMode) {
+                work->actionCommands.acState = AC_STATE_RUN + 1;
             } else {
-                work->actionCommands.acState = 1000;
+                work->actionCommands.acState = AC_STATE_RUN;
             }
-        case 1000:
-        case 1001:
+        case AC_STATE_RUN:
+        case AC_STATE_RUN + 1:
             cw->frame++;
             switch (cw->phase) {
                 case 0:
-                    if (!cw->hold && BattlePadCheckNow(cw->button)) {
+                    if (!cw->pressMode && BattlePadCheckNow(cw->button)) {
                         cw->phase = 1;
-                        work->actionCommands.acState = 1001;
+                        work->actionCommands.acState = AC_STATE_RUN + 1;
                         cw->frame = 0;
-                        GAC(work)->out0 = 1;
+                        work->actionCommands.outputParams[0] = 1;
                     }
                     break;
                 case 1:
-                    if (cw->hold) {
+                    if (cw->pressMode) {
                         if (cw->button == BattlePadGetNow() && BattlePadCheckTrigger(cw->button)) {
                             cw->phase = 2;
                         }
-                    } else {
-                        if (!BattlePadCheckNow(cw->button) && BattlePadCheckUp(cw->button)) {
-                            cw->phase = 2;
-                        }
+                    } else if (!BattlePadCheckNow(cw->button) && BattlePadCheckUp(cw->button)) {
+                        cw->phase = 2;
                     }
                     break;
             }
-            if (work->actionCommands.acState == 1000) {
+            if (work->actionCommands.acState == AC_STATE_RUN) {
                 if (cw->frame > 120) {
                     work->actionCommands.result = 0;
                     cw->gauge = 0.0f;
-                    work->actionCommands.acState = 1003;
-                    GAC(work)->out0 = 2;
+                    work->actionCommands.acState = AC_STATE_RUN + 3;
+                    work->actionCommands.outputParams[0] = 2;
                     break;
                 }
-            } else {
-                if (cw->frame > cw->maxFrames) {
-                    work->actionCommands.result = 0;
-                    work->actionCommands.acState = 1003;
-                    break;
-                }
+            } else if (cw->frame > cw->maxFrames) {
+                work->actionCommands.result = 0;
+                work->actionCommands.acState = AC_STATE_RUN + 3;
+                break;
             }
-            if (work->actionCommands.acState == 1000) {
+            if (work->actionCommands.acState == AC_STATE_RUN) {
                 break;
             }
             if (cw->timer <= 0) {
                 cw->cnt++;
             }
-            switch (GAC(work)->mode) {
-                case 1: {
-                    f32 angle = reviseAngle((f32)(cw->cnt * 360 / GAC(work)->period));
+            switch (work->actionCommands.params[GAUGE_PARAM_MODE]) {
+                case 1:
+                    angle = reviseAngle((f32)(cw->cnt * 360 / work->actionCommands.params[GAUGE_PARAM_PERIOD]));
                     if (angle <= 90.0f) {
-                        cw->gauge = intplGetValue(5, 0.0f, 100.0f, (s32)angle, 90);
+                        cw->gauge = intplGetValue(EASING_CUBIC_OUT, 0.0f, 100.0f, (s32)angle, 90);
                     } else if (angle <= 180.0f) {
-                        cw->gauge = intplGetValue(2, 100.0f, 0.0f, (s32)(angle - 90.0f), 90);
+                        cw->gauge = intplGetValue(EASING_CUBIC_IN, 100.0f, 0.0f, (s32)(angle - 90.0f), 90);
                     } else if (angle <= 270.0f) {
-                        cw->gauge = intplGetValue(5, 0.0f, 100.0f, (s32)(angle - 180.0f), 90);
+                        cw->gauge = intplGetValue(EASING_CUBIC_OUT, 0.0f, 100.0f, (s32)(angle - 180.0f), 90);
                     } else {
-                        cw->gauge = intplGetValue(2, 100.0f, 0.0f, (s32)(angle - 270.0f), 90);
+                        cw->gauge = intplGetValue(EASING_CUBIC_IN, 100.0f, 0.0f, (s32)(angle - 270.0f), 90);
                     }
                     if (cw->timer > 0) {
                         cw->timer--;
@@ -210,12 +189,14 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
                             cw->inRange = 0;
                             goto done;
                         }
-                    } else if ((GAC(work)->opts & 2) || (GAC(work)->opts & 2)) {
+                    } else if ((work->actionCommands.acFlags & AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE) || (work->actionCommands.acFlags & AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE)) {
+                        // BUG: the same bit is tested twice, so the 30-frame else branch below can never run. Same at the
+                        // wrap test below.
                         if ((s32)cw->gauge <= 0) {
                             cw->hits++;
                             cw->gauge = 0.0f;
                             cw->inRange = 0;
-                            if (GAC(work)->opts & 2) {
+                            if (work->actionCommands.acFlags & AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE) {
                                 cw->timer = 15;
                             } else {
                                 cw->timer = 30;
@@ -223,14 +204,13 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
                             goto done;
                         }
                     }
-                    if (cw->gauge >= (f32)GAC(work)->target) {
+                    if (cw->gauge >= (f32)work->actionCommands.params[GAUGE_PARAM_TARGET]) {
                         cw->inRange = 1;
                     } else {
                         cw->inRange = 0;
                     }
                     break;
-                }
-                default: {
+                default:
                     if (cw->timer > 0) {
                         cw->timer--;
                         if (cw->timer > 0) {
@@ -239,16 +219,16 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
                             goto done;
                         }
                     }
-                    cw->gauge = (f32)GAC(work)->period / 100.0f * (f32)cw->cnt + 50.0f;
-                    if (GAC(work)->opts & 1) {
+                    cw->gauge = (f32)work->actionCommands.params[GAUGE_PARAM_PERIOD] / 100.0f * (f32)cw->cnt + 50.0f;
+                    if (work->actionCommands.acFlags & AC_GAUGE_TIMING_FLAG_WRAP) {
                         s32 g = (s32)cw->gauge;
-                        if ((GAC(work)->opts & 2) || (GAC(work)->opts & 2)) {
+                        if ((work->actionCommands.acFlags & AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE) || (work->actionCommands.acFlags & AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE)) {
                             s32 q = g / 100;
                             if (q > cw->hits) {
                                 cw->hits = q;
                                 cw->gauge = 0.0f;
                                 cw->inRange = 0;
-                                if (GAC(work)->opts & 2) {
+                                if (work->actionCommands.acFlags & AC_GAUGE_TIMING_FLAG_CYCLE_PAUSE) {
                                     cw->timer = 15;
                                 } else {
                                     cw->timer = 30;
@@ -265,7 +245,6 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
                         cw->inRange = 0;
                     }
                     break;
-                }
             }
         done:
             if (autoCommand && cw->inRange) {
@@ -273,44 +252,44 @@ s32 battleAcMain_GaugeTiming(BattleWork* work) {
             }
             if (cw->phase == 2) {
                 if (cw->inRange) {
-                    work->actionCommands.result = 2;
+                    work->actionCommands.result = AC_RESULT_SUCCESS;
                     work->actionCommands.resultCount++;
                 } else {
                     work->actionCommands.result = 0;
-                    work->actionCommands.result &= ~2;
+                    work->actionCommands.result &= ~AC_RESULT_SUCCESS;
                 }
-                work->actionCommands.acState = 1003;
+                work->actionCommands.acState = AC_STATE_RUN + 3;
             }
             break;
-        case 1002:
-            GAC(work)->setupParam--;
-            if (GAC(work)->setupParam < 0) {
+        case AC_STATE_RUN + 2:
+            work->actionCommands.setupParam--;
+            if (work->actionCommands.setupParam < 0) {
                 if (cw->passed) {
-                    work->actionCommands.result = 2;
+                    work->actionCommands.result = AC_RESULT_SUCCESS;
                     work->actionCommands.resultCount++;
                 } else {
                     work->actionCommands.result = 0;
                 }
-                GAC(work)->flags |= 1;
+                work->actionCommands.doneFlags |= AC_DONE_FLAG_FINISHED;
                 return 0;
             }
             break;
-        case 1003:
-            work->actionCommands.acState = 1004;
-        case 1004:
-            GAC(work)->flags |= 1;
+        case AC_STATE_RUN + 3:
+            work->actionCommands.acState = AC_STATE_RUN + 4;
+        case AC_STATE_RUN + 4:
+            work->actionCommands.doneFlags |= AC_DONE_FLAG_FINISHED;
             cw->endTimer = 60;
-            work->actionCommands.acState = 1005;
+            work->actionCommands.acState = AC_STATE_RUN + 5;
             if (cw->sfxId != -1) {
                 psndSFXOff(cw->sfxId);
             }
-        case 1005:
+        case AC_STATE_RUN + 5:
             cw->endTimer--;
             if (cw->endTimer <= 0) {
-                work->actionCommands.acState = 1006;
+                work->actionCommands.acState = AC_STATE_RUN + 6;
             }
             break;
-        case 1006:
+        case AC_STATE_RUN + 6:
             work->actionCommands.maincb = NULL;
             work->actionCommands.dispcb = NULL;
             work->actionCommands.resultcb = NULL;
@@ -334,21 +313,21 @@ void battleAcDisp_GaugeTiming(CameraId cameraId, void* param) {
     BattleACDispParams* disp = &ac->disp;
 
     switch (ac->acState) {
-        case 99:
-            disp->iconX = intplGetValue(4, -300.0f, 30.0f, 20 - disp->slideTimer, 20);
-        case 100:
-        case 1000:
-        case 1001:
-        case 1003:
+        case AC_STATE_WAIT_START:
+            disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, -300.0f, 30.0f, 20 - disp->slideTimer, 20);
+        case AC_STATE_START:
+        case AC_STATE_RUN:
+        case AC_STATE_RUN + 1:
+        case AC_STATE_RUN + 3:
             actionCommandDisp(disp->iconX, disp->iconY);
             if (disp->slideTimer > 0) {
                 disp->slideTimer--;
             }
             break;
-        case 1004:
-        case 1005:
+        case AC_STATE_RUN + 4:
+        case AC_STATE_RUN + 5:
             if (disp->slideTimer >= 40) {
-                disp->iconX = intplGetValue(4, 30.0f, -300.0f, disp->slideTimer - 40, 20);
+                disp->iconX = intplGetValue(EASING_QUADRATIC_OUT, 30.0f, -300.0f, disp->slideTimer - 40, 20);
             } else {
                 disp->iconX = 30.0f;
             }
@@ -360,10 +339,13 @@ void battleAcDisp_GaugeTiming(CameraId cameraId, void* param) {
     }
 }
 
-/** Called by btlevtcmd_StopAC: unless the command already finished, starts the end wait and stops its sound. */
+/**
+ * Called by btlevtcmd_StopAC: unless the command already finished, starts the end wait
+ * (which would stop sfxId, but this command never starts a sound: it stays -1).
+ */
 void battleAcDelete_GaugeTiming(BattleWork* work) {
-    if (!(GAC(work)->flags & 1)) {
-        work->actionCommands.acState = 1004;
+    if (!(work->actionCommands.doneFlags & AC_DONE_FLAG_FINISHED)) {
+        work->actionCommands.acState = AC_STATE_RUN + 4;
     }
 }
 
@@ -376,7 +358,6 @@ static void actionCommandDisp(f32 x, f32 y) {
     BattleWork* work = _battleWorkPointer;
     BattleActions* ac = &work->actionCommands;
     BattleACDispParams* disp = &ac->disp;
-    GaugeAC* g;
     GaugeWork* cw;
     f32 rx;
     f32 ry;
@@ -390,19 +371,18 @@ static void actionCommandDisp(f32 x, f32 y) {
     u16 unpressed;
     u16 pressed2;
     u16 unpressed2;
+    u16 icon;
 
     camGetPtr(CAMERA_2D);
-    g = (GaugeAC*)ac;
     cw = (GaugeWork*)ac->work;
     ratio = cw->gauge / 100.0f;
     if (ratio > 1.0f) {
         ratio = 1.0f;
     }
     disp->gaugeRatio = ratio;
-    switch (g->mode) {
-        case 1: {
-            u16 icon;
-            t = 100.0f * disp->gaugeRatio / (f32)g->target;
+    switch (ac->params[GAUGE_PARAM_MODE]) {
+        case 1:
+            t = 100.0f * disp->gaugeRatio / (f32)ac->params[GAUGE_PARAM_TARGET];
             if (t > 100.0f) {
                 t = 100.0f;
             }
@@ -411,51 +391,49 @@ static void actionCommandDisp(f32 x, f32 y) {
             } else {
                 BattleAcDrawGauge((s32)x, (s32)y, t, 0xB2, 100, 100, 100, 100, 0);
             }
-            if (cw->gauge >= (f32)g->target) {
-                icon = ICON_095;
+            if (cw->gauge >= (f32)ac->params[GAUGE_PARAM_TARGET]) {
+                icon = ICON_AC_ON;
             } else {
-                icon = ICON_091;
+                icon = ICON_AC_OFF;
             }
             {
                 Vec pos = {0.0f, 0.0f, 0.0f};
                 pos.x = 16.0f + (176.0f + (-288.0f + x));
                 pos.y = 18.0f + y;
-                iconDispGx(&pos, ICON_DISP_2D, icon, 1.0f);
+                iconDispGx(&pos, ICON_FLAG_2D, 1.0f, icon);
             }
             break;
-        }
-        default: {
+        default:
             BattleAcDrawGauge((s32)x, (s32)y, 0.0f, 0xB2, 100, 100, 100, 100, 0);
             if (cw->timer <= 0) {
                 CameraEntry* cam = camGetPtr(CAMERA_2D);
                 rx = (-200.0f + x - 88.0f) + 173.0f * cw->gauge / 100.0f;
                 ry = 49.0f + y;
                 btlDispGXInit2DRasta();
-                GXLoadPosMtxImm(cam->view, 0);
+                GXLoadPosMtxImm(cam->view, GX_PNMTX0);
                 btlDispGXQuads2DRasta(rx, ry, rx + 10.0f, ry - 16.0f, 0, 255, 0, 255);
             }
-            n = g->target;
+            n = ac->params[GAUGE_PARAM_TARGET];
             bx = -288.0f + x;
             by = 20.0f + y;
             for (i = 0; i < n; i++) {
-                u16 icon = ICON_091;
+                u16 icon = ICON_AC_OFF;
                 f32 step;
                 step = 100.0f / (f32)(n + 1) * (f32)(i + 1);
                 if (cw->inRange) {
-                    icon = ICON_095;
+                    icon = ICON_AC_ON;
                 }
                 {
                     Vec pos = {0.0f, 0.0f, 0.0f};
                     pos.x = bx + 176.0f * step / 100.0f;
                     pos.y = by;
-                    iconDispGx(&pos, ICON_DISP_2D, icon, 0.8f);
+                    iconDispGx(&pos, ICON_FLAG_2D, 0.8f, icon);
                 }
             }
             break;
-        }
     }
 
-    switch (g->type) {
+    switch (ac->params[GAUGE_PARAM_TYPE]) {
         case 0:
             pressed = BattleACGetButtonIcon(PAD_TRIGGER_R, 1);
             unpressed = BattleACGetButtonIcon(PAD_TRIGGER_R, 0);
@@ -463,8 +441,8 @@ static void actionCommandDisp(f32 x, f32 y) {
             unpressed2 = 0;
             break;
         case 2:
-            pressed = BattleACGetButtonIcon(BTL_PAD_STICK_LEFT, 1);
-            unpressed = BattleACGetButtonIcon(BTL_PAD_STICK_LEFT, 0);
+            pressed = BattleACGetButtonIcon(BATTLE_PAD_STICK_LEFT, 1);
+            unpressed = BattleACGetButtonIcon(BATTLE_PAD_STICK_LEFT, 0);
             pressed2 = 0;
             unpressed2 = 0;
             break;
@@ -478,11 +456,11 @@ static void actionCommandDisp(f32 x, f32 y) {
     }
 
     switch (ac->acState) {
-        case 99:
-        case 100:
-        case 1003:
-        case 1004:
-        case 1005:
+        case AC_STATE_WAIT_START:
+        case AC_STATE_START:
+        case AC_STATE_RUN + 3:
+        case AC_STATE_RUN + 4:
+        case AC_STATE_RUN + 5:
             if (pressed2) {
                 Vec pos = {0.0f, 0.0f, 0.0f};
                 f32 rx, ry;
@@ -490,23 +468,23 @@ static void actionCommandDisp(f32 x, f32 y) {
                 ry = 55.0f + y;
                 pos.x = rx;
                 pos.y = ry;
-                iconDispGx(&pos, ICON_DISP_2D, unpressed, 1.0f);
+                iconDispGx(&pos, ICON_FLAG_2D, 1.0f, unpressed);
                 {
                     Vec pos2 = {0.0f, 0.0f, 0.0f};
                     pos2.x = 56.0f + rx;
                     pos2.y = ry;
-                    iconDispGx(&pos2, ICON_DISP_2D, unpressed2, 1.0f);
+                    iconDispGx(&pos2, ICON_FLAG_2D, 1.0f, unpressed2);
                 }
             } else {
                 Vec pos = {0.0f, 0.0f, 0.0f};
                 pos.x = 28.0f + (-228.0f + x);
                 pos.y = 55.0f + y;
-                iconDispGx(&pos, ICON_DISP_2D, unpressed, 1.0f);
+                iconDispGx(&pos, ICON_FLAG_2D, 1.0f, unpressed);
             }
             break;
-        case 1000:
-        case 1001:
-            if (cw->hold) {
+        case AC_STATE_RUN:
+        case AC_STATE_RUN + 1:
+            if (cw->pressMode) {
                 if (cw->inRange) {
                     if (pressed2) {
                         Vec pos = {0.0f, 0.0f, 0.0f};
@@ -515,85 +493,79 @@ static void actionCommandDisp(f32 x, f32 y) {
                         ry = 55.0f + y;
                         pos.x = rx;
                         pos.y = ry;
-                        iconDispGx(&pos, ICON_DISP_2D, pressed, 1.0f);
+                        iconDispGx(&pos, ICON_FLAG_2D, 1.0f, pressed);
                         {
                             Vec pos2 = {0.0f, 0.0f, 0.0f};
                             pos2.x = 56.0f + rx;
                             pos2.y = ry;
-                            iconDispGx(&pos2, ICON_DISP_2D, pressed2, 1.0f);
+                            iconDispGx(&pos2, ICON_FLAG_2D, 1.0f, pressed2);
                         }
                     } else {
                         Vec pos = {0.0f, 0.0f, 0.0f};
                         pos.x = 28.0f + (-228.0f + x);
                         pos.y = 55.0f + y;
-                        iconDispGx(&pos, ICON_DISP_2D, pressed, 1.0f);
+                        iconDispGx(&pos, ICON_FLAG_2D, 1.0f, pressed);
+                    }
+                } else if (pressed2) {
+                    Vec pos = {0.0f, 0.0f, 0.0f};
+                    f32 rx, ry;
+                    rx = -228.0f + x;
+                    ry = 55.0f + y;
+                    pos.x = rx;
+                    pos.y = ry;
+                    iconDispGx(&pos, ICON_FLAG_2D, 1.0f, unpressed);
+                    {
+                        Vec pos2 = {0.0f, 0.0f, 0.0f};
+                        pos2.x = 56.0f + rx;
+                        pos2.y = ry;
+                        iconDispGx(&pos2, ICON_FLAG_2D, 1.0f, unpressed2);
                     }
                 } else {
-                    if (pressed2) {
-                        Vec pos = {0.0f, 0.0f, 0.0f};
-                        f32 rx, ry;
-                        rx = -228.0f + x;
-                        ry = 55.0f + y;
-                        pos.x = rx;
-                        pos.y = ry;
-                        iconDispGx(&pos, ICON_DISP_2D, unpressed, 1.0f);
-                        {
-                            Vec pos2 = {0.0f, 0.0f, 0.0f};
-                            pos2.x = 56.0f + rx;
-                            pos2.y = ry;
-                            iconDispGx(&pos2, ICON_DISP_2D, unpressed2, 1.0f);
-                        }
-                    } else {
-                        Vec pos = {0.0f, 0.0f, 0.0f};
-                        pos.x = 28.0f + (-228.0f + x);
-                        pos.y = 55.0f + y;
-                        iconDispGx(&pos, ICON_DISP_2D, unpressed, 1.0f);
+                    Vec pos = {0.0f, 0.0f, 0.0f};
+                    pos.x = 28.0f + (-228.0f + x);
+                    pos.y = 55.0f + y;
+                    iconDispGx(&pos, ICON_FLAG_2D, 1.0f, unpressed);
+                }
+            } else if (cw->inRange) {
+                if (pressed2) {
+                    Vec pos = {0.0f, 0.0f, 0.0f};
+                    f32 rx, ry;
+                    rx = -228.0f + x;
+                    ry = 55.0f + y;
+                    pos.x = rx;
+                    pos.y = ry;
+                    iconDispGx(&pos, ICON_FLAG_2D, 1.0f, unpressed);
+                    {
+                        Vec pos2 = {0.0f, 0.0f, 0.0f};
+                        pos2.x = 56.0f + rx;
+                        pos2.y = ry;
+                        iconDispGx(&pos2, ICON_FLAG_2D, 1.0f, unpressed2);
                     }
+                } else {
+                    Vec pos = {0.0f, 0.0f, 0.0f};
+                    pos.x = 28.0f + (-228.0f + x);
+                    pos.y = 55.0f + y;
+                    iconDispGx(&pos, ICON_FLAG_2D, 1.0f, unpressed);
+                }
+            } else if (pressed2) {
+                Vec pos = {0.0f, 0.0f, 0.0f};
+                f32 rx, ry;
+                rx = -228.0f + x;
+                ry = 55.0f + y;
+                pos.x = rx;
+                pos.y = ry;
+                iconDispGx(&pos, ICON_FLAG_2D, 1.0f, pressed);
+                {
+                    Vec pos2 = {0.0f, 0.0f, 0.0f};
+                    pos2.x = 56.0f + rx;
+                    pos2.y = ry;
+                    iconDispGx(&pos2, ICON_FLAG_2D, 1.0f, pressed2);
                 }
             } else {
-                if (cw->inRange) {
-                    if (pressed2) {
-                        Vec pos = {0.0f, 0.0f, 0.0f};
-                        f32 rx, ry;
-                        rx = -228.0f + x;
-                        ry = 55.0f + y;
-                        pos.x = rx;
-                        pos.y = ry;
-                        iconDispGx(&pos, ICON_DISP_2D, unpressed, 1.0f);
-                        {
-                            Vec pos2 = {0.0f, 0.0f, 0.0f};
-                            pos2.x = 56.0f + rx;
-                            pos2.y = ry;
-                            iconDispGx(&pos2, ICON_DISP_2D, unpressed2, 1.0f);
-                        }
-                    } else {
-                        Vec pos = {0.0f, 0.0f, 0.0f};
-                        pos.x = 28.0f + (-228.0f + x);
-                        pos.y = 55.0f + y;
-                        iconDispGx(&pos, ICON_DISP_2D, unpressed, 1.0f);
-                    }
-                } else {
-                    if (pressed2) {
-                        Vec pos = {0.0f, 0.0f, 0.0f};
-                        f32 rx, ry;
-                        rx = -228.0f + x;
-                        ry = 55.0f + y;
-                        pos.x = rx;
-                        pos.y = ry;
-                        iconDispGx(&pos, ICON_DISP_2D, pressed, 1.0f);
-                        {
-                            Vec pos2 = {0.0f, 0.0f, 0.0f};
-                            pos2.x = 56.0f + rx;
-                            pos2.y = ry;
-                            iconDispGx(&pos2, ICON_DISP_2D, pressed2, 1.0f);
-                        }
-                    } else {
-                        Vec pos = {0.0f, 0.0f, 0.0f};
-                        pos.x = 28.0f + (-228.0f + x);
-                        pos.y = 55.0f + y;
-                        iconDispGx(&pos, ICON_DISP_2D, pressed, 1.0f);
-                    }
-                }
+                Vec pos = {0.0f, 0.0f, 0.0f};
+                pos.x = 28.0f + (-228.0f + x);
+                pos.y = 55.0f + y;
+                iconDispGx(&pos, ICON_FLAG_2D, 1.0f, pressed);
             }
             break;
     }

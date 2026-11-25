@@ -1,21 +1,26 @@
 // jin_11 (ダイム寺院, Creepy Steeple): room with a save block, a power-up block and a breaking floor;
 // doors to jin_07 and jin_10.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_map.h"
+#include "jin.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_snd.h"
-#include "jin.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_map.h"
+#include "pmario_sound.h"
 
-extern EvtWord jin_11_ana[];
+static EvtWord jin_11_ana[12];
+static EvtWord s_close[12];
+static EvtWord s_open[12];
 static BeroEntry bero_entry_data[3];
-extern EvtWord evt_yuka[];
+static EvtWord evt_yuka[5];
+EvtWord jin_11_init_evt[54];
 
-/** Exit event of the hole in the floor: sets GSWF_STG4_DROP_IN_ENTRANCE and drops Mario into jin_07. */
-EVT_BEGIN(jin_11_ana)
-    SET_VALUE(GSWF(GSWF_STG4_DROP_IN_ENTRANCE), 1)
+/** Exit event of the hole: sets GSWF_JIN_SCRIPTED_ENTRY_PENDING and changes the map to jin_07. */
+static EVT_BEGIN(jin_11_ana)
+    SET_VALUE(GSWF_JIN_SCRIPTED_ENTRY_PENDING, 1)
     CALL(evt_bero_mapchange, STRING("jin_07"), 0)
     SET_VALUE(LW(0), 1)
     RETURN
@@ -70,7 +75,7 @@ static BeroEntry bero_entry_data[] = {
         77, // centerPositionZ
         -1, // length
         NULL, 0, // enterEvent..caseType
-        (s32*)jin_11_ana, // exitEvent
+        jin_11_ana, // exitEvent
         "jin_07", // nextMapName
         NULL, // nextBeroName
         4, // enterAnimeType
@@ -81,8 +86,8 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /** Script run when Mario breaks the weak floor: sets the story to "Breaking the floor". */
-EVT_BEGIN(evt_yuka)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG4_13_03_BREAKING_THE_FLOOR)
+static EVT_BEGIN(evt_yuka)
+    SET_VALUE(GSW_STORY_PROGRESS, STG4_13_03_BREAKING_THE_FLOOR)
     RETURN
 EVT_END()
 
@@ -91,8 +96,8 @@ EVT_END()
  * the Shine Sprite power-up block and, before the "Breaking the floor" step, the breaking floor.
  */
 EVT_BEGIN(jin_11_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_JIN1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_JIN1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_JIN1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_JIN1"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
@@ -100,9 +105,9 @@ EVT_BEGIN(jin_11_init_evt)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_usu_kagemario_party_kill)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -50, 60, -40, 0, 0)
-    CALL(evt_mobj_powerupblk, STRING("pblk00"), 40, 60, -40, 0, GSWF(GSWF_JIN11_SHINE_SPRITE), 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG4_13_03_BREAKING_THE_FLOOR)
-        CALL(evt_mobj_breaking_floor, STRING("mobj_bf00"), 845, 115, 5, 0, PTR(evt_yuka), GSWF(GSWF_JIN11_FLOOR_BROKEN))
+    CALL(evt_mobj_powerupblk, STRING("pblk00"), 40, 60, -40, 0, GSWF_SHINE_26, 0)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG4_13_03_BREAKING_THE_FLOOR)
+        CALL(evt_mobj_breaking_floor, STRING("mobj_bf00"), 845, 115, 5, 0, PTR(evt_yuka), GSWF_JIN_11_BREAKING_FLOOR_BROKEN)
     END_IF
     RETURN
 EVT_END()

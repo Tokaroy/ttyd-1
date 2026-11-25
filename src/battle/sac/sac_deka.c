@@ -1,6 +1,6 @@
 // Star-power special move Earth Tremor (sac_deka): the timed-press game and its damage to every enemy.
-#pragma optimize_for_size on
-#include <dolphin/pad.h>
+
+#include "version.h"
 #include "battle/battle.h"
 #include "battle/battle_audience.h"
 #include "battle/battle_disp.h"
@@ -22,29 +22,29 @@
 #include <dolphin/mtx.h>
 #include <string.h>
 #include "icon_ids.h"
-#include "version.h"
 #include "battle/battle_event_cmd.h"
 #include "battle/battle_camera.h"
 #include "battle/sac/sac_common.h"
-#include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "battle/sac/sac_deka.h"
-#include "battle/battle_sub.h"
+#include <dolphin/pad.h>
+#include "battle/battle_status_effect.h"
 #include "eff/eff_starstone.h"
 #include "libc_decls.h"
-// US battle texture ids are 0x16 higher for these entries.
-#define BTL_TEX(id) ((id) + VERSION_PICK(0, 0x16))
+#include "battle/battle_sub.h"
+#include "battle/unit_work.h"
 
-#define SFXON(name) (psndSFXOn(name))
+static EvtWord dmg_evt[100];
 
 typedef struct DekaTiming {
-    s32 state;                   // 0x0
-    s32 timer;                   // 0x4, cleared when shown, never read
-    s32 type;                    // 0x8
-    f32 pos;                     // 0xC
-    Vec off;                     // 0x10
-    u8 reserved_1C[0x34 - 0x1C]; // 0x1C, never accessed
-    u8 alpha;                    // 0x34
-    u8 hit;                      // 0x35
+    s32 state;      // 0x0
+    s32 reserved_4; // 0x4, only set to 0
+    s32 type;       // 0x8
+    f32 pos;        // 0xC
+    Vec off;        // 0x10
+    u8 pad1C[0x34 - 0x1C];
+    u8 alpha; // 0x34
+    u8 hit;   // 0x35
 } DekaTiming;
 
 typedef struct YukaMesh {
@@ -87,9 +87,9 @@ typedef struct DekaWork {
     /* 0x3FC */ Vec starPos;
     /* 0x408 */ Vec from;
     /* 0x414 */ Vec to;
-    /* 0x420 */ f32 velX; // unused; only velY is used
+    /* 0x420 */ f32 unk420;
     /* 0x424 */ f32 velY;
-    /* 0x428 */ f32 velZ; // unused
+    /* 0x428 */ f32 unk428;
     /* 0x42C */ Vec scale;
     /* 0x438 */ Vec rot;
     /* 0x444 */ f32 sclFrom;
@@ -118,7 +118,6 @@ static void yuka_disp(CameraId cam, void* param);
 static void yuka_capture(CameraId cam, void* param);
 static void disp_3D_alpha(CameraId cam, void* param);
 static void disp_3D(CameraId cam, void* param);
-static void disp_3D(CameraId cam, void* param);
 static void disp_2D(CameraId cam, void* param);
 static void main_enemy_sub(BattleUnit* unit, s32* n);
 static void main_enemy(void);
@@ -128,7 +127,6 @@ static void main_gauge(void);
 static void main_base(void);
 static void yuka_main(void);
 static void yuka_init(void);
-static USER_FUNC(main_deka);
 
 /** Shows the action-command success effect (level in LW(0)) when a round of the timing game is cleared. */
 static EVT_BEGIN(nice_event)
@@ -140,25 +138,30 @@ EVT_END()
  * Runs Earth Tremor every frame: the timing game, its gauge and markers, the Crystal Star,
  * the enemies on the rippling floor and the floor mesh, then queues the displays.
  * args[0] is the partner's unit id (-1 = none).
- * The retail releases end it once yuka_end has freed the floor buffers; the demo has no such exit.
+ * JP and later end it once yuka_end has freed the floor buffers; the early demos have no such exit.
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(main_deka) {
+#else
+USER_FUNC(main_deka) {
+#endif
+
     EvtWord* args;
     DekaWork* w = get_ptr();
     s32 i;
 
     args = event->args;
     if (isFirstCall) {
-        memset(w, 0, 0x580);
+        memset(w, 0, sizeof(DekaWork));
         w->unitId = evtGetValue(event, args[0]);
         yuka_init();
     }
 #if VERSION >= VERSION_JP
     if (w->tex->address == NULL) {
-        return 2;
+        return EVT_RETURN_DONE;
     }
     if (w->mesh->address == NULL) {
-        return 2;
+        return EVT_RETURN_DONE;
     }
 #endif
     main_base();
@@ -169,11 +172,11 @@ static USER_FUNC(main_deka) {
     main_star();
     main_enemy();
     yuka_main();
-    dispEntry(CAMERA_2D, 901.0f, 1, disp_2D, 0);
-    dispEntry(CAMERA_3D, 0.0f, 1, disp_3D, 0);
-    dispEntry(CAMERA_3D, 0.0f, 2, disp_3D_alpha, 0);
-    dispEntry(CAMERA_3D, 0.0f, 0, yuka_disp, 0);
-    return 0;
+    dispEntry(CAMERA_2D, 901.0f, DISP_MODE_ALPHA_TEST, disp_2D, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, disp_3D, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, disp_3D_alpha, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_OPAQUE, yuka_disp, NULL);
+    return EVT_RETURN_BLOCK;
 }
 
 /**
@@ -191,7 +194,7 @@ static void yuka_init(void) {
     f32 x;
     f32 z;
 
-    mapGrpFlagOn("stg_b_yuka", 0x400001);
+    mapGrpFlagOn("stg_b_yuka", (MAP_OBJ_FLAG_HIDDEN | MAP_OBJ_FLAG_KURURING));
     PSMTXMultVec(mo->modelWorldMtx, &mo->joints->bboxMin, &w->min);
     PSMTXMultVec(mo->modelWorldMtx, &mo->joints->bboxMax, &w->max);
     w->w0 = w->texW = w->max.x - w->min.x;
@@ -204,8 +207,8 @@ static void yuka_init(void) {
     if (w->texH > 0x1E0) {
         w->texH = 0x1E0;
     }
-    w->tex = smartAlloc(GXGetTexBufferSize(w->texW, w->texH, 4, 0, 0), 2);
-    w->mesh = smartAlloc(0x3870, 2);
+    w->tex = smartAlloc(GXGetTexBufferSize(w->texW, w->texH, GX_TF_RGB565, GX_FALSE, 0), SMART_GROUP_BATTLE);
+    w->mesh = smartAlloc(sizeof(YukaMesh), SMART_GROUP_BATTLE);
     m = w->mesh->address;
     for (r = 0; r < 2; r++) {
         for (i = 0; i < 129; i++) {
@@ -228,7 +231,7 @@ static void yuka_init(void) {
             m->v[r][i] = r;
         }
     }
-    dispEntry(CAMERA_SHADOW, 0.0f, 0, yuka_capture, 0);
+    dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_OPAQUE, yuka_capture, NULL);
 }
 
 /**
@@ -274,6 +277,8 @@ static void yuka_main(void) {
             Vec n;
             Vec t;
 
+            // BUG: at j == 128 and j == 0 the neighbours prev[r][j + 1] and prev[r][j - 1] lie outside the row
+            // (the other row, or the arrays before and after prev).
             PSVECSubtract(&m->prev[r][j], &m->prev[r][j + 1], &d);
             PSVECNormalize(&d, &n);
             PSVECScale(&n, &n, 1.0f - PSVECMag(&d));
@@ -312,9 +317,13 @@ static void yuka_main(void) {
 
 /**
  * Frees the floor texture and mesh and clears the stg_b_yuka flags again.
- * The retail releases also null the buffer addresses, which is what lets main_deka finish.
+ * JP and later also null the buffer addresses, which is what lets main_deka finish.
  */
+#if VERSION <= VERSION_DEMO_JP
 static USER_FUNC(yuka_end) {
+#else
+USER_FUNC(yuka_end) {
+#endif
     DekaWork* w = get_ptr();
 
     smartFree(w->tex);
@@ -322,11 +331,13 @@ static USER_FUNC(yuka_end) {
     w->tex->address = NULL;
 #endif
     smartFree(w->mesh);
-#if VERSION >= VERSION_JP
-    w->mesh->address = NULL;
-#endif
+#if VERSION <= VERSION_DEMO_JP
     mapGrpFlagOff("stg_b_yuka", 0x400001);
-    return 2;
+#else
+    w->mesh->address = NULL;
+    mapGrpFlagOff("stg_b_yuka", (MAP_OBJ_FLAG_HIDDEN | MAP_OBJ_FLAG_KURURING));
+#endif
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -362,7 +373,7 @@ static void main_base(void) {
                 break;
             }
             w->state = 3;
-            w->sfx = SFXON("SFX_BTL_SAC_DOKKAN1_1");
+            w->sfx = psndSFXOn("SFX_BTL_SAC_DOKKAN1_1");
         case 3:
             if (w->gaugeState == 3) {
                 w->cursor += 0.1f * w->result + 0.8f;
@@ -373,7 +384,7 @@ static void main_base(void) {
                     w->result++;
                     w->starState = 6;
                     psndSFXOff(w->sfx);
-                    ev = evtEntry(nice_event, 0, EVENT_START_NOW);
+                    ev = evtEntry(nice_event, 0, EVENT_START_IMMEDIATE);
                     v = w->result + 1;
                     ev->lwData[0] = v < 6 ? v : 6;
                     if (w->round > 5) {
@@ -431,12 +442,11 @@ static void main_base(void) {
                 if (i == 8) {
                     found = 0;
                     for (j = 0; j < 8; j++) {
-                        DekaTiming* t2 = &w->timing[idx[j]];
-                        t = t2;
-                        if (t->state == 2 && t->type == 1) {
+                        DekaTiming* timing = &w->timing[idx[j]];
+                        if (timing->state == 2 && timing->type == 1) {
                             w->state = 5;
                             w->gaugeState = 4;
-                            t->hit = 2;
+                            timing->hit = 2;
                             psndSFXOn("SFX_BTL_SAC_DOKKAN3");
                             BattleAudienceSoundBooing();
                             psndSFXOff(w->sfx);
@@ -464,10 +474,10 @@ static void main_base(void) {
             break;
         case 4:
             w->timer--;
-            w->offsetY = intplGetValue(0, -40.0f, 0.0f, 30 - w->timer, 30);
+            w->offsetY = intplGetValue(EASING_LINEAR, -40.0f, 0.0f, 30 - w->timer, 30);
             if (w->timer <= 0) {
                 w->state = 3;
-                w->sfx = SFXON("SFX_BTL_SAC_DOKKAN1_1");
+                w->sfx = psndSFXOn("SFX_BTL_SAC_DOKKAN1_1");
             }
             break;
         case 5:
@@ -475,7 +485,7 @@ static void main_base(void) {
     }
 }
 
-/** Gauge display states: 30 frames to appear, then shown; after a miss it blinks for 80 frames and holds 30. */
+/** Gauge display states: 30 frames to appear, then shown; after a miss it blinks for 80 frames, then slides off over 30 (as after the fifth round). */
 static void main_gauge(void) {
     DekaWork* w = get_ptr();
 
@@ -490,7 +500,7 @@ static void main_gauge(void) {
             w->alpha = 255;
         case 2:
             w->gaugeTimer++;
-            w->gaugePos.x = intplGetValue(4, -1000.0f, 0.0f, w->gaugeTimer, 30);
+            w->gaugePos.x = intplGetValue(EASING_QUADRATIC_OUT, -1000.0f, 0.0f, w->gaugeTimer, 30);
             if (w->gaugeTimer >= 30) {
                 w->gaugeState = 3;
                 w->gaugeTimer = 0;
@@ -514,7 +524,7 @@ static void main_gauge(void) {
             break;
         case 5:
             w->gaugeTimer++;
-            w->gaugePos.x = intplGetValue(4, 0.0f, -1000.0f, w->gaugeTimer, 30);
+            w->gaugePos.x = intplGetValue(EASING_QUADRATIC_OUT, 0.0f, -1000.0f, w->gaugeTimer, 30);
             if (w->gaugeTimer >= 30) {
                 w->gaugeState = 3;
                 w->gaugeTimer = 0;
@@ -525,8 +535,6 @@ static void main_gauge(void) {
     }
 }
 
-// FAKE: inlining off (FAKES.md); without it main_timing is inlined into main_deka (76 -> 111 instructions)
-#pragma dont_inline on
 /**
  * Per-marker upkeep: clears the type of an unused marker, keeps a waiting one fully opaque,
  * and moves a hit marker to its settled state.
@@ -546,7 +554,7 @@ static void main_timing(s32 idx) {
         case 3:
             t->state = 4;
             t->alpha = 255;
-            t->timer = 0;
+            t->reserved_4 = 0;
             break;
         case 4:
             break;
@@ -554,14 +562,13 @@ static void main_timing(s32 idx) {
             break;
     }
 }
-#pragma dont_inline reset
 
 /**
  * Crystal Star state machine: appears over Mario, grows and spins,
  * then settles at (-100, 30, 50) for Mario and the partner to ride (state 4).
  * Grows by 1 per cleared round (states 6-7) or shrinks back to 2 on a wrong press (8-9).
  * For the attack (10-11) it bounces six times; each landing shakes the camera and sends two floor waves outward,
- * stronger with the bounce count and the result; then it rises 40 and stops (13).
+ * stronger with the bounce count and the result; then it rises 40 and fades out (13).
  */
 static void main_star(void) {
     DekaWork* w = get_ptr();
@@ -587,17 +594,17 @@ static void main_star(void) {
         case 2:
             w->starTimer++;
             if (w->starTimer <= 100) {
-                w->starPos.x = intplGetValue(0, w->from.x, w->to.x, w->starTimer, 100);
-                w->starPos.y = intplGetValue(0, w->from.y, w->to.y, w->starTimer, 100);
-                w->starPos.z = intplGetValue(0, w->from.z, w->to.z, w->starTimer, 100);
-                w->scale.x = w->scale.y = w->scale.z = intplGetValue(0, 0.0f, 2.0f, w->starTimer, 100);
+                w->starPos.x = intplGetValue(EASING_LINEAR, w->from.x, w->to.x, w->starTimer, 100);
+                w->starPos.y = intplGetValue(EASING_LINEAR, w->from.y, w->to.y, w->starTimer, 100);
+                w->starPos.z = intplGetValue(EASING_LINEAR, w->from.z, w->to.z, w->starTimer, 100);
+                w->scale.x = w->scale.y = w->scale.z = intplGetValue(EASING_LINEAR, 0.0f, 2.0f, w->starTimer, 100);
             } else {
                 w->starPos.x = w->to.x;
                 w->starPos.y = w->to.y;
                 w->starPos.z = w->to.z;
                 w->scale.x = w->scale.y = w->scale.z = 2.0f;
             }
-            w->rot.y = intplGetValue(4, 0.0f, 2160.0f, w->starTimer, 120);
+            w->rot.y = intplGetValue(EASING_QUADRATIC_OUT, 0.0f, 2160.0f, w->starTimer, 120);
             if (w->starTimer >= 120) {
                 w->starState = 3;
                 w->starTimer = 0;
@@ -609,9 +616,9 @@ static void main_star(void) {
             break;
         case 3:
             w->starTimer++;
-            w->starPos.x = intplGetValue(4, w->from.x, w->to.x, w->starTimer, 60);
-            w->starPos.y = intplGetValue(4, w->from.y, w->to.y, w->starTimer, 60);
-            w->starPos.z = intplGetValue(4, w->from.z, w->to.z, w->starTimer, 60);
+            w->starPos.x = intplGetValue(EASING_QUADRATIC_OUT, w->from.x, w->to.x, w->starTimer, 60);
+            w->starPos.y = intplGetValue(EASING_QUADRATIC_OUT, w->from.y, w->to.y, w->starTimer, 60);
+            w->starPos.z = intplGetValue(EASING_QUADRATIC_OUT, w->from.z, w->to.z, w->starTimer, 60);
             if (w->starTimer >= 60) {
                 w->starState = 4;
                 w->starTimer = 0;
@@ -641,7 +648,7 @@ static void main_star(void) {
         case 7: {
             s32 tbl[11] = {1, 2, 0, 2, 3, 1, 3, 4, 2, 4, 5};
             w->starTimer++;
-            w->scale.x = w->scale.y = w->scale.z = intplGetValue(4, w->sclFrom, w->sclTo, tbl[w->starTimer / 4], 5);
+            w->scale.x = w->scale.y = w->scale.z = intplGetValue(EASING_QUADRATIC_OUT, w->sclFrom, w->sclTo, tbl[w->starTimer / 4], 5);
             w->starPos.y = 12.5f * (w->scale.y - 2.0f) + 30.0f;
             if (w->starTimer >= 43) {
                 w->starState = 5;
@@ -658,7 +665,7 @@ static void main_star(void) {
         case 9: {
             s32 tbl[11] = {1, 2, 0, 2, 3, 1, 3, 4, 2, 4, 5};
             w->starTimer++;
-            w->scale.x = w->scale.y = w->scale.z = intplGetValue(4, w->sclFrom, w->sclTo, tbl[w->starTimer / 4], 5);
+            w->scale.x = w->scale.y = w->scale.z = intplGetValue(EASING_QUADRATIC_OUT, w->sclFrom, w->sclTo, tbl[w->starTimer / 4], 5);
             w->starPos.y = 12.5f * (w->scale.y - 2.0f) + 30.0f;
             if (w->starTimer >= 43) {
                 w->starState = 5;
@@ -680,7 +687,7 @@ static void main_star(void) {
                 f32 shake[6] = {1.0f, 1.3f, 2.0f, 2.6f, 3.3f, 3.8f};
                 f32 amp[6] = {1.0f, 1.3f, 2.0f, 2.6f, 3.3f, 3.8f};
                 w->starCount++;
-                btl_camera_shake_h(0, w->starCount * shake[w->result], 0.0f, 20, 0);
+                btl_camera_shake_h(BTL_CAM_PRI_NORMAL, w->starCount * shake[w->result], 0.0f, 20, 0);
                 psndSFXOn("SFX_BTL_SAC_DOKKAN5");
                 for (j = 0; j < 2; j++) {
                     for (k = 0; k < 6; k++) {
@@ -716,7 +723,7 @@ static void main_star(void) {
             break;
         case 12:
             w->starTimer--;
-            w->starPos.y = intplGetValue(4, w->from.y, w->to.y, 30 - w->starTimer, 30);
+            w->starPos.y = intplGetValue(EASING_QUADRATIC_OUT, w->from.y, w->to.y, 30 - w->starTimer, 30);
             if (w->starTimer <= 0) {
                 w->starState = 13;
                 w->starTimer = 0;
@@ -727,7 +734,7 @@ static void main_star(void) {
             if (w->starTimer > 30) {
                 w->starTimer = 30;
             }
-            alpha = intplGetValue(0, 255.0f, 0.0f, w->starTimer, 30);
+            alpha = intplGetValue(EASING_LINEAR, 255.0f, 0.0f, w->starTimer, 30);
             break;
     }
     if (w->eff) {
@@ -735,16 +742,14 @@ static void main_star(void) {
         e->position.x = w->starPos.x;
         e->position.y = w->starPos.y;
         e->position.z = w->starPos.z;
-        e->spinY = w->rot.x;
-        e->rotY = w->rot.y;
-        e->tiltZ = w->rot.z;
+        e->rot.x = w->rot.x;
+        e->rot.y = w->rot.y;
+        e->rot.z = w->rot.z;
         e->scale = 1.5f * w->scale.x;
         e->a = alpha;
     }
 }
 
-// FAKE: inlining off (FAKES.md); without it main_enemy is inlined into main_deka (76 -> 104 instructions)
-#pragma dont_inline on
 /** Moves every enemy-side unit with the floor ripple (main_enemy_sub) and records their ids, -1 for unused slots. */
 static void main_enemy(void) {
     BattleWork* bw = _battleWorkPointer;
@@ -755,7 +760,7 @@ static void main_enemy(void) {
 
     for (i = 0; i < BATTLE_UNIT_MAX; i++) {
         unit = BattleGetUnitPtr(bw, i);
-        if (unit && unit->alliance == 1) {
+        if (unit && unit->alliance == ALLIANCE_ENEMY) {
             main_enemy_sub(unit, &n);
         }
     }
@@ -763,7 +768,6 @@ static void main_enemy(void) {
         w->enemies[i] = -1;
     }
 }
-#pragma dont_inline reset
 
 /**
  * Bounces one enemy on the rippling floor: when the rising floor under it (enemy half only) is above it,
@@ -781,7 +785,7 @@ static void main_enemy_sub(BattleUnit* unit, s32* n) {
     f32 y;
     s32 i;
     BattleUnitPart* part;
-    s32 i2;
+    s32 partId;
 
     unit->rotationOffset = unit->offsetCenter;
     w->enemyVel[*n].y -= 1.25f;
@@ -799,7 +803,7 @@ static void main_enemy_sub(BattleUnit* unit, s32* n) {
         if (xc >= x0 && xc < x0 + step) {
             y = (xc - x0) / step * (m->disp[0][i + 1].y - m->disp[0][i].y) + m->disp[0][i].y;
             if (unit->position.y < y) {
-                if ((unit->attributeFlags & UNIT_ATTR_CEILING) && y < 120.0f) {
+                if ((unit->attributeFlags & kCeiling) && y < 120.0f) {
                     break;
                 }
                 if (m->vel[0][i].y > 0.0f) {
@@ -810,26 +814,26 @@ static void main_enemy_sub(BattleUnit* unit, s32* n) {
                     unit->rotation.z = 0.0f;
                     w->enemyRot[*n] = 0.0f;
                     w->enemyVel[*n].y += 0.5f * m->vel[0][i].y;
-                    i2 = BtlUnit_GetBodyPartsId(unit);
-                    part = BtlUnit_GetPartsPtr(unit, i2);
-                    if (part->attributes & PART_ATTR_IMMUNE_TO_DAMAGE_OR_STATUS) {
+                    partId = BtlUnit_GetBodyPartsId(unit);
+                    part = BtlUnit_GetPartsPtr(unit, partId);
+                    if (part->attributes & kImmuneToDamageAndStatus) {
                         continue;
                     }
-                    if (part->attributes & PART_ATTR_EVASIVE) {
+                    if (part->attributes & kClone) {
                         continue;
                     }
-                    if (!(unit->attributeFlags & UNIT_ATTR_INACTIVE) && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
-                        BtlUnit_SetAnimType(part, 0x27);
+                    if (!(unit->attributeFlags & kInactive) && !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
+                        BtlUnit_SetAnimType(part, POSE_TYPE_DAMAGE);
                     }
                     effSmallStarEntry(0, 2, xc, unit->position.y, unit->position.z, 0.0f, -1.0f, 0.0f);
-                    BtlUnit_snd_se(unit, unit->kindParams->damageSfxName, -250000000, 0);
-                    if (unit->attributeFlags & UNIT_ATTR_NO_KNOCKBACK_POSE) {
+                    BtlUnit_snd_se(unit, unit->kindParams->damageSfxName, EVT_NULLPTR, 0);
+                    if (unit->attributeFlags & kUnitNoSpin) {
                         continue;
                     }
-                    if (unit->attributeFlags & UNIT_ATTR_INACTIVE) {
+                    if (unit->attributeFlags & kInactive) {
                         continue;
                     }
-                    if (BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+                    if (BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
                         continue;
                     }
                     w->enemyRot[*n] = 20.0f;
@@ -848,7 +852,7 @@ static void main_enemy_sub(BattleUnit* unit, s32* n) {
     if (unit->position.y < unit->homePosition.y) {
         unit->position.y = unit->homePosition.y;
         w->enemyVel[*n].y = 0.0f;
-        if (!(unit->attributeFlags & UNIT_ATTR_INACTIVE) && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+        if (!(unit->attributeFlags & kInactive) && !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
             unit->rotation.z = 0.0f;
             w->enemyRot[*n] = 0.0f;
         }
@@ -863,12 +867,12 @@ static USER_FUNC(end_deka) {
 
     effDelete(((EffStarStoneWork*)w->eff->userdata)->dust);
     effDelete(w->eff);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
  * Draws the timing gauge: its frame, the red fill up to the cursor,
- * the star markers (lit once the cursor reaches them), the previous round's markers drifting up and fading,
+ * the star markers (lit once the cursor reaches them), the previous round's markers drifting 40 up out of the clip area,
  * and the hit or miss mark under each marker.
  */
 static void disp_2D(CameraId cam, void* param) {
@@ -883,6 +887,7 @@ static void disp_2D(CameraId cam, void* param) {
     f32 x;
     DekaTiming* t;
     s32 i;
+    s32 id;
 
     left = w->gaugePos.x - 0.5f * w->gaugeW - 8.0f;
     right = 8.0f + (w->gaugePos.x + 0.5f * w->gaugeW);
@@ -903,7 +908,7 @@ static void disp_2D(CameraId cam, void* param) {
         ratio = w->cursor / w->gaugeLen;
         if (ratio >= 0.0f && ratio <= 1.0f) {
             btlDispGXInit2DRasta();
-            GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, 0);
+            GXLoadPosMtxImm(camGetPtr(CAMERA_2D)->view, GX_PNMTX0);
             btlDispGXQuads2DRasta(left, 8.0f + w->gaugePos.y, ratio * (right - left) + left, w->gaugePos.y - 8.0f, 0xFF, 0, 0, w->alpha);
         }
     }
@@ -920,7 +925,7 @@ static void disp_2D(CameraId cam, void* param) {
                 PSMTXScale(sc, 0.75f, 0.75f, 0.75f);
                 PSMTXTrans(tr, x, 40.0f + (w->offsetY + (w->gaugePos.y - 18.0f + t->off.y)), w->gaugePos.z + t->off.z);
                 PSMTXConcat(tr, sc, m);
-                iconDispGxCol(m, ICON_DISP_2D, ICON_095, col);
+                iconDispGxCol(m, ICON_FLAG_2D, ICON_AC_ON, col);
             } else if (t->type == 2) {
                 PSMTXScale(sc, 1.0f, 1.0f, 1.0f);
                 PSMTXTrans(tr, x, 40.0f + (w->offsetY + (w->gaugePos.y + t->off.y)), w->gaugePos.z + t->off.z);
@@ -939,15 +944,12 @@ static void disp_2D(CameraId cam, void* param) {
                     PSMTXScale(sc, 0.75f, 0.75f, 0.75f);
                     PSMTXTrans(tr, x, w->offsetY + (w->gaugePos.y - 18.0f + t->off.y), w->gaugePos.z + t->off.z);
                     PSMTXConcat(tr, sc, m);
-                    {
-                        u16 id;
-                        if (w->cursor >= t->pos - 7.0f) {
-                            id = ICON_095;
-                        } else {
-                            id = ICON_091;
-                        }
-                        iconDispGxCol(m, ICON_DISP_2D, id, col);
+                    if (w->cursor >= t->pos - 7.0f) {
+                        id = ICON_AC_ON;
+                    } else {
+                        id = ICON_AC_OFF;
                     }
+                    iconDispGxCol(m, ICON_FLAG_2D, id, col);
                 } else {
                     PSMTXScale(sc, 1.0f, 1.0f, 1.0f);
                     PSMTXTrans(tr, x, w->offsetY + (w->gaugePos.y + t->off.y), w->gaugePos.z + t->off.z);
@@ -990,6 +992,7 @@ static void yuka_capture(CameraId cam, void* param) {
     Vec c;
     DekaWork* w = get_ptr();
     CameraEntry* camera = camGetPtr(cam);
+    f32 t;
 
     memcpy(&save, camGetPtr(cam), sizeof(CameraEntry));
     c.x = (w->min.x + w->max.x) / 2.0f;
@@ -998,23 +1001,20 @@ static void yuka_capture(CameraId cam, void* param) {
     camera->cameraUp = (Vec){0.0f, 0.0f, -1.0f};
     camera->cameraPos = c;
     camera->cameraAt = camera->cameraPos;
-    {
-        f32 t = tan(0.21816616f);
-        f32 h = w->h0;
-        camera->cameraPos.y += (f32)w->h0 / 2 / t;
-    }
+    t = tan(0.21816616f);
+    camera->cameraPos.y += (f32)w->h0 / 2 / t;
     C_MTXLookAt(camera->view, &camera->cameraPos, &camera->cameraUp, &camera->cameraAt);
     C_MTXPerspective(camera->projection, 25.0f, (f32)w->w0 / (f32)w->h0, 1.0f, 32767.0f);
-    camera->projType = 0;
+    camera->projType = GX_PERSPECTIVE;
     GXSetProjection(camera->projection, camera->projType);
     GXSetViewport(0.0f, 0.0f, w->texW, w->texH, 0.0f, 1.0f);
     GXSetScissor(0, 0, w->texW, w->texH);
     test_kururing_mapdisp(cam);
     sysWaitDrawSync();
     GXSetTexCopySrc(0, 0, w->texW, w->texH);
-    GXSetTexCopyDst(w->texW, w->texH, 4, 0);
-    GXSetZMode(1, 3, 1);
-    GXCopyTex(w->tex->address, 1);
+    GXSetTexCopyDst(w->texW, w->texH, GX_TF_RGB565, GX_FALSE);
+    GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
+    GXCopyTex(w->tex->address, GX_TRUE);
     GXPixModeSync();
     memcpy(camGetPtr(cam), &save, sizeof(CameraEntry));
 }
@@ -1028,7 +1028,7 @@ static void yuka_capture(CameraId cam, void* param) {
  */
 EVT_BEGIN(marioAttackEvent_Deka)
     // The partner joins only if it can act; with no enemy to target the move ends at once.
-    CALL(btlevtcmd_GetUnitId, BTL_UNIT_PARTNER, LW(14))
+    CALL(btlevtcmd_GetUnitId, UNIT_ID_PARTNER, LW(14))
     CALL(btlevtcmd_GetBodyId, LW(14), LW(15))
     CALL(btlevtcmd_CheckActStatus, LW(14), LW(0))
     IF_INT_EQUAL(LW(0), 0)
@@ -1038,55 +1038,59 @@ EVT_BEGIN(marioAttackEvent_Deka)
     IF_INT_EQUAL(LW(3), -1)
         GOTO(99)
     END_IF
+
     // Mario declares the attack, pays the Star Power and Earth Tremor's work starts.
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_CommandPayWeaponCost, BTL_UNIT_SELF)
-    CALL(btlevtcmd_CommandGetWeaponAddress, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_CommandPayWeaponCost, UNIT_ID_SELF)
+    CALL(btlevtcmd_CommandGetWeaponAddress, UNIT_ID_SELF, LW(0))
     CALL(btlevtcmd_WeaponAftereffect, LW(0))
     CALL(btlevtcmd_reset_move_color_lv_all)
     BEGIN_SIBLING_EVENT
         CALL(main_deka, LW(14))
     END_SIBLING_EVENT
+
     // Crystal Star opening: Mario holds up the star item and the Crystal Star appears in stardust.
     CALL_CHILD(sac_start_camera_evt)
     WAIT_MS(500)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL_CHILD(sac_mario_item_on_evt)
     WAIT_MS(500)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START2"), EVT_NULLPTR, 0, LW(11))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START2"), EVT_NULLPTR, 0, LW(11))
     CALL(star_stone_appear)
     BEGIN_SIBLING_EVENT
         CALL_CHILD(sac_start_stardust)
     END_SIBLING_EVENT
     WAIT_FRAMES(100)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BTL_SAC_START3"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BTL_SAC_START3"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(evt_snd_sfxoff, LW(11))
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_FRAMES(40)
+
     // Mario puts the item away and returns home while the Crystal Star settles.
     CALL_CHILD(sac_mario_item_on_end_evt)
     CALL(btlevtcmd_SacBgsetMove, 0)
     CALL_CHILD(sac_mario_back_home)
     CALL(wait_star_stone_take_on)
+
     // Mario and the partner jump onto the Crystal Star (Vivian's position is kept in her unit work).
     BEGIN_SIBLING_EVENT
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 44)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_JUMP)
         CALL(get_ride_pos, 0, LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_JumpSetting, BTL_UNIT_SELF, 30, 0, FLOAT(0.39941406f))
-        CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 30, -1)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("M_I_Y"))
+        CALL(btlevtcmd_JumpSetting, UNIT_ID_SELF, 30, 0, FLOAT(0.39941406f))
+        CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 30, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("M_I_Y"))
     END_SIBLING_EVENT
     BEGIN_SIBLING_EVENT
         IF_INT_NOT_EQUAL(LW(14), -1)
-            CALL(btlevtcmd_GetUnitKind, BTL_UNIT_PARTNER, LW(0))
+            CALL(btlevtcmd_GetUnitKind, UNIT_ID_PARTNER, LW(0))
             IF_INT_EQUAL(LW(0), UNIT_VIVIAN)
                 LOOP(0)
-                    CALL(btlevtcmd_SetUnitWork, LW(14), 3, 1)
+                    CALL(btlevtcmd_SetUnitWork, LW(14), SHADOW_TAIL_WORK_HOLD, 1)
                     CALL(btlevtcmd_GetPos, LW(14), LW(0), LW(1), LW(2))
-                    CALL(btlevtcmd_SetUnitWork, LW(14), 0, LW(0))
-                    CALL(btlevtcmd_SetUnitWork, LW(14), 1, LW(1))
-                    CALL(btlevtcmd_SetUnitWork, LW(14), 2, LW(2))
+                    CALL(btlevtcmd_SetUnitWork, LW(14), SHADOW_TAIL_WORK_X, LW(0))
+                    CALL(btlevtcmd_SetUnitWork, LW(14), SHADOW_TAIL_WORK_Y, LW(1))
+                    CALL(btlevtcmd_SetUnitWork, LW(14), SHADOW_TAIL_WORK_Z, LW(2))
                     WAIT_FRAMES(1)
                 END_LOOP
             END_IF
@@ -1094,27 +1098,29 @@ EVT_BEGIN(marioAttackEvent_Deka)
     END_SIBLING_EVENT
     BEGIN_SIBLING_EVENT
         IF_INT_NOT_EQUAL(LW(14), -1)
-            CALL(btlevtcmd_AnimeChangePoseType, LW(14), LW(15), 44)
+            CALL(btlevtcmd_AnimeChangePoseType, LW(14), LW(15), POSE_TYPE_JUMP)
             CALL(get_ride_pos, 1, LW(0), LW(1), LW(2))
             CALL(btlevtcmd_JumpSetting, LW(14), 30, 0, FLOAT(0.39941406f))
-            CALL(btlevtcmd_JumpPosition, LW(14), LW(0), LW(1), LW(2), 30, -1)
-            CALL(btlevtcmd_AnimeChangePoseType, LW(14), LW(15), BTL_POSE_STAY)
+            CALL(btlevtcmd_JumpPosition, LW(14), LW(0), LW(1), LW(2), 30, MOVE_SOUND_FROM_TABLE)
+            CALL(btlevtcmd_AnimeChangePoseType, LW(14), LW(15), POSE_TYPE_NEUTRAL)
         END_IF
     END_SIBLING_EVENT
     WAIT_FRAMES(30)
+
     // They stay on top of the star wherever it moves.
     BEGIN_SIBLING_EVENT_GET_ID(LW(13))
         LOOP(0)
             WAIT_FRAMES(1)
             CALL(get_ride_pos, 0, LW(0), LW(1), LW(2))
             ADD(LW(2), FLOAT(5.0f))
-            CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+            CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
             IF_INT_NOT_EQUAL(LW(14), -1)
                 CALL(get_ride_pos, 1, LW(0), LW(1), LW(2))
                 CALL(btlevtcmd_SetPos, LW(14), LW(0), LW(1), LW(2))
             END_IF
         END_LOOP
     END_SIBLING_EVENT
+
     // The timing game runs with the Action Command help shown and the crowd cheering.
     BEGIN_SIBLING_EVENT
         CALL(sac_cheer, 0)
@@ -1124,6 +1130,7 @@ EVT_BEGIN(marioAttackEvent_Deka)
     CALL(wait_game_end)
     CALL(sac_ac_help_off)
     CALL(sac_cheer_end)
+
     // The Crystal Star pounds the floor and the enemies take damage a second later.
     WAIT_MS(1000)
     CALL(star_stone_attack)
@@ -1134,38 +1141,41 @@ EVT_BEGIN(marioAttackEvent_Deka)
         CALL_CHILD(dmg_evt)
     END_INLINE_EVENT
     WAIT_MS(500)
+
     // Mario and the partner jump back to their home positions.
     BEGIN_SIBLING_EVENT
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 44)
-        CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_JumpSetting, BTL_UNIT_SELF, 30, 0, FLOAT(0.39941406f))
-        CALL(btlevtcmd_JumpPosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 30, -1)
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_JUMP)
+        CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_JumpSetting, UNIT_ID_SELF, 30, 0, FLOAT(0.39941406f))
+        CALL(btlevtcmd_JumpPosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 30, MOVE_SOUND_FROM_TABLE)
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
     END_SIBLING_EVENT
     BEGIN_SIBLING_EVENT
         IF_INT_NOT_EQUAL(LW(14), -1)
-            CALL(btlevtcmd_AnimeChangePoseType, LW(14), LW(15), 44)
+            CALL(btlevtcmd_AnimeChangePoseType, LW(14), LW(15), POSE_TYPE_JUMP)
             CALL(btlevtcmd_GetHomePos, LW(14), LW(0), LW(1), LW(2))
             CALL(btlevtcmd_JumpSetting, LW(14), 30, 0, FLOAT(0.39941406f))
-            CALL(btlevtcmd_JumpPosition, LW(14), LW(0), LW(1), LW(2), 30, -1)
+            CALL(btlevtcmd_JumpPosition, LW(14), LW(0), LW(1), LW(2), 30, MOVE_SOUND_FROM_TABLE)
             CALL(btlevtcmd_StartWaitEvent, LW(14))
         END_IF
     END_SIBLING_EVENT
     WAIT_FRAMES(30)
-    // The camera resets and the background and rippling floor are cleaned up.
-    CALL(evt_btl_camera_set_mode, 0, 0)
+
+    // The camera resets and the background is restored (the early demos also clean up the rippling floor here).
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
 #if VERSION <= VERSION_DEMO_JP
     CALL(yuka_end)
-    CALL(btlevtcmd_SacBgsetMove, 1)
-    CALL(end_deka)
-#else
-    CALL(btlevtcmd_SacBgsetMove, 1)
 #endif
-    // Vivian stops tracking her position.
+    CALL(btlevtcmd_SacBgsetMove, 1)
+
+    // Vivian stops tracking her position (JP and later clean up the floor and the star after it).
+#if VERSION <= VERSION_DEMO_JP
+    CALL(end_deka)
+#endif
     IF_INT_NOT_EQUAL(LW(14), -1)
-        CALL(btlevtcmd_GetUnitKind, BTL_UNIT_PARTNER, LW(0))
+        CALL(btlevtcmd_GetUnitKind, UNIT_ID_PARTNER, LW(0))
         IF_INT_EQUAL(LW(0), UNIT_VIVIAN)
-            CALL(btlevtcmd_SetUnitWork, LW(14), 3, 0)
+            CALL(btlevtcmd_SetUnitWork, LW(14), SHADOW_TAIL_WORK_HOLD, 0)
         END_IF
     END_IF
 #if VERSION >= VERSION_JP
@@ -1173,7 +1183,7 @@ EVT_BEGIN(marioAttackEvent_Deka)
     CALL(end_deka)
 #endif
     LABEL(99)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -1182,7 +1192,7 @@ EVT_END()
  * With 0-1 rounds cleared it misses ceiling enemies and floating ones whose part cannot be hammered;
  * with 2-3 only ceiling enemies are missed; 4-5 hit everyone.
  */
-EVT_BEGIN(dmg_evt)
+static EVT_BEGIN(dmg_evt)
     CALL(get_result, LW(10))
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     LABEL(10)
@@ -1190,13 +1200,13 @@ EVT_BEGIN(dmg_evt)
         RETURN
     END_IF
     IF_INT_LESS_OR_EQUAL(LW(10), 1)
-        CALL(btlevtcmd_CheckAttribute, LW(3), UNIT_ATTR_CEILING, LW(0))
+        CALL(btlevtcmd_CheckAttribute, LW(3), kCeiling, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             GOTO(30)
         END_IF
-        CALL(btlevtcmd_CheckAttribute, LW(3), UNIT_ATTR_FLOATING, LW(0))
+        CALL(btlevtcmd_CheckAttribute, LW(3), kFloating, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
-            CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), PART_ATTR_HAMMERLIKE_CANNOT_TARGET, LW(0))
+            CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), kHammerlikeCannotTarget, LW(0))
             IF_INT_NOT_EQUAL(LW(0), 0)
                 GOTO(30)
             END_IF
@@ -1204,7 +1214,7 @@ EVT_BEGIN(dmg_evt)
         GOTO(20)
     END_IF
     IF_INT_LESS_OR_EQUAL(LW(10), 3)
-        CALL(btlevtcmd_CheckAttribute, LW(3), UNIT_ATTR_CEILING, LW(0))
+        CALL(btlevtcmd_CheckAttribute, LW(3), kCeiling, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             GOTO(30)
         END_IF
@@ -1212,9 +1222,9 @@ EVT_BEGIN(dmg_evt)
     END_IF
     GOTO(20)
     LABEL(20)
-    CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), PART_ATTR_EVASIVE, LW(0))
+    CALL(btlevtcmd_CheckPartsAttribute, LW(3), LW(4), kClone, LW(0))
     IF_INT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_CommandCheckDamage, BTL_UNIT_MARIO, LW(3), LW(4), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CommandCheckDamage, UNIT_ID_MARIO, LW(3), LW(4), DAMAGE_RESULT_FINAL_HIT, LW(5))
     END_IF
     LABEL(30)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
@@ -1222,8 +1232,10 @@ EVT_BEGIN(dmg_evt)
     RETURN
 EVT_END()
 
-// Position writes go through a local FIFO pointer (keeps lis 0xcc01 ahead of the loop counters);
-// components are read z, y, x like GXPosition3f32's argument evaluation.
+// Writes one vertex position through the local FIFO pointer, reading the components z, y, x first.
+// FAKE: stands in for the SDK's GXPosition3f32(v->x, v->y, v->z), which reads z, y, x the same way (arguments
+// are evaluated right to left) but loads the FIFO address after the loop counters are set up; the explicit
+// fifo pointer set before the loop puts that load first, as in the target. The volatile is the SDK's own (GXWGFifo).
 #define YUKA_POSITION(fifo, v) \
     {                          \
         f32 _x, _y, _z;        \
@@ -1237,7 +1249,7 @@ EVT_END()
 
 /**
  * Draws the rippling floor as 128 textured quads along the strip, using the captured floor texture.
- * The retail releases skip it once the buffers are freed.
+ * JP and later skip it once the buffers are freed.
  */
 static void yuka_disp(CameraId cam, void* param) {
     DekaWork* w;
@@ -1251,33 +1263,34 @@ static void yuka_disp(CameraId cam, void* param) {
     camera = camGetPtr(cam);
 #if VERSION <= VERSION_DEMO_JP
     {
-        m = w->mesh->address;
-        {
 #else
     if (w->tex->address != NULL) {
+#endif
         m = w->mesh->address;
+#if VERSION <= VERSION_DEMO_JP
+        {
+#else
         if (m != NULL) {
 #endif
-            GXSetCullMode(0);
+            GXSetCullMode(GX_CULL_NONE);
             GXClearVtxDesc();
-            GXSetVtxDesc(9, 1);
-            GXSetVtxDesc(0xD, 1);
-            GXSetVtxAttrFmt(0, 9, 1, 4, 0);
-            GXSetVtxAttrFmt(0, 0xD, 1, 4, 0);
+            GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
+            GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
+            GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
+            GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
             GXSetNumChans(0);
             GXSetNumTexGens(1);
-            GXSetTexCoordGen2(0, 1, 4, 0x3C, 0, 0x7D);
+            GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
             GXSetNumTevStages(1);
-            GXSetTevOrder(0, 0, 0, 0xFF);
-            GXSetTevOp(0, 3);
-            GXInitTexObj(&obj, w->tex->address, w->texW, w->texH, 4, 0, 0, 0);
-            GXLoadTexObj(&obj, 0);
-            GXLoadPosMtxImm(camera->view, 0);
-            GXSetCurrentMtx(0);
+            GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+            GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
+            GXInitTexObj(&obj, w->tex->address, w->texW, w->texH, GX_TF_RGB565, GX_CLAMP, GX_CLAMP, GX_FALSE);
+            GXLoadTexObj(&obj, GX_TEXMAP0);
+            GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
             fifo = &GXWGFifo;
-            i = 0;
-            do {
-                GXBegin(0x80, GX_VTXFMT0, 4);
+            for (i = 0; i < 128; i++) {
+                GXBegin(GX_QUADS, GX_VTXFMT0, 4);
                 YUKA_POSITION(fifo, &m->disp[0][i]);
                 GXTexCoord2f32(m->u[0][i], m->v[0][i]);
                 YUKA_POSITION(fifo, &m->disp[1][i]);
@@ -1286,19 +1299,15 @@ static void yuka_disp(CameraId cam, void* param) {
                 GXTexCoord2f32(m->u[1][i + 1], m->v[1][i + 1]);
                 YUKA_POSITION(fifo, &m->disp[0][i + 1]);
                 GXTexCoord2f32(m->u[0][i + 1], m->v[0][i + 1]);
-                i++;
-            } while (i < 128);
+            }
         }
     }
 }
 
-// FAKE: inlining off (FAKES.md); without it get_ptr is inlined into its callers (16 shrink, e.g. main_timing 46 -> 36 instructions)
-#pragma dont_inline on
 /** Earth Tremor's work area (DekaWork), kept in the battle's shared action-command work buffer. */
 static DekaWork* get_ptr(void) {
     return (DekaWork*)_battleWorkPointer->actionCommands.work;
 }
-#pragma dont_inline reset
 
 /**
  * Sets up the star markers for a round: keeps the old ones for the fade-out,
@@ -1392,32 +1401,32 @@ restart:
 }
 
 /** Earth Tremor's damage function: the rounds cleared in the timing game plus 1 (1 to 6). */
-s32 weaponGetPower_Deka(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPower_Deka(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
     return get_ptr()->result + 1;
 }
 
 /** Waits until the Crystal Star has settled where Mario and the partner can jump onto it. */
 static USER_FUNC(wait_star_stone_take_on) {
-    return get_ptr()->starState == 4 ? 2 : 0;
+    return get_ptr()->starState == 4 ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
 }
 
 /** Starts the timing game (main_base state 1). */
 static USER_FUNC(start_game) {
     DekaWork* w = get_ptr();
     w->state = 1;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Waits until the timing game has ended (cleared all rounds or missed). */
 static USER_FUNC(wait_game_end) {
-    return get_ptr()->state == 5 ? 2 : 0;
+    return get_ptr()->state == 5 ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
 }
 
 /** Starts the Crystal Star appearing above Mario (main_star state 1). */
 static USER_FUNC(star_stone_appear) {
     DekaWork* w = get_ptr();
     w->starState = 1;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -1427,15 +1436,16 @@ static USER_FUNC(star_stone_appear) {
 static USER_FUNC(get_ride_pos) {
     DekaWork* w = get_ptr();
     EvtWord* args = event->args;
-    f32 k = 64.0f;
+
+    f32 baseSize = 64.0f; // the star's size at scale 1
     if (evtGetValue(event, *args++) == 0) {
-        evtSetFloat(event, *args++, 0.5f * (0.25f * (w->scale.x * k)) + w->starPos.x);
+        evtSetFloat(event, *args++, 0.5f * (0.25f * (w->scale.x * baseSize)) + w->starPos.x);
     } else {
-        evtSetFloat(event, *args++, w->starPos.x - 0.5f * (0.25f * (w->scale.x * k)));
+        evtSetFloat(event, *args++, w->starPos.x - 0.5f * (0.25f * (w->scale.x * baseSize)));
     }
-    evtSetFloat(event, *args++, 0.25f * (0.25f * (w->scale.y * k)) + w->starPos.y);
+    evtSetFloat(event, *args++, 0.25f * (0.25f * (w->scale.y * baseSize)) + w->starPos.y);
     evtSetFloat(event, *args++, 5.0f + w->starPos.z + 4.0f * w->scale.z);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Starts the Crystal Star's six floor-pounding bounces and waits until they are over. */
@@ -1445,9 +1455,9 @@ static USER_FUNC(star_stone_attack) {
         w->starState = 10;
     }
     if (w->starState == 13) {
-        return 2;
+        return EVT_RETURN_DONE;
     } else {
-        return 0;
+        return EVT_RETURN_BLOCK;
     }
 }
 
@@ -1455,5 +1465,5 @@ static USER_FUNC(star_stone_attack) {
 static USER_FUNC(get_result) {
     DekaWork* w = get_ptr();
     evtSetValue(event, event->args[0], w->result);
-    return 2;
+    return EVT_RETURN_DONE;
 }

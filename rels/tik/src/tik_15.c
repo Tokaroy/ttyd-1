@@ -1,5 +1,7 @@
 // tik_15 (埋没した都市, Rogueport Sewers): the large junction with pipes to tik_01 and tik_04 and exits to tik_16, tik_20 and
 // tik_21; Goombas, Paragoombas, Spiky Goombas, a Hammer Bro and a Magikoopa.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -7,14 +9,15 @@
 #include "driver/hitdrv.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_snd.h"
-#include "tik.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_mobj.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[7];
 static HitDamageReturn hitDmgRetPoints[13];
+EvtWord tik_15_init_evt[91];
 
 /**
  * Doors of this room: the pipes to tik_04 and tik_01, two west exits to tik_16, the east exit to tik_20
@@ -141,38 +144,38 @@ static HitDamageReturn hitDmgRetPoints[] = {
 
 /**
  * Map init script of tik_15, the large junction room.
- * Sets the fall-recovery points (hit damage return), the wall- climbing gazigazi hooks and the water animation.
+ * Sets the fall-recovery points (hit damage return), creates the Gazigazi hazard NPC and starts the water animation.
  * Removes the resident Goombas, Paragoombas and Spiky Goombas once the father
- * and son are reunited (STORY_STG1_17), and the Hammer Bro and Magikoopa before STORY_STG5_43_X_NAUTS_RETREAT.
- * Places two large blocks and two badge blocks (Mushroom, Fire Flower).
+ * and son are reunited (STG1_17), and the Hammer Bro and Magikoopa before STG5_43_X_NAUTS_RETREAT.
+ * Places two large blocks and two item blocks (Mushroom, Fire Flower).
  */
 EVT_BEGIN(tik_15_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK7"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK7"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
-    CALL(evt_map_playanim, STRING("anm_mizu"), 1, 0)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_17_FATHER_AND_SON_REUNITED)
+    CALL(evt_map_playanim, STRING("anm_mizu"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG1_17_FATHER_SON_REUNITED)
         CALL(evt_npc_check_delete, STRING("クリボー"))
         CALL(evt_npc_check_delete, STRING("パタクリボー"))
         CALL(evt_npc_check_delete, STRING("トゲクリボー"))
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG5_43_X_NAUTS_RETREAT)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG5_43_X_NAUTS_RETREAT)
         CALL(evt_npc_check_delete, STRING("ハンマーブロス"))
         CALL(evt_npc_check_delete, STRING("カメック"))
     END_IF
-    CALL(evt_mobj_lv_blk, STRING("block00"), -370, 0, -25, 0, GSWF(GSWF_TIK15_BIG_BLOCK_A_BROKEN), STRING("MOBJ_Lv1BigBlock"))
-    CALL(evt_mobj_lv_blk, STRING("block01"), -420, 0, -25, 0, GSWF(GSWF_TIK15_BIG_BLOCK_B_BROKEN), STRING("MOBJ_Lv1BigBlock"))
+    CALL(evt_mobj_lv_blk, STRING("block00"), -370, 0, -25, 0, GSWF_TIK_15_LV1_BIG_BLOCK_1_BROKEN, STRING("MOBJ_Lv1BigBlock"))
+    CALL(evt_mobj_lv_blk, STRING("block01"), -420, 0, -25, 0, GSWF_TIK_15_LV1_BIG_BLOCK_2_BROKEN, STRING("MOBJ_Lv1BigBlock"))
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 50, 0, -30, ITEM_MUSHROOM, 0, GSWF(GSWF_TIK15_MUSHROOM_BLOCK_HIT), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_02"), -140, 0, -30, ITEM_FIRE_FLOWER, 0, GSWF(GSWF_TIK15_FIRE_FLOWER_BLOCK_HIT), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 50, 0, -30, ITEM_MUSHROOM, 0, GSWF_TIK_15_MUSHROOM_BLOCK, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_02"), -140, 0, -30, ITEM_FIRE_FLOWER, 0, GSWF_TIK_15_FIRE_FLOWER_BLOCK, 0)
 #else
-    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 50, 0, -38, ITEM_MUSHROOM, 0, GSWF(GSWF_TIK15_MUSHROOM_BLOCK_HIT), 0)
-    CALL(evt_mobj_badgeblk, STRING("mobj_02"), -140, 0, -38, ITEM_FIRE_FLOWER, 0, GSWF(GSWF_TIK15_FIRE_FLOWER_BLOCK_HIT), 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_01"), 50, 0, -38, ITEM_MUSHROOM, 0, GSWF_TIK_15_MUSHROOM_BLOCK, 0)
+    CALL(evt_mobj_badgeblk, STRING("mobj_02"), -140, 0, -38, ITEM_FIRE_FLOWER, 0, GSWF_TIK_15_FIRE_FLOWER_BLOCK, 0)
 #endif
     RETURN
 EVT_END()

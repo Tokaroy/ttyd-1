@@ -1,40 +1,47 @@
 // hom_00 (途中駅ホーム, Excess Express platform): the platform where the Excess Express stops; the locked door into the station
 // (eki_00) needs the Station Key.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_window.h"
 #include "evt/evt_cmd.h"
+#include "eff/eff_magic1_n64.h"
+#include "driver/envdrv.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_hit.h"
+#include "driver/hitdrv.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "evt/evt_seq.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_item.h"
+#include "evt/evt_pouch.h"
+#include "driver/npcdrv.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "memory.h"
 #include "mario/mariost.h"
 #include "driver/mapdrv.h"
 #include "dolphin/gx.h"
 #include "dolphin/os.h"
-#include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_map.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_sub.h"
 #include "evt/evt_telop.h"
+#include "party/party_motion.h"
 #include "hom.h"
 #include "mario/mario_pouch.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_window.h"
-#include "driver/envdrv.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "driver/seqdrv.h"
+#include "driver/camdrv.h"
 
 static smartEntry* ind_lp;
 
@@ -42,12 +49,45 @@ static USER_FUNC(test_glare);
 static USER_FUNC(tokei);
 static void sun_tev(MapTevCallbackInfo* info);
 
+static EvtWord n_2_door_open[22];
+static EvtWord n_2_door_close[22];
 static BeroEntry bero_data[3];
-BeroEntry bero_data_nidome[2];
+static BeroEntry bero_data_nidome[2];
+static EvtWord evt_carry_up_bridge[92];
+static EvtWord init_powan_toron_konari_papa_gurume[23];
+static EvtWord talk_powan[8];
+static EvtWord talk_toron[8];
+static EvtWord talk_gurume[8];
+static EvtWord talk_papa[8];
+static EvtWord talk_konari[8];
+static EvtWord init_ekiin1[2];
+static EvtWord talk_ekiin1[32];
+static EvtWord init_ekiin2[13];
+static EvtWord talk_ekiin2[28];
 static NpcSetupInfo npc_data[9];
+static EvtWord evt_bridge_down[144];
 static s32 key_tbl[2];
-extern EvtWord evt_train_door[];
-extern EvtWord evt_train_nidome[];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord evt_chk[21];
+#else
+static EvtWord evt_chk[23];
+#endif
+
+static EvtWord evt_lock[10];
+static EvtWord evt_train_door[13];
+static EvtWord evt_train[262];
+static EvtWord evt_train_nidome[307];
+static EvtWord evt_hom_touchaku[460];
+static EvtWord evt_hom_touchaku_nidome[56];
+
+#if VERSION >= VERSION_US
+EvtWord hom_00_init_evt[259];
+#elif VERSION == VERSION_DEMO_JP
+EvtWord hom_00_init_evt[223];
+#else
+EvtWord hom_00_init_evt[247];
+#endif
 
 /**
  * Door-swing callback when opening the station door (n_bero_2): LW(0) is the door angle;
@@ -88,7 +128,7 @@ static BeroEntry bero_data[] = {
         45, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)evt_train_door, // exitEvent
+        evt_train_door, // exitEvent
         "rsh_01_b", // nextMapName
         "s_bero", // nextBeroName
         1, // enterAnimeType
@@ -118,7 +158,7 @@ static BeroEntry bero_data[] = {
 };
 
 /** Doors of this room: the north exit (n_bero_1) to rsh_01_b (Excess Express). */
-BeroEntry bero_data_nidome[] = {
+static BeroEntry bero_data_nidome[] = {
     {
         "n_bero_1", // hitName
         1, // type
@@ -129,7 +169,7 @@ BeroEntry bero_data_nidome[] = {
         45, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)evt_train_nidome, // exitEvent
+        evt_train_nidome, // exitEvent
         "rsh_01_b", // nextMapName
         "s_bero", // nextBeroName
         1, // enterAnimeType
@@ -146,16 +186,16 @@ BeroEntry bero_data_nidome[] = {
  * then asks whether Mario wants the Station Key (yes/no);
  * on yes he is given the key (ITEM_STATION_KEY_0x18) and the story becomes "Station Key obtained".
  */
-EVT_BEGIN(evt_carry_up_bridge)
-    IF_INT_EQUAL(GSWF(GSWF_HOM00_BRIDGE_EXPLAINED), 0)
+static EVT_BEGIN(evt_carry_up_bridge)
+    IF_INT_EQUAL(GSWF_HOM_DRAWBRIDGE_PROBLEM_EXPLAINED, 0)
         CALL(evt_msg_print, 0, STRING("stg6_hom_04"), 0, STRING("me"))
-        CALL(evt_cam3d_evt_set, -65, 33, 575, 213, 64, 102, 3000, 11)
+        CALL(evt_cam3d_evt_set, -65, 33, 575, 213, 64, 102, 3000, EASING_SINE_IN_OUT)
         WAIT_MS(6000)
-        CALL(evt_cam3d_evt_off, 0, 11)
+        CALL(evt_cam3d_evt_off, 0, EASING_SINE_IN_OUT)
         WAIT_MS(200)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_HOM00_BRIDGE_EXPLAINED), 0)
-        SET_VALUE(GSWF(GSWF_HOM00_BRIDGE_EXPLAINED), 1)
+    IF_INT_EQUAL(GSWF_HOM_DRAWBRIDGE_PROBLEM_EXPLAINED, 0)
+        SET_VALUE(GSWF_HOM_DRAWBRIDGE_PROBLEM_EXPLAINED, 1)
         CALL(evt_msg_print, 0, STRING("stg6_hom_05"), 0, STRING("me"))
     ELSE
         CALL(evt_msg_print, 0, STRING("stg6_hom_10"), 0, STRING("me"))
@@ -163,11 +203,11 @@ EVT_BEGIN(evt_carry_up_bridge)
     CALL(evt_msg_select, 0, STRING("stg6_hom_10_yn"))
     IF_INT_EQUAL(LW(0), 0)
         CALL(evt_msg_print_add, 0, STRING("stg6_hom_06"))
-        CALL(evt_item_entry, STRING("a"), ITEM_STATION_KEY_0x18, 0, 0, 0, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+        CALL(evt_item_entry, STRING("a"), ITEM_STATION_KEY_0x18, 0, 0, 0, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
         CALL(evt_item_get_item, STRING("a"))
         CALL(evt_item_get_item_end_wait, STRING("a"))
         CALL(evt_msg_print, 0, STRING("stg6_hom_08"), 0, STRING("me"))
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_28_STATION_KEY_OBTAINED)
+        SET_VALUE(GSW_STORY_PROGRESS, STG6_28_STATION_KEY_OBTAINED)
     ELSE
         CALL(evt_msg_print_add, 0, STRING("stg6_hom_09"))
     END_IF
@@ -176,15 +216,15 @@ EVT_END()
 
 /**
  * Init script shared by the platform NPCs Pennington, the fake Zip Toad, Heff T., Goldbob and Bub:
- * removes the NPC from the map once the drawbridge is down (story 42),
- * and the fake Zip Toad once the station has been reached (story 27).
+ * removes the NPC from the map once the drawbridge is down (story STG6_42_DRAWBRIDGE_DOWN),
+ * and the fake Zip Toad once the station has been reached (story STG6_27_RIVERSIDE_STATION).
  */
-EVT_BEGIN(init_powan_toron_konari_papa_gurume)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG6_42_DRAWBRIDGE_DOWN)
+static EVT_BEGIN(init_powan_toron_konari_papa_gurume)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG6_42_DRAWBRIDGE_DOWN)
         CALL(evt_npc_set_position, STRING("me"), 0, -1000, 0)
     END_SWITCH
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_27_RIVERSIDE_STATION)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_27_RIVERSIDE_STATION)
         CALL(evt_npc_set_position, STRING("トロン"), 0, -1000, 0)
     END_IF
     RETURN
@@ -221,7 +261,7 @@ static EVT_BEGIN(talk_konari)
 EVT_END()
 
 /** Init script of station attendant 1; does nothing. */
-EVT_BEGIN(init_ekiin1)
+static EVT_BEGIN(init_ekiin1)
     RETURN
 EVT_END()
 
@@ -229,13 +269,13 @@ EVT_END()
  * Talk script of station attendant 1: before the key is obtained, runs evt_carry_up_bridge;
  * then gives the drawbridge, waiting-for-the-train and after-departure lines by story progress.
  */
-EVT_BEGIN(talk_ekiin1)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_28_STATION_KEY_OBTAINED)
+static EVT_BEGIN(talk_ekiin1)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_28_STATION_KEY_OBTAINED)
         CALL_CHILD(evt_carry_up_bridge)
-        CASE_LESS(STORY_STG6_42_DRAWBRIDGE_DOWN)
+        CASE_LESS(STG6_42_DRAWBRIDGE_DOWN)
         CALL(evt_msg_print, 0, STRING("stg6_hom_11"), 0, 0)
-        CASE_LESS(STORY_STG6_43_CONDUCTOR_APPEARS)
+        CASE_LESS(STG6_43_CONDUCTOR_APPEARS)
         CALL(evt_msg_print, 0, STRING("stg6_hom_12"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg6_hom_13"), 0, 0)
@@ -244,12 +284,12 @@ EVT_BEGIN(talk_ekiin1)
 EVT_END()
 
 /**
- * Init script of station attendant 2: once the drawbridge is down (story 42),
+ * Init script of station attendant 2: once the drawbridge is down (story STG6_42_DRAWBRIDGE_DOWN),
  * moves him to the gate at (-865, 80, 100).
  */
-EVT_BEGIN(init_ekiin2)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_GREATER_OR_EQUAL(STORY_STG6_42_DRAWBRIDGE_DOWN)
+static EVT_BEGIN(init_ekiin2)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_GREATER_OR_EQUAL(STG6_42_DRAWBRIDGE_DOWN)
         CALL(evt_npc_set_position, STRING("me"), -865, 80, 100)
     END_SWITCH
     RETURN
@@ -259,11 +299,11 @@ EVT_END()
  * Talk script of station attendant 2 (at the ticket gate):
  * different lines before the drawbridge is down, while waiting for the conductor, and afterwards.
  */
-EVT_BEGIN(talk_ekiin2)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_LESS(STORY_STG6_42_DRAWBRIDGE_DOWN)
+static EVT_BEGIN(talk_ekiin2)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_LESS(STG6_42_DRAWBRIDGE_DOWN)
         CALL(evt_msg_print, 0, STRING("stg6_eki_03"), 0, 0)
-        CASE_LESS(STORY_STG6_43_CONDUCTOR_APPEARS)
+        CASE_LESS(STG6_43_CONDUCTOR_APPEARS)
         CALL(evt_msg_print, 0, STRING("stg6_eki_04"), 0, 0)
         CASE_DEFAULT
         CALL(evt_msg_print, 0, STRING("stg6_hom_16"), 0, 0)
@@ -277,8 +317,8 @@ EVT_END()
  */
 static NpcSetupInfo npc_data[] = {
     {
-        "ポワン探偵", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ポワン探偵", // name (Pennington)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_powan_toron_konari_papa_gurume, // initEvent
         NULL, // regularEvent
@@ -289,8 +329,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トロン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "トロン", // name (the fake Zip Toad (Doopliss in disguise))
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_powan_toron_konari_papa_gurume, // initEvent
         NULL, // regularEvent
@@ -301,8 +341,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "グルメキノピオ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "グルメキノピオ", // name (Heff T.)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_powan_toron_konari_papa_gurume, // initEvent
         NULL, // regularEvent
@@ -313,8 +353,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ナリキンパパ", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ナリキンパパ", // name (Goldbob)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_powan_toron_konari_papa_gurume, // initEvent
         NULL, // regularEvent
@@ -325,8 +365,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "コナリキン", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "コナリキン", // name (Bub)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_powan_toron_konari_papa_gurume, // initEvent
         NULL, // regularEvent
@@ -337,8 +377,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "駅員1", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "駅員1", // name (a Riverside Station worker)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_ekiin1, // initEvent
         NULL, // regularEvent
@@ -349,8 +389,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "駅員2", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "駅員2", // name (a Riverside Station worker)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, // reactionFlags
         init_ekiin2, // initEvent
         NULL, // regularEvent
@@ -361,8 +401,8 @@ static NpcSetupInfo npc_data[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ランペル", // name
-        NPC_FLAG_NO_WALL_HIT | NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "ランペル", // name (Doopliss)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_NO_WALL_COLLISION, // flags
         0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, // reactionFlags..returnEvent
         NULL, 0, // blowEvent..territoryType
         {0}, // territoryBase
@@ -373,28 +413,27 @@ static NpcSetupInfo npc_data[] = {
 };
 
 /**
- * Cutscene when Mario reaches the platform with the drawbridge lowering scene flag
- * (GSWF_EKI00_BRIDGE_LOWER_SCENE): Mario and his partner are hidden,
- * the camera shows the attendant noticing the bridge,
- * the drawbridge ("hasi") is lowered with its machinery sounds and a camera shake,
- * and the map changes back to eki_00.
+ * Drawbridge scene, spawned by hom_00's init while GSWF_EKI_BRIDGE_LOWERING_IN_PROGRESS is set (eki_00's
+ * bridge switch sets it): Mario and the partner are moved out of sight, the camera pans, station attendant 1
+ * (駅員1) notices and turns, the drawbridge "hasi" lowers with its machinery sounds and a camera shake,
+ * and the map changes back to eki_00 (s_bero).
  */
-EVT_BEGIN(evt_bridge_down)
+static EVT_BEGIN(evt_bridge_down)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set_xyz, -350, 15, 0, 0, 0, 11)
+    CALL(evt_cam3d_evt_set_xyz, -350, 15, 0, 0, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
-    CALL(evt_cam3d_evt_set_xyz, 100, 15, 0, 0, 5000, 0)
+    CALL(evt_cam3d_evt_set_xyz, 100, 15, 0, 0, 5000, EASING_LINEAR)
     WAIT_MS(5300)
-    CALL(evt_eff_fukidashi, 1, STRING("a"), STRING("駅員1"), 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING("a"), STRING("駅員1"), 0, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(1000)
     CALL(evt_npc_set_ry, STRING("駅員1"), 90)
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, -65, 33, 575, 213, 64, 102, 2000, 11)
+    CALL(evt_cam3d_evt_set, -65, 33, 575, 213, 64, 102, 2000, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
-    CALL(evt_map_playanim, STRING("hasi"), 0, 0)
+    CALL(evt_map_playanim, STRING("hasi"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_FRAMES(1)
     BEGIN_INLINE_EVENT
         CALL(evt_snd_sfxon, STRING("SFX_STG6_BRIDGE_MOVE1"), LW(10))
@@ -407,11 +446,11 @@ EVT_BEGIN(evt_bridge_down)
     MULTIPLY(LW(1), 2)
     DIVIDE(LW(1), 3)
     WAIT_MS(LW(1))
-    CALL(evt_cam3d_evt_set, 275, 260, 1400, 275, 210, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 275, 260, 1400, 275, 210, 0, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_map_checkanim, STRING("hasi"), LW(0), LW(1))
     WAIT_MS(LW(1))
-    CALL(evt_cam_shake, 4, FLOAT(0.0009765625f), FLOAT(0.0009765625f), 200)
+    CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0009765625f), FLOAT(0.0009765625f), 200)
     WAIT_MS(2000)
     CALL(evt_bero_mapchange, STRING("eki_00"), STRING("s_bero"))
     RETURN
@@ -444,12 +483,12 @@ EVT_END()
 /**
  * Runs when the Station Key is used on the lock:
  * switches the station door's entry on (bero_case_switch_on with LW(0) = 1)
- * and sets story progress to STORY_STG6_29_STATION_DOOR_UNLOCKED.
+ * and sets story progress to STG6_29_STATION_DOOR_UNLOCKED.
  */
 static EVT_BEGIN(evt_lock)
     SET_VALUE(LW(0), 1)
     CALL_CHILD(bero_case_switch_on)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_29_STATION_DOOR_UNLOCKED)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_29_STATION_DOOR_UNLOCKED)
     RETURN
 EVT_END()
 
@@ -457,8 +496,8 @@ EVT_END()
  * Exit event of the train door: returns 1 in LW(0) only while the story is at "Drawbridge down",
  * so the door can be used just then.
  */
-EVT_BEGIN(evt_train_door)
-    IF_INT_NOT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_42_DRAWBRIDGE_DOWN)
+static EVT_BEGIN(evt_train_door)
+    IF_INT_NOT_EQUAL(GSW_STORY_PROGRESS, STG6_42_DRAWBRIDGE_DOWN)
         SET_VALUE(LW(0), 0)
         RETURN
     END_IF
@@ -467,24 +506,22 @@ EVT_BEGIN(evt_train_door)
 EVT_END()
 
 /**
- * Boarding scene on the first trip: the rear cars are shown,
- * Mario and the partner walk to station attendant 2 (駅員2) beside the train,
- * the door closes and the attendant says stg6_eki_05.
- * The crossing barrier lowers (shadanki) and the train departs (hom_10_evt_resha_start) with the camera
- * following it for about 15 seconds.
- * It then sets GSWF_TRAIN_DEPARTED and GSWF_HOM00_TRAIN_DEPARTED,
- * moves story progress to STORY_STG6_43_CONDUCTOR_APPEARS and changes the map to rsh_02_c ("hom_hassya").
+ * Boarding scene, registered on n_bero_1 at STG6_42_DRAWBRIDGE_DOWN: the rear cars (train_4 to 6) are
+ * shown, Mario and the partner move in and face station attendant 2 (駅員2), the door closes and he says
+ * stg6_eki_05. The crossing barrier "shadanki" moves, the train departs (hom_10_evt_resha_start),
+ * then GSWF_HOM_TRAIN_BOARDED_UNUSED and GSWF_HOM_BOARDED_AT_RIVERSIDE_UNUSED are set, the story moves to
+ * STG6_43_CONDUCTOR_APPEARS and the map changes to rsh_02_c ("hom_hassya").
  */
 static EVT_BEGIN(evt_train)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_4"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_6"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_4"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_cam3d_get_shift, LW(0), LW(1), LW(2), LW(3))
     CALL(evt_cam3d_event_from_road, LW(0), LW(1), LW(2), LW(3), LW(10), LW(11), LW(12), LW(13), LW(14), LW(15))
-    CALL(evt_cam3d_evt_set, LW(10), LW(11), LW(12), LW(13), LW(14), LW(15), 500, 11)
+    CALL(evt_cam3d_evt_set, LW(10), LW(11), LW(12), LW(13), LW(14), LW(15), 500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_mov_pos, -820, 30, 500)
         CALL(evt_mario_set_dir_npc, STRING("駅員2"))
@@ -496,7 +533,7 @@ static EVT_BEGIN(evt_train)
     WAIT_MS(200)
     CALL(evt_party_move_pos, 0, -810, 20, 500)
     CALL(evt_party_set_dir_npc, 0, STRING("駅員2"))
-    CALL(evt_npc_status_onoff, 1, STRING("駅員2"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("駅員2"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_move_position, STRING("駅員2"), -800, 80, 0, FLOAT(80.0f), 1)
     CALL(evt_npc_reverse_ry, STRING("駅員2"))
     WAIT_MS(500)
@@ -504,37 +541,39 @@ static EVT_BEGIN(evt_train)
     WAIT_MS(500)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_SLIDE1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("n_1_door_close"), 0, 0)
+    CALL(evt_map_playanim, STRING("n_1_door_close"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("n_1_door_close"), LW(0), LW(1))
     WAIT_MS(LW(1))
     WAIT_MS(300)
+
+    // He calls the train off and the crossing barrier opens.
     CALL(evt_msg_print, 0, STRING("stg6_eki_05"), 0, STRING("駅員2"))
     WAIT_MS(400)
-    CALL(evt_cam3d_evt_set, 318, 80, 347, -134, 65, 35, 0, 11)
+    CALL(evt_cam3d_evt_set, 318, 80, 347, -134, 65, 35, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     WAIT_MS(1000)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_CROSSING_OPEN1"), -170, 30, 0, LW(10))
-    CALL(evt_map_playanim, STRING("shadanki"), 0, 0)
+    CALL(evt_map_playanim, STRING("shadanki"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("shadanki"), LW(0), LW(1))
     WAIT_MS(LW(1))
     CALL(evt_snd_sfxoff, LW(10))
     SET_VALUE(GF(15), 1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("eki_03_S"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group614"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("eki_03_S"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group614"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     SPAWN_EVENT(hom_10_evt_resha_start)
     WAIT_MS(4500)
-    CALL(evt_cam3d_evt_set, 50, 125, 500, 50, 75, 0, 1500, 12)
+    CALL(evt_cam3d_evt_set, 50, 125, 500, 50, 75, 0, 1500, EASING_SINE_OUT)
     WAIT_MS(1500)
     WAIT_MS(4500)
     CALL(evt_npc_set_ry, STRING("駅員1"), 90)
-    CALL(evt_cam3d_evt_set, -150, 25, 250, 273, 75, -10, 1500, 13)
+    CALL(evt_cam3d_evt_set, -150, 25, 250, 273, 75, -10, 1500, EASING_SINE_IN)
     WAIT_MS(1500)
     WAIT_MS(4000)
-    SET_VALUE(GSWF(GSWF_TRAIN_DEPARTED), 1)
-    SET_VALUE(GSWF(GSWF_HOM00_TRAIN_DEPARTED), 1)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_43_CONDUCTOR_APPEARS)
+    SET_VALUE(GSWF_HOM_TRAIN_BOARDED_UNUSED, 1)
+    SET_VALUE(GSWF_HOM_BOARDED_AT_RIVERSIDE_UNUSED, 1)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_43_CONDUCTOR_APPEARS)
     WAIT_FRAMES(1)
     CALL(evt_bero_mapchange, STRING("rsh_02_c"), STRING("hom_hassya"))
     RETURN
@@ -542,25 +581,27 @@ EVT_END()
 
 /**
  * Exit event of the train door on the second trip:
- * Mario boards, the crossing barrier closes, attendant 2 calls the train off,
+ * Mario boards, attendant 2 calls the train off, the crossing barrier opens,
  * the train starts (hom_10_evt_resha_start, or start2 on the return trip),
  * the train-leg counter is set to 1 (outbound) or 3 (return) and the map changes to rsh_02_c.
  */
-EVT_BEGIN(evt_train_nidome)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_4"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_6"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(evt_train_nidome)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_4"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
     ELSE
     END_IF
+
     // Mario freezes and the train door slides open.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_hitobj_onoff, STRING("n_bero_1"), 0, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_SLIDE1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("n_1_door_open"), 0, 0)
+    CALL(evt_map_playanim, STRING("n_1_door_open"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("n_1_door_open"), LW(0), LW(1))
     WAIT_MS(LW(1))
+
     // Mario and his partners walk up to the door.
     BEGIN_INLINE_EVENT
         CALL(evt_mario_mov_pos, -820, 12, 500)
@@ -580,8 +621,9 @@ EVT_BEGIN(evt_train_nidome)
     WAIT_MS(200)
     CALL(evt_party_move_pos, 1, -810, 30, 500)
     CALL(evt_party_set_dir, 1, 270, 200)
+
     // Attendant 2 walks over and the door closes behind them.
-    CALL(evt_npc_status_onoff, 1, STRING("駅員2"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("駅員2"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_move_position, STRING("駅員2"), -800, 80, 0, FLOAT(80.0f), 1)
     CALL(evt_npc_reverse_ry, STRING("駅員2"))
     WAIT_MS(500)
@@ -589,30 +631,30 @@ EVT_BEGIN(evt_train_nidome)
     WAIT_MS(500)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_SLIDE1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("n_1_door_close"), 0, 0)
+    CALL(evt_map_playanim, STRING("n_1_door_close"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("n_1_door_close"), LW(0), LW(1))
     WAIT_MS(LW(1))
     WAIT_MS(300)
-    // He calls the train off and the crossing barrier opens.
     CALL(evt_msg_print, 0, STRING("stg6_eki_05"), 0, STRING("駅員2"))
     WAIT_MS(400)
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_CROSSING_OPEN1"), -170, 30, 0, LW(10))
-    CALL(evt_map_playanim, STRING("shadanki"), 0, 0)
+    CALL(evt_map_playanim, STRING("shadanki"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("shadanki"), LW(0), LW(1))
     WAIT_MS(LW(1))
     CALL(evt_snd_sfxoff, LW(10))
+
     // Everyone vanishes from the platform and the train pulls out, outbound or on the return trip.
     SET_VALUE(GF(15), 1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("eki_03_S"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group614"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_cam_ctrl_onoff, 4, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("eki_03_S"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group614"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_cam_ctrl_onoff, CAMERA_3D, 0)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_party_cont_onoff, 1, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_party_set_pos, 1, 0, -1000, 0)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         BEGIN_INLINE_EVENT
             WAIT_MS(6000)
             CALL(evt_npc_set_ry, STRING("駅員2"), 90)
@@ -626,15 +668,16 @@ EVT_BEGIN(evt_train_nidome)
         SPAWN_EVENT(hom_10_evt_resha_start2)
     END_IF
     WAIT_MS(10000)
+
     // The train is marked as departed, the trip leg is set and the map changes to the train (rsh_02_c).
-    SET_VALUE(GSWF(GSWF_TRAIN_DEPARTED), 1)
-    SET_VALUE(GSWF(GSWF_HOM00_TRAIN_DEPARTED), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_BOARDED_UNUSED, 1)
+    SET_VALUE(GSWF_HOM_BOARDED_AT_RIVERSIDE_UNUSED, 1)
     WAIT_FRAMES(1)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 0)
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
-        SET_VALUE(GSW(GSW_TRAIN_LEG), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
+        SET_VALUE(GSW_HOM_TRAIN_LEG, 1)
     ELSE
-        SET_VALUE(GSW(GSW_TRAIN_LEG), 3)
+        SET_VALUE(GSW_HOM_TRAIN_LEG, 3)
     END_IF
     CALL(evt_bero_mapchange, STRING("rsh_02_c"), STRING("nidome_start"))
     SET_VALUE(LW(0), 1)
@@ -646,14 +689,14 @@ EVT_END()
  * the Excess Express pulls in, the doors open, the fake Zip Toad and Pennington step off, the fake turns into
  * Doopliss, who speaks and hops away, the story becomes "Riverside Station" and the map changes to rsh_02_b.
  */
-EVT_BEGIN(evt_hom_touchaku)
+static EVT_BEGIN(evt_hom_touchaku)
     // The party is hidden and the platform NPCs are moved off screen.
     CALL(evt_snd_bgm_scope, 0, 1)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set, 275, 260, 1400, 275, 210, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 275, 260, 1400, 275, 210, 0, 0, EASING_SINE_IN_OUT)
     CALL(evt_npc_set_position, STRING("ポワン探偵"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("トロン"), 0, -1000, 0)
     CALL(evt_npc_set_position, STRING("グルメキノピオ"), 0, -1000, 0)
@@ -662,7 +705,8 @@ EVT_BEGIN(evt_hom_touchaku)
     CALL(evt_npc_set_ry, STRING("トロン"), 90)
     CALL(evt_npc_set_ry, STRING("ポワン探偵"), 90)
     CALL(evt_npc_set_position, STRING("駅員2"), -750, 80, 100)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
+
     // A caption is shown while the Excess Express rolls into the platform and stops.
     BEGIN_INLINE_EVENT
         WAIT_MS(3000)
@@ -670,8 +714,8 @@ EVT_BEGIN(evt_hom_touchaku)
     END_INLINE_EVENT
     CALL_CHILD(hom_10_evt_resha_stop)
     WAIT_MS(2500)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_4"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_cam3d_evt_set, 458, 97, 366, 78, 110, 189, 3000, 11)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_4"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_cam3d_evt_set, 458, 97, 366, 78, 110, 189, 3000, EASING_SINE_IN_OUT)
     LOOP(0)
         IF_INT_EQUAL(GW(0), 0)
             BREAK_LOOP
@@ -679,9 +723,10 @@ EVT_BEGIN(evt_hom_touchaku)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(1000)
+
     // The camera moves to the door; Pennington and the fake Zip Toad step off while the door opens and closes.
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_4"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_cam3d_evt_set, -810, 232, 628, -810, 137, 87, 0, 11)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_4"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_cam3d_evt_set, -810, 232, 628, -810, 137, 87, 0, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
     CALL(evt_npc_flag_onoff, 1, STRING("ポワン探偵"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 1, STRING("トロン"), NPC_FLAG_INSTANT_TURN)
@@ -692,7 +737,7 @@ EVT_BEGIN(evt_hom_touchaku)
     SPAWN_EVENT(bero_open_door_play_se)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_SLIDE1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -40, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -40, 500)
     LABEL(0)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, STRING("tobira"), LW(0), 0, 0)
@@ -702,7 +747,7 @@ EVT_BEGIN(evt_hom_touchaku)
     END_IF
     CALL(evt_npc_flag_onoff, 0, STRING("ポワン探偵"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_npc_flag_onoff, 0, STRING("トロン"), NPC_FLAG_INSTANT_TURN)
-    CALL(evt_npc_status_onoff, 1, STRING("駅員2"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("駅員2"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_move_position, STRING("トロン"), -800, 100, 0, FLOAT(60.0f), 1)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_move_position, STRING("トロン"), -780, 100, 0, FLOAT(60.0f), 1)
@@ -713,7 +758,7 @@ EVT_BEGIN(evt_hom_touchaku)
     SPAWN_EVENT(bero_close_door_play_se)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_SLIDE1_3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, -40, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -40, 0, 500)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value)
     CALL(evt_mapobj_trans, 1, STRING("tobira"), LW(0), 0, 0)
@@ -721,6 +766,7 @@ EVT_BEGIN(evt_hom_touchaku)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(1)
     END_IF
+
     // The fake Zip Toad turns around, then changes into Doopliss in a puff of smoke.
     LOOP(3)
         CALL(evt_npc_reverse_ry, STRING("トロン"))
@@ -742,15 +788,16 @@ EVT_BEGIN(evt_hom_touchaku)
         WAIT_MS(200)
     END_LOOP
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, -780, 194, 481, -780, 125, 87, 500, 11)
+    CALL(evt_cam3d_evt_set, -780, 194, 481, -780, 125, 87, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
+
     // Doopliss says his piece and hops away across the platform.
     CALL(evt_msg_print, 0, STRING("stg6_hom_01_02"), 0, STRING("ランペル"))
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, -780, 259, 776, -780, 137, 87, 500, 11)
+    CALL(evt_cam3d_evt_set, -780, 259, 776, -780, 137, 87, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_sound_data_set, STRING("ランペル"), EVT_NULLPTR, EVT_NULLPTR, EVT_NULLPTR, STRING("SFX_STG6_LANPEL_JUMP1"), EVT_NULLPTR)
-    CALL(evt_npc_flag_onoff, 1, STRING("ランペル"), NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_status_onoff, 1, STRING("ランペル"), 2)
+    CALL(evt_npc_flag_onoff, 1, STRING("ランペル"), NPC_FLAG_NO_HIT)
+    CALL(evt_npc_status_onoff, 1, STRING("ランペル"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_set_ry, STRING("ランペル"), 90)
     LOOP(0)
         CALL(evt_npc_get_position, STRING("ランペル"), LW(0), LW(1), LW(2))
@@ -761,23 +808,24 @@ EVT_BEGIN(evt_hom_touchaku)
         END_IF
     END_LOOP
     CALL(evt_snd_bgm_scope, 0, 0)
+
     // The story advances to Riverside Station and the map changes to rsh_02_b.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_27_RIVERSIDE_STATION)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_27_RIVERSIDE_STATION)
     CALL(evt_bero_mapchange, STRING("rsh_02_b"), STRING("hom_touchaku"))
     RETURN
 EVT_END()
 
 /**
  * Arrival cutscene on the second visit (entering through "nidome"):
- * the train pulls in, GSWF_TRAIN_AT_RIVERSIDE is set and the map changes to rsh_02_b.
+ * the train pulls in, GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE is set and the map changes to rsh_02_b.
  */
-EVT_BEGIN(evt_hom_touchaku_nidome)
+static EVT_BEGIN(evt_hom_touchaku_nidome)
     CALL(evt_mario_cont_onoff, 0)
     CALL(evt_party_cont_onoff, 0, 0)
     CALL(evt_mario_set_pos, 0, -1000, 0)
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
-    CALL(evt_cam3d_evt_set, 406, 317, 596, -389, 137, -44, 0, 11)
-    CALL(evt_seq_wait, 2)
+    CALL(evt_cam3d_evt_set, 406, 317, 596, -389, 137, -44, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL_CHILD(hom_10_evt_resha_stop)
     WAIT_MS(2500)
     LOOP(0)
@@ -787,7 +835,7 @@ EVT_BEGIN(evt_hom_touchaku_nidome)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_MS(1000)
-    SET_VALUE(GSWF(GSWF_TRAIN_AT_RIVERSIDE), 1)
+    SET_VALUE(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE, 1)
     CALL(evt_bero_mapchange, STRING("rsh_02_b"), STRING("hom_touchaku"))
     RETURN
 EVT_END()
@@ -802,51 +850,56 @@ EVT_END()
 EVT_BEGIN(hom_00_init_evt)
     // NPCs, music, ambience, the save block and the recovery block.
     SET_VALUE(GF(15), 0)
+#if VERSION <= VERSION_DEMO_JP
+    CALL(evt_npc_setup, PTR(npc_data))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_HOM1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_EKI1"))
+#else
 #if VERSION >= VERSION_US
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hasi_L"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hasi_R"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hasi_L"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("hasi_R"), MAP_OBJ_FLAG_CLIP)
 #endif
     CALL(evt_npc_setup, PTR(npc_data))
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
-#endif
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG6_HOM1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_EKI1"))
-#if VERSION >= VERSION_JP
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_UNDIP, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG6_HOM1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_EKI1"))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_UNSILENT, 0)
 #endif
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -175, 140, -170, 0, 0)
     CALL(evt_mobj_recovery_blk, STRING("mobj_recover"), 15, -125, 140, -170, 0, 0)
+
     // The train is placed on the correct side of the platform.
-    IF_INT_EQUAL(GSWF(GSWF_TRAIN_RETURN_TRIP), 0)
+    IF_INT_EQUAL(GSWF_HOM_TRAIN_BOUND_FOR_ROGUEPORT, 0)
         CALL_CHILD(hom_10_evt_resha_right)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_4"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_4"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_5"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("train_6"), MAP_OBJ_FLAG_HIDDEN)
     ELSE
         CALL_CHILD(hom_10_evt_resha_left)
     END_IF
+
     // Late in the story the crossing barrier is shown in its open position.
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_54_WELCOME_BACK)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_54_WELCOME_BACK)
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_map_playanim, STRING("shadanki"), 2, 0)
+        CALL(evt_map_playanim, STRING("shadanki"), MAP_ANIM_PLAY_AT_END, 0)
 #else
         CALL(evt_bero_get_entername, LW(0))
         CALL(evt_sub_get_system_flag, LW(1))
         IF_STR_NOT_EQUAL(LW(0), STRING("n_bero_1"))
             IF_STR_NOT_EQUAL(LW(0), STRING("n_bero_2"))
                 IF_BITS_CLEAR(LW(1), 1)
-                    CALL(evt_map_playanim, STRING("shadanki"), 2, 0)
+                    CALL(evt_map_playanim, STRING("shadanki"), MAP_ANIM_PLAY_AT_END, 0)
                 END_IF
             END_IF
         END_IF
 #endif
     END_IF
+
     // The sun's heat haze and glare, and the station clock hands.
     CALL(evt_map_set_tevcallback, 2, PTR(sun_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("sun"), MAPOBJ_TEV_CALLBACK(2))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("sun"), MAPOBJ_FLAG_DISPLAY_LIST)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("sun"), MAPOBJ_FLAG_NO_COLOR_STAGE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("sun"), MAP_OBJ_TEV_CALLBACK(2))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("sun"), MAP_OBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("sun"), MAP_OBJ_FLAG_NO_COLOR_STAGE)
     BEGIN_INLINE_EVENT
         CALL(test_glare)
     END_INLINE_EVENT
@@ -858,49 +911,94 @@ EVT_BEGIN(hom_00_init_evt)
             WAIT_FRAMES(1)
         END_LOOP
     END_INLINE_EVENT
+
     // The drawbridge scene, the doors, and the arrival scenes of the first and second visits.
-    IF_INT_EQUAL(GSWF(GSWF_EKI00_BRIDGE_LOWER_SCENE), 1)
+    IF_INT_EQUAL(GSWF_EKI_BRIDGE_LOWERING_IN_PROGRESS, 1)
         SPAWN_EVENT(evt_bridge_down)
         RETURN
     END_IF
     SET_VALUE(LW(0), PTR(bero_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_27_RIVERSIDE_STATION)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_27_RIVERSIDE_STATION)
         SPAWN_EVENT(evt_hom_touchaku)
     END_IF
     CALL(evt_bero_get_entername, LW(0))
     IF_STR_EQUAL(LW(0), STRING("nidome"))
         SPAWN_EVENT(evt_hom_touchaku_nidome)
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_55_PEACH_GRODUS_AND_X_NAUT)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_55_PEACH_GRODUS_X_NAUT)
         SET_VALUE(LW(0), STRING("n_bero_1"))
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_bero_overwrite, STRING("n_bero_1"), PTR(bero_data_nidome))
         SET_VALUE(LW(0), STRING("n_bero_1"))
         CALL_CHILD(bero_case_switch_on)
     END_IF
+
     // The station door stays locked until the Station Key has been used.
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_29_STATION_DOOR_UNLOCKED)
-        CALL(evt_mobj_lock, STRING("lock"), ITEM_STATION_KEY_0x18, -260, 90, -190, 0, PTR(evt_chk), PTR(evt_lock), GSWF(GSWF_HOM00_STATION_DOOR_UNLOCKED))
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_29_STATION_DOOR_UNLOCKED)
+        CALL(evt_mobj_lock, STRING("lock"), 24, -260, 90, -190, 0, PTR(evt_chk), PTR(evt_lock), GSWF_HOM_00_STATION_DOOR_LOCK)
         SET_VALUE(LW(0), 1)
         CALL_CHILD(bero_case_switch_off)
     END_IF
-    // From the drawbridge-down step on, the bridge is lowered and the train door can be used.
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_42_DRAWBRIDGE_DOWN)
-        CALL(evt_map_playanim, STRING("hasi"), 2, 0)
+
+    // From the drawbridge-down step on, the bridge is lowered; at that step, the train's boarding event is registered.
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG6_42_DRAWBRIDGE_DOWN)
+        CALL(evt_map_playanim, STRING("hasi"), MAP_ANIM_PLAY_AT_END, 0)
     END_IF
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG6_42_DRAWBRIDGE_DOWN)
-        CALL(evt_hitobj_attr_onoff, 0, 1, STRING("n_bero_1"), 8388608)
-        CALL(evt_run_case_evt, CASE_COND_FRONT, 1, STRING("n_bero_1"), 0, PTR(evt_train), 0)
-        CALL(evt_map_playanim, STRING("n_1_door_open"), 2, 0)
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG6_42_DRAWBRIDGE_DOWN)
+        CALL(evt_hitobj_attr_onoff, 0, 1, STRING("n_bero_1"), HIT_ATTR_BERO)
+        CALL(evt_run_case_evt, CASE_FRONT, 1, STRING("n_bero_1"), 0, PTR(evt_train), 0)
+        CALL(evt_map_playanim, STRING("n_1_door_open"), MAP_ANIM_PLAY_AT_END, 0)
     END_IF
     SPAWN_EVENT(evt_sub_mail_event)
 #if VERSION >= VERSION_JP
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_2"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("train_2"), MAP_OBJ_FLAG_CLIP)
 #endif
     RETURN
 EVT_END()
+
+/**
+ * Script helper: sets the hour and minute hand rotation of the station clock (LW(0) and LW(1)) from the
+ * console's real-time clock.
+ */
+static USER_FUNC(tokei) {
+    s32 min;
+    OSCalendarTime time;
+    u32 sec;
+
+    OSTicksToCalendarTime(OSGetTime(), &time);
+    min = time.min * 60;
+    sec = time.hour * 3600 + min + time.sec;
+    event->lwData[0] = FLOAT(-(360.0f * (sec / 3600.0f) / 12.0f));
+    event->lwData[1] = FLOAT(-(360.0f * (sec / 60.0f) / 60.0f));
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper, runs forever: draws a glare filter over the sun's screen rectangle (grown by 50 pixels),
+ * switching it off when the sun is off screen or the train has left (GF(15)).
+ */
+static USER_FUNC(test_glare) {
+    MapObject* sun = mapGetMapObj("sun");
+    u16* rect;
+
+    if (isFirstCall) {
+        sun->flags |= MAP_OBJ_FLAG_SCREEN_RECT;
+        return EVT_RETURN_BLOCK;
+    }
+    rect = sun->screenRect;
+    if (rect[0] == 0x3FF || rect[1] == 0x3FF || rect[2] == 0x3FF || rect[3] == 0x3FF) {
+        envGlareFilter(0, 0, 0, 0, 0);
+    } else if (rect[0] == 0 && rect[1] == 0 && rect[2] == 0 && rect[3] == 0) {
+        envGlareFilter(0, 0, 0, 0, 0);
+    } else if (evtGetValue(event, GF(15))) {
+        envGlareFilter(0, 0, 0, 0, 0);
+    } else {
+        envGlareFilter(1, rect[1] - 50, rect[0] - 50, rect[3] + 50, rect[2] + 50);
+    }
+    return EVT_RETURN_BLOCK;
+}
 
 /**
  * Texture-environment callback for the sun: every frame it fills a 64x64 indirect texture with a scrolling sine
@@ -920,8 +1018,8 @@ static void sun_tev(MapTevCallbackInfo* info) {
         GX_TEXMTX9,
     };
     s32 stage = info->tevStage;
-    s32 texMap = info->texCoord;
-    s32 texCoord = info->texMap;
+    s32 texMap = info->texMap;
+    s32 texCoord = info->texCoord;
     s32 indStage = info->indStage;
     GXTexObj obj;
     f32 mtx[2][3];
@@ -931,7 +1029,7 @@ static void sun_tev(MapTevCallbackInfo* info) {
 
     // a scrolling sine-wave warp texture for the sun's heat haze
     if (ind_lp == NULL) {
-        ind_lp = smartAlloc(GXGetTexBufferSize(64, 64, GX_TF_IA8, GX_FALSE, 0), 1);
+        ind_lp = smartAlloc(GXGetTexBufferSize(64, 64, GX_TF_IA8, GX_FALSE, 0), SMART_GROUP_MAP);
     }
     buf = ind_lp->address;
     for (i = 0; i < 64; i++) {
@@ -961,50 +1059,7 @@ static void sun_tev(MapTevCallbackInfo* info) {
     GXSetIndTexCoordScale(indStage, GX_ITS_1, GX_ITS_1);
     GXSetTevIndWarp(GX_TEVSTAGE0, indStage, GX_TRUE, GX_FALSE, GX_ITM_0);
     info->tevStage = stage;
-    info->texMap = texCoord;
+    info->texCoord = texCoord;
     info->indStage = indStage + 1;
-    info->texCoord = texMap + 1;
-}
-
-/**
- * Script helper, runs forever: draws a glare filter over the sun's screen rectangle (grown by 50 pixels),
- * switching it off when the sun is off screen or the train has left (GF(15)).
- */
-static USER_FUNC(test_glare) {
-    MapObject* sun = mapGetMapObj("sun");
-    u16* rect;
-
-    if (isFirstCall) {
-        sun->flags |= MAPOBJ_FLAG_BBOX;
-        return EVT_RETURN_BLOCK;
-    }
-    rect = sun->screenRect;
-    if (rect[0] == 0x3FF || rect[1] == 0x3FF || rect[2] == 0x3FF || rect[3] == 0x3FF) {
-        envGlareFilter(0, 0, 0, 0, 0);
-    } else if (rect[0] == 0 && rect[1] == 0 && rect[2] == 0 && rect[3] == 0) {
-        envGlareFilter(0, 0, 0, 0, 0);
-    } else if (evtGetValue(event, GF(15))) {
-        envGlareFilter(0, 0, 0, 0, 0);
-    } else {
-        // The glare box is the sun's screen rectangle grown by 50 on each side.
-        envGlareFilter(1, rect[1] - 50, rect[0] - 50, rect[3] + 50, rect[2] + 50);
-    }
-    return EVT_RETURN_BLOCK;
-}
-
-/**
- * Script helper: sets the hour and minute hand rotation of the station clock (LW(0) and LW(1)) from the
- * console's real-time clock.
- */
-static USER_FUNC(tokei) {
-    s32 min;
-    OSCalendarTime time;
-    u32 sec;
-
-    OSTicksToCalendarTime(OSGetTime(), &time);
-    min = time.min * 60;
-    sec = time.hour * 3600 + min + time.sec;
-    event->lwData[0] = (s32)(1024.0f * -(360.0f * (sec / 3600.0f) / 12.0f)) - 230000000;
-    event->lwData[1] = (s32)(1024.0f * -(360.0f * (sec / 60.0f) / 60.0f)) - 230000000;
-    return EVT_RETURN_DONE;
+    info->texMap = texMap + 1;
 }

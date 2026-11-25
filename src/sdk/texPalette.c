@@ -1,4 +1,5 @@
 // TPL texture palette helpers (SDK charPipeline): unpack a .tpl and build GXTexObjs from it.
+
 #include <charPipeline/texPalette.h>
 #include <dolphin/gx/GXTexture.h>
 #include <dolphin/os.h>
@@ -9,13 +10,13 @@
 /**
  * Turns a TPL loaded in memory into usable form:
  * checks the version and converts the descriptor, texture and CLUT offsets to pointers (only once).
- * Used by the effect and background drivers after loading a .tpl.
+ * Used by the drivers (effects, background, map, icons, windows, fades, environment) after loading a .tpl.
  */
 void UnpackTexPalette(TEXPalettePtr pal) {
     u16 i;
 
     if (pal->versionNumber != PALETTE_VERSION) {
-        OSPanic(__FILE__, 0x24, "invalid version number for texture palette\0");
+        OSPanic(__FILE__, 0x24, "invalid version number for texture palette");
     }
 
     if ((u32)pal->descriptorArray <= 0x80000000) {
@@ -32,7 +33,7 @@ void UnpackTexPalette(TEXPalettePtr pal) {
             }
             if (pal->descriptorArray[i].CLUTHeader) {
                 pal->descriptorArray[i].CLUTHeader =
-                    (CLUTHeaderPtr)((u8*)pal + (u32)pal->descriptorArray[i].CLUTHeader);
+                    (CLUTHeaderPtr)((Ptr)pal + (u32)pal->descriptorArray[i].CLUTHeader);
                 if (!pal->descriptorArray[i].CLUTHeader->unpacked) {
                     pal->descriptorArray[i].CLUTHeader->data = (Ptr)pal + (u32)pal->descriptorArray[i].CLUTHeader->data;
                     pal->descriptorArray[i].CLUTHeader->unpacked = TRUE;

@@ -1,15 +1,16 @@
 // Text data parser: walks nested tagged blocks and reads values from them.
+
 #include "parse.h"
 #include <string.h>
 #include <stdio.h>
 #include "libc_decls.h"
 
 //.bss
-ParseWork parse;
+static ParseWork parse;
 
 /**
  * Starts parsing a text buffer of size bytes: the whole buffer becomes the single open block at depth 0.
- * Used by database.c to read the <Npc> entries of a map's NPC setup file.
+ * Used by database.c to read the <Npc> entries of a map's NPC setup file, and by gor_01 for its cooking tables.
  */
 void parseInit(void* ptr, u32 size) {
     parse.ptr = ptr;
@@ -22,7 +23,10 @@ void parseInit(void* ptr, u32 size) {
  * the tag copy loop was an inline: its locals take the low volatile registers (r4 j, r5 n) under the
  * strength-reduced buf pointer (r6)
  */
-static inline void parseCopyTag(char* buf, s8* p, s32 i, s32 end) {
+// Copies the tag that starts at p[i] into buf without its whitespace, up to and including the closing '>'
+// (at most 127 characters), and terminates it.
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void getTag(char* buf, s8* p, s32 i, s32 end) {
     s32 n;
     s32 j;
     for (j = i, n = 0; j < end; j++) {
@@ -34,7 +38,7 @@ static inline void parseCopyTag(char* buf, s8* p, s32 i, s32 end) {
             break;
         }
     }
-    *(buf + n) = 0;
+    buf[n] = 0;
 }
 
 /**
@@ -53,7 +57,7 @@ BOOL parsePush(const char* tag) {
     s32 depth;
     depth = 0;
     state = 0;
-    p = (s8*)parse.ptr;
+    p = parse.ptr;
     i = parse.pos[parse.depth];
     end = parse.end[parse.depth];
     for (; i < end; i++) {
@@ -73,8 +77,8 @@ BOOL parsePush(const char* tag) {
                 }
             } else {
                 if (state == 0 && depth == 0) {
-                    parseCopyTag(buf, p, i, end);
-                    if (strcmp(&buf[0], tag) == 0) {
+                    getTag(buf, p, i, end);
+                    if (strcmp(buf, tag) == 0) {
                         for (; i < end; i++) {
                             if (p[i] == '>') {
                                 break;
@@ -114,11 +118,11 @@ void parsePopNext(void) {
 /**
  * Reads the next whitespace-separated value of the current block into data and advances past it.
  * type 0 is a quoted string, 1 a decimal s32, 2 an f32, 3 three f32s (a Vec).
+ * A string read leaves the read position at the end of the block, not just past the string.
  * Returns FALSE when the block has no more values.
  */
 BOOL parseGet1Next(s32 type, void* data) {
     s32* posp;
-    char* dst;
     s32 i;
     s32 end;
     s8* p;
@@ -127,7 +131,6 @@ BOOL parseGet1Next(s32 type, void* data) {
     BOOL result = TRUE;
     s32* posStack;
     s32 state;
-    s32 j;
     s32 n;
     s8 c;
 
@@ -141,15 +144,15 @@ BOOL parseGet1Next(s32 type, void* data) {
 
     posStack = parse.pos;
     state = 0;
-    p = (s8*)parse.ptr;
+    p = parse.ptr;
     i = posStack[parse.depth];
     end = parse.end[parse.depth];
     posp = posStack + parse.depth;
     for (; i < end; i++) {
         if (p[i] == '/' && p[i + 1] == '/') {
             for (; i < end; i++) {
-                // BUG: '/n' (a two-character constant, 0x2F6E) where '\n' was meant; it never equals
-                // a char, so a // comment runs to the end of the block instead of the end of the line.
+                // BUG: '/n' is a multi-character constant, not '\n', so no character matches it: after a //
+                // comment the scan runs to the end of the range and the value is not found.
                 if (p[i] == '/n') {
                     break;
                 }

@@ -1,4 +1,5 @@
 // Declares the per-kind audience item and animation data structures.
+
 #pragma once
 
 #include "mario/mario_pouch.h"
@@ -9,7 +10,7 @@ typedef struct BattleAudienceItemKind {
     s32 chance;    // 0x4
 } BattleAudienceItemKind;
 
-/* seems unused, just static table size
+/* Slot order of the audience_anim_* tables in battle_audience_kind_data.c (BattleAudienceKind.animTable is typed s32** and indexes them); kept as documentation, not used as a type.
 typedef struct BattleAudienceAnimTable {
     s32* animWaitFront;     // 0x0
     s32* animWaitBack;      // 0x4
@@ -32,8 +33,10 @@ typedef struct BattleAudienceAnimTable {
     s32* animEatFront;      // 0x48, for Piranha Plants
 } BattleAudienceAnimTable; */
 
+#define AUDIENCE_KIND_WIDE (1 << 0) // BattleAudienceKind.flags: takes two seats (counts double in the type weights)
+
 typedef struct BattleAudienceKind {
-    u8 flags;                          // 0x0, 1: counts double in the audience-type weights
+    u8 flags;                          // 0x0, AUDIENCE_KIND_WIDE
     s32** animTable;                   // 0x4
     BattleAudienceItemKind* itemTable; // 0x8
     f32 itemOffsetX;                   // 0xC, thrown-item spawn offset from the member

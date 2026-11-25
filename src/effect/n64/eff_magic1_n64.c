@@ -1,4 +1,6 @@
 // Paper Mario 64 magic effect 1: pulsing colour glow moving from a point toward a target.
+
+#include "version.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,11 +10,10 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "eff/n64/eff_magic1_n64.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-#include "version.h"
 
-/** Colour pulse of the magic bolt's three rings: a phase and an RGB colour for each ring. */
+/** Colour pulse of the magic bolt: a phase and an RGB colour for each of the three sprites in a ring (main_dl). */
 static u8 anime_data[12] = {0x00, 0xFF, 0xD0, 0x1A, 0x78, 0x4D, 0xD0, 0xFE, 0xF0, 0xFE, 0x4C, 0x6E};
 
 static void effMagic1Main(EffectEntry* effect);
@@ -21,11 +22,13 @@ static void effMagic1Disp(CameraId cameraId, EffectEntry* effect);
 /**
  * Spawns a Magikoopa-style magic bolt (type 0) at (x, y, z) that travels to (tx, ty, tz) in life frames,
  * or a burst of sparks (type 1, 24 frames) that the bolt spawns when it arrives.
- * Called by the kamec units (Magikoopas, Kammy).
+ * Called by the kamec battle units (Magikoopas, Kammy), the field Magikoopa's kamec_fire_magic (npc_event.c)
+ * and evt_eff64 "magic1_n64".
  */
 EffectEntry* effMagic1N64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 tx, f32 ty, f32 tz) {
     EffectEntry* effect;
     EffMagic1N64Work* w;
+    f32 inv;
 
     effect = effEntry();
     effect->type = "Magic1N64";
@@ -33,7 +36,7 @@ EffectEntry* effMagic1N64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 tx, 
     w = __memAlloc(HEAP_EFFECT, sizeof(EffMagic1N64Work));
     effect->userdata = w;
     effect->callback = effMagic1Main;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     w->age = 0;
     w->type = type;
     w->alpha = 255;
@@ -42,8 +45,7 @@ EffectEntry* effMagic1N64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 tx, 
     w->position.z = z;
     w->scale = 1.0f;
     switch (type) {
-        case 0: {
-            f32 inv;
+        case 0:
             inv = 1.0f / (f32)life;
             w->offset.x = 0.0f;
             w->offset.y = 0.0f;
@@ -53,7 +55,6 @@ EffectEntry* effMagic1N64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 tx, 
             w->velocity.z = inv * (tz - z);
             w->life = life;
             break;
-        }
         default:
             w->offset.x = 29.0f;
             w->offset.y = 0.0f;
@@ -69,7 +70,7 @@ EffectEntry* effMagic1N64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 tx, 
 
 /**
  * Moves the bolt along its velocity (the burst slows and fades); a bolt reaching the end spawns the burst there.
- * From JP on, it only draws while the system level is nonzero.
+ * From JP on, while the system level is nonzero it is frozen: drawn but not moved or aged.
  */
 static void effMagic1Main(EffectEntry* effect) {
     EffMagic1N64Work* work = effect->userdata;
@@ -82,13 +83,13 @@ static void effMagic1Main(EffectEntry* effect) {
     tmp.z = work->offset.z;
     position = tmp;
 #if VERSION >= VERSION_JP
-    if ((u32)marioStGetSystemLevel() != 0) {
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMagic1Disp, effect);
+    if (marioStGetSystemLevel() != 0) {
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effMagic1Disp, effect);
         return;
     }
 #endif
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 0;
     }
     work->life--;
@@ -101,9 +102,7 @@ static void effMagic1Main(EffectEntry* effect) {
     if (type == 0 && work->life == 0) {
         EffectEntry* e = effMagic1N64Entry(1, 0x30, work->position.x + work->offset.x, work->position.y + work->offset.y,
                                            work->position.z + work->offset.z, 0.0f, 0.0f, 0.0f);
-        EffMagic1N64Work* sparkle = e->userdata;
-
-        sparkle->scale = work->scale;
+        ((EffMagic1N64Work*)e->userdata)->scale = work->scale;
     }
     if (type == 1) {
         work->velocity.x *= 0.83f;
@@ -112,14 +111,24 @@ static void effMagic1Main(EffectEntry* effect) {
     work->offset.x += work->velocity.x;
     work->offset.y += work->velocity.y;
     work->offset.z += work->velocity.z;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMagic1Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effMagic1Disp, effect);
+}
+
+/** One colour channel pulsing between `from` and `to` as the sine of `deg` degrees. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static u8 color(s32 from, s32 to, s32 deg) {
+    return (s32)(0.5f * ((f32)(to - from) * (1.0f + effMagic1SinDeg((f32)deg))) + (f32)from);
+}
+
+/** As color, with the angle given as a time part and a phase part. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static u8 color2(s32 from, s32 to, s32 t, s32 phase) {
+    return (s32)(0.5f * ((f32)(to - from) * (1.0f + effMagic1SinDeg((f32)(t + phase)))) + (f32)from);
 }
 
 /** Draws three trailing rings of three spinning glow sprites (texture 0x10) with colors that pulse over time. */
 static void main_dl(EffectEntry* effect, Mtx base) {
     u8* a;
-    f32 yr;
-
     EffMagic1N64Work* w = effect->userdata;
     s32 type = w->type;
     f32 scale = w->scale;
@@ -184,6 +193,8 @@ static void main_dl(EffectEntry* effect, Mtx base) {
                     break;
                 default:
                     ang -= 50.0f;
+
+                    // 1.2048193f = 1 / 0.83f: the velocity before this frame's decay in effMagic1Main
                     ox -= 2.0f * (1.2048193f * w->velocity.x);
                     break;
             }
@@ -197,7 +208,8 @@ static void main_dl(EffectEntry* effect, Mtx base) {
         PSMTXConcat(mc8, mf8, mf8);
         PSMTXConcat(mf8, m98, m68);
 
-        for (j = 0, a = anime_data; j < 3; j++) {
+        for (j = 0; j < 3; j++) {
+            a = &anime_data[j * 4];
             t = 6.2831855f * ang / 360.0f;
             c = (f32)cos(t);
             s = (f32)sin(t);
@@ -206,16 +218,17 @@ static void main_dl(EffectEntry* effect, Mtx base) {
             PSMTXConcat(m68, m38, m38);
             PSMTXConcat(base, m38, m38);
             GXLoadPosMtxImm(m38, GX_PNMTX0);
-            GXSetTevColor(GX_TEVREG0, (GXColor){(u8)(s32)effMagic1Blend(a[1], 0, (f32)(s32)(180 + (gp->retraceCount << 5) + a[0])),
-                                                (u8)(s32)effMagic1Blend(a[2], 0, (f32)(s32)(180 + (gp->retraceCount << 5) + a[0])),
-                                                (u8)(s32)effMagic1Blend(a[3], 0, (f32)(s32)(180 + (gp->retraceCount << 5) + a[0])), alpha});
-            GXSetTevColor(GX_TEVREG1, (GXColor){(u8)(s32)effMagic1Blend(a[1], 255, (f32)(s32)((gp->retraceCount << 5) + a[0])),
-                                                (u8)(s32)effMagic1Blend(a[2], 255, (f32)(s32)((gp->retraceCount << 5) + a[0])),
-                                                (u8)(s32)effMagic1Blend(a[3], 255, (f32)(s32)((gp->retraceCount << 5) + a[0])), 255});
-            if (type == 0)
+            GXSetTevColor(GX_TEVREG0, (GXColor){color2(a[1], 0, 180 + (gp->retraceCount << 5), a[0]),
+                                                color2(a[2], 0, 180 + (gp->retraceCount << 5), a[0]),
+                                                color2(a[3], 0, 180 + (gp->retraceCount << 5), a[0]), alpha});
+            GXSetTevColor(GX_TEVREG1, (GXColor){color(a[1], 255, (gp->retraceCount << 5) + a[0]),
+                                                color(a[2], 255, (gp->retraceCount << 5) + a[0]),
+                                                color(a[3], 255, (gp->retraceCount << 5) + a[0]), 255});
+            if (type == 0) {
                 sz = 15;
-            else
+            } else {
                 sz = 10;
+            }
             PSMTXScale(m98, 2.0f, 0.25f, 1.0f);
             PSMTXTrans(mf8, 0.0f, (f32)(3 - j) * 64.0f / 256.0f, 0.0f);
             PSMTXConcat(mf8, m98, mf8);
@@ -229,7 +242,6 @@ static void main_dl(EffectEntry* effect, Mtx base) {
             GXTexCoord2f32(1.0f, 1.0f);
             GXPosition3s16(-sz, -sz, 0);
             GXTexCoord2f32(0.0f, 1.0f);
-            a += 4;
         }
     }
 }
@@ -241,10 +253,10 @@ static void effMagic1Disp(CameraId cameraId, EffectEntry* effect) {
     f32 yaw;
     s32 type;
     s32 i;
-    Mtx m98;
-    Mtx m68;
-    Mtx m38;
-    Mtx m8;
+    Mtx trans;
+    Mtx rotY;
+    Mtx base;
+    Mtx ring;
 
     camera = camGetPtr(cameraId);
     w = effect->userdata;
@@ -257,19 +269,19 @@ static void effMagic1Disp(CameraId cameraId, EffectEntry* effect) {
             yaw = -camGetPtr(CAMERA_3D)->viewYaw;
             break;
     }
-    PSMTXTrans(m98, w->position.x, w->position.y, w->position.z);
-    PSMTXRotRad(m68, 'y', yaw * 0.017453292f);
-    PSMTXConcat(m98, m68, m38);
-    PSMTXConcat(camera->view, m38, m38);
+    PSMTXTrans(trans, w->position.x, w->position.y, w->position.z);
+    PSMTXRotRad(rotY, 'y', yaw * 0.017453292f);
+    PSMTXConcat(trans, rotY, base);
+    PSMTXConcat(camera->view, base, base);
     switch (type) {
         case 0:
-            main_dl(effect, m38);
+            main_dl(effect, base);
             break;
         case 1:
             for (i = 0; i < 12; i++) {
-                PSMTXRotRad(m8, 'z', 0.017453292f * (f32)(i * 30));
-                PSMTXConcat(m38, m8, m8);
-                main_dl(effect, m8);
+                PSMTXRotRad(ring, 'z', 0.017453292f * (f32)(i * 30));
+                PSMTXConcat(base, ring, ring);
+                main_dl(effect, ring);
             }
             break;
     }

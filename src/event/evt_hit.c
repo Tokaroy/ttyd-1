@@ -1,5 +1,5 @@
 // Script commands for map collision objects: flags, positions and damage settings (hitdrv).
-#include "evt/evt_hit.h"
+
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
 #include "driver/hitdrv.h"
@@ -7,33 +7,29 @@
 #include "memory.h"
 #include <string.h>
 
-HitDamageReturn* hitDmgretPtr;
-
-static void name_callback_sub(const char* name, void* evt, BOOL flag);
+static HitDamageReturn* hitDmgretPtr;
 
 /**
  * Enables (args[2] nonzero) or disables the collision of hit object args[0],
- * or of its whole group when args[1] is nonzero, by clearing or setting hit flag 0x1.
+ * or of its whole group when args[1] is nonzero, by clearing or setting HIT_FLAG_OFF.
  * Doors use it on their inside groups.
  */
 USER_FUNC(evt_hitobj_onoff) {
     EvtWord* args = event->args;
     const char* name = (const char*)evtGetValue(event, args[0]);
     s32 isGroup = evtGetValue(event, args[1]);
-    s32 off = evtGetValue(event, args[2]);
+    s32 on = evtGetValue(event, args[2]);
 
     if (isGroup == 0) {
-        if (off != 0) {
+        if (on != 0) {
             hitObjFlagOff(name, HIT_FLAG_OFF);
         } else {
             hitObjFlagOn(name, HIT_FLAG_OFF);
         }
+    } else if (on != 0) {
+        hitGrpFlagOff(name, HIT_FLAG_OFF);
     } else {
-        if (off != 0) {
-            hitGrpFlagOff(name, HIT_FLAG_OFF);
-        } else {
-            hitGrpFlagOn(name, HIT_FLAG_OFF);
-        }
+        hitGrpFlagOn(name, HIT_FLAG_OFF);
     }
     return EVT_RETURN_DONE;
 }
@@ -104,29 +100,41 @@ USER_FUNC(evt_hit_get_position) {
     return EVT_RETURN_DONE;
 }
 
+/** Returns the normal of hit object args[0] in the float variables args[1..3]. */
+// Original name and size (0x78) from the JP demo map (UNUSED there: no script uses it); evt_hit_get_position (the
+// same size) with hitObjGetNormal.
+USER_FUNC(evt_hit_get_normal) {
+    EvtWord* args = event->args;
+    Vec normal;
+
+    hitObjGetNormal((const char*)evtGetValue(event, args[0]), &normal);
+    evtSetFloat(event, args[1], normal.x);
+    evtSetFloat(event, args[2], normal.y);
+    evtSetFloat(event, args[3], normal.z);
+    return EVT_RETURN_DONE;
+}
+
 /**
  * Sets (args[1] nonzero) or clears hit flag mask args[3] (a literal, not a variable) on hit object args[2],
  * or on its whole group when args[0] is nonzero.
  */
-USER_FUNC(L_evt_hitobj_flag_onoff) {
+USER_FUNC(evt_hitobj_flag_onoff) {
     EvtWord* args = event->args;
     s32 isGroup = evtGetValue(event, args[0]);
-    s32 off = evtGetValue(event, args[1]);
+    s32 on = evtGetValue(event, args[1]);
     const char* name = (const char*)evtGetValue(event, args[2]);
     s32 flag = args[3];
 
     if (isGroup == 0) {
-        if (off == 0) {
+        if (on == 0) {
             hitObjFlagOff(name, flag);
         } else {
             hitObjFlagOn(name, flag);
         }
+    } else if (on == 0) {
+        hitGrpFlagOff(name, flag);
     } else {
-        if (off == 0) {
-            hitGrpFlagOff(name, flag);
-        } else {
-            hitGrpFlagOn(name, flag);
-        }
+        hitGrpFlagOn(name, flag);
     }
     return EVT_RETURN_DONE;
 }
@@ -138,39 +146,37 @@ USER_FUNC(L_evt_hitobj_flag_onoff) {
 USER_FUNC(evt_hitobj_attr_onoff) {
     EvtWord* args = event->args;
     s32 isGroup = evtGetValue(event, args[0]);
-    s32 off = evtGetValue(event, args[1]);
+    s32 on = evtGetValue(event, args[1]);
     const char* name = (const char*)evtGetValue(event, args[2]);
     s32 attr = args[3];
 
     if (isGroup == 0) {
-        if (off == 0) {
+        if (on == 0) {
             hitObjAttrOff(name, attr);
         } else {
             hitObjAttrOn(name, attr);
         }
+    } else if (on == 0) {
+        hitGrpAttrOff(name, attr);
     } else {
-        if (off == 0) {
-            hitGrpAttrOff(name, attr);
-        } else {
-            hitGrpAttrOn(name, attr);
-        }
+        hitGrpAttrOn(name, attr);
     }
     return EVT_RETURN_DONE;
 }
 
 /**
  * Starts script evt once for hit object name and every object below it, passing each name in LW(0);
- * flag also walks the siblings (it is FALSE only for the starting object).
+ * withSiblings also walks the siblings (it is FALSE only for the starting object).
  */
-static void name_callback_sub(const char* name, void* evt, BOOL flag) {
+static void name_callback_sub(const char* name, void* evt, BOOL withSiblings) {
     HitEntry* hit = hitNameToPtr(name);
     if (hit != NULL) {
-        evtEntry(evt, 0, 0x20)->lwData[0] = (EvtWord)name;
+        evtEntry(evt, 0, EVENT_START_IMMEDIATE)->lwData[0] = (EvtWord)name;
         if (hit->child != NULL) {
-            name_callback_sub(*(const char**)hit->child->joint, evt, TRUE);
+            name_callback_sub(hit->child->joint->name, evt, TRUE);
         }
-        if (flag && hit->sibling != NULL) {
-            name_callback_sub(*(const char**)hit->sibling->joint, evt, TRUE);
+        if (withSiblings && hit->sibling != NULL) {
+            name_callback_sub(hit->sibling->joint->name, evt, TRUE);
         }
     }
 }

@@ -1,16 +1,18 @@
 // Weapon power calculation: how much damage each kind of attack deals from levels, HP and badges.
+
 #include "battle/battle_weapon_power.h"
 #include "battle/battle.h"
 #include "battle/battle_database_common.h"
 #include "battle/battle_unit.h"
+#include "mario/mario_pouch.h"
 
 /** Default hpDamageFn: a fixed HP damage taken from hpDamageWork[0]. */
-s32 weaponGetPowerDefault(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPowerDefault(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     return weapon->hpDamageWork[0];
 }
 
 /** Default fpDamageFn: a fixed FP damage taken from fpDamageWork[0]. */
-s32 weaponGetFPPowerDefault(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetFPPowerDefault(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     return weapon->fpDamageWork[0];
 }
 
@@ -18,7 +20,7 @@ s32 weaponGetFPPowerDefault(BattleUnit* attacker, BattleWeapon* weapon, BattleUn
  * Damage of Mario's jumps: hpDamageWork holds a (failed, succeeded) action-command pair per boot level (Normal,
  * Super, Ultra Boots), indexed by the action command's success bit; Jumpman adds its equipped count.
  */
-s32 weaponGetPowerFromMarioJumpLv(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPowerFromMarioJumpLv(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     s32 acSuccess;
     s32 slot;
     u32 power;
@@ -29,8 +31,8 @@ s32 weaponGetPowerFromMarioJumpLv(BattleUnit* attacker, BattleWeapon* weapon, Ba
         slot = 5;
     }
     power = weapon->hpDamageWork[slot];
-    if (attacker->badgesEquipped.Jumpman) {
-        power += attacker->badgesEquipped.Jumpman;
+    if (unit1->badgesEquipped.Jumpman) {
+        power += unit1->badgesEquipped.Jumpman;
     }
     return power;
 }
@@ -39,7 +41,7 @@ s32 weaponGetPowerFromMarioJumpLv(BattleUnit* attacker, BattleWeapon* weapon, Ba
  * Damage of Mario's hammer attacks: hpDamageWork holds a (failed, succeeded) action-command pair per hammer
  * level, indexed by the action command's success bit; Hammerman adds its equipped count.
  */
-s32 weaponGetPowerFromMarioHammerLv(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPowerFromMarioHammerLv(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     s32 acSuccess;
     s32 slot;
     u32 power;
@@ -50,8 +52,8 @@ s32 weaponGetPowerFromMarioHammerLv(BattleUnit* attacker, BattleWeapon* weapon, 
         slot = 5;
     }
     power = weapon->hpDamageWork[slot];
-    if (attacker->badgesEquipped.Hammerman) {
-        power += attacker->badgesEquipped.Hammerman;
+    if (unit1->badgesEquipped.Hammerman) {
+        power += unit1->badgesEquipped.Hammerman;
     }
     return power;
 }
@@ -61,39 +63,39 @@ s32 weaponGetPowerFromMarioHammerLv(BattleUnit* attacker, BattleWeapon* weapon, 
  * the boot-level damage plus hpDamageWork[7] for every equipped copy of the badge whose item id is in
  * hpDamageWork[6].
  */
-s32 weaponGetPowerOverlapJump1(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPowerOverlapJump1(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     u32 jumpPower;
-    u32 perBadge;
+    u32 bonusPerBadge;
 
-    jumpPower = weaponGetPowerFromMarioJumpLv(attacker, weapon, target, part);
-    perBadge = weapon->hpDamageWork[7];
-    return jumpPower + perBadge * pouchEquipCheckBadge(weapon->hpDamageWork[6]);
+    jumpPower = weaponGetPowerFromMarioJumpLv(unit1, weapon, unit2, part);
+    bonusPerBadge = weapon->hpDamageWork[7];
+    return jumpPower + bonusPerBadge * pouchEquipCheckBadge(weapon->hpDamageWork[6]);
 }
 
 /**
  * Hammer counterpart of weaponGetPowerOverlapJump1:
  * hammer-level damage plus hpDamageWork[7] per equipped copy of the badge in hpDamageWork[6].
  */
-s32 weaponGetPowerOverlapHammer1(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPowerOverlapHammer1(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     u32 hammerPower;
-    u32 perBadge;
+    u32 bonusPerBadge;
 
-    hammerPower = weaponGetPowerFromMarioHammerLv(attacker, weapon, target, part);
-    perBadge = weapon->hpDamageWork[7];
-    return hammerPower + perBadge * pouchEquipCheckBadge(weapon->hpDamageWork[6]);
+    hammerPower = weaponGetPowerFromMarioHammerLv(unit1, weapon, unit2, part);
+    bonusPerBadge = weapon->hpDamageWork[7];
+    return hammerPower + bonusPerBadge * pouchEquipCheckBadge(weapon->hpDamageWork[6]);
 }
 
 /**
  * Damage of partner moves: hpDamageWork holds a (failed, succeeded) action-command pair per partner rank
  * (Normal, Super, Ultra), chosen by the attacker's rank and the action command's success bit.
  */
-s32 weaponGetPowerFromPartyAttackLv(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPowerFromPartyAttackLv(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     BattleWork* wp = _battleWorkPointer;
-    PartyId partyId;
+    s32 partyId;
     s32 acSuccess;
     s32 slot;
 
-    partyId = BattleTransPartyId(attacker->currentKind);
+    partyId = BattleTransPartyId(unit1->currentKind);
     acSuccess = (wp->actionCommands.result >> 1) & 1;
     slot = acSuccess + 2 * pouchGetPartyAttackLv(partyId);
     if (slot >= 6) {
@@ -107,12 +109,12 @@ s32 weaponGetPowerFromPartyAttackLv(BattleUnit* attacker, BattleWeapon* weapon, 
  * real partner the attacker's kind maps to. Used by the moves of Doopliss's partner copies (the gullible
  * partner units in jin and Doopliss's partner forms in unit_boss_rampell_las.c).
  */
-s32 weaponGetPowerFromGulliblePartyAttackLv(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target,
+u32 weaponGetPowerFromGulliblePartyAttackLv(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2,
                                             BattleUnitPart* part) {
-    PartyId partyId;
+    s32 partyId;
     s32 partyAttackLv;
 
-    partyId = BattleTransPartyId(attacker->currentKind);
+    partyId = BattleTransPartyId(unit1->currentKind);
     partyAttackLv = pouchGetPartyAttackLv(partyId);
     if (partyAttackLv >= 6) {
         partyAttackLv = 5;
@@ -125,7 +127,7 @@ s32 weaponGetPowerFromGulliblePartyAttackLv(BattleUnit* attacker, BattleWeapon* 
  * outputParams[hpDamageWork[0]] plus hpDamageWork[1], never below 0.
  * Used by partner moves whose damage the minigame decides (Flurrie, Koops, Bobbery, Ms. Mowz and others).
  */
-s32 weaponGetACOutputParam(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetACOutputParam(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     s32 result;
 
     result = _battleWorkPointer->actionCommands.outputParams[weapon->hpDamageWork[0]] + weapon->hpDamageWork[1];
@@ -139,8 +141,8 @@ s32 weaponGetACOutputParam(BattleUnit* attacker, BattleWeapon* weapon, BattleUni
  * Halves the target's HP, rounding the damage up:
  * the Poison Shroom reel of the battle Bingo slot (weapon_doku_kinoko).
  */
-s32 weaponGetPowerHPHalf(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
-    s32 hp = target->currentHp;
+u32 weaponGetPowerHPHalf(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
+    s32 hp = unit2->currentHp;
 
     if ((hp & 1) == 1) {
         return hp / 2 + 1;
@@ -148,14 +150,14 @@ s32 weaponGetPowerHPHalf(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit*
     return hp / 2;
 }
 
-/** Halves the target's HP, rounding the damage down: the Poison Shroom item thrown at an enemy. */
-s32 weaponGetPowerHPHalf2(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
-    return target->currentHp / 2;
+/** Halves the target's HP, rounding the damage down: the Poison Shroom item (used on the user's own side). */
+u32 weaponGetPowerHPHalf2(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
+    return unit2->currentHp / 2;
 }
 
 /** FP version of weaponGetPowerHPHalf: halves the target's FP, rounding up, for the Bingo slot's Poison Shroom reel. */
-s32 weaponGetFPPowerFPHalf(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
-    s32 fp = target->currentFp;
+u32 weaponGetFPPowerFPHalf(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
+    s32 fp = unit2->currentFp;
 
     if ((fp & 1) == 1) {
         return fp / 2 + 1;
@@ -167,7 +169,7 @@ s32 weaponGetFPPowerFPHalf(BattleUnit* attacker, BattleWeapon* weapon, BattleUni
  * Damage of Tornado Jump (tatsumaki = tornado):
  * hpDamageWork[0] plus hpDamageWork[1] per equipped Tornado Jump badge.
  */
-s32 weaponGetPowerTatsumaki(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part) {
+u32 weaponGetPowerTatsumaki(BattleUnit* unit1, BattleWeapon* weapon, BattleUnit* unit2, BattleUnitPart* part) {
     u32 power;
 
     BattleGetMarioPtr(_battleWorkPointer);

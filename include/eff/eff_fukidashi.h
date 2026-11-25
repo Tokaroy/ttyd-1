@@ -1,4 +1,5 @@
 // eff_fukidashi.c: emote-bubble effect: effFukidashiEntry and its work data (EffFukidashiWork).
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -28,4 +29,11 @@ typedef struct EffFukidashiWork {
     s32 pad_50;      // 0x50, never accessed
     s32 stage;       // 0x54
 } EffFukidashiWork;
-EffectEntry* effFukidashiEntry(s32 type, s32 number, NpcEntry* npc, f32 x, f32 y, f32 z, f32 size, f32 angle, s32 duration);
+
+// effFukidashiEntry speaker: an NpcEntry* or one of these ids
+#define FUKIDASHI_MARIO -1
+#define FUKIDASHI_PARTY -2
+#define FUKIDASHI_EXTRA_PARTY -3
+
+EffectEntry* effFukidashiEntry(s32 type, s32 number, NpcEntry* npc, f32 x, f32 y, f32 z, f32 size, f32 angle,
+                               s32 duration);

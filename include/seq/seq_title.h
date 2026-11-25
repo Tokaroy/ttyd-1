@@ -1,16 +1,15 @@
-// src/sequence/seq_title.c: the title sequence (seq_: game sequence) and its work struct TitleWork.
 #pragma once
 
+#include "version.h"
 #include "driver/seqdrv.h"
 #include "manager/filemgr.h"
 #include <dolphin/types.h>
-#include "version.h"
 
 typedef struct TitleWork {
     FileEntry* texture;   // 0x0
     u8 pad_04[0x8 - 0x4]; // 0x4, never accessed
     s32 state;            // 0x8, title sequence step (switch in titleMain)
-    f32 topPosX;          // 0xC, texture 5 position (slides down from y 1000 to 120)
+    f32 topPosX;          // 0xC, texture 5 position (starts at y 1000, bounces down from 300 to 120; 130 in the early demos)
     f32 topPosY;          // 0x10
     f32 bottomPosX;       // 0x14, texture 6 position (slides up from y -1000 to -170)
     f32 bottomPosY;       // 0x18
@@ -26,7 +25,9 @@ typedef struct TitleWork {
 
 const char* DbgBtlSel_GetMsgDataPtr(void);
 s32 getDebugMode(void);
-s32 N_getDebugMode(void);
 void seq_titleInit(SequenceWork* work);
 void seq_titleMain(SequenceWork* work);
 void seq_titleExit(SequenceWork* work);
+#if VERSION >= VERSION_US
+void pressStartGX(s32 alpha, f32 x, f32 y);
+#endif

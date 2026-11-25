@@ -1,6 +1,6 @@
-// src/sequence/seq_e3.c: the E3 trade-show sequence (seq_: game sequence) and its work struct seq_e3_work.
 #pragma once
 
+#include "version.h"
 #include <dolphin/os.h>
 #include "driver/seqdrv.h"
 #include "manager/filemgr.h"
@@ -16,11 +16,12 @@ typedef struct seq_e3_work {
     f32 dstY;                   // 0x1C
     OSAlarm alarm;              // 0x20
     OSTime initTime;            // 0x48
-    s32 poseIds[4];             // 0x50, demo only: the four characters on the title screen
-    struct EventEntry* animEvt; // 0x60, demo only: event that animates them
-    f32 poseRotY;               // 0x64, set to 270.0f in seq_e3Init; the demo draws the characters with it
+    s32 poseIds[4];             // 0x50, early demos only: the four characters on the title screen
+    struct EventEntry* animEvt; // 0x60, early demos only: event that animates them
+    f32 poseRotY;               // 0x64, set to 270.0f in seq_e3Init; only the June US demo reads it (e3PoseSetRotY turns the characters drawn with it)
 } seq_e3_work;
 
 void seq_e3Init(SequenceWork* work);
 void seq_e3Main(SequenceWork* work);
 void seq_e3Exit(SequenceWork* work);
+OSTime e3GetTime(void);

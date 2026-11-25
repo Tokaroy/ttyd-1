@@ -1,11 +1,17 @@
 // mot_plane.c: Mario's paper airplane motion (mot_plane, mot_plane_post) and its work struct MotPlaneWork.
+
 #pragma once
 
+#include "version.h"
 #include <dolphin/types.h>
 #include <dolphin/mtx.h>
 
-/* mot_plane's work: MarioWork.motPlane (the 0x288 union). Allocated 0x48 by mot_plane's
- * trigger block, freed by mot_plane_post / on landing. Same on JP and US. */
+/* mot_plane's work: MarioWork.motPlane (the per-motion union, 0x288 in JP, 0x294 from US on). Allocated 0x48 by mot_plane's
+ * trigger block, freed by mot_plane_post / on landing. Same layout in every version. */
+// MotPlaneWork.flags
+#define MOT_PLANE_FLAG_RIGHT (1 << 0)       // facing right (HIT_ATTR_PLANE_PANEL_R of the take-off panel)
+#define MOT_PLANE_FLAG_DIVE_UNUSED (1 << 4) // set while diving; tested only to clear itself on pull-up (no other effect found; legacy _UNUSED name)
+
 typedef struct MotPlaneWork {
     u32 flags;              // 0x00: bit0 = facing (hit attr bit 4 of the jump-from object), 0x10 = set in the dive, cleared on pull-up
     f32 pitch;              // 0x04: nose pitch in degrees (sincosf(90 + pitch) in the collision probe)
@@ -17,19 +23,32 @@ typedef struct MotPlaneWork {
     f32 pitchRecover;       // 0x1C: per-frame pitch change while recovering, eases to 0
     s32 stallTimer;         // 0x20: frames below stall speed with the stick held back; >= limit -> sub-motion 60
     f32 pitchMin;           // 0x24: lowest pitch allowed (-22 in a dive), eases to planeData[4]
-    s32 sfxId;              // 0x28: glide loop (0x17F), -1 when off
+    u32 sfxId;              // 0x28: glide loop (PSND_SFX_MARIO_AIRPLANE2), -1 when off (u32: its -1 tests are unsigned compares in the retail code)
     u8 pad_2C[0x30 - 0x2C]; // 0x2C
     Vec frontPos;           // 0x30: front collision probe start
     Vec tipPos;             // 0x3C: nose tip; probe runs frontPos -> tipPos
 } MotPlaneWork;             // size 0x48
 
+void marioForcePlaneAnime(void);
+void getPlaneFrPos(Vec* pos);
+void getPlaneBoPos(Vec* pos);
+
+// marioGetPlaneStatus
+enum {
+    PLANE_STATUS_NONE = 0,
+    PLANE_STATUS_TRANSITION = 1, // take-off or landing
+    PLANE_STATUS_GLIDING = 2,    // sub-motions 12-19
+};
+
 s32 marioGetPlaneStatus(void);
-#include "version.h"
+s32 marioPlaneGetFlyingDir(void);
+void mot_plane(void);
+void mot_plane_post(void);
+
+void paper_plane_off(void);
+BOOL checkAirPort(void);
 #if VERSION <= VERSION_DEMO_JP
 void mario_plane_cancel(void);
 #else
-BOOL mario_plane_cancel(void); // TRUE when the flight was cut short
+BOOL mario_plane_cancel(void);
 #endif
-void marioForcePlaneAnime(void);
-void mot_plane(void);
-void mot_plane_post(void);

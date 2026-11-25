@@ -1,6 +1,7 @@
 // Paper Mario 64 effect: fireworks, a rocket launched with a velocity vector and trailing points; w is the target scale.
-#include "eff/n64/eff_fireworks_n64.h"
+
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_fireworks_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -8,6 +9,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffFireworksN64Work {
@@ -20,7 +22,7 @@ typedef struct EffFireworksN64Work {
     s32 g;           // 0x28
     s32 b;           // 0x2c
     s32 alpha;       // 0x30
-    s32 r2;          // 0x34, second color, set at entry; never read
+    s32 r2;          // 0x34
     s32 g2;          // 0x38
     s32 b2;          // 0x3c
     s32 alpha2;      // 0x40
@@ -72,18 +74,18 @@ static s8 vtx3[168] = {
     52, -83, 0, 12, 45, 0, -12, 22, 0, -12, 33, 0, -24, 10, 0, -12, 10, 0, -12, 45, 0, -52, -83, 0,
     -35, -74, 0, -70, -92, 0, -85, 13, 0, -99, 27, 0, -113, 40, 0, 63, -53, 0, 66, -73, 0, 70, -92, 0};
 
-struct {
+static struct {
     s8* v;
     s32 n;
 } vtx_data[3] = {{vtx, 95}, {vtx2, 66}, {vtx3, 56}};
 
 static void effFireworksMain(EffectEntry* effect);
-static void effFireworksDisp(CameraId cameraId, EffectEntry* effect);
+static void effFireworksDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a firework at (x, y, z) travelling with velocity (vx, vy, vz) that bursts into the pattern selected by
  * type; w is the final burst scale. lifetime is in frames, with 32 extra for the launch.
- * Event scripts via evt_eff.
+ * Reached only through evt_eff64; no script in the tree spawns it.
  */
 EffectEntry* effFireworksN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 vx, f32 vy, f32 vz, f32 w) {
     EffectEntry* effect;
@@ -153,19 +155,19 @@ EffectEntry* effFireworksN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f
  */
 static void effFireworksMain(EffectEntry* effect) {
     EffFireworksN64Work* work = effect->userdata;
-    Vec position2;
-    Vec position = {0.0f, 0.0f, 0.0f};
+    Vec position;
+    Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 frame;
     s32 i;
     s32 idx;
     f32 s;
 
-    position.x = work->position.x;
-    position.y = work->position.y;
-    position.z = work->position.z;
-    position2 = position;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    tmp.x = work->position.x;
+    tmp.y = work->position.y;
+    tmp.z = work->position.z;
+    position = tmp;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -212,7 +214,7 @@ static void effFireworksMain(EffectEntry* effect) {
             work->frame = 1;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position2), 2, (DispCallback)effFireworksDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effFireworksDisp, effect);
 }
 
 /**
@@ -220,7 +222,8 @@ static void effFireworksMain(EffectEntry* effect) {
  * after the burst draws one sprite (texture 8) per vertex of vtx_data[type],
  * randomly skipping some every frame so the burst twinkles.
  */
-static void effFireworksDisp(CameraId cameraId, EffectEntry* effect) {
+static void effFireworksDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     static s32 salpha;
     static s32 sflag;
     CameraEntry* camera;
@@ -294,7 +297,7 @@ static void effFireworksDisp(CameraId cameraId, EffectEntry* effect) {
         v = vtx_data[type].v;
         count = vtx_data[type].n;
     } else {
-        v = 0;
+        v = NULL;
         count = 4;
     }
     for (i = 0; i < count; i++, v += 3) {
@@ -320,27 +323,25 @@ static void effFireworksDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTX44MultVec(camera->projection, &t, &t);
             sx = t.x * gp->fbWidth / 2.0f;
             sy = t.y * gp->efbHeight / 2.0f;
-            {
-                target = (Vec){0.0f, 0.0f, 0.0f};
-                pos = (Vec){0.0f, 0.0f, 1000.0f};
-                up = (Vec){0.0f, 1.0f, 0.0f};
-                GXGetProjectionv(proj);
-                MTXOrtho(ortho, 480.0f, 0.0f, 0.0f, 608.0f, 1.0f, 32768.0f);
-                GXSetProjection(ortho, GX_ORTHOGRAPHIC);
-                MTXLookAt(view, &pos, &up, &target);
-                GXLoadPosMtxImm(view, GX_PNMTX0);
-                GXSetCurrentMtx(0);
-                GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-                GXPosition3f32(sx, sy, 0.0f);
-                GXTexCoord2s16(0, 1);
-                GXPosition3f32(sx + 8.0f, sy, 0.0f);
-                GXTexCoord2s16(1, 1);
-                GXPosition3f32(sx + 8.0f, sy - 8.0f, 0.0f);
-                GXTexCoord2s16(1, 0);
-                GXPosition3f32(sx, sy - 8.0f, 0.0f);
-                GXTexCoord2s16(0, 0);
-                GXSetProjectionv(proj);
-            }
+            target = (Vec){0.0f, 0.0f, 0.0f};
+            pos = (Vec){0.0f, 0.0f, 1000.0f};
+            up = (Vec){0.0f, 1.0f, 0.0f};
+            GXGetProjectionv(proj);
+            MTXOrtho(ortho, 480.0f, 0.0f, 0.0f, 608.0f, 1.0f, 32768.0f);
+            GXSetProjection(ortho, GX_ORTHOGRAPHIC);
+            MTXLookAt(view, &pos, &up, &target);
+            GXLoadPosMtxImm(view, GX_PNMTX0);
+            GXSetCurrentMtx(GX_PNMTX0);
+            GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+            GXPosition3f32(sx, sy, 0.0f);
+            GXTexCoord2s16(0, 1);
+            GXPosition3f32(sx + 8.0f, sy, 0.0f);
+            GXTexCoord2s16(1, 1);
+            GXPosition3f32(sx + 8.0f, sy - 8.0f, 0.0f);
+            GXTexCoord2s16(1, 0);
+            GXPosition3f32(sx, sy - 8.0f, 0.0f);
+            GXTexCoord2s16(0, 0);
+            GXSetProjectionv(proj);
         }
     }
 }

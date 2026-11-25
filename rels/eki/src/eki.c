@@ -1,10 +1,18 @@
 // eki.rel (駅, Riverside Station): REL prolog/epilog; registers the init events of eki_00 to eki_06 and the area battle tables.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 
 #include "data/mapdata.h"
 #include "eki.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * REL prolog for the Riverside Station module: runs the static constructors,
@@ -35,6 +43,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Target of unresolved relocations; the module has no code to run for them, so it is empty. */
 void _unresolved(void) {
 }

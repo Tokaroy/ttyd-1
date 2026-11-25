@@ -1,4 +1,5 @@
-// Paper Mario 64 effect: music notes (onpu: musical note) at a point; types 0 and 1.
+// Paper Mario 64 effect: music notes (onpu: musical note) at a point; types 0-2.
+
 #include "eff/n64/eff_onpu_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -28,6 +29,7 @@ static u8 color_rotation_data[] = {
     0xB4, 0xB4, 0xFE, 0xB4, 0xDD, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5,
     0xB4, 0xFE, 0xB4, 0xD5, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5, 0xAC,
 };
+
 /** Camera-facing 16x32 music note quad. */
 static effN64Vtx size16x32_tex16x32_vtx[] = {
     {-8, 0, 0, 0, 0, 0, 0, 0, 255},
@@ -37,12 +39,12 @@ static effN64Vtx size16x32_tex16x32_vtx[] = {
 };
 
 static void effOnpuMain(EffectEntry* effect);
-static void effOnpuDisp(CameraId cameraId, EffectEntry* effect);
+static void effOnpuDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns one music note at (x, y, z) living 64 frames.
  * Type 0 rises straight up; type 1 drifts left and type 2 right while slowing to a stop.
- * Pansy units spawn types 1 and 2 via evt_eff64 "onpu_n64".
+ * Pansy units spawn types 1 and 2 via evt_eff64 "onpu_n64"; battle_audience_kinopio.c spawns type 0.
  */
 EffectEntry* effOnpuN64Entry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
@@ -115,14 +117,15 @@ static void effOnpuMain(EffectEntry* effect) {
     work->position.y += work->vy;
     work->vx += 0.04f * (work->targetVx - work->vx);
     work->vy += 0.04f * (work->targetVy - work->vy);
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effOnpuDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effOnpuDisp, effect);
 }
 
 /**
- * Draws the note as a camera-facing 16x32 quad using two scrolling note textures (0x28, 0x29) with the color
- * cycling.
+ * Draws the note as a camera-facing 16x32 quad using two note textures (0x28, 0x29), both showing the note cell
+ * picked at spawn (texOfs, one of seven), with the color cycling.
  */
-static void effOnpuDisp(CameraId cameraId, EffectEntry* effect) {
+static void effOnpuDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffOnpuN64Work* work;
     s32 offset;

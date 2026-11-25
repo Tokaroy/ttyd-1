@@ -1,5 +1,6 @@
 // Battle unit Vivian, in the Shadow Sirens fight (ビビアン): win.rel's copy.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "battle/battle_event_default.h"
@@ -10,22 +11,22 @@
 #include "evt/evt_eff.h"
 #include "unit/party/unit_party_vivian.h"
 #include "battle/battle_database_common.h"
-#include "unit/unit_boss_majolyne.h"
-#include "battle/battle_sub.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_sub.h"
-#include "win.h"
-#include "version.h"
+#include "battle/battle_sub.h"
+#include "battle/battle_damage.h"
+#include "battle/unit_work.h"
 
-// Unit work slots (btlevtcmd_SetUnitWork / GetUnitWork)
-enum {
-    UW_BOSS_VIVIAN_HOLD_SHADOW = 3, // 0 lets majo3_shadow_tail_event track her floor position in work 0-2
-    UW_BOSS_VIVIAN_HP_RANK = 4,     // her place in the sisters' HP order (0 to 2)
-    UW_BOSS_VIVIAN_NEW_HP_RANK = 5, // place majo_unison_phase_event gives her; she moves when it differs
-    UW_BOSS_VIVIAN_SERIOUS = 6,     // cleared at init; in Beldam it marks her 66% HP line
-    UW_BOSS_VIVIAN_AGGRESSIVE = 7,  // 1 set by Beldam (below 50% HP), 2 once Vivian has switched attacks
-    UW_BOSS_VIVIAN_ATTACK_MODE = 8, // 0 shadow slip only, 1 flame next, 2 shadow slip or flame at random
-};
+// BattleUnit.work slots (btlevtcmd_Get/Set/AddUnitWork)
+#define UNIT_WORK_ATTACK_STEP 8 // attack choice: 0 kagenuke_attack_event, 1 flame_attack_event once (then 2), 2 random (70 kagenuke / 30 flame)
+
+extern EvtWord btl_majolyne_zoom[];
+extern EvtWord btl_marilyn_zoom[];
+extern EvtWord btl_vivian_zoom[];
+extern EvtWord majo3_shadow_tail_event[];
+extern EvtWord majo_unison_phase_event[];
+extern BattleUnitKind unit_boss_majolyne;
+extern BattleUnitKind unit_boss_marilyn;
 
 BattleUnitKind unit_boss_vivian;
 static BattleUnitDefense defence;
@@ -34,158 +35,151 @@ static StatusVulnerability regist;
 static PoseTableEntry pose_table[18];
 static BattleDataEntry data_table[2];
 static BattleUnitKindPart parts[1];
-BattleWeapon weapon_vivian_kagenuke_attack1;
-BattleWeapon weapon_vivian_flame_attack1;
+static BattleWeapon weapon_vivian_kagenuke_attack1;
+static BattleWeapon weapon_vivian_flame_attack1;
 static BattleUnitSetup entry_marilyn;
 static BattleUnitSetup entry_majolyne;
+EvtWord vivian_down[19];
+EvtWord vivian_up[27];
 static EvtWord init_event[179];
 static EvtWord entry_event[46];
 static EvtWord damage_event[22];
 static EvtWord dead_event[189];
+static EvtWord unison_phase_event[81];
 static EvtWord phase_event[2];
 static EvtWord attack_event[98];
+
 #if VERSION >= VERSION_US
 static EvtWord kagenuke_attack_event[207];
 #else
 static EvtWord kagenuke_attack_event[204];
 #endif
-extern EvtWord flame_attack_event[];
-#if VERSION >= VERSION_US
-static EvtWord wait_event[7];
-#else
+
+static EvtWord flame_attack_event[185];
+
 static EvtWord wait_event[6];
-#endif
 
 /**
  * Unit data of Vivian (btl_un_vivian1), the lead unit of the Shadow Sirens fight in Boggly Woods: 10 HP,
  * level 26. Her init script spawns Marilyn and Beldam behind her.
  */
 BattleUnitKind unit_boss_vivian = {
-    33,
-    "btl_un_vivian1",
-    10,
-    0,
-    1,
-    1,
-    26,
-    0,
-    0,
-    100,
-    0,
-    50,
-    9,
-    30,
-    40,
-    0,
-    40,
-    0.0f,
-    20.0f,
-    0.0f,
-    0,
-    0,
-    6.0f,
-    16.0f,
-    0.0f,
-    15.0f,
-    0.0f,
-    -10.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    15.0f,
-    0.0f,
-    0.0f,
-    11.0f,
-    26.0f,
-    0.0f,
-    0.0f,
-    20.0f,
-    0.0f,
-    30.0f,
-    40.0f,
-    0,
-    0,
-    0,
-    2,
-    100,
-    20,
-    0.0f,
-    0.0f,
-    0.0f,
-    "SFX_BOSS_VIVI_DAMAGED1",
-    "SFX_BTL_DAMAGE_FIRE1",
-    "SFX_BTL_DAMAGE_ICE1",
-    "SFX_BTL_DAMAGE_BIRIBIRI1",
-    0,
-    &regist,
-    1,
-    parts,
-    init_event,
-    data_table,
+    UNIT_VIVIAN_CHAPTER2, // unitType
+    "btl_un_vivian1", // name
+    10, // maxHp
+    0, // maxFp
+    1, // dangerHP
+    1, // perilHP
+    26, // level
+    0, // bonusExp
+    0, // bonusCoin
+    100, // bonusCoinRate
+    0, // baseCoin
+    50, // runRate
+    9, // pbSoftCap
+    30, // width
+    40, // height
+    {0, 40}, // hitOffset
+    {0.0f, 20.0f, 0.0f}, // centerOffset
+    {0, 0}, // hpGaugeOffset
+    {6.0f, 16.0f, 0.0f}, // talkTogeBaseOffset
+    {15.0f, 0.0f, -10.0f}, // heldItemBaseOffset
+    {0.0f, 0.0f, 0.0f}, // burnFlameOffset
+    0.0f, // vivianOffsetX
+    0.0f, // vivianOffsetZ
+    {15.0f, 0.0f, 0.0f}, // bintaHitOffset
+    {11.0f, 26.0f, 0.0f}, // kissHitOffset
+    {0.0f, 20.0f, 0.0f}, // cutBaseOffset
+    30.0f, // cutWidth
+    40.0f, // cutHeight
+    0, // turnOrder
+    0, // turnOrderVariance
+    0, // swallowChance
+    2, // swallowAttributes
+    100, // hammerKnockbackChance
+    20, // itemStealParam
+    {0.0f, 0.0f, 0.0f}, // starPointDispOffset
+    "SFX_BOSS_VIVI_DAMAGED1", // damageSfxName
+    "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
+    "SFX_BTL_DAMAGE_ICE1", // iceDamageSfxName
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    0, // attributeFlags
+    &regist, // statusVulnerability
+    1, // numParts
+    parts, // parts
+    init_event, // initEventCode
+    data_table, // dataTable
 };
 
 /** Flat damage reduction of Vivian against normal, fire, ice, explosion and electric hits: none. */
 static BattleUnitDefense defence = {{0, 0, 0, 0, 0}};
 
 /** Element attributes of Vivian: none, so every element does its normal damage. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
 #if VERSION <= VERSION_DEMO_JP
-/**
- * Status vulnerability of Vivian in the demo builds, as a percent of the normal chance of each status:
- * immune to fright, Gale Force, instant KO; 60% for freeze; 70% for sleep, dizzy, confusion, Tiny,
- * Attack Down, Defense Down, allergy, Slow; 80% for stop.
- */
 static StatusVulnerability regist = {70, 80, 70, 100, 70, 100, 100, 60, 100, 70, 100, 70, 100, 70, 70, 0, 0, 100, 70, 100, 100, 0};
 #else
-/**
- * Status vulnerability of Vivian in the retail builds, as a percent of the normal chance of each status:
- * immune to fright, Gale Force, instant KO; 50% for freeze; 70% for sleep, dizzy, confusion, allergy, Slow;
- * 80% for stop, Tiny, Attack Down; 95% for Defense Down.
- */
-static StatusVulnerability regist = {70, 80, 70, 100, 70, 100, 100, 50, 100, 80, 100, 80, 100, 95, 70, 0, 0, 100, 70, 100, 100, 0};
+static StatusVulnerability regist = {
+    70, // sleep
+    80, // stop
+    70, // dizzy
+    100, // poison
+    70, // confuse
+    100, // electric
+    100, // burn
+    50, // freeze
+    100, // huge
+    80, // tiny
+    100, // attackUp
+    80, // attackDown
+    100, // defenseUp
+    95, // defenseDown
+    70, // allergic
+    0, // fright
+    0, // galeForce
+    100, // fast
+    70, // slow
+    100, // dodgy
+    100, // invisible
+    0, // ohko
+};
 #endif
 
-/**
- * Poses of Vivian (PTR_*): idle, status, hurt, run, walk and talking animations;
- * her attack poses are set by name in her scripts.
- */
 static PoseTableEntry pose_table[] = {
-    {1, "PTR_N_1"},
-    {2, "PTR_Z_1"},
-    {9, "PTR_Z_1"},
-    {5, "PTR_X_1"},
-    {4, "PTR_X_1"},
-    {3, "PTR_X_1"},
-    {BTL_POSE_NORMAL, "PTR_S_4"},
-    {29, "PTR_Q_1"},
-    {30, "PTR_Q_1"},
-    {31, "PTR_D_1"},
-    {BTL_POSE_DAMAGE, "PTR_D_1"},
-    {50, "PTR_S_4"},
-    {BTL_POSE_RUN, "PTR_R_1"},
-    {BTL_POSE_WALK, "PTR_W_1"},
-    {BTL_POSE_DANGER, "PTR_D_2"},
-    {BTL_POSE_PERIL, "PTR_D_2"},
-    {BTL_POSE_TALK, "PTR_T_5"},
-    {BTL_POSE_STAY_DEFAULT, "PTR_S_4"},
+    {POSE_TYPE_SLEEP, "PTR_N_1"},
+    {POSE_TYPE_STOP, "PTR_Z_1"},
+    {POSE_TYPE_FREEZE, "PTR_Z_1"},
+    {POSE_TYPE_CONFUSE, "PTR_X_1"},
+    {POSE_TYPE_POISON, "PTR_X_1"},
+    {POSE_TYPE_DIZZY, "PTR_X_1"},
+    {POSE_TYPE_NORMAL, "PTR_S_4"},
+    {POSE_TYPE_DAMAGE_FIRE, "PTR_Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "PTR_Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "PTR_D_1"},
+    {POSE_TYPE_DAMAGE, "PTR_D_1"},
+    {POSE_TYPE_ATTACK, "PTR_S_4"},
+    {POSE_TYPE_RUN, "PTR_R_1"},
+    {POSE_TYPE_WALK, "PTR_W_1"},
+    {POSE_TYPE_DANGER, "PTR_D_2"},
+    {POSE_TYPE_PERIL, "PTR_D_2"},
+    {POSE_TYPE_TALK, "PTR_T_5"},
+    {POSE_TYPE_ACTION, "PTR_S_4"},
 };
 
 /** Data table of Vivian: event 49 (she is defeated) runs dead_event. */
 static BattleDataEntry data_table[] = {
-    {49, dead_event},
+    {UNIT_DATA_DEAD_EVENT, dead_event},
     {0, NULL},
 };
 
 /** Vivian's single part: her model (c_vivian), the main target and the part that covers for allies. */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_vivian", "c_vivian", 0.0f, 0.0f, 0.0f, 0.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER, 0, pose_table},
+    {1, "btl_un_vivian", "c_vivian", 0.0f, 0.0f, 0.0f, 0.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart, 0, pose_table},
 };
 
 /** Vivian's shadow-slip strike: 1 damage to one opposing target, guardable. */
-BattleWeapon weapon_vivian_kagenuke_attack1 = {
+static BattleWeapon weapon_vivian_kagenuke_attack1 = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -201,13 +195,13 @@ BattleWeapon weapon_vivian_kagenuke_attack1 = {
     {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_TOP_SPIKY, // counterResistFlags
     TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -224,7 +218,7 @@ BattleWeapon weapon_vivian_kagenuke_attack1 = {
 /**
  * Vivian's flame: 1 fire-element damage to every opposing target, ignoring defense and impossible to guard.
  */
-BattleWeapon weapon_vivian_flame_attack1 = {
+static BattleWeapon weapon_vivian_flame_attack1 = {
     NULL, 0, // name..icon
     {0}, // pad_06
     0, NULL, // itemId..description
@@ -244,14 +238,14 @@ BattleWeapon weapon_vivian_flame_attack1 = {
     {1, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
     ELEMENT_FIRE, // element
-    0, // damagePattern
+    ATTACKPATTERN_NULL, // damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_PIERCES_DEFENSE | SPECIAL_UNGUARDABLE, // special
+    SPECIAL_PIERCE_DEFENSE | SPECIAL_UNGUARDABLE, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -271,7 +265,7 @@ BattleWeapon weapon_vivian_flame_attack1 = {
  */
 static BattleUnitSetup entry_marilyn = {
     &unit_boss_marilyn, // unitKindParams
-    1, // alliance
+    ALLIANCE_ENEMY, // alliance
     {0}, // pad_05
     BATTLE_PHASE_ENEMY, // attackPhase
     {1000.0f, 0.0f, 1000.0f}, // position
@@ -286,7 +280,7 @@ static BattleUnitSetup entry_marilyn = {
  */
 static BattleUnitSetup entry_majolyne = {
     &unit_boss_majolyne, // unitKindParams
-    1, // alliance
+    ALLIANCE_ENEMY, // alliance
     {0}, // pad_05
     BATTLE_PHASE_ENEMY, // attackPhase
     {1000.0f, 0.0f, 1000.0f}, // position
@@ -299,12 +293,12 @@ static BattleUnitSetup entry_majolyne = {
  * Vivian sinks into her shadow: after 250 ms plays the shadow sound (SFX_BOSS_VIVI_SHADOW1)
  * and hides her model (battle_evt_majo_disp_off).
  */
-static EVT_BEGIN(vivian_down)
+EVT_BEGIN(vivian_down)
     BEGIN_INLINE_EVENT
         WAIT_MS(250)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_VIVI_SHADOW1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_VIVI_SHADOW1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_INLINE_EVENT
-    CALL(battle_evt_majo_disp_off, BTL_UNIT_SELF, 1, 0, 0)
+    CALL(battle_evt_majo_disp_off, UNIT_ID_SELF, 1, 0, 0)
     RETURN
 EVT_END()
 
@@ -312,13 +306,13 @@ EVT_END()
  * Vivian rises out of her shadow at the position in LW(0..2):
  * after 250 ms plays the rising sound (SFX_BOSS_VIVI_SHADOW2), shows her model and sets her position.
  */
-static EVT_BEGIN(vivian_up)
+EVT_BEGIN(vivian_up)
     BEGIN_INLINE_EVENT
         WAIT_MS(250)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_VIVI_SHADOW2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_VIVI_SHADOW2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     END_INLINE_EVENT
-    CALL(battle_evt_majo_disp_on, BTL_UNIT_SELF, 1, LW(0), LW(1), LW(2), 0)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(battle_evt_majo_disp_on, UNIT_ID_SELF, 1, LW(0), LW(1), LW(2), 0)
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     RETURN
 EVT_END()
 
@@ -332,82 +326,81 @@ EVT_END()
  * clears her unit work 8 and 3 and starts majo3_shadow_tail_event.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventPhase, BTL_UNIT_SELF, PTR(phase_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(btldefaultevt_Confuse))
-    CALL(btlevtcmd_SetEventEntry, BTL_UNIT_SELF, PTR(entry_event))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_HP_RANK, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_NEW_HP_RANK, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_SERIOUS, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_AGGRESSIVE, 0)
-    CALL(btlevtcmd_GetUnitId, BTL_UNIT_SELF, GW(10))
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventPhase, UNIT_ID_SELF, PTR(phase_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(btldefaultevt_Confuse))
+    CALL(btlevtcmd_SetEventEntry, UNIT_ID_SELF, PTR(entry_event))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, MAJO_WORK_LINE_POS, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, MAJO_WORK_NEXT_LINE_POS, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, MAJO_WORK_LOW_HP_TALK_DONE, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, MAJO_WORK_LOW_HP_ATTACK, 0)
+    CALL(btlevtcmd_GetUnitId, UNIT_ID_SELF, GW(10))
     CALL(btlevtcmd_SpawnUnit, GW(9), PTR(&entry_marilyn), 0)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 50)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 50)
     ADD(LW(2), 10)
     CALL(btlevtcmd_SetPos, GW(9), LW(0), LW(1), LW(2))
     CALL(btlevtcmd_SetHomePos, GW(9), LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetUnitWork, GW(9), 4, 1)
-    CALL(btlevtcmd_SetUnitWork, GW(9), 5, 1)
-    CALL(btlevtcmd_SetUnitWork, GW(9), 6, 0)
-    CALL(btlevtcmd_SetUnitWork, GW(9), 7, 0)
+    CALL(btlevtcmd_SetUnitWork, GW(9), MAJO_WORK_LINE_POS, 1)
+    CALL(btlevtcmd_SetUnitWork, GW(9), MAJO_WORK_NEXT_LINE_POS, 1)
+    CALL(btlevtcmd_SetUnitWork, GW(9), MAJO_WORK_LOW_HP_TALK_DONE, 0)
+    CALL(btlevtcmd_SetUnitWork, GW(9), MAJO_WORK_LOW_HP_ATTACK, 0)
     CALL(btlevtcmd_SpawnUnit, GW(8), PTR(&entry_majolyne), 0)
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_FaceDirectionSub, BTL_UNIT_SELF, LW(0), 100)
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_FaceDirectionSub, UNIT_ID_SELF, LW(0), 100)
     ADD(LW(2), 20)
     CALL(btlevtcmd_SetPos, GW(8), LW(0), LW(1), LW(2))
     CALL(btlevtcmd_SetHomePos, GW(8), LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetUnitWork, GW(8), 4, 2)
-    CALL(btlevtcmd_SetUnitWork, GW(8), 5, 2)
-    CALL(btlevtcmd_SetUnitWork, GW(8), 6, 0)
-    CALL(btlevtcmd_SetUnitWork, GW(8), 7, 0)
+    CALL(btlevtcmd_SetUnitWork, GW(8), MAJO_WORK_LINE_POS, 2)
+    CALL(btlevtcmd_SetUnitWork, GW(8), MAJO_WORK_NEXT_LINE_POS, 2)
+    CALL(btlevtcmd_SetUnitWork, GW(8), MAJO_WORK_LOW_HP_TALK_DONE, 0)
+    CALL(btlevtcmd_SetUnitWork, GW(8), MAJO_WORK_LOW_HP_ATTACK, 0)
     SET_VALUE(GW(13), 0)
     SET_VALUE(GW(12), 0)
     SET_VALUE(GW(11), 0)
     SET_VALUE(GW(14), 2)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_ATTACK_MODE, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_HOLD_SHADOW, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ATTACK_STEP, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, SHADOW_TAIL_WORK_HOLD, 0)
     SPAWN_EVENT(majo3_shadow_tail_event)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
  * Battle intro (entry script): after 120 frames the camera moves onto each sister in turn:
  * Beldam says they will show what they can do (btl_majo3_00),
- * Marilyn grunts (btl_majo3_01) and Vivian answers "Yes, Sis!" (btl_majo3_02).
+ * Marilyn grunts (btl_majo3_01) and Vivian answers her (btl_majo3_02).
  */
 static EVT_BEGIN(entry_event)
-    CALL(btlevtcmd_StatusWindowOnOff, 0)
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
     WAIT_FRAMES(60)
     WAIT_FRAMES(60)
     CALL_CHILD(btl_majolyne_zoom)
-    CALL(evt_msg_print, 2, STRING("btl_majo3_00"), 0, GW(8))
+    CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("btl_majo3_00"), 0, GW(8))
     WAIT_MS(300)
     CALL_CHILD(btl_marilyn_zoom)
-    CALL(evt_msg_print, 2, STRING("btl_majo3_01"), 0, GW(9))
+    CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("btl_majo3_01"), 0, GW(9))
     WAIT_MS(300)
     CALL_CHILD(btl_vivian_zoom)
-    CALL(evt_msg_print, 2, STRING("btl_majo3_02"), 0, BTL_UNIT_SELF)
+    CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("btl_majo3_02"), 0, -2)
     WAIT_MS(300)
-    CALL(btlevtcmd_StatusWindowOnOff, 1)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     RETURN
 EVT_END()
 
 /**
- * Damage script of Vivian: sets GW(13) (her state for the sisters' scripts) to 1
- * when the hit carries DAMAGE_FLAG_DEFEATED (1024),
- * then runs the default damage script.
+ * Damage event of Vivian: sets GW(13) (her state for the sisters' scripts) to 1 when the hit carries
+ * DAMAGE_RESULT_DEATH, then runs the default damage event.
  */
 static EVT_BEGIN(damage_event)
-    CALL(btlevtcmd_CheckDamageCode, BTL_UNIT_SELF, DAMAGE_FLAG_DEFEATED, LW(0))
+    CALL(btlevtcmd_CheckDamageCode, UNIT_ID_SELF, DAMAGE_RESULT_DEATH, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         SET_VALUE(GW(13), 1)
     END_IF
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
@@ -415,13 +408,13 @@ EVT_END()
 
 /**
  * Vivian's defeat: she walks back to her home spot if displaced.
- * If a sister is in the middle of her own defeat (state 1) she waits for it and says nothing;
+ * If Beldam or Marilyn is mid-defeat (GW(11) or GW(12) = 1), she waits for it to finish and says nothing;
  * if both sisters are dead she screams (btl_majo3_13);
  * otherwise she apologizes (btl_majo3_10). Then GW(13) = 2 and the shared no-spin dead sequence runs.
  */
 static EVT_BEGIN(dead_event)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(3), LW(4), LW(5))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(3), LW(4), LW(5))
     SET_VALUE(LW(6), 1)
     IF_INT_EQUAL(LW(0), LW(3))
         IF_INT_EQUAL(LW(1), LW(4))
@@ -431,10 +424,10 @@ static EVT_BEGIN(dead_event)
         END_IF
     END_IF
     IF_INT_EQUAL(LW(6), 1)
-        CALL(btlevtcmd_SetMoveSpeed, BTL_UNIT_SELF, FLOAT(6.0f))
-        CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_WALK)
-        CALL(btlevtcmd_MovePosition, BTL_UNIT_SELF, LW(0), LW(1), LW(2), 0, -1, 0)
-        CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+        CALL(btlevtcmd_SetMoveSpeed, UNIT_ID_SELF, FLOAT(6.0f))
+        CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_WALK)
+        CALL(btlevtcmd_MovePosition, UNIT_ID_SELF, LW(0), LW(1), LW(2), 0, MOVE_SOUND_FROM_TABLE, 0)
+        CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     END_IF
     WAIT_FRAMES(1)
     CALL(btlevtcmd_WaitAttackEnd)
@@ -472,10 +465,10 @@ static EVT_BEGIN(dead_event)
             END_LOOP
             GOTO(99)
             CASE_EQUAL(2)
-            CALL(btlevtcmd_StatusWindowOnOff, 0)
+            CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
             CALL_CHILD(btl_vivian_zoom)
-            CALL(evt_msg_print, 2, STRING("btl_majo3_13"), 0, BTL_UNIT_SELF)
-            CALL(btlevtcmd_StatusWindowOnOff, 1)
+            CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("btl_majo3_13"), 0, -2)
+            CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
             GOTO(90)
         END_SWITCH
         SWITCH(GW(12))
@@ -483,16 +476,16 @@ static EVT_BEGIN(dead_event)
             CASE_DEFAULT
         END_SWITCH
     END_SWITCH
-    CALL(btlevtcmd_StatusWindowOnOff, 0)
-    CALL(btlevtcmd_SetTalkPose, BTL_UNIT_SELF, STRING("PTR_D_1"))
-    CALL(btlevtcmd_SetStayPose, BTL_UNIT_SELF, STRING("PTR_D_1"))
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_OFF)
+    CALL(btlevtcmd_SetTalkPose, UNIT_ID_SELF, STRING("PTR_D_1"))
+    CALL(btlevtcmd_SetStayPose, UNIT_ID_SELF, STRING("PTR_D_1"))
     CALL_CHILD(btl_vivian_zoom)
-    CALL(evt_msg_print, 2, STRING("btl_majo3_10"), 0, BTL_UNIT_SELF)
-    CALL(btlevtcmd_StatusWindowOnOff, 1)
+    CALL(evt_msg_print, MSG_PRINT_BATTLE_UNIT, STRING("btl_majo3_10"), 0, -2)
+    CALL(btlevtcmd_StatusWindowOnOff, STATUS_WINDOW_EVENT_ON)
     LABEL(90)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     LABEL(99)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PTR_D_3"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PTR_D_3"))
     SET_VALUE(GW(13), 2)
     SET_VALUE(LW(10), -2)
     CALL_CHILD(subsetevt_dead_core_nospin_norotate)
@@ -509,11 +502,11 @@ static EVT_BEGIN(unison_phase_event)
     CALL(btlevtcmd_CheckPhase, LW(0), BATTLE_PHASE_AFTER_PLAYER)
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(majo_unison_phase_event)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_HP_RANK, LW(3))
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_NEW_HP_RANK, LW(4))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, MAJO_WORK_LINE_POS, LW(3))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, MAJO_WORK_NEXT_LINE_POS, LW(4))
         IF_INT_NOT_EQUAL(LW(3), LW(4))
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_HP_RANK, LW(4))
-            CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, MAJO_WORK_LINE_POS, LW(4))
+            CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
             CALL_CHILD(vivian_down)
             WAIT_MS(500)
             SWITCH(LW(4))
@@ -528,10 +521,10 @@ static EVT_BEGIN(unison_phase_event)
                 SET_VALUE(LW(2), 20)
             END_SWITCH
             SET_VALUE(LW(1), 0)
-            CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+            CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
             CALL_CHILD(vivian_up)
             CALL(btlevtcmd_SortPhaseMoveTable)
-            CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+            CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         END_IF
     END_IF
     RETURN
@@ -544,29 +537,29 @@ EVT_END()
 
 /**
  * Vivian's attack choice: uses an item if the AI picks one.
- * Otherwise she always uses the shadow slip (unit work 8 = 0)
- * until Beldam's phase script sets her unit work 7 (below 50% HP);
+ * Otherwise she always uses the shadow slip (UNIT_WORK_ATTACK_STEP = 0)
+ * until Beldam's phase script sets her unit work 7 (from her low-HP check or the group-enrage branch);
  * then her next attack is the flame and from then on she picks shadow slip 70% or flame 30%.
  */
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_AGGRESSIVE, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, MAJO_WORK_LOW_HP_ATTACK, LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_ATTACK_MODE, 1)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_AGGRESSIVE, 2)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ATTACK_STEP, 1)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, MAJO_WORK_LOW_HP_ATTACK, 2)
     END_IF
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_ATTACK_MODE, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_ATTACK_STEP, LW(0))
     SWITCH(LW(0))
         CASE_EQUAL(0)
         SET_VALUE(LW(9), PTR(&weapon_vivian_kagenuke_attack1))
         CALL_CHILD(kagenuke_attack_event)
         CASE_EQUAL(1)
-        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_BOSS_VIVIAN_ATTACK_MODE, 2)
+        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_ATTACK_STEP, 2)
         SET_VALUE(LW(9), PTR(&weapon_vivian_flame_attack1))
         CALL_CHILD(flame_attack_event)
         CASE_EQUAL(2)
@@ -582,8 +575,8 @@ static EVT_BEGIN(attack_event)
             CALL_CHILD(flame_attack_event)
         END_IF
     END_SWITCH
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -592,24 +585,24 @@ EVT_END()
  * she sinks into her shadow, rises in front of the target and strikes, then sinks again to return home.
  */
 static EVT_BEGIN(kagenuke_attack_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), LW(9))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), LW(9))
     CALL(btlevtcmd_ChoiceSamplingEnemy, LW(9), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
         END_IF
         RETURN
     END_IF
     CALL(btlevtcmd_WeaponAftereffect, LW(9))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, LW(9))
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
-    CALL(evt_btl_camera_set_mode, 0, 8)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, LW(3))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, LW(9))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT_TO_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, LW(3))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_set_zoom, 0, 200)
     CALL_CHILD(vivian_down)
@@ -622,25 +615,25 @@ static EVT_BEGIN(kagenuke_attack_event)
     SET_VALUE(LW(1), 0)
     CALL_CHILD(vivian_up)
     WAIT_MS(300)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PTR_A1_2"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PTR_A1_2"))
     WAIT_MS(70)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_VIVI_ATTACK4"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_VIVI_ATTACK4"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
@@ -651,14 +644,14 @@ static EVT_BEGIN(kagenuke_attack_event)
     GOTO(98)
     LABEL(91)
     CALL(btlevtcmd_ResultACDefence, LW(3), LW(9))
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     LABEL(98)
     WAIT_MS(500)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
     CALL_CHILD(vivian_down)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_MS(200)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
     CALL_CHILD(vivian_up)
     RETURN
 EVT_END()
@@ -666,48 +659,48 @@ EVT_END()
 /**
  * Vivian's flame attack (weapon_vivian_flame_attack1, 1 damage to every enemy,
  * piercing defense and unguardable):
- * she raises her hands with the magic sound, then smoke appears on each target in turn as it is hit or dodges;
+ * she raises her hands with the magic sound, then smoke appears on each target in turn before its hit check;
  * with no valid targets it ends (or flusters her when confused).
  */
-EVT_BEGIN(flame_attack_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), LW(9))
+static EVT_BEGIN(flame_attack_event)
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), LW(9))
     CALL(btlevtcmd_ChoiceSamplingEnemy, LW(9), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
         END_IF
         RETURN
     END_IF
     CALL(btlevtcmd_WeaponAftereffect, LW(9))
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, LW(9))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PTR_A3_1"))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_BOSS_VIVI_MAGIC1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, LW(9))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PTR_A3_1"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_BOSS_VIVI_MAGIC1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     WAIT_MS(1000)
     CALL(btlevtcmd_GetSelectEnemy, LW(3), LW(4))
     SET_VALUE(LW(10), 0)
     LABEL(10)
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(0), LW(1), LW(2))
     CALL(evt_eff, STRING(""), STRING("kemuri_test"), 6, LW(0), LW(1), LW(2), FLOAT(1.0f), 0, 0, 0, 0, 0, 0, 0)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
@@ -717,10 +710,12 @@ EVT_BEGIN(flame_attack_event)
     LABEL(90)
     GOTO(97)
     LABEL(91)
+
+    // Defense input is checked only for the first selected target.
     IF_INT_EQUAL(LW(10), 0)
         CALL(btlevtcmd_ResultACDefence, LW(3), LW(9))
     END_IF
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     LABEL(97)
     CALL(btlevtcmd_GetSelectNextEnemy, LW(3), LW(4))
     IF_INT_NOT_EQUAL(LW(3), -1)
@@ -728,13 +723,13 @@ EVT_BEGIN(flame_attack_event)
         GOTO(10)
     END_IF
     LABEL(98)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     WAIT_MS(1000)
     RETURN
 EVT_END()
 
-/** Wait event of Vivian: switches to pose table entry 1 (idle). */
+/** Wait event of Vivian: restores automatic pose-table animation selection for part 1. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()

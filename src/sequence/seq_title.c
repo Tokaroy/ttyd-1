@@ -1,4 +1,5 @@
 // Title sequence: the title screen and its "press start" prompt.
+
 #include "version.h"
 #include "seq/seq_title.h"
 #include "driver/animdrv.h"
@@ -16,47 +17,91 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <string.h>
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
 #include <dolphin/pad.h>
+#include "sfx_name_word.h"
+#include "seq/seq_e3.h"
 
-TitleWork work2;
+#if VERSION < VERSION_US
+static void pressStartGX(s32 alpha, f32 x, f32 y);
+#endif
+
+static TitleWork work2;
+
 /**
  * Title screen state (logo animation, the press-start prompt, the debug flag);
  * wp2 is the pointer the code uses.
  */
-TitleWork* wp2 = &work2;
+static TitleWork* wp2 = &work2;
 
-// Resting height of the title logo (TitleWork.topPosY). The timings below use one second,
-// VERSION_PICK(60, gp->framerate) frames: US counts at the display frame rate (50 or 60), JP and the demo at 60.
+#if VERSION >= VERSION_US
+#define TITLE_FRAMES_PER_SEC (gp->framerate)
+#else
+#define TITLE_FRAMES_PER_SEC 60
+#endif
+
+/** Resting height of the title logo; the early demos show it higher. */
 #if VERSION <= VERSION_DEMO_JP
 #define TITLE_TOP_Y 130.0f
 #else
 #define TITLE_TOP_Y 120.0f
 #endif
 
-void L_titleInit(SequenceWork* work);
+// local prototypes
+void titleInit(SequenceWork* work);
+void titleExit(SequenceWork* work);
 static void titleMain(SequenceWork* work);
 static void disp1(CameraId cameraId, void* param);
 static void disp2(CameraId cameraId, void* param);
-#if VERSION <= VERSION_JP // US and PAL export it (seq_e3 has a local copy); JP and the demo keep it local
-static
-#endif
-    void pressStartGX(s32 alpha, f32 x, f32 y);
-static void titleLoadDemo(void);
+void demoAsync(void);
 
 /** Stub of the debug battle selector's message file hook: always NULL, so a debug battle loads gon_11's messages. */
 const char* DbgBtlSel_GetMsgDataPtr(void) {
     return NULL;
 }
 
-/**
- * Enters the title sequence: loads mariost.tpl, parks the logo halves off screen,
- * starts the title BGM (the digest theme after a game over) held paused until the curtain opens,
- * and clears the map-event-skip, save-blocks and kiosk flags.
- * Later versions do the setup in L_titleInit and also stop leftover field sound.
- */
-#if VERSION <= VERSION_DEMO_JP
+/** Sets up the title screen (titleInit), then clears the entrance, save-block and E3 flags. */
 void seq_titleInit(SequenceWork* work) {
+    titleInit(work);
+    gp->flags &= ~GW_FLAG_NO_ENTRANCE;
+    gp->flags &= ~0x40;
+    gp->flags &= ~GW_FLAG_NO_SAVE_BLOCK;
+    gp->flags &= ~GW_FLAG_E3;
+}
+
+/** Leaves the title sequence; all the work is in titleExit. */
+void seq_titleExit(SequenceWork* work) {
+    titleExit(work);
+}
+
+/** Per-frame title sequence; all the work is in titleMain. */
+void seq_titleMain(SequenceWork* work) {
+    titleMain(work);
+}
+
+/** Blocks until the music started on channel 1 has begun playing. */
+// Original name and size (0x38) from the JP demo map (UNUSED there: nothing in this file calls it), listed between
+// seq_titleMain and titleInit: evt_sub.c's static bgm_start_wait (0x38), the same name and size.
+static USER_FUNC(bgm_start_wait) {
+    return psndBGMStartCheck(1) ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
+}
+
+// Descriptive name (not in the symbol maps).
+#if VERSION >= VERSION_JP
+/** Returns the title sequence's debug flag (wp2->debug). Not in the early demos. */
+s32 getDebugMode(void) {
+    return wp2->debug;
+}
+#endif
+
+/**
+ * Title setup (called by seq_titleInit): loads mariost.tpl, parks the logo off screen,
+ * stops leftover sound (later versions: BGM fades over 3 s after a map change), and starts the title BGM,
+ * or the digest theme after a game over, held paused until the curtain opens.
+ */
+// In the early demos every call is inlined and the linker strips it (the JP demo's link map lists it as UNUSED).
+void titleInit(SequenceWork* work) {
+#if VERSION <= VERSION_DEMO_JP
     memset(wp2, 0, sizeof(TitleWork));
     wp2->texture = fileAllocf(4, "%s/mariost.tpl", getMarioStDvdRoot());
     wp2->topPosX = 0.0f;
@@ -69,66 +114,23 @@ void seq_titleInit(SequenceWork* work) {
     }
     if (seqGetPrevSeq() != SEQ_LOAD) {
         if (seqGetPrevSeq() == SEQ_GAME_OVER) {
-            psndBGMOn(PSND_FADE_OUT, "BGM_DIGEST1");
-            if ((u32)psbgm[0].streamId != 0xFFFFFFFFU) {
-                sound.streams[psbgm[0].streamId].flags |= 0x8000;
+            psndBGMOn(PSND_FADEOUT, "BGM_DIGEST1");
+
+            if (psbgm[0].streamId != -1) {
+                sound.streams[psbgm[0].streamId].flags |= SOUND_STREAM_FLAG_PAUSE;
             }
         } else {
-            psndBGMOn(PSND_FADE_OUT, "BGM_TITLE1");
-            if ((u32)psbgm[0].streamId != 0xFFFFFFFFU) {
-                sound.streams[psbgm[0].streamId].flags |= 0x8000;
+            psndBGMOn(PSND_FADEOUT, "BGM_TITLE1");
+            if (psbgm[0].streamId != -1) {
+                sound.streams[psbgm[0].streamId].flags |= SOUND_STREAM_FLAG_PAUSE;
             }
         }
     }
-    camGetPtr(CAMERA_2D)->flags &= ~CAM_FLAG_LETTER_BOX;
-    camGetPtr(CAMERA_2D)->flags |= CAM_FLAG_LETTER_BOX_SNAP;
-    gp->flags &= ~GLOBAL_FLAG_SKIP_MAP_EVENTS;
-    gp->flags &= ~0x40;
-    gp->flags &= ~GLOBAL_FLAG_SAVE_BLOCKS_OFF;
-    gp->flags &= ~GLOBAL_FLAG_KIOSK;
-}
+    camGetPtr(CAMERA_2D)->flags &= ~CAMERA_FLAG_LETTER_BOX;
+    camGetPtr(CAMERA_2D)->flags |= CAMERA_FLAG_LETTER_BOX_INSTANT;
 #else
-/** Later versions: L_titleInit does the setup, then the same flags are cleared. */
-void seq_titleInit(SequenceWork* work) {
-    L_titleInit(work);
-    gp->flags &= ~GLOBAL_FLAG_SKIP_MAP_EVENTS;
-    gp->flags &= ~0x40;
-    gp->flags &= ~GLOBAL_FLAG_SAVE_BLOCKS_OFF;
-    gp->flags &= ~GLOBAL_FLAG_KIOSK;
-}
-#endif
-
-/** Leaves the title sequence: frees mariost.tpl and fades out all sound unless going on to the file select. */
-void seq_titleExit(SequenceWork* work) {
-    fileFree(wp2->texture);
-    if (seqGetNextSeq() != SEQ_LOAD) {
-        psndStopAllFadeOut();
-    }
-}
-
-/** Per-frame title sequence; all the work is in titleMain. */
-void seq_titleMain(SequenceWork* work) {
-    titleMain(work);
-}
-
-/**
- * Debug mode state from the title-screen button code: -1 once X, B, R, B, Y, L has been entered.
- * The crash handler only shows its error screen in debug mode; otherwise it stops sound and hangs.
- */
-#if VERSION >= VERSION_JP
-s32 N_getDebugMode(void) {
-    return wp2->debug;
-}
-
-/**
- * Later versions' title setup (called by seq_titleInit):
- * loads mariost.tpl, parks the logo off screen,
- * stops leftover field sound (BGM fades over 3 s after a map change), and starts the title BGM,
- * or the digest theme after a game over, held paused until the curtain opens.
- */
-void L_titleInit(SequenceWork* work) {
     memset(wp2, 0, sizeof(TitleWork));
-    wp2->texture = fileAllocf(4, "%s/mariost.tpl", getMarioStDvdRoot());
+    wp2->texture = fileAllocf(FILE_TYPE_TPL, "%s/mariost.tpl", getMarioStDvdRoot());
     wp2->topPosX = 0.0f;
     wp2->topPosY = 1000.0f;
     wp2->bottomPosX = 0.0f;
@@ -139,8 +141,8 @@ void L_titleInit(SequenceWork* work) {
         psndSFXAllOff();
     } else if (seqGetPrevSeq() != SEQ_LOGO) {
         if (seqGetPrevSeq() == SEQ_MAP_CHANGE) {
-            psndBGMOff_f_d(PSND_FADE_OUT, 3000, 0);
-            psndBGMOff_f_d(PSND_FADE_OUT | PSND_CH(1), 3000, 0);
+            psndBGMOff_f_d(PSND_FADEOUT, 3000, 0);
+            psndBGMOff_f_d(PSND_FADEOUT | PSND_SLOT(1), 3000, 0);
             psndSFXAllOff();
         } else if (seqGetPrevSeq() == SEQ_GAME_OVER) {
             psndStopAllFadeOut();
@@ -148,26 +150,36 @@ void L_titleInit(SequenceWork* work) {
     }
     if (seqGetPrevSeq() != SEQ_LOAD) {
         if (seqGetPrevSeq() == SEQ_GAME_OVER) {
-            if (OSGetSoundMode() == 0) {
-                SoundSetOutputMode(0);
+            if (OSGetSoundMode() == OS_SOUND_MODE_MONO) {
+                SoundSetOutputMode(SND_OUTPUTMODE_MONO);
             } else {
-                SoundSetOutputMode(1);
+                SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
             }
-            psndBGMOn(PSND_FADE_OUT, "BGM_DIGEST1");
-            if ((u32)psbgm[0].streamId != 0xFFFFFFFFU) {
-                sound.streams[psbgm[0].streamId].flags |= 0x8000;
+            psndBGMOn(PSND_FADEOUT, "BGM_DIGEST1");
+
+            if (psbgm[0].streamId != -1) {
+                sound.streams[psbgm[0].streamId].flags |= SOUND_STREAM_FLAG_PAUSE;
             }
         } else {
-            psndBGMOn(PSND_FADE_OUT, "BGM_TITLE1");
-            if ((u32)psbgm[0].streamId != 0xFFFFFFFFU) {
-                sound.streams[psbgm[0].streamId].flags |= 0x8000;
+            psndBGMOn(PSND_FADEOUT, "BGM_TITLE1");
+            if (psbgm[0].streamId != -1) {
+                sound.streams[psbgm[0].streamId].flags |= SOUND_STREAM_FLAG_PAUSE;
             }
         }
     }
-    camGetPtr(CAMERA_2D)->flags &= ~CAM_FLAG_LETTER_BOX;
-    camGetPtr(CAMERA_2D)->flags |= CAM_FLAG_LETTER_BOX_SNAP;
-}
+    camGetPtr(CAMERA_2D)->flags &= ~CAMERA_FLAG_LETTER_BOX;
+    camGetPtr(CAMERA_2D)->flags |= CAMERA_FLAG_LETTER_BOX_INSTANT;
 #endif
+}
+
+/** Frees mariost.tpl and fades out all sound unless going on to the file select (called by seq_titleExit). */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void titleExit(SequenceWork* work) {
+    fileFree(wp2->texture);
+    if (seqGetNextSeq() != SEQ_LOAD) {
+        psndStopAllFadeOut();
+    }
+}
 
 /**
  * Title screen state machine: waits for the BGM (and curtain animations), opens the curtain,
@@ -176,14 +188,16 @@ void L_titleInit(SequenceWork* work) {
  * Queues the logo draws each frame; later versions also track the debug-mode button code.
  */
 static void titleMain(SequenceWork* work) {
+#if VERSION <= VERSION_DEMO_JP
     switch (wp2->state) {
         case 0:
-#if VERSION <= VERSION_DEMO_JP
             if (psndBGMStartCheck(0) != 0U) {
 #else
-            // later versions also wait for the curtain animations to load
+    switch (wp2->state) {
+        case 0:
             if (psndBGMStartCheck(0) != 0U && animGroupBaseAsync("OFF_d_maku_left_right", 2, 0) && animGroupBaseAsync("OFF_d_maku_center", 2, 0)) {
 #endif
+
                 if (seqGetPrevSeq() == SEQ_LOAD) {
                     fadeEntry(FADE_CURTAIN_SIDES_A2_TOP, 0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
                     fadeEntry(FADE_CURTAIN_CENTER_Z2_3D, 0, (GXColor){0x00, 0x00, 0x00, 0xFF});
@@ -212,8 +226,8 @@ static void titleMain(SequenceWork* work) {
         case 1:
             wp2->timer--;
             if (wp2->timer == 0) {
-                if ((u32)psbgm[0].streamId != 0xFFFFFFFFU) {
-                    sound.streams[psbgm[0].streamId].flags &= ~0x8000;
+                if (psbgm[0].streamId != -1) {
+                    sound.streams[psbgm[0].streamId].flags &= ~SOUND_STREAM_FLAG_PAUSE;
                 }
             }
             if (fadeIsFinish()) {
@@ -223,10 +237,10 @@ static void titleMain(SequenceWork* work) {
                 } else {
                     wp2->topPosY = TITLE_TOP_Y;
                     wp2->bottomPosY = -170.0f;
+#if VERSION >= VERSION_JP
 #if VERSION >= VERSION_US
                     wp2->counter = 0;
 #endif
-#if VERSION >= VERSION_JP
                     wp2->frame = 0;
 #endif
                     wp2->state = 3;
@@ -235,51 +249,72 @@ static void titleMain(SequenceWork* work) {
             break;
         case 2:
             wp2->topPosX = 0.0f;
-            wp2->topPosY = intplGetValue(10, 300.0f, TITLE_TOP_Y, wp2->counter, VERSION_PICK(60, gp->framerate));
+            wp2->topPosY = intplGetValue(EASING_BOUNCE_SHRINKING, 300.0f, TITLE_TOP_Y, wp2->counter, TITLE_FRAMES_PER_SEC);
             wp2->timer--;
             if (wp2->timer == 0) {
-                if ((u32)psbgm[0].streamId != 0xFFFFFFFFU) {
-                    sound.streams[psbgm[0].streamId].flags &= ~0x8000;
+                if (psbgm[0].streamId != -1) {
+                    sound.streams[psbgm[0].streamId].flags &= ~SOUND_STREAM_FLAG_PAUSE;
                 }
                 if (seqGetPrevSeq() == SEQ_GAME_OVER) {
-                    psndSFXOn((const char*)0xAB8);
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_BTL_CLAUD_ATTACK2));
                 }
             }
             wp2->bottomPosX = 0.0f;
-            wp2->bottomPosY = intplGetValue(11, -300.0f, -170.0f, wp2->counter, VERSION_PICK(60, gp->framerate));
+#if VERSION <= VERSION_DEMO_JP
+            wp2->bottomPosY = intplGetValue(EASING_SINE_IN_OUT, -300.0f, -170.0f, wp2->counter, VERSION_PICK(60, gp->framerate));
             wp2->counter++;
             if (wp2->counter > VERSION_PICK(60, gp->framerate)) {
-                titleLoadDemo();
-#if VERSION == VERSION_US || VERSION == VERSION_DEMO_US_2
+                demoAsync();
+#else
+            wp2->bottomPosY = intplGetValue(EASING_SINE_IN_OUT, -300.0f, -170.0f, wp2->counter, TITLE_FRAMES_PER_SEC);
+            wp2->counter++;
+            if (wp2->counter > TITLE_FRAMES_PER_SEC) {
+                demoAsync();
+#if (VERSION == VERSION_US || VERSION == VERSION_DEMO_US_2)
                 wp2->counter = 0;
 #endif
-#if VERSION >= VERSION_JP
                 wp2->frame = 0;
 #endif
                 wp2->state++;
             }
             break;
         case 3:
-#if VERSION >= VERSION_US
+#if VERSION <= VERSION_DEMO_JP
+            wp2->fadeAlpha += 0.1f;
+            if (wp2->fadeAlpha > 1.0f) {
+                wp2->fadeAlpha = 1.0f;
+            }
+            if (keyGetButtonTrg(0) & (PAD_BUTTON_A | PAD_BUTTON_START)) {
+                psndSFXOn((const char*)PSND_SFX_CURSOR_OK1);
+                wp2->state = 10;
+            } else if (++wp2->idle > VERSION_PICK(60, gp->framerate) * 20 - VERSION_PICK(60, gp->framerate)) {
+                wp2->state = 20;
+            }
+#elif VERSION >= VERSION_US
             wp2->counter++;
-            if (wp2->counter > VERSION_PICK(60, gp->framerate)) {
-#endif
+            if (wp2->counter > TITLE_FRAMES_PER_SEC) {
                 wp2->fadeAlpha += 0.1f;
                 if (wp2->fadeAlpha > 1.0f) {
                     wp2->fadeAlpha = 1.0f;
                 }
                 if (keyGetButtonTrg(0) & (PAD_BUTTON_A | PAD_BUTTON_START)) {
-#if VERSION <= VERSION_DEMO_JP
-                    psndSFXOn((const char*)0x12);
-#else
-                psndSFXOn((const char*)8);
-#endif
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_PRESS_START1));
                     wp2->state = 10;
-                } else if (++wp2->idle > VERSION_PICK(60, gp->framerate) * 20 - VERSION_PICK(60, gp->framerate)) {
+                } else if (++wp2->idle > TITLE_FRAMES_PER_SEC * 20 - TITLE_FRAMES_PER_SEC) {
                     wp2->state = 20;
                 }
-#if VERSION >= VERSION_US
             }
+#else
+    wp2->fadeAlpha += 0.1f;
+    if (wp2->fadeAlpha > 1.0f) {
+        wp2->fadeAlpha = 1.0f;
+    }
+    if (keyGetButtonTrg(0) & (PAD_BUTTON_A | PAD_BUTTON_START)) {
+        psndSFXOn(SFX_NAME_WORD(PSND_SFX_PRESS_START1));
+        wp2->state = 10;
+    } else if (++wp2->idle > TITLE_FRAMES_PER_SEC * 20 - TITLE_FRAMES_PER_SEC) {
+        wp2->state = 20;
+    }
 #endif
             break;
         case 10:
@@ -304,16 +339,16 @@ static void titleMain(SequenceWork* work) {
 #else
             fadeEntry(FADE_OUT_BLACK, 1000, (GXColor){0x00, 0x00, 0x00, 0xFF});
 #endif
-            psndBGMOff_f_d(PSND_FADE_OUT, 1000, 0);
+            psndBGMOff_f_d(PSND_FADEOUT, 1000, 0);
             wp2->counter = 0;
             wp2->state++;
             break;
         case 21:
-            wp2->topPosY = intplGetValue(11, TITLE_TOP_Y, 400.0f, wp2->counter, VERSION_PICK(60, gp->framerate));
-            wp2->bottomPosY = intplGetValue(11, -170.0f, -400.0f, wp2->counter, VERSION_PICK(60, gp->framerate));
+            wp2->topPosY = intplGetValue(EASING_SINE_IN_OUT, TITLE_TOP_Y, 400.0f, wp2->counter, TITLE_FRAMES_PER_SEC);
+            wp2->bottomPosY = intplGetValue(EASING_SINE_IN_OUT, -170.0f, -400.0f, wp2->counter, TITLE_FRAMES_PER_SEC);
             wp2->counter++;
-            if (wp2->counter > VERSION_PICK(60, gp->framerate)) {
-                wp2->counter = VERSION_PICK(60, gp->framerate);
+            if (wp2->counter > TITLE_FRAMES_PER_SEC) {
+                wp2->counter = TITLE_FRAMES_PER_SEC;
             }
             wp2->fadeAlpha -= 0.1f;
             if (wp2->fadeAlpha < 0.0f) {
@@ -335,8 +370,8 @@ static void titleMain(SequenceWork* work) {
             break;
     }
     if (wp2->state != 12 && work->state < 14) {
-        dispEntry(CAMERA_3D, 0.0f, 0, disp1, NULL);
-        dispEntry(CAMERA_3D_EFFECTB, 0.0f, 0, disp2, NULL);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_OPAQUE, disp1, NULL);
+        dispEntry(CAMERA_3D_EFFECTB, 0.0f, DISP_MODE_OPAQUE, disp2, NULL);
 #if VERSION >= VERSION_JP
         // a button sequence on the title screen turns on debug mode (getDebugMode)
         switch (wp2->debug) {
@@ -391,8 +426,8 @@ static void titleMain(SequenceWork* work) {
 static void disp1(CameraId cameraId, void* param) {
     CameraEntry* cam = camGetPtr(CAMERA_2D);
     CameraEntry saved;
-    f32 proj[7];
-    f32 vp[6];
+    f32 proj[GX_PROJECTION_SZ];
+    f32 vp[GX_VIEWPORT_SZ];
 
     saved = *camGetPtr(cameraId);
     *camGetPtr(cameraId) = *cam;
@@ -414,20 +449,22 @@ static void disp1(CameraId cameraId, void* param) {
 
 /**
  * Effect-layer draw callback: draws the two logo halves at their animated positions (per-language images in US
- * and PAL) and the pulsing "press start" prompt.
+ * and later) and the pulsing "press start" prompt.
  * Later versions show the build date and time while Z is held in debug mode.
  */
 static void disp2(CameraId cameraId, void* param) {
     CameraEntry* cam = camGetPtr(CAMERA_2D);
     CameraEntry saved;
-    f32 proj[7];
-    f32 vp[6];
+    f32 proj[GX_PROJECTION_SZ];
+    f32 vp[GX_VIEWPORT_SZ];
     s32 alpha;
     f32 s;
+#if VERSION >= VERSION_US
 #if VERSION >= VERSION_DEMO_EU
     s32 tbl[6] = {19, 19, 20, 21, 22, 23};
-#elif VERSION >= VERSION_US
+#else
     s32 tbl[6] = {21, 21, 22, 23, 24, 25};
+#endif
 #endif
 
     saved = *camGetPtr(cameraId);
@@ -438,6 +475,11 @@ static void disp2(CameraId cameraId, void* param) {
     GXSetViewport(cam->viewport[0], cam->viewport[1], cam->viewport[2],
                   cam->viewport[3], cam->viewport[4], cam->viewport[5]);
     winTexInit(*wp2->texture->data);
+#if VERSION <= VERSION_DEMO_JP
+    winTexSet(5, (Vec){wp2->topPosX, wp2->topPosY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+    winTexSet(6, (Vec){wp2->bottomPosX, wp2->bottomPosY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
+    s = (f32)sin((f32)gp->retraceCount / 30.0f);
+#else
 #if VERSION >= VERSION_US
     winTexSetNearest(tbl[gp->language], (Vec){wp2->topPosX, wp2->topPosY - 20.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
 #if VERSION >= VERSION_DEMO_EU
@@ -445,16 +487,10 @@ static void disp2(CameraId cameraId, void* param) {
 #else
     winTexSet(gp->language + 9, (Vec){wp2->bottomPosX, wp2->bottomPosY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
 #endif
-#elif VERSION <= VERSION_DEMO_JP
-    winTexSet(5, (Vec){wp2->topPosX, wp2->topPosY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
-    winTexSet(6, (Vec){wp2->bottomPosX, wp2->bottomPosY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
 #else
     winTexSetNearest(5, (Vec){wp2->topPosX, wp2->topPosY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     winTexSet(6, (Vec){wp2->bottomPosX, wp2->bottomPosY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
 #endif
-#if VERSION <= VERSION_DEMO_JP
-    s = (f32)sin((f32)gp->retraceCount / 30.0f);
-#else
     wp2->frame++;
     s = (f32)sin(6.2831855f * (f32)wp2->frame / 120.0f);
 #endif
@@ -465,12 +501,14 @@ static void disp2(CameraId cameraId, void* param) {
     if (alpha > 255) {
         alpha = 255;
     }
+#if VERSION <= VERSION_DEMO_JP
+    pressStartGX(alpha, 0.0f, -110.0f);
+#else
 #if VERSION >= VERSION_US
     pressStartGX(alpha, 0.0f, -122.0f);
 #else
     pressStartGX(alpha, 0.0f, -110.0f);
 #endif
-#if VERSION >= VERSION_JP
     if (wp2->debug < 0 && (keyGetButton(0) & PAD_TRIGGER_Z)) {
         FontDrawStart();
         FontDrawEdge();
@@ -485,13 +523,14 @@ static void disp2(CameraId cameraId, void* param) {
     GXSetViewport(vp[0], vp[1], vp[2], vp[3], vp[4], vp[5]);
 }
 
-#if VERSION <= VERSION_JP
-static
-#endif
-    void pressStartGX(s32 alpha, f32 x, f32 y) {
+/**
+ * Draws the PRESS START text centred at (x, y) at alpha `alpha`, its colour scrolled through a gradient texture (US and
+ * later pick the text by language).
+ */
+void pressStartGX(s32 alpha, f32 x, f32 y) {
     CameraEntry* camera = camGetCurPtr();
     GXTexObj startText, gradient;
-    Mtx v17, v16;
+    Mtx mtx, scaleMtx;
 
 #if VERSION >= VERSION_US
 #if VERSION >= VERSION_DEMO_EU
@@ -521,17 +560,16 @@ static
     GXSetTevColor(GX_TEVREG0, (GXColor){0x00, 0x00, 0x00, alpha});
     GXSetNumChans(0);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 60);
-    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, 30);
-    MTXScale(v16, 1.0f, 1.0f, 1.0f);
-    // the frame count scrolls the "press start" gradient
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
+    GXSetTexCoordGen(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0);
+    MTXScale(scaleMtx, 1.0f, 1.0f, 1.0f);
 #if VERSION <= VERSION_DEMO_JP
-    MTXTrans(v17, (f32)gp->retraceCount / -200.0f, 0.0f, 0.0f);
+    MTXTrans(mtx, (f32)gp->retraceCount / -200.0f, 0.0f, 0.0f);
 #else
-    MTXTrans(v17, (f32)wp2->frame / -200.0f, 0.0f, 0.0f);
+    MTXTrans(mtx, (f32)wp2->frame / -200.0f, 0.0f, 0.0f);
 #endif
-    MTXConcat(v16, v17, v17);
-    GXLoadTexMtxImm(v17, 30, GX_MTX2x4);
+    MTXConcat(scaleMtx, mtx, mtx);
+    GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
@@ -542,12 +580,12 @@ static
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    MTXTrans(v17, x, y, 0.0f);
-    MTXScale(v16, (f32)GXGetTexObjWidth(&startText), (f32)GXGetTexObjHeight(&startText), 1.0f);
-    MTXConcat(v17, v16, v17);
-    MTXConcat(camera->view, v17, v17);
-    GXLoadPosMtxImm(v17, 0);
-    GXSetCurrentMtx(0);
+    MTXTrans(mtx, x, y, 0.0f);
+    MTXScale(scaleMtx, (f32)GXGetTexObjWidth(&startText), (f32)GXGetTexObjHeight(&startText), 1.0f);
+    MTXConcat(mtx, scaleMtx, mtx);
+    MTXConcat(camera->view, mtx, mtx);
+    GXLoadPosMtxImm(mtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXBegin(GX_QUADS, GX_VTXFMT0, 4);
     GXPosition3f32(-0.5f, -0.5f, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
@@ -564,8 +602,9 @@ static
  * Prefetches demo.tpl and the animations used by the dmo_00 opening demo (Peach, the treasure chest,
  * a Goomba and the other characters of the opening) once the logo has landed, so the idle demo starts quickly.
  */
-static void titleLoadDemo(void) {
-    fileAsyncf(4, 0, "%s/demo.tpl", getMarioStDvdRoot());
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void demoAsync(void) {
+    fileAsyncf(FILE_TYPE_TPL, 0, "%s/demo.tpl", getMarioStDvdRoot());
     animGroupBaseAsync("c_peach", 0, 0);
     animGroupBaseAsync("c_nazo", 0, 0);
     animGroupBaseAsync("MOBJ_GoldenTreasureBox", 0, 0);

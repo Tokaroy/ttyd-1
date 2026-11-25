@@ -1,6 +1,11 @@
 // Rogueport Sewers (tik) battle unit: Hammer Bro (hammer_bros): its parts, defence/status tables, and attack events.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "battle/battle_camera.h"
+#include "evt/evt_sub.h"
+#include "battle/battle_sub.h"
 
 #include "battle/battle.h"
 #include "system.h"
@@ -10,27 +15,8 @@
 #include "battle/battle_weapon_power.h"
 #include "battle/battle_database_common.h"
 #include "manager/evtmgr_cmd.h"
-#include "battle/battle_sub.h"
-#include "evt/evt_sub.h"
-
-// Unit work slots of the Hammer Bro (btlevtcmd_SetUnitWork / GetUnitWork)
-enum {
-    UW_HAMMER_BROS_BARRAGE_UNIT_1 = 0, // barrage throw 1: target unit (slots 0-4 hold throws 1-5)
-    UW_HAMMER_BROS_BARRAGE_UNIT_2 = 1, // barrage throw 2: target unit
-    UW_HAMMER_BROS_BARRAGE_UNIT_3 = 2, // barrage throw 3: target unit
-    UW_HAMMER_BROS_BARRAGE_UNIT_4 = 3, // barrage throw 4: target unit
-    UW_HAMMER_BROS_BARRAGE_UNIT_5 = 4, // barrage throw 5: target unit
-    UW_HAMMER_BROS_BARRAGE_PART_1 = 5, // barrage throw 1: target part (slots 5-9 hold throws 1-5)
-    UW_HAMMER_BROS_BARRAGE_PART_2 = 6, // barrage throw 2: target part
-    UW_HAMMER_BROS_BARRAGE_PART_3 = 7, // barrage throw 3: target part
-    UW_HAMMER_BROS_BARRAGE_PART_4 = 8, // barrage throw 4: target part
-    UW_HAMMER_BROS_BARRAGE_PART_5 = 9, // barrage throw 5: target part
-    UW_HAMMER_BROS_HIT_1 = 10,         // barrage throw 1 hit (unit slot + 10); in the series: an earlier throw hit
-    UW_HAMMER_BROS_HIT_2 = 11,         // barrage throw 2 hit
-    UW_HAMMER_BROS_HIT_3 = 12,         // barrage throw 3 hit
-    UW_HAMMER_BROS_HIT_4 = 13,         // barrage throw 4 hit
-    UW_HAMMER_BROS_HIT_5 = 14,         // barrage throw 5 hit
-};
+#include "battle/battle_damage.h"
+#include "battle/unit/unit_hammer_bros.h"
 
 static USER_FUNC(hammer_bros_nagemakuri_set_target);
 static void hammer_bros_get_next_target(s32* unitIdx, s32* partIdx);
@@ -49,6 +35,11 @@ static BattleWeapon weapon_hammer_bros_nagemakuri_attack;
 static EvtWord init_event[21];
 static EvtWord damage_event[10];
 static EvtWord attack_event[96];
+static EvtWord start_avoid[26];
+static EvtWord hammer_bros_attack_common_event1[254];
+static EvtWord hammer_bros_attack_common_event2[112];
+static EvtWord hammer_bros_attack_common_event3[59];
+static EvtWord damage_check_event_sub[137];
 static EvtWord normal_attack_event[112];
 static EvtWord renzoku_attack_event[111];
 static EvtWord renzoku_attack_event_sub_no_last[13];
@@ -122,105 +113,108 @@ static USER_FUNC(hammer_bros_nagemakuri_set_target) {
  * its size, offsets, damage sounds, status vulnerability, parts and init event.
  */
 BattleUnitKind unit_hammer_bros = {
-    56,
-    "btl_un_hammer_bros",
-    7,
-    0,
-    1,
-    1,
-    26,
-    0,
-    2,
-    70,
-    2,
-    50,
-    9999,
-    36,
-    44,
-    3,
-    44,
-    0.0f,
-    22.0f,
-    0.0f,
-    0,
-    0,
-    0.0f,
-    0.0f,
-    0.0f,
-    18.0f,
-    0.0f,
-    -10.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    15.0f,
-    0.0f,
-    0.0f,
-    10.0f,
-    28.0f,
-    0.0f,
-    0.0f,
-    22.0f,
-    0.0f,
-    36.0f,
-    44.0f,
-    0,
-    0,
-    0,
-    2,
-    100,
-    20,
-    0.0f,
-    0.0f,
-    0.0f,
-    "SFX_ENM_HUMMER_DAMAGED1",
-    "SFX_BTL_DAMAGE_FIRE1",
-    "SFX_BTL_DAMAGE_ICE1",
-    "SFX_BTL_DAMAGE_BIRIBIRI1",
-    0,
-    &regist,
-    6,
-    parts,
-    init_event,
-    data_table,
+    UNIT_HAMMER_BRO, // unitType
+    "btl_un_hammer_bros", // name
+    7, // maxHp
+    0, // maxFp
+    1, // dangerHP
+    1, // perilHP
+    26, // level
+    0, // bonusExp
+    2, // bonusCoin
+    70, // bonusCoinRate
+    2, // baseCoin
+    50, // runRate
+    9999, // pbSoftCap
+    36, // width
+    44, // height
+    {3, 44}, // hitOffset
+    {0.0f, 22.0f, 0.0f}, // centerOffset
+    {0, 0}, // hpGaugeOffset
+    {0.0f, 0.0f, 0.0f}, // talkTogeBaseOffset
+    {18.0f, 0.0f, -10.0f}, // heldItemBaseOffset
+    {0.0f, 0.0f, 0.0f}, // burnFlameOffset
+    0.0f, // vivianOffsetX
+    0.0f, // vivianOffsetZ
+    {15.0f, 0.0f, 0.0f}, // bintaHitOffset
+    {10.0f, 28.0f, 0.0f}, // kissHitOffset
+    {0.0f, 22.0f, 0.0f}, // cutBaseOffset
+    36.0f, // cutWidth
+    44.0f, // cutHeight
+    0, // turnOrder
+    0, // turnOrderVariance
+    0, // swallowChance
+    2, // swallowAttributes
+    100, // hammerKnockbackChance
+    20, // itemStealParam
+    {0.0f, 0.0f, 0.0f}, // starPointDispOffset
+    "SFX_ENM_HUMMER_DAMAGED1", // damageSfxName
+    "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
+    "SFX_BTL_DAMAGE_ICE1", // iceDamageSfxName
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
+    0, // attributeFlags
+    &regist, // statusVulnerability
+    6, // numParts
+    parts, // parts
+    init_event, // initEventCode
+    data_table, // dataTable
 };
 
 /** Defence of the Hammer Bro: 1 damage points off every hit. */
 static BattleUnitDefense defence = {{1, 1, 1, 1, 1}};
 
 /** Element reactions of the Hammer Bro: no special reaction to any element. */
-static BattleUnitDefenseAttr defence_attr = {{0, 0, 0, 0, 0}};
+static BattleUnitDefenseAttr defence_attr = {{DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE, DEFENSE_ATTR_NONE}};
 
+/** Status vulnerability of the Hammer Bro (percent multiplier on each status's inflict chance). */
 #if VERSION <= VERSION_DEMO_JP
-/** Status vulnerability of the Hammer Bro (percent chance to take each status): resists most statuses. */
 static StatusVulnerability regist = {80, 80, 70, 100, 80, 100, 100, 70, 100, 80, 100, 80, 100, 80, 80, 40, 60, 100, 80, 100, 100, 95};
 #else
-/** Status vulnerability of the Hammer Bro (percent chance to take each status): resists most statuses. */
-static StatusVulnerability regist = {80, 80, 70, 100, 80, 100, 100, 70, 100, 80, 100, 80, 100, 95, 80, 70, 60, 100, 80, 100, 100, 95};
+static StatusVulnerability regist = {
+    80, // sleep
+    80, // stop
+    70, // dizzy
+    100, // poison
+    80, // confuse
+    100, // electric
+    100, // burn
+    70, // freeze
+    100, // huge
+    80, // tiny
+    100, // attackUp
+    80, // attackDown
+    100, // defenseUp
+    95, // defenseDown
+    80, // allergic
+    70, // fright
+    60, // galeForce
+    100, // fast
+    80, // slow
+    100, // dodgy
+    100, // invisible
+    95, // ohko
+};
 #endif
 
-/** Pose table of the Hammer Bro: maps each battle pose to the animation it plays (BRO_* animations). */
 static PoseTableEntry pose_table[] = {
-    {1, "BRO_N_1"},
-    {2, "BRO_Y_1"},
-    {9, "BRO_Y_1"},
-    {5, "BRO_K_1"},
-    {4, "BRO_X_1"},
-    {3, "BRO_X_1"},
-    {27, "BRO_D_1"},
-    {BTL_POSE_NORMAL, "BRO_S_1"},
-    {29, "BRO_Q_1"},
-    {30, "BRO_Q_1"},
-    {31, "BRO_S_1"},
-    {BTL_POSE_DAMAGE, "BRO_D_1"},
-    {BTL_POSE_RUN, "BRO_R_1"},
-    {BTL_POSE_WALK, "BRO_W_1"},
-    {BTL_POSE_DANGER, "BRO_X_1"},
-    {BTL_POSE_PERIL, "BRO_X_1"},
-    {BTL_POSE_TALK, "BRO_T_1"},
-    {BTL_POSE_STAY_DEFAULT, "BRO_S_1"},
+    {POSE_TYPE_SLEEP, "BRO_N_1"},
+    {POSE_TYPE_STOP, "BRO_Y_1"},
+    {POSE_TYPE_FREEZE, "BRO_Y_1"},
+    {POSE_TYPE_CONFUSE, "BRO_K_1"},
+    {POSE_TYPE_POISON, "BRO_X_1"},
+    {POSE_TYPE_DIZZY, "BRO_X_1"},
+    {POSE_TYPE_KO, "BRO_D_1"},
+    {POSE_TYPE_NORMAL, "BRO_S_1"},
+    {POSE_TYPE_DAMAGE_FIRE, "BRO_Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "BRO_Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "BRO_S_1"},
+    {POSE_TYPE_DAMAGE, "BRO_D_1"},
+    {POSE_TYPE_RUN, "BRO_R_1"},
+    {POSE_TYPE_WALK, "BRO_W_1"},
+    {POSE_TYPE_DANGER, "BRO_X_1"},
+    {POSE_TYPE_PERIL, "BRO_X_1"},
+    {POSE_TYPE_TALK, "BRO_T_1"},
+    {POSE_TYPE_ACTION, "BRO_S_1"},
 };
 
 /** Data table of the Hammer Bro: empty; it has no event hooks. */
@@ -230,15 +224,15 @@ static BattleDataEntry data_table[] = {
 
 /** Parts of the Hammer Bro (6 parts): hit positions, defences, attributes and pose tables. */
 static BattleUnitKindPart parts[] = {
-    {1, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 0.0f, 35.0f, 0.0f, 0.0f, 45.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_MAIN | PART_ATTR_GUARD_COVER, 0, pose_table},
-    {2, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {3, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {4, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {5, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
-    {6, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, PART_ATTR_NOT_TARGETABLE | PART_ATTR_HIDDEN | PART_ATTR_NO_SHADOW | PART_ATTR_WORLD_POSITION, 0, pose_table},
+    {1, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 0.0f, 35.0f, 0.0f, 0.0f, 45.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kMainPart | kGuardTargetPart, 0, pose_table},
+    {2, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {3, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {4, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {5, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
+    {6, "btl_un_hammer_bros", "c_burosu_h", 0.0f, 0.0f, 0.0f, 15.0f, 25.0f, 0.0f, 0.0f, 30.0f, 0.0f, 20, 30, 255, &defence, &defence_attr, kNotTargetable | kHidden | kNoShadow | kAbsolutePosition, 0, pose_table},
 };
 
-/** Weapon of the Hammer Bro's attack: 4 damage, jump-type contact attack. */
+/** Weapon of the Hammer Bro's attack (a thrown hammer): 4 damage, jump-type targeting, counters cannot hit it. */
 static BattleWeapon weapon_hammer_bros_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
@@ -255,13 +249,13 @@ static BattleWeapon weapon_hammer_bros_attack = {
     {4, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_JUMPLIKE | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_JUMPLIKE | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -275,7 +269,7 @@ static BattleWeapon weapon_hammer_bros_attack = {
     {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
 };
 
-/** Weapon of the Hammer Bro's rapid-fire attack: 2 damage, jump-type contact attack. */
+/** Weapon of the Hammer Bro's rapid-fire attack (thrown hammers): 2 damage, jump-type targeting, counters cannot hit it. */
 static BattleWeapon weapon_hammer_bros_renzoku_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
@@ -292,13 +286,13 @@ static BattleWeapon weapon_hammer_bros_renzoku_attack = {
     {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_JUMPLIKE | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_JUMPLIKE | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     TARGET_WEIGHT_UNUSED_2000 | TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -312,7 +306,7 @@ static BattleWeapon weapon_hammer_bros_renzoku_attack = {
     {0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0, 0}, // stageEffectRates
 };
 
-/** Weapon of the Hammer Bro's barrage attack: 2 damage, jump-type contact attack. */
+/** Weapon of the Hammer Bro's barrage attack (thrown hammers): 2 damage, jump-type targeting, counters cannot hit it. */
 static BattleWeapon weapon_hammer_bros_nagemakuri_attack = {
     NULL, 0, // name..icon
     {0}, // pad_06
@@ -329,13 +323,13 @@ static BattleWeapon weapon_hammer_bros_nagemakuri_attack = {
     {2, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_MULTIPLE, // targetClassFlags
-    TARGET_PROP_JUMPLIKE | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_MULTIPLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_JUMPLIKE | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_ALL, // counterResistFlags
     TARGET_WEIGHT_RANDOM, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
@@ -351,20 +345,20 @@ static BattleWeapon weapon_hammer_bros_nagemakuri_attack = {
 
 /**
  * Init script of the Hammer Bro.
- * Registers its wait, attack and damage scripts and sets its walking and jumping sounds.
+ * Registers its wait, attack and damage scripts (attack_event also serves as its confusion event).
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /** Damage reaction of the Hammer Bro: the default damage script. */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
@@ -374,27 +368,27 @@ EVT_END()
  * Attack script of the Hammer Bro.
  * Picks one of three attacks: the single hammer throw (normal_attack_event),
  * the successive throws (renzoku_attack_event) or the barrage (nagemakuri_attack_event);
- * with a 50 percent chance for the barrage or the series when several targets exist,
- * and the normal throw otherwise. Uses the confused-attack and enemy-item checks first.
+ * with a 50 percent chance each for the barrage or the series at 3 HP or less,
+ * and the normal throw at higher HP. A first strike uses the normal throw before the enemy-item check.
  */
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_HIT_1, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_HIT_2, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_HIT_3, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_HIT_4, 0)
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_HIT_5, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_HIT, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_HIT + 1, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_HIT + 2, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_HIT + 3, 0)
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_HIT + 4, 0)
     CALL(btlevtcmd_check_battleflag, LW(0), BATTLE_FLAG_FIRST_ATTACK)
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(normal_attack_event)
         GOTO(99)
     END_IF
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    CALL(btlevtcmd_GetHp, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_GetHp, UNIT_ID_SELF, LW(0))
     IF_INT_LESS_OR_EQUAL(LW(0), 3)
         SET_VALUE(LW(0), 50)
         ADD(LW(0), 50)
@@ -411,7 +405,7 @@ static EVT_BEGIN(attack_event)
         GOTO(99)
     END_IF
     LABEL(99)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -421,13 +415,13 @@ EVT_END()
  */
 static EVT_BEGIN(start_avoid)
     IF_INT_EQUAL(LW(5), 3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
     END_IF
     IF_INT_EQUAL(LW(5), 6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
     END_IF
     IF_INT_EQUAL(LW(5), 2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
     END_IF
     RETURN
 EVT_END()
@@ -436,45 +430,45 @@ EVT_END()
  * A hammer throw that misses (damage_check_event_sub's avoid results): with the throw pose (BRO_A_1B) and
  * sounds, the hammer part LW(15) spins from the Hammer Bro's hand towards the target's hit position;
  * as it passes
- * the target the avoid animation starts (start_avoid), and it bounces twice on the ground beyond the target
+ * the target any applicable avoid animation starts (start_avoid), and it bounces twice on the ground beyond the target
  * (100 and 150 units past) before being hidden again.
  */
 static EVT_BEGIN(hammer_bros_attack_common_event1)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_HUMMER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, LW(15), STRING("BRO_A_1B"))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(6), LW(7), LW(8))
-    CALL(btlevtcmd_GetFaceDirection, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_HUMMER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, LW(15), STRING("BRO_A_1B"))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(6), LW(7), LW(8))
+    CALL(btlevtcmd_GetFaceDirection, UNIT_ID_SELF, LW(0))
     MULTIPLY(LW(0), 10)
     ADD(LW(6), LW(0))
-    CALL(btlevtcmd_SetPartsPos, BTL_UNIT_SELF, LW(15), LW(6), LW(7), LW(8))
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, LW(15), 0, 0, -135)
-    CALL(btlevtcmd_SetPartsRotateOffset, BTL_UNIT_SELF, LW(15), 0, 5, 0)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_SetPartsPos, UNIT_ID_SELF, LW(15), LW(6), LW(7), LW(8))
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, LW(15), 0, 0, -135)
+    CALL(btlevtcmd_SetPartsRotateOffset, UNIT_ID_SELF, LW(15), 0, 5, 0)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
     BEGIN_SIBLING_EVENT
         LOOP(0)
-            CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_HUMMER_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+            CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_HUMMER_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
             WAIT_FRAMES(10)
         END_LOOP
     END_SIBLING_EVENT
     BEGIN_SIBLING_EVENT
         LOOP(0)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddPartsRotate, BTL_UNIT_SELF, LW(15), 0, 0, 32)
+            CALL(btlevtcmd_AddPartsRotate, UNIT_ID_SELF, LW(15), 0, 0, 32)
         END_LOOP
     END_SIBLING_EVENT
     BEGIN_SIBLING_EVENT
         LOOP(0)
-            CALL(btlevtcmd_GetFaceDirection, BTL_UNIT_SELF, LW(0))
+            CALL(btlevtcmd_GetFaceDirection, UNIT_ID_SELF, LW(0))
             IF_INT_EQUAL(LW(0), -1)
-                CALL(btlevtcmd_GetPartsPos, BTL_UNIT_SELF, LW(15), LW(0), LW(1), LW(2))
+                CALL(btlevtcmd_GetPartsPos, UNIT_ID_SELF, LW(15), LW(0), LW(1), LW(2))
                 CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(6), LW(7), LW(8))
                 IF_INT_LESS_OR_EQUAL(LW(0), LW(6))
                     CALL_CHILD(start_avoid)
                     BREAK_LOOP
                 END_IF
             ELSE
-                CALL(btlevtcmd_GetPartsPos, BTL_UNIT_SELF, LW(15), LW(0), LW(1), LW(2))
+                CALL(btlevtcmd_GetPartsPos, UNIT_ID_SELF, LW(15), LW(0), LW(1), LW(2))
                 CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(6), LW(7), LW(8))
                 IF_INT_GREATER_OR_EQUAL(LW(0), LW(6))
                     CALL_CHILD(start_avoid)
@@ -485,21 +479,21 @@ static EVT_BEGIN(hammer_bros_attack_common_event1)
         END_LOOP
     END_SIBLING_EVENT
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(6), LW(7), LW(8))
-    CALL(btlevtcmd_JumpPartsSetting, BTL_UNIT_SELF, LW(15), 60, 0, FLOAT(0.19921875f))
-    CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(6), LW(7), LW(8), 60, -1)
-    CALL(btlevtcmd_JumpPartsContinue, BTL_UNIT_SELF, LW(15))
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_HUMMER_ATTACK3"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_JumpPartsSetting, UNIT_ID_SELF, LW(15), 60, 0, FLOAT(0.19921875f))
+    CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(6), LW(7), LW(8), 60, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_JumpPartsContinue, UNIT_ID_SELF, LW(15))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_HUMMER_ATTACK3"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(6), LW(7), LW(8))
     CALL(btlevtcmd_FaceDirectionSub, LW(3), LW(6), 100)
-    CALL(btlevtcmd_JumpPartsSetting, BTL_UNIT_SELF, LW(15), 0, FLOAT(4.0f), FLOAT(0.5996094f))
-    CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(6), 0, LW(8), 0, -1)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_HUMMER_ATTACK3"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_JumpPartsSetting, UNIT_ID_SELF, LW(15), 0, FLOAT(4.0f), FLOAT(0.5996094f))
+    CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(6), 0, LW(8), 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_HUMMER_ATTACK3"), EVT_NULLPTR, 0, EVT_NULLPTR)
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(6), LW(7), LW(8))
     CALL(btlevtcmd_FaceDirectionSub, LW(3), LW(6), 150)
-    CALL(btlevtcmd_JumpPartsSetting, BTL_UNIT_SELF, LW(15), 0, FLOAT(4.0f), FLOAT(0.39941406f))
-    CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(6), 0, LW(8), 0, -1)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_JumpPartsSetting, UNIT_ID_SELF, LW(15), 0, FLOAT(4.0f), FLOAT(0.39941406f))
+    CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(6), 0, LW(8), 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
     RETURN
 EVT_END()
 
@@ -509,80 +503,82 @@ EVT_END()
  * from the Hammer Bro's hand to the target's hit position. The damage is applied by the caller.
  */
 static EVT_BEGIN(hammer_bros_attack_common_event2)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_HUMMER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, LW(15), STRING("BRO_A_1B"))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(6), LW(7), LW(8))
-    CALL(btlevtcmd_GetFaceDirection, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_HUMMER_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, LW(15), STRING("BRO_A_1B"))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(6), LW(7), LW(8))
+    CALL(btlevtcmd_GetFaceDirection, UNIT_ID_SELF, LW(0))
     MULTIPLY(LW(0), 10)
     ADD(LW(6), LW(0))
-    CALL(btlevtcmd_SetPartsPos, BTL_UNIT_SELF, LW(15), LW(6), LW(7), LW(8))
-    CALL(btlevtcmd_SetPartsRotate, BTL_UNIT_SELF, LW(15), 0, 0, -135)
-    CALL(btlevtcmd_SetPartsRotateOffset, BTL_UNIT_SELF, LW(15), 0, 5, 0)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_SetPartsPos, UNIT_ID_SELF, LW(15), LW(6), LW(7), LW(8))
+    CALL(btlevtcmd_SetPartsRotate, UNIT_ID_SELF, LW(15), 0, 0, -135)
+    CALL(btlevtcmd_SetPartsRotateOffset, UNIT_ID_SELF, LW(15), 0, 5, 0)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
     BEGIN_SIBLING_EVENT
         LOOP(0)
-            CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_HUMMER_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+            CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_HUMMER_ATTACK2"), EVT_NULLPTR, 0, EVT_NULLPTR)
             WAIT_FRAMES(10)
         END_LOOP
     END_SIBLING_EVENT
     BEGIN_SIBLING_EVENT
         LOOP(0)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddPartsRotate, BTL_UNIT_SELF, LW(15), 0, 0, 32)
+            CALL(btlevtcmd_AddPartsRotate, UNIT_ID_SELF, LW(15), 0, 0, 32)
         END_LOOP
     END_SIBLING_EVENT
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(6), LW(7), LW(8))
-    CALL(btlevtcmd_JumpPartsSetting, BTL_UNIT_SELF, LW(15), 60, 0, FLOAT(0.19921875f))
-    CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(6), LW(7), LW(8), 60, -1)
+    CALL(btlevtcmd_JumpPartsSetting, UNIT_ID_SELF, LW(15), 60, 0, FLOAT(0.19921875f))
+    CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(6), LW(7), LW(8), 60, MOVE_SOUND_FROM_TABLE)
     RETURN
 EVT_END()
 
 /**
  * The hammer bouncing off after a hit: keeps the hammer part LW(15) spinning, shows the throw pose (BRO_A_1B),
- * bounces it from the target to the ground 50 units back towards the Hammer Bro and hides it again.
+ * bounces it from the target to the ground 50 units past the target (in the Hammer Bro's facing direction) and hides it again.
  */
 static EVT_BEGIN(hammer_bros_attack_common_event3)
     BEGIN_SIBLING_EVENT
         LOOP(0)
             WAIT_FRAMES(1)
-            CALL(btlevtcmd_AddPartsRotate, BTL_UNIT_SELF, LW(15), 0, 0, 32)
+            CALL(btlevtcmd_AddPartsRotate, UNIT_ID_SELF, LW(15), 0, 0, 32)
         END_LOOP
     END_SIBLING_EVENT
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, LW(15), STRING("BRO_A_1B"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, LW(15), STRING("BRO_A_1B"))
     CALL(btlevtcmd_GetHitPos, LW(3), LW(4), LW(6), LW(7), LW(8))
-    CALL(btlevtcmd_FaceDirectionAdd, BTL_UNIT_SELF, LW(6), 50)
-    CALL(btlevtcmd_JumpPartsSetting, BTL_UNIT_SELF, LW(15), 0, FLOAT(2.0f), FLOAT(0.5f))
-    CALL(btlevtcmd_JumpPartsPosition, BTL_UNIT_SELF, LW(15), LW(6), 0, LW(8), 0, -1)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, LW(15), PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_FaceDirectionAdd, UNIT_ID_SELF, LW(6), 50)
+    CALL(btlevtcmd_JumpPartsSetting, UNIT_ID_SELF, LW(15), 0, FLOAT(2.0f), FLOAT(0.5f))
+    CALL(btlevtcmd_JumpPartsPosition, UNIT_ID_SELF, LW(15), LW(6), 0, LW(8), 0, MOVE_SOUND_FROM_TABLE)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, LW(15), kNoShadow)
     RETURN
 EVT_END()
 
 /**
- * One hammer throw as used by all three attacks (weapon in LW(9), hammer part in LW(15)):
- * if the pre-damage check says it misses it plays common_event1; if it hits it plays common_event2, applies the
- * action-command result and the damage (CheckDamage flag 256 when LW(10) is 1, i.e. the final throw at that
- * target, else 0) and plays common_event3. When LW(11) is 1 (a non-final throw) a hit is recorded first: unit
- * work 10 for the series, or work 10 plus the target's slot for the barrage.
+ * Resolves one thrown hammer (weapon LW(9), target and part LW(3) / LW(4)): anything but a hit on the pre-check
+ * plays hammer_bros_attack_common_event1. On a hit with LW(11) = 1 it first records the hit (UNIT_WORK_THROW_HIT
+ * for weapon_hammer_bros_renzoku_attack, else unit work 10 plus the target's index in the list in unit work 0-4 /
+ * 5-9), then hammer_bros_attack_common_event2, the guard result, the damage (DAMAGE_RESULT_FINAL_HIT when LW(10) =
+ * 1) and hammer_bros_attack_common_event3.
  */
 static EVT_BEGIN(damage_check_event_sub)
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), 0, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), 0, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
+        CASE_EQUAL(PRECHECK_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
+        CASE_EQUAL(PRECHECK_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
+        CASE_EQUAL(PRECHECK_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
+        // BUG: the script has no LABEL(98): evtSearchLabel falls back to the GOTO's own argument, run as opcode 98
+        // (SET_SPD, reading the next word as the speed), and the script goes on to LABEL(90) as for a miss.
         GOTO(98)
         CASE_END
     END_SWITCH
@@ -592,17 +588,17 @@ static EVT_BEGIN(damage_check_event_sub)
     LABEL(91)
     IF_INT_EQUAL(LW(11), 1)
         IF_INT_EQUAL(LW(9), PTR(&weapon_hammer_bros_renzoku_attack))
-            CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_HIT_1, 1)
+            CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_HIT, 1)
         ELSE
-            SET_VALUE(LW(13), UW_HAMMER_BROS_BARRAGE_UNIT_1)
-            SET_VALUE(LW(14), UW_HAMMER_BROS_BARRAGE_PART_1)
+            SET_VALUE(LW(13), 0)
+            SET_VALUE(LW(14), 5)
             LOOP(0)
-                CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(13), LW(5))
-                CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(14), LW(6))
+                CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(13), LW(5))
+                CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(14), LW(6))
                 IF_INT_EQUAL(LW(3), LW(5))
                     IF_INT_EQUAL(LW(4), LW(6))
                         ADD(LW(13), 10)
-                        CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, LW(13), 1)
+                        CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, LW(13), 1)
                         BREAK_LOOP
                     END_IF
                 END_IF
@@ -614,9 +610,9 @@ static EVT_BEGIN(damage_check_event_sub)
     CALL_CHILD(hammer_bros_attack_common_event2)
     CALL(btlevtcmd_ResultACDefence, LW(3), LW(9))
     IF_INT_EQUAL(LW(10), 1)
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     ELSE
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), 0, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), 0, LW(5))
     END_IF
     CALL_CHILD(hammer_bros_attack_common_event3)
     GOTO(99)
@@ -634,26 +630,26 @@ static EVT_BEGIN(normal_attack_event)
         WAIT_MS(750)
         CALL(btlevtcmd_GetFirstAttackTarget, LW(3), LW(4))
     ELSE
-        CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-        CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_hammer_bros_attack))
+        CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+        CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_hammer_bros_attack))
         CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_hammer_bros_attack), LW(3), LW(4))
     END_IF
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_hammer_bros_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_hammer_bros_attack))
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("BRO_A_1A"))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_hammer_bros_attack))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("BRO_A_1A"))
     WAIT_FRAMES(27)
     SET_VALUE(LW(15), 2)
     SET_VALUE(LW(9), PTR(&weapon_hammer_bros_attack))
@@ -661,43 +657,43 @@ static EVT_BEGIN(normal_attack_event)
     SET_VALUE(LW(11), 0)
     CALL_CHILD(damage_check_event_sub)
     WAIT_FRAMES(60)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, BTL_POSE_STAY)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_NEUTRAL)
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
  * The Hammer Bro's series of hammer throws (renzoku = in a row) at one target:
- * winds up (BRO_A_1A) and spawns four throws 250 ms apart using hammer parts 2 to 5, the last one through
+ * winds up (BRO_A_1A) and spawns four throws using hammer parts 2 to 5, with a 250 ms pause before each subsequent 27-frame wind-up, the last one through
  * renzoku_attack_event_sub_last, and waits 1.5 s for them to land.
  */
 static EVT_BEGIN(renzoku_attack_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_hammer_bros_renzoku_attack))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_hammer_bros_renzoku_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_hammer_bros_renzoku_attack), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_hammer_bros_renzoku_attack))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_hammer_bros_renzoku_attack))
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_hammer_bros_renzoku_attack))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
     SET_VALUE(LW(14), 0)
     SET_VALUE(LW(15), 2)
     LOOP(0)
         IF_INT_GREATER_OR_EQUAL(LW(14), 4)
             BREAK_LOOP
         END_IF
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("BRO_A_1A"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("BRO_A_1A"))
         WAIT_FRAMES(27)
         IF_INT_EQUAL(LW(14), 3)
             SPAWN_EVENT(renzoku_attack_event_sub_last)
@@ -711,14 +707,14 @@ static EVT_BEGIN(renzoku_attack_event)
     LABEL(98)
     WAIT_MS(1500)
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
 /**
  * One of the first three throws of the series: damage_check_event_sub with the series weapon,
  * as a non-final throw
- * that records a hit in unit work 10.
+ * that records a hit in UNIT_WORK_THROW_HIT.
  */
 static EVT_BEGIN(renzoku_attack_event_sub_no_last)
     SET_VALUE(LW(9), PTR(&weapon_hammer_bros_renzoku_attack))
@@ -729,16 +725,16 @@ static EVT_BEGIN(renzoku_attack_event_sub_no_last)
 EVT_END()
 
 /**
- * The fourth and final throw of the series: if an earlier throw hit (unit work 10 is 1) it always hits, playing
+ * The fourth and final throw of the series: if an earlier throw hit (UNIT_WORK_THROW_HIT is 1) it always hits, playing
  * the hit flight, applying the action-command result and the damage and the bounce; otherwise it is an ordinary
  * final throw through damage_check_event_sub.
  */
 static EVT_BEGIN(renzoku_attack_event_sub_last)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_HIT_1, LW(0))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_HIT, LW(0))
     IF_INT_EQUAL(LW(0), 1)
         CALL_CHILD(hammer_bros_attack_common_event2)
         CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_hammer_bros_renzoku_attack))
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_hammer_bros_renzoku_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_hammer_bros_renzoku_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
         CALL_CHILD(hammer_bros_attack_common_event3)
     ELSE
         SET_VALUE(LW(9), PTR(&weapon_hammer_bros_renzoku_attack))
@@ -754,49 +750,49 @@ EVT_END()
  * picks five random targets with hammer_bros_nagemakuri_set_target (units in unit work 0 to 4, parts in 5 to 9),
  * then turns to each of the first four in turn,
  * winds up (BRO_A_1A) and spawns a throw (nagemakuri_attack_event_sub)
- * 250 ms apart with hammer parts 2 to 5, and waits 1.5 s.
+ * with hammer parts 2 to 5, a 250 ms pause before each subsequent 27-frame wind-up, and waits 1.5 s.
  */
 static EVT_BEGIN(nagemakuri_attack_event)
-    CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-    CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), PTR(&weapon_hammer_bros_nagemakuri_attack))
+    CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+    CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), PTR(&weapon_hammer_bros_nagemakuri_attack))
     CALL(btlevtcmd_ChoiceSamplingEnemy, PTR(&weapon_hammer_bros_nagemakuri_attack), LW(3), LW(4))
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(btlevtcmd_WeaponAftereffect, PTR(&weapon_hammer_bros_nagemakuri_attack))
-    CALL(btlevtcmd_AttackDeclareAll, BTL_UNIT_SELF)
+    CALL(btlevtcmd_AttackDeclareAll, UNIT_ID_SELF)
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, PTR(&weapon_hammer_bros_nagemakuri_attack))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, PTR(&weapon_hammer_bros_nagemakuri_attack))
     CALL(hammer_bros_nagemakuri_set_target, LW(0), LW(1), LW(2), LW(3), LW(4), LW(5), LW(6), LW(7), LW(8), LW(9))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_UNIT_1, LW(0))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_UNIT_2, LW(2))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_UNIT_3, LW(4))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_UNIT_4, LW(6))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_UNIT_5, LW(8))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_PART_1, LW(1))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_PART_2, LW(3))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_PART_3, LW(5))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_PART_4, LW(7))
-    CALL(btlevtcmd_SetUnitWork, BTL_UNIT_SELF, UW_HAMMER_BROS_BARRAGE_PART_5, LW(9))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET, LW(0))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET + 1, LW(2))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET + 2, LW(4))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET + 3, LW(6))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET + 4, LW(8))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET_PART, LW(1))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET_PART + 1, LW(3))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET_PART + 2, LW(5))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET_PART + 3, LW(7))
+    CALL(btlevtcmd_SetUnitWork, UNIT_ID_SELF, UNIT_WORK_THROW_TARGET_PART + 4, LW(9))
     SET_VALUE(LW(12), 0)
-    SET_VALUE(LW(13), UW_HAMMER_BROS_BARRAGE_UNIT_1)
-    SET_VALUE(LW(14), UW_HAMMER_BROS_BARRAGE_PART_1)
+    SET_VALUE(LW(13), 0)
+    SET_VALUE(LW(14), 5)
     SET_VALUE(LW(15), 2)
     LOOP(0)
         IF_INT_GREATER_OR_EQUAL(LW(12), 4)
             BREAK_LOOP
         END_IF
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(13), LW(3))
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(14), LW(4))
-        CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(10))
-        CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(10))
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("BRO_A_1A"))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(13), LW(3))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(14), LW(4))
+        CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(10))
+        CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(10))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("BRO_A_1A"))
         WAIT_FRAMES(27)
         SPAWN_EVENT(nagemakuri_attack_event_sub)
         WAIT_MS(250)
@@ -808,7 +804,7 @@ static EVT_BEGIN(nagemakuri_attack_event)
     LABEL(98)
     WAIT_MS(1500)
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -818,9 +814,11 @@ EVT_END()
  * this one is non-final (nagemakuri_attack_event_sub_no_last), otherwise it is the last throw at that target
  * (nagemakuri_attack_event_sub_last).
  */
+
+// Look ahead among the remaining throws to distinguish an intermediate hit from the last hit on this unit/part.
 static EVT_BEGIN(nagemakuri_attack_event_sub)
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(13), LW(3))
-    CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(14), LW(4))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(13), LW(3))
+    CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(14), LW(4))
     LOOP(0)
         IF_INT_GREATER_OR_EQUAL(LW(13), 3)
             CALL_CHILD(nagemakuri_attack_event_sub_last)
@@ -828,8 +826,8 @@ static EVT_BEGIN(nagemakuri_attack_event_sub)
         END_IF
         ADD(LW(13), 1)
         ADD(LW(14), 1)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(13), LW(5))
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(14), LW(6))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(13), LW(5))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(14), LW(6))
         IF_INT_EQUAL(LW(3), LW(5))
             IF_INT_EQUAL(LW(4), LW(6))
                 CALL_CHILD(nagemakuri_attack_event_sub_no_last)
@@ -842,7 +840,7 @@ EVT_END()
 
 /**
  * A non-final throw of the barrage: damage_check_event_sub with the barrage weapon,
- * recording a hit in unit work 10
+ * recording a hit in UNIT_WORK_THROW_HIT
  * plus the target's first slot.
  */
 static EVT_BEGIN(nagemakuri_attack_event_sub_no_last)
@@ -854,20 +852,20 @@ static EVT_BEGIN(nagemakuri_attack_event_sub_no_last)
 EVT_END()
 
 /**
- * The last throw of the barrage at a target: if an earlier throw at the same target hit (unit work 10 plus its
+ * The last throw of the barrage at a target: if an earlier throw at the same target hit (UNIT_WORK_THROW_HIT plus its
  * first slot is 1) it always hits, playing the hit flight, applying the action-command result and the damage and
  * the bounce; otherwise it is an ordinary final throw through damage_check_event_sub.
  */
 static EVT_BEGIN(nagemakuri_attack_event_sub_last)
-    SET_VALUE(LW(13), UW_HAMMER_BROS_BARRAGE_UNIT_1)
-    SET_VALUE(LW(14), UW_HAMMER_BROS_BARRAGE_PART_1)
+    SET_VALUE(LW(13), 0)
+    SET_VALUE(LW(14), 5)
     LOOP(0)
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(13), LW(5))
-        CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(14), LW(6))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(13), LW(5))
+        CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(14), LW(6))
         IF_INT_EQUAL(LW(3), LW(5))
             IF_INT_EQUAL(LW(4), LW(6))
                 ADD(LW(13), 10)
-                CALL(btlevtcmd_GetUnitWork, BTL_UNIT_SELF, LW(13), LW(0))
+                CALL(btlevtcmd_GetUnitWork, UNIT_ID_SELF, LW(13), LW(0))
                 BREAK_LOOP
             END_IF
         END_IF
@@ -877,7 +875,7 @@ static EVT_BEGIN(nagemakuri_attack_event_sub_last)
     IF_INT_EQUAL(LW(0), 1)
         CALL_CHILD(hammer_bros_attack_common_event2)
         CALL(btlevtcmd_ResultACDefence, LW(3), PTR(&weapon_hammer_bros_nagemakuri_attack))
-        CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), PTR(&weapon_hammer_bros_nagemakuri_attack), DAMAGE_FLAG_LAST_HIT, LW(5))
+        CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), PTR(&weapon_hammer_bros_nagemakuri_attack), DAMAGE_RESULT_FINAL_HIT, LW(5))
         CALL_CHILD(hammer_bros_attack_common_event3)
     ELSE
         SET_VALUE(LW(9), PTR(&weapon_hammer_bros_nagemakuri_attack))
@@ -890,6 +888,6 @@ EVT_END()
 
 /** Wait script of the Hammer Bro: shows its idle pose from the pose table. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()

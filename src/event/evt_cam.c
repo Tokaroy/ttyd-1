@@ -1,4 +1,5 @@
 // Script commands for the cameras: position, target, shake, zoom and 3D camera modes.
+
 #include "evt/evt_cam.h"
 #include "driver/camdrv.h"
 #include "driver/npcdrv.h"
@@ -6,16 +7,31 @@
 #include "manager/evtmgr.h"
 #include "manager/evtmgr_cmd.h"
 #include "mario/mario.h"
+#include "mario/mario_party.h"
+#include "party.h"
 #include "mario/mariost.h"
 #include "pmario_sound.h"
 #include "system.h"
 #include <dolphin/os.h>
-#include "cam_shift.h"
 #include "libc_decls.h"
 #include "cam_road.h"
 #include <math.h>
+#include "cam_shift.h"
 
-void OSReport(const char* msg, ...);
+/** CameraId id, BOOL on */
+// Original name and size (0x6c) from the JP demo map (UNUSED there: no script uses it); evt_cam_ctrl_onoff with
+// camDispOn and camDispOff.
+USER_FUNC(evt_cam_disp_onoff) {
+    EvtWord* args = event->args;
+    CameraId id = evtGetValue(event, args[0]);
+
+    if (evtGetValue(event, args[1])) {
+        camDispOn(id);
+    } else {
+        camDispOff(id);
+    }
+    return EVT_RETURN_DONE;
+}
 
 /** CameraId id, BOOL on */
 USER_FUNC(evt_cam_ctrl_onoff) {
@@ -27,6 +43,18 @@ USER_FUNC(evt_cam_ctrl_onoff) {
     } else {
         camCtrlOff(id);
     }
+    return EVT_RETURN_DONE;
+}
+
+/** CameraId id, s32 mode */
+// Original name and size (0x60) from the JP demo map (UNUSED there: no script uses it); the two arguments of
+// camSetMode, which its name gives.
+USER_FUNC(evt_cam_set_mode) {
+    EvtWord* args = event->args;
+    CameraId id = evtGetValue(event, args[0]);
+    s32 mode = evtGetValue(event, args[1]);
+
+    camSetMode(id, mode);
     return EVT_RETURN_DONE;
 }
 
@@ -64,20 +92,23 @@ USER_FUNC(evt_cam_shake) {
     f32 len;
     s32 onTime, offTime;
     u64 last;
+    s32 gz;
 
     id = evtGetValue(event, args[0]);
     x = evtGetFloat(event, args[1]);
+
+    // FAKE: camId is a spare copy of id for two camGetPtr calls; using id changes the object
     camId = id;
     y = evtGetFloat(event, args[2]);
     msec = evtGetValue(event, args[3]);
     now = event->lifetime;
     if (isFirstCall) {
         event->userdata[0] = 0;
-        ((u32*)&event->userdata[1])[0] = (now >> 32) & 0xFFFFFFFF;
-        ((u32*)&event->userdata[1])[1] = now & 0xFFFFFFFF;
+        event->userdata[1] = (now >> 32) & 0xFFFFFFFF;
+        event->userdata[2] = now & 0xFFFFFFFF;
         event->userWork[3] = 0;
-        ((u32*)&event->wInterpRelatedTime)[0] = (now >> 32) & 0xFFFFFFFF;
-        ((u32*)&event->wInterpRelatedTime)[1] = now & 0xFFFFFFFF;
+        event->userWork[4] = (now >> 32) & 0xFFFFFFFF; // userWork[4..5]: wInterpRelatedTime, phase start
+        event->userWork[5] = now & 0xFFFFFFFF;
     }
     event->userdata[0]++;
     event->userdata[0] %= 4;
@@ -86,10 +117,10 @@ USER_FUNC(evt_cam_shake) {
     } else {
         PSMTX44Trans(camGetPtr(camId)->projAdjust, -x, -y, 0.0f);
     }
-    camGetPtr(camId)->flags |= CAM_FLAG_PROJ_ADJUST;
+    camGetPtr(camId)->flags |= CAMERA_FLAG_PROJ_ADJUST;
     if (msec) {
         if ((u64)msec < OSTicksToMilliseconds(now - *(u64*)&event->userdata[1])) {
-            camGetPtr(id)->flags &= ~CAM_FLAG_PROJ_ADJUST;
+            camGetPtr(id)->flags &= ~CAMERA_FLAG_PROJ_ADJUST;
             padRumbleOff(0);
             return EVT_RETURN_DONE;
         }
@@ -101,26 +132,23 @@ USER_FUNC(evt_cam_shake) {
     if (onTime && offTime) {
         // FAKE: dead int guard (COLOURING W): its division temps survive to RA and add interference, then the
         // post-RA peephole folds the branch and deletes the arm (no code). Colours the first u64 compare's dummy r24.
-        {
-            s32 gz = 0;
-            if (gz != 0) {
-                offTime = ((offTime / onTime) / (onTime / offTime)) / (((offTime + 1) / onTime) / (onTime / (offTime + 1)));
-            }
+        gz = 0;
+        if (gz != 0) {
+            offTime = ((offTime / onTime) / (onTime / offTime)) / (((offTime + 1) / onTime) / (onTime / (offTime + 1)));
         }
         if (!event->userWork[3]) {
             padRumbleOn(0);
             if (onTime < OSTicksToMilliseconds(now - last)) {
-                shift = 32;
                 event->userWork[3] = 1 - event->userWork[3];
-                ((u32*)&event->wInterpRelatedTime)[0] = (now >> shift) & 0xFFFFFFFF;
-                ((u32*)&event->wInterpRelatedTime)[1] = now & 0xFFFFFFFF;
+                event->userWork[4] = (now >> 32) & 0xFFFFFFFF;
+                event->userWork[5] = now & 0xFFFFFFFF;
             }
         } else {
             padRumbleOff(0);
             if (offTime < OSTicksToMilliseconds(now - last)) {
                 event->userWork[3] = 1 - event->userWork[3];
-                ((u32*)&event->wInterpRelatedTime)[0] = (now >> 32) & 0xFFFFFFFF;
-                ((u32*)&event->wInterpRelatedTime)[1] = now & 0xFFFFFFFF;
+                event->userWork[4] = (now >> 32) & 0xFFFFFFFF;
+                event->userWork[5] = now & 0xFFFFFFFF;
             }
         }
     }
@@ -152,7 +180,7 @@ USER_FUNC(evt_cam3d_evt_zoom_in) {
     camera->storedAt.z += (f32)dist * (f32)sin(camera->viewYaw);
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 3;
+    camera->stateA = CAM_MOVE_TO_STORED;
     camera->curveA = curve;
     return EVT_RETURN_DONE;
 }
@@ -173,7 +201,6 @@ USER_FUNC(evt_cam3d_evt_set_at) {
     curve = evtGetValue(event, args[5]);
     camera = camGetPtr(CAMERA_3D);
     at = (Vec){x, y, z};
-    (Vec){0.0f, 0.0f, 0.0f};
     PSVECSubtract(&at, &camera->cameraPos, &pos);
     PSVECScale(&pos, &pos, (f32)percent / 100.0f);
     PSVECAdd(&pos, &camera->cameraPos, &pos);
@@ -183,7 +210,37 @@ USER_FUNC(evt_cam3d_evt_set_at) {
     camera->storedAt = at;
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 3;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = curve;
+    return EVT_RETURN_DONE;
+}
+
+/** s32 x, s32 y, s32 z, s32 msec, s32 curve: moves the camera position to (x, y, z), keeping the current at */
+// Original name and size (0x1a8) from the JP demo map (UNUSED there: nothing calls it), between evt_cam3d_evt_set_at
+// and evt_cam3d_evt_set. Body: evt_cam3d_evt_set's move with only the position given and the at kept as
+// evt_cam3d_evt_zoom_in keeps it (storedAt = cameraAt); the size fits exactly, and its position template is the one
+// the "unused" zero Vec in evt_cam3d_evt_set_at stood in for (dropped; .rodata unchanged). The argument list (no
+// percent, unlike evt_cam3d_evt_set_at) is what the size leaves.
+USER_FUNC(evt_cam3d_evt_set_pos) {
+    EvtWord* args = event->args;
+    s32 x, y, z, msec, curve;
+    CameraEntry* camera;
+    Vec pos;
+
+    x = evtGetValue(event, args[0]);
+    y = evtGetValue(event, args[1]);
+    z = evtGetValue(event, args[2]);
+    msec = evtGetValue(event, args[3]);
+    curve = evtGetValue(event, args[4]);
+    camera = camGetPtr(CAMERA_3D);
+    pos = (Vec){x, y, z};
+    camera->presetPos = camera->cameraPos;
+    camera->presetAt = camera->cameraAt;
+    camera->storedPos = pos;
+    camera->storedAt = camera->cameraAt;
+    camera->startTimeA = gp->renderTime;
+    camera->durationA = OSMillisecondsToTicks(msec);
+    camera->stateA = CAM_MOVE_TO_STORED;
     camera->curveA = curve;
     return EVT_RETURN_DONE;
 }
@@ -213,7 +270,7 @@ USER_FUNC(evt_cam3d_evt_set) {
     camera->storedAt = at;
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 3;
+    camera->stateA = CAM_MOVE_TO_STORED;
     camera->curveA = curve;
     return EVT_RETURN_DONE;
 }
@@ -239,8 +296,6 @@ USER_FUNC(evt_cam3d_evt_set_rel) {
     {
         Vec pos, at;
 
-        (Vec){0.0f, 0.0f, 0.0f};
-        (Vec){0.0f, 0.0f, 0.0f};
         ax = mario->position.x + ax;
         ay = mario->position.y + ay;
         az = mario->position.z + az;
@@ -258,7 +313,47 @@ USER_FUNC(evt_cam3d_evt_set_rel) {
     }
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 3;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = curve;
+    return EVT_RETURN_DONE;
+}
+
+/** s32 posX, posY, posZ, atX, atY, atZ (relative to the partner), msec, curve */
+// Original name and size (0x340) from the JP demo map (UNUSED there: nothing calls it), between evt_cam3d_evt_set_rel
+// and evt_cam3d_evt_set_npc_rel. Body: evt_cam3d_evt_set_npc_rel for Mario's partner (no name argument); the size
+// fits exactly, and its two templates are the ones the two "unused" zero Vecs in evt_cam3d_evt_set_rel stood in for
+// (dropped; .rodata unchanged). The partner lookup partyGetPtr(marioGetPartyId()) is the common form; partyGetPtr(0)
+// or anotherPartyGetPtr(0) give the same size.
+USER_FUNC(evt_cam3d_evt_set_party_rel) {
+    EvtWord* args = event->args;
+    f32 px, py, pz, ax, ay, az;
+    s32 msec, curve;
+    CameraEntry* camera;
+    PartyEntry* party;
+    Vec partyPos, partyAt;
+    Vec pos, at;
+
+    px = evtGetValue(event, args[0]);
+    py = evtGetValue(event, args[1]);
+    pz = evtGetValue(event, args[2]);
+    ax = evtGetValue(event, args[3]);
+    ay = evtGetValue(event, args[4]);
+    az = evtGetValue(event, args[5]);
+    msec = evtGetValue(event, args[6]);
+    curve = evtGetValue(event, args[7]);
+    camera = camGetPtr(CAMERA_3D);
+    party = partyGetPtr(marioGetPartyId());
+    pos = (Vec){px, py, pz};
+    at = (Vec){ax, ay, az};
+    PSVECAdd(&party->position, &at, &partyAt);
+    PSVECAdd(&partyAt, &pos, &partyPos);
+    camera->presetPos = camera->cameraPos;
+    camera->presetAt = camera->cameraAt;
+    camera->storedPos = partyPos;
+    camera->storedAt = partyAt;
+    camera->startTimeA = gp->renderTime;
+    camera->durationA = OSMillisecondsToTicks(msec);
+    camera->stateA = CAM_MOVE_TO_STORED;
     camera->curveA = curve;
     return EVT_RETURN_DONE;
 }
@@ -295,7 +390,7 @@ USER_FUNC(evt_cam3d_evt_set_npc_rel) {
     camera->storedAt = npcAt;
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 3;
+    camera->stateA = CAM_MOVE_TO_STORED;
     camera->curveA = curve;
     return EVT_RETURN_DONE;
 }
@@ -336,13 +431,14 @@ USER_FUNC(evt_cam3d_evt_set_rel_dir) {
     camera->storedAt = marAt;
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 3;
+    camera->stateA = CAM_MOVE_TO_STORED;
     camera->curveA = curve;
     return EVT_RETURN_DONE;
 }
 
-/** unused (dead-stripped): only its string and 100.0f survive */
-// FAKE: uncalled stand-in for a stripped function; keeps its format string and orders 100.0f
+// FAKE: stand-in for evt_cam3d_evt_set_xls (0x148) and evt_cam3d_evt_set_rel_xls (0x1ac), which the JP demo map
+// lists UNUSED here; it keeps their format string (map @689) and 100.0f. They probably parse a text row with sscanf,
+// but how they use the %d and %s fields is not known (plausible bodies miss the map sizes).
 static void evt_cam_debug_print(f32 a) {
     OSReport("%f%f%f%f%f%f%d%s", a / 100.0f);
 }
@@ -360,7 +456,7 @@ USER_FUNC(evt_cam3d_evt_off) {
     camera->presetAt = camera->cameraAt;
     camera->startTimeA = gp->renderTime;
     camera->durationA = OSMillisecondsToTicks(msec);
-    camera->stateA = 1;
+    camera->stateA = CAM_MOVE_BACK;
     camera->curveA = curve;
     return EVT_RETURN_DONE;
 }
@@ -371,9 +467,9 @@ USER_FUNC(evt_cam3d_road_shift_onoff) {
     CameraEntry* camera = camGetPtr(CAMERA_3D);
 
     if (on) {
-        camera->flags &= ~CAM_FLAG_ROAD_SHIFT_OFF;
+        camera->flags &= ~CAMERA_FLAG_ROAD_SHIFT_OFF;
     } else {
-        camera->flags |= CAM_FLAG_ROAD_SHIFT_OFF;
+        camera->flags |= CAMERA_FLAG_ROAD_SHIFT_OFF;
     }
     return EVT_RETURN_DONE;
 }
@@ -420,6 +516,16 @@ USER_FUNC(evt_cam3d_evt_xyz_off) {
     return EVT_RETURN_DONE;
 }
 
+/** f32 fovY: sets the 3D camera's vertical field of view */
+// Original name and size (0x54) from the JP demo map (UNUSED there: no script uses it); one float stored in the 3D
+// camera's fovY.
+USER_FUNC(evt_cam3d_set_fovy) {
+    CameraEntry* camera = camGetPtr(CAMERA_3D);
+
+    camera->fovY = evtGetFloat(event, event->args[0]);
+    return EVT_RETURN_DONE;
+}
+
 /** f32 x, f32 y, f32 z, out f32 shift */
 USER_FUNC(evt_cam3d_get_shift) {
     EvtWord* args = event->args;
@@ -461,8 +567,8 @@ USER_FUNC(evt_cam3d_evt_set_now) {
     camera->presetAt = camera->storedAt;
     camera->startTimeA = gp->renderTime;
     camera->durationA = 0;
-    camera->stateA = 3;
-    camera->curveA = 11;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = EASING_SINE_IN_OUT;
     return EVT_RETURN_DONE;
 }
 
@@ -563,18 +669,18 @@ USER_FUNC(evt_cam_letter_box_onoff) {
     CameraEntry* camera = camGetPtr(CAMERA_2D);
 
     if (on) {
-        camera->flags |= CAM_FLAG_LETTER_BOX;
-        psndSetFlag(PSND_FLAG_IDLE_MIX);
+        camera->flags |= CAMERA_FLAG_LETTER_BOX;
+        psndSetFlag(PSND_FLAG_LETTER_BOX);
         camera->letterBoxAlpha = 255;
         camera->letterBoxTop = 0;
         camera->letterBoxBottom = 0;
         camera->letterBoxCamId = CAMERA_2D;
     } else {
-        camera->flags &= ~CAM_FLAG_LETTER_BOX;
-        psndClearFlag(PSND_FLAG_IDLE_MIX);
+        camera->flags &= ~CAMERA_FLAG_LETTER_BOX;
+        psndClearFlag(PSND_FLAG_LETTER_BOX);
     }
     if (flag) {
-        camera->flags |= CAM_FLAG_LETTER_BOX_SNAP;
+        camera->flags |= CAMERA_FLAG_LETTER_BOX_INSTANT;
     }
     return EVT_RETURN_DONE;
 }
@@ -585,11 +691,11 @@ USER_FUNC(evt_cam_letter_box_disable) {
     CameraEntry* camera = camGetPtr(CAMERA_2D);
 
     if (disable) {
-        camera->flags |= CAM_FLAG_LETTER_BOX_DISABLE;
-        psndSetFlag(PSND_FLAG_IDLE_MIX_OFF);
+        camera->flags |= CAMERA_FLAG_LETTER_BOX_OFF;
+        psndSetFlag(PSND_FLAG_LETTER_BOX_OFF);
     } else {
-        camera->flags &= ~CAM_FLAG_LETTER_BOX_DISABLE;
-        psndClearFlag(PSND_FLAG_IDLE_MIX_OFF);
+        camera->flags &= ~CAMERA_FLAG_LETTER_BOX_OFF;
+        psndClearFlag(PSND_FLAG_LETTER_BOX_OFF);
     }
     return EVT_RETURN_DONE;
 }
@@ -598,7 +704,7 @@ USER_FUNC(evt_cam_letter_box_disable) {
 USER_FUNC(evt_cam_letter_box_wait) {
     CameraEntry* camera = camGetPtr(CAMERA_2D);
 
-    if ((camera->flags & CAM_FLAG_LETTER_BOX) && camera->letterBoxTop == 49 && camera->letterBoxBottom == 44) {
+    if ((camera->flags & CAMERA_FLAG_LETTER_BOX) && camera->letterBoxTop == LETTER_BOX_TOP_HEIGHT && camera->letterBoxBottom == LETTER_BOX_BOTTOM_HEIGHT) {
         return EVT_RETURN_DONE;
     }
     return EVT_RETURN_BLOCK;

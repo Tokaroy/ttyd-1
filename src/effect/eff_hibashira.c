@@ -1,12 +1,17 @@
 // Fire pillar (hibashira: pillar of fire) animation; types 0-2 place one pillar, types 3-5 spread count pillars
 // between a start and an end point.
+
 #include "eff/eff_hibashira.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
-#include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
+static void effHibashiraDisp(CameraId cameraId, EffectEntry* effect);
+static void effHibashiraMain(EffectEntry* effect);
 
 typedef struct EffHibashiraWork {
     s32 type;     // 0x0
@@ -28,9 +33,9 @@ EffectEntry* effHibashiraEntry(s32 type, s32 count, s32 duration, f32 x, f32 y, 
                                f32 endY, f32 endZ, f32 scale) {
     EffectEntry* effect;
     EffHibashiraWork* work;
-    EffHibashiraWork* pillar;
     s32 num, i;
     f32 dx, dy, dz;
+    f32 s;
 
     effect = effEntry();
     num = 1;
@@ -51,7 +56,7 @@ EffectEntry* effHibashiraEntry(s32 type, s32 count, s32 duration, f32 x, f32 y, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffHibashiraWork) * effect->count);
     effect->userdata = work;
     effect->callback = effHibashiraMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -66,33 +71,33 @@ EffectEntry* effHibashiraEntry(s32 type, s32 count, s32 duration, f32 x, f32 y, 
     }
     work->frame = 0;
 
-    // spread the pillars evenly from start to end
+    // spread the works evenly from the start toward the end (the last one stops one step short of it)
     dx = endX - x;
     dy = endY - y;
     dz = endZ - z;
-    pillar = work + 1;
-    for (i = 1; i < effect->count; i++, pillar++) {
-        pillar->position.x = (i - 1) * (dx / (num - 1));
-        pillar->position.y = (i - 1) * (dy / (num - 1));
-        pillar->position.z = (i - 1) * (dz / (num - 1));
-        {
-            f32 s = sin(3.1415927f * i / (effect->count - 1));
-            pillar->scale = s + 0.5f;
-        }
-        pillar->poseId = -1;
-        pillar->alpha = 255;
-        pillar->timer = 0;
-        pillar->frame = 0;
-        pillar->delay = (i - 1) * 4;
+    work++;
+    for (i = 1; i < effect->count; i++, work++) {
+        work->position.x = (i - 1) * (dx / (num - 1));
+        work->position.y = (i - 1) * (dy / (num - 1));
+        work->position.z = (i - 1) * (dz / (num - 1));
+
+        s = sin(3.1415927f * i / (effect->count - 1));
+        work->scale = s + 0.5f;
+        work->poseId = -1;
+        work->alpha = 255;
+        work->timer = 0;
+        work->frame = 0;
+        work->delay = (i - 1) * 4;
     }
     return effect;
 }
 
-/** Fades the pillars in and out, spreading pillars for types 3-5 and loading their flame animations. */
+/**
+ * Starts each pillar's flame animation after its delay (4 frames apart), fades each pillar out from its sixth
+ * frame, and fades the whole effect over 16 frames on soft delete or at the end of the duration.
+ */
 static void effHibashiraMain(EffectEntry* effect) {
-    s32 k;
     EffHibashiraWork* work = effect->userdata;
-    EffHibashiraWork* pillar;
     Vec position;
     s32 type;
     s32 i;
@@ -103,8 +108,8 @@ static void effHibashiraMain(EffectEntry* effect) {
     type = work->type;
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     switch (type) {
@@ -130,16 +135,16 @@ static void effHibashiraMain(EffectEntry* effect) {
         work->alpha = work->timer * 16;
     }
     if (work->timer < 0) {
-        for (i = 0, pillar = work; i < effect->count; pillar++, i++) {
-            if (pillar->poseId != -1) {
-                animPoseRelease(pillar->poseId);
+        for (i = 0; i < effect->count; i++) {
+            if (work[i].poseId != -1) {
+                animPoseRelease(work[i].poseId);
             }
         }
         effDelete(effect);
         return;
     }
 
-    for (work++, k = 1; k < effect->count; k++, work++) {
+    for (work++, i = 1; i < effect->count; i++, work++) {
         if (work->delay) {
             work->delay--;
             continue;
@@ -174,7 +179,7 @@ static void effHibashiraMain(EffectEntry* effect) {
             work->alpha = 0;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effHibashiraDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effHibashiraDisp, effect);
 }
 
 /** Draws each pillar's animation pose at its offset, faded by the effect's alpha. */
@@ -198,7 +203,7 @@ static void effHibashiraDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTXScale(scale, work->scale, work->scale, work->scale);
             PSMTXConcat(mtx, scale, mtx);
             PSMTXConcat(base, mtx, mtx);
-            animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+            animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
             animPoseSetMaterialEvtColor(work->poseId,
                                         (GXColor){0xFF, 0xFF, 0xFF, work->alpha * alpha / 255});
             animPoseMain(work->poseId);

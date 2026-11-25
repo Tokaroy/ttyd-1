@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: recovery heart: a heart sprite rises and fades, with the recovered count drawn as digits.
+
 #include "eff/n64/eff_recover_heart_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,6 +8,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffRecoverHeartN64Work {
@@ -16,11 +18,11 @@ typedef struct EffRecoverHeartN64Work {
     f32 velY;        // 0x14
     f32 velZ;        // 0x18
     f32 rotZ;        // 0x1C
-    f32 reserved_20; // 0x20, only cleared at entry
+    f32 reserved_20; // 0x20, only set to 0
     f32 offX;        // 0x24
     s32 alpha;       // 0x28
     s32 frame;       // 0x2C
-    s32 age;         // 0x30, counts up each frame; never read
+    s32 elapsed;     // 0x30
     s32 delay;       // 0x34
     f32 scaleW;      // 0x38
     f32 scaleH;      // 0x3C
@@ -32,19 +34,20 @@ typedef struct EffRecoverHeartN64Work {
  * Width and height of each heart or flower over its 7-frame pop-in: it grows, squashes and stretches,
  * then settles.
  */
-f32 scale_w_dat[] = {0.25f, 0.5f, 0.75f, 1.0f, 0.9f, 1.1f, 1.0f};
-f32 scale_h_dat[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.2f, 0.9f, 1.0f};
+static f32 scale_w_dat[] = {0.25f, 0.5f, 0.75f, 1.0f, 0.9f, 1.1f, 1.0f};
+
+static f32 scale_h_dat[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.2f, 0.9f, 1.0f};
 
 /** 32x32 quad for the large first heart or flower that carries the recovered amount. */
-effN64Vtx size32x32_tex32x32_heart_vtx[] = {
+static effN64Vtx size32x32_tex32x32_heart_vtx[] = {
     {-16, -16, 0, 0, 0, 255, 255, 255, 255},
     {16, -16, 0, 1024, 0, 255, 255, 255, 255},
     {16, 16, 0, 1024, 1024, 255, 255, 255, 255},
     {-16, 16, 0, 0, 1024, 255, 255, 255, 255},
 };
 
-/** 16x16 quad for the smaller hearts or flowers that float up beside the large one. */
-effN64Vtx size16x16_tex32x32_heart_vtx[] = {
+/** 16x16 quad for the small heart drawn instead of the large one for type 2 (no digits). */
+static effN64Vtx size16x16_tex32x32_heart_vtx[] = {
     {-8, -8, 0, 0, 0, 255, 255, 255, 255},
     {8, -8, 0, 1024, 0, 255, 255, 255, 255},
     {8, 8, 0, 1024, 1024, 255, 255, 255, 255},
@@ -52,7 +55,7 @@ effN64Vtx size16x16_tex32x32_heart_vtx[] = {
 };
 
 /** Near-white quad for a single-digit amount drawn on the heart. */
-effN64Vtx size24x24_tex32x32_heart_vtx[] = {
+static effN64Vtx size24x24_tex32x32_heart_vtx[] = {
     {-12, -15, 0, 0, 0, 250, 250, 250, 255},
     {12, -15, 0, 1024, 0, 250, 250, 250, 255},
     {12, 9, 0, 1024, 1024, 250, 250, 250, 255},
@@ -60,7 +63,7 @@ effN64Vtx size24x24_tex32x32_heart_vtx[] = {
 };
 
 /** Near-white quad for the left-hand digit of a two-digit amount on the heart. */
-effN64Vtx size16x24_tex32x32_l_heart_vtx[] = {
+static effN64Vtx size16x24_tex32x32_l_heart_vtx[] = {
     {-16, -15, 0, 0, 0, 250, 250, 250, 255},
     {4, -15, 0, 1024, 0, 250, 250, 250, 255},
     {4, 9, 0, 1024, 1024, 250, 250, 250, 255},
@@ -68,7 +71,7 @@ effN64Vtx size16x24_tex32x32_l_heart_vtx[] = {
 };
 
 /** Near-white quad for the right-hand digit of a two-digit amount on the heart. */
-effN64Vtx size16x24_tex32x32_r_heart_vtx[] = {
+static effN64Vtx size16x24_tex32x32_r_heart_vtx[] = {
     {-4, -15, 0, 0, 0, 250, 250, 250, 255},
     {16, -15, 0, 1024, 0, 250, 250, 250, 255},
     {16, 9, 0, 1024, 1024, 250, 250, 250, 255},
@@ -76,7 +79,7 @@ effN64Vtx size16x24_tex32x32_r_heart_vtx[] = {
 };
 
 /** Green quad for a single-digit amount drawn on the flower. */
-effN64Vtx size24x24_tex32x32_flower_vtx[] = {
+static effN64Vtx size24x24_tex32x32_flower_vtx[] = {
     {-12, -15, 0, 0, 0, 36, 190, 20, 255},
     {12, -15, 0, 1024, 0, 36, 190, 20, 255},
     {12, 9, 0, 1024, 1024, 36, 190, 20, 255},
@@ -84,7 +87,7 @@ effN64Vtx size24x24_tex32x32_flower_vtx[] = {
 };
 
 /** Green quad for the left-hand digit of a two-digit amount on the flower. */
-effN64Vtx size16x24_tex32x32_l_flower_vtx[] = {
+static effN64Vtx size16x24_tex32x32_l_flower_vtx[] = {
     {-16, -15, 0, 0, 0, 36, 190, 20, 255},
     {4, -15, 0, 1024, 0, 36, 190, 20, 255},
     {4, 9, 0, 1024, 1024, 36, 190, 20, 255},
@@ -92,7 +95,7 @@ effN64Vtx size16x24_tex32x32_l_flower_vtx[] = {
 };
 
 /** Green quad for the right-hand digit of a two-digit amount on the flower. */
-effN64Vtx size16x24_tex32x32_r_flower_vtx[] = {
+static effN64Vtx size16x24_tex32x32_r_flower_vtx[] = {
     {-4, -15, 0, 0, 0, 36, 190, 20, 255},
     {16, -15, 0, 1024, 0, 36, 190, 20, 255},
     {16, 9, 0, 1024, 1024, 36, 190, 20, 255},
@@ -100,10 +103,12 @@ effN64Vtx size16x24_tex32x32_r_flower_vtx[] = {
 };
 
 static void effRecoverHeartMain(EffectEntry* effect);
-static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect);
+static void effRecoverHeartDisp(CameraId cameraId, void* payload);
 
 /**
- * Spawns a rising heart sprite at (x, y, z) lasting 46 frames; a negative count selects the alternate texture.
+ * Spawns one rising heart (types 0 and 2) or flower (other types) sprite at (x, y, z) lasting 46 frames;
+ * a negative count selects the alternate heart texture and digit layout. The setup loop's branch for pieces
+ * after the first never runs (the effect has one header and one piece).
  * Spawned by event scripts through evt_eff.
  */
 EffectEntry* effRecoverHeartN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z) {
@@ -124,7 +129,7 @@ EffectEntry* effRecoverHeartN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z) {
     work->position.y = y;
     work->position.z = z;
     work->frame = 46;
-    work->age = 0;
+    work->elapsed = 0;
     if (count < 0) {
         work->flag = 1;
         count = -count;
@@ -133,9 +138,7 @@ EffectEntry* effRecoverHeartN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z) {
     }
     work->count = count;
     k = 0;
-
     for (i = 1; i < 2; i++) {
-
         p = &work[i];
         p->position.x = 0.0f;
         p->position.y = 0.0f;
@@ -178,7 +181,6 @@ static void effRecoverHeartMain(EffectEntry* effect) {
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 i;
-    s32 k;
     f32 ang;
     f32 fade;
 
@@ -187,7 +189,7 @@ static void effRecoverHeartMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     work->frame--;
-    work->age++;
+    work->elapsed++;
     lifetime = work->frame;
     if (lifetime < 0) {
         effDelete(effect);
@@ -225,16 +227,18 @@ static void effRecoverHeartMain(EffectEntry* effect) {
         }
         work->frame++;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effRecoverHeartDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effRecoverHeartDisp, effect);
 }
 
 /**
  * Draws each piece camera-facing: types 0 and 2 use heart texture 0x50 (0x51 when `flag` is set),
  * others the flower texture 0x52.
  * Except for type 2, the first piece is a large 32x32 icon with the amount drawn on it from digit strip 0x53:
- * one digit under 10, otherwise two (with `flag` set the left glyph is strip slot 10 instead of the tens digit).
+ * one digit under 10, otherwise two (with `flag` set it always draws two, the left glyph being strip slot 10
+ * instead of the tens digit). Type 2 draws a 16x16 heart without digits.
  */
-static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
+static void effRecoverHeartDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     s32 j;
     CameraEntry* camera;
     EffRecoverHeartN64Work* work;
@@ -244,12 +248,13 @@ static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
     s32 flag;
     s32 k;
     s32 tex;
+    BOOL isHeart;
     Mtx mtx;
     Mtx scale;
     Mtx rot;
-    Mtx m90;
-    Mtx m60;
-    Mtx m30;
+    Mtx billboardMtx;
+    Mtx scaledMtx;
+    Mtx rotatedMtx;
     GXTexObj texObj;
 
     camera = camGetPtr(cameraId);
@@ -257,7 +262,7 @@ static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
     flag = work->flag;
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
     PSMTXRotRad(rot, 'y', 0.017453292f * -camGetPtr(CAMERA_3D)->viewYaw);
-    PSMTXConcat(mtx, rot, m90);
+    PSMTXConcat(mtx, rot, billboardMtx);
     type = work->type;
     count = work->count;
     work = work + 1;
@@ -286,8 +291,9 @@ static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
             GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_RASC, GX_CC_ZERO);
             GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
         }
-        tex = (type == 0 || type == 2);
-        if (tex) {
+
+        isHeart = (type == 0 || type == 2);
+        if (isHeart) {
             tex = 0x51;
             if (flag == 0) {
                 tex = 0x50;
@@ -302,14 +308,14 @@ static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXTrans(mtx, work->position.x + work->offX, work->position.y, work->position.z);
         PSMTXScale(scale, work->scaleW, work->scaleH, 1.0f);
         PSMTXConcat(mtx, scale, mtx);
-        PSMTXConcat(m90, mtx, m60);
+        PSMTXConcat(billboardMtx, mtx, scaledMtx);
         PSMTXRotRad(rot, 'z', 0.017453292f * work->rotZ);
-        PSMTXConcat(m60, rot, m30);
+        PSMTXConcat(scaledMtx, rot, rotatedMtx);
         if (i == 1 && type != 2) {
             effSetVtxDescN64(size32x32_tex32x32_heart_vtx);
-            PSMTXConcat(camera->view, m30, mtx);
+            PSMTXConcat(camera->view, rotatedMtx, mtx);
             GXLoadPosMtxImm(mtx, GX_PNMTX0);
-            GXSetCurrentMtx(0);
+            GXSetCurrentMtx(GX_PNMTX0);
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(0, 1, 2, 0, 0, 2, 3, 0);
             GXSetNumTevStages(1);
@@ -330,9 +336,9 @@ static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
                 } else {
                     effSetVtxDescN64(size24x24_tex32x32_flower_vtx);
                 }
-                PSMTXConcat(camera->view, m60, mtx);
+                PSMTXConcat(camera->view, scaledMtx, mtx);
                 GXLoadPosMtxImm(mtx, GX_PNMTX0);
-                GXSetCurrentMtx(0);
+                GXSetCurrentMtx(GX_PNMTX0);
                 GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
             } else {
@@ -349,9 +355,9 @@ static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
                 } else {
                     effSetVtxDescN64(size16x24_tex32x32_r_flower_vtx);
                 }
-                PSMTXConcat(camera->view, m60, mtx);
+                PSMTXConcat(camera->view, scaledMtx, mtx);
                 GXLoadPosMtxImm(mtx, GX_PNMTX0);
-                GXSetCurrentMtx(0);
+                GXSetCurrentMtx(GX_PNMTX0);
                 GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
                 PSMTXScale(scale, 0.03125f, 0.0026041667f, 0.0f);
@@ -367,9 +373,9 @@ static void effRecoverHeartDisp(CameraId cameraId, EffectEntry* effect) {
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
             }
         } else {
-            PSMTXConcat(camera->view, m30, mtx);
+            PSMTXConcat(camera->view, rotatedMtx, mtx);
             GXLoadPosMtxImm(mtx, GX_PNMTX0);
-            GXSetCurrentMtx(0);
+            GXSetCurrentMtx(GX_PNMTX0);
             effSetVtxDescN64(size16x16_tex32x32_heart_vtx);
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(0, 1, 2, 0, 0, 2, 3, 0);

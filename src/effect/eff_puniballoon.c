@@ -1,4 +1,5 @@
 // Puni balloon (puni: the Punies): a wobbling balloon (type 0) that pops into a burst of small pieces (type 1).
+
 #include "driver/camdrv.h"
 #include "eff/eff_puniballoon.h"
 #include "driver/dispdrv.h"
@@ -8,21 +9,21 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 static void effPuniBalloonMain(EffectEntry* effect);
-static void effPuniBalloonDisp(CameraId cameraId, EffectEntry* effect);
+static void effPuniBalloonDisp(CameraId cameraId, void* param);
 static void balloon_1(CameraId cameraId, EffectEntry* effect);
 static void balloon_0(CameraId cameraId, EffectEntry* effect);
 
 /**
  * Spawns a Puni balloon (type 0) or its pop burst (type 1) at (x, y, z) scaled by `scale`;
- * used by the Great Tree (mri) Puni scenes and evt_eff ("puniballoon").
+ * used by the Great Tree (mri) Puni scenes and evt_eff ("puni_balloon").
  */
 EffectEntry* effPuniBalloonEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     PuniBalloonWork* work;
-    PuniBalloonWork* p;
     s32 i;
     s32 n;
 
@@ -41,7 +42,7 @@ EffectEntry* effPuniBalloonEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(PuniBalloonWork));
     effect->userdata = work;
     effect->callback = effPuniBalloonMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -51,26 +52,28 @@ EffectEntry* effPuniBalloonEntry(s32 type, f32 x, f32 y, f32 z, f32 scale) {
     work->frame = 0;
     work->scale = 0.0f;
     work->baseScale = scale;
-    for (i = 1, p = work + 1; i < effect->count; i++, p++) {
-        p->position.x = 0.0f;
-        p->position.y = 0.0f;
-        p->position.z = 0.0f;
-        p->scale = scale;
-        p->velocity.x = (f32)(rand() % 11 - 5);
-        p->velocity.y = (f32)(rand() % 11 - 5);
-        p->velocity.z = (f32)(rand() % 11 - 5);
+    for (i = 1, work++; i < effect->count; i++, work++) {
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->scale = scale;
+        work->velocity.x = (f32)(rand() % 11 - 5);
+        work->velocity.y = (f32)(rand() % 11 - 5);
+        work->velocity.z = (f32)(rand() % 11 - 5);
     }
     return effect;
 }
 
-/** Per frame: advances the frame counter, ends the effect after the pop and registers the draw callback. */
+/**
+ * Per frame: advances the frame counter and the burst pieces; a balloon (type 0) lasts until soft-deleted, then
+ * pops 16 frames later into a type 1 burst, which ends after 30 frames; registers the draw callback.
+ */
 static void effPuniBalloonMain(EffectEntry* effect) {
     PuniBalloonWork* work = effect->userdata;
     Vec pos;
     Vec tmp;
     s32 type;
     s32 i;
-    PuniBalloonWork* p;
 
     tmp = (Vec){0.0f, 0.0f, 0.0f};
     tmp.x = work->position.x;
@@ -79,8 +82,8 @@ static void effPuniBalloonMain(EffectEntry* effect) {
     pos = tmp;
     type = work->type;
 
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 16;
     }
     if (work->life < 1000) {
@@ -97,21 +100,35 @@ static void effPuniBalloonMain(EffectEntry* effect) {
     work->scale += (1.0f - work->scale) / 10.0f;
     work->rotation = 20.0f * (f32)sin(work->frame / 20.0f);
     for (i = 1, work++; i < effect->count; i++, work++) {
-        p = work;
-        p->position.x += p->velocity.x;
-        p->position.y += p->velocity.y;
-        p->position.z += p->velocity.z;
-        p->velocity.y += -0.1f;
-        p->velocity.x *= 0.98f;
-        p->velocity.y *= 0.98f;
-        p->velocity.z *= 0.98f;
-        p->scale *= 0.9f;
+        work->position.x += work->velocity.x;
+        work->position.y += work->velocity.y;
+        work->position.z += work->velocity.z;
+        work->velocity.y += -0.1f;
+        work->velocity.x *= 0.98f;
+        work->velocity.y *= 0.98f;
+        work->velocity.z *= 0.98f;
+        work->scale *= 0.9f;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&pos), 2, (DispCallback)effPuniBalloonDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_XLU, effPuniBalloonDisp, effect);
+}
+
+/** The balloon's textured quad: 24 x 24 around the origin, texture repeated twice across. */
+// Original name and size (0x94) from the JP demo map (UNUSED there: every call is inlined).
+static void polygon(void) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3s16(-12, 12, 0);
+    GXTexCoord2s16(0, 0);
+    GXPosition3s16(-12, -12, 0);
+    GXTexCoord2s16(0, 1);
+    GXPosition3s16(12, -12, 0);
+    GXTexCoord2s16(2, 1);
+    GXPosition3s16(12, 12, 0);
+    GXTexCoord2s16(2, 0);
 }
 
 /** Draw callback: dispatches to balloon_0 (the balloon) or balloon_1 (the burst) by type. */
-static void effPuniBalloonDisp(CameraId cameraId, EffectEntry* effect) {
+static void effPuniBalloonDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     PuniBalloonWork* work = effect->userdata;
     if (work->type == 0) {
         balloon_0(cameraId, effect);
@@ -134,15 +151,15 @@ static void balloon_0(CameraId cameraId, EffectEntry* effect) {
     scale += 0.1f * sv;
     scale *= work->baseScale;
     PSMTXTrans(mT, work->position.x, work->position.y, work->position.z);
-    PSMTXRotRad(mR, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    PSMTXRotRad(mR, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(mT, mR, mX);
     PSMTXConcat(cam->view, mX, mT);
-    PSMTXRotRad(mR, 'z', 0.017453292f * work->rotation);
+    PSMTXRotRad(mR, 'z', MTXDegToRad(work->rotation));
     PSMTXScale(mS, scale, scale, scale);
     PSMTXConcat(mT, mR, mT);
     PSMTXConcat(mT, mS, mT);
-    GXLoadPosMtxImm(mT, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(mT, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_NONE);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -161,15 +178,7 @@ static void balloon_0(CameraId cameraId, EffectEntry* effect) {
     GXSetTevKAlphaSel(GX_TEVSTAGE0, GX_TEV_KASEL_1_2);
     effGetTexObj(0x26, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-    GXPosition3s16(-12, 12, 0);
-    GXTexCoord2s16(0, 0);
-    GXPosition3s16(-12, -12, 0);
-    GXTexCoord2s16(0, 1);
-    GXPosition3s16(12, -12, 0);
-    GXTexCoord2s16(2, 1);
-    GXPosition3s16(12, 12, 0);
-    GXTexCoord2s16(2, 0);
+    polygon();
     GXSetNumIndStages(0);
     GXSetTevDirect(GX_TEVSTAGE0);
 }
@@ -177,14 +186,13 @@ static void balloon_0(CameraId cameraId, EffectEntry* effect) {
 /** Draws the burst of small pieces after the balloon pops, using the same texture. */
 static void balloon_1(CameraId cameraId, EffectEntry* effect) {
     PuniBalloonWork* work = effect->userdata;
-    PuniBalloonWork* p;
     CameraEntry* cam = camGetPtr(cameraId);
     s32 i;
     Mtx mC, mA, mB, mD;
     GXTexObj texObj;
 
     PSMTXTrans(mA, work->position.x, work->position.y, work->position.z);
-    PSMTXRotRad(mB, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
+    PSMTXRotRad(mB, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
     PSMTXConcat(mA, mB, mC);
     PSMTXConcat(cam->view, mC, mC);
     GXSetNumChans(0);
@@ -206,21 +214,12 @@ static void balloon_1(CameraId cameraId, EffectEntry* effect) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 0);
     for (i = 1, work++; i < effect->count; i++, work++) {
-        p = work;
-        PSMTXTrans(mA, p->position.x, p->position.y, p->position.z);
-        PSMTXScale(mD, p->scale, p->scale, p->scale);
+        PSMTXTrans(mA, work->position.x, work->position.y, work->position.z);
+        PSMTXScale(mD, work->scale, work->scale, work->scale);
         PSMTXConcat(mA, mD, mA);
         PSMTXConcat(mC, mA, mA);
-        GXLoadPosMtxImm(mA, 0);
-        GXSetCurrentMtx(0);
-        GXBegin(GX_QUADS, GX_VTXFMT0, 4);
-        GXPosition3s16(-12, 12, 0);
-        GXTexCoord2s16(0, 0);
-        GXPosition3s16(-12, -12, 0);
-        GXTexCoord2s16(0, 1);
-        GXPosition3s16(12, -12, 0);
-        GXTexCoord2s16(2, 1);
-        GXPosition3s16(12, 12, 0);
-        GXTexCoord2s16(2, 0);
+        GXLoadPosMtxImm(mA, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
+        polygon();
     }
 }

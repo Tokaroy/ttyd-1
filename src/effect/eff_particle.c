@@ -1,5 +1,5 @@
 // Generic particle effect (Particle): count particles with random motion from a point for a given life.
-#include "eff/eff_particle.h"
+
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -10,6 +10,7 @@
 #include <dolphin/mtx.h>
 #include "libc_decls.h"
 #include <math.h>
+#include "eff/eff_particle.h"
 
 typedef struct ParticleItem {
     s32 next; // 0x0
@@ -51,7 +52,7 @@ typedef struct ParticleWork {
  * Spark (hibana) colour by remaining life, indexed by life / 8:
  * a particle fades from white through yellow to a dark, transparent orange as it dies.
  */
-GXColor hibana_col[32] = {
+static GXColor hibana_col[32] = {
     {0x5F, 0x28, 0x00, 0x00},
     {0x69, 0x35, 0x00, 0x08},
     {0x73, 0x42, 0x00, 0x10},
@@ -86,22 +87,67 @@ GXColor hibana_col[32] = {
     {0xFF, 0xFF, 0xFF, 0xFF}
 };
 
-/** Random seed of the particle generator, advanced by pt_frand for every random draw in this file. */
-s32 seed = 1;
+/** Random seed of the particle generator, advanced by rndf for every random draw in this file. */
+static s32 seed = 1;
 
-/** Pseudo-random f32 in [0, 1) from a linear congruential generator on the global seed. */
-static inline f32 pt_frand(void) {
+/** Links the free list of the effect's particle items: item i points at i + 1, the last at 0; none active. */
+// Original name from the JP demo's link map (UNUSED there, 0x50): every call is inlined, so the linker strips it.
+void ParticleInit(EffectEntry* effect) {
+    ParticleWork* work = effect->userdata;
+    u32 i;
+
+    for (i = 1; i < work->count + 2; i++) {
+        work->items[i - 1].next = i;
+    }
+    work->items[i - 1].next = 0;
+    work->active = 0;
+}
+
+/**
+ * Resets an emitter: identity orientation, zero vectors, 5 particles a frame, particle life Gaussian with mean 125
+ * and standard deviation 25 frames.
+ */
+// Original name from the JP demo's link map (UNUSED there, 0x70): every call is inlined, so the linker strips it.
+void EmitterInit(ParticleEmitter* emitter) {
+    PSMTXIdentity(emitter->mtx);
+    emitter->vecA.x = emitter->vecA.y = emitter->vecA.z = 0.0f;
+    emitter->vecB = emitter->vecA;
+    emitter->accum = 0.0f;
+    emitter->rate = 5.0f;
+    emitter->lifeMean = 125.0f;
+    emitter->lifeStd = 25.0f;
+}
+
+// FAKE: stand-in for EmitterUpdate, which the linker stripped (JP demo map: UNUSED, 0x10c, here between EmitterInit
+// and rndi); nothing calls it. Its signed int-to-float constant is the last item in .rodata (map @715, the highest
+// number in the object). The other stripped functions of the file (ParticleInit, EmitterInit, rndi, rndf, BoxMuller,
+// ParticleUpdate) are restored and convert no signed int (rndf's conversion is unsigned, a different constant), so
+// the constant is EmitterUpdate's; its body is not known. Removing the stand-in changes the object.
+void particleStrippedPool(f32* f, s32 i) {
+    *f = (f32)i;
+}
+
+/** Pseudo-random integer: the next value of rndf's linear congruential generator. */
+// Original name from the JP demo's link map (UNUSED there, 0x20, just before rndf): nothing calls it, so the linker
+// strips it. The one-step form of rndf's update compiles to that size; whether it returned s32 or u32 is not known.
+s32 rndi(void) {
+    seed = seed * 0x5EEDF715 + 0x1B0CB173;
+    return seed;
+}
+
+/** Pseudo-random f32 in [0, 1) from a linear congruential generator on the file's seed. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+f32 rndf(void) {
     seed = seed * 0x5EEDF715 + 0x1B0CB173;
     return (f32)(u32)seed * 2.3283064e-10f;
 }
 
-static void effParticleDisp(CameraId cameraId, EffectEntry* effect);
+static void effParticleDisp(CameraId cameraId, void* payload);
 static void effParticleMain(EffectEntry* effect);
-static void EmitterEmit(EffectEntry* effect, ParticleEmitter* emitter);
-static void ParticleEmit(EffectEntry* effect, ParticleItem* p, ParticleEmitter* emitter);
 
 /** Gaussian-distributed random number (polar Box-Muller), caching the second value for the next call. */
-static inline f32 pt_gauss(void) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+f32 BoxMuller(void) {
     static f32 y2;
     static s32 use_last;
     f32 x1, x2, w, y1;
@@ -111,8 +157,8 @@ static inline f32 pt_gauss(void) {
         use_last = 0;
     } else {
         do {
-            x1 = 2.0f * pt_frand() - 1.0f;
-            x2 = 2.0f * pt_frand() - 1.0f;
+            x1 = 2.0f * rndf() - 1.0f;
+            x2 = 2.0f * rndf() - 1.0f;
             w = x1 * x1 + x2 * x2;
         } while (w > 1.0f);
         w = (-2.0f * (f32)log(w)) / w;
@@ -124,23 +170,17 @@ static inline f32 pt_gauss(void) {
     return y1;
 }
 
-/** Stand-in for a function the original linker dead-stripped; its signed int->float constant is last in .rodata. */
-// FAKE: uncalled stand-in for a stripped function; creates the int-to-float double in .rodata
-void particleStrippedPool(f32* f, s32 i) {
-    *f = (f32)i;
-}
-
-/** Initialises one particle from the emitter: random direction and speed, life and size. */
+/** Initialises one particle from the emitter: random direction in a cone around the emitter axis at work->speed, Gaussian life. */
 static void ParticleEmit(EffectEntry* effect, ParticleItem* p, ParticleEmitter* emitter) {
     ParticleWork* work = effect->userdata;
     f32 w;
     f32 r;
 
-    p->life = (s32)(emitter->lifeStd * pt_gauss() + emitter->lifeMean);
+    p->life = (s32)(emitter->lifeStd * BoxMuller() + emitter->lifeMean);
     do {
-        r = 2.0f * pt_frand();
+        r = 2.0f * rndf();
         p->vel.x = r - 1.0f;
-        r = 2.0f * pt_frand();
+        r = 2.0f * rndf();
         p->vel.z = r - 1.0f;
         w = p->vel.x * p->vel.x + p->vel.z * p->vel.z;
     } while (w > 1.0f);
@@ -183,15 +223,41 @@ static void EmitterEmit(EffectEntry* effect, ParticleEmitter* emitter) {
     }
 }
 
+/** Ages and moves the live particles; dead ones go back to the free list. */
+// Original name from the JP demo's link map (UNUSED there, 0xe8): every call is inlined, so the linker strips it.
+void ParticleUpdate(EffectEntry* effect) {
+    ParticleWork* work = effect->userdata;
+    ParticleItem* p;
+    u32 idx;
+    ParticleItem* prev;
+
+    prev = &work->items[work->count];
+    idx = prev->next;
+    while (idx != work->count + 1) {
+        p = &work->items[idx];
+        p->life--;
+        if (p->life < 0) {
+            prev->next = p->next;
+            p->next = work->items[work->count + 1].next;
+            work->items[work->count + 1].next = idx;
+            work->active--;
+        } else {
+            PSVECAdd(&p->pos, &p->vel, &p->pos);
+            p->vel.y += -0.03f;
+            prev = p;
+        }
+        idx = prev->next;
+    }
+}
+
 /**
- * Spawns an emitter at (x, y, z) that throws `count` particles toward (dx, dy, dz) for `life` frames;
+ * Spawns an emitter at (x, y, z) that throws up to `count` live particles toward (dx, dy, dz) for `life` frames
+ * (0 or less: until soft-deleted);
  * reached through evt_eff ("particle").
  */
 EffectEntry* effParticleEntry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz, s32 count, s32 life) {
     EffectEntry* effect;
     ParticleWork* work;
-    ParticleWork* w2;
-    u32 i;
     Mtx mx, mz;
 
     effect = effEntry();
@@ -200,7 +266,7 @@ EffectEntry* effParticleEntry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dy, f32
     work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(ParticleWork) + (count + 2) * sizeof(ParticleItem));
     effect->userdata = work;
     effect->callback = effParticleMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->pos.x = x;
     work->pos.y = y;
@@ -219,19 +285,9 @@ EffectEntry* effParticleEntry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dy, f32
     work->count = count;
     work->items = (ParticleItem*)((u8*)work + effect->count * sizeof(ParticleWork));
     work->speed = 4.0f;
-    w2 = effect->userdata;
-    for (i = 1; i < w2->count + 2; i++) {
-        w2->items[i - 1].next = i;
-    }
-    w2->items[i - 1].next = 0;
-    w2->active = 0;
-    PSMTXIdentity(work->emit.mtx);
-    work->emit.vecA.x = work->emit.vecA.y = work->emit.vecA.z = 0.0f;
-    work->emit.vecB = work->emit.vecA;
-    work->emit.accum = 0.0f;
-    work->emit.rate = 5.0f;
-    work->emit.lifeMean = 125.0f;
-    work->emit.lifeStd = 25.0f;
+
+    ParticleInit(effect);
+    EmitterInit(&work->emit);
     {
         Vec zero = {0.0f, 0.0f, 0.0f};
         Vec d;
@@ -243,31 +299,27 @@ EffectEntry* effParticleEntry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dy, f32
         PSVECNormalize(&d, &d);
         work->angX = -angleABf(0.0f, 0.0f, 1000.0f * d.z, 1000.0f * d.y);
         work->angY = -angleABf(0.0f, 0.0f, 1000.0f * d.x, 1000.0f * d.y);
-        PSMTXRotRad(mx, 'x', 0.017453292f * work->angX);
-        PSMTXRotRad(mz, 'z', 0.017453292f * work->angY);
+        PSMTXRotRad(mx, 'x', MTXDegToRad(work->angX));
+        PSMTXRotRad(mz, 'z', MTXDegToRad(work->angY));
         PSMTXConcat(mx, mz, work->emit.mtx);
     }
     return effect;
 }
 
-/** Per frame: emits new particles, moves and ages the live ones and deletes the effect when none remain. */
+/** Per frame: emits new particles, moves and ages the live ones and deletes the effect when its life runs out. */
 static void effParticleMain(EffectEntry* effect) {
     ParticleWork* work = effect->userdata;
     Vec zero = {0.0f, 0.0f, 0.0f};
     Vec pos;
     Vec t;
-    ParticleItem* p;
-    ParticleItem* prev;
-    ParticleWork* w;
-    u32 idx;
 
     t = zero;
     t.x = work->pos.x;
     t.y = work->pos.y;
     t.z = work->pos.z;
     pos = t;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 16;
     }
     if (work->life < 1000) {
@@ -282,29 +334,13 @@ static void effParticleMain(EffectEntry* effect) {
     }
     work->frame++;
     EmitterEmit(effect, &work->emit);
-    w = effect->userdata;
-    prev = &w->items[w->count];
-    idx = prev->next;
-    while (idx != w->count + 1) {
-        p = &w->items[idx];
-        p->life--;
-        if (p->life < 0) {
-            prev->next = p->next;
-            p->next = w->items[w->count + 1].next;
-            w->items[w->count + 1].next = idx;
-            w->active--;
-        } else {
-            PSVECAdd(&p->pos, &p->vel, &p->pos);
-            p->vel.y += -0.03f;
-            prev = p;
-        }
-        idx = prev->next;
-    }
-    dispEntry(CAMERA_3D, dispCalcZ(&pos), 2, (DispCallback)effParticleDisp, effect);
+    ParticleUpdate(effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_XLU, effParticleDisp, effect);
 }
 
 /** Draws every live particle as a camera-facing textured quad (effect texture 0x61). */
-static void effParticleDisp(CameraId cameraId, EffectEntry* effect) {
+static void effParticleDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     ParticleWork* work = effect->userdata;
     CameraEntry* cam = camGetPtr(cameraId);
     s32 alpha = work->alpha;
@@ -314,7 +350,6 @@ static void effParticleDisp(CameraId cameraId, EffectEntry* effect) {
     u32 idx;
     ParticleItem* p;
     GXColor col;
-    f32 d2r;
 
     effGetTexObj(0x61, &texObj);
     GXLoadTexObj(&texObj, GX_TEXMAP0);
@@ -339,21 +374,23 @@ static void effParticleDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mX, mS, mR);
     hx = 4.0f;
     hy = 8.0f;
-    d2r = 0.017453292f;
     for (idx = work->items[work->count].next; idx != work->count + 1; idx = p->next) {
         p = &work->items[idx];
+
+        // BUG: life is Gaussian (mean 125, deviation 25) with no upper clamp, so a life of 256 or more reads past the
+        // 32 colours (needs about 5 deviations).
         col = hibana_col[p->life >> 3];
         col.a = alpha * col.a / 255;
         GXSetChanMatColor(GX_COLOR0A0, col);
         PSMTXTrans(mX, p->pos.x, p->pos.y, p->pos.z);
         PSMTXConcat(mR, mX, mX);
         PSMTXConcat(cam->view, mX, mX);
-        PSMTXRotRad(mT, 'y', d2r * -camGetPtr(cameraId)->viewYaw);
+        PSMTXRotRad(mT, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
         PSMTXConcat(mX, mT, mX);
-        PSMTXRotRad(mT, 'x', d2r * (f32)((gp->retraceCount + idx) % 360 * 10));
+        PSMTXRotRad(mT, 'x', 0.017453292f * (f32)((gp->retraceCount + idx) % 360 * 10));
         PSMTXConcat(mX, mT, mX);
-        GXLoadPosMtxImm(mX, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(mX, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         ex = 2.0f;
         ox = -hx / 2.0f;
         oy = -hy / 2.0f;

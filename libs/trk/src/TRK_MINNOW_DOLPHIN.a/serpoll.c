@@ -1,3 +1,5 @@
+#include "trk.h"
+
 typedef int DSError;
 
 typedef struct TRKBuffer TRKBuffer;
@@ -35,11 +37,6 @@ DSError TRKPostEvent(TRKEvent* event);
 static TRKFramingState gTRKFramingState;
 void* gTRKInputPendingPtr;
 
-/**
- * If the host link has data, grabs a free buffer,
- * reads a 0x40-byte packet header and then the rest of the packet (the header's size field gives the total) into
- * it. Returns the buffer index, or -1 if nothing arrived or the read failed.
- */
 int TRKTestForPacket(void) {
     int bytes;
     int id;
@@ -51,18 +48,20 @@ int TRKTestForPacket(void) {
     if (TRKPollUART() <= 0)
         return -1;
 
+    // BUG: the result is not tested: with no free buffer b is NULL and is used anyway
     id = TRKGetFreeBuffer(&bufIdx, &b);
     MWTRACE(4, "TestForPacket : FreeBuffer is  %ld\n", id);
     TRKSetBufferPosition(b, 0);
 
-    if (TRKReadUARTN(&hdr, 0x40) == 0) {
-        TRKAppendBuffer_ui8(b, (unsigned char*)&hdr, 0x40);
+    if (TRKReadUARTN(&hdr, sizeof(hdr)) == 0) {
+        TRKAppendBuffer_ui8(b, (unsigned char*)&hdr, sizeof(hdr));
         id = bufIdx;
 
-        if ((bytes = hdr.size - 0x40) > 0) {
+        if ((bytes = hdr.size - sizeof(hdr)) > 0) {
             MWTRACE(1, "Reading payload %ld bytes\n", bytes);
 
-            if (TRKReadUARTN(payload, hdr.size - 0x40) == 0) {
+            if (TRKReadUARTN(payload, hdr.size - sizeof(hdr)) == 0) {
+                // BUG: appends hdr.size bytes, but only hdr.size - sizeof(hdr) payload bytes were read
                 TRKAppendBuffer_ui8(b, payload, hdr.size);
             } else {
                 MWTRACE(8, "TestForPacket : Invalid size of packet hdr.size\n");
@@ -82,7 +81,6 @@ int TRKTestForPacket(void) {
 
 void TRKProcessInput(int bufferIdx);
 
-/** Polls for a packet and, if one arrived, hands its buffer on to TRKProcessInput. */
 void TRKGetInput(void) {
     int id;
 
@@ -94,17 +92,15 @@ void TRKGetInput(void) {
     }
 }
 
-/** Posts a message event (type 2) for the received buffer so the main loop dispatches it. */
 void TRKProcessInput(int bufferIdx) {
     TRKEvent event;
 
-    TRKConstructEvent(&event, 2);
+    TRKConstructEvent(&event, TRK_EVENT_REQUEST);
     gTRKFramingState.msgBufID = -1;
     event.msgBufID = bufferIdx;
     TRKPostEvent(&event);
 }
 
-/** Resets the packet framing state and prints the sizes of the protocol structures; returns 0. */
 DSError TRKInitializeSerialHandler(void) {
     gTRKFramingState.msgBufID = -1;
     gTRKFramingState.receiveState = 0;
@@ -120,7 +116,6 @@ DSError TRKInitializeSerialHandler(void) {
     return 0;
 }
 
-/** Serial handler shutdown; nothing to do, returns 0. */
 DSError TRKTerminateSerialHandler(void) {
     return 0;
 }

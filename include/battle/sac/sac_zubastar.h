@@ -1,10 +1,11 @@
 // Declares the Supernova (sac_zubastar) special move event.
+
+#include "battle/battle_unit.h"
+#include "battle/battle_database_common.h"
 #pragma once
 
-#include <dolphin/types.h>
-#include "battle/battle_database_common.h"
-#include "battle/battle_unit.h"
+#include "dolphin/types.h"
 #include "evt/evt_word.h"
 
 extern EvtWord marioAttackEvent_ZubaStar[];
-s32 weaponGetPower_ZubaStar(BattleUnit* attacker, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part);
+u32 weaponGetPower_ZubaStar(BattleUnit* a, BattleWeapon* weapon, BattleUnit* target, BattleUnitPart* part);

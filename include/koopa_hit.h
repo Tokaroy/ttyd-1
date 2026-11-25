@@ -1,25 +1,42 @@
 // koopa_hit.c: Bowser's collision in the side-scrolling interludes: ground, head, wall, enemy and flame checks.
+
 #pragma once
 
-#include "driver/hitdrv.h"
 #include "version.h"
+#include "driver/hitdrv.h"
 
 HitEntry* kpaChkHitobjRide(void);
 long kpaClearHitobjRide(void);
+
+// kpaEnemyHitChk results
+typedef enum KpaEnemyHit {
+    KPA_ENEMY_HIT_NONE = 0,
+    KPA_ENEMY_HIT_STOMP = 1,  // Bowser lands on it
+    KPA_ENEMY_HIT_FIRE = 2,   // in Bowser's fire
+    KPA_ENEMY_HIT_STAR = 3,   // touched while Bowser is invincible
+    KPA_ENEMY_HIT_BOWSER = 4, // it hurts Bowser
+} KpaEnemyHit;
+
 #if VERSION <= VERSION_DEMO_JP
 HitEntry* kpaSearchWallFront(Vec* pos, f32* h, f32 dx, f32 dz);
 #endif
 
 s32 kpaEnemyHitChk(f32 x, f32 y, f32 z, f32 h, f32 w);
-HitEntry* kpaGetHitobjHead(s32 i);
-HitEntry* kpaGetHitobjRide(s32 i);
-HitEntry* kpaGetHitobj(void);
+HitEntry* kpaFlameHitCheck(f32 x, f32 y, f32 z, f32 r);
 HitEntry* kpaGetHitFlame(void);
+HitEntry* kpaGetHitobj(void);
+HitEntry* kpaGetHitobjHead(s32 i);
+void kpaSetHitobjHead(s32 i, HitEntry* hit);
+HitEntry* kpaGetHitobjHead2(void);
+HitEntry* kpaGetHitobjRide(s32 i);
+void kpaSetHitobjRide(s32 i, HitEntry* hit);
+void kpaSetHitofsRide(s32 i, f32 ofs);
+f32 kpaGetHitofsRide(s32 i);
 HitEntry* kpaHitCheck(void);
 HitEntry* kpaSearchFrontUnder(void);
-
-HitEntry* kpaFlameHitCheck(f32 x, f32 y, f32 z, f32 r);
-HitEntry* kpaGetHitobjHead2(void);
-// Head (ceiling) check for Bowser; on a hit it sets pos->y and *h.
-HitEntry* kpaSearchHead(Vec* pos, f32* h, f32 hgt);
-HitEntry* kpaSearchGround(f32* outY, f32* outDepth, f32* outAng, f32 range);
+HitEntry* kpaSearchGround(f32 range, f32* outY, f32* outDepth, f32* outAng);
+s32* kpaGetHeadchkofs(s32 level);
+HitEntry* kpaSearchHead(f32 hgt, Vec* pos, f32* outB);
+void kpaClearHitobjHead(void);
+void kpaSetHitofsHead(s32 i, f32 ofs);
+f32 kpaGetHitofsHead(s32 i);

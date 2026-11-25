@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: butterfly that flutters around a home point.
+
 #include "eff/n64/eff_butterfly_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -9,6 +10,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include <math.h>
 
@@ -31,10 +33,10 @@ typedef struct EffButterflyN64Work {
 static s8 y_data[30] = {-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13, -14, -15, -16, -17, -18, -19, -17, -15, -13, -11, -9, -7, -5, -3, -1, 0, 0};
 
 static void effButterflyMain(EffectEntry* effect);
-static void effButterflyDisp(CameraId cameraId, EffectEntry* effect);
+static void effButterflyDisp(CameraId cameraId, void* param);
 
 /** Butterfly wing poses: one six-vertex set per bob step, with the wing tips rising set by set so the wings flap. */
-effN64Vtx but_02_v[] = {
+static effN64Vtx but_02_v[] = {
     {0, 0, 250, 0, 2048, 255, 255, 255, 255},
     {318, 31, 250, 1024, 2048, 255, 255, 255, 255},
     {318, 31, -254, 1024, 0, 255, 255, 255, 255},
@@ -214,7 +216,8 @@ effN64Vtx but_02_v[] = {
     {318, 27, -254, 1024, 0, 255, 255, 255, 255},
     {0, 0, -254, 0, 0, 255, 255, 255, 255},
     {-318, 27, 250, 1024, 2048, 255, 255, 255, 255},
-    {-318, 27, -254, 1024, 0, 255, 255, 255, 255},};
+    {-318, 27, -254, 1024, 0, 255, 255, 255, 255},
+};
 
 /**
  * Spawns a butterfly that wanders within 50 units horizontally and 30 vertically of (x, y, z);
@@ -231,7 +234,7 @@ EffectEntry* effButterflyN64Entry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffButterflyN64Work));
     effect->userdata = work;
     effect->callback = effButterflyMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->lifetime = 1000;
     work->alpha = 255;
@@ -267,8 +270,8 @@ static void effButterflyMain(EffectEntry* effect) {
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 900;
     }
     if (work->lifetime < 1000) {
@@ -321,15 +324,16 @@ static void effButterflyMain(EffectEntry* effect) {
     work->position.x += work->velocity.x;
     work->position.y += work->velocity.y;
     work->position.z += work->velocity.z;
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 1, (DispCallback)effButterflyDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_ALPHA_TEST, effButterflyDisp, effect);
 }
 
 /**
- * Draws the butterfly facing its heading, bobbing with y_data.
- * bobIdx also selects the six-vertex set in but_02_v;
- * the wing tips rise from set to set (y 31, 42, 58, 79 ...), so the wings flap.
+ * Draws the butterfly facing its heading, bobbing with 0.3 times y_data.
+ * bobIdx also selects the six-vertex set in but_02_v; it advances by 3 per frame, so every third set is shown
+ * (wing-tip y 31, 79, 160, 240 ...) and the wings flap.
  */
-static void effButterflyDisp(CameraId cameraId, EffectEntry* effect) {
+static void effButterflyDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffButterflyN64Work* work;
     GXTexObj texObj;

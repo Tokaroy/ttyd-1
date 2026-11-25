@@ -1,27 +1,37 @@
 // dou.rel (洞窟, Pirate's Grotto): _prolog registers each map's init script (dou_00 to dou_13) and the area's battle tables.
 // Also the shared bobbing-platform (puka) events.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_sub.h"
 
 #include "data/mapdata.h"
 #include "manager/evtmgr_cmd.h"
 #include "mario/mario.h"
-#include "evt/evt_sub.h"
 #include "system.h"
 #include "dou.h"
-#include "rel_module.h"
 
 static USER_FUNC(dou_mario_pos_osreport_func);
 
-f32 dou_normal_puka_data[16];
-extern EvtWord dou_puka_event_sub[];
-extern EvtWord dou_mario_pos_osreport[];
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
+
+static f32 dou_normal_puka_data[16];
+EvtWord dou_normal_puka[19];
+static EvtWord dou_puka_event_sub[54];
+EvtWord dou_puka_event[40];
+EvtWord dou_mario_pos_osreport[4];
 
 /**
  * Up-and-down offsets, in 16 steps, that make a Pirate's Grotto platform bob on the water; one step is
  * applied every 130 ms.
  */
-f32 dou_normal_puka_data[] = {
+static f32 dou_normal_puka_data[] = {
     -0.0f, -0.5f, -1.0f, -1.5f, -2.0f, -2.2f, -2.5f, -2.7f,
     -2.7f, -2.7f, -2.5f, -2.2f, -2.0f, -1.5f, -1.0f, -0.5f,
 };
@@ -47,9 +57,9 @@ EVT_END()
  * One dip of a floating platform: sinks the offset in LW(6) to LW(2) over 300 ms, holds for LW(3) ms,
  * then rises back to 0 over 300 ms. The debug messages are "sink" and "float" in Japanese.
  */
-EVT_BEGIN(dou_puka_event_sub)
+static EVT_BEGIN(dou_puka_event_sub)
     DEBUG_PUT_MSG(STRING("しずむ"))
-    CALL(evt_sub_intpl_msec_init, 4, 0, LW(2), 300)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, 0, LW(2), 300)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         SET_FLOAT_INDEXED(LW(6), LW(0))
@@ -60,7 +70,7 @@ EVT_BEGIN(dou_puka_event_sub)
     END_LOOP
     WAIT_MS(LW(3))
     DEBUG_PUT_MSG(STRING("うく"))
-    CALL(evt_sub_intpl_msec_init, 1, LW(2), 0, 300)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, LW(2), 0, 300)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         SET_FLOAT_INDEXED(LW(6), LW(0))
@@ -124,13 +134,13 @@ EVT_BEGIN(dou_puka_event)
     RETURN
 EVT_END()
 
-/** Debug script, not used by any map: calls dou_mario_pos_osreport_func. */
+/** Calls dou_mario_pos_osreport_func; no script or table in this tree runs it. */
 EVT_BEGIN(dou_mario_pos_osreport)
     CALL(dou_mario_pos_osreport_func)
     RETURN
 EVT_END()
 
-/** REL module epilog, run when dou.rel is unloaded: runs the static destructors. */
+/** REL module epilog: runs the static destructors (_dtors) when dou.rel is unloaded. */
 void _epilog(void) {
     voidfunctionptr* dtor;
 
@@ -138,27 +148,32 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /**
  * Module unresolved-symbol stub: if a relocation could not be resolved the REL linker points it here;
  * it does nothing.
  */
 void _unresolved(void) {
 }
+
 /**
  * Script helper: stores the bobbing offset for step LW(0) (taken modulo 16) from dou_normal_puka_data into
  * args[0] as a float.
  */
 USER_FUNC(evt_dou_normal_puka) {
+    // LW(0) is the sample counter; its low four bits wrap the 16-entry bobbing curve.
     evtSetFloat(event, event->args[0], dou_normal_puka_data[event->lwData[0] & 0xF]);
     return EVT_RETURN_DONE;
 }
+
 /**
  * Debug script function named for printing Mario's position with OSReport: in this build it only looks up
  * Mario and reads the button trigger, prints nothing and blocks forever.
  * Only the unused dou_mario_pos_osreport calls it.
  */
 static USER_FUNC(dou_mario_pos_osreport_func) {
-    MarioWork* mario = marioGetPtr();
+    // This diagnostic helper polls input but remains blocked; it does not finish the event.
+    marioGetPtr();
 
     keyGetButtonTrg(0);
     return EVT_RETURN_BLOCK;

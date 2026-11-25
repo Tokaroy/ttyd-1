@@ -1,90 +1,13 @@
 // Declares the damage and counterattack work structures and the damage functions.
+
 #pragma once
 
 #include <dolphin/types.h>
 
+struct BattleWork;
 struct BattleUnit;
-struct BattleUnitPart;
+struct BattleWorkUnitPart;
 struct BattleWeapon;
-
-// Damage codes. BattleCheckDamage takes DAMAGE_FLAG_* bits from the attack script and builds the code it passes to
-// BattleDamageDirect and BattleRunHitEvent; the target keeps it in BattleUnit.damageCode, which scripts read with
-// btlevtcmd_GetDamageCode (the low byte, DAMAGE_HIT_*) and btlevtcmd_CheckDamageCode (any bits).
-typedef enum BattleDamageCode {
-    DAMAGE_HIT_STATUS_ONLY = 0x16, // no damage, but a status took hold
-    DAMAGE_HIT_NORMAL = 0x17,
-    DAMAGE_HIT_FIRE = 0x18,
-    DAMAGE_HIT_EXPLOSION = 0x19,
-    DAMAGE_HIT_ICE = 0x1A,
-    DAMAGE_HIT_ELECTRIC = 0x1B,
-    DAMAGE_HIT_FRIGHT = 0x1C,     // Fright landed
-    DAMAGE_HIT_GALE_FORCE = 0x1D, // Gale Force landed
-    DAMAGE_HIT_NONE = 0x1E,       // no damage and no status
-    DAMAGE_HIT_SUPERGUARDED = 0x2A,
-    DAMAGE_HIT_COUNTER_TOP_SPIKY = 0x2B, // 0x2B-0x36: the attacker is hurt by the target's counter (BattleCheckCounter)
-    DAMAGE_HIT_COUNTER_PREEMPTIVE_SPIKY = 0x2C,
-    DAMAGE_HIT_COUNTER_FRONT_SPIKY = 0x2D,
-    DAMAGE_HIT_COUNTER_FIERY = 0x2E,
-    DAMAGE_HIT_COUNTER_ICY = 0x2F,
-    DAMAGE_HIT_COUNTER_ELECTRIC = 0x30,
-    DAMAGE_HIT_COUNTER_EXPLOSIVE = 0x31,
-    DAMAGE_HIT_COUNTER_VOLATILE_EXPLOSIVE = 0x32,
-    DAMAGE_HIT_COUNTER_POISON = 0x33,
-    DAMAGE_HIT_COUNTER_ELECTRIFIED = 0x34, // the target is electrified (status or part)
-    DAMAGE_HIT_COUNTER_PAYBACK = 0x35,     // Payback status or the Return Postage badge
-    DAMAGE_HIT_COUNTER_HOLD_FAST = 0x36,
-    DAMAGE_HIT_SUPERGUARD_COUNTER = 0x37, // the attacker hit back by a Superguard (also used by a few items)
-    DAMAGE_HIT_MASK = 0xFF,
-
-    DAMAGE_FLAG_LAST_HIT = 0x100,        // the last (or only) hit of the move: it can knock out and inflict status
-    DAMAGE_FLAG_KO = 0x200,              // the hit took the target to 0 HP
-    DAMAGE_FLAG_DEFEATED = 0x400,        // ... and the target is out (a reviving unit only from fire or explosions)
-    DAMAGE_FLAG_LIFE_SHROOM = 0x800,     // ... and a Life Shroom will revive it
-    DAMAGE_FLAG_GUARDING = 0x1000,       // the target used the Defend command
-    DAMAGE_FLAG_HEAL = 0x2000,           // the target absorbs the hit as healing (defense attribute 3)
-    DAMAGE_FLAG_BACKFIRE = 0x4000,       // btldefaultevt_Damage then runs _backfire; nothing in the damage code sets it
-    DAMAGE_FLAG_SHATTER = 0x8000,        // the frozen target shatters (never happens: the chance is 0)
-    DAMAGE_FLAG_AC_SUCCESS = 0x20000,    // the attacker's action command succeeded
-    DAMAGE_FLAG_GUARDED = 0x40000,       // the target guarded (A at the right time)
-    DAMAGE_FLAG_SUPERGUARDED = 0x80000,  // the target superguarded (B at the right time)
-    DAMAGE_FLAG_ALWAYS_HIT = 0x100000,   // no luck badge, Dodgy or accuracy roll (BattlePreCheckDamage)
-    DAMAGE_FLAG_FLIPPED = 0x200000,      // a shelled or bomb-flippable part was flipped
-    DAMAGE_FLAG_GROUNDED = 0x400000,     // a winged part was knocked down
-    DAMAGE_FLAG_ATTACK_FX_R = 0x1000000, // 0x1000000-0x10000000: the hit sound of the chosen Attack FX badge
-    DAMAGE_FLAG_ATTACK_FX_Y = 0x2000000, // (the demo plays B, G and Y for these three)
-    DAMAGE_FLAG_ATTACK_FX_B = 0x4000000,
-    DAMAGE_FLAG_ATTACK_FX_G = 0x8000000,
-    DAMAGE_FLAG_ATTACK_FX_P = 0x10000000,
-    DAMAGE_FLAG_NO_STATUS = 0x20000000,      // the weapon's statuses are not applied
-    DAMAGE_FLAG_STATUS_ANY_HIT = 0x40000000, // the statuses are applied on every hit, not only the last
-    DAMAGE_FLAG_PIERCE_IMMUNE = 0x80000000,  // hurts parts whose defense attribute is 4 (immune to other hits)
-} BattleDamageCode;
-
-// BattleSetStatusDamage result bits.
-typedef enum BattleStatusResult {
-    STATUS_RESULT_AILMENT = 0x1, // a status with turns that counts as a hit (DAMAGE_HIT_NORMAL)
-    STATUS_RESULT_OTHER = 0x2,   // a buff or a status without turns (DAMAGE_HIT_STATUS_ONLY)
-    STATUS_RESULT_FRIGHT = 0x4,
-    STATUS_RESULT_GALE_FORCE = 0x8,
-    STATUS_RESULT_INSTANT_KILL = 0x10,
-    STATUS_RESULT_SLEEP = 0x20, // the target fell asleep: the hit does not wake it
-} BattleStatusResult;
-
-// BattleCheckCounter result: what the target's counter attributes do back to the attacker.
-typedef struct CounterWork {
-    s32 noHazard;        // 0x0, 1 until a spike/fire/ice/electric counter hits
-    s32 payback;         // 0x4, poison counter or Payback: half the damage back
-    s32 inflictBurn;     // 0x8
-    s32 inflictPoison;   // 0xC
-    s32 inflictElectric; // 0x10
-    s32 inflictFreeze;   // 0x14
-    s32 holdFast;        // 0x18
-    s32 returnPostage;   // 0x1C
-    s32 type;            // 0x20
-    u32 msg;             // 0x24
-    s32 count;           // 0x28
-    u32 hitEvent;        // 0x2C, hit event run on the target
-} CounterWork;
 
 typedef struct BattleVulnerableStatus {
     u8 sleepRate;       // 0x0
@@ -111,14 +34,139 @@ typedef struct BattleVulnerableStatus {
     u8 instaKillRate;   // 0x15
 } BattleVulnerableStatus;
 
-s32 BattleCheckDamage(struct BattleUnit* unit1, struct BattleUnit* unit2, struct BattleUnitPart* part, struct BattleWeapon* weapon, s32 flags);
+// Low byte of a hit result (the upper bits are flags; 0x16, 0x1C and 0x1D are status-only outcomes)
+typedef enum BattleDamageCode {
+    DAMAGE_CODE_STATUS_ONLY = 0x16, // status effect without normal impact
+    DAMAGE_CODE_NORMAL = 0x17,      // hit by a normal-element weapon
+    DAMAGE_CODE_FIRE = 0x18,
+    DAMAGE_CODE_EXPLOSION = 0x19,
+    DAMAGE_CODE_ICE = 0x1A,
+    DAMAGE_CODE_ELECTRIC = 0x1B,
+    DAMAGE_CODE_FRIGHT = 0x1C,          // Fright outcome
+    DAMAGE_CODE_GALE_FORCE = 0x1D,      // Gale Force (blown away) outcome
+    DAMAGE_CODE_NO_DAMAGE = 0x1E,       // the hit did no damage (default result)
+    DAMAGE_CODE_AVOID_TOP_SPIKY = 0x1F, // contact hazards that stopped the attack (BattleCheckCounter)
+    DAMAGE_CODE_AVOID_PREEMPTIVE_SPIKY = 0x20,
+    DAMAGE_CODE_AVOID_FRONT_SPIKY = 0x21,
+    DAMAGE_CODE_AVOID_FIERY = 0x22,
+    DAMAGE_CODE_AVOID_ICY = 0x23,
+    DAMAGE_CODE_AVOID_ELECTRIC = 0x24,
+    DAMAGE_CODE_AVOID_POISON = 0x25, // default route exists; no producer in BattleCheckCounter
+    DAMAGE_CODE_LUCKY = 0x26,        // evaded by Lucky (badges)
+    DAMAGE_CODE_DODGY = 0x27,        // evaded by Dodgy
+    DAMAGE_CODE_MISS = 0x28,
+    DAMAGE_CODE_PROTECTED = 0x29, // target whose attack a bodyguard took
+    DAMAGE_CODE_SUPERGUARDED = 0x2A,
+    DAMAGE_CODE_COUNTER_TOP_SPIKY = 0x2B, // BattleCheckCounter kinds; CounterWork.result = DAMAGE_RESULT_FINAL_HIT | the code (the attacker's damage result)
+    DAMAGE_CODE_COUNTER_PREEMPTIVE_SPIKY = 0x2C,
+    DAMAGE_CODE_COUNTER_FRONT_SPIKY = 0x2D,
+    DAMAGE_CODE_COUNTER_FIERY = 0x2E,
+    DAMAGE_CODE_COUNTER_ICY = 0x2F,
+    DAMAGE_CODE_COUNTER_ELECTRIC = 0x30, // electric part
+    DAMAGE_CODE_COUNTER_EXPLOSIVE = 0x31,
+    DAMAGE_CODE_COUNTER_VOLATILE_EXPLOSIVE = 0x32,
+    DAMAGE_CODE_COUNTER_POISON = 0x33,
+    DAMAGE_CODE_COUNTER_ELECTRIFIED = 0x34, // target under STATUS_ELECTRIC
+    DAMAGE_CODE_COUNTER_PAYBACK = 0x35,     // Payback status or Return Postage
+    DAMAGE_CODE_COUNTER_HOLD_FAST = 0x36,
+    DAMAGE_CODE_SUPERGUARD_COUNTER = 0x37, // superguard damage back to the attacker
+    DAMAGE_CODE_BODYGUARD_MOVE = 0x38,     // the guarding unit moves in
+    DAMAGE_CODE_FIRST_ATTACK_POS = 0x39,   // first-strike positioning
+} BattleDamageCode;
 
-struct BattleWork;
+// Upper bits of BattleUnit.damageCode next to the low-byte BattleDamageCode (BattleCheckDamage's result). The
+// damage check functions take the same bits as their flags argument and start the result from them.
+typedef enum BattleDamageResultFlags {
+    DAMAGE_RESULT_FINAL_HIT = 0x100,     // last hit of the attack (status, gauge and death are resolved)
+    DAMAGE_RESULT_ZERO_HP = 0x200,       // HP is zero after the final hit
+    DAMAGE_RESULT_DEATH = 0x400,         // the unit dies (undead only from fire/explosive hits)
+    DAMAGE_RESULT_REVIVAL = 0x800,       // a Life Shroom can revive the unit
+    DAMAGE_RESULT_GUARD_RETURN = 0x1000, // the target is a bodyguard: it goes back to its place afterwards
+                                         // (btldefaultevt_guard_return)
+    DAMAGE_RESULT_ABSORBED = 0x2000,     // DEFENSE_ATTR_ABSORB: the hit heals; no damage display, Pity Flower or FP damage
+    DAMAGE_RESULT_BACKFIRE = 0x4000,     // the default damage event runs _backfire
+    DAMAGE_RESULT_FREEZE_CRUSH = 0x8000, // SPECIAL_FREEZE_CRUSH broke the target's freeze (never set: its irand(100) < 0 test fails)
+    DAMAGE_RESULT_AC_SUCCESS = 0x20000,  // the attack's action command succeeded
+    DAMAGE_RESULT_GUARD = 0x40000,
+    DAMAGE_RESULT_SUPERGUARD = 0x80000,
+    DAMAGE_RESULT_NO_EVADE = 0x100000,     // BattlePreCheckDamage reports a hit without the evasion checks
+    DAMAGE_RESULT_FLIPPED = 0x200000,      // a shelled or bomb-flippable part was flipped (dmg_turn_event)
+    DAMAGE_RESULT_GROUNDED = 0x400000,     // a winged part was grounded on the final hit (dmg_fall_event)
+    DAMAGE_RESULT_ATTACK_FX_R = 0x1000000, // an Attack FX badge sound played: R (Hooktail's damage event reacts to it)
+    DAMAGE_RESULT_ATTACK_FX_Y = 0x2000000,
+    DAMAGE_RESULT_ATTACK_FX_B = 0x4000000,
+    DAMAGE_RESULT_ATTACK_FX_G = 0x8000000,
+    DAMAGE_RESULT_ATTACK_FX_P = 0x10000000,
+    DAMAGE_RESULT_NO_STATUS = 0x20000000,        // BattleSetStatusDamageFromWeapon inflicts nothing
+    DAMAGE_RESULT_STATUS_EVERY_HIT = 0x40000000, // status is tried on this hit, not only on the final one
+    DAMAGE_RESULT_GULP = (s32)0x80000000,        // Yoshi's Gulp: passes DEFENSE_ATTR_IMMUNE_EXCEPT_GULP
+} BattleDamageResultFlags;
 
-void BattleInitCounterPreCheckWork(CounterWork* work);
-s32 BattleCheckCounter(CounterWork* work, struct BattleUnit* attacker, struct BattleUnit* target, struct BattleUnitPart* part, struct BattleWeapon* weapon, u32* flags);
-s32 BattlePreCheckDamage(struct BattleUnit* attacker, struct BattleUnit* target, struct BattleUnitPart* part, struct BattleWeapon* weapon, u32 flags);
+// Counter result filled by BattleCheckCounter (BattleInitCounterPreCheckWork clears it and sets attackHits)
+typedef struct CounterWork {
+    s32 attackHits;     // 0x0, cleared when a contact hazard (spiky, fiery, icy, electric part) stops the attack
+    s32 payback;        // 0x4, Payback status or poison counter: half the damage goes back
+    s32 burnStatus;     // 0x8, the counter also burns the attacker
+    s32 poisonStatus;   // 0xC, ... poisons the attacker
+    s32 electricStatus; // 0x10, ... electrifies the attacker
+    s32 freezeStatus;   // 0x14, ... freezes the attacker
+    s32 holdFast;       // 0x18, Hold Fast status: half the damage goes back, with an explosion
+    s32 returnPostage;  // 0x1C, Return Postage badge: half the damage goes back
+    s32 type;           // 0x20
+    u32 result;         // 0x24
+    s32 count;          // 0x28, damage dealt back to the attacker
+    u32 hitEvent;       // 0x2C, hit event run on the target (BattleRunHitEvent)
+} CounterWork;
+
+s32 BattleCheckDamage(struct BattleUnit* unit1, struct BattleUnit* unit2, struct BattleWorkUnitPart* part, struct BattleWeapon* weapon, u32 flags);
 void BattleAttackDeclare(s32* unitIdx, s32* partIdx);
+void BattleInitCounterPreCheckWork(CounterWork* work);
+s32 BattleCheckCounter(CounterWork* work, struct BattleUnit* attacker, struct BattleUnit* target,
+                       struct BattleWorkUnitPart* part, struct BattleWeapon* weapon, u32* flags);
+
+// BattleSetStatusDamage results (BattleSetStatusDamageFromWeapon ORs them for every status it tries)
+typedef enum StatusDamageResult {
+    STATUS_RESULT_TIMED = (1 << 0),      // 0x1, a timed status landed: a no-damage hit counts as normal
+    STATUS_RESULT_UNTIMED = (1 << 1),    // 0x2, a buff or a status without duration (DAMAGE_CODE_STATUS_ONLY)
+    STATUS_RESULT_FRIGHT = (1 << 2),     // 0x4, -> DAMAGE_CODE_FRIGHT
+    STATUS_RESULT_GALE_FORCE = (1 << 3), // 0x8, -> DAMAGE_CODE_GALE_FORCE
+    STATUS_RESULT_DEAD = (1 << 4),       // 0x10, STATUS_DEAD was inflicted: on the final hit the target dies
+    STATUS_RESULT_SLEEP = (1 << 5),      // 0x20, the hit cannot wake the target it just put to sleep (canWake 0)
+} StatusDamageResult;
+
+// What BattlePreCheckDamage, BattleCheckCounter and BattleCheckDamage return (scripts: btlevtcmd_(Command)PreCheckDamage,
+// PreCheckCounter, CheckDamage); one number range, scripts test the same variable for several.
+typedef enum BattleCheckResult {
+    CHECK_DAMAGE_COUNTERED = -1, // the attacker was countered, or nothing was decided
+    CHECK_COUNTER_NONE = 0,
+    PRECHECK_HIT = 1,
+    PRECHECK_MISS = 2,             // accuracy roll failed, or the part is a clone the weapon cannot touch
+    PRECHECK_LUCKY = 3,            // Pretty Lucky, Lucky Day, Close Call
+    PRECHECK_INTANGIBLE = 4,       // invisible, veiled, or a kIntangiblePart part (JP: attribute bit 0x10)
+    PRECHECK_PREEMPTIVE_SPIKY = 5, // kCounterPreemptiveFrontSpiky stops the attack before contact
+    PRECHECK_DODGY = 6,            // STATUS_DODGY
+    CHECK_COUNTER_PREEMPTIVE_SPIKY = 7,
+    CHECK_COUNTER_TOP_SPIKY = 8,
+    CHECK_COUNTER_FRONT_SPIKY = 9,
+    CHECK_COUNTER_FIERY = 10,
+    CHECK_COUNTER_ICY = 11,
+    CHECK_COUNTER_EXPLOSIVE = 12,
+    CHECK_COUNTER_VOLATILE_EXPLOSIVE = 13,
+    CHECK_COUNTER_ELECTRIFIED = 14,
+    CHECK_COUNTER_POISON = 15,
+    CHECK_COUNTER_PAYBACK = 16,
+    CHECK_COUNTER_HOLD_FAST = 17,
+    CHECK_DAMAGE_HIT = 18,
+    CHECK_DAMAGE_NO_EFFECT = 19,
+    CHECK_DAMAGE_SUPERGUARDED = 21, // Superguarded without a counter
+} BattleCheckResult;
+
 void BattleAttackDeclareAll(struct BattleWork* wp);
-void BattleDamageDirect(s32 unitId, struct BattleUnit* target, struct BattleUnitPart* part, s32 damage, s32 fpDamage, u32 result, u32 pattern, s32 flag);
-s32 BattleSetStatusDamageFromWeapon(struct BattleUnit* attacker, struct BattleUnit* target, struct BattleUnitPart* part, struct BattleWeapon* weapon, u32 flags);
+void BattleDamageDirect(s32 unitId, struct BattleUnit* target, struct BattleWorkUnitPart* part, s32 damage, s32 fpDamage, u32 result, u32 pattern, s32 canWake);
+s32 BattlePreCheckDamage(struct BattleUnit* attacker, struct BattleUnit* target, struct BattleWorkUnitPart* part, struct BattleWeapon* weapon, u32 flags);
+s32 BattleSetStatusDamageFromWeapon(struct BattleUnit* attacker, struct BattleUnit* target, struct BattleWorkUnitPart* part, struct BattleWeapon* weapon, u32 flags);
+
+// Names from LLCOOLT's tree.
+enum {
+    DAMAGE_HIT_MASK = 255,
+};

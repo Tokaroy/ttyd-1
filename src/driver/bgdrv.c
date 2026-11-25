@@ -1,5 +1,6 @@
 // Background driver: loads and draws the backdrop texture behind a map or battle stage (scrolling,
 // translation and colour multiply), one set of state for the field and one for battle.
+
 #include "driver/bgdrv.h"
 #include "driver/arcdrv.h"
 #include "driver/camdrv.h"
@@ -11,9 +12,9 @@
 #include "texPalette.h"
 #include "driver/mapdrv.h"
 #include <string.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
-#define PI 3.14159265358979323846264338327950288419716939937510
 #define TWO_PI 6.2831855f
 
 //.bss
@@ -69,11 +70,11 @@ static inline void bgLoad(BackgroundWork* bgwork, const char* filename) {
         if (tpl) {
             UnpackTexPalette(tpl);
             bgwork->flags |= BG_RENDERING;
-            bgwork->flags &= ~BG_FLAT_COLOR;
+            bgwork->flags &= ~BG_DO_MULTIPLY;
             bgwork->flags &= ~BG_NO_AUTOSCROLL;
             bgwork->color = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
         } else {
-            bgwork->flags |= BG_FLAT_COLOR;
+            bgwork->flags |= BG_DO_MULTIPLY;
             bgwork->multiply = (GXColor){0x00, 0xFF, 0x00, 0xFF};
             bgwork->flags |= BG_RENDERING;
             bgwork->color = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
@@ -132,7 +133,6 @@ void bgAutoScrollOn(void) {
 
 /**
  * Stops the camera's position from shifting the backdrop; only the camera yaw still turns it.
- * No caller in this tree.
  */
 void bgTransOffsetOff(void) {
     bgGetWork()->flags |= BG_NO_TRANSLATION;
@@ -148,7 +148,7 @@ void bgTransOffsetOn(void) {
  * full turn) and position, then queues bgDisp on the background camera.
  */
 void bgMain(void) {
-    f32 sinangle, cosangle, angle, v8, v11;
+    f32 sinangle, cosangle, angle, transX, yawScroll;
     BackgroundWork* bgwork;
     CameraEntry* camera;
     GXTexObj texobj;
@@ -160,20 +160,20 @@ void bgMain(void) {
         angle = (TWO_PI * reviseAngle(-camera->viewYaw)) / 360.0f;
         sinangle = sin(angle);
         cosangle = cos(angle);
-        v8 = 0.0f;
-        if (!(bgwork->flags & BG_FLAT_COLOR)) {
+        transX = 0.0f;
+        if (!(bgwork->flags & BG_DO_MULTIPLY)) {
             TEXGetGXTexObjFromPalette(bgwork->data, &texobj, 0);
             width = gp->fbWidth / GXGetTexObjWidth(&texobj);
         } else {
             width = 0;
         }
         if (!(bgwork->flags & BG_NO_TRANSLATION)) {
-            v8 = (0.001f * ((cosangle * camera->cameraAt.x) - (sinangle * camera->cameraAt.z))) + v8;
+            transX = (0.001f * ((cosangle * camera->cameraAt.x) - (sinangle * camera->cameraAt.z))) + transX;
         }
-        v11 = 4.0f * (camGetPtr(CAMERA_3D)->viewYaw / 360.0f);
-        v8 = ((f32)width * v11) + v8;
-        bgwork->trans_x = v8;
-        dispEntry(CAMERA_BACKGROUND, 0.0f, 3, bgDisp, NULL);
+        yawScroll = 4.0f * (camGetPtr(CAMERA_3D)->viewYaw / 360.0f);
+        transX = ((f32)width * yawScroll) + transX;
+        bgwork->trans_x = transX;
+        dispEntry(CAMERA_BACKGROUND, 0.0f, DISP_MODE_OPAQUE_NO_Z, bgDisp, NULL);
     }
 }
 
@@ -188,7 +188,6 @@ static void bgDisp(CameraId camId, void* param) {
     GXColor blend;
     GXTexObj texobj;
     Mtx trans, scale;
-    f32 sy;
     if (bgwork->flags & BG_RENDERING) {
         GXSetAlphaUpdate(GX_FALSE);
         GXSetCullMode(GX_CULL_BACK);
@@ -202,7 +201,7 @@ static void bgDisp(CameraId camId, void* param) {
         blend.a = blend.a * bgwork->color.a / 255;
         blend.r = blend.r * bgwork->color.r / 255;
         GXSetTevColor(GX_TEVREG0, blend);
-        if (!(bgwork->flags & BG_FLAT_COLOR)) {
+        if (!(bgwork->flags & BG_DO_MULTIPLY)) {
             GXSetNumChans(0);
             GXSetNumTevStages(1);
             GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
@@ -233,8 +232,8 @@ static void bgDisp(CameraId camId, void* param) {
             GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_RASC, GX_CC_C0, GX_CC_ZERO);
             GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_RASA, GX_CA_A0, GX_CA_ZERO);
         }
-        GXLoadPosMtxImm(camera->view, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(camera->view, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXClearVtxDesc();
         GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
         GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);

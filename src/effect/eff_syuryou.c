@@ -1,19 +1,21 @@
 // Grodus effects (syuryou, 首領: the leader): type 0 plays his staff animation EFF_batug_tue once, type 1 his barrier
 // MOBJ_EFF_baria; both fade out when removed.
+
 #include "eff/eff_syuryou.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
-
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
 static void effSyuryouDisp(CameraId cameraId, EffectEntry* effect);
 static void effSyuryouMain(EffectEntry* effect);
 
 /**
  * Spawns Grodus's effect at (x, y, z): type 0 his staff animation, type 1 his barrier.
- * `duration` is in frames (0 or less: until soft deleted);
- * the aji (X-Naut Fortress) fights spawn the barrier with a 1000-frame duration.
+ * `duration` is in frames; 0 or less becomes 1000, and the timer only counts down below 1000,
+ * so 1000 or more keeps it until soft deleted. The barrier callers (Yux units, Grodus, las_28) pass 1000.
  */
 EffectEntry* effSyuryouEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
@@ -25,7 +27,7 @@ EffectEntry* effSyuryouEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffSyuryouWork) * effect->count);
     effect->userdata = work;
     effect->callback = effSyuryouMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -42,10 +44,6 @@ EffectEntry* effSyuryouEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
     return effect;
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma push
-// FAKE: dead assignments optimisation off for effSyuryouMain, effSyuryouDisp: the original register allocation and scheduling need it
-#pragma opt_dead_assignments off
 /**
  * Waits for the animation group to load, starts the pose, then runs the timer:
  * soft delete or timeout fades the alpha over 32 frames;
@@ -54,12 +52,16 @@ EffectEntry* effSyuryouEntry(s32 type, s32 duration, f32 x, f32 y, f32 z) {
 static void effSyuryouMain(EffectEntry* effect) {
     EffSyuryouWork* work = effect->userdata;
     Vec position;
-    BOOL inBattle;
+    s32 inBattle;
     s32 type;
 
     position = (Vec){work->position.x, work->position.y, work->position.z};
     type = work->type;
-    inBattle = gp->inBattle != 0;
+    if (gp->inBattle) {
+        inBattle = 1;
+    } else {
+        inBattle = 0;
+    }
 
     switch (type) {
         case 0:
@@ -67,7 +69,7 @@ static void effSyuryouMain(EffectEntry* effect) {
                 return;
             }
             if (work->poseId == -1) {
-                work->poseId = animPoseEntry("EFF_batug_tue", (u32)inBattle);
+                work->poseId = animPoseEntry("EFF_batug_tue", inBattle);
                 animPoseSetAnim(work->poseId, "A_1", TRUE);
             }
             if (animPoseGetLoopTimes(work->poseId) >= 1.0f) {
@@ -81,7 +83,7 @@ static void effSyuryouMain(EffectEntry* effect) {
                 return;
             }
             if (work->poseId == -1) {
-                work->poseId = animPoseEntry("MOBJ_EFF_baria", (u32)inBattle);
+                work->poseId = animPoseEntry("MOBJ_EFF_baria", inBattle);
                 animPoseSetAnim(work->poseId, "A_1", TRUE);
             }
             if (animPoseGetLoopTimes(work->poseId) >= 1.0f) {
@@ -91,8 +93,8 @@ static void effSyuryouMain(EffectEntry* effect) {
     }
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 32;
     }
     if (work->timer < 1000) {
@@ -108,9 +110,8 @@ static void effSyuryouMain(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effSyuryouDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effSyuryouDisp, effect);
 }
-#pragma pop
 
 /** Draws the animation pose camera-facing, with the fade alpha applied as an event colour. */
 static void effSyuryouDisp(CameraId cameraId, EffectEntry* effect) {
@@ -125,7 +126,7 @@ static void effSyuryouDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 10.0f);

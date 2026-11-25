@@ -16,10 +16,6 @@ static struct Timer Timer;
 // prototypes
 static void DecrementerExceptionHandler(__OSException exception, OSContext* context);
 
-/**
- * Installs the function called when the decrementer timer expires and returns the previous callback.
- * It also stops the timer, so OSStartTimer must be called again.
- */
 OSTimerCallback OSSetTimerCallback(OSTimerCallback callback) {
     OSTimerCallback prevCallback;
 
@@ -35,10 +31,6 @@ OSTimerCallback OSSetTimerCallback(OSTimerCallback callback) {
     return prevCallback;
 }
 
-/**
- * Sets up the decrementer timer to count time ticks; mode 1 reloads and repeats, mode 2 stops after firing once.
- * The first call registers the decrementer exception handler (exception 8).
- */
 void OSInitTimer(u32 time, u32 mode) {
 #if DEBUG
     if (time >= 0x80000000) {
@@ -61,7 +53,6 @@ void OSInitTimer(u32 time, u32 mode) {
     }
 }
 
-/** Loads the saved count into the decrementer register and marks the timer running. */
 void OSStartTimer(void) {
     BOOL enabled;
 
@@ -76,10 +67,6 @@ void OSStartTimer(void) {
     OSRestoreInterrupts(enabled);
 }
 
-/**
- * Stops the timer and saves the remaining decrementer count
- * so a later start continues from there (0 if it already went negative).
- */
 void OSStopTimer(void) {
     BOOL enabled;
 
@@ -100,10 +87,6 @@ void OSStopTimer(void) {
     OSRestoreInterrupts(enabled);
 }
 
-/**
- * C part of the decrementer exception: in repeat mode reloads the start value, in one-shot mode stops the timer,
- * calls the user callback, then resumes the interrupted context.
- */
 static void DecrementerExceptionCallback(__OSException exception, OSContext* context) {
     OSContext exceptionContext;
 
@@ -127,10 +110,6 @@ static void DecrementerExceptionCallback(__OSException exception, OSContext* con
 }
 
 #ifdef __GEKKO__
-/**
- * Assembly entry for the decrementer exception:
- * saves r0-r2, r6-r31 and GQR1-7 into the interrupted context, then branches to DecrementerExceptionCallback.
- */
 static asm void DecrementerExceptionHandler(__OSException exception,
                                             register OSContext* context) {
     nofralloc

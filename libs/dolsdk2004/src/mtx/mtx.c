@@ -1,13 +1,12 @@
 #include <dolphin.h>
 #include <dolphin/mtx.h>
+#include "fake_tgmath.h"
 
-/** The constants 0 and 1, loaded by the paired-single matrix routines. */
 static f32 Unit01[2] = {
     0.0f,
     1.0f
 };
 
-/** Sets a 3x4 matrix to the identity (C reference version). */
 void C_MTXIdentity(Mtx m) {
     ASSERTMSGLINE(189, m, "MtxIdentity():  NULL Mtx 'm' ");
     m[0][0] = 1;
@@ -24,7 +23,6 @@ void C_MTXIdentity(Mtx m) {
     m[2][3] = 0;
 }
 
-/** Sets a 3x4 matrix to the identity (paired-singles version). */
 void PSMTXIdentity(register Mtx m) {
     register f32 c_zero = 0.0f;
     register f32 c_one = 1.0f;
@@ -43,7 +41,6 @@ void PSMTXIdentity(register Mtx m) {
     }
 }
 
-/** Copies a 3x4 matrix (C reference version). */
 void C_MTXCopy(const Mtx src, Mtx dst) {
     ASSERTMSGLINE(250, src, "MTXCopy():  NULL MtxPtr 'src' ");
     ASSERTMSGLINE(251, dst, "MTXCopy():  NULL MtxPtr 'dst' ");
@@ -63,7 +60,6 @@ void C_MTXCopy(const Mtx src, Mtx dst) {
     }
 }
 
-/** Copies a 3x4 matrix (paired-singles version). */
 asm void PSMTXCopy(const register Mtx src, register Mtx dst) {
     psq_l f0, 0(src), 0, 0
     psq_st f0, 0(dst), 0, 0
@@ -79,7 +75,6 @@ asm void PSMTXCopy(const register Mtx src, register Mtx dst) {
     psq_st f5, 40(dst), 0, 0
 }
 
-/** Multiplies two 3x4 matrices, ab = a * b, which concatenates the two transforms (C reference version). */
 void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
     Mtx mTmp;
     MtxPtr m;
@@ -114,7 +109,6 @@ void C_MTXConcat(const Mtx a, const Mtx b, Mtx ab) {
     }
 }
 
-/** Multiplies two 3x4 matrices, ab = a * b (paired-singles version, hand-written assembly). */
 asm void PSMTXConcat(const register Mtx a, const register Mtx b, register Mtx ab) {
     nofralloc
     stwu r1, -64(r1)
@@ -170,10 +164,6 @@ asm void PSMTXConcat(const register Mtx a, const register Mtx b, register Mtx ab
     blr
 }
 
-/**
- * Multiplies the matrix a by each of count matrices (count must be greater than 1) from srcBase,
- * writing a * src[i] to dstBase[i].
- */
 void C_MTXConcatArray(const Mtx a, const Mtx* srcBase, Mtx* dstBase, u32 count) {
     u32 i;
 
@@ -192,7 +182,7 @@ void C_MTXConcatArray(const Mtx a, const Mtx* srcBase, Mtx* dstBase, u32 count) 
 #if DEBUG
 #pragma push
 #pragma optimization_level 1
-/** Debug builds only (not compiled here): upstream's setting, as this function will not compile at level 0. */
+// This function will not compile at optimization level 0
 #endif
 void PSMTXConcatArray(const register Mtx a, const register Mtx* srcBase, register Mtx* dstBase, register u32 count) {
     register f32 va0, va1, va2, va3, va4, va5;
@@ -287,7 +277,6 @@ void PSMTXConcatArray(const register Mtx a, const register Mtx* srcBase, registe
 #pragma pop
 #endif
 
-/** Transposes the 3x3 part of a matrix into a 3x4 destination with a zero translation (C reference version). */
 void C_MTXTranspose(const Mtx src, Mtx xPose) {
     Mtx mTmp;
     MtxPtr m;
@@ -318,7 +307,6 @@ void C_MTXTranspose(const Mtx src, Mtx xPose) {
     }
 }
 
-/** Transposes a matrix (paired-singles version). */
 void PSMTXTranspose(const register Mtx src, register Mtx xPose) {
     register f32 c_zero = 0;
     register f32 row0a;
@@ -355,10 +343,6 @@ void PSMTXTranspose(const register Mtx src, register Mtx xPose) {
     xPose[2][2] = row0b;
 }
 
-/**
- * Inverts a 3x4 affine matrix; returns 0 and leaves the output untouched
- * when the determinant is zero (C reference version).
- */
 u32 C_MTXInverse(const Mtx src, Mtx inv) {
     Mtx mTmp;
     MtxPtr m;
@@ -404,7 +388,6 @@ u32 C_MTXInverse(const Mtx src, Mtx inv) {
     return 1;
 }
 
-/** Inverts a 3x4 affine matrix, returning 0 if singular (paired-singles version). */
 asm u32 PSMTXInverse(const register Mtx src, register Mtx inv) {
     psq_l f0, 0(src), 1, 0
     psq_l f1, 4(src), 0, 0
@@ -470,7 +453,6 @@ skip_return:
     psq_st f7, 44(inv), 1, 0
 }
 
-/** Computes the inverse transpose of a matrix, the matrix GX uses to transform normals (C reference version). */
 u32 C_MTXInvXpose(const Mtx src, Mtx invX) {
     Mtx mTmp;
     MtxPtr m;
@@ -516,61 +498,59 @@ u32 C_MTXInvXpose(const Mtx src, Mtx invX) {
     return 1;
 }
 
-/** Computes the inverse transpose of a matrix for transforming normals (paired-singles version). */
 asm u32 PSMTXInvXpose(const register Mtx src, register Mtx invX) {
-	psq_l f0, 0(src), 1, 0
-	psq_l f1, 4(src), 0, 0
-	psq_l f2, 16(src), 1, 0
-	ps_merge10 f6, f1, f0
-	psq_l f3, 20(src), 0, 0
-	psq_l f4, 32(src), 1, 0
-	ps_merge10 f7, f3, f2
-	psq_l f5, 36(src), 0, 0
-	ps_mul f11, f3, f6
-	ps_merge10 f8, f5, f4
-	ps_mul f13, f5, f7
-	ps_msub f11, f1, f7, f11
-	ps_mul f12, f1, f8
-	ps_msub f13, f3, f8, f13
-	ps_msub f12, f5, f6, f12
-	ps_mul f10, f3, f4
-	ps_mul f9, f0, f5
-	ps_mul f8, f1, f2
-	ps_msub f10, f2, f5, f10
-	ps_msub f9, f1, f4, f9
-	ps_msub f8, f0, f3, f8
-	ps_mul f7, f0, f13
-	ps_sub f1, f1, f1
-	ps_madd f7, f2, f12, f7
-	ps_madd f7, f4, f11, f7
-	ps_cmpo0 cr0, f7, f1
-	bne skip_return
-	li r3, 0
-	blr
+    psq_l f0, 0(src), 1, 0
+    psq_l f1, 4(src), 0, 0
+    psq_l f2, 16(src), 1, 0
+    ps_merge10 f6, f1, f0
+    psq_l f3, 20(src), 0, 0
+    psq_l f4, 32(src), 1, 0
+    ps_merge10 f7, f3, f2
+    psq_l f5, 36(src), 0, 0
+    ps_mul f11, f3, f6
+    ps_merge10 f8, f5, f4
+    ps_mul f13, f5, f7
+    ps_msub f11, f1, f7, f11
+    ps_mul f12, f1, f8
+    ps_msub f13, f3, f8, f13
+    ps_msub f12, f5, f6, f12
+    ps_mul f10, f3, f4
+    ps_mul f9, f0, f5
+    ps_mul f8, f1, f2
+    ps_msub f10, f2, f5, f10
+    ps_msub f9, f1, f4, f9
+    ps_msub f8, f0, f3, f8
+    ps_mul f7, f0, f13
+    ps_sub f1, f1, f1
+    ps_madd f7, f2, f12, f7
+    ps_madd f7, f4, f11, f7
+    ps_cmpo0 cr0, f7, f1
+    bne skip_return
+    li r3, 0
+    blr
 skip_return:
-	fres f0, f7
-	psq_st f1, 12(invX), 1, 0
-	ps_add f6, f0, f0
-	ps_mul f5, f0, f0
-	psq_st f1, 28(invX), 1, 0
-	ps_nmsub f0, f7, f5, f6
-	psq_st f1, 44(invX), 1, 0
-	ps_muls0 f13, f13, f0
-	ps_muls0 f12, f12, f0
-	ps_muls0 f11, f11, f0
+    fres f0, f7
+    psq_st f1, 12(invX), 1, 0
+    ps_add f6, f0, f0
+    ps_mul f5, f0, f0
+    psq_st f1, 28(invX), 1, 0
+    ps_nmsub f0, f7, f5, f6
+    psq_st f1, 44(invX), 1, 0
+    ps_muls0 f13, f13, f0
+    ps_muls0 f12, f12, f0
+    ps_muls0 f11, f11, f0
     psq_st f13, 0(invX), 0, 0
-	psq_st f12, 16(invX), 0, 0
-	ps_muls0 f10, f10, f0
+    psq_st f12, 16(invX), 0, 0
+    ps_muls0 f10, f10, f0
     ps_muls0 f9, f9, f0
-	psq_st f11, 32(invX), 0, 0
-	psq_st f10, 8(invX), 1, 0
-	ps_muls0 f8, f8, f0
-	li r3, 1
+    psq_st f11, 32(invX), 0, 0
+    psq_st f10, 8(invX), 1, 0
+    ps_muls0 f8, f8, f0
+    li r3, 1
     psq_st f9, 24(invX), 1, 0
-	psq_st f8, 40(invX), 1, 0
+    psq_st f8, 40(invX), 1, 0
 }
 
-/** Builds a rotation matrix about the X, Y or Z axis (given as 'x', 'y' or 'z') from an angle in radians. */
 void C_MTXRotRad(Mtx m, char axis, f32 rad) {
     f32 sinA;
     f32 cosA;
@@ -581,7 +561,6 @@ void C_MTXRotRad(Mtx m, char axis, f32 rad) {
     C_MTXRotTrig(m, axis, sinA, cosA);
 }
 
-/** Builds a single-axis rotation matrix from an angle in radians (paired-singles version). */
 void PSMTXRotRad(Mtx m, char axis, f32 rad) {
     f32 sinA, cosA;
     sinA = sinf(rad);
@@ -589,7 +568,6 @@ void PSMTXRotRad(Mtx m, char axis, f32 rad) {
     PSMTXRotTrig(m, axis, sinA, cosA);
 }
 
-/** Builds a single-axis rotation matrix from a precomputed sine and cosine. */
 void C_MTXRotTrig(Mtx m, char axis, f32 sinA, f32 cosA) {
     ASSERTMSGLINE(1502, m, "MTXRotTrig():  NULL MtxPtr 'm' ");
     switch(axis) {
@@ -644,71 +622,108 @@ void C_MTXRotTrig(Mtx m, char axis, f32 sinA, f32 cosA) {
     }
 }
 
-/** Builds a single-axis rotation matrix from a precomputed sine and cosine (paired-singles version). */
 void PSMTXRotTrig(register Mtx m, register char axis, register f32 sinA, register f32 cosA) {
     register f32 fc0, fc1, nsinA;
     register f32 fw0, fw1, fw2, fw3;
 
-	asm {
-		frsp        sinA, sinA
-		frsp        cosA, cosA
-	}
+    asm {
+        frsp        sinA, sinA
+        frsp        cosA, cosA
+    }
 
     fc0 = 0.0f;
     fc1 = 1.0f;
 
-	asm {
-		ori         axis, axis, 0x20
-		ps_neg      nsinA, sinA
-		cmplwi      axis, 'x'
-		beq         _case_x
-		cmplwi      axis, 'y'
-		beq         _case_y
-		cmplwi      axis, 'z'
-		beq         _case_z
-		b           _end
+    asm {
+        ori         axis, axis, 0x20
+        ps_neg      nsinA, sinA
+        cmplwi      axis, 'x'
+        beq         _case_x
+        cmplwi      axis, 'y'
+        beq         _case_y
+        cmplwi      axis, 'z'
+        beq         _case_z
+        b           _end
 
-	_case_x:
-		psq_st      fc1,  0(m), 1, 0
-		psq_st      fc0,  4(m), 0, 0
-		ps_merge00  fw0, sinA, cosA
-		psq_st      fc0, 12(m), 0, 0
-		ps_merge00  fw1, cosA, nsinA
-		psq_st      fc0, 28(m), 0, 0
-		psq_st      fc0, 44(m), 1, 0
-		psq_st      fw0, 36(m), 0, 0
-		psq_st      fw1, 20(m), 0, 0
-		b           _end;
+    _case_x:
+        psq_st      fc1,  0(m), 1, 0
+        psq_st      fc0,  4(m), 0, 0
+        ps_merge00  fw0, sinA, cosA
+        psq_st      fc0, 12(m), 0, 0
+        ps_merge00  fw1, cosA, nsinA
+        psq_st      fc0, 28(m), 0, 0
+        psq_st      fc0, 44(m), 1, 0
+        psq_st      fw0, 36(m), 0, 0
+        psq_st      fw1, 20(m), 0, 0
+        b           _end;
 
-	_case_y:
-		ps_merge00  fw0, cosA, fc0
-		ps_merge00  fw1, fc0, fc1
-		psq_st      fc0, 24(m), 0, 0
-		psq_st      fw0,  0(m), 0, 0
-		ps_merge00  fw2, nsinA, fc0
-		ps_merge00  fw3, sinA, fc0
-		psq_st      fw0, 40(m), 0, 0;
-		psq_st      fw1, 16(m), 0, 0;
-		psq_st      fw3,  8(m), 0, 0;
-		psq_st      fw2, 32(m), 0, 0;
-		b           _end;
+    _case_y:
+        ps_merge00  fw0, cosA, fc0
+        ps_merge00  fw1, fc0, fc1
+        psq_st      fc0, 24(m), 0, 0
+        psq_st      fw0,  0(m), 0, 0
+        ps_merge00  fw2, nsinA, fc0
+        ps_merge00  fw3, sinA, fc0
+        psq_st      fw0, 40(m), 0, 0;
+        psq_st      fw1, 16(m), 0, 0;
+        psq_st      fw3,  8(m), 0, 0;
+        psq_st      fw2, 32(m), 0, 0;
+        b           _end;
 
-	_case_z:
-		psq_st      fc0,  8(m), 0, 0
-		ps_merge00  fw0, sinA, cosA
-		ps_merge00  fw2, cosA, nsinA
-		psq_st      fc0, 24(m), 0, 0
-		psq_st      fc0, 32(m), 0, 0
-		ps_merge00  fw1, fc1, fc0
-		psq_st      fw0, 16(m), 0, 0
-		psq_st      fw2,  0(m), 0, 0
-		psq_st      fw1, 40(m), 0, 0
+    _case_z:
+        psq_st      fc0,  8(m), 0, 0
+        ps_merge00  fw0, sinA, cosA
+        ps_merge00  fw2, cosA, nsinA
+        psq_st      fc0, 24(m), 0, 0
+        psq_st      fc0, 32(m), 0, 0
+        ps_merge00  fw1, fc1, fc0
+        psq_st      fw0, 16(m), 0, 0
+        psq_st      fw2,  0(m), 0, 0
+        psq_st      fw1, 40(m), 0, 0
 
-	_end:
-	}
+    _end:
+    }
 }
 
-/** Shared worker for PSMTXRotAxisRad: builds the axis-angle rotation matrix from a unit axis, sine and cosine. */
+void C_MTXRotAxisRad(Mtx m, const Vec* axis, f32 rad) {
+    Vec vN;
+    f32 s;
+    f32 c;
+    f32 t;
+    f32 x;
+    f32 y;
+    f32 z;
+    f32 xSq;
+    f32 ySq;
+    f32 zSq;
+
+    ASSERTMSGLINE(1677, m, "MTXRotAxisRad():  NULL MtxPtr 'm' ");
+    ASSERTMSGLINE(1678, axis, "MTXRotAxisRad():  NULL VecPtr 'axis' ");
+
+    s = sinf(rad);
+    c = cosf(rad);
+    t = 1 - c;
+    C_VECNormalize(axis, &vN);
+    x = vN.x;
+    y = vN.y;
+    z = vN.z;
+    xSq = (x * x);
+    ySq = (y * y);
+    zSq = (z * z);
+    m[0][0] = (c + (t * xSq));
+    m[0][1] = (y * (t * x)) - (s * z);
+    m[0][2] = (z * (t * x)) + (s * y);
+    m[0][3] = 0;
+    m[1][0] = ((y * (t * x)) + (s * z));
+    m[1][1] = (c + (t * ySq));
+    m[1][2] = ((z * (t * y)) - (s * x));
+    m[1][3] = 0;
+    m[2][0] = ((z * (t * x)) - (s * y));
+    m[2][1] = ((z * (t * y)) + (s * x));
+    m[2][2] = (c + (t * zSq));
+    m[2][3] = 0;
+}
+
 static void __PSMTXRotAxisRadInternal(register Mtx m, const register Vec* axis, register f32 sT, register f32 cT) {
     register f32 tT, fc0;
     register f32 tmp0, tmp1, tmp2, tmp3, tmp4;
@@ -761,7 +776,6 @@ static void __PSMTXRotAxisRadInternal(register Mtx m, const register Vec* axis, 
     }
 }
 
-/** Builds a rotation matrix about an arbitrary axis from an angle in radians; the axis is normalized first. */
 void PSMTXRotAxisRad(Mtx m, const Vec* axis, f32 rad) {
     f32 sinT, cosT;
 
@@ -771,47 +785,6 @@ void PSMTXRotAxisRad(Mtx m, const Vec* axis, f32 rad) {
     __PSMTXRotAxisRadInternal(m, axis, sinT, cosT);
 }
 
-/** Builds a rotation matrix about an arbitrary axis from an angle in radians (C reference version). */
-void C_MTXRotAxisRad(Mtx m, const Vec* axis, f32 rad) {
-    Vec vN;
-    f32 s;
-    f32 c;
-    f32 t;
-    f32 x;
-    f32 y;
-    f32 z;
-    f32 xSq;
-    f32 ySq;
-    f32 zSq;
-
-    ASSERTMSGLINE(1677, m, "MTXRotAxisRad():  NULL MtxPtr 'm' ");
-    ASSERTMSGLINE(1678, axis, "MTXRotAxisRad():  NULL VecPtr 'axis' ");
-
-    s = sinf(rad);
-    c = cosf(rad);
-    t = 1 - c;
-    C_VECNormalize(axis, &vN);
-    x = vN.x;
-    y = vN.y;
-    z = vN.z;
-    xSq = (x * x);
-    ySq = (y * y);
-    zSq = (z * z);
-    m[0][0] = (c + (t * xSq));
-    m[0][1] = (y * (t * x)) - (s * z);
-    m[0][2] = (z * (t * x)) + (s * y);
-    m[0][3] = 0;
-    m[1][0] = ((y * (t * x)) + (s * z));
-    m[1][1] = (c + (t * ySq));
-    m[1][2] = ((z * (t * y)) - (s * x));
-    m[1][3] = 0;
-    m[2][0] = ((z * (t * x)) - (s * y));
-    m[2][1] = ((z * (t * y)) + (s * x));
-    m[2][2] = (c + (t * zSq));
-    m[2][3] = 0;
-}
-
-/** Builds a translation matrix (C reference version). */
 void C_MTXTrans(Mtx m, f32 xT, f32 yT, f32 zT) {
     ASSERTMSGLINE(1866, m, "MTXTrans():  NULL MtxPtr 'm' ");
     m[0][0] = 1;
@@ -828,32 +801,27 @@ void C_MTXTrans(Mtx m, f32 xT, f32 yT, f32 zT) {
     m[2][3] = zT;
 }
 
-/** Builds a translation matrix (paired-singles version). */
 void PSMTXTrans(register Mtx m, register f32 xT, register f32 yT, register f32 zT) {
     register f32 c0 = 0.0f;
     register f32 c1 = 1.0f;
 
-	asm {
-		stfs xT, 12(m)
-		stfs yT, 28(m)
-		psq_st c0, 4(m), 0, 0
-		psq_st c0, 32(m), 0, 0
-		stfs c0, 16(m)
-		stfs c1, 20(m)
-		stfs c0, 24(m)
-		stfs c1, 40(m)
-		stfs zT, 44(m)
-		stfs c1, 0(m)
-	}
+    asm {
+        stfs xT, 12(m)
+        stfs yT, 28(m)
+        psq_st c0, 4(m), 0, 0
+        psq_st c0, 32(m), 0, 0
+        stfs c0, 16(m)
+        stfs c1, 20(m)
+        stfs c0, 24(m)
+        stfs c1, 40(m)
+        stfs zT, 44(m)
+        stfs c1, 0(m)
+    }
 }
 
-/**
- * Applies a translation to an existing matrix, dest = src * T(x, y, z),
- * without a full multiply (C reference version).
- */
 void C_MTXTransApply(const Mtx src, Mtx dst, f32 xT, f32 yT, f32 zT) {
     ASSERTMSGLINE(1933, src, "MTXTransApply(): NULL MtxPtr 'src' ");
-    ASSERTMSGLINE(1934, dst, "MTXTransApply(): NULL MtxPtr 'src' "); //! wrong assert string
+    ASSERTMSGLINE(1934, dst, "MTXTransApply(): NULL MtxPtr 'src' "); // the text names src, the test is on dst
 
     if (src != dst) {
         dst[0][0] = src[0][0];
@@ -872,7 +840,6 @@ void C_MTXTransApply(const Mtx src, Mtx dst, f32 xT, f32 yT, f32 zT) {
     dst[2][3] = (src[2][3] + zT);
 }
 
-/** Applies a translation to an existing matrix without a full multiply (paired-singles version). */
 asm void PSMTXTransApply(const register Mtx src, register Mtx dst, register f32 xT, register f32 yT, register f32 zT) {
     nofralloc
     psq_l fp4, 0(src), 0, 0
@@ -896,7 +863,6 @@ asm void PSMTXTransApply(const register Mtx src, register Mtx dst, register f32 
     blr
 }
 
-/** Builds a scale matrix (C reference version). */
 void C_MTXScale(Mtx m, f32 xS, f32 yS, f32 zS) {
     ASSERTMSGLINE(2008, m, "MTXScale():  NULL MtxPtr 'm' ");
     m[0][0] = xS;
@@ -913,23 +879,21 @@ void C_MTXScale(Mtx m, f32 xS, f32 yS, f32 zS) {
     m[2][3] = 0;
 }
 
-/** Builds a scale matrix (paired-singles version). */
 void PSMTXScale(register Mtx m, register f32 xS, register f32 yS, register f32 zS) {
     register f32 c0 = 0.0f;
 
-	asm {
-		stfs xS, 0(m)
-		psq_st c0, 4(m), 0, 0
-		psq_st c0, 12(m), 0, 0
-		stfs yS, 20(m)
-		psq_st c0, 24(m), 0, 0
-		psq_st c0, 32(m), 0, 0
-		stfs zS, 40(m)
-		stfs c0, 44(m)
-	}
+    asm {
+        stfs xS, 0(m)
+        psq_st c0, 4(m), 0, 0
+        psq_st c0, 12(m), 0, 0
+        stfs yS, 20(m)
+        psq_st c0, 24(m), 0, 0
+        psq_st c0, 32(m), 0, 0
+        stfs zS, 40(m)
+        stfs c0, 44(m)
+    }
 }
 
-/** Scales the rows of an existing matrix by x, y, z without a full multiply (C reference version). */
 void C_MTXScaleApply(const Mtx src, Mtx dst, f32 xS, f32 yS, f32 zS) {
     ASSERTMSGLINE(2070, src, "MTXScaleApply(): NULL MtxPtr 'src' ");
     ASSERTMSGLINE(2071, dst, "MTXScaleApply(): NULL MtxPtr 'dst' ");
@@ -947,7 +911,6 @@ void C_MTXScaleApply(const Mtx src, Mtx dst, f32 xS, f32 yS, f32 zS) {
     dst[2][3] = (src[2][3] * zS);
 }
 
-/** Scales the rows of an existing matrix by x, y, z (paired-singles version). */
 asm void PSMTXScaleApply(const register Mtx src, register Mtx dst, register f32 xS, register f32 yS, register f32 zS) {
     nofralloc
     frsp xS, xS
@@ -974,7 +937,6 @@ asm void PSMTXScaleApply(const register Mtx src, register Mtx dst, register f32 
     blr
 }
 
-/** Converts a unit quaternion to a 3x4 rotation matrix (C reference version). */
 void C_MTXQuat(Mtx m, const Quaternion* q) {
     f32 s;
     f32 xs;
@@ -1020,14 +982,13 @@ void C_MTXQuat(Mtx m, const Quaternion* q) {
     m[2][3] = 0;
 }
 
-/** Converts a unit quaternion to a 3x4 rotation matrix (paired-singles version). */
 void PSMTXQuat(register Mtx m, const register Quaternion* q) {
     register f32 c_zero, c_one, c_two, scale;
     register f32 tmp0, tmp1, tmp2, tmp3, tmp4;
     register f32 tmp5, tmp6, tmp7, tmp8, tmp9;
     c_one = 1.0f;
 
-	asm {
+    asm {
         psq_l tmp0, 0(q), 0, 0
         psq_l tmp1, 8(q), 0, 0
         fsubs c_zero, c_one, c_one
@@ -1067,13 +1028,9 @@ void PSMTXQuat(register Mtx m, const register Quaternion* q) {
         ps_merge01 tmp9, tmp7, tmp5
         psq_st tmp3, 24(m), 0, 0
         psq_st tmp9, 32(m), 0, 0
-	}
+    }
 }
 
-/**
- * Builds a matrix that reflects points across the plane through a point with a given normal (used for mirrors
- * and water).
- */
 void C_MTXReflect(Mtx m, const Vec* p, const Vec* n) {
     f32 vxy;
     f32 vxz;
@@ -1098,7 +1055,6 @@ void C_MTXReflect(Mtx m, const Vec* p, const Vec* n) {
     m[2][3] = (pdotn * n->z);
 }
 
-/** Builds a plane reflection matrix (paired-singles version). */
 void PSMTXReflect(register Mtx m, const register Vec* p, const register Vec* n) {
     register f32 c_one;
     register f32 vn_xy, vn_z1;
@@ -1139,7 +1095,6 @@ void PSMTXReflect(register Mtx m, const register Vec* p, const register Vec* n) 
     }
 }
 
-/** Builds a view matrix from a camera position, up vector and target point. */
 void C_MTXLookAt(Mtx m, const Point3d* camPos, const Vec* camUp, const Point3d* target) {
     Vec vLook;
     Vec vRight;
@@ -1171,7 +1126,6 @@ void C_MTXLookAt(Mtx m, const Point3d* camPos, const Vec* camUp, const Point3d* 
     m[2][3] = -((camPos->z * vLook.z) + ((camPos->x * vLook.x) + (camPos->y * vLook.y)));
 }
 
-/** Builds a texture-projection matrix for a frustum light, scaled and biased into texture coordinates. */
 void C_MTXLightFrustum(Mtx m, f32 t, f32 b, f32 l, f32 r, f32 n, f32 scaleS, f32 scaleT, f32 transS, f32 transT) {
     f32 tmp;
 
@@ -1195,7 +1149,6 @@ void C_MTXLightFrustum(Mtx m, f32 t, f32 b, f32 l, f32 r, f32 n, f32 scaleS, f32
     m[2][3] = 0;
 }
 
-/** Builds a texture-projection matrix for a perspective spotlight from a field of view and aspect ratio. */
 void C_MTXLightPerspective(Mtx m, f32 fovY, f32 aspect, f32 scaleS, f32 scaleT, f32 transS, f32 transT) {
     f32 angle;
     f32 cot;
@@ -1221,7 +1174,6 @@ void C_MTXLightPerspective(Mtx m, f32 fovY, f32 aspect, f32 scaleS, f32 scaleT, 
     m[2][3] = 0;
 }
 
-/** Builds a texture-projection matrix for an orthographic light volume. */
 void C_MTXLightOrtho(Mtx m, f32 t, f32 b, f32 l, f32 r, f32 scaleS, f32 scaleT, f32 transS, f32 transT) {
     f32 tmp;
 

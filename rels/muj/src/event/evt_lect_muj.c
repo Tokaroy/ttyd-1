@@ -1,10 +1,26 @@
-// Keelhaul Key (muj, mujinto: desert island): the partner lecture (all_party_lecture, lecture_friends messages).
+// Keelhaul Key (muj): the partner lecture (all_party_lecture, lecture_friends messages).
+
+#include "version.h"
 #include "icon_ids.h"
 #include "eff/eff_mario_balloon.h"
 #include "eff/eff_fukidashi.h"
 #include "eff/eff_itemget.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "pmario_sound.h"
+#include "statuswindow.h"
+#include "driver/hitdrv.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_img.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_party.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_lecture.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_pouch.h"
 
 #include "mario/mario.h"
 #include "manager/evtmgr_cmd.h"
@@ -22,39 +38,13 @@
 #include "driver/npcdrv.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_lect.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_img.h"
-#include "evt/evt_lecture.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_snd.h"
-#include "pmario_sound.h"
-#include "statuswindow.h"
-#include "driver/hitdrv.h"
 
 static OSTime wwstart;
 static s32 x_flag_data[2];
 static void lecture_button_disp(CameraId camera, void* param);
 static LectButton lbtn[2];
-/**
- * Jumps a camera by the offset ofs: saves its current position and target as the preset
- * and sets the stored position and target to the current ones plus ofs (state 3, curve 11, zero duration).
- */
-static inline void effitemget_cam_move(CameraEntry* camera, Vec ofs) {
-    camera->presetPos = camera->cameraPos;
-    camera->presetAt = camera->cameraAt;
-    PSVECAdd(&camera->cameraPos, &ofs, &camera->storedPos);
-    PSVECAdd(&camera->cameraAt, &ofs, &camera->storedAt);
-    camera->startTimeA = gp->renderTime;
-    camera->durationA = 0;
-    camera->stateA = 3;
-    camera->curveA = 11;
-}
-static EffectEntry* eff; // lect_npc_balloon_on_off: the balloon effect over the NPC
+
+static EffectEntry* eff;
 
 static USER_FUNC(effitemget_busaiku);
 static USER_FUNC(effitemget_open);
@@ -66,7 +56,7 @@ static USER_FUNC(bgm_start_wait);
 static f32 lect_party_ido_sub(f32 elapsed, f32 total, f32 end, f32 start);
 static USER_FUNC(efffukidashichange_cam);
 static USER_FUNC(lect_npc_balloon_on_off);
-static USER_FUNC(lect_mobj_hit_nasi);
+USER_FUNC(lect_mobj_hit_nasi);
 static USER_FUNC(effitemget_open_ptr);
 static USER_FUNC(effitemgetchange_cam_ptr);
 static USER_FUNC(lect_map_cam_chg);
@@ -79,7 +69,6 @@ static USER_FUNC(lecture_button_flag_on_off);
 static USER_FUNC(lecture_button_set_alpha);
 static USER_FUNC(lecture_button_set_icon_id);
 static USER_FUNC(lecture_button_rtn);
-static void lecture_button_disp(CameraId camera, void* param);
 static USER_FUNC(x_flag_wait);
 static USER_FUNC(x_flag_get);
 static USER_FUNC(x_flag_add);
@@ -89,13 +78,21 @@ static USER_FUNC(lect_status_off);
 static USER_FUNC(lect_mario_ido_sum);
 static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start);
 
-extern EvtWord sanders_party_lecture_init[];
+static EvtWord sanders_party_lecture_init[48];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord sanders_party_lecture[];
-extern EvtWord all_party_lecture[];
+#else
+EvtWord sanders_party_lecture[71];
+#endif
+
+static EvtWord all_party_lecture_otosub[11];
+EvtWord all_party_lecture[492];
 
 /**
- * Linear blend of two values by progress elapsed / total:
- * returns start at the beginning and end at the end (parameter order is end, start).
+ * Linear interpolation for the lecture walking helpers:
+ * returns (total - elapsed) / total * end + elapsed / total * start,
+ * so at elapsed 0 it is end and at elapsed == total it is start.
  */
 static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
     f32 rem = total - elapsed;
@@ -104,14 +101,14 @@ static f32 lect_mario_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
 }
 
 /**
- * Script helper: slides Mario to a lecture position over args[0] frames.
- * The first call stores his start in LW(0) to LW(2) and the timer;
- * each call blends his position toward the destination in LW(3) to LW(5).
+ * Script helper: slides Mario in a straight line over args[0] milliseconds. The first call saves his position
+ * in LW(0) to LW(2); each call then places him on the line from LW(3), LW(4), LW(5) (at the start) to that
+ * saved position (at the end). Blocks until the time is up.
  */
 static USER_FUNC(lect_mario_ido_sum) {
     EvtWord* args = event->args;
     MarioWork* mario = marioGetPtr();
-    s32 frames = evtGetValue(event, args[0]);
+    s32 durationMs = evtGetValue(event, args[0]);
     s32 elapsed;
 
     if (isFirstCall) {
@@ -120,14 +117,14 @@ static USER_FUNC(lect_mario_ido_sum) {
         evtSetFloat(event, LW(1), mario->position.y);
         evtSetFloat(event, LW(2), mario->position.z);
     }
-    elapsed = OSTicksToMilliseconds((u64)(s32)((u32)event->lifetime - (u32)wwstart));
-    if (elapsed > frames) {
-        elapsed = frames;
+    elapsed = OSTicksToMilliseconds((u64)OSDiffTick(event->lifetime, wwstart));
+    if (elapsed > durationMs) {
+        elapsed = durationMs;
     }
-    mario->position.x = lect_mario_ido_sub(elapsed, frames, evtGetFloat(event, LW(3)), evtGetFloat(event, LW(0)));
-    mario->position.y = lect_mario_ido_sub(elapsed, frames, evtGetFloat(event, LW(4)), evtGetFloat(event, LW(1)));
-    mario->position.z = lect_mario_ido_sub(elapsed, frames, evtGetFloat(event, LW(5)), evtGetFloat(event, LW(2)));
-    if (elapsed >= frames) {
+    mario->position.x = lect_mario_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(3)), evtGetFloat(event, LW(0)));
+    mario->position.y = lect_mario_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(4)), evtGetFloat(event, LW(1)));
+    mario->position.z = lect_mario_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(5)), evtGetFloat(event, LW(2)));
+    if (elapsed >= durationMs) {
         return EVT_RETURN_DONE;
     }
     return EVT_RETURN_BLOCK;
@@ -204,15 +201,15 @@ static void lecture_button_disp(CameraId camera, void* param) {
             Vec pos;
 
             switch (btn->iconId) {
-                case ICON_075:
-                case ICON_076:
-                case ICON_077:
-                case ICON_078:
-                case ICON_079:
-                case ICON_07A:
-                case ICON_07B:
-                case ICON_07C:
-                case ICON_07D:
+                case ICON_STICK_DOWN_LEFT:
+                case ICON_STICK_DOWN:
+                case ICON_STICK_DOWN_RIGHT:
+                case ICON_STICK_LEFT:
+                case ICON_STICK_NEUTRAL:
+                case ICON_STICK_RIGHT:
+                case ICON_STICK_UP_LEFT:
+                case ICON_STICK_UP:
+                case ICON_STICK_UP_RIGHT:
                     ofs = -15.0f;
                     break;
                 default:
@@ -221,14 +218,14 @@ static void lecture_button_disp(CameraId camera, void* param) {
             }
             pos = disp->pos;
             pos.y += ofs;
-            iconDispGxAlpha(&pos, ICON_FLAG_NO_MAP_BLEND | ICON_FLAG_2D, btn->iconId, btn->alpha, 1.0f);
+            iconDispGxAlpha(&pos, ICON_FLAG_NO_MAP_BLEND | ICON_FLAG_2D, 1.0f, btn->iconId, btn->alpha);
         }
     }
 }
 
 /**
  * Script helper that animates the two button prompts of the lecture each frame:
- * sequence 0 picks the first icon, 2 fades the prompt in, 3 fades it out (7 alpha per frame) and 4 hides it.
+ * sequence 0 sets the X button icon, 2 fades the prompt in, 3 fades it out (7 alpha per frame) and 4 hides it.
  * Returns done when both prompts are hidden, otherwise queues the draw and blocks. Starts them at (200, -25).
  */
 static USER_FUNC(lecture_button_rtn) {
@@ -251,7 +248,7 @@ static USER_FUNC(lecture_button_rtn) {
         btn = &lbtn[i];
         switch (btn->seq) {
             case 0:
-                btn->iconId = ICON_068;
+                btn->iconId = ICON_BUTTON_X;
                 btn->seq = 1;
                 break;
             case 2:
@@ -277,7 +274,7 @@ static USER_FUNC(lecture_button_rtn) {
     if (done >= 2) {
         return EVT_RETURN_DONE;
     }
-    dispEntry(CAMERA_2D, 0.0f, 1, lecture_button_disp, NULL);
+    dispEntry(CAMERA_2D, 0.0f, DISP_MODE_ALPHA_TEST, lecture_button_disp, NULL);
     return EVT_RETURN_BLOCK;
 }
 
@@ -343,6 +340,7 @@ static USER_FUNC(lecture_button_get_icon_id) {
     s32 index = evtGetValue(event, args[0]);
     LectButton* btn = &lbtn[index];
 
+    // This getter returns the sequence state, not the displayed icon ID.
     evtSetValue(event, args[1], btn->seq);
     return EVT_RETURN_DONE;
 }
@@ -441,7 +439,7 @@ static USER_FUNC(effitemget_open_ptr) {
  */
 static USER_FUNC(effitemget_busaiku) {
     s32 up = evtGetValue(event, event->args[0]);
-    CameraEntry* camera = camGetPtr(4);
+    CameraEntry* camera = camGetPtr(CAMERA_3D);
     Vec ofs;
 
     if (up) {
@@ -449,220 +447,22 @@ static USER_FUNC(effitemget_busaiku) {
     } else {
         ofs = (Vec){0.0f, -2016.0f, 0.0f};
     }
-    effitemget_cam_move(camera, ofs);
+    camera->presetPos = camera->cameraPos;
+    camera->presetAt = camera->cameraAt;
+    PSVECAdd(&camera->cameraPos, &ofs, &camera->storedPos);
+    PSVECAdd(&camera->cameraAt, &ofs, &camera->storedAt);
+    camera->startTimeA = gp->renderTime;
+    camera->durationA = 0;
+    camera->stateA = CAM_MOVE_TO_STORED;
+    camera->curveA = EASING_SINE_IN_OUT;
     return EVT_RETURN_DONE;
 }
 
 /**
- * Sets up Bobbery's lecture: puts Mario at (90, 0, 0) facing right, frames the camera on him,
- * moves Bobbery next to Mario over one second and turns him to face right.
+ * Script helper: switches off the collision of the map object named args[0] ("me" for the running one): each
+ * of its (up to two) named hit objects gets HIT_FLAG_OFF through hitGrpFlagOn (nasi = none).
  */
-EVT_BEGIN(sanders_party_lecture_init)
-    CALL(evt_mario_set_pos, 90, 0, 0)
-    CALL(evt_mario_set_dir, 90, 0, 0)
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    SUBTRACT(LW(0), 40)
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(90.0f), FLOAT(510.0f), FLOAT(-20.0f), FLOAT(30.0f), FLOAT(-100.0f), 1000, 0)
-    CALL(evt_party_cont_onoff, 0, 0)
-    CALL(lect_party_ido_sum, 0, 1000)
-    CALL(evt_party_cont_onoff, 0, 1)
-    CALL(evt_party_set_dir, 0, 90, 300)
-    RETURN
-EVT_END()
-
-/**
- * Bobbery's lecture after he joins (lecture_friends_15 and 16):
- * his field move is demonstrated with evt_party_thunders_use while the camera pans,
- * then he strikes a pose (O_1) and returns to standing (S_1).
- */
-EVT_BEGIN(sanders_party_lecture)
-    CALL(evt_msg_print, 0, STRING("lecture_friends_15_0_1"), 0, 0)
-    CALL(evt_msg_print, 0, STRING("lecture_friends_15_1"), 0, 0)
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(90.0f), FLOAT(510.0f), FLOAT(50.0f), FLOAT(30.0f), FLOAT(-100.0f), 1000, 11)
-    WAIT_MS(1000)
-    CALL(evt_cam_letter_box_disable, 1)
-    CALL(evt_party_thunders_use, 0)
-    CALL(evt_cam_letter_box_disable, 0)
-    CALL(evt_party_stop, 0)
-    WAIT_FRAMES(16)
-#if VERSION <= VERSION_DEMO_JP
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    SUBTRACT(LW(0), 40)
-    CALL(evt_party_move_pos2, 0, LW(0), LW(2), FLOAT(80.0f))
-#endif
-    CALL(evt_party_set_dir, 0, 90, 300)
-    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(90.0f), FLOAT(510.0f), FLOAT(-20.0f), FLOAT(30.0f), FLOAT(-100.0f), 1000, 0)
-    WAIT_MS(1000)
-    CALL(evt_msg_print_add, 0, STRING("lecture_friends_16"))
-    CALL(evt_party_set_pose, 0, STRING("O_1"))
-    WAIT_MS(1000)
-    CALL(evt_party_set_pose, 0, STRING("S_1"))
-    RETURN
-EVT_END()
-
-/**
- * Sub-event of the partner lecture: holds the current music
- * and plays the get-partner jingle on channel 1 for two seconds.
- */
-static EVT_BEGIN(all_party_lecture_otosub)
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_GET_PARTY1"))
-    WAIT_MS(2000)
-    RETURN
-EVT_END()
-
-/**
- * The partner lecture shown when a new partner joins (partner id in LW(9), the partner's NPC name in LW(8)):
- * swaps the NPC for the real partner in the party,
- * plays the get-partner jingle with an item-get backdrop
- * and prints the matching lecture_friends message for that partner with its demonstration.
- */
-EVT_BEGIN(all_party_lecture)
-    CALL(evt_mario_normalize)
-    IF_INT_NOT_EQUAL(LW(9), 1)
-        IF_INT_NOT_EQUAL(LW(9), 5)
-            CALL(evt_mario_goodbye_party, 0)
-        ELSE
-            CALL(evt_mario_kill_party, 0)
-        END_IF
-        WAIT_MS(500)
-        CALL(evt_npc_get_position, LW(8), LW(0), LW(1), LW(2))
-        CALL(evt_npc_get_dir, LW(8), LW(3))
-        CALL(evt_npc_set_position, LW(8), 0, -1000, 0)
-        // The partner joins the party and the item-get backdrop appears behind him.
-        CALL(evt_pouch_party_join, LW(9))
-        CALL(evt_mario_set_party_pos, 0, LW(9), LW(0), LW(1), LW(2))
-        CALL(set_dir, LW(3))
-    ELSE
-        CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
-    END_IF
-    CALL(evt_party_set_camid, 0, 7)
-    SPAWN_EVENT_GET_ID(PTR(all_party_lecture_otosub), LW(11))
-    CALL(lect_itemget_kesan, 0, FLOAT(600.0f), LW(0), LW(1), LW(2))
-    CALL(evt_eff, STRING("sub_bg"), STRING("itemget"), 1, LW(0), LW(1), LW(2), 0, 0, 0, 0, 0, 0, 0, 0)
-    CALL(effitemgetchange_cam, STRING("sub_bg"), 5)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
-    SWITCH(LW(9))
-        CASE_EQUAL(1)
-        // A system message announces the new partner.
-        CALL(evt_msg_print, 0, STRING("lecture_friends_00"), 0, 0)
-        CASE_EQUAL(2)
-        CALL(evt_msg_print, 0, STRING("lecture_friends_04"), 0, 0)
-        CASE_EQUAL(5)
-        CALL(evt_msg_print, 0, STRING("lecture_friends_07"), 0, 0)
-        CASE_EQUAL(4)
-        CALL(evt_pouch_get_yoshiname, LW(0))
-        CALL(evt_msg_print_insert, 0, STRING("lecture_friends_09"), 0, 0, LW(0))
-        CASE_EQUAL(6)
-        CALL(evt_msg_print, 0, STRING("lecture_friends_12"), 0, 0)
-        CASE_EQUAL(3)
-        CALL(evt_msg_print, 0, STRING("lecture_friends_15"), 0, 0)
-        CALL(evt_eff_softdelete, STRING("sunlight"))
-        CASE_EQUAL(7)
-        CALL(evt_msg_print, 0, STRING("lecture_friends_17"), 0, 0)
-    END_SWITCH
-    IS_EVENT_RUNNING(LW(11), LW(12))
-    IF_INT_EQUAL(LW(12), 1)
-        DELETE_EVENT(LW(11))
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    END_IF
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_mario_set_camid, 7)
-    CALL(effitemget_open, STRING("sub_bg"))
-    CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_OFF_PARTY_LECTURE1_1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_npc_stop_for_event)
-    WAIT_MS(1000)
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    // The lecture music starts and the partner demonstrates his moves.
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_EVT_LECTURE1"))
-    CALL(evt_snd_envoff, PSND_FADE_HOLD)
-    CALL(lect_cam_save)
-    CALL(effitemget_busaiku, 1)
-    WAIT_FRAMES(1)
-    CALL(evt_party_cont_onoff, 0, 0)
-    CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
-    SET_VALUE(LW(3), LW(1))
-    ADD(LW(3), 2016)
-    CALL(evt_party_set_pos, 0, LW(0), LW(3), LW(2))
-    CALL(effitemgetchange_cam, STRING("sub_bg"), 4)
-    CALL(evt_paper_entry, STRING("OFF_d_seal_upper_right"))
-    CALL(evt_img_entry, STRING("img"))
-    CALL(evt_img_set_paper, STRING("img"), STRING("OFF_d_seal_upper_right"))
-    CALL(evt_img_free_capture, STRING("img"), 0)
-    CALL(evt_img_alloc_capture, STRING("img"), 0, 0, 1, 0, 0, 608, 480)
-    CALL(evt_img_clear_virtual_point, STRING("img"))
-    CALL(evt_img_set_paper_anim, STRING("img"), STRING("Z_1"))
-    CALL(evt_img_onoff, STRING("img"), 1)
-    WAIT_FRAMES(1)
-    CALL(effitemget_busaiku, 0)
-    CALL(evt_eff_softdelete, STRING("sub_bg"))
-    WAIT_FRAMES(1)
-    CALL(evt_party_set_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_party_cont_onoff, 0, 1)
-    CALL(lect_test_systemlevel)
-    SWITCH(LW(9))
-        CASE_EQUAL(3)
-        // Bobbery gets his own demonstration set up first.
-        CALL_CHILD(sanders_party_lecture_init)
-    END_SWITCH
-    LOOP(6)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_LECTUREN_BLINKING1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_mario_dispflag_onoff, 0, 1)
-        WAIT_MS(100)
-        CALL(evt_mario_dispflag_onoff, 1, 1)
-        WAIT_MS(100)
-    END_LOOP
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_LECTUREN_BLINKING1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_mario_dispflag_onoff, 0, 1)
-    SWITCH(LW(9))
-        CASE_EQUAL(3)
-        CALL_CHILD(sanders_party_lecture)
-    END_SWITCH
-    LOOP(6)
-        CALL(evt_mario_dispflag_onoff, 1, 1)
-        CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
-        WAIT_MS(100)
-        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-        CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_LECTUREN_BLINKING1"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_mario_dispflag_onoff, 0, 1)
-        CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 0)
-        WAIT_MS(100)
-    END_LOOP
-    CALL(evt_mario_dispflag_onoff, 1, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 1)
-    CALL(evt_mario_init_camid)
-    CALL(evt_party_init_camid, 0)
-    CALL(lect_cam_load, 0)
-    CALL(evt_mario_dispflag_onoff, 0, 1)
-    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDDEN, 0)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    CALL(evt_snd_envoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
-    // The lecture ends: the music resumes and the camera goes back to normal.
-    CALL(evt_snd_sfxon_3d, STRING("SFX_OFF_PARTY_LECTURE1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_img_set_paper_anim, STRING("img"), STRING("A_1"))
-    CALL(evt_img_wait_animend, STRING("img"))
-    CALL(evt_img_release, STRING("img"))
-    CALL(evt_paper_delete, STRING("OFF_d_seal_upper_right"))
-    CALL(evt_npc_start_for_event)
-    SWITCH(LW(9))
-        CASE_EQUAL(3)
-        CALL(evt_eff64, STRING("sunlight"), STRING("sunlight_n64"), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-    END_SWITCH
-    RETURN
-EVT_END()
-
-/**
- * Script helper: switches on the hit boxes of the map object named args[0] (or the calling object for "me")
- * so it can be hit again.
- */
-static USER_FUNC(lect_mobj_hit_nasi) {
+USER_FUNC(lect_mobj_hit_nasi) {
     const char* name = (const char*)evtGetValue(event, event->args[0]);
     MapObjectEntry* mobj;
     s32 i;
@@ -675,7 +475,7 @@ static USER_FUNC(lect_mobj_hit_nasi) {
     for (i = 0; i < 2; i++) {
         // name is an array inside MapObjectHitEntry, so the NULL test is always true (as in the game); strcmp does the work
         if (mobj->hitObj[i].name != NULL && strcmp(mobj->hitObj[i].name, "") != 0) {
-            hitGrpFlagOn(mobj->hitObj[i].name, 1);
+            hitGrpFlagOn(mobj->hitObj[i].name, HIT_FLAG_OFF);
         }
     }
     return EVT_RETURN_DONE;
@@ -690,7 +490,7 @@ static USER_FUNC(lect_itemget_kesan) {
     EvtWord* args = event->args;
     PartyEntry* party = partyGetPtr(args[0] == 0 ? partyCtrlNo : 1);
     f32 dist = evtGetFloat(event, args[1]);
-    CameraEntry* cam = camGetPtr(4);
+    CameraEntry* cam = camGetPtr(CAMERA_3D);
     Vec pos;
     Vec dir;
 
@@ -723,7 +523,7 @@ static USER_FUNC(lect_npc_balloon_on_off) {
 
     if (evtGetValue(event, args[1])) {
         eff = effMarioBalloonEntry(1, npc);
-        ((MarioBalloonWork*)eff->userdata)->camera = 7;
+        ((MarioBalloonWork*)eff->userdata)->camera = CAMERA_3D_EFFECTB;
     } else {
         effDelete(eff);
     }
@@ -740,7 +540,7 @@ static USER_FUNC(efffukidashichange_cam) {
     return EVT_RETURN_DONE;
 }
 
-/** Linear blend of two values by progress elapsed / total, used for the partner (same as lect_mario_ido_sub). */
+/** Linear interpolation for the partner glide, the same as lect_mario_ido_sub. */
 static f32 lect_party_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
     f32 rem = total - elapsed;
 
@@ -748,13 +548,13 @@ static f32 lect_party_ido_sub(f32 elapsed, f32 total, f32 end, f32 start) {
 }
 
 /**
- * Script helper: slides a partner to a lecture position over args[1] frames (partner slot args[0]: 0 is the
- * active partner), storing the start in LW(3) to LW(5) on the first call.
+ * Script helper: slides a partner to the lecture position LW(0) to LW(2) over args[1] milliseconds (partner
+ * slot args[0]: 0 is the active partner), storing the start in LW(3) to LW(5) on the first call.
  */
 static USER_FUNC(lect_party_ido_sum) {
     EvtWord* args = event->args;
     PartyEntry* party = partyGetPtr(args[0] == 0 ? partyCtrlNo : 1);
-    s32 frames = evtGetValue(event, args[1]);
+    s32 durationMs = evtGetValue(event, args[1]);
     s32 elapsed;
 
     if (isFirstCall) {
@@ -764,18 +564,76 @@ static USER_FUNC(lect_party_ido_sum) {
         evtSetFloat(event, LW(5), party->position.z);
         return EVT_RETURN_BLOCK;
     }
-    elapsed = OSTicksToMilliseconds((u64)(s32)((u32)event->lifetime - (u32)wwstart));
-    if (elapsed > frames) {
-        elapsed = frames;
+    elapsed = OSTicksToMilliseconds((u64)OSDiffTick(event->lifetime, wwstart));
+    if (elapsed > durationMs) {
+        elapsed = durationMs;
     }
-    party->position.x = lect_party_ido_sub(elapsed, frames, evtGetFloat(event, LW(3)), evtGetFloat(event, LW(0)));
-    party->position.y = lect_party_ido_sub(elapsed, frames, evtGetFloat(event, LW(4)), evtGetFloat(event, LW(1)));
-    party->position.z = lect_party_ido_sub(elapsed, frames, evtGetFloat(event, LW(5)), evtGetFloat(event, LW(2)));
-    if (elapsed >= frames) {
+    party->position.x = lect_party_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(3)), evtGetFloat(event, LW(0)));
+    party->position.y = lect_party_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(4)), evtGetFloat(event, LW(1)));
+    party->position.z = lect_party_ido_sub(elapsed, durationMs, evtGetFloat(event, LW(5)), evtGetFloat(event, LW(2)));
+    if (elapsed >= durationMs) {
         return EVT_RETURN_DONE;
     }
     return EVT_RETURN_BLOCK;
 }
+
+/**
+ * Sets up Bobbery's lecture: puts Mario at (90, 0, 0) facing right, frames the camera on him,
+ * moves Bobbery next to Mario over one second and turns him to face right.
+ */
+static EVT_BEGIN(sanders_party_lecture_init)
+    CALL(evt_mario_set_pos, 90, 0, 0)
+    CALL(evt_mario_set_dir, 90, 0, 0)
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+    SUBTRACT(LW(0), 40)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(90.0f), FLOAT(510.0f), FLOAT(-20.0f), FLOAT(30.0f), FLOAT(-100.0f), 1000, EASING_LINEAR)
+    CALL(evt_party_cont_onoff, 0, 0)
+    CALL(lect_party_ido_sum, 0, 1000)
+    CALL(evt_party_cont_onoff, 0, 1)
+    CALL(evt_party_set_dir, 0, 90, 300)
+    RETURN
+EVT_END()
+
+/**
+ * Bobbery's lecture after he joins (lecture_friends_15 and 16):
+ * his field move is demonstrated with evt_party_thunders_use while the camera pans,
+ * then he strikes a pose (O_1) and returns to standing (S_1).
+ */
+EVT_BEGIN(sanders_party_lecture)
+    CALL(evt_msg_print, 0, STRING("lecture_friends_15_0_1"), 0, 0)
+    CALL(evt_msg_print, 0, STRING("lecture_friends_15_1"), 0, 0)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(90.0f), FLOAT(510.0f), FLOAT(50.0f), FLOAT(30.0f), FLOAT(-100.0f), 1000, EASING_SINE_IN_OUT)
+    WAIT_MS(1000)
+    CALL(evt_cam_letter_box_disable, 1)
+    CALL(evt_party_thunders_use, 0)
+    CALL(evt_cam_letter_box_disable, 0)
+    CALL(evt_party_stop, 0)
+    WAIT_FRAMES(16)
+#if VERSION <= VERSION_DEMO_JP
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+    SUBTRACT(LW(0), 40)
+    CALL(evt_party_move_pos2, 0, LW(0), LW(2), FLOAT(80.0f))
+#endif
+    CALL(evt_party_set_dir, 0, 90, 300)
+    CALL(evt_cam3d_evt_set_rel, FLOAT(0.0f), FLOAT(90.0f), FLOAT(510.0f), FLOAT(-20.0f), FLOAT(30.0f), FLOAT(-100.0f), 1000, EASING_LINEAR)
+    WAIT_MS(1000)
+    CALL(evt_msg_print_add, 0, STRING("lecture_friends_16"))
+    CALL(evt_party_set_pose, 0, STRING("O_1"))
+    WAIT_MS(1000)
+    CALL(evt_party_set_pose, 0, STRING("S_1"))
+    RETURN
+EVT_END()
+
+/**
+ * Sub-event of the partner lecture: holds the current music
+ * and plays the get-partner jingle on channel 1 for two seconds.
+ */
+static EVT_BEGIN(all_party_lecture_otosub)
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_GET_PARTY1"))
+    WAIT_MS(2000)
+    RETURN
+EVT_END()
 
 /** Script helper: turns the active partner to face right or left according to args[0] (above 180 faces left). */
 static USER_FUNC(set_dir) {
@@ -788,6 +646,159 @@ static USER_FUNC(set_dir) {
     }
     return EVT_RETURN_DONE;
 }
+
+/**
+ * Partner-join lecture for partner LW(9) (NPC LW(8) stands in for him), run by muj_05 (gor, hei, tou, usu and win have
+ * their own copies): unless he is already out (partner 1), the current partner leaves (removed at once for partner 5),
+ * he joins the party at the NPC's spot, the item-get backdrop appears with the partner's lecture_friends message,
+ * then the lecture music (BGM_EVT_LECTURE1) plays while his move demonstration runs; music, cameras and controls are
+ * restored at the end.
+ */
+EVT_BEGIN(all_party_lecture)
+    CALL(evt_mario_normalize)
+    IF_INT_NOT_EQUAL(LW(9), 1)
+        IF_INT_NOT_EQUAL(LW(9), 5)
+            CALL(evt_mario_goodbye_party, 0)
+        ELSE
+            CALL(evt_mario_kill_party, 0)
+        END_IF
+        WAIT_MS(500)
+        CALL(evt_npc_get_position, LW(8), LW(0), LW(1), LW(2))
+        CALL(evt_npc_get_dir, LW(8), LW(3))
+        CALL(evt_npc_set_position, LW(8), 0, -1000, 0)
+
+        // The partner joins the party and the item-get backdrop appears behind him.
+        CALL(evt_pouch_party_join, LW(9))
+        CALL(evt_mario_set_party_pos, 0, LW(9), LW(0), LW(1), LW(2))
+        CALL(set_dir, LW(3))
+    ELSE
+        CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
+    END_IF
+    CALL(evt_party_set_camid, 0, 7)
+    SPAWN_EVENT_GET_ID(PTR(all_party_lecture_otosub), LW(11))
+    CALL(lect_itemget_kesan, 0, FLOAT(600.0f), LW(0), LW(1), LW(2))
+    CALL(evt_eff, STRING("sub_bg"), STRING("itemget"), 1, LW(0), LW(1), LW(2), 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(effitemgetchange_cam, STRING("sub_bg"), 5)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
+    SWITCH(LW(9))
+        CASE_EQUAL(1)
+
+        // A system message announces the new partner.
+        CALL(evt_msg_print, 0, STRING("lecture_friends_00"), 0, 0)
+        CASE_EQUAL(2)
+        CALL(evt_msg_print, 0, STRING("lecture_friends_04"), 0, 0)
+        CASE_EQUAL(5)
+        CALL(evt_msg_print, 0, STRING("lecture_friends_07"), 0, 0)
+        CASE_EQUAL(4)
+        CALL(evt_pouch_get_yoshiname, LW(0))
+        CALL(evt_msg_print_insert, 0, STRING("lecture_friends_09"), 0, 0, LW(0))
+        CASE_EQUAL(6)
+        CALL(evt_msg_print, 0, STRING("lecture_friends_12"), 0, 0)
+        CASE_EQUAL(3)
+        CALL(evt_msg_print, 0, STRING("lecture_friends_15"), 0, 0)
+        CALL(evt_eff_softdelete, STRING("sunlight"))
+        CASE_EQUAL(7)
+        CALL(evt_msg_print, 0, STRING("lecture_friends_17"), 0, 0)
+    END_SWITCH
+    IS_EVENT_RUNNING(LW(11), LW(12))
+    IF_INT_EQUAL(LW(12), 1)
+        DELETE_EVENT(LW(11))
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+    END_IF
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_mario_set_camid, 7)
+    CALL(effitemget_open, STRING("sub_bg"))
+    CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_OFF_PARTY_LECTURE1_1"), LW(0), LW(1), LW(2), 0)
+    CALL(evt_npc_stop_for_event)
+    WAIT_MS(1000)
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+
+    // The lecture music starts and the partner demonstrates his moves.
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_EVT_LECTURE1"))
+    CALL(evt_snd_envoff, PSND_PAUSE)
+    CALL(lect_cam_save)
+    CALL(effitemget_busaiku, 1)
+    WAIT_FRAMES(1)
+    CALL(evt_party_cont_onoff, 0, 0)
+    CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
+    SET_VALUE(LW(3), LW(1))
+    ADD(LW(3), 2016)
+    CALL(evt_party_set_pos, 0, LW(0), LW(3), LW(2))
+    CALL(effitemgetchange_cam, STRING("sub_bg"), 4)
+    CALL(evt_paper_entry, STRING("OFF_d_seal_upper_right"))
+    CALL(evt_img_entry, STRING("img"))
+    CALL(evt_img_set_paper, STRING("img"), STRING("OFF_d_seal_upper_right"))
+    CALL(evt_img_free_capture, STRING("img"), 0)
+    CALL(evt_img_alloc_capture, STRING("img"), 0, 0, 1, 0, 0, 608, 480)
+    CALL(evt_img_clear_virtual_point, STRING("img"))
+    CALL(evt_img_set_paper_anim, STRING("img"), STRING("Z_1"))
+    CALL(evt_img_onoff, STRING("img"), 1)
+    WAIT_FRAMES(1)
+    CALL(effitemget_busaiku, 0)
+    CALL(evt_eff_softdelete, STRING("sub_bg"))
+    WAIT_FRAMES(1)
+    CALL(evt_party_set_pos, 0, LW(0), LW(1), LW(2))
+    CALL(evt_party_cont_onoff, 0, 1)
+    CALL(lect_test_systemlevel)
+    SWITCH(LW(9))
+        CASE_EQUAL(3)
+
+        // Bobbery gets his own demonstration set up first.
+        CALL_CHILD(sanders_party_lecture_init)
+    END_SWITCH
+    LOOP(6)
+        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_LECTUREN_BLINKING1"), LW(0), LW(1), LW(2), 0)
+        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
+        WAIT_MS(100)
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+        WAIT_MS(100)
+    END_LOOP
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+    CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_LECTUREN_BLINKING1"), LW(0), LW(1), LW(2), 0)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
+    SWITCH(LW(9))
+        CASE_EQUAL(3)
+        CALL_CHILD(sanders_party_lecture)
+    END_SWITCH
+    LOOP(6)
+        CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+        CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
+        WAIT_MS(100)
+        CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+        CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_LECTUREN_BLINKING1"), LW(0), LW(1), LW(2), 0)
+        CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
+        CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 0)
+        WAIT_MS(100)
+    END_LOOP
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 1)
+    CALL(evt_mario_init_camid)
+    CALL(evt_party_init_camid, 0)
+    CALL(lect_cam_load, 0)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
+    CALL(evt_party_dispflg_onoff, 0, PARTY_DISP_FLAG_HIDE, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+    CALL(evt_snd_envoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_envon, PSND_CONTINUE | PSND_FADEIN, 0)
+    CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
+
+    // The lecture ends: the music resumes and the camera goes back to normal.
+    CALL(evt_snd_sfxon_3d, STRING("SFX_OFF_PARTY_LECTURE1"), LW(0), LW(1), LW(2), 0)
+    CALL(evt_img_set_paper_anim, STRING("img"), STRING("A_1"))
+    CALL(evt_img_wait_animend, STRING("img"))
+    CALL(evt_img_release, STRING("img"))
+    CALL(evt_paper_delete, STRING("OFF_d_seal_upper_right"))
+    CALL(evt_npc_start_for_event)
+    SWITCH(LW(9))
+        CASE_EQUAL(3)
+        CALL(evt_eff64, STRING("sunlight"), STRING("sunlight_n64"), 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    END_SWITCH
+    RETURN
+EVT_END()
 
 /** Script helper: blocks until the music channel 1 has started playing (psndBGMStartCheck). */
 static USER_FUNC(bgm_start_wait) {

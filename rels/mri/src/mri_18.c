@@ -1,23 +1,29 @@
 // mri_18 (巨木の中, The Great Tree): a pipe room with planters, guarded by an X-Naut and a Yux.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_snd.h"
-#include "mri_puni.h"
 #include "mri.h"
 #include "data_tables.h"
-#include "evt/evt_story.h"
+#include "evt/evt_map.h"
+#include "evt/evt_npc.h"
+#include "mri_puni.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 static BeroEntry bero_entry_data[5];
+static EvtWord evt_ueki_04[20];
 static KusaAccess ueki_access_data[7];
+EvtWord mri_18_init_evt[105];
 
 /**
- * Exits of mri_18: pipe dokan1 to mri_12 (dokan3); pipe dokan2 to mri_16 (dokan2); dokan3 (scripted pipe);
- * dokan4 (scripted pipe).
+ * Exits of mri_18: pipe dokan1 to mri_12 (dokan3); pipe dokan2 to mri_16 (dokan2); pipe dokan3 to dokan4
+ * in this room; pipe dokan4 to dokan3 in this room.
  */
 static BeroEntry bero_entry_data[] = {
     {
@@ -90,13 +96,13 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Planter hit script 4: the first time it is hit it launches a coin out of the planter;
- * remembered with GSWF_MRI18_PLANTER_COIN_TAKEN.
+ * Planter hit script 4: when its item is not out, launches a coin out of the planter, collected only once
+ * (GSWF_MRI_18_COIN_PLANT).
  */
 static EVT_BEGIN(evt_ueki_04)
     CALL(evt_item_delete_check, STRING("item_ueki_04"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ueki_04"), ITEM_COIN, 50, -320, -35, ITEM_ENTRY_LAUNCH, GSWF(GSWF_MRI18_PLANTER_COIN_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_ueki_04"), ITEM_COIN, 50, -320, -35, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_MRI_18_COIN_PLANT, 0)
     END_IF
     RETURN
 EVT_END()
@@ -118,7 +124,7 @@ static KusaAccess ueki_access_data[] = {
 /**
  * Map init script of mri_18, a pipe room with planters that an X-Naut grunt and a Yux guard:
  * sets up the Puni, the planters and the water animations,
- * and removes the guards once the story is past STORY_STG2_25_01_PEACH_CRUMP_AND_X_NAUTS.
+ * and removes the guards once the story is past STG2_25_01_PEACH_CRUMP_X_NAUTS.
  */
 EVT_BEGIN(mri_18_init_evt)
     CALL(evt_puni_mem_init)
@@ -131,26 +137,26 @@ EVT_BEGIN(mri_18_init_evt)
     CALL_CHILD(mri_puni_init)
     SPAWN_EVENT(puni_disp_info)
     SPAWN_EVENT(mri_countdown)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_23_TIME_BOMB_ACTIVATED, STORY_STG2_23_01_X_NAUT_BATTLE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI9"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_23_TIME_BOMB_ACTIVATED, STG2_23_01_X_NAUT_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI9"))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI4"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI4"))
     END_SWITCH
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_GREATER(GSW(GSW_STORY_PROGRESS), STORY_STG2_25_01_PEACH_CRUMP_AND_X_NAUTS)
+    IF_INT_GREATER(GSW_STORY_PROGRESS, STG2_25_01_PEACH_CRUMP_X_NAUTS)
         CALL(evt_npc_check_delete, STRING("軍団ザコ"))
         CALL(evt_npc_check_delete, STRING("バリアーン２"))
     END_IF
     SET_VALUE(LW(0), PTR(ueki_access_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    CALL(evt_map_playanim, STRING("mizu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("mizu_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_02"), 1, 0)
+    CALL(evt_map_playanim, STRING("mizu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_02"), MAP_ANIM_PLAY_LOOP, 0)
     RETURN
 EVT_END()

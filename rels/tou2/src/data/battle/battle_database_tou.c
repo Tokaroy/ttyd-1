@@ -1,6 +1,7 @@
 // battle_database_tou: Glitz Pit battle data: arena stage layouts and the ranked match groups (tou_rank_N)
 // with their unit setups, plus the field battle selection tables.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "battle/battle_weapon_power.h"
@@ -10,111 +11,109 @@
 #include "battle/battle_stage_object.h"
 #include "driver/npcdrv.h"
 #include "evt/evt_map.h"
-#include "version.h"
 #include "driver/mapdrv.h"
 
-extern s32 tou_gamen_screen_tev[];
 extern BattleUnitKind unit_jyugem;
 
-BattleStageObjectData tou_btlobject_data[14];
-BattleStageData tou_btlstage_data[2];
-BattleUnitSetup btlparty_tou_tou_rank_19[5];
-BattleGroupSetup btlgrp_tou_tou_rank_19;
-BattleUnitSetup btlparty_tou_tou_rank_18[3];
-BattleGroupSetup btlgrp_tou_tou_rank_18;
-BattleUnitSetup btlparty_tou_tou_rank_17[3];
-BattleGroupSetup btlgrp_tou_tou_rank_17;
-BattleUnitSetup btlparty_tou_tou_rank_16[3];
-BattleGroupSetup btlgrp_tou_tou_rank_16;
-BattleUnitSetup btlparty_tou_tou_rank_15[3];
-BattleGroupSetup btlgrp_tou_tou_rank_15;
-BattleUnitSetup btlparty_tou_tou_rank_14[3];
-BattleGroupSetup btlgrp_tou_tou_rank_14;
-BattleUnitSetup btlparty_tou_tou_rank_13[3];
-BattleGroupSetup btlgrp_tou_tou_rank_13;
-BattleUnitSetup btlparty_tou_tou_rank_12[4];
-BattleGroupSetup btlgrp_tou_tou_rank_12;
-BattleUnitSetup btlparty_tou_tou_rank_11[4];
-BattleGroupSetup btlgrp_tou_tou_rank_11;
-BattleUnitSetup btlparty_tou_tou_rank_10[2];
-BattleGroupSetup btlgrp_tou_tou_rank_10;
-BattleUnitSetup btlparty_tou_tou_rank_9[2];
-BattleGroupSetup btlgrp_tou_tou_rank_9;
-BattleUnitSetup btlparty_tou_tou_rank_8[2];
-BattleGroupSetup btlgrp_tou_tou_rank_8;
-BattleUnitSetup btlparty_tou_tou_rank_7[3];
-BattleGroupSetup btlgrp_tou_tou_rank_7;
-BattleUnitSetup btlparty_tou_tou_rank_6[3];
-BattleGroupSetup btlgrp_tou_tou_rank_6;
-BattleUnitSetup btlparty_tou_tou_rank_5[3];
-BattleGroupSetup btlgrp_tou_tou_rank_5;
-BattleUnitSetup btlparty_tou_tou_rank_4[1];
-BattleGroupSetup btlgrp_tou_tou_rank_4;
-BattleUnitSetup btlparty_tou_tou_rank_3[3];
-BattleGroupSetup btlgrp_tou_tou_rank_3;
-BattleUnitSetup btlparty_tou_tou_rank_2[2];
-BattleGroupSetup btlgrp_tou_tou_rank_2;
-BattleUnitSetup btlparty_tou_tou_rank_1[1];
-BattleGroupSetup btlgrp_tou_tou_rank_1;
-BattleUnitSetup btlparty_tou_tou_add_1[4];
-BattleGroupSetup btlgrp_tou_tou_add_1;
-BattleUnitSetup btlparty_tou_tou_add_2[4];
-BattleGroupSetup btlgrp_tou_tou_add_2;
-BattleUnitSetup btlparty_tou_tou_boss[1];
-BattleGroupSetup btlgrp_tou_tou_boss;
-BattleUnitSetup btlparty_tou_tou_champ[1];
-BattleGroupSetup btlgrp_tou_tou_champ;
-BattleUnitSetup btlparty_tou_tou_koopa[1];
-BattleGroupSetup btlgrp_tou_tou_koopa;
-NpcBattleSelect btlgrpsel_tou_btlno_tou_test1_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_01_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_02_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_03_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_04_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_05_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_06_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_07_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_08_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_09_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_10_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_11_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_12_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_13_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_14_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_15_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_16_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_17_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_18_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_19_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_20_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_21_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_22_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_23_off[2];
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_24_off[2];
+static BattleStageObjectData tou_btlobject_data[14];
+static BattleStageData tou_btlstage_data[2];
+static BattleUnitSetup btlparty_tou_tou_rank_19[5];
+static BattleGroupSetup btlgrp_tou_tou_rank_19;
+static BattleUnitSetup btlparty_tou_tou_rank_18[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_18;
+static BattleUnitSetup btlparty_tou_tou_rank_17[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_17;
+static BattleUnitSetup btlparty_tou_tou_rank_16[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_16;
+static BattleUnitSetup btlparty_tou_tou_rank_15[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_15;
+static BattleUnitSetup btlparty_tou_tou_rank_14[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_14;
+static BattleUnitSetup btlparty_tou_tou_rank_13[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_13;
+static BattleUnitSetup btlparty_tou_tou_rank_12[4];
+static BattleGroupSetup btlgrp_tou_tou_rank_12;
+static BattleUnitSetup btlparty_tou_tou_rank_11[4];
+static BattleGroupSetup btlgrp_tou_tou_rank_11;
+static BattleUnitSetup btlparty_tou_tou_rank_10[2];
+static BattleGroupSetup btlgrp_tou_tou_rank_10;
+static BattleUnitSetup btlparty_tou_tou_rank_9[2];
+static BattleGroupSetup btlgrp_tou_tou_rank_9;
+static BattleUnitSetup btlparty_tou_tou_rank_8[2];
+static BattleGroupSetup btlgrp_tou_tou_rank_8;
+static BattleUnitSetup btlparty_tou_tou_rank_7[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_7;
+static BattleUnitSetup btlparty_tou_tou_rank_6[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_6;
+static BattleUnitSetup btlparty_tou_tou_rank_5[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_5;
+static BattleUnitSetup btlparty_tou_tou_rank_4[1];
+static BattleGroupSetup btlgrp_tou_tou_rank_4;
+static BattleUnitSetup btlparty_tou_tou_rank_3[3];
+static BattleGroupSetup btlgrp_tou_tou_rank_3;
+static BattleUnitSetup btlparty_tou_tou_rank_2[2];
+static BattleGroupSetup btlgrp_tou_tou_rank_2;
+static BattleUnitSetup btlparty_tou_tou_rank_1[1];
+static BattleGroupSetup btlgrp_tou_tou_rank_1;
+static BattleUnitSetup btlparty_tou_tou_add_1[4];
+static BattleGroupSetup btlgrp_tou_tou_add_1;
+static BattleUnitSetup btlparty_tou_tou_add_2[4];
+static BattleGroupSetup btlgrp_tou_tou_add_2;
+static BattleUnitSetup btlparty_tou_tou_boss[1];
+static BattleGroupSetup btlgrp_tou_tou_boss;
+static BattleUnitSetup btlparty_tou_tou_champ[1];
+static BattleGroupSetup btlgrp_tou_tou_champ;
+static BattleUnitSetup btlparty_tou_tou_koopa[1];
+static BattleGroupSetup btlgrp_tou_tou_koopa;
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_test1_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_01_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_02_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_03_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_04_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_05_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_06_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_07_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_08_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_09_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_10_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_11_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_12_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_13_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_14_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_15_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_16_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_17_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_18_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_19_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_20_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_21_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_22_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_23_off[2];
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_24_off[2];
 NpcSetupBattleInfo btlsetup_tou_tbl[26];
 NpcTerritoryInfo btl_tou_setup_no_tbl[26];
-extern EvtWord bgset_tou_screen_evt[];
+static EvtWord bgset_tou_screen_evt[22];
 
 /**
  * Stage objects of the Glitz Pit arena (stg_03_0), in two sets: entries 0-5 for the normal arena (the big
  * screen "gamen", the "etc" scenery, side walls side__L and side__R, and background sets B and C) and
  * entries 6-13 for the title-match arena, the same objects plus the if_wire and if_body objects.
  */
-BattleStageObjectData tou_btlobject_data[] = {
-    {"gamen", 2, 0, {0.0f, 0.0f, -50.0f}, 0, 60, {0}},
-    {"etc", 2, 0, {0.0f, 0.0f, -54.0f}, 10, 50, {0}},
-    {"side__L", 2, 0, {-137.0f, 0.0f, -40.0f}, 20, 40, {0}},
-    {"side__R", 2, 0, {137.0f, 0.0f, -40.0f}, 30, 30, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"gamen", 2, 0, {0.0f, 0.0f, -50.0f}, 0, 60, {0}},
-    {"etc", 2, 0, {0.0f, 0.0f, -54.0f}, 10, 50, {0}},
-    {"side__L", 2, 0, {-137.0f, 0.0f, -40.0f}, 20, 40, {0}},
-    {"side__R", 2, 0, {137.0f, 0.0f, -40.0f}, 30, 30, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"if_wire", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
-    {"if_body", 5, 6, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+static BattleStageObjectData tou_btlobject_data[] = {
+    {"gamen", 2, STAGE_LAYER_A1, {0.0f, 0.0f, -50.0f}, 0, 60, {0}},
+    {"etc", 2, STAGE_LAYER_A1, {0.0f, 0.0f, -54.0f}, 10, 50, {0}},
+    {"side__L", 2, STAGE_LAYER_A1, {-137.0f, 0.0f, -40.0f}, 20, 40, {0}},
+    {"side__R", 2, STAGE_LAYER_A1, {137.0f, 0.0f, -40.0f}, 30, 30, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"gamen", 2, STAGE_LAYER_A1, {0.0f, 0.0f, -50.0f}, 0, 60, {0}},
+    {"etc", 2, STAGE_LAYER_A1, {0.0f, 0.0f, -54.0f}, 10, 50, {0}},
+    {"side__L", 2, STAGE_LAYER_A1, {-137.0f, 0.0f, -40.0f}, 20, 40, {0}},
+    {"side__R", 2, STAGE_LAYER_A1, {137.0f, 0.0f, -40.0f}, 30, 30, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"if_wire", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
+    {"if_body", 5, STAGE_LAYER_IRON_FRAME, {0.0f, 130.0f, 0.0f}, 0, 0, {0}},
 };
 
 /**
@@ -122,7 +121,7 @@ BattleStageObjectData tou_btlobject_data[] = {
  * for the Rawk Hawk fight (objects 6-13). Both run bgset_tou_screen_evt to drive the big screen and keep
  * the background sets from being destroyed.
  */
-BattleStageData tou_btlstage_data[] = {
+static BattleStageData tou_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_03_0", // specificStageDataDir
@@ -154,10 +153,10 @@ BattleStageData tou_btlstage_data[] = {
 };
 
 /** Enemy lineup of the Goomba Bros. match (BTLNO_TOU_01_01): Goomba Bros. x5. */
-BattleUnitSetup btlparty_tou_tou_rank_19[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_19[] = {
     {
         &unit_kurikuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {10.0f, 0.0f, -20.0f}, // position
@@ -167,7 +166,7 @@ BattleUnitSetup btlparty_tou_tou_rank_19[] = {
     },
     {
         &unit_kurikuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -177,7 +176,7 @@ BattleUnitSetup btlparty_tou_tou_rank_19[] = {
     },
     {
         &unit_kurikuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -187,7 +186,7 @@ BattleUnitSetup btlparty_tou_tou_rank_19[] = {
     },
     {
         &unit_kurikuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -197,7 +196,7 @@ BattleUnitSetup btlparty_tou_tou_rank_19[] = {
     },
     {
         &unit_kurikuri, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {170.0f, 0.0f, 20.0f}, // position
@@ -211,7 +210,7 @@ BattleUnitSetup btlparty_tou_tou_rank_19[] = {
  * Battle group of the Goomba Bros. match (BTLNO_TOU_01_01): Goomba Bros. x5, with its item drop odds and
  * heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_19 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_19 = {
     5, // numEnemies
     btlparty_tou_tou_rank_19, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -222,10 +221,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_19 = {
 };
 
 /** Enemy lineup of the KP Koopas match (BTLNO_TOU_01_02): KP Koopa x2, KP Paratroopa. */
-BattleUnitSetup btlparty_tou_tou_rank_18[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_18[] = {
     {
         &unit_nokonoko_fighter, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -235,7 +234,7 @@ BattleUnitSetup btlparty_tou_tou_rank_18[] = {
     },
     {
         &unit_nokonoko_fighter, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -245,7 +244,7 @@ BattleUnitSetup btlparty_tou_tou_rank_18[] = {
     },
     {
         &unit_patapata_fighter, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -259,7 +258,7 @@ BattleUnitSetup btlparty_tou_tou_rank_18[] = {
  * Battle group of the KP Koopas match (BTLNO_TOU_01_02): KP Koopa x2, KP Paratroopa, with its item drop
  * odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_18 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_18 = {
     3, // numEnemies
     btlparty_tou_tou_rank_18, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -270,10 +269,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_18 = {
 };
 
 /** Enemy lineup of the Pokey Triplets match (BTLNO_TOU_01_03): Pokey x3. */
-BattleUnitSetup btlparty_tou_tou_rank_17[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_17[] = {
     {
         &unit_sambo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -283,7 +282,7 @@ BattleUnitSetup btlparty_tou_tou_rank_17[] = {
     },
     {
         &unit_sambo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -293,7 +292,7 @@ BattleUnitSetup btlparty_tou_tou_rank_17[] = {
     },
     {
         &unit_sambo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -307,7 +306,7 @@ BattleUnitSetup btlparty_tou_tou_rank_17[] = {
  * Battle group of the Pokey Triplets match (BTLNO_TOU_01_03): Pokey x3, with its item drop odds and heart
  * and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_17 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_17 = {
     3, // numEnemies
     btlparty_tou_tou_rank_17, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -318,10 +317,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_17 = {
 };
 
 /** Enemy lineup of the Dead Bones match (BTLNO_TOU_01_04): Dull Bones x3. */
-BattleUnitSetup btlparty_tou_tou_rank_16[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_16[] = {
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -331,7 +330,7 @@ BattleUnitSetup btlparty_tou_tou_rank_16[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -341,7 +340,7 @@ BattleUnitSetup btlparty_tou_tou_rank_16[] = {
     },
     {
         &unit_honenoko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -355,7 +354,7 @@ BattleUnitSetup btlparty_tou_tou_rank_16[] = {
  * Battle group of the Dead Bones match (BTLNO_TOU_01_04): Dull Bones x3, with its item drop odds and heart
  * and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_16 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_16 = {
     3, // numEnemies
     btlparty_tou_tou_rank_16, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -366,10 +365,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_16 = {
 };
 
 /** Enemy lineup of the Spike Storm match (BTLNO_TOU_01_05): Spiny x2, Lakitu. */
-BattleUnitSetup btlparty_tou_tou_rank_15[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_15[] = {
     {
         &unit_togezo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -379,7 +378,7 @@ BattleUnitSetup btlparty_tou_tou_rank_15[] = {
     },
     {
         &unit_togezo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -389,7 +388,7 @@ BattleUnitSetup btlparty_tou_tou_rank_15[] = {
     },
     {
         &unit_jyugem, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -403,7 +402,7 @@ BattleUnitSetup btlparty_tou_tou_rank_15[] = {
  * Battle group of the Spike Storm match (BTLNO_TOU_01_05): Spiny x2, Lakitu, with its item drop odds and
  * heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_15 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_15 = {
     3, // numEnemies
     btlparty_tou_tou_rank_15, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -414,10 +413,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_15 = {
 };
 
 /** Enemy lineup of the Mind-Bogglers match (BTLNO_TOU_01_06): Pale Piranha, Dark Puff, Pider. */
-BattleUnitSetup btlparty_tou_tou_rank_14[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_14[] = {
     {
         &unit_monochrome_pakkun, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -427,7 +426,7 @@ BattleUnitSetup btlparty_tou_tou_rank_14[] = {
     },
     {
         &unit_monochrome_kurokumorn, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -437,7 +436,7 @@ BattleUnitSetup btlparty_tou_tou_rank_14[] = {
     },
     {
         &unit_piders, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 40.0f, 10.0f}, // position
@@ -451,7 +450,7 @@ BattleUnitSetup btlparty_tou_tou_rank_14[] = {
  * Battle group of the Mind-Bogglers match (BTLNO_TOU_01_06): Pale Piranha, Dark Puff, Pider, with its item
  * drop odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_14 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_14 = {
     3, // numEnemies
     btlparty_tou_tou_rank_14, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -462,10 +461,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_14 = {
 };
 
 /** Enemy lineup of the Punk Rocks match (BTLNO_TOU_01_07): H. Bald Cleft x3. */
-BattleUnitSetup btlparty_tou_tou_rank_13[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_13[] = {
     {
         &unit_hyper_sinnosuke, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -475,7 +474,7 @@ BattleUnitSetup btlparty_tou_tou_rank_13[] = {
     },
     {
         &unit_hyper_sinnosuke, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -485,7 +484,7 @@ BattleUnitSetup btlparty_tou_tou_rank_13[] = {
     },
     {
         &unit_hyper_sinnosuke, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -499,7 +498,7 @@ BattleUnitSetup btlparty_tou_tou_rank_13[] = {
  * Battle group of the Punk Rocks match (BTLNO_TOU_01_07): H. Bald Cleft x3, with its item drop odds and
  * heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_13 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_13 = {
     3, // numEnemies
     btlparty_tou_tou_rank_13, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -510,10 +509,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_13 = {
 };
 
 /** Enemy lineup of the Bob-omb Squad match (BTLNO_TOU_01_08): Bob-omb x4. */
-BattleUnitSetup btlparty_tou_tou_rank_12[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_12[] = {
     {
         &unit_bomhei, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -523,7 +522,7 @@ BattleUnitSetup btlparty_tou_tou_rank_12[] = {
     },
     {
         &unit_bomhei, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -533,7 +532,7 @@ BattleUnitSetup btlparty_tou_tou_rank_12[] = {
     },
     {
         &unit_bomhei, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -543,7 +542,7 @@ BattleUnitSetup btlparty_tou_tou_rank_12[] = {
     },
     {
         &unit_bomhei, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -557,7 +556,7 @@ BattleUnitSetup btlparty_tou_tou_rank_12[] = {
  * Battle group of the Bob-omb Squad match (BTLNO_TOU_01_08): Bob-omb x4, with its item drop odds and heart
  * and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_12 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_12 = {
     4, // numEnemies
     btlparty_tou_tou_rank_12, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -568,10 +567,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_12 = {
 };
 
 /** Enemy lineup of the Hand-It-Overs match (BTLNO_TOU_01_09): Bandit x2, Big Bandit x2. */
-BattleUnitSetup btlparty_tou_tou_rank_11[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_11[] = {
     {
         &unit_borodo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -581,7 +580,7 @@ BattleUnitSetup btlparty_tou_tou_rank_11[] = {
     },
     {
         &unit_borodo, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -591,7 +590,7 @@ BattleUnitSetup btlparty_tou_tou_rank_11[] = {
     },
     {
         &unit_borodo_king, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -601,7 +600,7 @@ BattleUnitSetup btlparty_tou_tou_rank_11[] = {
     },
     {
         &unit_borodo_king, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -615,7 +614,7 @@ BattleUnitSetup btlparty_tou_tou_rank_11[] = {
  * Battle group of the Hand-It-Overs match (BTLNO_TOU_01_09): Bandit x2, Big Bandit x2, with its item drop
  * odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_11 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_11 = {
     4, // numEnemies
     btlparty_tou_tou_rank_11, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -626,10 +625,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_11 = {
 };
 
 /** Enemy lineup of the Armored Harriers match (BTLNO_TOU_01_10): Iron Cleft x2. */
-BattleUnitSetup btlparty_tou_tou_rank_10[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_10[] = {
     {
         &unit_iron_sinemon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {80.0f, 0.0f, 0.0f}, // position
@@ -639,7 +638,7 @@ BattleUnitSetup btlparty_tou_tou_rank_10[] = {
     },
     {
         &unit_iron_sinemon2, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 10.0f}, // position
@@ -653,7 +652,7 @@ BattleUnitSetup btlparty_tou_tou_rank_10[] = {
  * Battle group of the Armored Harriers match (BTLNO_TOU_01_10): Iron Cleft x2, with its item drop odds and
  * heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_10 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_10 = {
     2, // numEnemies
     btlparty_tou_tou_rank_10, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -664,10 +663,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_10 = {
 };
 
 /** Enemy lineup of the Tiny Spinies match (BTLNO_TOU_01_11): R. S. Buzzy x2. */
-BattleUnitSetup btlparty_tou_tou_rank_9[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_9[] = {
     {
         &unit_crimson_togemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -677,7 +676,7 @@ BattleUnitSetup btlparty_tou_tou_rank_9[] = {
     },
     {
         &unit_crimson_togemet, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -691,7 +690,7 @@ BattleUnitSetup btlparty_tou_tou_rank_9[] = {
  * Battle group of the Tiny Spinies match (BTLNO_TOU_01_11): R. S. Buzzy x2, with its item drop odds and
  * heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_9 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_9 = {
     2, // numEnemies
     btlparty_tou_tou_rank_9, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -702,10 +701,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_9 = {
 };
 
 /** Enemy lineup of the Poker Faces match (BTLNO_TOU_01_12): Bristle x2. */
-BattleUnitSetup btlparty_tou_tou_rank_8[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_8[] = {
     {
         &unit_togedaruma, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -715,7 +714,7 @@ BattleUnitSetup btlparty_tou_tou_rank_8[] = {
     },
     {
         &unit_togedaruma, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -729,7 +728,7 @@ BattleUnitSetup btlparty_tou_tou_rank_8[] = {
  * Battle group of the Poker Faces match (BTLNO_TOU_01_12): Bristle x2, with its item drop odds and heart
  * and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_8 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_8 = {
     2, // numEnemies
     btlparty_tou_tou_rank_8, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -740,10 +739,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_8 = {
 };
 
 /** Enemy lineup of the Shellshockers match (BTLNO_TOU_01_13): Shady Koopa x2, S. Paratroopa. */
-BattleUnitSetup btlparty_tou_tou_rank_7[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_7[] = {
     {
         &unit_ura_noko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -753,7 +752,7 @@ BattleUnitSetup btlparty_tou_tou_rank_7[] = {
     },
     {
         &unit_ura_pata, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 40.0f, 0.0f}, // position
@@ -763,7 +762,7 @@ BattleUnitSetup btlparty_tou_tou_rank_7[] = {
     },
     {
         &unit_ura_noko, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -777,7 +776,7 @@ BattleUnitSetup btlparty_tou_tou_rank_7[] = {
  * Battle group of the Shellshockers match (BTLNO_TOU_01_13): Shady Koopa x2, S. Paratroopa, with its item
  * drop odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_7 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_7 = {
     3, // numEnemies
     btlparty_tou_tou_rank_7, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -788,10 +787,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_7 = {
 };
 
 /** Enemy lineup of The Fuzz match (BTLNO_TOU_01_14): Fuzzy, Green Fuzzy, Flower Fuzzy. */
-BattleUnitSetup btlparty_tou_tou_rank_6[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_6[] = {
     {
         &unit_chorobon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -801,7 +800,7 @@ BattleUnitSetup btlparty_tou_tou_rank_6[] = {
     },
     {
         &unit_green_chorobon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -811,7 +810,7 @@ BattleUnitSetup btlparty_tou_tou_rank_6[] = {
     },
     {
         &unit_flower_chorobon, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -825,7 +824,7 @@ BattleUnitSetup btlparty_tou_tou_rank_6[] = {
  * Battle group of The Fuzz match (BTLNO_TOU_01_14): Fuzzy, Green Fuzzy, Flower Fuzzy, with its item drop
  * odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_6 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_6 = {
     3, // numEnemies
     btlparty_tou_tou_rank_6, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -838,10 +837,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_6 = {
 /**
  * Enemy lineup of the Magikoopa Masters match (BTLNO_TOU_01_15): R. Magikoopa, W. Magikoopa, G. Magikoopa.
  */
-BattleUnitSetup btlparty_tou_tou_rank_5[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_5[] = {
     {
         &unit_kamec_red, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -851,7 +850,7 @@ BattleUnitSetup btlparty_tou_tou_rank_5[] = {
     },
     {
         &unit_kamec_white, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -861,7 +860,7 @@ BattleUnitSetup btlparty_tou_tou_rank_5[] = {
     },
     {
         &unit_kamec_green, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -875,7 +874,7 @@ BattleUnitSetup btlparty_tou_tou_rank_5[] = {
  * Battle group of the Magikoopa Masters match (BTLNO_TOU_01_15): R. Magikoopa, W. Magikoopa, G. Magikoopa,
  * with its item drop odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_5 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_5 = {
     3, // numEnemies
     btlparty_tou_tou_rank_5, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -886,10 +885,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_5 = {
 };
 
 /** Enemy lineup of the Craw-Daddy match (BTLNO_TOU_01_16): Dark Craw. */
-BattleUnitSetup btlparty_tou_tou_rank_4[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_4[] = {
     {
         &unit_dark_keeper, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -903,7 +902,7 @@ BattleUnitSetup btlparty_tou_tou_rank_4[] = {
  * Battle group of the Craw-Daddy match (BTLNO_TOU_01_16): Dark Craw, with its item drop odds and heart and
  * flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_4 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_4 = {
     1, // numEnemies
     btlparty_tou_tou_rank_4, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -916,10 +915,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_4 = {
 /**
  * Enemy lineup of the Hamma, Bamma, and Flare match (BTLNO_TOU_01_17): Hammer Bro, Fire Bro, Boomerang Bro.
  */
-BattleUnitSetup btlparty_tou_tou_rank_3[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_3[] = {
     {
         &unit_hammer_bros, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {50.0f, 0.0f, -10.0f}, // position
@@ -929,7 +928,7 @@ BattleUnitSetup btlparty_tou_tou_rank_3[] = {
     },
     {
         &unit_fire_bros, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -939,7 +938,7 @@ BattleUnitSetup btlparty_tou_tou_rank_3[] = {
     },
     {
         &unit_boomerang_bros, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {130.0f, 0.0f, 10.0f}, // position
@@ -953,7 +952,7 @@ BattleUnitSetup btlparty_tou_tou_rank_3[] = {
  * Battle group of the Hamma, Bamma, and Flare match (BTLNO_TOU_01_17): Hammer Bro, Fire Bro, Boomerang Bro,
  * with its item drop odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_3 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_3 = {
     3, // numEnemies
     btlparty_tou_tou_rank_3, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -964,10 +963,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_3 = {
 };
 
 /** Enemy lineup of the Chomp Country match (BTLNO_TOU_01_18): Red Chomp x2. */
-BattleUnitSetup btlparty_tou_tou_rank_2[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_2[] = {
     {
         &unit_burst_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -977,7 +976,7 @@ BattleUnitSetup btlparty_tou_tou_rank_2[] = {
     },
     {
         &unit_burst_wanwan, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -991,7 +990,7 @@ BattleUnitSetup btlparty_tou_tou_rank_2[] = {
  * Battle group of the Chomp Country match (BTLNO_TOU_01_18): Red Chomp x2, with its item drop odds and
  * heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_2 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_2 = {
     2, // numEnemies
     btlparty_tou_tou_rank_2, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1002,10 +1001,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_2 = {
 };
 
 /** Enemy lineup of the Koopinator match (BTLNO_TOU_01_19): D. Koopatrol. */
-BattleUnitSetup btlparty_tou_tou_rank_1[] = {
+static BattleUnitSetup btlparty_tou_tou_rank_1[] = {
     {
         &unit_togenoko_ace, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1019,7 +1018,7 @@ BattleUnitSetup btlparty_tou_tou_rank_1[] = {
  * Battle group of the Koopinator match (BTLNO_TOU_01_19): D. Koopatrol, with its item drop odds and heart
  * and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_rank_1 = {
+static BattleGroupSetup btlgrp_tou_tou_rank_1 = {
     1, // numEnemies
     btlparty_tou_tou_rank_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1030,10 +1029,10 @@ BattleGroupSetup btlgrp_tou_tou_rank_1 = {
 };
 
 /** Enemy lineup of the Wings of Night match (BTLNO_TOU_01_20): Swooper x4. */
-BattleUnitSetup btlparty_tou_tou_add_1[] = {
+static BattleUnitSetup btlparty_tou_tou_add_1[] = {
     {
         &unit_basabasa, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 130.0f, -10.0f}, // position
@@ -1043,7 +1042,7 @@ BattleUnitSetup btlparty_tou_tou_add_1[] = {
     },
     {
         &unit_basabasa, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 130.0f, 0.0f}, // position
@@ -1053,7 +1052,7 @@ BattleUnitSetup btlparty_tou_tou_add_1[] = {
     },
     {
         &unit_basabasa, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 130.0f, 10.0f}, // position
@@ -1063,7 +1062,7 @@ BattleUnitSetup btlparty_tou_tou_add_1[] = {
     },
     {
         &unit_basabasa, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 130.0f, 20.0f}, // position
@@ -1077,7 +1076,7 @@ BattleUnitSetup btlparty_tou_tou_add_1[] = {
  * Battle group of the Wings of Night match (BTLNO_TOU_01_20): Swooper x4, with its item drop odds and heart
  * and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_add_1 = {
+static BattleGroupSetup btlgrp_tou_tou_add_1 = {
     4, // numEnemies
     btlparty_tou_tou_add_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1088,10 +1087,10 @@ BattleGroupSetup btlgrp_tou_tou_add_1 = {
 };
 
 /** Enemy lineup of the Destructors match (BTLNO_TOU_01_21): Spinia x2, Spania x2. */
-BattleUnitSetup btlparty_tou_tou_add_2[] = {
+static BattleUnitSetup btlparty_tou_tou_add_2[] = {
     {
         &unit_hinnya, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {30.0f, 0.0f, -10.0f}, // position
@@ -1101,7 +1100,7 @@ BattleUnitSetup btlparty_tou_tou_add_2[] = {
     },
     {
         &unit_hannya, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, 0.0f, 0.0f}, // position
@@ -1111,7 +1110,7 @@ BattleUnitSetup btlparty_tou_tou_add_2[] = {
     },
     {
         &unit_hinnya, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {110.0f, 0.0f, 10.0f}, // position
@@ -1121,7 +1120,7 @@ BattleUnitSetup btlparty_tou_tou_add_2[] = {
     },
     {
         &unit_hannya, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {150.0f, 0.0f, 20.0f}, // position
@@ -1135,7 +1134,7 @@ BattleUnitSetup btlparty_tou_tou_add_2[] = {
  * Battle group of the Destructors match (BTLNO_TOU_01_21): Spinia x2, Spania x2, with its item drop odds
  * and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_add_2 = {
+static BattleGroupSetup btlgrp_tou_tou_add_2 = {
     4, // numEnemies
     btlparty_tou_tou_add_2, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1146,10 +1145,10 @@ BattleGroupSetup btlgrp_tou_tou_add_2 = {
 };
 
 /** Enemy lineup of the boss fight against Macho Grubba (BTLNO_TOU_01_23): Macho Grubba. */
-BattleUnitSetup btlparty_tou_tou_boss[] = {
+static BattleUnitSetup btlparty_tou_tou_boss[] = {
     {
         &unit_boss_macho_gance, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1163,7 +1162,7 @@ BattleUnitSetup btlparty_tou_tou_boss[] = {
  * Battle group of the boss fight against Macho Grubba (BTLNO_TOU_01_23): Macho Grubba, with its item drop
  * odds and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_boss = {
+static BattleGroupSetup btlgrp_tou_tou_boss = {
     1, // numEnemies
     btlparty_tou_tou_boss, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1174,10 +1173,10 @@ BattleGroupSetup btlgrp_tou_tou_boss = {
 };
 
 /** Enemy lineup of the title match against Rawk Hawk (BTLNO_TOU_01_22): Rawk Hawk. */
-BattleUnitSetup btlparty_tou_tou_champ[] = {
+static BattleUnitSetup btlparty_tou_tou_champ[] = {
     {
         &unit_boss_champion, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1191,7 +1190,7 @@ BattleUnitSetup btlparty_tou_tou_champ[] = {
  * Battle group of the title match against Rawk Hawk (BTLNO_TOU_01_22): Rawk Hawk, with its item drop odds
  * and heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_champ = {
+static BattleGroupSetup btlgrp_tou_tou_champ = {
     1, // numEnemies
     btlparty_tou_tou_champ, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1202,10 +1201,10 @@ BattleGroupSetup btlgrp_tou_tou_champ = {
 };
 
 /** Enemy lineup of Bowser's surprise intrusion fight (BTLNO_TOU_01_24): Bowser. */
-BattleUnitSetup btlparty_tou_tou_koopa[] = {
+static BattleUnitSetup btlparty_tou_tou_koopa[] = {
     {
         &unit_boss_koopa_tou, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -1219,7 +1218,7 @@ BattleUnitSetup btlparty_tou_tou_koopa[] = {
  * Battle group of Bowser's surprise intrusion fight (BTLNO_TOU_01_24): Bowser, with its item drop odds and
  * heart and flower drop tables.
  */
-BattleGroupSetup btlgrp_tou_tou_koopa = {
+static BattleGroupSetup btlgrp_tou_tou_koopa = {
     1, // numEnemies
     btlparty_tou_tou_koopa, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -1230,7 +1229,7 @@ BattleGroupSetup btlgrp_tou_tou_koopa = {
 };
 
 /** Debug battle choice BTLNO_TOU_TEST1: reuses the Goomba Bros. group on the normal arena. */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_test1_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_test1_off[] = {
     {50, &btlgrp_tou_tou_rank_19, tou_btlstage_data},
     {0},
 };
@@ -1239,7 +1238,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_test1_off[] = {
  * Group choice for the Goomba Bros. match (BTLNO_TOU_01_01): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_01_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_01_off[] = {
     {50, &btlgrp_tou_tou_rank_19, tou_btlstage_data},
     {0},
 };
@@ -1248,7 +1247,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_01_off[] = {
  * Group choice for the KP Koopas match (BTLNO_TOU_01_02): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_02_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_02_off[] = {
     {50, &btlgrp_tou_tou_rank_18, tou_btlstage_data},
     {0},
 };
@@ -1257,7 +1256,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_02_off[] = {
  * Group choice for the Pokey Triplets match (BTLNO_TOU_01_03): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_03_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_03_off[] = {
     {50, &btlgrp_tou_tou_rank_17, tou_btlstage_data},
     {0},
 };
@@ -1266,7 +1265,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_03_off[] = {
  * Group choice for the Dead Bones match (BTLNO_TOU_01_04): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_04_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_04_off[] = {
     {50, &btlgrp_tou_tou_rank_16, tou_btlstage_data},
     {0},
 };
@@ -1275,7 +1274,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_04_off[] = {
  * Group choice for the Spike Storm match (BTLNO_TOU_01_05): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_05_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_05_off[] = {
     {50, &btlgrp_tou_tou_rank_15, tou_btlstage_data},
     {0},
 };
@@ -1284,7 +1283,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_05_off[] = {
  * Group choice for the Mind-Bogglers match (BTLNO_TOU_01_06): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_06_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_06_off[] = {
     {50, &btlgrp_tou_tou_rank_14, tou_btlstage_data},
     {0},
 };
@@ -1293,7 +1292,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_06_off[] = {
  * Group choice for the Punk Rocks match (BTLNO_TOU_01_07): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_07_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_07_off[] = {
     {50, &btlgrp_tou_tou_rank_13, tou_btlstage_data},
     {0},
 };
@@ -1302,7 +1301,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_07_off[] = {
  * Group choice for the Bob-omb Squad match (BTLNO_TOU_01_08): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_08_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_08_off[] = {
     {50, &btlgrp_tou_tou_rank_12, tou_btlstage_data},
     {0},
 };
@@ -1311,7 +1310,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_08_off[] = {
  * Group choice for the Hand-It-Overs match (BTLNO_TOU_01_09): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_09_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_09_off[] = {
     {50, &btlgrp_tou_tou_rank_11, tou_btlstage_data},
     {0},
 };
@@ -1320,7 +1319,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_09_off[] = {
  * Group choice for the Armored Harriers match (BTLNO_TOU_01_10): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_10_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_10_off[] = {
     {50, &btlgrp_tou_tou_rank_10, tou_btlstage_data},
     {0},
 };
@@ -1329,7 +1328,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_10_off[] = {
  * Group choice for the Tiny Spinies match (BTLNO_TOU_01_11): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_11_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_11_off[] = {
     {50, &btlgrp_tou_tou_rank_9, tou_btlstage_data},
     {0},
 };
@@ -1338,7 +1337,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_11_off[] = {
  * Group choice for the Poker Faces match (BTLNO_TOU_01_12): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_12_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_12_off[] = {
     {50, &btlgrp_tou_tou_rank_8, tou_btlstage_data},
     {0},
 };
@@ -1347,7 +1346,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_12_off[] = {
  * Group choice for the Shellshockers match (BTLNO_TOU_01_13): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_13_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_13_off[] = {
     {50, &btlgrp_tou_tou_rank_7, tou_btlstage_data},
     {0},
 };
@@ -1356,7 +1355,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_13_off[] = {
  * Group choice for The Fuzz match (BTLNO_TOU_01_14): always the one listed group (weight 50) on the normal
  * arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_14_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_14_off[] = {
     {50, &btlgrp_tou_tou_rank_6, tou_btlstage_data},
     {0},
 };
@@ -1365,7 +1364,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_14_off[] = {
  * Group choice for the Magikoopa Masters match (BTLNO_TOU_01_15): always the one listed group (weight 50)
  * on the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_15_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_15_off[] = {
     {50, &btlgrp_tou_tou_rank_5, tou_btlstage_data},
     {0},
 };
@@ -1374,7 +1373,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_15_off[] = {
  * Group choice for the Craw-Daddy match (BTLNO_TOU_01_16): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_16_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_16_off[] = {
     {50, &btlgrp_tou_tou_rank_4, tou_btlstage_data},
     {0},
 };
@@ -1383,7 +1382,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_16_off[] = {
  * Group choice for the Hamma, Bamma, and Flare match (BTLNO_TOU_01_17): always the one listed group (weight
  * 50) on the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_17_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_17_off[] = {
     {50, &btlgrp_tou_tou_rank_3, tou_btlstage_data},
     {0},
 };
@@ -1392,7 +1391,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_17_off[] = {
  * Group choice for the Chomp Country match (BTLNO_TOU_01_18): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_18_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_18_off[] = {
     {50, &btlgrp_tou_tou_rank_2, tou_btlstage_data},
     {0},
 };
@@ -1401,7 +1400,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_18_off[] = {
  * Group choice for the Koopinator match (BTLNO_TOU_01_19): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_19_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_19_off[] = {
     {50, &btlgrp_tou_tou_rank_1, tou_btlstage_data},
     {0},
 };
@@ -1410,7 +1409,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_19_off[] = {
  * Group choice for the Wings of Night match (BTLNO_TOU_01_20): always the one listed group (weight 50) on
  * the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_20_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_20_off[] = {
     {50, &btlgrp_tou_tou_add_1, tou_btlstage_data},
     {0},
 };
@@ -1419,7 +1418,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_20_off[] = {
  * Group choice for the Destructors match (BTLNO_TOU_01_21): always the one listed group (weight 50) on the
  * normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_21_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_21_off[] = {
     {50, &btlgrp_tou_tou_add_2, tou_btlstage_data},
     {0},
 };
@@ -1428,7 +1427,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_21_off[] = {
  * Group choice for the title match against Rawk Hawk (BTLNO_TOU_01_22): always the one listed group (weight
  * 50) on the title-match arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_22_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_22_off[] = {
     {50, &btlgrp_tou_tou_champ, &tou_btlstage_data[1]},
     {0},
 };
@@ -1437,7 +1436,7 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_22_off[] = {
  * Group choice for the boss fight against Macho Grubba (BTLNO_TOU_01_23): always the one listed group
  * (weight 50) on the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_23_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_23_off[] = {
     {50, &btlgrp_tou_tou_boss, tou_btlstage_data},
     {0},
 };
@@ -1446,18 +1445,11 @@ NpcBattleSelect btlgrpsel_tou_btlno_tou_01_23_off[] = {
  * Group choice for Bowser's surprise intrusion fight (BTLNO_TOU_01_24): always the one listed group (weight
  * 50) on the normal arena stage.
  */
-NpcBattleSelect btlgrpsel_tou_btlno_tou_01_24_off[] = {
+static NpcBattleSelect btlgrpsel_tou_btlno_tou_01_24_off[] = {
     {50, &btlgrp_tou_tou_koopa, tou_btlstage_data},
     {0},
 };
 
-/**
- * Encounter table of the Glitz Pit, indexed by BTLNO_TOU_*: a debug entry, then the 24 matches of tou_03
- * from the Goomba Bros. up to Macho Grubba and the surprise Bowser fight. Each entry names the fighter
- * team, allows losing the match (NPC_BATTLE_LOSS_OK; not for the Macho Grubba boss fight, nor for the
- * Bowser intrusion in the Japanese versions) and sets the battle music. Registered with relSetBtlAddr in
- * tou2.c.
- */
 NpcSetupBattleInfo btlsetup_tou_tbl[] = {
     {
         "マップstg_03_0", // name
@@ -1465,7 +1457,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -1476,7 +1468,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_01_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1488,7 +1480,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_02_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {10, 10}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1500,7 +1492,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_03_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1512,7 +1504,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_04_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1524,7 +1516,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_05_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1536,7 +1528,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_06_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1548,7 +1540,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_07_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1560,7 +1552,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_08_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1572,7 +1564,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_09_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1584,7 +1576,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_10_off, // select
-        NPC_BATTLE_LOSS_OK | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_GAME_OVER | NPC_BATTLE_STORY), // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_CHUBOSS_BATTLE1", // bgmName
@@ -1596,7 +1588,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_11_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1608,7 +1600,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_12_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1620,7 +1612,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_13_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {10, 10}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1632,7 +1624,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_14_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1644,7 +1636,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_15_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {10, 10}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1656,7 +1648,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_16_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1668,7 +1660,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_17_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1680,7 +1672,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_18_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1692,7 +1684,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_19_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {10, 10}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1704,7 +1696,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_20_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1716,7 +1708,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_21_off, // select
-        NPC_BATTLE_LOSS_OK, // battleFlags
+        NPC_BATTLE_NO_GAME_OVER, // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
@@ -1728,7 +1720,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_22_off, // select
-        NPC_BATTLE_LOSS_OK | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_GAME_OVER | NPC_BATTLE_STORY), // battleFlags
         0, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG3_CHAMP1", // bgmName
@@ -1740,7 +1732,7 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_23_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         6, // randomMode
         {{4, 4}, {4, 4}, {0}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG3_GANCE1", // bgmName
@@ -1753,21 +1745,17 @@ NpcSetupBattleInfo btlsetup_tou_tbl[] = {
         NULL, // altSelect
         btlgrpsel_tou_btlno_tou_01_24_off, // select
 #if VERSION >= VERSION_US
-        NPC_BATTLE_LOSS_OK | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_GAME_OVER | NPC_BATTLE_STORY), // battleFlags
 #else
-        NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        NPC_BATTLE_STORY, // battleFlags
 #endif
-        0, // randomMode
+        0, // field_1C
         {{0}, {0}, {0}, {0}, {4, 4}, {4, 4}, {0}, {0}, {4, 4}, {0}, {4, 4}, {4, 4}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG8_KOOPA", // bgmName
     },
     {0},
 };
 
-/**
- * Maps the BTLNO_TOU_* battle ids to their index in btlsetup_tou_tbl; registered with relSetBtlAddr in
- * tou2.c.
- */
 NpcTerritoryInfo btl_tou_setup_no_tbl[] = {
     {"BTLNO_TOU_TEST1", 0},
     {"BTLNO_TOU_01_01", 1},
@@ -1802,11 +1790,11 @@ NpcTerritoryInfo btl_tou_setup_no_tbl[] = {
  * initialises the big monitor texture, then installs tou_gamen_screen_tev as TEV callback 8 on the "gamen"
  * (screen) map object so the monitor shows the battle picture.
  */
-EVT_BEGIN(bgset_tou_screen_evt)
+static EVT_BEGIN(bgset_tou_screen_evt)
     CALL(tou_gamen_screen_tev_init)
     WAIT_FRAMES(1)
     CALL(evt_map_set_tevcallback, 8, PTR(tou_gamen_screen_tev))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamen"), MAPOBJ_TEV_CALLBACK(8))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamen"), MAPOBJ_FLAG_DISPLAY_LIST)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamen"), MAP_OBJ_TEV_CALLBACK(8))
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamen"), MAP_OBJ_FLAG_DISPLAY_LIST)
     RETURN
 EVT_END()

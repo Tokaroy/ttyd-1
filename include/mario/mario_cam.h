@@ -1,11 +1,12 @@
 // mario_cam.c: the field camera that follows Mario (marioCamMain, marioUpdateCam, zoom and follow-rate controls).
+
 #pragma once
 
 #include <dolphin/types.h>
 #include "driver/camdrv.h"
 
 s32 marioGetCamId(void);
-void marioCamZoomOffReq2(s32);
+void marioCamZoomOffReq2(s32 value);
 f32 marioGetCamFollowRate(void);
 void marioResetCamFollowRate(void);
 void marioResetCamShift(void);

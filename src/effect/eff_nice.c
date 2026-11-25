@@ -1,4 +1,6 @@
 // Rating text (nice, good, great, wonderful, excellent, lucky) in per-language models, squashing and stretching, with a sound.
+
+#include "version.h"
 #include "eff/eff_nice.h"
 #include "driver/animdrv.h"
 #include "mario/mariost.h"
@@ -9,11 +11,10 @@
 #include "pmario_sound.h"
 #include "system.h"
 #include <dolphin/gx.h>
-#include "version.h"
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
 
-#if VERSION >= VERSION_US
-//.sdata
-const char* anim_jp[] = {
+static const char* anim_jp[] = {
     "EFF_nice",
     "EFF_good",
     "EFF_great",
@@ -22,7 +23,7 @@ const char* anim_jp[] = {
     NULL,
     "EFF_lucky"
 };
-const char* anim_us[] = {
+static const char* anim_us[] = {
     "EFF_nice_us",
     "EFF_good_us",
     "EFF_great_us",
@@ -31,6 +32,8 @@ const char* anim_us[] = {
     NULL,
     "EFF_lucky_us"
 };
+
+#if VERSION >= VERSION_US
 const char* anim_lang3[] = {
     "EFF_nice_D",
     "EFF_good_D",
@@ -68,12 +71,13 @@ const char* anim_lang6[] = {
     "EFF_lucky_I"
 };
 const char** anim_tbl[6] = {anim_jp, anim_us, anim_lang3, anim_lang4, anim_lang5, anim_lang6};
+
 /**
  * Letter textures spelling the Stylish text (type 7) in each language, drawn left to right;
  * -1 leaves a gap.
  */
-s16 acrobat_jp[] = {151, 152, 153, 154, 155, 156, 157};
-s16 acrobat_us[] = {161, 162, 163, 164, 165, 161, 166, 167};
+static s16 acrobat_jp[] = {151, 152, 153, 154, 155, 156, 157};
+static s16 acrobat_us[] = {161, 162, 163, 164, 165, 161, 166, 167};
 s16 acrobat_lang3[] = {157, 158, 158, 159, 160};
 s16 acrobat_lang4[] = {163, 164, 165, 166, 167, 168};
 s16 acrobat_lang5[] = {166, 167, 168, 166, 169, 166, 170, 171, 166};
@@ -82,38 +86,19 @@ typedef struct AcrobatSet {
     s16* tex;
     s32 count;
 } AcrobatSet;
-/** Stylish letter list and letter count for each language, read by acrobatMain and the type 7 draw. */
-AcrobatSet acrobat_tbl[6] = {{acrobat_jp, 7}, {acrobat_us, 8}, {acrobat_lang3, 5}, {acrobat_lang4, 6}, {acrobat_lang5, 9}, {acrobat_lang6, 10}};
-#else
-//.sdata
-const char* anim_jp[] = {
-    "EFF_nice",
-    "EFF_good",
-    "EFF_great",
-    "EFF_wonderful",
-    "EFF_excellent",
-    NULL,
-    "EFF_lucky"
-};
-const char* anim_us[] = {
-    "EFF_nice_us",
-    "EFF_good_us",
-    "EFF_great_us",
-    "EFF_wonderful_us",
-    "EFF_excellent_us",
-    NULL,
-    "EFF_lucky_us"
-};
-static const char** anim_tbl[2] = {anim_jp, anim_us};
-/** Stylish text (type 7) letter textures for Japanese and English in the builds before the US release. */
-s32 acrobat_jp[] = {179, 180, 181, 182, 183, 184, 185};
-s32 acrobat_us[] = {183, 184, 185, 186, 187, 188}; // includes nonexistant textures
-s32* acrobat_tbl[2] = {acrobat_jp, acrobat_us};
-#endif
-// unreferenced zero word in target
 
-// forward declarations
-static void rendermodeFunc(s32 wXluStage);
+/** Stylish letter list and letter count for each language, read by acrobatMain and the type 7 draw. */
+static AcrobatSet acrobat_tbl[6] = {{acrobat_jp, 7}, {acrobat_us, 8}, {acrobat_lang3, 5}, {acrobat_lang4, 6}, {acrobat_lang5, 9}, {acrobat_lang6, 10}};
+#else
+static const char** anim_tbl[2] = {anim_jp, anim_us};
+
+/** Letter textures spelling the Stylish text (type 7) in each language, drawn left to right. */
+static s32 acrobat_jp[] = {179, 180, 181, 182, 183, 184, 185};
+static s32 acrobat_us[] = {183, 184, 185, 186, 187, 188}; // includes nonexistent textures
+/** Stylish letter list for each language, read by the type 7 draw (the letter count is fixed in effNiceEntry). */
+static s32* acrobat_tbl[2] = {acrobat_jp, acrobat_us};
+#endif
+
 static void effNiceMain(EffectEntry* effect);
 
 /**
@@ -151,13 +136,15 @@ static void rendermodeFunc(s32 wXluStage) {
  * battle_damage.c and battle_event_cmd.c call it for Action Command ratings.
  */
 EffectEntry* effNiceEntry(s32 type, f32 x, f32 y, f32 z) {
-    NiceEffectWork *userdata, *ptr;
+    NiceEffectWork* userdata;
     EffectEntry* effect;
     u32 size, count;
     int i;
 
     effect = effEntry();
-    if (type == 5) { // guard for unused slot
+
+    // slot 5 of the animation tables is NULL: use type 0 instead
+    if (type == 5) {
         type = 0;
     }
     switch (type) {
@@ -165,7 +152,7 @@ EffectEntry* effNiceEntry(s32 type, f32 x, f32 y, f32 z) {
 #if VERSION >= VERSION_US
             count = acrobat_tbl[gp->language].count + 1;
 #else
-            if ((u32)gp->language == 0) {
+            if (gp->language == LANGUAGE_JP) {
                 count = 8;
             } else {
                 count = 7;
@@ -183,7 +170,7 @@ EffectEntry* effNiceEntry(s32 type, f32 x, f32 y, f32 z) {
     effect->userdata = userdata;
     memset(userdata, 0, size);
     effect->callback = effNiceMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     userdata->type = type;
     userdata->position.x = x;
     userdata->position.y = y;
@@ -195,23 +182,21 @@ EffectEntry* effNiceEntry(s32 type, f32 x, f32 y, f32 z) {
     userdata->poseId = -1;
     switch (type) {
         case 7:
-            ptr = userdata + 1;
-            for (i = 1; i < effect->count; i++, ptr++) {
-                ptr->position.x = 1000.0f;
-                ptr->position.y = 0.0f;
-                ptr->position.z = 0.0f;
-                ptr->scaleX = 1.0f;
-                ptr->scaleY = 1.0f;
-                ptr->scaleZ = 1.0f;
-                ptr->state = 0;
-                ptr->timer = 0;
+            for (i = 1; i < effect->count; i++) {
+                userdata[i].position.x = 1000.0f;
+                userdata[i].position.y = 0.0f;
+                userdata[i].position.z = 0.0f;
+                userdata[i].scaleX = 1.0f;
+                userdata[i].scaleY = 1.0f;
+                userdata[i].scaleZ = 1.0f;
+                userdata[i].state = 0;
+                userdata[i].timer = 0;
             }
             break;
         default:
-            size = gp->inBattle != 0;
-            userdata->poseId = animPoseEntry(anim_tbl[gp->language][type], size);
+            userdata->poseId = animPoseEntry(anim_tbl[gp->language][type], gp->inBattle ? 1 : 0);
             animPoseSetAnim(userdata->poseId, "A_1", TRUE);
-            animPoseSetMaterialFlagOn(userdata->poseId, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+            animPoseSetMaterialFlagOn(userdata->poseId, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
             animPoseSetGXFunc(userdata->poseId, rendermodeFunc, FALSE);
             break;
     }
@@ -240,8 +225,8 @@ static void effNiceMain(EffectEntry* effect) {
     tmp.z = wp->position.z;
     pos = tmp;
     type = wp->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (wp->poseId != -1) {
             animPoseRelease(wp->poseId);
         }
@@ -252,16 +237,16 @@ static void effNiceMain(EffectEntry* effect) {
         pose = animPoseGetAnimPosePtr(wp->poseId);
         data = animPoseGetAnimDataPtr(wp->poseId);
         animPoseMain(wp->poseId);
-#if VERSION >= VERSION_US
         switch (type) {
             case 0:
+#if VERSION >= VERSION_US
             case 1:
             case 2:
             case 3:
             case 4:
             case 5:
             case 6:
-                len = data->loopInfo[2];
+                len = data->loopInfo->end;
                 {
                     f32 tbl[7][6] = {
                         {32.0f, 34.0f, 34.0f, 34.0f, 34.0f, 36.0f},
@@ -273,71 +258,64 @@ static void effNiceMain(EffectEntry* effect) {
                         {1000.0f, 37.0f, 46.0f, 42.0f, 39.0f, 62.0f},
                     };
                     start = tbl[type][gp->language];
+#else
+            case 1: {
+                len = data->loopInfo->end;
+                start = (gp->language == LANGUAGE_JP) ? 32.0f : 34.0f;
+#endif
                     if (pose->localFrame > start) {
                         t = 1.0f - (pose->localFrame - start) / (len - start);
-                        if (t < 0.0f)
+                        if (t < 0.0f) {
                             t = 0.0f;
-                        animPoseSetMaterialFlagOn(wp->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                        }
+                        animPoseSetMaterialFlagOn(wp->poseId, MAP_OBJ_FLAG_COLOR);
                         animPoseSetMaterialEvtColor(wp->poseId, (GXColor){0xFF, 0xFF, 0xFF, 255.0f * t});
                     }
+#if VERSION >= VERSION_US
                 }
-                break;
-        }
 #else
-        switch (type) {
-            case 0:
-            case 1: {
-                len = data->loopInfo[2];
-                start = ((u32)gp->language == 0) ? 32.0f : 34.0f;
+                break;
+            }
+            case 2:
+                len = data->loopInfo->end;
+                start = (gp->language == LANGUAGE_JP) ? 35.0f : 37.0f;
                 if (pose->localFrame > start) {
                     t = 1.0f - (pose->localFrame - start) / (len - start);
-                    if (t < 0.0f)
+                    if (t < 0.0f) {
                         t = 0.0f;
-                    animPoseSetMaterialFlagOn(wp->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                    }
+                    animPoseSetMaterialFlagOn(wp->poseId, MAP_OBJ_FLAG_COLOR);
                     animPoseSetMaterialEvtColor(wp->poseId, (GXColor){0xFF, 0xFF, 0xFF, 255.0f * t});
                 }
                 break;
-            }
-            case 2: {
-                len = data->loopInfo[2];
-                start = ((u32)gp->language == 0) ? 35.0f : 37.0f;
+            case 3:
+                len = data->loopInfo->end;
+                start = (gp->language == LANGUAGE_JP) ? 45.0f : 40.0f;
                 if (pose->localFrame > start) {
                     t = 1.0f - (pose->localFrame - start) / (len - start);
-                    if (t < 0.0f)
+                    if (t < 0.0f) {
                         t = 0.0f;
-                    animPoseSetMaterialFlagOn(wp->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                    }
+                    animPoseSetMaterialFlagOn(wp->poseId, MAP_OBJ_FLAG_COLOR);
                     animPoseSetMaterialEvtColor(wp->poseId, (GXColor){0xFF, 0xFF, 0xFF, 255.0f * t});
                 }
                 break;
-            }
-            case 3: {
-                len = data->loopInfo[2];
-                start = ((u32)gp->language == 0) ? 45.0f : 40.0f;
+            case 4:
+                len = data->loopInfo->end;
+                start = (gp->language == LANGUAGE_JP) ? 48.0f : 40.0f;
                 if (pose->localFrame > start) {
                     t = 1.0f - (pose->localFrame - start) / (len - start);
-                    if (t < 0.0f)
+                    if (t < 0.0f) {
                         t = 0.0f;
-                    animPoseSetMaterialFlagOn(wp->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                    }
+                    animPoseSetMaterialFlagOn(wp->poseId, MAP_OBJ_FLAG_COLOR);
                     animPoseSetMaterialEvtColor(wp->poseId, (GXColor){0xFF, 0xFF, 0xFF, 255.0f * t});
                 }
                 break;
-            }
-            case 4: {
-                len = data->loopInfo[2];
-                start = ((u32)gp->language == 0) ? 48.0f : 40.0f;
-                if (pose->localFrame > start) {
-                    t = 1.0f - (pose->localFrame - start) / (len - start);
-                    if (t < 0.0f)
-                        t = 0.0f;
-                    animPoseSetMaterialFlagOn(wp->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
-                    animPoseSetMaterialEvtColor(wp->poseId, (GXColor){0xFF, 0xFF, 0xFF, 255.0f * t});
-                }
-                break;
-            }
             case 6:
+#endif
                 break;
         }
-#endif
         if (animPoseGetLoopTimes(wp->poseId) >= 1.0f) {
             animPoseRelease(wp->poseId);
             effDelete(effect);
@@ -347,11 +325,14 @@ static void effNiceMain(EffectEntry* effect) {
     if (type == 7) {
         acrobatMain(effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&pos), 8, effNiceDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_CUSTOM_MID, effNiceDisp, effect);
     }
 }
 
-/** Draw callback: draws the rating text pose, scaled by the work's stretch factors. */
+/**
+ * Draw callback: draws the rating text pose facing the camera, scaled by overallScale times 8
+ * (US and later shrink some language/type pairs to 0.7 more).
+ */
 static void effNiceDisp(CameraId cameraId, void* param) {
     EffectEntry* effect = param;
     NiceEffectWork* wp = effect->userdata;
@@ -364,12 +345,13 @@ static void effNiceDisp(CameraId cameraId, void* param) {
     PSMTXConcat(mtx, scale, mtx);
     PSMTXScale(scale, 8.0f, 8.0f, 8.0f);
     PSMTXConcat(mtx, scale, mtx);
-#if VERSION >= VERSION_US
 #if VERSION >= VERSION_DEMO_EU
-    if ((u32)gp->language != 0) {
-#else
-    if (((u32)gp->language == 1 && wp->type == 3) || ((u32)gp->language == 1 && wp->type == 4) || ((u32)gp->language == 5 && wp->type == 6)) {
-#endif
+    if (gp->language != LANGUAGE_JP) {
+        PSMTXScale(scale, 0.7f, 0.7f, 0.7f);
+        PSMTXConcat(mtx, scale, mtx);
+    }
+#elif VERSION >= VERSION_US
+    if ((gp->language == LANGUAGE_US && wp->type == 3) || (gp->language == LANGUAGE_US && wp->type == 4) || (gp->language == LANGUAGE_IT && wp->type == 6)) {
         PSMTXScale(scale, 0.7f, 0.7f, 0.7f);
         PSMTXConcat(mtx, scale, mtx);
     }
@@ -399,14 +381,12 @@ static void acrobatMain(EffectEntry* effect) {
     tmp.z = wp->position.z;
     pos = tmp;
     for (i = 1, wp++; i < effect->count; i++, wp++) {
-        // FAKE: integer cast makes the literal a CSE/loop-invariant @ temp (numbers below the SR temps)
-        const char* sfx2 = SFX_NAME_WORD("SFX_SYSTEM_ACROBAT1");
         switch (wp->state) {
             case 0:
                 wp->timer = i * 4;
                 wp->state++;
                 if (i == 1) {
-                    psndSFXOn(sfx2);
+                    psndSFXOn(SFX_NAME_WORD("SFX_SYSTEM_ACROBAT1"));
                 }
                 break;
             case 1:
@@ -418,7 +398,7 @@ static void acrobatMain(EffectEntry* effect) {
                 break;
             case 2:
                 wp->timer++;
-                wp->position.x = intplGetValue(12, 500.0f, i * 4, wp->timer, 30);
+                wp->position.x = intplGetValue(EASING_SINE_OUT, 500.0f, i * 4, wp->timer, 30);
                 if (wp->timer >= 30) {
                     wp->timer = 0;
                     wp->state++;
@@ -426,8 +406,8 @@ static void acrobatMain(EffectEntry* effect) {
                 break;
             case 3:
                 wp->timer++;
-                wp->scaleX = intplGetValue(12, 1.0f, 0.4f, wp->timer, 8);
-                wp->scaleY = intplGetValue(12, 1.0f, 1.5f, wp->timer, 8);
+                wp->scaleX = intplGetValue(EASING_SINE_OUT, 1.0f, 0.4f, wp->timer, 8);
+                wp->scaleY = intplGetValue(EASING_SINE_OUT, 1.0f, 1.5f, wp->timer, 8);
                 if (wp->timer >= 8) {
                     wp->timer = 0;
                     wp->state++;
@@ -442,9 +422,9 @@ static void acrobatMain(EffectEntry* effect) {
                 break;
             case 5:
                 wp->timer++;
-                wp->position.x = intplGetValue(8, i * 4, i * 12, wp->timer, 30);
-                wp->scaleX = intplGetValue(12, 0.2f, 1.0f, wp->timer, 30);
-                wp->scaleY = intplGetValue(12, 1.5f, 1.0f, wp->timer, 30);
+                wp->position.x = intplGetValue(EASING_WAVE_SHRINKING_FASTER, i * 4, i * 12, wp->timer, 30);
+                wp->scaleX = intplGetValue(EASING_SINE_OUT, 0.2f, 1.0f, wp->timer, 30);
+                wp->scaleY = intplGetValue(EASING_SINE_OUT, 1.5f, 1.0f, wp->timer, 30);
                 if (wp->timer >= 30) {
                     wp->timer = 0;
                     wp->state++;
@@ -459,8 +439,8 @@ static void acrobatMain(EffectEntry* effect) {
                 break;
             case 7:
                 wp->timer++;
-                wp->scaleX = intplGetValue(12, 1.0f, 1.5f, wp->timer, 15);
-                wp->scaleY = intplGetValue(12, 1.0f, 0.1f, wp->timer, 15);
+                wp->scaleX = intplGetValue(EASING_SINE_OUT, 1.0f, 1.5f, wp->timer, 15);
+                wp->scaleY = intplGetValue(EASING_SINE_OUT, 1.0f, 0.1f, wp->timer, 15);
                 if (wp->timer >= 15) {
                     wp->timer = 0;
                     wp->state++;
@@ -468,8 +448,8 @@ static void acrobatMain(EffectEntry* effect) {
                 break;
             case 8:
                 wp->timer++;
-                wp->scaleX = intplGetValue(12, 1.5f, 0.1f, wp->timer, 15);
-                wp->scaleY = intplGetValue(12, 0.1f, 2.0f, wp->timer, 15);
+                wp->scaleX = intplGetValue(EASING_SINE_OUT, 1.5f, 0.1f, wp->timer, 15);
+                wp->scaleY = intplGetValue(EASING_SINE_OUT, 0.1f, 2.0f, wp->timer, 15);
                 if (wp->timer >= 15) {
                     wp->timer = 0;
                     wp->state++;
@@ -484,14 +464,14 @@ static void acrobatMain(EffectEntry* effect) {
     if (done >= effect->count - 1) {
         effDelete(effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&pos), 8, effAcrobatDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&pos), DISP_MODE_CUSTOM_MID, effAcrobatDisp, effect);
     }
 }
 
 /**
  * Draw callback for type 7: draws each letter as a camera-facing textured quad (textures from acrobat_tbl for
  * the current language) at its offset and squash/stretch, with no depth test.
- * US and PAL skip letters whose texture id is -1.
+ * US and later skip letters whose texture id is -1.
  */
 static void effAcrobatDisp(CameraId cameraId, void* param) {
     EffectEntry* effect = param;
@@ -499,13 +479,10 @@ static void effAcrobatDisp(CameraId cameraId, void* param) {
     CameraEntry* camera = camGetPtr(cameraId);
     Mtx trans, rot, scale, mtx;
     GXTexObj tex;
+    f32 size, half, ofsX, ofsY, ten;
+    int i;
 #if VERSION >= VERSION_US
-    f32 size, half, ofsX, ofsY, ten;
-    int i;
     s32 id;
-#else
-    f32 size, half, ofsX, ofsY, ten;
-    int i;
 #endif
 
     PSMTXTrans(trans, wp->position.x, wp->position.y, wp->position.z);
@@ -534,10 +511,15 @@ static void effAcrobatDisp(CameraId cameraId, void* param) {
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    // US and PAL skip a letter whose texture id is -1 and compute the quad corners inside the loop
-#if VERSION >= VERSION_US
     size = 20.0f;
+#if VERSION >= VERSION_US
     size = -size;
+#else
+    ten = 10.0f;
+    size = -size;
+    half = size;
+    half *= 0.5f;
+#endif
     wp++;
     for (i = 1; i < effect->count; i++, wp++) {
         if (wp->state < 6) {
@@ -556,8 +538,9 @@ static void effAcrobatDisp(CameraId cameraId, void* param) {
         PSMTXConcat(trans, scale, scale);
         PSMTXConcat(mtx, scale, scale);
         PSMTXConcat(camera->view, scale, scale);
-        GXLoadPosMtxImm(scale, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(scale, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
+#if VERSION >= VERSION_US
         id = acrobat_tbl[gp->language].tex[i - 1];
         if (id != -1) {
             effGetTexObj(id, &tex);
@@ -574,33 +557,7 @@ static void effAcrobatDisp(CameraId cameraId, void* param) {
             GXPosition3f32(half, half, 0.0f);
             GXTexCoord2f32(0.0f, 1.0f);
         }
-    }
 #else
-    size = 20.0f;
-    ten = 10.0f;
-    size = -size;
-    half = size;
-    half *= 0.5f;
-    wp++;
-    for (i = 1; i < effect->count; i++, wp++) {
-        if (wp->state < 6) {
-            ofsX = size / 2.0f;
-            ofsY = 0.0f;
-        } else {
-            ofsX = 0.0f;
-            ofsY = size / 2.0f;
-        }
-        PSMTXTrans(trans, wp->position.x, wp->position.y, wp->position.z);
-        PSMTXTrans(rot, ofsX, ofsY, 0.0f);
-        PSMTXScale(scale, wp->scaleX, wp->scaleY, wp->scaleZ);
-        PSMTXConcat(rot, scale, scale);
-        PSMTXTrans(rot, -ofsX, -ofsY, 0.0f);
-        PSMTXConcat(scale, rot, scale);
-        PSMTXConcat(trans, scale, scale);
-        PSMTXConcat(mtx, scale, scale);
-        PSMTXConcat(camera->view, scale, scale);
-        GXLoadPosMtxImm(scale, 0);
-        GXSetCurrentMtx(0);
         effGetTexObj(acrobat_tbl[gp->language][i - 1], &tex);
         GXLoadTexObj(&tex, GX_TEXMAP0);
         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
@@ -612,6 +569,6 @@ static void effAcrobatDisp(CameraId cameraId, void* param) {
         GXTexCoord2f32(1.0f, 1.0f);
         GXPosition3f32(half, half, 0.0f);
         GXTexCoord2f32(0.0f, 1.0f);
-    }
 #endif
+    }
 }

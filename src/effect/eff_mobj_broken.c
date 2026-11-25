@@ -1,5 +1,5 @@
-// Debris from a broken map object (MObjBroken); types 0-7 pick the object, one type shows the EFF_sango model.
-#include "eff/eff_mobj_broken.h"
+// Debris from a broken map object (MObjBroken); types 0-7 pick the object, type 7 shows the EFF_sango model.
+
 #include "driver/animdrv.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -10,10 +10,11 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-
-#define PI 3.1415927f
-#define HALF_PI 1.5707964f
+#include "poly_trig.h"
+#include "eff/eff_mobj_broken.h"
+#include "driver/mapdrv.h"
 
 typedef struct EffMObjBrokenWork {
     s32 type;     // 0x0
@@ -29,83 +30,13 @@ typedef struct EffMObjBrokenWork {
 } EffMObjBrokenWork;
 
 static void effMObjBrokenMain(EffectEntry* effect);
-static void effMObjBrokenDisp(CameraId cameraId, EffectEntry* effect);
-static void effMObjBrokenDisp2(CameraId cameraId, EffectEntry* effect);
-static void rendermodeFunc(s32 arg);
+static void effMObjBrokenDisp(CameraId cameraId, void* param);
+static void effMObjBrokenDisp2(CameraId cameraId, void* param);
 
-/** Inline sine, kept as a local copy so the compiler inlines it in this unit. */
-static inline f32 _sinf(f32 x) {
-    f32 a = 0.00761f;
-    f32 b = 0.16605f;
-    f32 c = 1.0f;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        } else {
-            x = HALF_PI - (x - HALF_PI);
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        }
-    } else if (x < 4.712389f) {
-        x = x - PI;
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * x;
-        a = -a;
-    } else {
-        x = HALF_PI - (x - 4.712389f);
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * x;
-        a = -a;
-    }
-    return a;
-}
-
-/** Inline cosine, kept as a local copy so the compiler inlines it in this unit. */
-static inline f32 _cosf(f32 x) {
-    f32 a = 0.03705f;
-    f32 b = 0.4967f;
-    f32 c = 1.0f;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-        } else {
-            x = HALF_PI - (x - HALF_PI);
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = -a;
-        }
-    } else if (x < 4.712389f) {
-        x = x - PI;
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = -a;
-    } else {
-        x = HALF_PI - (x - 4.712389f);
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-    }
-    return a;
-}
-
-/** Spawns the debris of a broken map object at (x, y, z); evt_mobj.c calls it with a type per object kind (0-7). */
+/**
+ * Spawns the debris of a broken map object at (x, y, z); evt_mobj.c calls it with a type per object kind (0-6;
+ * nothing in our code passes type 7).
+ */
 EffectEntry* effMObjBrokenEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffMObjBrokenWork* work;
@@ -140,7 +71,7 @@ EffectEntry* effMObjBrokenEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, effect->count * sizeof(EffMObjBrokenWork));
     effect->userdata = work;
     effect->callback = effMObjBrokenMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -198,18 +129,18 @@ EffectEntry* effMObjBrokenEntry(s32 type, f32 x, f32 y, f32 z) {
     if (type != 7) {
         effKemuTestEntry(2, x, y + (work - 1)->position.y, z, type < 3 ? 0.5f : 1.0f);
     } else {
+        // BUG: work points one past the last element here (the loop leaves it at userdata + count); the other branch reads work - 1
         effKemuTestEntry(16, x, y + work->position.y, z, 1.0f);
     }
     return effect;
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
+// (propagation and lifetimes off together, as in the rels' extdrv functions)
 #pragma opt_propagation off
-// FAKE: lifetimes optimisation off for effMObjBrokenMain: the original register allocation and scheduling need it
 #pragma opt_lifetimes off
 /**
- * Per frame: throws each fragment outward with gravity, fades it and releases its pose;
- * deletes the effect at the end.
+ * Per frame: throws each fragment outward with gravity and spins it; once all have fallen 100 below the origin,
+ * releases the poses and deletes the effect. Fragments do not fade (alpha is never changed).
  */
 static void effMObjBrokenMain(EffectEntry* effect) {
     EffMObjBrokenWork* work = effect->userdata;
@@ -228,8 +159,9 @@ static void effMObjBrokenMain(EffectEntry* effect) {
     pos2 = pos;
     inBattle = gp->inBattle != 0;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
         w = work;
+        // FAKE: done doubles as the loop counter (it is reset before its real use); a separate counter changes the allocation
         for (done = 0; done < effect->count; done++, w++) {
             if (w->poseId != -1) {
                 animPoseRelease(w->poseId);
@@ -255,8 +187,8 @@ static void effMObjBrokenMain(EffectEntry* effect) {
                 }
                 break;
         }
-        work->position.x += work->speed * _sinf(6.2831855f * work->angle / 360.0f);
-        work->position.z += work->speed * -_cosf(6.2831855f * work->angle / 360.0f);
+        work->position.x += work->speed * polySinf(6.2831855f * work->angle / 360.0f);
+        work->position.z += work->speed * -polyCosf(6.2831855f * work->angle / 360.0f);
         work->position.y += work->velY;
         work->velY -= work->gravity;
         if (type < 6) {
@@ -270,6 +202,7 @@ static void effMObjBrokenMain(EffectEntry* effect) {
     }
     if (done >= effect->count - 1) {
         w2 = effect->userdata;
+        // FAKE: type doubles as the loop counter (the function returns right after); a separate counter changes the allocation
         for (type = 0; type < effect->count; type++, w2++) {
             if (w2->poseId != -1) {
                 animPoseRelease(w2->poseId);
@@ -279,17 +212,20 @@ static void effMObjBrokenMain(EffectEntry* effect) {
         return;
     }
     if (type != 7) {
-        dispEntry(CAMERA_3D, dispCalcZ(&pos2), 8, (DispCallback)effMObjBrokenDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_CUSTOM_MID, effMObjBrokenDisp, effect);
     } else {
-        dispEntry(CAMERA_3D, dispCalcZ(&pos2), 8, (DispCallback)effMObjBrokenDisp2, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&pos2), DISP_MODE_CUSTOM_MID, effMObjBrokenDisp2, effect);
     }
 }
 
 #pragma opt_propagation reset
 #pragma opt_lifetimes reset
-
-/** Draws the fragments as textured quads (effect textures 56-59) with alpha blending. */
-static void effMObjBrokenDisp(CameraId cameraId, EffectEntry* effect) {
+/**
+ * Draws the fragments as flattened textured cubes (effect texture 56-58 by type, 59 for type 6) with alpha
+ * blending: a half-transparent black offset shadow pass, then a white pass.
+ */
+static void effMObjBrokenDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffMObjBrokenWork* work = effect->userdata;
     CameraEntry* camera;
     Mtx mT, mR, mS, mN;
@@ -313,7 +249,7 @@ static void effMObjBrokenDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_DISABLE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(1);
-    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 60, GX_FALSE, 125);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -349,8 +285,8 @@ static void effMObjBrokenDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXScale(mS, 1.0f, 1.0f, 0.0f);
         PSMTXConcat(mT, mS, mT);
         PSMTXConcat(mN, mT, mT);
-        GXLoadPosMtxImm(mT, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(mT, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXDrawCube();
     }
     color = (GXColor){255, 255, 255, 255};
@@ -370,23 +306,27 @@ static void effMObjBrokenDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXScale(mS, 1.0f, 1.0f, 0.0f);
         PSMTXConcat(mT, mS, mT);
         PSMTXConcat(mN, mT, mT);
-        GXLoadPosMtxImm(mT, 0);
-        GXSetCurrentMtx(0);
+        GXLoadPosMtxImm(mT, GX_PNMTX0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXDrawCube();
     }
 }
 
 /** GX state callback for the EFF_sango pose: sets up alpha blending. */
-static void rendermodeFunc(s32 arg) {
-    animGetPtr()->currDispMode = arg;
+static void rendermodeFunc(s32 wXluStage) {
+    animGetPtr()->currDispMode = wXluStage;
     GXSetBlendMode(GX_BM_BLEND, GX_BL_SRCALPHA, GX_BL_INVSRCALPHA, GX_LO_CLEAR);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
     GXSetZMode(GX_FALSE, GX_LEQUAL, GX_FALSE);
 }
 
-/** Draws the EFF_sango model pieces for the type that shows them, tinted with an event colour for fading. */
-static void effMObjBrokenDisp2(CameraId cameraId, EffectEntry* effect) {
+/**
+ * Draws the EFF_sango model pieces (type 7) twice through the event colour: a half-transparent black offset
+ * shadow, then white.
+ */
+static void effMObjBrokenDisp2(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     s32 off;
     EffMObjBrokenWork* work;
     EffMObjBrokenWork* top;
@@ -411,11 +351,11 @@ static void effMObjBrokenDisp2(CameraId cameraId, EffectEntry* effect) {
                 continue;
             }
             if (pass == 0) {
-                animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
                 color = (GXColor){0, 0, 0, 128};
                 animPoseSetMaterialEvtColor(work->poseId, color);
             } else {
-                animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+                animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
                 color = (GXColor){255, 255, 255, 254};
                 animPoseSetMaterialEvtColor(work->poseId, color);
             }
@@ -423,7 +363,7 @@ static void effMObjBrokenDisp2(CameraId cameraId, EffectEntry* effect) {
             PSMTXScale(mS, work->scale, work->scale, work->scale);
             PSMTXConcat(mBase, mT, mT);
             PSMTXConcat(mT, mS, mT);
-            animPoseSetGXFunc(work->poseId, (void (*)(s32))rendermodeFunc, FALSE);
+            animPoseSetGXFunc(work->poseId, rendermodeFunc, FALSE);
             animPoseMain(work->poseId);
             animPoseDrawMtx(work->poseId, mT, 1, 0.0f, 0.8f);
             animPoseDrawMtx(work->poseId, mT, 2, 0.0f, 0.8f);

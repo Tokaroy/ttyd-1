@@ -5,7 +5,14 @@
 
 #include "data/mapdata.h"
 #include "hom.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Module entry point of hom.rel: runs the static constructors
@@ -31,6 +38,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Linker stub for unresolved symbols; does nothing. */
 void _unresolved(void) {
 }

@@ -1,4 +1,5 @@
 // evt_shop.c: the item shops (ShopObj, ShopItem, ShopperData, ShopPoint) and their script commands.
+
 #pragma once
 
 #include <dolphin/types.h>
@@ -33,25 +34,13 @@ typedef struct ShopDb {
     s16 save;  // 0x6
 } ShopDb;
 
-// ShopWork.flags bits; evtShopIsActive reports any of them.
-enum ShopWorkFlags {
-    SHOP_FLAG_ITEM_SELECTED = 0x1, // Mario stands at an item: its name and price windows are up (cleared every frame)
-    SHOP_FLAG_BUYING = 0x2,        // the buy script for the selected item is running
-    SHOP_FLAG_TALKING = 0x4000,    // the counter talk menu is up (shop_flag_onoff in the talk script)
-};
-
-// ShopWork.itemFlags bits.
-enum ShopItemFlags {
-    SHOP_ITEM_FLAG_SOLD_OUT = 0x1, // a one-off item already owned or bought: hidden and not selectable
-};
-
 typedef struct ShopWork {
-    u16 flags;              // 0x0
+    u16 flags;              // 0x0, SHOP_FLAG_*
     ShopObj* objs;          // 0x4
     ShopItem* items;        // 0x8
     ShopperData* shopper;   // 0xC
     ShopDb* db;             // 0x10
-    u16 itemFlags[6];       // 0x14
+    u16 itemFlags[6];       // 0x14, SHOP_ITEM_FLAG_*
     s32 count;              // 0x20
     EventEntry* mainEvt;    // 0x24
     EventEntry* buyEvt;     // 0x28
@@ -68,3 +57,18 @@ typedef struct ShopWork {
 USER_FUNC(evt_shop_setup);
 
 BOOL evtShopIsActive(void);
+USER_FUNC(evt_shop_main_func);
+USER_FUNC(point_wait);
+
+// Names from LLCOOLT's tree.
+enum {
+    SHOP_ITEM_FLAG_SOLD_OUT = 1,
+};
+
+// ShopWork.flags (evtShopIsActive: any bit set). TALKING is a name from LLCOOLT's tree.
+enum {
+    SHOP_FLAG_ITEM_SELECTED = 1, // an item on the shelf is picked (its windows are up); evt_shop_main_func and
+                                 // disp_off clear it
+    SHOP_FLAG_BUYING = 1 << 1,   // A pressed: the buy event runs, the shelf is not checked until it ends
+    SHOP_FLAG_TALKING = 16384,
+};

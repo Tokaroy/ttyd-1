@@ -1,10 +1,11 @@
 // eff_recovery.c: HP/FP recovery effect entry (effRecoveryEntry) and its per-icon work data (RecoveryWork).
+
 #pragma once
 
+#include "version.h"
 #include "driver/effdrv.h"
 #include "dolphin/types.h"
 #include <dolphin/mtx.h>
-#include "version.h"
 
 struct MayaAnim;
 

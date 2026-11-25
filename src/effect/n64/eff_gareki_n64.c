@@ -1,6 +1,8 @@
-// Paper Mario 64 effect: rubble (gareki), eight debris pieces that fall to a ground height and fade.
-#include "eff/n64/eff_gareki_n64.h"
+// Paper Mario 64 effect: rubble (gareki), a chunk that falls to a ground height, then breaks into eight pieces
+// that fade.
+
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_gareki_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -28,13 +30,14 @@ typedef struct EffGarekiN64Work {
 
 static void gareki_dl(s32 type);
 static void effGarekiMain(EffectEntry* effect);
-static void effGarekiDisp(CameraId cameraId, EffectEntry* effect);
+static void effGarekiDisp(CameraId cameraId, void* param);
 
-/** Sideways speed of each of the eight rubble pieces when the chunk breaks. */
+#if VERSION <= VERSION_DEMO_JP
 static f32 vx_data[] = {-1.0f, -0.5f, 0.5f, 1.0f, -1.0f, -0.5f, 0.5f, 1.0f};
+#endif
 
 /** Starting (x, y) offset of each of the eight rubble pieces from the chunk's centre. */
-static f32 trans_data[] = {-5.0f, -4.0f, -3.0f, -2.0f, 2.0f, -3.0f, 5.0f, -4.0f, -4.0f, 2.0f, -1.0f, 4.0f, 3.0f, 2.0f, 5.0f, 4.0f};
+static f32 trans_data[][2] = {{-5.0f, -4.0f}, {-3.0f, -2.0f}, {2.0f, -3.0f}, {5.0f, -4.0f}, {-4.0f, 2.0f}, {-1.0f, 4.0f}, {3.0f, 2.0f}, {5.0f, 4.0f}};
 
 /** Rubble mesh: the whole chunk first, then the eight pieces it breaks into. */
 static effN64Vtx stg__s_v[] = {
@@ -100,16 +103,19 @@ static effN64Vtx stg__s_v[] = {
     {1, -4, 0, 1024, 2304, 255, 255, 255, 255},
 };
 
+/** Sideways speed of each of the eight rubble pieces when the chunk breaks. */
+#if VERSION >= VERSION_JP
+static f32 vx_data[] = {-1.0f, -0.5f, 0.5f, 1.0f, -1.0f, -0.5f, 0.5f, 1.0f};
+#endif
+
 /**
  * Spawns a falling rubble chunk (gareki = rubble) at (x, y, z) that drops until it reaches groundY,
- * then breaks into eight pieces. type is not read. Spawned only from event scripts through evt_eff.
+ * then breaks into eight pieces. type is not read. Reached only through evt_eff64; no script in the tree
+ * spawns it.
  */
 EffectEntry* effGarekiN64Entry(s32 type, f32 x, f32 y, f32 z, f32 groundY) {
-    f32* tp;
-    EffGarekiN64Work* work;
-    f32* vp;
     EffectEntry* effect;
-    EffGarekiN64Work* piece;
+    EffGarekiN64Work* work;
     s32 i;
 
     effect = effEntry();
@@ -131,19 +137,17 @@ EffectEntry* effGarekiN64Entry(s32 type, f32 x, f32 y, f32 z, f32 groundY) {
     work->rotVelX = rand() % 60 - 30;
     work->rotVelY = 0.25f * work->rotVelX;
     work->lifetime = 20;
-    tp = trans_data + 2;
-    vp = vx_data + 1;
-    piece = work + 1;
-    for (i = 1; i < 9; i++, piece++, tp += 2, vp++) {
-        piece->offsetX = tp[-2];
-        piece->offsetY = tp[-1];
-        piece->position.x = 0.0f;
-        piece->position.y = 0.0f;
-        piece->position.z = 0.0f;
-        piece->velX = 2.0f * vp[-1];
-        piece->velY = 2.0f * (0.1f * (rand() % 10)) + 1.0f;
-        piece->rotX = 0.0f;
-        piece->rotZ = 0.0f;
+    work++;
+    for (i = 1; i < 9; i++, work++) {
+        work->offsetX = trans_data[i - 1][0];
+        work->offsetY = trans_data[i - 1][1];
+        work->position.x = 0.0f;
+        work->position.y = 0.0f;
+        work->position.z = 0.0f;
+        work->velX = 2.0f * vx_data[i - 1];
+        work->velY = 2.0f * (0.1f * (rand() % 10)) + 1.0f;
+        work->rotX = 0.0f;
+        work->rotZ = 0.0f;
     }
     return effect;
 }
@@ -156,7 +160,6 @@ static void effGarekiMain(EffectEntry* effect) {
     EffGarekiN64Work* work = effect->userdata;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
-    EffGarekiN64Work* piece;
     s32 i;
 
     tmp.x = work->position.x;
@@ -191,19 +194,19 @@ static void effGarekiMain(EffectEntry* effect) {
             work->rotZ += 20.0f;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effGarekiDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effGarekiDisp, effect);
 }
 
 /**
  * Draws the whole chunk with texture 23 while it falls,
  * then each of the eight pieces at its own offset and rotation.
  */
-static void effGarekiDisp(CameraId cameraId, EffectEntry* effect) {
+static void effGarekiDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffGarekiN64Work* work;
     s32 i;
     s32 alpha;
-    f32 rad;
     Mtx trans;
     Mtx scale;
     Mtx rot;
@@ -252,7 +255,6 @@ static void effGarekiDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXConcat(trans, scale, mtx);
         PSMTXConcat(mtx, rot, mtx);
         PSMTXRotRad(rotX, 'x', 0.017453292f * work->rotX);
-        rad = 0.017453292f;
         i = 1;
         work++;
         for (; i < effect->count; i++, work++) {
@@ -260,9 +262,9 @@ static void effGarekiDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTXConcat(trans, rotX, pieceMtx);
             PSMTXTrans(trans, work->offsetX, work->offsetY, 0.0f);
             PSMTXConcat(pieceMtx, trans, pieceMtx);
-            PSMTXRotRad(rot, 'x', rad * work->rotX);
+            PSMTXRotRad(rot, 'x', 0.017453292f * work->rotX);
             PSMTXConcat(pieceMtx, rot, pieceMtx);
-            PSMTXRotRad(rot, 'z', rad * work->rotZ);
+            PSMTXRotRad(rot, 'z', 0.017453292f * work->rotZ);
             PSMTXConcat(pieceMtx, rot, pieceMtx);
             PSMTXConcat(mtx, pieceMtx, pieceMtx);
             PSMTXConcat(camera->view, pieceMtx, pieceMtx);

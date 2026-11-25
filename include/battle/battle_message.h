@@ -1,4 +1,5 @@
 // Declares the battle message announcement command.
+
 #pragma once
 
 #include "evt/evt_cmd.h"

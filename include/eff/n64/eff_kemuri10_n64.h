@@ -1,11 +1,12 @@
 // eff_kemuri10_n64.c: smoke effect 10 entry (effKemuri10N64Entry).
+
 #pragma once
 
+#include "version.h"
 #include "driver/effdrv.h"
 #include "dolphin/types.h"
 #include <dolphin/mtx.h>
 #include <dolphin/gx.h>
-#include "version.h"
 
 typedef struct EffKemuri10N64Work {
     s32 type;      // 0x0
@@ -20,7 +21,6 @@ typedef struct EffKemuri10N64Work {
     s32 counter;   // 0x60
     u8 r, g, b;    // 0x64
     u8 r2, g2, b2; // 0x67
-    u8 pad_6a[2];  // 0x6A
 #if VERSION >= VERSION_JP
     s32 camera; // 0x6C
 #endif

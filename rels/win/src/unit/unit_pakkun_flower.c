@@ -1,7 +1,12 @@
 // Battle unit Piranha Plant (キラーパックン): win.rel's copy.
+// No formation or script of this REL uses it.
 
+#include "version.h"
+#include "system.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_eff.h"
+#include "battle/battle_status_effect.h"
 
 #include "battle/battle.h"
 #include "battle/battle_sub.h"
@@ -13,20 +18,20 @@
 #include "evt/evt_sub.h"
 #include "battle/battle_database_common.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_eff.h"
-#include "system.h"
+#include "battle/battle_damage.h"
 
 static USER_FUNC(shadow_scale_memory);
 static USER_FUNC(shadow_scale_return);
 static USER_FUNC(shadow_scale_small);
 static USER_FUNC(pakkun_ceil_exist);
 
-static BattleUnitKind unit_pakkun_flower;
+BattleUnitKind unit_pakkun_flower;
 static BattleUnitDefense defence;
 static BattleUnitDefenseAttr defence_attr;
 static StatusVulnerability regist;
 static BattleUnitKindPart parts[1];
 static BattleWeapon weapon_pakkun_flower_attack;
+static EvtWord attack_event[41];
 static PoseTableEntry pose_table[18];
 static PoseTableEntry pose_table_ceil[18];
 static BattleDataEntry data_table[15];
@@ -34,6 +39,7 @@ static EvtWord init_event[31];
 static EvtWord dmg_avoid_counter_thorn_head_event[71];
 static EvtWord damage_event[10];
 static EvtWord counter_damage_event[30];
+static EvtWord ceil_fall_ready_event[131];
 static EvtWord return_event[256];
 static EvtWord normal_attack_event[311];
 static EvtWord wait_event[6];
@@ -43,8 +49,8 @@ static EvtWord wait_event[6];
  * a ground plant that dives underground and bites for 9 damage. win.rel carries this copy,
  * but no battle group of Boggly Woods places it.
  */
-static BattleUnitKind unit_pakkun_flower = {
-    162, // unitType
+BattleUnitKind unit_pakkun_flower = {
+    UNIT_PIRANHA_PLANT, // unitType
     "btl_un_pakkun_flower", // name
     15, // maxHp
     0, // maxFp
@@ -79,7 +85,7 @@ static BattleUnitKind unit_pakkun_flower = {
     "SFX_ENM_PAKKUN_DAMAGED1", // damageSfxName
     "SFX_BTL_DAMAGE_FIRE1", // fireDamageSfxName
     "SFX_BTL_DAMAGE_ICE1", // iceDamageSfxName
-    "SFX_BTL_DAMAGE_BIRIBIRI1", // explosionDamageSfxName
+    "SFX_BTL_DAMAGE_BIRIBIRI1", // electricDamageSfxName
     0, // attributeFlags
     &regist, // statusVulnerability
     1, // numParts
@@ -97,21 +103,32 @@ static BattleUnitDefense defence = {0};
 static BattleUnitDefenseAttr defence_attr = {0};
 
 #if VERSION <= VERSION_DEMO_JP
-/**
- * Status vulnerability of the Piranha Plant in the demo builds,
- * as a percent of the normal chance of each status:
- * 20% for fright; 30% for Gale Force, instant KO; 60% for dizzy; 70% for Tiny, Attack Down, Defense Down,
- * allergy, Slow; 75% for confusion; 80% for sleep, stop, freeze.
- */
 static StatusVulnerability regist = {80, 80, 60, 100, 75, 100, 100, 80, 100, 70, 100, 70, 100, 70, 70, 20, 30, 100, 70, 100, 100, 30};
 #else
-/**
- * Status vulnerability of the Piranha Plant in the retail builds,
- * as a percent of the normal chance of each status:
- * 10% for fright; 30% for Gale Force, instant KO; 40% for dizzy; 60% for freeze; 70% for stop, allergy, Slow;
- * 80% for confusion; 85% for Tiny, Attack Down, Defense Down.
- */
-static StatusVulnerability regist = {100, 70, 40, 100, 80, 100, 100, 60, 100, 85, 100, 85, 100, 85, 70, 10, 30, 100, 70, 100, 100, 30};
+static StatusVulnerability regist = {
+    100, // sleep
+    70, // stop
+    40, // dizzy
+    100, // poison
+    80, // confuse
+    100, // electric
+    100, // burn
+    60, // freeze
+    100, // huge
+    85, // tiny
+    100, // attackUp
+    85, // attackDown
+    100, // defenseUp
+    85, // defenseDown
+    70, // allergic
+    10, // fright
+    30, // galeForce
+    100, // fast
+    70, // slow
+    100, // dodgy
+    100, // invisible
+    30, // ohko
+};
 #endif
 
 /**
@@ -131,8 +148,8 @@ static BattleUnitKindPart parts[] = {
         255, // baseAlpha
         &defence, // defense
         &defence_attr, // defenseAttr
-        PART_ATTR_MAIN | PART_ATTR_GUARD_COVER, // attributes
-        COUNTER_ATTR_TOP_SPIKY, // counterAttributes
+        kMainPart | kGuardTargetPart, // attributes
+        kCounterTopSpiky, // counterAttributes
         pose_table, // poseTable
     },
 };
@@ -157,15 +174,15 @@ static BattleWeapon weapon_pakkun_flower_attack = {
     {9, 0, 0, 0, 0, 0, 0, 0}, // hpDamageWork
     NULL, // fpDamageFn
     {0}, // fpDamageWork
-    TARGET_CLASS_NO_TREE_OR_SWITCH | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_OWN_ALLIANCE | TARGET_CLASS_NO_SELF | TARGET_CLASS_MAIN_PARTS | TARGET_CLASS_SINGLE, // targetClassFlags
-    TARGET_PROP_HAMMERLIKE | TARGET_PROP_FRONTMOST | TARGET_PROP_START_OPPOSING_SIDE, // targetPropertyFlags
-    ELEMENT_NORMAL, 0, // element..damagePattern
+    TARGET_CLASS_SINGLE | TARGET_CLASS_ONLY_MAIN_PARTS | TARGET_CLASS_NO_SELF | TARGET_CLASS_NO_OWN_SIDE | TARGET_CLASS_NO_SYSTEM_UNIT | TARGET_CLASS_NO_TREE_OR_SWITCH, // targetClassFlags
+    TARGET_PROP_HAMMERLIKE | TARGET_PROP_ONLY_FRONTMOST | TARGET_PROP_OPPOSITE_SIDE_FIRST, // targetPropertyFlags
+    ELEMENT_NORMAL, ATTACKPATTERN_NULL, // element..damagePattern
     3, // acLevel
     2, // reserved_6F
     NULL, // acHelpMsg
-    SPECIAL_BADGE_BUFFABLE | SPECIAL_STATUS_BUFFABLE | SPECIAL_CHARGE_BUFFABLE | SPECIAL_SHATTERS_FREEZE, // special
+    SPECIAL_BADGE_POWER | SPECIAL_STATUS_POWER | SPECIAL_CHARGEABLE | SPECIAL_FREEZE_CRUSH, // special
     COUNTER_RESIST_TOP_SPIKY, // counterResistFlags
-    TARGET_WEIGHT_PREFER_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
+    TARGET_WEIGHT_FRONT | TARGET_WEIGHT_UNUSED_2000, // targetWeightFlags
     0, 0, 0, 0, 0, 0, 0, 0, // sleepChance..poisonTime
     0, 0, 0, 0, 0, 0, 0, 0, // poisonStrength..burnChance
     0, 0, 0, 0, 0, 0, 0, 0, // burnTime..atkChangeTime
@@ -178,53 +195,49 @@ static BattleWeapon weapon_pakkun_flower_attack = {
 };
 
 /**
- * Attack entry of the Piranha Plant: with a first-strike battle flag, or after any item use check,
+ * Attack entry of the Piranha Plant: with a first-strike battle flag, or when its item check selects no script,
  * it runs normal_attack_event with its single weapon (weapon_pakkun_flower_attack),
  * then returns to the wait event.
  */
 static EVT_BEGIN(attack_event)
-    CALL(btlevtcmd_check_battleflag, LW(0), 2)
+    CALL(btlevtcmd_check_battleflag, LW(0), BATTLE_FLAG_FIRST_ATTACK)
     IF_INT_NOT_EQUAL(LW(0), 0)
         SET_VALUE(LW(9), PTR(&weapon_pakkun_flower_attack))
         CALL_CHILD(normal_attack_event)
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
-    CALL(btlevtcmd_EnemyItemUseCheck, BTL_UNIT_SELF, LW(0))
+    CALL(btlevtcmd_EnemyItemUseCheck, UNIT_ID_SELF, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
         CALL_CHILD(LW(0))
-        CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+        CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
         RETURN
     END_IF
     SET_VALUE(LW(9), PTR(&weapon_pakkun_flower_attack))
     CALL_CHILD(normal_attack_event)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
-/**
- * Poses of the Piranha Plant (PKF_*) while it stands on the ground: idle, status, hurt,
- * bite and talking animations.
- */
 static PoseTableEntry pose_table[] = {
-    {STATUS_SLEEP, "PKF_N_1"},
-    {STATUS_STOP, "PKF_Y_1"},
-    {STATUS_FREEZE, "PKF_Y_1"},
-    {STATUS_CONFUSE, "PKF_K_1"},
-    {STATUS_POISON, "PKF_X_1"},
-    {STATUS_DIZZY, "PKF_X_1"},
-    {BTL_POSE_NORMAL, "PKF_S_1"},
-    {29, "PKF_Q_1"},
-    {30, "PKF_Q_1"},
-    {31, "PKF_S_2"},
-    {BTL_POSE_DAMAGE, "PKF_D_1"},
-    {50, "PKF_A_1B"},
-    {BTL_POSE_WALK, "PKF_S_1"},
-    {BTL_POSE_RUN, "PKF_S_1"},
-    {BTL_POSE_DANGER, "PKF_X_1"},
-    {BTL_POSE_PERIL, "PKF_X_1"},
-    {BTL_POSE_TALK, "PKF_T_1"},
-    {BTL_POSE_STAY_DEFAULT, "PKF_S_1"},
+    {POSE_TYPE_SLEEP, "PKF_N_1"},
+    {POSE_TYPE_STOP, "PKF_Y_1"},
+    {POSE_TYPE_FREEZE, "PKF_Y_1"},
+    {POSE_TYPE_CONFUSE, "PKF_K_1"},
+    {POSE_TYPE_POISON, "PKF_X_1"},
+    {POSE_TYPE_DIZZY, "PKF_X_1"},
+    {POSE_TYPE_NORMAL, "PKF_S_1"},
+    {POSE_TYPE_DAMAGE_FIRE, "PKF_Q_1"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "PKF_Q_1"},
+    {POSE_TYPE_DAMAGE_GUARDED, "PKF_S_2"},
+    {POSE_TYPE_DAMAGE, "PKF_D_1"},
+    {POSE_TYPE_ATTACK, "PKF_A_1B"},
+    {POSE_TYPE_WALK, "PKF_S_1"},
+    {POSE_TYPE_RUN, "PKF_S_1"},
+    {POSE_TYPE_DANGER, "PKF_X_1"},
+    {POSE_TYPE_PERIL, "PKF_X_1"},
+    {POSE_TYPE_TALK, "PKF_T_1"},
+    {POSE_TYPE_ACTION, "PKF_S_1"},
 };
 
 /**
@@ -232,24 +245,24 @@ static PoseTableEntry pose_table[] = {
  * the same slots as pose_table.
  */
 static PoseTableEntry pose_table_ceil[] = {
-    {STATUS_SLEEP, "PKF_N_2"},
-    {STATUS_STOP, "PKF_Y_2"},
-    {STATUS_FREEZE, "PKF_Y_2"},
-    {STATUS_CONFUSE, "PKF_K_2"},
-    {STATUS_POISON, "PKF_X_2"},
-    {STATUS_DIZZY, "PKF_X_2"},
-    {BTL_POSE_NORMAL, "PKF_S_3"},
-    {29, "PKF_Q_2"},
-    {30, "PKF_Q_2"},
-    {31, "PKF_S_4"},
-    {BTL_POSE_DAMAGE, "PKF_D_2"},
-    {50, "PKF_A_5"},
-    {BTL_POSE_WALK, "PKF_S_3"},
-    {BTL_POSE_RUN, "PKF_S_3"},
-    {BTL_POSE_DANGER, "PKF_X_2"},
-    {BTL_POSE_PERIL, "PKF_X_2"},
-    {BTL_POSE_TALK, "PKF_S_3"},
-    {BTL_POSE_STAY_DEFAULT, "PKF_S_3"},
+    {POSE_TYPE_SLEEP, "PKF_N_2"},
+    {POSE_TYPE_STOP, "PKF_Y_2"},
+    {POSE_TYPE_FREEZE, "PKF_Y_2"},
+    {POSE_TYPE_CONFUSE, "PKF_K_2"},
+    {POSE_TYPE_POISON, "PKF_X_2"},
+    {POSE_TYPE_DIZZY, "PKF_X_2"},
+    {POSE_TYPE_NORMAL, "PKF_S_3"},
+    {POSE_TYPE_DAMAGE_FIRE, "PKF_Q_2"},
+    {POSE_TYPE_DAMAGE_FIRE_2_UNUSED, "PKF_Q_2"},
+    {POSE_TYPE_DAMAGE_GUARDED, "PKF_S_4"},
+    {POSE_TYPE_DAMAGE, "PKF_D_2"},
+    {POSE_TYPE_ATTACK, "PKF_A_5"},
+    {POSE_TYPE_WALK, "PKF_S_3"},
+    {POSE_TYPE_RUN, "PKF_S_3"},
+    {POSE_TYPE_DANGER, "PKF_X_2"},
+    {POSE_TYPE_PERIL, "PKF_X_2"},
+    {POSE_TYPE_TALK, "PKF_S_3"},
+    {POSE_TYPE_ACTION, "PKF_S_3"},
 };
 
 /**
@@ -258,20 +271,20 @@ static PoseTableEntry pose_table_ceil[] = {
  * (First Strike) does nothing.
  */
 static BattleDataEntry data_table[] = {
-    {37, dmg_avoid_counter_thorn_head_event},
-    {26, counter_damage_event},
-    {25, counter_damage_event},
-    {27, counter_damage_event},
-    {28, counter_damage_event},
-    {29, counter_damage_event},
-    {30, counter_damage_event},
-    {31, counter_damage_event},
-    {32, counter_damage_event},
-    {33, counter_damage_event},
-    {34, counter_damage_event},
-    {35, counter_damage_event},
-    {36, counter_damage_event},
-    {48, btldefaultevt_Dummy},
+    {UNIT_DATA_AVOID_THORN_HEAD_EVENT, dmg_avoid_counter_thorn_head_event},
+    {UNIT_DATA_COUNTER_FRONT_SPIKY_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_PREEMPTIVE_SPIKY_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_FIERY_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_ICY_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_ELECTRIC_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_EXPLOSIVE_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_VOLATILE_EXPLOSIVE_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_POISON_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_ELECTRIFIED_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_PAYBACK_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_HOLD_FAST_EVENT, counter_damage_event},
+    {UNIT_DATA_COUNTER_SUPERGUARD_EVENT, counter_damage_event},
+    {UNIT_DATA_FIRST_ATTACK_POS_EVENT, btldefaultevt_Dummy},
     {0},
 };
 
@@ -280,13 +293,13 @@ static BattleDataEntry data_table[] = {
  * sets the hit cursor offset of part 1 and saves its shadow size with shadow_scale_memory.
  */
 static EVT_BEGIN(init_event)
-    CALL(btlevtcmd_SetEventWait, BTL_UNIT_SELF, PTR(wait_event))
-    CALL(btlevtcmd_SetEventAttack, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetEventDamage, BTL_UNIT_SELF, PTR(damage_event))
-    CALL(btlevtcmd_SetEventConfusion, BTL_UNIT_SELF, PTR(attack_event))
-    CALL(btlevtcmd_SetHitCursorOffset, BTL_UNIT_SELF, 1, 0, 50, 0)
-    CALL(shadow_scale_memory, BTL_UNIT_SELF)
-    CALL(btlevtcmd_StartWaitEvent, BTL_UNIT_SELF)
+    CALL(btlevtcmd_SetEventWait, UNIT_ID_SELF, PTR(wait_event))
+    CALL(btlevtcmd_SetEventAttack, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetEventDamage, UNIT_ID_SELF, PTR(damage_event))
+    CALL(btlevtcmd_SetEventConfusion, UNIT_ID_SELF, PTR(attack_event))
+    CALL(btlevtcmd_SetHitCursorOffset, UNIT_ID_SELF, 1, 0, 50, 0)
+    CALL(shadow_scale_memory, UNIT_ID_SELF)
+    CALL(btlevtcmd_StartWaitEvent, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
@@ -296,16 +309,16 @@ EVT_END()
  * "toge_flush" spike effect above its head, 50 units up (63 when Huge, 37 when Tiny).
  */
 static EVT_BEGIN(dmg_avoid_counter_thorn_head_event)
-    CALL(btlevtcmd_AnimeChangePoseType, BTL_UNIT_SELF, 1, 31)
+    CALL(btlevtcmd_AnimeChangePoseType, UNIT_ID_SELF, 1, POSE_TYPE_DAMAGE_GUARDED)
     WAIT_MS(250)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_S_1"))
-    CALL(btlevtcmd_GetPos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_CheckStatus, BTL_UNIT_SELF, STATUS_HUGE, LW(3))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_S_1"))
+    CALL(btlevtcmd_GetPos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_CheckStatus, UNIT_ID_SELF, STATUS_HUGE, LW(3))
     IF_INT_NOT_EQUAL(LW(3), 0)
         ADD(LW(1), 63)
         GOTO(90)
     END_IF
-    CALL(btlevtcmd_CheckStatus, BTL_UNIT_SELF, STATUS_TINY, LW(3))
+    CALL(btlevtcmd_CheckStatus, UNIT_ID_SELF, STATUS_TINY, LW(3))
     IF_INT_NOT_EQUAL(LW(3), 0)
         ADD(LW(1), 37)
         GOTO(90)
@@ -322,7 +335,7 @@ EVT_END()
  * (LW(10) = -2, LW(11) = 1).
  */
 static EVT_BEGIN(damage_event)
-    SET_VALUE(LW(10), -2)
+    SET_VALUE(LW(10), UNIT_ID_SELF)
     SET_VALUE(LW(11), 1)
     CALL_CHILD(btldefaultevt_Damage)
     RETURN
@@ -333,11 +346,11 @@ EVT_END()
  * runs return_event so it climbs back to its spot.
  */
 static EVT_BEGIN(counter_damage_event)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_D_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_D_1"))
     WAIT_MS(1000)
-    CALL(btlevtcmd_CheckDamageCode, BTL_UNIT_SELF, DAMAGE_FLAG_KO, LW(0))
+    CALL(btlevtcmd_CheckDamageCode, UNIT_ID_SELF, DAMAGE_RESULT_ZERO_HP, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(btlevtcmd_CheckDamageCode, BTL_UNIT_SELF, DAMAGE_FLAG_LIFE_SHROOM, LW(0))
+        CALL(btlevtcmd_CheckDamageCode, UNIT_ID_SELF, DAMAGE_RESULT_REVIVAL, LW(0))
         IF_INT_EQUAL(LW(0), 0)
             RETURN
         END_IF
@@ -347,115 +360,113 @@ static EVT_BEGIN(counter_damage_event)
 EVT_END()
 
 /**
- * Ceiling-fall script, registered by return_event while the Piranha Plant hangs from the stage's iron frame
- * and run when the frame falls:
- * it hides (shadow shrinking), moves itself and its home to the floor (y 0) and comes back up from the ground,
- * with the floor hit offsets, UNIT_ATTR_CEILING and the hammer and shell-toss no-target part attributes cleared
- * and the floor pose table.
+ * Ceiling-fall event, registered by return_event while the Piranha Plant hangs from the stage's iron frame: it
+ * unregisters itself, hides (shadow shrinking), moves itself and its home to the floor (y 0) and comes back
+ * up with the floor hit offsets and pose table, kCeiling and the hammer and shell-toss cannot-target part
+ * attributes cleared.
  */
 static EVT_BEGIN(ceil_fall_ready_event)
-    CALL(btlevtcmd_SetEventCeilFall, BTL_UNIT_SELF, 0)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_SetEventCeilFall, UNIT_ID_SELF, 0)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     BEGIN_SIBLING_EVENT
-        CALL(shadow_scale_small, BTL_UNIT_SELF)
+        CALL(shadow_scale_small, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_4"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_4"))
     WAIT_MS(300)
-    CALL(btlevtcmd_OnAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
-    CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), 0, LW(2))
-    CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, LW(0), 0, LW(2))
+    CALL(btlevtcmd_OnAttribute, UNIT_ID_SELF, kUnitHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
+    CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), 0, LW(2))
+    CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, LW(0), 0, LW(2))
     WAIT_MS(500)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     BEGIN_SIBLING_EVENT
-        CALL(shadow_scale_return, BTL_UNIT_SELF)
+        CALL(shadow_scale_return, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_OffAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_1"))
-    CALL(btlevtcmd_SetHitOffset, BTL_UNIT_SELF, 1, 0, 0, 0)
-    CALL(btlevtcmd_SetHitCursorOffset, BTL_UNIT_SELF, 1, 0, 50, 0)
-    CALL(btlevtcmd_SetStatusIconOffset, BTL_UNIT_SELF, 4, 48)
-    CALL(btlevtcmd_SetKissHitOffset, BTL_UNIT_SELF, 16, 32, 0)
-    CALL(btlevtcmd_OffAttribute, BTL_UNIT_SELF, UNIT_ATTR_CEILING)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_HAMMERLIKE_CANNOT_TARGET)
-    CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table))
+    CALL(btlevtcmd_OffAttribute, UNIT_ID_SELF, kUnitHidden)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_1"))
+    CALL(btlevtcmd_SetHitOffset, UNIT_ID_SELF, 1, 0, 0, 0)
+    CALL(btlevtcmd_SetHitCursorOffset, UNIT_ID_SELF, 1, 0, 50, 0)
+    CALL(btlevtcmd_SetStatusIconOffset, UNIT_ID_SELF, 4, 48)
+    CALL(btlevtcmd_SetKissHitOffset, UNIT_ID_SELF, 16, 32, 0)
+    CALL(btlevtcmd_OffAttribute, UNIT_ID_SELF, kCeiling)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kShellTosslikeCannotTarget)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kHammerlikeCannotTarget)
+    CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table))
     WAIT_MS(500)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_S_1"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_S_1"))
     RETURN
 EVT_END()
 
 /**
- * Sends the Piranha Plant back after an attack or counter:
- * it ducks into the ground (shadow shrinking) and comes up again at its home x.
+ * Sends the Piranha Plant back: it ducks into the ground (shadow shrinking) and comes up again at its home x.
  * While the stage's iron frame is still there (pakkun_ceil_exist) it picks at random between the floor (y 0)
- * and hanging from the frame (y 130, UNIT_ATTR_CEILING, can't be hit by hammers or shell tosses,
- * ceiling pose table, ceil_fall_ready_event registered).
+ * and hanging from the frame (y 130, kCeiling, kHammerlikeCannotTarget and kShellTosslikeCannotTarget,
+ * ceiling pose table and offsets, ceil_fall_ready_event registered); otherwise it always takes the floor.
  */
 static EVT_BEGIN(return_event)
-    CALL(evt_btl_camera_set_mode, 0, 0)
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_DEFAULT)
     CALL(pakkun_ceil_exist, LW(0))
     IF_INT_EQUAL(LW(0), 1)
         CALL(evt_sub_random, 1, LW(15))
     ELSE
         SET_VALUE(LW(15), 0)
     END_IF
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     BEGIN_SIBLING_EVENT
-        CALL(shadow_scale_small, BTL_UNIT_SELF)
+        CALL(shadow_scale_small, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_2"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_2"))
     WAIT_MS(300)
-    CALL(btlevtcmd_OnAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_OnAttribute, UNIT_ID_SELF, kUnitHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
     IF_INT_EQUAL(LW(15), 0)
-        CALL(btlevtcmd_SetEventCeilFall, BTL_UNIT_SELF, 0)
-        CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), 0, LW(2))
-        CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, LW(0), 0, LW(2))
+        CALL(btlevtcmd_SetEventCeilFall, UNIT_ID_SELF, 0)
+        CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), 0, LW(2))
+        CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, LW(0), 0, LW(2))
         WAIT_MS(500)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
         BEGIN_SIBLING_EVENT
-            CALL(shadow_scale_return, BTL_UNIT_SELF)
+            CALL(shadow_scale_return, UNIT_ID_SELF)
         END_SIBLING_EVENT
-        CALL(btlevtcmd_OffAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-        CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_1"))
-        CALL(btlevtcmd_SetHitOffset, BTL_UNIT_SELF, 1, 0, 0, 0)
-        CALL(btlevtcmd_SetHitCursorOffset, BTL_UNIT_SELF, 1, 0, 50, 0)
-        CALL(btlevtcmd_SetStatusIconOffset, BTL_UNIT_SELF, 4, 48)
-        CALL(btlevtcmd_SetKissHitOffset, BTL_UNIT_SELF, 16, 32, 0)
-        CALL(btlevtcmd_OffAttribute, BTL_UNIT_SELF, UNIT_ATTR_CEILING)
-        CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET)
-        CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_HAMMERLIKE_CANNOT_TARGET)
-        CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table))
+        CALL(btlevtcmd_OffAttribute, UNIT_ID_SELF, kUnitHidden)
+        CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_1"))
+        CALL(btlevtcmd_SetHitOffset, UNIT_ID_SELF, 1, 0, 0, 0)
+        CALL(btlevtcmd_SetHitCursorOffset, UNIT_ID_SELF, 1, 0, 50, 0)
+        CALL(btlevtcmd_SetStatusIconOffset, UNIT_ID_SELF, 4, 48)
+        CALL(btlevtcmd_SetKissHitOffset, UNIT_ID_SELF, 16, 32, 0)
+        CALL(btlevtcmd_OffAttribute, UNIT_ID_SELF, kCeiling)
+        CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kShellTosslikeCannotTarget)
+        CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kHammerlikeCannotTarget)
+        CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table))
         WAIT_MS(500)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_S_1"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_S_1"))
     ELSE
-        CALL(btlevtcmd_SetEventCeilFall, BTL_UNIT_SELF, PTR(ceil_fall_ready_event))
-        CALL(btlevtcmd_GetHomePos, BTL_UNIT_SELF, LW(0), LW(1), LW(2))
-        CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), 130, LW(2))
-        CALL(btlevtcmd_SetHomePos, BTL_UNIT_SELF, LW(0), 130, LW(2))
+        CALL(btlevtcmd_SetEventCeilFall, UNIT_ID_SELF, PTR(ceil_fall_ready_event))
+        CALL(btlevtcmd_GetHomePos, UNIT_ID_SELF, LW(0), LW(1), LW(2))
+        CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), 130, LW(2))
+        CALL(btlevtcmd_SetHomePos, UNIT_ID_SELF, LW(0), 130, LW(2))
         WAIT_MS(500)
-        CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+        CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
         BEGIN_SIBLING_EVENT
-            CALL(shadow_scale_return, BTL_UNIT_SELF)
+            CALL(shadow_scale_return, UNIT_ID_SELF)
         END_SIBLING_EVENT
-        CALL(btlevtcmd_OffAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-        CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_3"))
-        CALL(btlevtcmd_SetHitOffset, BTL_UNIT_SELF, 1, 0, -80, 0)
-        CALL(btlevtcmd_SetHitCursorOffset, BTL_UNIT_SELF, 1, 0, -50, 0)
-        CALL(btlevtcmd_SetStatusIconOffset, BTL_UNIT_SELF, 4, 10)
-        CALL(btlevtcmd_SetKissHitOffset, BTL_UNIT_SELF, 16, -32, 0)
-        CALL(btlevtcmd_OnAttribute, BTL_UNIT_SELF, UNIT_ATTR_CEILING)
-        CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_SHELL_TOSSLIKE_CANNOT_TARGET)
-        CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_HAMMERLIKE_CANNOT_TARGET)
-        CALL(btlevtcmd_AnimeSetPoseTable, BTL_UNIT_SELF, 1, PTR(pose_table_ceil))
+        CALL(btlevtcmd_OffAttribute, UNIT_ID_SELF, kUnitHidden)
+        CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_3"))
+        CALL(btlevtcmd_SetHitOffset, UNIT_ID_SELF, 1, 0, -80, 0)
+        CALL(btlevtcmd_SetHitCursorOffset, UNIT_ID_SELF, 1, 0, -50, 0)
+        CALL(btlevtcmd_SetStatusIconOffset, UNIT_ID_SELF, 4, 10)
+        CALL(btlevtcmd_SetKissHitOffset, UNIT_ID_SELF, 16, -32, 0)
+        CALL(btlevtcmd_OnAttribute, UNIT_ID_SELF, kCeiling)
+        CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 1, kShellTosslikeCannotTarget)
+        CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 1, kHammerlikeCannotTarget)
+        CALL(btlevtcmd_AnimeSetPoseTable, UNIT_ID_SELF, 1, PTR(pose_table_ceil))
         WAIT_MS(500)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_S_3"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_S_3"))
     END_IF
     RETURN
 EVT_END()
@@ -470,87 +481,92 @@ EVT_END()
 static EVT_BEGIN(normal_attack_event)
     // A First Strike aims at the first-strike target after a short pause;
     // otherwise the plant picks a target from the opposing side.
-    CALL(btlevtcmd_check_battleflag, LW(0), 2)
+    CALL(btlevtcmd_check_battleflag, LW(0), BATTLE_FLAG_FIRST_ATTACK)
     IF_INT_NOT_EQUAL(LW(0), 0)
         WAIT_MS(750)
         CALL(btlevtcmd_GetFirstAttackTarget, LW(3), LW(4))
     ELSE
-        CALL(btlevtcmd_GetEnemyBelong, BTL_UNIT_SELF, LW(0))
-        CALL(btlevtcmd_SamplingEnemy, BTL_UNIT_SELF, LW(0), LW(9))
+        CALL(btlevtcmd_GetEnemyBelong, UNIT_ID_SELF, LW(0))
+        CALL(btlevtcmd_SamplingEnemy, UNIT_ID_SELF, LW(0), LW(9))
         CALL(btlevtcmd_ChoiceSamplingEnemy, LW(9), LW(3), LW(4))
     END_IF
     IF_INT_EQUAL(LW(3), -1)
-        CALL(btlevtcmd_CheckToken, BTL_UNIT_SELF, TOKEN_FLAG_CONFUSED_ACTION, LW(0))
+        CALL(btlevtcmd_CheckToken, UNIT_ID_SELF, kConfusedAction, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             CALL_CHILD(subsetevt_confuse_flustered)
             RETURN
         END_IF
         GOTO(99)
     END_IF
-    // Declare the attack, wait for any guard and pay the cost.
+
+    // Declare the attack, wait for protecting-unit movement and pay the cost.
     CALL(btlevtcmd_WeaponAftereffect, LW(9))
-    CALL(btlevtcmd_AttackDeclare, BTL_UNIT_SELF, LW(3), LW(4))
+    CALL(btlevtcmd_AttackDeclare, UNIT_ID_SELF, LW(3), LW(4))
     CALL(btlevtcmd_WaitGuardMove)
-    CALL(btlevtcmd_PayWeaponCost, BTL_UNIT_SELF, LW(9))
+    CALL(btlevtcmd_PayWeaponCost, UNIT_ID_SELF, LW(9))
+
     // The plant sinks into the ground while its shadow shrinks (from the floor or from the ceiling pose).
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_MOVE1"), EVT_NULLPTR, 0, EVT_NULLPTR)
     BEGIN_SIBLING_EVENT
-        CALL(shadow_scale_small, BTL_UNIT_SELF)
+        CALL(shadow_scale_small, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_CheckAttribute, BTL_UNIT_SELF, UNIT_ATTR_CEILING, LW(15))
+    CALL(btlevtcmd_CheckAttribute, UNIT_ID_SELF, kCeiling, LW(15))
     IF_INT_EQUAL(LW(15), 0)
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_2"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_2"))
     ELSE
-        CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_4"))
+        CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_4"))
     END_IF
     WAIT_MS(300)
-    CALL(btlevtcmd_OnAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-    CALL(btlevtcmd_OnPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
+    CALL(btlevtcmd_OnAttribute, UNIT_ID_SELF, kUnitHidden)
+    CALL(btlevtcmd_OnPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
+
     // Underground it slides next to the target and turns toward it.
     CALL(btlevtcmd_GetPos, LW(3), LW(0), LW(1), LW(2))
     CALL(btlevtcmd_FaceDirectionAdd, LW(3), LW(0), 45)
-    CALL(btlevtcmd_SetPos, BTL_UNIT_SELF, LW(0), 0, LW(2))
-    CALL(btlevtcmd_CalculateFaceDirection, BTL_UNIT_SELF, -1, LW(3), LW(4), 16, LW(15))
-    CALL(btlevtcmd_ChangeFaceDirection, BTL_UNIT_SELF, LW(15))
+    CALL(btlevtcmd_SetPos, UNIT_ID_SELF, LW(0), 0, LW(2))
+    CALL(btlevtcmd_CalculateFaceDirection, UNIT_ID_SELF, -1, LW(3), LW(4), FACE_DIR_TOWARD_UNIT, LW(15))
+    CALL(btlevtcmd_ChangeFaceDirection, UNIT_ID_SELF, LW(15))
     WAIT_MS(500)
+
     // The camera follows as the plant pops out of the ground with its shadow growing
     // back, then winds up its bite.
-    CALL(evt_btl_camera_set_mode, 0, 8)
-    CALL(evt_btl_camera_set_homing_unit, 0, BTL_UNIT_SELF, LW(3))
+    CALL(evt_btl_camera_set_mode, BTL_CAM_PRI_NORMAL, BTL_CAM_MODE_UNIT_TO_UNIT)
+    CALL(evt_btl_camera_set_homing_unit, 0, UNIT_ID_SELF, LW(3))
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 1)
     CALL(evt_btl_camera_set_zoom, 0, 250)
-    CALL(btlevtcmd_SetHitOffset, BTL_UNIT_SELF, 1, 0, 0, 0)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_SetHitOffset, UNIT_ID_SELF, 1, 0, 0, 0)
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_MOVE2"), EVT_NULLPTR, 0, EVT_NULLPTR)
     BEGIN_SIBLING_EVENT
-        CALL(shadow_scale_return, BTL_UNIT_SELF)
+        CALL(shadow_scale_return, UNIT_ID_SELF)
     END_SIBLING_EVENT
-    CALL(btlevtcmd_OffAttribute, BTL_UNIT_SELF, UNIT_ATTR_HIDDEN)
-    CALL(btlevtcmd_OffPartsAttribute, BTL_UNIT_SELF, 1, PART_ATTR_NO_SHADOW)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_E_1"))
+    CALL(btlevtcmd_OffAttribute, UNIT_ID_SELF, kUnitHidden)
+    CALL(btlevtcmd_OffPartsAttribute, UNIT_ID_SELF, 1, kNoShadow)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_E_1"))
     WAIT_MS(150)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_A_1A"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_A_1A"))
     WAIT_MS(200)
-    CALL(btlevtcmd_snd_se, BTL_UNIT_SELF, STRING("SFX_ENM_PAKKUN_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_A_1B"))
+    CALL(btlevtcmd_snd_se, UNIT_ID_SELF, STRING("SFX_ENM_PAKKUN_ATTACK1"), EVT_NULLPTR, 0, EVT_NULLPTR)
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_A_1B"))
     WAIT_MS(200)
-    CALL(btlevtcmd_AnimeChangePose, BTL_UNIT_SELF, 1, STRING("PKF_A_1C"))
+    CALL(btlevtcmd_AnimeChangePose, UNIT_ID_SELF, 1, STRING("PKF_A_1C"))
+
     // Bite: the damage pre-check decides whether the target dodges or the hit lands.
-    CALL(btlevtcmd_PreCheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_PreCheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     SWITCH(LW(5))
-        CASE_OR_EQUAL(4)
+        CASE_OR_EQUAL(PRECHECK_INTANGIBLE)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(3)
-        CALL(btlevtcmd_StartAvoid, LW(3), 38)
+        CASE_EQUAL(PRECHECK_LUCKY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_LUCKY)
         GOTO(90)
         CASE_END
-        CASE_EQUAL(6)
-        CALL(btlevtcmd_StartAvoid, LW(3), 39)
+        CASE_EQUAL(PRECHECK_DODGY)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_DODGY)
         GOTO(90)
-        CASE_EQUAL(2)
-        CALL(btlevtcmd_StartAvoid, LW(3), 40)
+        CASE_EQUAL(PRECHECK_MISS)
+        CALL(btlevtcmd_StartAvoid, LW(3), DAMAGE_CODE_MISS)
         GOTO(90)
-        CASE_EQUAL(1)
+        CASE_EQUAL(PRECHECK_HIT)
         GOTO(91)
         CASE_END
         CASE_DEFAULT
@@ -560,31 +576,33 @@ static EVT_BEGIN(normal_attack_event)
     LABEL(90)
     GOTO(98)
     LABEL(91)
+
     // Hit: the camera shakes, the guard result is resolved and the damage is dealt.
     CALL(evt_btl_camera_shake_h, 0, 1, 1, 8, 0)
     CALL(evt_btl_camera_set_moveSpeedLv, 0, 2)
     CALL(evt_btl_camera_add_zoom, 0, -50)
     CALL(btlevtcmd_ResultACDefence, LW(3), LW(9))
-    CALL(btlevtcmd_CheckDamage, BTL_UNIT_SELF, LW(3), LW(4), LW(9), DAMAGE_FLAG_LAST_HIT, LW(5))
+    CALL(btlevtcmd_CheckDamage, UNIT_ID_SELF, LW(3), LW(4), LW(9), DAMAGE_RESULT_FINAL_HIT, LW(5))
     GOTO(98)
     LABEL(98)
+
     // After a pause the plant ducks down and resurfaces at its home spot (return_event).
     WAIT_MS(500)
     CALL_CHILD(return_event)
     LABEL(99)
-    CALL(btlevtcmd_ResetFaceDirection, BTL_UNIT_SELF)
+    CALL(btlevtcmd_ResetFaceDirection, UNIT_ID_SELF)
     RETURN
 EVT_END()
 
-/** Wait event of the Piranha Plant: switches to pose-table entry 1 (PKF_N_1 on the floor, PKF_N_2 on the ceiling). */
+/** Wait event of the Piranha Plant: selects the current pose-table animation for part 1. */
 static EVT_BEGIN(wait_event)
-    CALL(btlevtcmd_AnimeChangePoseFromTable, BTL_UNIT_SELF, 1)
+    CALL(btlevtcmd_AnimeChangePoseFromTable, UNIT_ID_SELF, 1)
     RETURN
 EVT_END()
 
 /**
- * Script helper: grows the shadow of the plant's part 1 from 0 back to the size stored by shadow_scale_memory
- * over 15 frames, after it comes out of the ground. args[0] is the unit.
+ * Script helper (args[0] is a battle unit): grows part 1's shadow back from zero to the scale saved in unit work[0]
+ * over 15 frames (work[1] counts them); blocks until done.
  */
 static USER_FUNC(shadow_scale_return) {
     s32 id = BattleTransID(event, evtGetValue(event, event->args[0]));
@@ -594,7 +612,7 @@ static USER_FUNC(shadow_scale_return) {
     if (isFirstCall) {
         unit->work[1] = 0;
     }
-    part->shadowScale = intplGetValue(0, 0.0f, unit->work[0], unit->work[1], 15);
+    part->shadowScale = intplGetValue(EASING_LINEAR, 0.0f, unit->work[0], unit->work[1], 15);
     if (unit->work[1] >= 15) {
         return EVT_RETURN_DONE;
     }
@@ -614,7 +632,7 @@ static USER_FUNC(shadow_scale_small) {
     if (isFirstCall) {
         unit->work[1] = 0;
     }
-    part->shadowScale = intplGetValue(0, unit->work[0], 0.0f, unit->work[1], 15);
+    part->shadowScale = intplGetValue(EASING_LINEAR, unit->work[0], 0.0f, unit->work[1], 15);
     if (unit->work[1] >= 15) {
         return EVT_RETURN_DONE;
     }
@@ -636,14 +654,14 @@ static USER_FUNC(shadow_scale_memory) {
 }
 
 /**
- * Script helper: writes 0 to args[0] if the stage's ceiling iron frame has been knocked away
- * (STAGE_OBJ_FLAG_IRON_FRAME_GONE), otherwise 1;
+ * Script helper: writes 0 to args[0] if the stage's ceiling iron frame is unavailable
+ * (STAGE_FLAG_NO_IRON_FRAME), otherwise 1;
  * the plant uses it to decide whether it can hang from the ceiling.
  */
 static USER_FUNC(pakkun_ceil_exist) {
     EvtWord* args = event->args;
 
-    if (_battleWorkPointer->stageObjectWork.flags & STAGE_OBJ_FLAG_IRON_FRAME_GONE) {
+    if (_battleWorkPointer->stageObjectWork.flags & STAGE_FLAG_NO_IRON_FRAME) {
         evtSetValue(event, args[0], 0);
     } else {
         evtSetValue(event, args[0], 1);

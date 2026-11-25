@@ -1,16 +1,17 @@
 // tik_01 (埋没した都市, Rogueport Sewers): the first room below Rogueport (gor_02): the three Goomba bullies
 // (gorotuki_sanninngumi), bombable walls, a save block, and the scene after the badge lecture.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_pouch.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_movefloor.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_case.h"
 #include "evt/evt_eff.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_img.h"
 #include "evt/evt_item.h"
-#include "driver/itemdrv.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
 #include "evt/evt_mobj.h"
@@ -19,29 +20,38 @@
 #include "evt/evt_offscreen.h"
 #include "evt/evt_paper.h"
 #include "evt/evt_party.h"
+#include "evt/evt_case.h"
 #include "evt/evt_snd.h"
-#include "tik.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
+#include "party/party_motion.h"
+#include "driver/npcdrv.h"
 #include "driver/mapdrv.h"
-#include "evt/evt_pouch.h"
+#include "mario/mario_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
-extern EvtWord lecture_badge_after_00_evt[];
-extern EvtWord dokan_2_in_evt[];
+static EvtWord lecture_badge_after_00_evt[34];
+static EvtWord dokan_2_in_evt[22];
 static BeroEntry bero_entry_data[12];
-extern EvtWord ashioto[];
-extern EvtWord gorotuki_sanninngumi[];
-extern EvtWord wall_bomb00[];
-extern EvtWord wall_bomb01[];
+static EvtWord ashioto[35];
+static EvtWord gorotuki_sanninngumi[694];
+static EvtWord wall_bomb00[139];
+static EvtWord wall_bomb01[140];
+static EvtWord mobj_box00[34];
+
+#if VERSION == VERSION_DEMO_JP
+EvtWord tik_01_init_evt[205];
+#else
+EvtWord tik_01_init_evt[208];
+#endif
 
 /**
  * Short scene after Goombella's badge lecture: Mario's partner walks to (-375, -105),
  * turns left and says lecture_badge_after_00, a reminder to equip a badge.
  */
-EVT_BEGIN(lecture_badge_after_00_evt)
+static EVT_BEGIN(lecture_badge_after_00_evt)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_bero_exec_wait, 65536)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
     CALL(evt_party_stop, 0)
     CALL(evt_party_move_pos2, 0, -375, -105, FLOAT(120.0f))
     CALL(evt_party_set_dir, 0, 270, 200)
@@ -52,13 +62,13 @@ EVT_BEGIN(lecture_badge_after_00_evt)
 EVT_END()
 
 /**
- * Runs when Mario enters the second pipe.
- * During the badge tutorial (STORY_STG0_17_BADGE_TUTORIAL up to the Blooper battle),
+ * Entry script of dokan_2: runs when Mario arrives in this room through the pipe from Rogueport (gor_02).
+ * During the badge tutorial (STG0_17_BADGE_TUTORIAL up to the Blooper battle),
  * if he has no badge equipped yet, it plays lecture_badge_after_00_evt. Returns 0 in LW(0).
  */
-EVT_BEGIN(dokan_2_in_evt)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG0_17_BADGE_TUTORIAL)
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG0_19_BLOOPER_BATTLE)
+static EVT_BEGIN(dokan_2_in_evt)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG0_17_BADGE_TUTORIAL)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG0_19_BLOOPER_BATTLE)
             CALL(evt_pouch_get_equipbadgecnt, LW(0))
             IF_INT_EQUAL(LW(0), 0)
                 SPAWN_EVENT(lecture_badge_after_00_evt)
@@ -148,7 +158,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)dokan_2_in_evt, // enterEvent
+        dokan_2_in_evt, // enterEvent
         10, // caseType
         NULL, // exitEvent
         "gor_02", // nextMapName
@@ -255,11 +265,10 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Footstep sound loop for the first Goomba bully:
- * alternates the left and right KURI_MOVE sounds at his position every 50 ms.
- * Started and stopped by the escape scene.
+ * Footstep loop for the first Goomba bully: SFX_STG0_KURI_MOVE1L and 1R at his position, alternating every 50 ms,
+ * forever; the bully scenes spawn it and delete it.
  */
-EVT_BEGIN(ashioto)
+static EVT_BEGIN(ashioto)
     LOOP(0)
         CALL(evt_npc_get_position, STRING("クリボー１"), LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG0_KURI_MOVE1L"), LW(0), LW(1), LW(2), 0)
@@ -277,16 +286,16 @@ EVT_END()
  * They taunt Mario and his partner (mac_0_086 to mac_0_092),
  * jump at him and start a battle (battle info 4) against Goomba 1.
  * After the fight they run away off the left edge, the partner comments (mac_0_094),
- * story progress is set to STORY_STG0_11_3_GOOMBA_GOONS, the save-block hit area opens and the music returns.
+ * story progress is set to STG0_11_3_GOOMBA_GOONS, the a_rec collision group is switched off and the music returns.
  */
-EVT_BEGIN(gorotuki_sanninngumi)
+static EVT_BEGIN(gorotuki_sanninngumi)
     // The three Goombas wait on the ledge until Mario walks past X = -100.
     CALL(evt_npc_set_position, STRING("クリボー１"), 110, 75, 65)
     CALL(evt_npc_set_position, STRING("クリボー２"), 140, 95, 35)
     CALL(evt_npc_set_position, STRING("クリボー３"), 155, 75, 85)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリボー１"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリボー２"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
-    CALL(evt_npc_flag_onoff, 1, STRING("クリボー３"), NPC_FLAG_NO_WALL_HIT | NPC_FLAG_TALK_ANIM | NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリボー１"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリボー２"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_NO_WALL_COLLISION)
+    CALL(evt_npc_flag_onoff, 1, STRING("クリボー３"), NPC_FLAG_NO_HIT | NPC_FLAG_TALK_POSE | NPC_FLAG_NO_WALL_COLLISION)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         IF_INT_GREATER_OR_EQUAL(LW(0), -100)
@@ -294,8 +303,9 @@ EVT_BEGIN(gorotuki_sanninngumi)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // A Goomba calls out; Mario and Goombella turn toward the gang, startled.
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S"), MAPOBJ_FLAG_BBOX_CULL)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S"), MAP_OBJ_FLAG_CLIP)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_msg_print, 0, STRING("mac_0_086"), 0, STRING("クリボー１"))
     CALL(evt_party_stop, 0)
@@ -306,11 +316,12 @@ EVT_BEGIN(gorotuki_sanninngumi)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
-    CALL(evt_eff_fukidashi, 0, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 30)
-    CALL(evt_eff_fukidashi, 3, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 30)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 30)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 30)
     WAIT_MS(800)
+
     // The camera frames the gang and Mario and Goombella are lined up facing them.
-    CALL(evt_cam3d_evt_set, 125, 148, 360, 125, 110, 37, 500, 11)
+    CALL(evt_cam3d_evt_set, 125, 148, 360, 125, 110, 37, 500, EASING_SINE_IN_OUT)
     WAIT_MS(400)
     SET_VALUE(LW(0), -100)
     SET_VALUE(LW(2), 70)
@@ -321,18 +332,20 @@ EVT_BEGIN(gorotuki_sanninngumi)
     CALL(evt_party_set_pos, 1, LW(0), 0, LW(2))
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_party_set_dir, 0, 90, -1)
+
     // The Goombas flirt with Goombella, she turns them down flat, and they decide to fight.
     CALL(evt_msg_print, 0, STRING("mac_0_087"), 0, STRING("クリボー２"))
     CALL(evt_msg_print, 0, STRING("mac_0_088"), 0, STRING("クリボー３"))
-    CALL(evt_cam3d_evt_set, -140, 65, 310, -140, 33, 37, 0, 11)
+    CALL(evt_cam3d_evt_set, -140, 65, 310, -140, 33, 37, 0, EASING_SINE_IN_OUT)
     WAIT_MS(200)
     CALL(evt_msg_print_party, STRING("mac_0_089"))
-    CALL(evt_cam3d_evt_set, 125, 148, 360, 125, 110, 37, 0, 11)
+    CALL(evt_cam3d_evt_set, 125, 148, 360, 125, 110, 37, 0, EASING_SINE_IN_OUT)
     WAIT_MS(200)
     CALL(evt_msg_print, 0, STRING("mac_0_090"), 0, STRING("クリボー１"))
     CALL(evt_msg_print, 0, STRING("mac_0_091"), 0, STRING("クリボー２"))
     CALL(evt_msg_print, 0, STRING("mac_0_092"), 0, STRING("クリボー３"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+
     // All three jump down at Mario and the battle against the Goomba, Spiky Goomba and Paragoomba starts.
     BEGIN_INLINE_EVENT_GET_ID(LW(10))
         SPAWN_EVENT_GET_ID(PTR(ashioto), LW(10))
@@ -374,6 +387,7 @@ EVT_BEGIN(gorotuki_sanninngumi)
     DELETE_EVENT(LW(10))
     DELETE_EVENT(LW(11))
     DELETE_EVENT(LW(12))
+
     // After the battle the beaten Goombas are put back on the floor in their hurt pose.
     CALL(evt_npc_set_position, STRING("クリボー１"), -65, 0, 65)
     CALL(evt_npc_set_position, STRING("クリボー２"), -55, 20, 35)
@@ -382,9 +396,10 @@ EVT_BEGIN(gorotuki_sanninngumi)
     CALL(evt_npc_set_damage_anim, STRING("クリボー１"))
     CALL(evt_npc_set_damage_anim, STRING("クリボー２"))
     CALL(evt_npc_set_damage_anim, STRING("クリボー３"))
-    CALL(evt_cam3d_evt_set, -120, 150, 588, -120, 55, 37, 0, 11)
+    CALL(evt_cam3d_evt_set, -120, 150, 588, -120, 55, 37, 0, EASING_SINE_IN_OUT)
     WAIT_MS(500)
-    CALL(evt_npc_flag_onoff, 0, STRING("クリボー１"), NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 0, STRING("クリボー１"), NPC_FLAG_TALK_POSE)
+
     // The first Goomba wails and the three flee off the left edge while Mario and Goombella watch.
     CALL(evt_msg_print, 0, STRING("mac_0_093"), 0, STRING("クリボー１"))
     SET_VALUE(GF(0), 1)
@@ -433,30 +448,33 @@ EVT_BEGIN(gorotuki_sanninngumi)
         WAIT_FRAMES(1)
     END_LOOP
     WAIT_WHILE(GF(1))
+
     // Goombella gloats; Mario is then warned that more enemies lie ahead and told to strike first in the field.
     WAIT_MS(200)
-    CALL(evt_cam3d_evt_set, -140, 65, 310, -140, 33, 37, 0, 11)
+    CALL(evt_cam3d_evt_set, -140, 65, 310, -140, 33, 37, 0, EASING_SINE_IN_OUT)
     WAIT_MS(200)
     CALL(evt_msg_print_party, STRING("mac_0_094"))
     WAIT_MS(333)
     CALL(evt_msg_print, 0, STRING("mac_0_094_01"), 0, STRING("extparty"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_party_run, 0)
     CALL(evt_party_run, 1)
-    // The Goomba gang is marked done, the save block opens and the sewer music returns.
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG0_11_3_GOOMBA_GOONS)
+
+    // The Goomba gang is marked done, the a_rec collision group is switched off and the sewer music returns.
+    SET_VALUE(GSW_STORY_PROGRESS, STG0_11_3_GOOMBA_GOONS)
     CALL(evt_hitobj_onoff, STRING("a_rec"), 1, 0)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG0_TIK1"), 2000)
+    CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG0_TIK1"), 2000)
     RETURN
 EVT_END()
 
 /**
- * Bobbery bomb trigger for the first cracked wall (bom_kabe_1) in the room.
- * Plays the break sound, swaps the wall's hit areas from closed to open,
- * sets GSWF_TIK01_WALL1_BOMBED and plays the paper-style collapse animation (OFF_d_bom_ver2) over the wall.
+ * Bobbery case event (CASE_BOBBERY on a_dom_kabe_1) of the first cracked wall bom_kabe_1: the break sound, hit
+ * object a_dom_kabe_1 off and a_dom_kabe_2 on, GSWF_TIK_01_WALL_BOMBED set, then the paper collapse animation
+ * OFF_d_bom_ver2 over a capture of the wall (skipped when its bounding box is empty) as bom_kabe_1 is hidden and
+ * bom_kabe_2 shown.
  */
-EVT_BEGIN(wall_bomb00)
+static EVT_BEGIN(wall_bomb00)
     BEGIN_INLINE_EVENT
         WAIT_MS(200)
         CALL(evt_mapobj_get_position, STRING("bom_kabe_1"), LW(0), LW(1), LW(2))
@@ -464,7 +482,7 @@ EVT_BEGIN(wall_bomb00)
     END_INLINE_EVENT
     CALL(evt_hitobj_onoff, STRING("a_dom_kabe_1"), 1, 0)
     CALL(evt_hitobj_onoff, STRING("a_dom_kabe_2"), 1, 1)
-    SET_VALUE(GSWF(GSWF_TIK01_WALL1_BOMBED), 1)
+    SET_VALUE(GSWF_TIK_01_WALL_BOMBED, 1)
     CALL(evt_img_entry, STRING("capture_img"))
     CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_bom_ver2"))
     CALL(evt_offscreen_entry, STRING("offscreen"))
@@ -480,12 +498,12 @@ EVT_BEGIN(wall_bomb00)
         CALL(evt_img_alloc_capture, STRING("capture_img"), 0, STRING("offscreen"), 1, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_img_clear_virtual_point, STRING("capture_img"))
         CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_2"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_2"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_img_wait_animend, STRING("capture_img"))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_2"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_2"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     CALL(evt_mapobj_clear_offscreen, 1, STRING("bom_kabe_1"))
     CALL(evt_img_free_capture, STRING("capture_img"), 0)
@@ -497,10 +515,11 @@ EVT_BEGIN(wall_bomb00)
 EVT_END()
 
 /**
- * Bobbery bomb trigger for the second cracked wall (bom_kabe_3), which hides the e_bero_2 exit.
- * The same as wall_bomb00, but it also enables the exit's door trigger and sets GSWF_TIK01_WALL2_BOMBED.
+ * Bobbery case event (CASE_BOBBERY on e_bero_2) of the second cracked wall bom_kabe_3: as wall_bomb00, but it
+ * switches on exit e_bero_2 (bero_case_switch_on, hit attribute 4 on), sets GSWF_TIK_01_EAST_WALL_BOMBED and swaps
+ * bom_kabe_3 for bom_kabe_4.
  */
-EVT_BEGIN(wall_bomb01)
+static EVT_BEGIN(wall_bomb01)
     BEGIN_INLINE_EVENT
         WAIT_MS(200)
         CALL(evt_mapobj_get_position, STRING("bom_kabe_3"), LW(0), LW(1), LW(2))
@@ -509,7 +528,7 @@ EVT_BEGIN(wall_bomb01)
     SET_VALUE(LW(0), STRING("e_bero_2"))
     CALL_CHILD(bero_case_switch_on)
     CALL(evt_hitobj_attr_onoff, 1, 1, STRING("e_bero_2"), 4)
-    SET_VALUE(GSWF(GSWF_TIK01_WALL2_BOMBED), 1)
+    SET_VALUE(GSWF_TIK_01_EAST_WALL_BOMBED, 1)
     CALL(evt_img_entry, STRING("capture_img"))
     CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_bom_ver2"))
     CALL(evt_offscreen_entry, STRING("offscreen"))
@@ -525,12 +544,12 @@ EVT_BEGIN(wall_bomb01)
         CALL(evt_img_alloc_capture, STRING("capture_img"), 0, STRING("offscreen"), 1, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_img_clear_virtual_point, STRING("capture_img"))
         CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_3"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_4"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_3"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_4"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_img_wait_animend, STRING("capture_img"))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_3"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_4"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_3"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("bom_kabe_4"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     CALL(evt_mapobj_clear_offscreen, 1, STRING("bom_kabe_3"))
     CALL(evt_img_free_capture, STRING("capture_img"), 0)
@@ -548,11 +567,11 @@ EVT_END()
 static EVT_BEGIN(mobj_box00)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mobj_get_position, STRING("mobj_box00"), LW(0), LW(1), LW(2))
-    CALL(evt_item_entry, STRING("item00"), ITEM_DEFEND_PLUS_P, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED, -1, 0)
+    CALL(evt_item_entry, STRING("item00"), ITEM_DEFEND_PLUS_P, LW(0), LW(1), LW(2), ITEM_TYPE_STILL, -1, 0)
 #if VERSION <= VERSION_DEMO_JP
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET)
 #else
-    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_BADGE_RETURN | ITEM_FLAG_NO_TOUCH)
+    CALL(evt_item_flag_on, STRING("item00"), ITEM_FLAG_NO_TOUCH_GET | ITEM_FLAG_LOST_BADGE_TO_SHOP)
 #endif
     CALL(evt_mobj_wait_animation_end, STRING("mobj_box00"))
     CALL(evt_item_get_item, STRING("item00"))
@@ -561,54 +580,55 @@ static EVT_BEGIN(mobj_box00)
 EVT_END()
 
 /**
- * Map init script of tik_01.
- * Starts the sewer music (fading in only the first time, via GSWF_TIK01_BGM_STARTED) and ambience,
- * sets up the exits, the two bombable walls, the Defend Plus P chest, the Star Piece panel,
- * the save block and the moving floor, and registers the airport harbor.
- * Removes the spiked Goomba before Frankly's house; runs the bully scene until the tutorial step is passed.
+ * Map init script of tik_01: JP and later set GSWF_TIK_01_VISITED. Starts the sewer music (fading in only the
+ * first time, via GSWF_TIK_01_ENTERED) and ambience, sets up the exits, marks the contact lens as arrived
+ * once it was ordered late and the story reached STG1_17_FATHER_SON_REUNITED, and sets up the two bombable
+ * walls, the Defend Plus P chest, the Star Piece panel, the save block, the moving floor and the airport
+ * harbor. Removes the spiked Goomba before STG0_16_FRANKLYS_HOUSE; runs the bully scene up to
+ * STG0_10_01_FRANKLYS_TUTORIAL.
  */
 EVT_BEGIN(tik_01_init_evt)
 #if VERSION >= VERSION_JP
-    SET_VALUE(GSWF(GSWF_LOG_MAP_TIK_ROUTE_SHOWN), 1)
+    SET_VALUE(GSWF_TIK_01_VISITED, 1)
 #endif
-    IF_INT_EQUAL(GSWF(GSWF_TIK01_BGM_STARTED), 1)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
+    IF_INT_EQUAL(GSWF_TIK_01_ENTERED, 1)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
     ELSE
-        CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_FADE_OUT, STRING("BGM_STG0_TIK1"), 3000)
-        SET_VALUE(GSWF(GSWF_TIK01_BGM_STARTED), 1)
+        CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_FADEOUT, STRING("BGM_STG0_TIK1"), 3000)
+        SET_VALUE(GSWF_TIK_01_ENTERED, 1)
     END_IF
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK1"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_EQUAL(GSWF(GSWF_GOR01_LENS_ARRIVED), 0)
-        IF_INT_EQUAL(GSWF(GSWF_GOR01_LENS_ORDERED_ALT), 1)
-            IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG1_17_FATHER_AND_SON_REUNITED)
-                SET_VALUE(GSWF(GSWF_GOR01_LENS_ARRIVED), 1)
+    IF_INT_EQUAL(GSWF_GOR_CONTACT_LENS_ARRIVED, 0)
+        IF_INT_EQUAL(GSWF_GOR_CONTACT_LENS_ORDERED_LATE, 1)
+            IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG1_17_FATHER_SON_REUNITED)
+                SET_VALUE(GSWF_GOR_CONTACT_LENS_ARRIVED, 1)
             END_IF
         END_IF
     END_IF
     CALL(evt_paper_entry, STRING("OFF_d_bom_ver2"))
-    IF_INT_EQUAL(GSWF(GSWF_TIK01_WALL1_BOMBED), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_2"), MAPOBJ_FLAG_HIDE)
+    IF_INT_EQUAL(GSWF_TIK_01_WALL_BOMBED, 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_2"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_dom_kabe_2"), 1, 0)
-        CALL(evt_run_case_evt, CASE_COND_BOBBERY, 1, STRING("a_dom_kabe_1"), 0, PTR(wall_bomb00), 0)
+        CALL(evt_run_case_evt, CASE_BOBBERY, 1, STRING("a_dom_kabe_1"), 0, PTR(wall_bomb00), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_1"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_dom_kabe_1"), 1, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_TIK01_WALL2_BOMBED), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_4"), MAPOBJ_FLAG_HIDE)
+    IF_INT_EQUAL(GSWF_TIK_01_EAST_WALL_BOMBED, 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_4"), MAP_OBJ_FLAG_HIDDEN)
         SET_VALUE(LW(0), STRING("e_bero_2"))
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_hitobj_attr_onoff, 1, 0, STRING("e_bero_2"), 4)
-        CALL(evt_run_case_evt, CASE_COND_BOBBERY, 1, STRING("e_bero_2"), 0, PTR(wall_bomb01), 0)
+        CALL(evt_run_case_evt, CASE_BOBBERY, 1, STRING("e_bero_2"), 0, PTR(wall_bomb01), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_3"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("bom_kabe_3"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
-    CALL(evt_mobj_itembox, STRING("mobj_box00"), 540, 125, -100, 0, 0, PTR(mobj_box00), GSWF(GSWF_TIK01_DEFEND_PLUS_P_CHEST_OPENED))
-    CALL(evt_mobj_kururing_floor, STRING("kururin1"), -100, 0, 50, STRING("jimen"), 125, GSWF(GSWF_TIK01_STAR_PIECE_PANEL))
+    CALL(evt_mobj_itembox, STRING("mobj_box00"), 540, 125, -100, MOBJ_ITEMBOX_NORMAL, 0, PTR(mobj_box00), GSWF_TIK_01_DEFEND_PLUS_P_CHEST)
+    CALL(evt_mobj_kururing_floor, STRING("kururin1"), -100, 0, 50, STRING("jimen"), 125, GSWF_STARPIECE_22)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -455, 135, -60, 0, 0)
     SET_VALUE(LW(0), STRING("ugo_yuka_1"))
     SET_VALUE(LW(1), STRING("a_ugo_yuka_1"))
@@ -628,10 +648,10 @@ EVT_BEGIN(tik_01_init_evt)
     SET_VALUE(LW(12), 0)
     SPAWN_EVENT(moving_floor)
     CALL(evt_map_entry_airport_harbor, 0, STRING("hikou"), STRING("a_hi1"))
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG0_16_FRANKLYS_HOUSE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG0_16_FRANKLYS_HOUSE)
         CALL(evt_npc_check_delete, STRING("トゲクリボー"))
     END_IF
-    IF_INT_LESS_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG0_10_01_FRANKLYS_TUTORIAL)
+    IF_INT_LESS_OR_EQUAL(GSW_STORY_PROGRESS, STG0_10_01_FRANKLYS_TUTORIAL)
         SPAWN_EVENT(gorotuki_sanninngumi)
     ELSE
         CALL(evt_hitobj_onoff, STRING("a_rec"), 1, 0)

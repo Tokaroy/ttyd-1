@@ -1,5 +1,5 @@
 // Battle status effects: the visual effects of statuses on units and the status-change announcement.
-#include <dolphin/pad.h>
+
 #include "version.h"
 #include "battle/battle_status_effect.h"
 #include "battle/battle_unit.h"
@@ -9,25 +9,20 @@
 #include "battle/battle_pad.h"
 #include "driver/dispdrv.h"
 #include "driver/msgdrv.h"
+#include "battle/battle_sub.h"
+#include "icon_ids.h"
 #include <stdio.h>
 #include <string.h>
 #include "driver/icondrv.h"
-#include "battle/battle_sub.h"
+#include "driver/camdrv.h"
+#include "driver/effdrv.h"
+#include "battle/battle_damage.h"
+#include "eff/eff_sleep.h"
 #include "eff/eff_fire.h"
 #include "eff/eff_ice.h"
-#include "eff/eff_sleep.h"
-#include "battle/battle_damage.h"
-
-// StChgMsg.flags: who the pending status message is about.
-#define ST_CHG_MSG_FLAG_MARIO 0x1   // Mario
-#define ST_CHG_MSG_FLAG_PARTNER 0x2 // a partner on the player's side
-#define ST_CHG_MSG_FLAG_OTHER 0x4   // any other unit
-
-#define ST_CHG_MSG(i) ((StChgMsg*)_battleWorkPointer->announce.stChg.msg + (i)) /* cast keeps the 0x18D88 displacement folded into each access */
+#include "eff/eff_spark.h"
 
 BOOL BattleStatusChangeAnnouceMain_Unit(BattleUnit* unit);
-void BattleStatusChangeMsgSetAnnouce(BattleUnit* unit, s32 index, s32 changed);
-void BattleStatusChangeInfoWorkInit(BattleUnit* unit);
 static void _st_chg_msg_disp(void);
 
 typedef struct StChgMsgData {
@@ -37,15 +32,10 @@ typedef struct StChgMsgData {
     const char* msg0;
 } StChgMsgData;
 
-// Status Type Priority Data. The demo defines it first; its .data follows that order (retail keeps it in .sdata).
 #if VERSION <= VERSION_DEMO_JP
-/**
- * Demo copy of the status announcement order: Charge first, then Poison, Sleep and so on, ending with -1.
- * BattleStatusChangeMsgMain shows pending messages in this order and _get_pri ranks queued changes by it.
- */
-s8 _st_pri_data[] = {
-    STATUS_CHARGE, //charge is elevated
-    STATUS_POISON, //poison is elevated
+static s8 _st_pri_data[] = {
+    STATUS_CHARGE, // charge is elevated
+    STATUS_POISON, // poison is elevated
     STATUS_SLEEP,
     STATUS_STOP,
     STATUS_DIZZY,
@@ -74,43 +64,43 @@ s8 _st_pri_data[] = {
 
 /**
  * Message for each status change announcement (the Japanese status name is only a label):
- * msg1 when the status took hold, msg0 when not; only Charge differs ("...But it had no effect!").
+ * msg1 when the change is marked changed, msg0 otherwise; only Charge differs ("...But it had no effect!").
  * Ends with type -1.
  */
-StChgMsgData _st_chg_msg_data[] = {
-    { 4, "どく", "msg_st_chg_poison", "msg_st_chg_poison" },
-    { 16, "チャージ", "msg_st_chg_charge", "msg_st_chg_charge3" },
-    { 1, "ねむり", "msg_st_chg_sleep", "msg_st_chg_sleep" },
-    { 2, "ストップ", "msg_st_chg_stan", "msg_st_chg_stan" },
-    { 3, "グルグル", "msg_st_chg_guruguru", "msg_st_chg_guruguru" },
-    { 5, "こんらん", "msg_st_chg_confusion", "msg_st_chg_confusion" },
-    { 6, "ビリビリ", "msg_st_chg_biribiri", "msg_st_chg_biribiri" },
-    { 7, "ヨケヨケ", "msg_st_chg_dodge", "msg_st_chg_dodge" },
-    { 8, "ひだるま", "msg_st_chg_fire", "msg_st_chg_fire" },
-    { 9, "こおりづけ", "msg_st_chg_freeze", "msg_st_chg_freeze" },
-    { 10, "デカデカ", "msg_st_chg_big", "msg_st_chg_big" },
-    { 11, "ミニミニ", "msg_st_chg_small", "msg_st_chg_small" },
-    { 12, "つよつよ", "msg_st_chg_tuyotuyo", "msg_st_chg_tuyotuyo" },
-    { 13, "よわよわ", "msg_st_chg_yowayowa", "msg_st_chg_yowayowa" },
-    { 14, "カチカチ", "msg_st_chg_hard", "msg_st_chg_hard" },
-    { 15, "フニャフニャ", "msg_st_chg_soft", "msg_st_chg_soft" },
-    { 0, "アレルギー", "msg_st_chg_allergy", "msg_st_chg_allergy" },
-    { 18, "とうめい", "msg_st_chg_trans", "msg_st_chg_trans" },
-    { 19, "はやい", "msg_st_chg_quick", "msg_st_chg_quick" },
-    { 20, "のろい", "msg_st_chg_slow", "msg_st_chg_slow" },
-    { 21, "しかえし", "msg_st_chg_counter", "msg_st_chg_counter" },
-    { 22, "ボムカウンター", "msg_st_chg_bombcounter", "msg_st_chg_bombcounter" },
-    { 23, "じわじわＨＰ", "msg_st_chg_reg_hp", "msg_st_chg_reg_hp" },
-    { 24, "じわじわＦＰ", "msg_st_chg_reg_fp", "msg_st_chg_reg_fp" },
+static StChgMsgData _st_chg_msg_data[] = {
+    { STATUS_POISON, "どく", "msg_st_chg_poison", "msg_st_chg_poison" },
+    { STATUS_CHARGE, "チャージ", "msg_st_chg_charge", "msg_st_chg_charge3" },
+    { STATUS_SLEEP, "ねむり", "msg_st_chg_sleep", "msg_st_chg_sleep" },
+    { STATUS_STOP, "ストップ", "msg_st_chg_stan", "msg_st_chg_stan" },
+    { STATUS_DIZZY, "グルグル", "msg_st_chg_guruguru", "msg_st_chg_guruguru" },
+    { STATUS_CONFUSE, "こんらん", "msg_st_chg_confusion", "msg_st_chg_confusion" },
+    { STATUS_ELECTRIC, "ビリビリ", "msg_st_chg_biribiri", "msg_st_chg_biribiri" },
+    { STATUS_DODGY, "ヨケヨケ", "msg_st_chg_dodge", "msg_st_chg_dodge" },
+    { STATUS_BURN, "ひだるま", "msg_st_chg_fire", "msg_st_chg_fire" },
+    { STATUS_FREEZE, "こおりづけ", "msg_st_chg_freeze", "msg_st_chg_freeze" },
+    { STATUS_HUGE, "デカデカ", "msg_st_chg_big", "msg_st_chg_big" },
+    { STATUS_TINY, "ミニミニ", "msg_st_chg_small", "msg_st_chg_small" },
+    { STATUS_ATTACK_UP, "つよつよ", "msg_st_chg_tuyotuyo", "msg_st_chg_tuyotuyo" },
+    { STATUS_ATTACK_DOWN, "よわよわ", "msg_st_chg_yowayowa", "msg_st_chg_yowayowa" },
+    { STATUS_DEFENSE_UP, "カチカチ", "msg_st_chg_hard", "msg_st_chg_hard" },
+    { STATUS_DEFENSE_DOWN, "フニャフニャ", "msg_st_chg_soft", "msg_st_chg_soft" },
+    { STATUS_ALLERGIC, "アレルギー", "msg_st_chg_allergy", "msg_st_chg_allergy" },
+    { STATUS_INVISIBLE, "とうめい", "msg_st_chg_trans", "msg_st_chg_trans" },
+    { STATUS_FAST, "はやい", "msg_st_chg_quick", "msg_st_chg_quick" },
+    { STATUS_SLOW, "のろい", "msg_st_chg_slow", "msg_st_chg_slow" },
+    { STATUS_PAYBACK, "しかえし", "msg_st_chg_counter", "msg_st_chg_counter" },
+    { STATUS_HOLD_FAST, "ボムカウンター", "msg_st_chg_bombcounter", "msg_st_chg_bombcounter" },
+    { STATUS_HP_REGEN, "じわじわＨＰ", "msg_st_chg_reg_hp", "msg_st_chg_reg_hp" },
+    { STATUS_FP_REGEN, "じわじわＦＰ", "msg_st_chg_reg_fp", "msg_st_chg_reg_fp" },
     { -1, "", "", "" },
 };
 
-#if VERSION >= VERSION_JP
 //.sdata
 // Status Type Priority Data
-s8 _st_pri_data[] = {
-    STATUS_CHARGE, //charge is elevated
-    STATUS_POISON, //poison is elevated
+#if VERSION >= VERSION_JP
+static s8 _st_pri_data[] = {
+    STATUS_CHARGE, // charge is elevated
+    STATUS_POISON, // poison is elevated
     STATUS_SLEEP,
     STATUS_STOP,
     STATUS_DIZZY,
@@ -148,14 +138,13 @@ static void BSE_Freeze(BattleUnit* unit);
 static void BSE_FreezeDelete(BattleUnit* unit);
 static void BSE_Kagegakure(BattleUnit* unit);
 static void BSE_KagegakureDelete(BattleUnit* unit);
-static s32 _get_pri(s8 type);
 
 /**
  * Status-effect setup for a new unit, called from BtlUnit_Entry;
  * empty in every version (the effect pointers start NULL).
  */
 void BattleStatusEffectInit(BattleUnit* unit) {
-    ; // stubbed in retail
+    ; // empty in every version
 }
 
 /**
@@ -180,15 +169,6 @@ void BattleStatusEffectDelete(BattleUnit* unit) {
     BSE_KagegakureDelete(unit);
 }
 
-#include "driver/effdrv.h"
-// FAKE: local prototype with two extra arguments (eff_spark.h: (s32 type, f32 x, f32 y, f32 z)): BSE_Biribiri passes
-// 10 and half the unit width, which effSparkEntry never reads; the target computes and passes them.
-EffectEntry* effSparkEntry(s32, s32, f32, f32, f32, f32);
-#define EFF_SLEEP(u) ((u)->sleepEff)
-#define EFF_SPARK(u) ((u)->sparkEff)
-
-// BSE_Sleep, BSE_SleepDelete, BSE_Biribiri and 1 more size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 /**
  * While the unit is asleep, keeps a sleep effect (the floating Zs) at the top-right of its body part:
  * half the width across and 0.95 of the height up, scaled by the unit's size (at body height for ceiling units).
@@ -204,14 +184,14 @@ static void BSE_Sleep(BattleUnit* unit) {
         on = TRUE;
     }
     if (on) {
-        if (EFF_SLEEP(unit) == NULL) {
-            EFF_SLEEP(unit) = effSleepEntry(0, 0, -1000.0f, -1000.0f, -1000.0f, 1.0f, 60.0f);
+        if (unit->sleepEff == NULL) {
+            unit->sleepEff = effSleepEntry(0, 0, -1000.0f, -1000.0f, -1000.0f, 1.0f, 60.0f);
         }
-        wk = (f32*)EFF_SLEEP(unit)->userdata;
+        wk = (f32*)unit->sleepEff->userdata;
         BtlUnit_GetPartsWorldPos(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit)), &x, &y, &z);
         dx = 0.5f * (unit->sizeMultiplier * BtlUnit_GetWidth(unit));
         dy = 0.95f * (unit->sizeMultiplier * BtlUnit_GetHeight(unit));
-        if (unit->attributeFlags & UNIT_ATTR_CEILING) {
+        if (unit->attributeFlags & kCeiling) {
             dy = 0.0f;
         }
         x += dx;
@@ -226,9 +206,9 @@ static void BSE_Sleep(BattleUnit* unit) {
 
 /** Deletes the unit's sleep effect if it has one. */
 static void BSE_SleepDelete(BattleUnit* unit) {
-    if (EFF_SLEEP(unit) != NULL) {
-        effDelete(EFF_SLEEP(unit));
-        EFF_SLEEP(unit) = NULL;
+    if (unit->sleepEff != NULL) {
+        effDelete(unit->sleepEff);
+        unit->sleepEff = NULL;
     }
 }
 
@@ -247,13 +227,13 @@ static void BSE_Biribiri(BattleUnit* unit) {
         on = TRUE;
     }
     if (on) {
-        if (EFF_SPARK(unit) == NULL) {
-            EFF_SPARK(unit) = effSparkEntry(0, 10, -1000.0f, -1000.0f, -1000.0f, BtlUnit_GetWidth(unit) / 2);
+        if (unit->sparkEff == NULL) {
+            unit->sparkEff = effSparkEntry(0, 10, -1000.0f, -1000.0f, -1000.0f, BtlUnit_GetWidth(unit) / 2);
         }
-        wk = (f32*)EFF_SPARK(unit)->userdata;
+        wk = (f32*)unit->sparkEff->userdata;
         BtlUnit_GetPartsWorldPos(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit)), &x, &y, &z);
         dy = unit->sizeMultiplier * (BtlUnit_GetHeight(unit) / 2);
-        if (unit->attributeFlags & UNIT_ATTR_CEILING) {
+        if (unit->attributeFlags & kCeiling) {
             dy = 0.0f;
         }
         y += dy;
@@ -267,18 +247,12 @@ static void BSE_Biribiri(BattleUnit* unit) {
 
 /** Deletes the unit's Electrified spark effect if it has one. */
 static void BSE_BiribiriDelete(BattleUnit* unit) {
-    if (EFF_SPARK(unit) != NULL) {
-        effDelete(EFF_SPARK(unit));
-        EFF_SPARK(unit) = NULL;
+    if (unit->sparkEff != NULL) {
+        effDelete(unit->sparkEff);
+        unit->sparkEff = NULL;
     }
 }
-#pragma optimize_for_size reset
 
-#define EFF_FIRE(u) ((u)->fireEff)
-#define EFF_ICE(u) ((u)->iceEff)
-
-// BSE_Fire, BSE_FireDelete, BSE_Freeze and 1 more size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 /**
  * While the unit is Burned, keeps a flame effect on it at the unit kind's burnFlameOffset (mirrored by facing
  * direction and scaled by size); deletes it when the burn ends.
@@ -292,10 +266,10 @@ static void BSE_Fire(BattleUnit* unit) {
         on = TRUE;
     }
     if (on) {
-        if (EFF_FIRE(unit) == NULL) {
-            EFF_FIRE(unit) = effFireEntry(0, 0, -1000.0f, -1000.0f, -1000.0f, 1.0f);
+        if (unit->fireEff == NULL) {
+            unit->fireEff = effFireEntry(0, 0, -1000.0f, -1000.0f, -1000.0f, 1.0f);
         }
-        wk = (f32*)EFF_FIRE(unit)->userdata;
+        wk = (f32*)unit->fireEff->userdata;
         BtlUnit_GetPartsWorldPos(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit)), &x, &y, &z);
         x += unit->sizeMultiplier * (unit->kindParams->burnFlameOffset.x * (unit->faceDirection >= 0 ? 1.0f : -1.0f));
         y += unit->kindParams->burnFlameOffset.y * unit->sizeMultiplier;
@@ -310,9 +284,9 @@ static void BSE_Fire(BattleUnit* unit) {
 
 /** Deletes the unit's Burn flame effect if it has one. */
 static void BSE_FireDelete(BattleUnit* unit) {
-    if (EFF_FIRE(unit) != NULL) {
-        effDelete(EFF_FIRE(unit));
-        EFF_FIRE(unit) = NULL;
+    if (unit->fireEff != NULL) {
+        effDelete(unit->fireEff);
+        unit->fireEff = NULL;
     }
 }
 
@@ -324,28 +298,27 @@ static void BSE_FireDelete(BattleUnit* unit) {
 static void BSE_Freeze(BattleUnit* unit) {
     f32 x, y, z;
     f32* wk;
-    f32 a, b, sc;
+    f32 widthScale, heightScale, scale;
     BOOL on = FALSE;
+    BattleUnitPart* parts;
 
     if (BtlUnit_CheckStatus(unit, STATUS_FREEZE)) {
         on = TRUE;
     }
     if (on) {
-        if (EFF_ICE(unit) == NULL) {
-            EFF_ICE(unit) = effIceEntry(0, -1, -1000.0f, -1000.0f, -1000.0f, 1.0f);
+        if (unit->iceEff == NULL) {
+            unit->iceEff = effIceEntry(0, -1, -1000.0f, -1000.0f, -1000.0f, 1.0f);
         }
-        wk = (f32*)EFF_ICE(unit)->userdata;
-        {
-            BattleUnitPart* parts = BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit));
-            a = unit->width / 20.0f;
-            b = unit->height / 36.0f;
-            sc = a <= b ? a : b;
-            sc *= unit->sizeMultiplier;
-            wk[4] = sc;
-            BtlUnit_GetPartsWorldPos(parts, &x, &y, &z);
-        }
+        wk = (f32*)unit->iceEff->userdata;
+        parts = BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit));
+        widthScale = unit->width / 20.0f;
+        heightScale = unit->height / 36.0f;
+        scale = widthScale <= heightScale ? widthScale : heightScale;
+        scale *= unit->sizeMultiplier;
+        wk[4] = scale;
+        BtlUnit_GetPartsWorldPos(parts, &x, &y, &z);
         wk[1] = x;
-        wk[2] = 20.0f * sc + y;
+        wk[2] = 20.0f * scale + y;
         wk[3] = 10.0f + z;
     } else {
         BSE_FreezeDelete(unit);
@@ -353,39 +326,33 @@ static void BSE_Freeze(BattleUnit* unit) {
 }
 
 /**
- * Removes the unit's ice-block effect with effSoftDelete, so instead of vanishing it plays out the rest of its
- * animation and then sags, fades and drips smoke puffs (effIceMain).
+ * Removes the unit's ice-block effect with effSoftDelete, so instead of vanishing it plays its animation on from
+ * frame 90 to the end and then deletes itself (effIceMain).
  */
 static void BSE_FreezeDelete(BattleUnit* unit) {
-    if (EFF_ICE(unit) != NULL) {
-        effSoftDelete(EFF_ICE(unit));
-        EFF_ICE(unit) = NULL;
+    if (unit->iceEff != NULL) {
+        effSoftDelete(unit->iceEff);
+        unit->iceEff = NULL;
     }
 }
 
-#pragma optimize_for_size reset
-
 /**
- * Kagegakure = hiding in the shadows (Vivian's Veil).
- * While the command menu is up (BATTLE_DISP_FLAG_COMMAND_MENU) and the unit is UNIT_ATTR_VEILED,
- * shows icon 0xA1 (0x99 in the demos) named "_biK_<unitId>" at the unit's body part; removes it otherwise.
+ * Kagegakure = hiding in the shadows (Vivian's Veil). While the command menu is up (BATTLE_DISP_FLAG_COMMAND_MENU)
+ * and the unit is kVeiled, shows icon ICON_MARIO_UNDER_GROUND_VEIL named "_biK_<unitId>" 5 units in front of the
+ * unit's body part; removes it otherwise.
  */
 static void BSE_Kagegakure(BattleUnit* unit) {
     char name[0x10];
     f32 x, y, z;
     BOOL on = FALSE;
 
-    if ((_battleWorkPointer->dispFlags & BATTLE_DISP_FLAG_COMMAND_MENU) && (unit->attributeFlags & UNIT_ATTR_VEILED)) {
+    if ((_battleWorkPointer->dispFlags & BATTLE_DISP_FLAG_COMMAND_MENU) && (unit->attributeFlags & kVeiled)) {
         on = TRUE;
     }
     if (on) {
         if (unit->kageIcon == NULL) {
-            sprintf(name, "_biK_%02x", *(s32*)unit);
-#if VERSION >= VERSION_US
-            iconEntry(name, 0xA1);
-#else
-            iconEntry(name, 0x99);
-#endif
+            sprintf(name, "_biK_%02x", unit->unitId);
+            iconEntry(name, ICON_MARIO_UNDER_GROUND_VEIL);
             unit->kageIcon = iconNameToPtr(name);
         }
         BtlUnit_GetPartsWorldPos(BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit)), &x, &y, &z);
@@ -409,11 +376,9 @@ static void BSE_KagegakureDelete(BattleUnit* unit) {
  */
 void BSE_TurnFirstProcessEffectEntry(BattleUnit* unit, s16 active) {
     unit->burnDamageFlameState = 1;
-    unit->burnDamageFlameActive = active;
+    unit->mbBurnDamageFlameActive = active;
 }
 
-// BSE_TurnFirstProcessEffectMain size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 /**
  * Steps the start-of-turn Burn animation each frame:
  * spawns a flame at the unit, pulses its scale between 0.4 and 2.0 for 60 frames,
@@ -424,23 +389,23 @@ BOOL BSE_TurnFirstProcessEffectMain(BattleUnit* unit) {
     BattleUnitPart* part;
     f32 x, y, z;
     f32* work;
-    u16 ac;
-    u16 st;
+    u16 active;
+    u16 state;
 
     part = BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit));
-    st = unit->burnDamageFlameState;
-    if (st == 0) {
+    state = unit->burnDamageFlameState;
+    if (state == 0) {
         return FALSE;
     }
-    ac = unit->burnDamageFlameActive;
-    if (ac == 0) {
+    active = unit->mbBurnDamageFlameActive;
+    if (active == 0) {
         return FALSE;
     }
-    switch (ac) {
+    switch (active) {
         case 1:
-            switch (st) {
+            switch (state) {
                 case 1:
-                    unit->burnDamageFlameState = st + 1;
+                    unit->burnDamageFlameState = state + 1;
                     unit->burnDamageFlameScale = 1.0f;
                     BtlUnit_GetPartsWorldPos(part, &x, &y, &z);
                     z += 5.0f;
@@ -461,8 +426,10 @@ BOOL BSE_TurnFirstProcessEffectMain(BattleUnit* unit) {
                     unit->burnDamageFlameEff = NULL;
                     unit->burnDamageFlameState = 0;
                     if (!BtlUnit_CheckShadowGuard(unit)) {
-                        BattleDamageDirect(-5, unit, NULL, 1, 0, 0x118, 0, 1);
+                        BattleDamageDirect(UNIT_ID_SYSTEM, unit, NULL, 1, 0, DAMAGE_RESULT_FINAL_HIT | DAMAGE_CODE_FIRE, 0, 1);
                     }
+
+                    // fall through
                 case 0:
                 default:
                     return FALSE;
@@ -473,14 +440,11 @@ BOOL BSE_TurnFirstProcessEffectMain(BattleUnit* unit) {
     }
     return TRUE;
 }
-#pragma optimize_for_size reset
 
-// BattleStatusChangeInfoWorkInit size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 /**
  * Empties the unit's six-entry status-change queue (statusChangeInfo).
- * Called when the unit enters battle, from BtlUnit_ClearStatus and (not in the demos)
- * after the status messages have been shown.
+ * Called when the unit enters battle; in JP and later also from BtlUnit_ClearStatus, and
+ * status-message processing clears it while a message is active.
  */
 void BattleStatusChangeInfoWorkInit(BattleUnit* unit) {
     s32 i;
@@ -495,10 +459,7 @@ void BattleStatusChangeInfoWorkInit(BattleUnit* unit) {
         p->reserved_04 = 0;
     }
 }
-#pragma optimize_for_size reset
 
-// FAKE: inlining off from here to the end of the file (FAKES.md); without it 11 functions change length, e.g. BattleStatusEffectMain 19 -> 373 instructions
-#pragma dont_inline on
 /**
  * Priority of a status for the change messages:
  * 24 for the first entry of _st_pri_data (Charge) down to 1 for the last, -1 if the status is not listed.
@@ -506,7 +467,7 @@ void BattleStatusChangeInfoWorkInit(BattleUnit* unit) {
  */
 static s32 _get_pri(s8 type) {
     s8* val;
-    s32 priority = 24; // _st_pri_data has 24 entries: the first gets 24, the last 1
+    s32 priority = 24;
 
     for (val = _st_pri_data;; priority--, val++) {
         if (*val == -1) {
@@ -519,8 +480,6 @@ static s32 _get_pri(s8 type) {
     return -1;
 }
 
-// BattleStatusChangeInfoSetAnnouce size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 /**
  * Queues a status change on the unit (battle_damage.c calls it when a status is inflicted or changed):
  * inserts it into the six-entry statusChangeInfo list by _get_pri priority,
@@ -536,14 +495,15 @@ void BattleStatusChangeInfoSetAnnouce(BattleUnit* unit, s32 type, s32 strength, 
     u8 u, t;
 
     for (i = 0; i < 6; i++) {
-        s32 cur = e[i].type;
-
-        n = _get_pri(cur);
-        if (pri >= (s8)n)
+        s32 queuedType = e[i].type;
+        n = _get_pri(queuedType);
+        if (pri >= (s8)n) {
             break;
+        }
     }
-    if (i >= 6)
+    if (i >= 6) {
         return;
+    }
     tmp.type = type;
     tmp.strength = strength;
     tmp.changed = changed;
@@ -557,23 +517,26 @@ void BattleStatusChangeInfoSetAnnouce(BattleUnit* unit, s32 type, s32 strength, 
         }
     }
     j = 0;
-    n = j;
+    n = 0;
     t = 0;
     for (i = 0; i < 6; i++) {
-        if (e[i].type == -1)
+        if (e[i].type == -1) {
             break;
+        }
         e[i].stagger = t;
         e[i].reserved_04 = j;
         t += 10;
         n++;
     }
-    if (t == 0)
-        goto L3;
-    u = 0x50;
-    goto Ld;
-L3:
-    u = 0x3C;
-Ld:;
+
+    switch (t) {
+        default:
+            u = 0x50;
+            break;
+        case 0:
+            u = 0x3C;
+            break;
+    }
     for (j = n; j >= 0; j--) {
         if (e[j].type != -1) {
             e[j].stackOffset = u;
@@ -582,9 +545,6 @@ Ld:;
     }
 }
 
-#pragma optimize_for_size reset
-// BattleStatusChangeAnnouceMain, BattleStatusChangeAnnouceMain_Unit size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 /**
  * Runs the per-unit status announcements for every unit and returns TRUE while any is still showing;
  * since BattleStatusChangeAnnouceMain_Unit is empty it always returns FALSE.
@@ -609,29 +569,25 @@ BOOL BattleStatusChangeAnnouceMain(BattleWork* wp) {
 BOOL BattleStatusChangeAnnouceMain_Unit(BattleUnit* unit) {
     return FALSE;
 }
-#pragma optimize_for_size reset
 
-// BattleStatusChangeMsgWorkInit size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
 /** Clears the 28 status-change message slots in BattleWork (one per status type) at battle start. */
 void BattleStatusChangeMsgWorkInit(void) {
-    StChgMsg* msg = ST_CHG_MSG(0);
+    StChgMsg* msg = &_battleWorkPointer->announce.stChg.msg[0];
     s32 i;
 
-    memset(msg, 0, 0x258);
+    memset(msg, 0, sizeof(StChgWork));
     for (i = 0; i < 28; i++) {
         msg[i].type = -1;
     }
 }
-#pragma optimize_for_size reset
 
 /**
- * Marks the status-change message for status index as pending and records who it is about:
- * ST_CHG_MSG_FLAG_MARIO, _PARTNER (a partner on the player's side) or _OTHER (any other unit).
- * changed selects msg1 over msg0 (only Charge differs).
+ * Fills status-change announcement slot index for the unit: unit id, type, timer 0, changed, and a flag for Mario, the
+ * player's partner or any other unit.
  */
 void BattleStatusChangeMsgSetAnnouce(BattleUnit* unit, s32 index, s32 changed) {
-    StChgMsg* msg = ST_CHG_MSG(index);
+    StChgWork* st = &_battleWorkPointer->announce.stChg;
+    StChgMsg* msg = &st->msg[index];
     s32 id;
 
     msg->unitId = unit->unitId;
@@ -640,16 +596,14 @@ void BattleStatusChangeMsgSetAnnouce(BattleUnit* unit, s32 index, s32 changed) {
     msg->changed = changed;
     id = unit->currentKind;
     if (id == UNIT_MARIO) {
-        msg->flags |= ST_CHG_MSG_FLAG_MARIO;
-    } else if (id >= UNIT_GOOMBELLA && id < UNIT_MAX && unit->alliance == 0) {
-        msg->flags |= ST_CHG_MSG_FLAG_PARTNER;
+        msg->flags |= ST_CHG_MSG_MARIO;
+    } else if (id >= TYPE_PARTNER_MIN && id < TYPE_PARTNER_MAX && unit->alliance == ALLIANCE_PLAYER) {
+        msg->flags |= ST_CHG_MSG_PARTNER;
     } else {
-        msg->flags |= ST_CHG_MSG_FLAG_OTHER;
+        msg->flags |= ST_CHG_MSG_OTHER;
     }
 }
-// the rest of this unit is size-optimised, as in the original (the object differs without it)
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
+
 /**
  * Rebuilds the pending status messages before they are shown:
  * for each status, re-marks it from every living unit whose statusChangeInfo queue holds it,
@@ -675,7 +629,7 @@ void BattleStatusChangeMsgAdjust(BattleWork* wp) {
         msg->flags = 0;
         for (j = 0; j < BATTLE_UNIT_MAX; j++) {
             unit = BattleGetUnitPtr(wp, j);
-            if (unit && !BtlUnit_CheckStatus(unit, STATUS_INSTANT_KILL)) {
+            if (unit && !BtlUnit_CheckStatus(unit, STATUS_DEAD)) {
                 e = &unit->statusChangeInfo[0];
                 found = 0;
                 k = 0;
@@ -692,20 +646,20 @@ void BattleStatusChangeMsgAdjust(BattleWork* wp) {
             }
         }
         if (!msg->flags) {
-            msg->unitId = -1;
+            msg->unitId = UNIT_ID_NONE;
             msg->type = -1;
         } else if (*(s64*)&base->maskHi & (s64)(1 << t)) {
-            msg->unitId = -1;
+            msg->unitId = UNIT_ID_NONE;
             msg->type = -1;
         }
     }
 }
 
 /**
- * Shows the pending status-change message of highest priority, one per call:
+ * Shows the pending status-change message of highest priority (_st_pri_data), one per call:
  * loads its text (msg_st_chg_*), keeps it up for 90 frames (A or B skips) and registers _st_chg_msg_disp.
- * Returns TRUE while any message is pending, which holds the battle sequence.
- * The retail versions also clear every unit's queue once a message was shown.
+ * Returns TRUE while any message is pending.
+ * JP and later also clear every unit's status-change info once a message was pending.
  */
 BOOL BattleStatusChangeMsgMain(BattleWork* wp) {
     StChgWork* base = &wp->announce.stChg;
@@ -721,7 +675,7 @@ BOOL BattleStatusChangeMsgMain(BattleWork* wp) {
         BattleGetUnitPtr(wp, msg->unitId);
         if (msg->timer) {
             msg->timer--;
-            if (BattlePadCheckTrigger((PAD_BUTTON_A | PAD_BUTTON_B))) {
+            if (BattlePadCheckTrigger(PAD_BUTTON_A | PAD_BUTTON_B)) {
                 msg->timer = 0;
             }
             if (!msg->timer) {
@@ -741,42 +695,40 @@ BOOL BattleStatusChangeMsgMain(BattleWork* wp) {
             }
             msg->timer = 90;
         }
-        dispEntry(CAMERA_2D, 900.0f, 1, (DispCallback)_st_chg_msg_disp, 0);
+        dispEntry(CAMERA_2D, 900.0f, DISP_MODE_ALPHA_TEST, (DispCallback)_st_chg_msg_disp, 0);
         break;
     }
 #if VERSION >= VERSION_JP
     if (ret) {
         for (i = 0; i < BATTLE_UNIT_MAX; i++) {
             BattleUnit* unit = BattleGetUnitPtr(wp, i);
-            if (unit)
+            if (unit) {
                 BattleStatusChangeInfoWorkInit(unit);
+            }
         }
     }
 #endif
     return ret;
 }
 
-typedef void (*WakuColByRefFunc)(u16, GXColor*, f32, f32, f32, f32, f32);
-
 /**
- * Draws the current status-change text centred near the top of the screen (y -120) in a white-bordered window
+ * Draws the current status-change text centred in the lower half of the screen (y -120) in a white-bordered window
  * sized to the text, 29 units per line.
  */
 static void _st_chg_msg_disp(void) {
     StChgWork* st = &_battleWorkPointer->announce.stChg;
     f32 y;
     f32 x;
+    f32 center = 0.0f;
     u16 width;
     u16 lines;
-    GXColor col0;
     width = FontGetMessageWidthLine((const char*)st->text, &lines);
     lines++;
-    col0 = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
-    y = 0.0f;
-    x = y - (width / 2);
     y = -120.0f;
-    // the color is passed by address here (same ABI as by-value GXColor)
-    ((WakuColByRefFunc)windowDispGX_Waku_col)(0, &col0, x - 20.0f, ((lines - 1) * 29) + -117.0f, (f32)(width + 40), (f32)(lines * 29 + 1), 10.0f);
+
+    // center is a variable: the retail code computes 0.0f - width / 2 at run time (lfs 0.0f, fsubs); a literal
+    // 0.0f folds to fneg. x is assigned inside the call, as in battle_ac_help.c's window.
+    windowDispGX_Waku_col((x = center - (width / 2)) - 20.0f, ((lines - 1) * 29) + -117.0f, (f32)(width + 40), (f32)(lines * 29 + 1), 10.0f, 0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     FontDrawStart();
     FontDrawMessage(x, (s32)y + (lines - 1) * 29, (const char*)st->text);
 }

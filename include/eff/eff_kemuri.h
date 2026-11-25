@@ -1,4 +1,5 @@
 // eff_kemuri.c: work data for the smoke puffs (effKemuriData, effKemuri2Data).
+
 #pragma once
 
 #include "driver/effdrv.h"
@@ -50,7 +51,5 @@ typedef struct effKemuriData {
     s32 lifetime;           // 0x88, frames (32 or 64)
 } effKemuriData;
 
-// dir: mario_kemuri passes Mario's direction, the other callers 0; not read
-EffectEntry* effKemuriEntry(s32 type, f32 x, f32 y, f32 z, f32 dir);
-// type: callers pass 0; not read
+EffectEntry* effKemuriEntry(s32 type, f32 x, f32 y, f32 z, f32 dir); // dir: passed by mario_kemuri, not read
 EffectEntry* effKemuri2Entry(s32 type, f32 x, f32 y, f32 z, f32 dx, f32 dz);

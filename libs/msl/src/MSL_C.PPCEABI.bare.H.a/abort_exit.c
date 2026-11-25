@@ -7,27 +7,28 @@ void __end_critical_region(int region);
 void __kill_critical_regions(void);
 void __destroy_global_chain(void);
 void _ExitProcess(void);
+int raise(int sig);
+void __exit(int status);
 
 extern void (*_dtors[])(void);
 
 #define atexit_funcs_access 0
 
-/** Set once abort() has started, so a second abort does not run the exit handlers again. */
 int __aborting = 0;
 
-static void (*__atexit_funcs[max_funcs])(void);
-/** Number of handlers registered with atexit() so far. */
+void (*__atexit_funcs[max_funcs])(void);
 int __atexit_curr_func = 0;
 
-void (*__stdio_exit)(void) = 0;
-void (*__console_exit)(void) = 0;
+void (*__stdio_exit)(void) = NULL;
+void (*__console_exit)(void) = NULL;
 
-/**
- * Standard exit(): runs the registered atexit handlers, flushes and closes all open streams,
- * then terminates the program.
- */
+void abort(void) {
+    raise(1);
+    __aborting = 1;
+    __exit(1);
+}
+
 void exit(int status) {
-    int i;
     void (**dtor)(void);
 
     if (!__aborting) {
@@ -48,6 +49,10 @@ void exit(int status) {
         }
     }
 
+    __exit(status);
+}
+
+void __exit(int status) {
     __begin_critical_region(atexit_funcs_access);
     while (__atexit_curr_func > 0)
         (*__atexit_funcs[--__atexit_curr_func])();

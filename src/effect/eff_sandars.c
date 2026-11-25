@@ -1,5 +1,6 @@
 // Sandars: explosion; types 0-4 spawn a bomb burst (types 3 and 4 also play the EFF_bakuhatu "explosion" animation);
-// type 5 is a line of growing, spinning sprites.
+// type 5 is a line of growing sprites (the last one spins).
+
 #include "eff/eff_sandars.h"
 #include "driver/animdrv.h"
 #include "driver/camdrv.h"
@@ -10,19 +11,21 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
+#include "driver/mapdrv.h"
 
 static void effSandarsMain(EffectEntry* effect);
-static void effSandarsDisp(CameraId cameraId, EffectEntry* effect);
-static void effSandarsDisp2(CameraId cameraId, EffectEntry* effect);
+static void effSandarsDisp(CameraId cameraId, void* param);
+static void effSandarsDisp2(CameraId cameraId, void* param);
 
 /** Size percentages per frame as each type 5 sprite grows in: up to 120%, then it collapses. */
-static u8 scale_data[] = {0, 0, 0, 13, 0x1C, 0x2C, 0x3C, 0x4B, 0x59, 0x65, 0x6F, 0x75, 0x78, 0x4B, 0};
+static u8 scale_data[] = {0, 0, 0, 13, 28, 44, 60, 75, 89, 101, 111, 117, 120, 75, 0};
 
 /**
  * Spawns the effect at (x, y, z).
  * Types 0-2 are field bursts (small, then larger) and 3/4 the battle bomb-game success/failure;
- * type 5 allocates 6 records for the steam sprites, with `radius` as their direction in degrees.
+ * type 5 allocates 6 records (the effect plus 5 steam sprites), with `radius` as their direction in degrees.
  * Callers include Bobbery's party attack, the Toad audience and the bomb minigame.
  */
 EffectEntry* effSandarsEntry(s32 type, f32 x, f32 y, f32 z, f32 radius) {
@@ -44,7 +47,7 @@ EffectEntry* effSandarsEntry(s32 type, f32 x, f32 y, f32 z, f32 radius) {
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffSandarsWork));
     effect->userdata = work;
     effect->callback = effSandarsMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -53,7 +56,7 @@ EffectEntry* effSandarsEntry(s32 type, f32 x, f32 y, f32 z, f32 radius) {
     work->state = 0;
     work->frame = 0;
     work->poseId = -1;
-    work->camId = 4;
+    work->camId = CAMERA_3D;
     switch (type) {
         case 0:
         case 4:
@@ -78,9 +81,9 @@ EffectEntry* effSandarsEntry(s32 type, f32 x, f32 y, f32 z, f32 radius) {
     }
     ang = 6.2831855f * radius / 360.0f;
     work++;
-    for (i = 1, camId = 10; i < effect->count; camId += 10, i++, work++) {
-        work->position.x = (f32)camId * (f32)cos(ang);
-        work->position.y = (f32)camId * (f32)sin(ang);
+    for (i = 1; i < effect->count; i++, work++) {
+        work->position.x = (f32)(i * 10) * (f32)cos(ang);
+        work->position.y = (f32)(i * 10) * (f32)sin(ang);
         work->position.z = 0.0f;
         work->scale2 = 0.2f * i;
         work->scale = 0.0f;
@@ -98,15 +101,6 @@ EffectEntry* effSandarsEntry(s32 type, f32 x, f32 y, f32 z, f32 radius) {
     return effect;
 }
 
-/** Builds a Vec from three floats (inline helper so Main's position copy compiles the same way). */
-static inline Vec effSandarsMakeVec(f32 x, f32 y, f32 z) {
-    Vec pos = {0.0f, 0.0f, 0.0f};
-    pos.x = x;
-    pos.y = y;
-    pos.z = z;
-    return pos;
-}
-
 /**
  * Types 0-4 spawn a bomb effect, then (types 3/4) play the EFF_bakuhatu animation and fade it out;
  * type 5 runs the scale/spin timers of the steam sprites for 100 frames.
@@ -116,16 +110,19 @@ static void effSandarsMain(EffectEntry* effect) {
     Vec pos2;
     f32 bx, by, bz;
     s32 camId;
-    s32 camera;
+    s32 inBattle;
     s32 type;
     s32 i;
 
-    pos2 = effSandarsMakeVec(bx = work->position.x, by = work->position.y, bz = work->position.z);
+    bx = work->position.x;
+    by = work->position.y;
+    bz = work->position.z;
+    pos2 = (Vec){bx, by, bz};
     type = work->type;
     camId = work->camId;
-    camera = gp->inBattle != 0;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    inBattle = gp->inBattle != 0;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (work->poseId != -1) {
             animPoseRelease(work->poseId);
         }
@@ -144,14 +141,14 @@ static void effSandarsMain(EffectEntry* effect) {
                 if (work->delay != 0) {
                     work->delay--;
                 } else {
-                    if ((u32)work->frame < 15) {
+                    if (work->frame < sizeof(scale_data) / sizeof(scale_data[0])) {
                         work->scale = scale_data[work->frame] / 100.0f;
                     }
                     work->frame++;
                     work->rot += work->rotSpeed;
                 }
             }
-            dispEntry(camId, dispCalcZ(&pos2), 2, (DispCallback)effSandarsDisp2, effect);
+            dispEntry(camId, dispCalcZ(&pos2), DISP_MODE_XLU, effSandarsDisp2, effect);
             return;
         default:
             break;
@@ -169,8 +166,8 @@ static void effSandarsMain(EffectEntry* effect) {
             }
             if (work->frame != 0) {
                 work->frame--;
-            } else if (animGroupBaseAsync("EFF_bakuhatu", camera, NULL)) {
-                work->poseId = animPoseEntry("EFF_bakuhatu", camera);
+            } else if (animGroupBaseAsync("EFF_bakuhatu", inBattle, NULL)) {
+                work->poseId = animPoseEntry("EFF_bakuhatu", inBattle);
                 animPoseSetAnim(work->poseId, "Z_1", TRUE);
                 work->state++;
             }
@@ -185,11 +182,12 @@ static void effSandarsMain(EffectEntry* effect) {
             }
             break;
     }
-    dispEntry(camId, dispCalcZ(&pos2), 2, (DispCallback)effSandarsDisp, effect);
+    dispEntry(camId, dispCalcZ(&pos2), DISP_MODE_XLU, effSandarsDisp, effect);
 }
 
 /** Draws the EFF_bakuhatu explosion pose, camera-facing, with fading alpha. */
-static void effSandarsDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSandarsDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffSandarsWork* work;
     Mtx mtx;
     Mtx rot;
@@ -208,7 +206,7 @@ static void effSandarsDisp(CameraId cameraId, EffectEntry* effect) {
     PSMTXConcat(mtx, scale, view);
     PSMTXScale(scale, work->bombScale, work->bombScale, work->bombScale);
     PSMTXConcat(view, scale, view);
-    animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+    animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
     animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
     animPoseMain(work->poseId);
     animPoseDrawMtx(work->poseId, view, 1, 0.0f, 4.0f);
@@ -216,8 +214,9 @@ static void effSandarsDisp(CameraId cameraId, EffectEntry* effect) {
     animPoseDrawMtx(work->poseId, view, 3, 0.0f, 4.0f);
 }
 
-/** Draws the type 5 steam sprites as camera-facing textured quads, each spinning around its own centre. */
-static void effSandarsDisp2(CameraId cameraId, EffectEntry* effect) {
+/** Draws the type 5 steam sprites as camera-facing textured quads, each rotated by its own angle (only the last one spins). */
+static void effSandarsDisp2(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffSandarsWork* work;
     CameraEntry* camera;
     f32 neg;

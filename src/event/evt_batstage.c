@@ -1,21 +1,18 @@
 // Script commands for the battle stage: stage and audience darkness, stage lights.
-#include "evt/evt_batstage.h"
+
 #include "battle/battle.h"
 #include "manager/evtmgr_cmd.h"
 #include <dolphin/mtx.h>
 #include "battle/battle_stage.h"
-// FAKE: evt_batstage.c calls BattleStageSetStgDarkBase through this prototype (the types it was compiled with) instead of the one in battle/battle_stage.h; same registers, behaviour-identical.
-typedef void (*BattleStageSetStgDarkBaseS32Fn)(u8, s32, s32);
-// FAKE: evt_batstage.c calls BattleStageSetStgDark through this prototype (the types it was compiled with) instead of the one in battle/battle_stage.h; same registers, behaviour-identical.
-typedef void (*BattleStageSetStgDarkS32Fn)(u8, s32, s32);
-// FAKE: evt_batstage.c calls BattleStageSetAudDarkBase through this prototype (the types it was compiled with) instead of the one in battle/battle_stage.h; same registers, behaviour-identical.
-typedef void (*BattleStageSetAudDarkBaseS32Fn)(u8, s32, s32);
-// FAKE: evt_batstage.c calls BattleStageSetAudDark through this prototype (the types it was compiled with) instead of the one in battle/battle_stage.h; same registers, behaviour-identical.
-typedef void (*BattleStageSetAudDarkS32Fn)(u8, s32, s32);
-// FAKE: evt_batstage.c calls BattleStageReturnStgDarkBase through this prototype (the types it was compiled with) instead of the one in battle/battle_stage.h; same registers, behaviour-identical.
-typedef void (*BattleStageReturnStgDarkBaseS32Fn)(s32, s32);
-// FAKE: evt_batstage.c calls BattleStageReturnAudDarkBase through this prototype (the types it was compiled with) instead of the one in battle/battle_stage.h; same registers, behaviour-identical.
-typedef void (*BattleStageReturnAudDarkBaseS32Fn)(s32, s32);
+
+// Old-style (non-prototype) declarations of battle_stage.c's darkness setters: the calls pass the s32 mode
+// unconverted (battle_stage.c defines the parameter as u8 and converts it there).
+void BattleStageReturnAudDarkBase();
+void BattleStageSetAudDarkBase();
+void BattleStageSetAudDark();
+void BattleStageReturnStgDarkBase();
+void BattleStageSetStgDarkBase();
+void BattleStageSetStgDark();
 
 /**
  * Fades the battle stage's darkness: args are the darkness level (0-255), the fade time in frames and a mode.
@@ -23,65 +20,156 @@ typedef void (*BattleStageReturnAudDarkBaseS32Fn)(s32, s32);
  */
 USER_FUNC(evt_batstage_set_stg_dark) {
     EvtWord* args = event->args;
-    u8 a = evtGetValue(event, args[0]);
-    s32 b = evtGetValue(event, args[1]);
-    s32 c = evtGetValue(event, args[2]);
-    ((BattleStageSetStgDarkS32Fn)BattleStageSetStgDark)(a, b, c);
+    u8 dark = evtGetValue(event, args[0]);
+    s32 time = evtGetValue(event, args[1]);
+    s32 mode = evtGetValue(event, args[2]);
+    BattleStageSetStgDark(dark, time, mode);
     return EVT_RETURN_DONE;
 }
 
 /** Sets the stage's base darkness (the level evt_batstage_return_stg_dark_base fades back to): level, frames, mode. */
 USER_FUNC(evt_batstage_set_stg_dark_base) {
     EvtWord* args = event->args;
-    u8 a = evtGetValue(event, args[0]);
-    s32 b = evtGetValue(event, args[1]);
-    s32 c = evtGetValue(event, args[2]);
-    ((BattleStageSetStgDarkBaseS32Fn)BattleStageSetStgDarkBase)(a, b, c);
+    u8 dark = evtGetValue(event, args[0]);
+    s32 time = evtGetValue(event, args[1]);
+    s32 mode = evtGetValue(event, args[2]);
+    BattleStageSetStgDarkBase(dark, time, mode);
     return EVT_RETURN_DONE;
 }
 
 /** Fades the stage darkness back to its base level; args are the fade time in frames and a mode. */
 USER_FUNC(evt_batstage_return_stg_dark_base) {
     EvtWord* args = event->args;
-    s32 a = evtGetValue(event, args[0]);
-    s32 b = evtGetValue(event, args[1]);
-    ((BattleStageReturnStgDarkBaseS32Fn)BattleStageReturnStgDarkBase)(a, b);
+    s32 time = evtGetValue(event, args[0]);
+    s32 mode = evtGetValue(event, args[1]);
+    BattleStageReturnStgDarkBase(time, mode);
     return EVT_RETURN_DONE;
 }
 
 /** Fades the audience's darkness: args are the darkness level (0-255), the fade time in frames and a mode. */
 USER_FUNC(evt_batstage_set_aud_dark) {
     EvtWord* args = event->args;
-    u8 a = evtGetValue(event, args[0]);
-    s32 b = evtGetValue(event, args[1]);
-    s32 c = evtGetValue(event, args[2]);
-    ((BattleStageSetAudDarkS32Fn)BattleStageSetAudDark)(a, b, c);
+    u8 dark = evtGetValue(event, args[0]);
+    s32 time = evtGetValue(event, args[1]);
+    s32 mode = evtGetValue(event, args[2]);
+    BattleStageSetAudDark(dark, time, mode);
     return EVT_RETURN_DONE;
 }
 
 /** Sets the audience's base darkness level (restored by evt_batstage_return_aud_dark_base): level, frames, mode. */
 USER_FUNC(evt_batstage_set_aud_dark_base) {
     EvtWord* args = event->args;
-    u8 a = evtGetValue(event, args[0]);
-    s32 b = evtGetValue(event, args[1]);
-    s32 c = evtGetValue(event, args[2]);
-    ((BattleStageSetAudDarkBaseS32Fn)BattleStageSetAudDarkBase)(a, b, c);
+    u8 dark = evtGetValue(event, args[0]);
+    s32 time = evtGetValue(event, args[1]);
+    s32 mode = evtGetValue(event, args[2]);
+    BattleStageSetAudDarkBase(dark, time, mode);
     return EVT_RETURN_DONE;
 }
 
 /** Fades the audience darkness back to its base level; args are the fade time in frames and a mode. */
 USER_FUNC(evt_batstage_return_aud_dark_base) {
     EvtWord* args = event->args;
-    s32 a = evtGetValue(event, args[0]);
-    s32 b = evtGetValue(event, args[1]);
-    ((BattleStageReturnAudDarkBaseS32Fn)BattleStageReturnAudDarkBase)(a, b);
+    s32 time = evtGetValue(event, args[0]);
+    s32 mode = evtGetValue(event, args[1]);
+    BattleStageReturnAudDarkBase(time, mode);
+    return EVT_RETURN_DONE;
+}
+
+/** Switches stage light args[0] off over args[1] frames with curve mode args[2] (BattleStageLightRelease). */
+// evt_batstage_light_release, _set_lightcolor, _set_width, _set_position, _set_target and _set_upvec: original names
+// and sizes (0x7c, 0xa8, 0x98, 0xcc, 0xcc, 0xcc) from the JP demo map (UNUSED there: no script uses them). Each passes
+// its arguments to the BattleStageLight function its name gives, in the form of evt_batstage_set_stg_dark; the sizes
+// fit the light being given by its number. The map's _entry and _set_target_by_ commands are not
+// restored (their bodies or the functions they call are not known).
+USER_FUNC(evt_batstage_light_release) {
+    EvtWord* args = event->args;
+    s32 idx = evtGetValue(event, args[0]);
+    s32 time = evtGetValue(event, args[1]);
+    s32 mode = evtGetValue(event, args[2]);
+    BattleStageLightRelease(idx, time, mode);
+    return EVT_RETURN_DONE;
+}
+
+/** Switches every stage light off over args[0] frames with curve mode args[1] (BattleStageLightReleaseAll). */
+// Original name and size (0x60) from the JP demo map (UNUSED there: no script uses it), listed right after
+// evt_batstage_light_release: that command's form for BattleStageLightReleaseAll, which takes no light number.
+USER_FUNC(evt_batstage_light_release_all) {
+    EvtWord* args = event->args;
+    s32 time = evtGetValue(event, args[0]);
+    s32 mode = evtGetValue(event, args[1]);
+    BattleStageLightReleaseAll(time, mode);
+    return EVT_RETURN_DONE;
+}
+
+/** Fades stage light args[0] to the colour args[1..3] over args[4] frames with curve mode args[5]. */
+// Original name and size from the JP demo map (see evt_batstage_light_release).
+USER_FUNC(evt_batstage_light_set_lightcolor) {
+    EvtWord* args = event->args;
+    s32 idx = evtGetValue(event, args[0]);
+    u8 r = evtGetValue(event, args[1]);
+    u8 g = evtGetValue(event, args[2]);
+    u8 b = evtGetValue(event, args[3]);
+    s32 time = evtGetValue(event, args[4]);
+    s32 mode = evtGetValue(event, args[5]);
+    BattleStageLightSetLightColor(idx, r, g, b, time, mode);
+    return EVT_RETURN_DONE;
+}
+
+/** Changes the width of stage light args[0] to args[1] over args[2] frames with curve mode args[3]. */
+// Original name and size from the JP demo map (see evt_batstage_light_release).
+USER_FUNC(evt_batstage_light_set_width) {
+    EvtWord* args = event->args;
+    s32 idx = evtGetValue(event, args[0]);
+    s32 width = evtGetValue(event, args[1]);
+    s32 time = evtGetValue(event, args[2]);
+    s32 mode = evtGetValue(event, args[3]);
+    BattleStageLightSetWidth(idx, width, time, mode);
+    return EVT_RETURN_DONE;
+}
+
+/** Moves stage light args[0] to the floats args[1..3] over args[4] frames with curve mode args[5]. */
+// Original name and size from the JP demo map (see evt_batstage_light_release).
+USER_FUNC(evt_batstage_light_set_position) {
+    EvtWord* args = event->args;
+    s32 idx = evtGetValue(event, args[0]);
+    f32 x = evtGetFloat(event, args[1]);
+    f32 y = evtGetFloat(event, args[2]);
+    f32 z = evtGetFloat(event, args[3]);
+    s32 time = evtGetValue(event, args[4]);
+    BattleStageLightSetPosition(idx, x, y, z, time, evtGetValue(event, args[5]));
+    return EVT_RETURN_DONE;
+}
+
+/** Moves the target of stage light args[0] to the floats args[1..3] over args[4] frames with curve mode args[5]. */
+// Original name and size from the JP demo map (see evt_batstage_light_release).
+USER_FUNC(evt_batstage_light_set_target) {
+    EvtWord* args = event->args;
+    s32 idx = evtGetValue(event, args[0]);
+    f32 x = evtGetFloat(event, args[1]);
+    f32 y = evtGetFloat(event, args[2]);
+    f32 z = evtGetFloat(event, args[3]);
+    s32 time = evtGetValue(event, args[4]);
+    BattleStageLightSetTarget(idx, x, y, z, time, evtGetValue(event, args[5]));
+    return EVT_RETURN_DONE;
+}
+
+/** Turns the up vector of stage light args[0] to the floats args[1..3] over args[4] frames with curve mode args[5]. */
+// Original name and size from the JP demo map (see evt_batstage_light_release).
+USER_FUNC(evt_batstage_light_set_upvec) {
+    EvtWord* args = event->args;
+    s32 idx = evtGetValue(event, args[0]);
+    f32 x = evtGetFloat(event, args[1]);
+    f32 y = evtGetFloat(event, args[2]);
+    f32 z = evtGetFloat(event, args[3]);
+    s32 time = evtGetValue(event, args[4]);
+    BattleStageLightSetUpVec(idx, x, y, z, time, evtGetValue(event, args[5]));
     return EVT_RETURN_DONE;
 }
 
 /**
- * Spotlights the acting unit for an Appeal: dims stage and audience to 140
- * and aims up to three grey "sys_activeUnit_N" lights at it (arg 1: only the third, in white).
- * Paired with ..._player_off.
+ * Spotlights the active unit: args[0] 1 switches on only the light "sys_activeUnit_3", in white; any other value
+ * all three lights "sys_activeUnit_1" to "_3", in grey (120). Each light (made when missing) is placed above the stage
+ * and set to follow the active unit; then the stage and the audience are darkened (level 140).
  */
 USER_FUNC(evt_batstage_light_set_player_on) {
     EvtWord* args = event->args;
@@ -96,7 +184,9 @@ USER_FUNC(evt_batstage_light_set_player_on) {
     Vec upv[3] = {{0.0f, 0.0f, -1.0f}, {0.0f, 0.0f, -1.0f}, {0.0f, 0.0f, -1.0f}};
     u8 col[3][3] = {{120, 120, 120}, {120, 120, 120}, {120, 120, 120}};
     u8 en[3] = {0, 0, 0};
-    u8 en2[4] = {0, 0, 0, 0}; // FAKE: unused; its zero initialiser template stays in the unit's data
+
+    // Never read; unused in the original too: its stack slot and initializer template are in the retail code
+    u8 en2[4] = {0, 0, 0, 0};
 
     switch (sel) {
         case 1:
@@ -131,8 +221,8 @@ USER_FUNC(evt_batstage_light_set_player_on) {
 }
 
 /**
- * Undoes evt_batstage_light_set_player_on: restores stage and audience darkness
- * and releases the three sys_activeUnit spotlights over 30 frames.
+ * Undoes evt_batstage_light_set_player_on: returns the audience and stage darkness to their base levels and releases
+ * those of the three "sys_activeUnit" lights that exist.
  */
 USER_FUNC(evt_batstage_light_set_player_off) {
     s32 idx;

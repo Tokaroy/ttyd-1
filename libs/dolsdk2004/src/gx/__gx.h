@@ -175,15 +175,15 @@ do { \
 
 #define GET_REG_FIELD(reg, size, shift) ((int)((reg) >> (shift)) & ((1 << (size)) - 1))
 
-// Two forms of the register-field macro: this one (mask, then or) is the form the non-GX libraries compile to;
-// SET_REG_FIELD below (an rlwimi insert) is the form the GX library compiles to.
+// TODO: reconcile reg macro differences
+// this one is needed to match non GX libs
 #define OLD_SET_REG_FIELD(line, reg, size, shift, val) \
 do { \
     ASSERTMSGLINE(line, ((u32)(val) & ~((1 << (size)) - 1)) == 0, "GX Internal: Register field out of range"); \
     (reg) = ((u32)(reg) & ~(((1 << (size)) - 1) << (shift))) | ((u32)(val) << (shift)); \
 } while (0)
 
-// the GX library form: an rlwimi insert, which is what the GX code compiles to
+// above doesn't seem to work with GX, only can get it to work with this
 #define SET_REG_FIELD(line, reg, size, shift, val) \
 do { \
     ASSERTMSGLINE(line, ((u32)(val) & ~((1 << (size)) - 1)) == 0, "GX Internal: Register field out of range"); \
@@ -308,6 +308,13 @@ typedef struct __GXData_struct {
     u8 dirtyVAT;
     u32 dirtyState;
 } GXData;
+
+// GXData.dirtyState bits, named after the update __GXSetDirtyState runs for each
+#define GX_DIRTY_SU_TEX   0x01 // __GXSetSUTexRegs
+#define GX_DIRTY_BP_MASK  0x02 // __GXUpdateBPMask
+#define GX_DIRTY_GEN_MODE 0x04 // __GXSetGenMode
+#define GX_DIRTY_VCD      0x08 // __GXSetVCD
+#define GX_DIRTY_VAT      0x10 // __GXSetVAT (VCD or VAT also runs __GXCalculateVLim)
 
 extern GXData* const __GXData;
 extern void* __memReg;

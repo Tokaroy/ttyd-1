@@ -1,4 +1,5 @@
 // Magic circle (mahojin) from the MOBJ_EFF_mahojin_omote/ura animations, with a star-stone effect drawn over it.
+
 #include "driver/animdrv.h"
 #include "eff/eff_mahojin.h"
 #include "driver/camdrv.h"
@@ -11,15 +12,15 @@
 #include <dolphin/mtx.h>
 
 static void effMahojinMain(EffectEntry* effect);
-static void effMahojinDisp(CameraId cameraId, void* param);
+static void effMahojinDisp(CameraId cameraId, void* payload);
 
-s32 mahojin_rate;
+static s32 mahojin_rate;
 
 /**
  * Animation names for the seven star pieces around the magic circle, three per piece:
  * appear (A_2), shown (S_2) and already placed (S_3).
  * A new piece plays its appear animation and then S_2;
- * pieces already placed when the effect starts show S_3 at once, or S_2 for types 7 and 8.
+ * pieces already placed when the effect starts fade in showing S_3, or S_2 for types 7 and 8.
  */
 static const char* name_tbl[] = {
     "A_2_1", "S_2_1", "S_3_1", "A_2_2", "S_2_2", "S_3_2", "A_2_3", "S_2_3", "S_3_3", "A_2_4", "S_2_4",
@@ -30,7 +31,7 @@ static const char* name_tbl[] = {
  * Positions of the seven star pieces around the magic circle, evenly spaced on a ring of radius about 14
  * starting at the back; effMahojinDisp uses them to sort the pieces by depth before drawing.
  */
-Vec pos_tbl[7] = {
+static Vec pos_tbl[7] = {
     { 0.0f, 0.0f, -14.321f },
     { 10.7071f, 0.0f, -9.1648f },
     { 13.843f, 0.0f, 2.7905f },
@@ -46,8 +47,8 @@ Vec pos_tbl[7] = {
  */
 static void callback(MapTevCallbackInfo* info) {
     s32 tevStage = info->tevStage;
-    s32 texCoord = info->texCoord;
     s32 texMap = info->texMap;
+    s32 texCoord = info->texCoord;
     s32 indStage = info->indStage;
 
     GXSetTevColor(GX_TEVREG0, (GXColor){0xE8, 0x00, 0xE8, mahojin_rate});
@@ -58,20 +59,18 @@ static void callback(MapTevCallbackInfo* info) {
     GXSetTevAlphaIn(tevStage, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
     GXSetTevSwapMode(tevStage, GX_TEV_SWAP0, GX_TEV_SWAP0);
     info->tevStage = tevStage + 1;
-    info->texMap = texMap;
-    info->indStage = indStage;
     info->texCoord = texCoord;
+    info->indStage = indStage;
+    info->texMap = texMap;
 }
 
 /**
- * Spawns the magic circle (2 work records: front and back animation) at (x, y, z); type is stored.
- * Called from evt_eff ("mahojin").
+ * Spawns the magic circle at (x, y, z): two records for the circle (each with a front and a back pose), plus one
+ * per star piece, type of them (at most 7; type 8 shows all 7 as already placed). Called from evt_eff ("mahojin").
  */
 EffectEntry* effMahojinEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffMahojinWork* work;
-    s32 i;
-    EffMahojinWork* p;
     s32 n;
 
     effect = effEntry();
@@ -81,53 +80,54 @@ EffectEntry* effMahojinEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, n * sizeof(EffMahojinWork));
     effect->userdata = work;
     effect->callback = effMahojinMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
 
-    p = work;
-    p->type = type;
-    p->position.x = x;
-    p->position.y = y;
-    p->position.z = z;
-    p->timer = 1000;
-    p->counter = 0;
-    p->poseId[0] = -1;
-    p->poseId[1] = -1;
-    p->alpha = 255;
-    p->state = 0;
-    p->arg = NULL;
-    p->func = NULL;
+    work->type = type;
+    work->position.x = x;
+    work->position.y = y;
+    work->position.z = z;
+    work->timer = 1000;
+    work->reserved_14 = 0;
+    work->poseId[0] = -1;
+    work->poseId[1] = -1;
+    work->alpha = 255;
+    work->state = 0;
+    work->arg = NULL;
+    work->func = NULL;
 
-    p = work + 1;
-    p->type = type;
-    p->position.x = x;
-    p->position.y = y;
-    p->position.z = z;
-    p->timer = 1000;
-    p->counter = 0;
-    p->poseId[0] = -1;
-    p->poseId[1] = -1;
-    p->alpha = 255;
-    p->state = 0;
-    p->arg = NULL;
-    p->func = NULL;
+    work++;
+    work->type = type;
+    work->position.x = x;
+    work->position.y = y;
+    work->position.z = z;
+    work->timer = 1000;
+    work->reserved_14 = 0;
+    work->poseId[0] = -1;
+    work->poseId[1] = -1;
+    work->alpha = 255;
+    work->state = 0;
+    work->arg = NULL;
+    work->func = NULL;
 
-    for (p = work + 2, n = 2; n < effect->count; n++, p++) {
-        p->position.x = x;
-        p->position.y = y;
-        p->position.z = z;
-        p->poseId[0] = -1;
-        p->poseId[1] = -1;
-        p->alpha = 0;
-        p->state = 0;
-        p->arg = NULL;
-        p->func = NULL;
+    work++;
+    for (n = 2; n < effect->count; n++, work++) {
+        work->position.x = x;
+        work->position.y = y;
+        work->position.z = z;
+        work->poseId[0] = -1;
+        work->poseId[1] = -1;
+        work->alpha = 0;
+        work->state = 0;
+        work->arg = NULL;
+        work->func = NULL;
     }
     return effect;
 }
 
 /**
- * Per frame: sets up the omote/ura animations, advances them, switches to the "S_1" animation after the loop,
- * and fades out and deletes the effect on a delete request.
+ * Per frame: sets up the omote/ura animations, switches the circle to S_1/S_4 after the first loop, brings in
+ * the star pieces, for type 7 fades in the purple tint once the last piece has played, and fades out and deletes
+ * the effect on a delete request.
  */
 static void effMahojinMain(EffectEntry* effect) {
     EffMahojinWork* p;
@@ -138,6 +138,7 @@ static void effMahojinMain(EffectEntry* effect) {
     f32 loops;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
+    s32 k;
 
     tmp.x = work->position.x;
     tmp.y = work->position.y;
@@ -162,11 +163,13 @@ static void effMahojinMain(EffectEntry* effect) {
         work[1].poseId[1] = animPoseEntry("MOBJ_EFF_mahojin_ura", inBattle);
         animPoseSetAnim(work[1].poseId[0], "A_4", TRUE);
         animPoseSetAnim(work[1].poseId[1], "A_4", TRUE);
+
+        // work re-reads effect->userdata (it already holds it; the reload is in the retail code)
         work = effect->userdata;
     }
 
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -208,13 +211,9 @@ static void effMahojinMain(EffectEntry* effect) {
             if (type == 7) {
                 if (animPoseGetLoopTimes(p[effect->count - 1].poseId[0]) > 1.0f) {
                     mapSetTevCallback(10, callback);
-                    {
-                        EffMahojinWork* q = p;
-                        s32 k;
-                        for (k = 0; k < effect->count; q++, k++) {
-                            animPoseSetMaterialFlagOn(q->poseId[0], ANIM_MATERIAL_TEV_CALLBACK(10));
-                            animPoseSetMaterialFlagOn(q->poseId[1], ANIM_MATERIAL_TEV_CALLBACK(10));
-                        }
+                    for (k = 0; k < effect->count; k++) {
+                        animPoseSetMaterialFlagOn(p[k].poseId[0], MAP_OBJ_TEV_CALLBACK(10));
+                        animPoseSetMaterialFlagOn(p[k].poseId[1], MAP_OBJ_TEV_CALLBACK(10));
                     }
                     mahojin_rate = 0;
                     p->state++;
@@ -277,14 +276,14 @@ static void effMahojinMain(EffectEntry* effect) {
                 break;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, effMahojinDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effMahojinDisp, effect);
 }
 
 /**
- * Draws the magic circle's front and back animation poses at the effect position,
- * applying the purple tint callback.
+ * Draws the magic circle's front poses, then its back poses, at the effect position, star pieces sorted by depth,
+ * with fog off; in the second pass it also calls each piece's attached draw function (gor_01's star stones).
  */
-static void effMahojinDisp(CameraId cameraId, void* param) {
+static void effMahojinDisp(CameraId cameraId, void* payload) {
     s32 j;
     EffMahojinWork* work;
     s32 pass;
@@ -301,12 +300,13 @@ static void effMahojinDisp(CameraId cameraId, void* param) {
     f32 z[16];
     s32 idx[16];
 
-    effect = param;
+    effect = payload;
     work = effect->userdata;
     camGetPtr(cameraId);
     alpha = work->alpha;
     map = mapGetWork();
     flags = map->entries[0].flags;
+
     for (pass = 0; pass < 2; pass++) {
         n = 0;
         if (pass == 0) {
@@ -336,7 +336,7 @@ static void effMahojinDisp(CameraId cameraId, void* param) {
                 }
             }
         }
-        map->entries[0].flags &= ~1;
+        map->entries[0].flags &= ~MAP_ENTRY_FOG;
         PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
         for (i = 0; i < effect->count; i++) {
             p = &work[idx[i]];
@@ -345,7 +345,7 @@ static void effMahojinDisp(CameraId cameraId, void* param) {
             }
             if (p->poseId[pass] != -1) {
                 animPoseMain(p->poseId[pass]);
-                animPoseSetMaterialFlagOn(p->poseId[pass], ANIM_MATERIAL_FLAG_EVT_COLOR);
+                animPoseSetMaterialFlagOn(p->poseId[pass], MAP_OBJ_FLAG_COLOR);
                 animPoseSetMaterialEvtColor(p->poseId[pass], (GXColor){0xFF, 0xFF, 0xFF, p->alpha * alpha / 255});
                 animPoseDrawMtx(p->poseId[pass], mtx, 3, 0.0f, 10.0f);
             }

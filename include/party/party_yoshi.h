@@ -1,8 +1,19 @@
 // party_yoshi.c: Yoshi's field partner functions (init, use, bye, exit) and the yoshi speed and frame events.
+
 #pragma once
 
 #include "dolphin/types.h"
 #include "party.h"
+
+// yoshiGetStatus results, distinct from PartyEntry.useMotionId.
+typedef enum YoshiStatus {
+    YOSHI_STATUS_INACTIVE = 0,
+    YOSHI_STATUS_RIDING = 1,
+    YOSHI_STATUS_FLUTTER = 2,
+    YOSHI_STATUS_STAND_JUMP = 3,
+    YOSHI_STATUS_FALL = 4,
+    YOSHI_STATUS_OTHER = 5, // includes get-off motions 100..101 and the default active state (JP and later; the early demos return 3 for both)
+} YoshiStatus;
 
 s32 yoshiGetStatus(void);
 
@@ -13,9 +24,8 @@ void yoshi_init(PartyEntry* party);
 void yoshi_use(PartyEntry* party);
 
 void evt_set_yoshi_spd(f32 spd);
-
-void evt_set_yoshi_frm(s32 msec);
 void marioRideYoshi(void);
 void marioYoshiForceCancel(void);
 void yoshi_jumpStand(void);
-BOOL marioGetoffYoshi(void);
+void evt_set_yoshi_frm(s32 msec);
+s32 marioGetoffYoshi(void);

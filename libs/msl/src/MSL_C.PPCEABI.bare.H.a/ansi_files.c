@@ -4,28 +4,22 @@
 #define _STATIC_FILES 4
 
 enum { must_exist };
-enum { read_mode = 1, write_mode = 2 };
-enum { unbuffered, line_buffered, full_buffered };
 
 int __read_console(__file_handle handle, unsigned char* buffer, size_t* count, void* ref_con);
 int __write_console(__file_handle handle, unsigned char* buffer, size_t* count, void* ref_con);
 int __close_console(__file_handle handle);
 
-unsigned char stdin_buff[console_buff_size];
-unsigned char stdout_buff[console_buff_size];
-unsigned char stderr_buff[console_buff_size];
+static unsigned char stdin_buff[console_buff_size];
+static unsigned char stdout_buff[console_buff_size];
+static unsigned char stderr_buff[console_buff_size];
 
-/** The standard C streams (stdin, stdout, stderr) the library sets up statically. */
+/* stdin, stdout and stderr; the fourth entry stays zero-filled and ends the next_file_struct list. */
 FILE __files[_STATIC_FILES] = {
-    {0, {must_exist, read_mode, line_buffered, __console_file, __unoriented, 0}, {__neutral, 0, 0, 0}, 0, 0, 0, {0, 0}, {0, 0}, 0, stdin_buff, console_buff_size, stdin_buff, 0, 0, 0, 0, NULL, __read_console, __write_console, __close_console, NULL, &__files[1]},
-    {1, {must_exist, write_mode, line_buffered, __console_file, __unoriented, 0}, {__neutral, 0, 0, 0}, 0, 0, 0, {0, 0}, {0, 0}, 0, stdout_buff, console_buff_size, stdout_buff, 0, 0, 0, 0, NULL, __read_console, __write_console, __close_console, NULL, &__files[2]},
-    {2, {must_exist, write_mode, unbuffered, __console_file, __unoriented, 0}, {__neutral, 0, 0, 0}, 0, 0, 0, {0, 0}, {0, 0}, 0, stderr_buff, console_buff_size, stderr_buff, 0, 0, 0, 0, NULL, __read_console, __write_console, __close_console, NULL, &__files[3]},
+    {0, {must_exist, __read, _IOLBF, __console_file, __unoriented, 0}, {__neutral, 0, 0, 0}, 0, 0, 0, {0, 0}, {0, 0}, 0, stdin_buff, console_buff_size, stdin_buff, 0, 0, 0, 0, NULL, __read_console, __write_console, __close_console, NULL, &__files[1]},
+    {1, {must_exist, __write, _IOLBF, __console_file, __unoriented, 0}, {__neutral, 0, 0, 0}, 0, 0, 0, {0, 0}, {0, 0}, 0, stdout_buff, console_buff_size, stdout_buff, 0, 0, 0, 0, NULL, __read_console, __write_console, __close_console, NULL, &__files[2]},
+    {2, {must_exist, __write, _IONBF, __console_file, __unoriented, 0}, {__neutral, 0, 0, 0}, 0, 0, 0, {0, 0}, {0, 0}, 0, stderr_buff, console_buff_size, stderr_buff, 0, 0, 0, 0, NULL, __read_console, __write_console, __close_console, NULL, &__files[3]},
 };
 
-/**
- * Calls fflush on every FILE in the global file list that is not closed;
- * returns EOF if any flush failed, else 0. Used by fflush(NULL).
- */
 int __flush_all(void) {
     int result = 0;
     FILE* file = &__files[0];
@@ -39,11 +33,6 @@ int __flush_all(void) {
     return (result);
 }
 
-/**
- * Closes every FILE in the global file list under the stdio lock,
- * freeing dynamically allocated ones and marking the static ones (stdin/stdout/stderr slots) unavailable.
- * Installed as __stdio_exit so exit() runs it.
- */
 void __close_all(void) {
     FILE* p = &__files[0];
     FILE* plast;

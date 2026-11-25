@@ -1,7 +1,6 @@
 #include <dolphin.h>
 #include <dolphin/os.h>
 
-/** Initialises a counting semaphore with the given starting count and an empty wait queue. */
 void OSInitSemaphore(OSSemaphore* sem, s32 count) {
     BOOL enabled = OSDisableInterrupts();
 
@@ -10,10 +9,6 @@ void OSInitSemaphore(OSSemaphore* sem, s32 count) {
     OSRestoreInterrupts(enabled);
 }
 
-/**
- * Decrements the semaphore, putting the calling thread to sleep while the count is zero.
- * Returns the count before the decrement.
- */
 s32 OSWaitSemaphore(OSSemaphore* sem) {
     BOOL enabled;
     s32 count;
@@ -29,10 +24,6 @@ s32 OSWaitSemaphore(OSSemaphore* sem) {
     return count;
 }
 
-/**
- * Non-blocking version of OSWaitSemaphore: decrements and returns the old count if positive,
- * otherwise returns the zero count without waiting.
- */
 s32 OSTryWaitSemaphore(OSSemaphore* sem) {
     BOOL enabled;
     s32 count;
@@ -47,7 +38,6 @@ s32 OSTryWaitSemaphore(OSSemaphore* sem) {
     return count;
 }
 
-/** Increments the semaphore and wakes one waiting thread. Returns the count before the increment. */
 s32 OSSignalSemaphore(OSSemaphore* sem) {
     BOOL enabled;
     s32 count;
@@ -61,7 +51,6 @@ s32 OSSignalSemaphore(OSSemaphore* sem) {
     return count;
 }
 
-/** Returns the semaphore's current count. */
 s32 OSGetSemaphoreCount(OSSemaphore* sem) {
     return sem->count;
 }

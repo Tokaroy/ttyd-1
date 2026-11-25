@@ -1,8 +1,28 @@
 // tik_12 (埋没した都市, Rogueport Sewers): the charm-caster's (majinaishi) house: her charm cube (majinai_BOX) and trouble 14
 // (irai_14).
+
+#include "version.h"
 #include "battle/battle_unit.h"
-#include "evt/evt_cmd.h"
 #include "driver/animdrv.h"
+#include "evt/evt_story.h"
+#include "evt/evt_win.h"
+#include "evt/evt_window.h"
+#include "evt/evt_cmd.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_pouch.h"
+#include "driver/mapdrv.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "mario/mario.h"
 
 #include "eff/eff_stardust.h"
 #include "manager/evtmgr_cmd.h"
@@ -10,22 +30,6 @@
 #include "evt/evt_bero.h"
 #include "evt/evt_npc.h"
 #include "mario/mario_pouch.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_win.h"
-#include "evt/evt_window.h"
-#include "tik.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
-#include "driver/mapdrv.h"
-#include "mario/mario.h"
 
 static USER_FUNC(effect_stardust);
 static USER_FUNC(majinaisi_ryokin_kaisu);
@@ -33,12 +37,25 @@ static USER_FUNC(setmertn);
 
 s32 majinaisi_ryokin_kaisu_tbl[6];
 static BeroEntry bero_entry_data[2];
-extern EvtWord suisyou_kirakira[];
+static EvtWord suisyou_kirakira[30];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord majinaisi_table_talk[];
-s32 iri_14_item_tbl[2];
+#else
+EvtWord majinaisi_table_talk[877];
+#endif
+
+static s32 iri_14_item_tbl[2];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord majinaisi_direct_talk[];
-extern EvtWord majinaisi_init[];
+#else
+EvtWord majinaisi_direct_talk[108];
+#endif
+
+static EvtWord majinaisi_init[10];
 static NpcSetupInfo npcEnt[2];
+EvtWord tik_12_init_evt[58];
 
 /**
  * Merlee's charm prices, read by majinaisi_ryokin_kaisu: pairs of fee and the number of times the charm works,
@@ -73,7 +90,7 @@ static BeroEntry bero_entry_data[] = {
  * Lens-flare sparkle on Merlee's crystal ball: spawns a lensflare effect at the "uranai" object,
  * 15 units above and 20 in front of it.
  */
-EVT_BEGIN(suisyou_kirakira)
+static EVT_BEGIN(suisyou_kirakira)
     CALL(evt_mapobj_get_position, STRING("uranai"), LW(0), LW(1), LW(2))
     ADD(LW(1), 15)
     ADD(LW(2), 20)
@@ -107,6 +124,7 @@ EVT_BEGIN(majinaisi_table_talk)
         CALL(evt_mario_key_onoff, 1)
         RETURN
     END_IF
+
     // She shows Mario's coins and the three prices; he can back out, or be turned away if he is short of coins.
     CALL(evt_msg_print_add, 0, STRING("majinaisi_04"))
 #if VERSION <= VERSION_DEMO_JP
@@ -136,6 +154,7 @@ EVT_BEGIN(majinaisi_table_talk)
         CALL(evt_mario_key_onoff, 1)
         RETURN
     END_IF
+
     // Mario pays, the charm is set, and Mario and the partners step into place in front of her.
     MULTIPLY(LW(1), -1)
     CALL(evt_pouch_add_coin, LW(1))
@@ -151,6 +170,7 @@ EVT_BEGIN(majinaisi_table_talk)
         CALL(evt_party_move_pos2, 0, 75, 0, 60)
         CALL(evt_party_set_dir, 0, 270, 300)
     END_INLINE_EVENT
+
     BEGIN_INLINE_EVENT
         CALL(evt_party_move_pos2, 1, 105, 0, 60)
         CALL(evt_party_set_dir, 1, 270, 300)
@@ -158,6 +178,7 @@ EVT_BEGIN(majinaisi_table_talk)
     CALL(evt_mario_mov_pos2, 25, 0, 60)
     CALL(evt_mario_set_dir, 270, 300, 0)
     WAIT_MS(1000)
+
     // The charm cube moves under Mario, unfolds around him and closes over him, then rises into the air.
     CALL(evt_mapobj_get_position, STRING("majinai_BOX"), LW(0), LW(1), LW(2))
     CALL(evt_mario_get_pos, 0, LW(3), LW(4), LW(5))
@@ -170,23 +191,23 @@ EVT_BEGIN(majinaisi_table_talk)
     SPAWN_EVENT_GET_ID(PTR(suisyou_kirakira), GW(0))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_INCANT_CUBE1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("anm_sen"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_sen"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("senn"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("senn"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_map_checkanim, STRING("anm_sen"), LW(0), LW(1))
     WAIT_MS(LW(1))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_INCANT_CUBE2"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("anm_men"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_men"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group4"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("group4"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_map_checkanim, STRING("anm_men"), LW(0), LW(1))
     WAIT_MS(LW(1))
     CALL(evt_npc_set_anim, STRING("me"), STRING("H_1"))
-    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDDEN)
+    CALL(evt_mario_dispflag_onoff, 1, MARIO_DISP_FLAG_HIDE)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_INCANT_CUBE3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 60, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 60, 1000)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_trans, 1, STRING("majinai_BOX"), LW(3), LW(0), LW(5))
@@ -194,6 +215,7 @@ EVT_BEGIN(majinaisi_table_talk)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(1)
     END_IF
+
     // The cube spins faster and faster while crystal sparkles pulse around it, then slows to a stop.
     CALL(evt_npc_set_anim, STRING("me"), STRING("S_2"))
     BEGIN_INLINE_EVENT
@@ -275,6 +297,7 @@ EVT_BEGIN(majinaisi_table_talk)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // The cube sinks back to the floor and the room fades out around it.
     WAIT_MS(1000)
     CALL(evt_npc_set_anim, STRING("me"), STRING("H_2"))
@@ -283,7 +306,7 @@ EVT_BEGIN(majinaisi_table_talk)
     SET_VALUE(LW(5), LW(15))
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_INCANT_CUBE5"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_sub_intpl_msec_init, 11, LW(4), 0, 1000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(4), 0, 1000)
     LABEL(3)
     CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
     CALL(evt_mapobj_trans, 1, STRING("majinai_BOX"), LW(3), LW(0), LW(5))
@@ -291,21 +314,21 @@ EVT_BEGIN(majinaisi_table_talk)
     IF_INT_EQUAL(LW(1), 1)
         GOTO(3)
     END_IF
-    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDDEN)
+    CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_HIDE)
     DELETE_EVENT(GW(0))
     CALL(evt_eff_softdelete, STRING("aaax"))
     CALL(evt_snd_sfxoff, GW(1))
     BEGIN_INLINE_EVENT
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group4"), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("senn"), MAPOBJ_FLAG_NO_BLEND)
-        CALL(evt_map_blend_set_flag, 1, STRING("mario"), ANIM_MATERIAL_FLAG_NO_BLEND)
-        CALL(evt_map_blend_set_flag, 1, STRING("party"), ANIM_MATERIAL_FLAG_NO_BLEND)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group4"), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("senn"), MAP_OBJ_FLAG_NO_MAP_BLEND)
+        CALL(evt_map_blend_set_flag, 1, STRING("mario"), 2048)
+        CALL(evt_map_blend_set_flag, 1, STRING("party"), 2048)
         CALL(evt_mario_get_exparty, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
-            CALL(evt_map_blend_set_flag, 1, STRING("extparty"), ANIM_MATERIAL_FLAG_NO_BLEND)
+            CALL(evt_map_blend_set_flag, 1, STRING("extparty"), 2048)
         END_IF
-        CALL(evt_map_blend_set_flag, 1, STRING("まじない師"), ANIM_MATERIAL_FLAG_NO_BLEND)
-        CALL(evt_sub_intpl_msec_init, 11, 255, 0, 500)
+        CALL(evt_map_blend_set_flag, 1, STRING("まじない師"), 2048)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 255, 0, 500)
         LABEL(4)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_map_set_blend, 0, 255, 255, 255, LW(0))
@@ -314,6 +337,7 @@ EVT_BEGIN(majinaisi_table_talk)
             GOTO(4)
         END_IF
     END_INLINE_EVENT
+
     // The cube opens and Mario jumps out in a burst of star dust; Merlee promises he will win in style.
     BEGIN_INLINE_EVENT
         WAIT_MS(100)
@@ -327,27 +351,28 @@ EVT_BEGIN(majinaisi_table_talk)
     END_INLINE_EVENT
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_EVT_INCANT_CUBE3"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_map_playanim, STRING("anm_ten"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_ten"), MAP_ANIM_PLAY_ONCE, 0)
     WAIT_FRAMES(1)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("senn"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group4"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("BOX_tenkai"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("BOX_tenkai"), MAPOBJ_FLAG_NO_BLEND)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("senn"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group4"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("BOX_tenkai"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("BOX_tenkai"), MAP_OBJ_FLAG_NO_MAP_BLEND)
     CALL(evt_map_checkanim, STRING("anm_ten"), LW(0), LW(1))
     WAIT_MS(LW(1))
     CALL(evt_msg_print, 0, STRING("majinaisi_08"), 0, STRING("me"))
+
     // The room and the cube are put back and control returns.
-    CALL(evt_mario_set_motion, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("majinai_BOX"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mario_set_motion, MARIO_MOTION_STAY)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("majinai_BOX"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_map_blend_off, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("majinai_BOX"), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_map_blend_set_flag, 0, STRING("mario"), ANIM_MATERIAL_FLAG_NO_BLEND)
-    CALL(evt_map_blend_set_flag, 0, STRING("party"), ANIM_MATERIAL_FLAG_NO_BLEND)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("majinai_BOX"), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_map_blend_set_flag, 0, STRING("mario"), 2048)
+    CALL(evt_map_blend_set_flag, 0, STRING("party"), 2048)
     CALL(evt_mario_get_exparty, LW(0))
     IF_INT_NOT_EQUAL(LW(0), 0)
-        CALL(evt_map_blend_set_flag, 0, STRING("extparty"), ANIM_MATERIAL_FLAG_NO_BLEND)
+        CALL(evt_map_blend_set_flag, 0, STRING("extparty"), 2048)
     END_IF
-    CALL(evt_map_blend_set_flag, 0, STRING("まじない師"), ANIM_MATERIAL_FLAG_NO_BLEND)
+    CALL(evt_map_blend_set_flag, 0, STRING("まじない師"), 2048)
     CALL(evt_mapobj_trans, 1, STRING("majinai_BOX"), 0, 0, 0)
     WAIT_FRAMES(1)
     CALL(evt_party_run, 0)
@@ -357,7 +382,7 @@ EVT_BEGIN(majinaisi_table_talk)
 EVT_END()
 
 /** Items Merlee accepts for Trouble Center request 14: Cake Mix (-1 ends the list). */
-s32 iri_14_item_tbl[] = {
+static s32 iri_14_item_tbl[] = {
     ITEM_CAKE_MIX, -1,
 };
 
@@ -367,17 +392,17 @@ s32 iri_14_item_tbl[] = {
  * Mario hands one over, gets 30 coins and the request is marked solved. Otherwise she says majinaisi_00.
  */
 EVT_BEGIN(majinaisi_direct_talk)
-    IF_INT_EQUAL(GSW(GSW_TROUBLE_ACTIVE), 14)
-        IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_BASE), 0)
+    IF_INT_EQUAL(GSW_TROUBLE_ACCEPTED, TROUBLE_HEARTFUL_CAKE_RECIPE)
+        IF_INT_EQUAL(GSWF_TROUBLE_WORK(0), 0)
             CALL(evt_msg_print, 0, STRING("irai_14_00"), 0, 0)
         ELSE
-            IF_INT_EQUAL(GSWF(GSWF_TROUBLE_WORK_1), 0)
+            IF_INT_EQUAL(GSWF_TROUBLE_WORK(1), 0)
                 CALL(evt_msg_print, 0, STRING("irai_14_01"), 0, 0)
                 CALL(evt_mario_set_pose, STRING("M_I_2"))
                 WAIT_MS(1000)
                 CALL(evt_mario_set_pose, STRING("M_S_1"))
                 CALL(evt_msg_print, 0, STRING("irai_14_02"), 0, 0)
-                SET_VALUE(GSWF(GSWF_TROUBLE_WORK_1), 1)
+                SET_VALUE(GSWF_TROUBLE_WORK(1), 1)
             ELSE
                 CALL(evt_pouch_check_item, ITEM_CAKE_MIX, LW(0))
                 IF_INT_GREATER(LW(0), 0)
@@ -391,8 +416,8 @@ EVT_BEGIN(majinaisi_direct_talk)
                         CALL(evt_pouch_remove_item, ITEM_CAKE_MIX, LW(0))
                         CALL(evt_msg_print, 0, STRING("irai_14_05"), 0, 0)
                         CALL(evt_sub_get_coin, 30)
-                        SET_VALUE(GSW(GSW_TROUBLE_ACTIVE), 0)
-                        SET_VALUE(GSWF(GSWF_TROUBLE_14_SOLVED), 1)
+                        SET_VALUE(GSW_TROUBLE_ACCEPTED, TROUBLE_NONE)
+                        SET_VALUE(GSWF_TROUBLE_DONE(TROUBLE_HEARTFUL_CAKE_RECIPE), 1)
                         CALL(evt_msg_print, 0, STRING("sys_request_finish"), 0, 0)
                     END_IF
                 ELSE
@@ -407,16 +432,16 @@ EVT_BEGIN(majinaisi_direct_talk)
 EVT_END()
 
 /** Init script for Merlee (まじない師). Registers the table talk on the a_majinai hit area. */
-EVT_BEGIN(majinaisi_init)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_majinai"), 0, PTR(majinaisi_table_talk), 0)
+static EVT_BEGIN(majinaisi_init)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_majinai"), 0, PTR(majinaisi_table_talk), 0)
     RETURN
 EVT_END()
 
 /** NPCs of this room: Merlee, whose table talk is registered on the a_majinai area. */
 static NpcSetupInfo npcEnt[] = {
     {
-        "まじない師", // name
-        NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM, // flags
+        "まじない師", // name (Merlee, the charmer)
+        NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM, // flags
         0, // reactionFlags
         majinaisi_init, // initEvent
         NULL, // regularEvent
@@ -435,25 +460,25 @@ static NpcSetupInfo npcEnt[] = {
  * turns off blending on her room's objects and hides her box, and starts the smoke animation.
  */
 EVT_BEGIN(tik_12_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG0_TIK1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG0_TIK1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG0_TIK1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG0_TIK1"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL(evt_npc_setup, PTR(npcEnt))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("e_yuka_s"), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group2"), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_kakoi"), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mad"), MAPOBJ_FLAG_NO_BLEND)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("majinai_BOX"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("anm_kem"), 1, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("e_yuka_s"), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("group2"), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ie_kakoi"), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mad"), MAP_OBJ_FLAG_NO_MAP_BLEND)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("majinai_BOX"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("anm_kem"), MAP_ANIM_PLAY_LOOP, 0)
     RETURN
 EVT_END()
 
 /**
  * Script helper.
- * Spawns a star-dust particle burst: args are the type, X, Y, Z, X and Y velocities, particle count and camera.
+ * Spawns a star-dust particle burst: args are the type, X, Y, Z, X and Y velocities, particle count and lifetime.
  */
 static USER_FUNC(effect_stardust) {
     EvtWord* args = event->args;
@@ -464,21 +489,24 @@ static USER_FUNC(effect_stardust) {
     f32 vx = evtGetFloat(event, args[4]);
     f32 vy = evtGetFloat(event, args[5]);
     s32 count = evtGetValue(event, args[6]);
-    s32 camera = evtGetValue(event, args[7]);
+    s32 lifetime = evtGetValue(event, args[7]);
 
-    effStardustEntry(type, count, camera, x, y, z, vx, vy);
+    effStardustEntry(type, count, lifetime, x, y, z, vx, vy);
     return EVT_RETURN_DONE;
 }
+
 /** Script helper. Sets the running event's owner NPC to the NPC named by args[0] (Merlee). */
 static USER_FUNC(setmertn) {
     event->ownerNPC = npcNameToPtr((const char*)evtGetValue(event, event->args[0]));
     return EVT_RETURN_DONE;
 }
+
 /**
  * Script helper.
  * Reads Merlee's price list: for the menu index args[0],
  * returns the fee in args[1] and the charm's number of uses in args[2] from majinaisi_ryokin_kaisu_tbl.
  */
+// Each selection indexes a pair: coin price followed by the number of uses.
 static USER_FUNC(majinaisi_ryokin_kaisu) {
     EvtWord* args = event->args;
     s32 idx = evtGetValue(event, args[0]);

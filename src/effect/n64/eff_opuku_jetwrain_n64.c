@@ -1,6 +1,7 @@
-// Paper Mario 64 effect: rain of water (jetwrain) from a water jet.
-#include "eff/n64/eff_opuku_jetwrain_n64.h"
+// Paper Mario 64 effect (jetwrain): a full-screen water-ripple distortion of the rendered frame.
+
 #include "driver/camdrv.h"
+#include "eff/eff_magic1_n64.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
 #include "memory.h"
@@ -8,7 +9,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "eff/eff_n64.h"
-#include "libc_decls.h"
+#include "eff/n64/eff_opuku_jetwrain_n64.h"
 
 typedef struct EffOpukuJetwrainWork {
     s32 type;      // 0x0
@@ -24,7 +25,7 @@ typedef struct EffOpukuJetwrainWork {
 } EffOpukuJetwrainWork;
 
 /**
- * Four screen tiles (corner, right edge, bottom edge, both edges) whose corners are rewritten from the wave
+ * Four screen tiles (interior at 0, left/right edge column at 4, top/bottom edge row at 8, corner at 12) whose corners are rewritten from the wave
  * heights before each tile of the copied frame is redrawn, giving the rippling-water warp.
  */
 static effN64Vtx opuku_jetwrain_vtx[16] = {
@@ -46,22 +47,8 @@ static effN64Vtx opuku_jetwrain_vtx[16] = {
     {-144, -104, -320, 0x280, 0x280, 0, 0, 0, 255},
 };
 
-static void effOpukuJetwrainDisp(CameraId cameraId, EffectEntry* effect);
+static void effOpukuJetwrainDisp(CameraId cameraId, void* param);
 static void effOpukuJetwrainMain(EffectEntry* effect);
-
-/** Returns the sine of an angle given in degrees. */
-inline f32 sind(f32 deg) {
-    return sin(6.2831855f * deg / 360.0f);
-}
-
-/** Returns whether a < 12 (the loop bound over the wave grid columns). */
-inline int inline_fn2(s32 a) {
-    return a < 12;
-}
-/** Returns whether n < 13 (the loop bound over the wave grid width). */
-inline int inline_fn(s32 n) {
-    return n < 13;
-}
 
 /**
  * Spawns a water-ripple screen distortion for lifetime frames (<= 0 means until deleted), scaled by scale;
@@ -80,7 +67,7 @@ EffectEntry* effOpukuJetwrainN64Entry(s32 type, f32 x, f32 y, f32 z, f32 scale, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffOpukuJetwrainWork));
     effect->userdata = work;
     effect->callback = effOpukuJetwrainMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -100,7 +87,7 @@ EffectEntry* effOpukuJetwrainN64Entry(s32 type, f32 x, f32 y, f32 z, f32 scale, 
     work->col2[1] = 220;
     work->col2[2] = 255;
     for (i = 0; i < 19; i++) {
-        for (j = 0; inline_fn(j); j++) {
+        for (j = 0; j < (s32)(sizeof(work->h[0]) / sizeof(work->h[0][0])); j++) {
             work->h[i][j] = 0;
             work->v[i][j] = 0;
         }
@@ -122,14 +109,15 @@ static void effOpukuJetwrainMain(EffectEntry* effect) {
     s32 frame;
     s32 alpha;
     f32 a;
+    f32 s;
 
     work = effect->userdata;
     tmp.x = work->position.x;
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 32;
     }
     if (work->lifetime < 1000) {
@@ -152,7 +140,8 @@ static void effOpukuJetwrainMain(EffectEntry* effect) {
     work->alpha = alpha;
     a = (f32)alpha / 255.0f;
     for (i = 1; i < 18; i++) {
-        work->h[i][6] = a * (-64.0f * sind((f32)((frame - i) * -20)));
+        s = sin(6.2831855f * (f32)((frame - i) * -20) / 360.0f);
+        work->h[i][6] = a * (-64.0f * s);
     }
     for (i = 1; i < 18; i++) {
         for (j = 1; j < 12; j++) {
@@ -168,18 +157,19 @@ static void effOpukuJetwrainMain(EffectEntry* effect) {
         }
     }
     for (i = 1; i < 18; i++) {
-        for (j = 1; inline_fn2(j); j++) {
+        for (j = 1; j < (s32)(sizeof(work->h[0]) / sizeof(work->h[0][0])) - 1; j++) {
             work->h[i][j] += 0.02f * work->v[i][j];
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effOpukuJetwrainDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effOpukuJetwrainDisp, effect);
 }
 
 /**
  * Copies the frame to a texture and redraws it as 16x16 tiles whose corners are displaced by the wave heights,
  * waiting for draw sync after every tile.
  */
-static void effOpukuJetwrainDisp(CameraId cameraId, EffectEntry* effect) {
+static void effOpukuJetwrainDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     s32 px;
     EffOpukuJetwrainWork* work;
     s32 alpha;
@@ -207,7 +197,7 @@ static void effOpukuJetwrainDisp(CameraId cameraId, EffectEntry* effect) {
     C_MTXOrtho(ortho, 0.0f, 480.0f, 0.0f, 608.0f, 1.0f, 32768.0f);
     GXSetProjection(ortho, GX_ORTHOGRAPHIC);
     GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
-    buf = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB565, GX_FALSE, 0), 3)->address;
+    buf = smartAlloc(GXGetTexBufferSize(304, 240, GX_TF_RGB565, GX_FALSE, 0), SMART_GROUP_TEMP)->address;
     GXSetTexCopySrc(0, 0, 608, 480);
     GXSetTexCopyDst(304, 240, GX_TF_RGB565, GX_TRUE);
     GXCopyTex(buf, GX_FALSE);
@@ -234,8 +224,8 @@ static void effOpukuJetwrainDisp(CameraId cameraId, EffectEntry* effect) {
         Vec cam = {304.0f, 240.0f, 100.0f};
         C_MTXLookAt(view, &cam, &up, &target);
     }
-    GXLoadPosMtxImm(view, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(view, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     for (i = 0; i < 12; i++) {
         by = i * 16 + 24;
         edgeY = 0;

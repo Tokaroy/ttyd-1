@@ -1,26 +1,53 @@
 // dou_09 (洞窟, Pirate's Grotto): hub room linking dou_03, dou_10 and dou_13 with bobbing platforms.
 // A wall that can be bombed open and a hidden brick.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_damage.h"
 #include "dou.h"
 #include "driver/hitdrv.h"
-#include "evt/evt_case.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_img.h"
 #include "evt/evt_map.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_offscreen.h"
 #include "evt/evt_paper.h"
+#include "evt/evt_case.h"
 #include "evt/evt_snd.h"
+#include "party/party_motion.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_story.h"
+#include "evt/evt_mobj.h"
 #include "driver/mapdrv.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
 
 static BeroEntry bero_entry_data[5];
+static EvtWord dou_puka_event_init0[8];
+static EvtWord dou_puka_event_0[24];
+static EvtWord dou_puka_event_rev_0[10];
+static EvtWord dou_puka_event_main0[21];
+static EvtWord dou_puka_event_sub0[45];
+static EvtWord dou_puka_event_init1[8];
+static EvtWord dou_puka_event_1[24];
+static EvtWord dou_puka_event_rev_1[10];
+static EvtWord dou_puka_event_main1[21];
+static EvtWord dou_puka_event_sub1[45];
+static EvtWord dou_puka_event_init2[8];
+static EvtWord dou_puka_event_2[24];
+static EvtWord dou_puka_event_rev_2[10];
+static EvtWord dou_puka_event_main2[21];
+static EvtWord dou_puka_event_sub2[45];
+static EvtWord dou_puka_event_init3[8];
+static EvtWord dou_puka_event_3[24];
+static EvtWord dou_puka_event_rev_3[10];
+static EvtWord dou_puka_event_main3[21];
+static EvtWord dou_puka_event_sub3[45];
 static HitDamageReturn hitDmgRetPoints[5];
+static EvtWord evt_ride_taru[15];
+static EvtWord evt_ride_ship[15];
+static EvtWord bombwall_bomb[138];
+static EvtWord bombwall_init[40];
+EvtWord dou_09_init_evt[211];
 
 /**
  * Exits (beros) of this room: w_bero to dou_13, e_bero_1 to dou_10, e_bero_2 to dou_10 and n_bero to dou_03.
@@ -94,9 +121,10 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Clears the state and offset registers of floating platform 0 (state 0 = idle, 1 = being ridden,
- * 2 = stepped off; offset = its current height).
+ * Clears the state and offset registers of floating platform 0 (state 0 = idle, 1 = dipping,
+ * 2 = dip finished; offset = its current height).
  */
+// Four floating objects use state/height pairs GW(0/1), GW(2/3), GW(4/5), GW(6/7).
 static EVT_BEGIN(dou_puka_event_init0)
     SET_VALUE(GW(0), 0)
     SET_VALUE(GW(1), 0)
@@ -107,7 +135,7 @@ EVT_END()
  * Stand-on case script for floating platform 0:
  * if idle it marks the platform as ridden, runs the extra callback in LW(3)
  * when there is one (e.g. the boat or barrel creak sound), then the shared dip animation dou_puka_event,
- * and marks it as stepped off.
+ * and marks the dip as finished (state 2).
  */
 static EVT_BEGIN(dou_puka_event_0)
     IF_INT_NOT_EQUAL(GW(0), 0)
@@ -125,7 +153,7 @@ EVT_END()
 
 /**
  * Step-off case script for floating platform 0:
- * once the dip has finished (state 2) it sets the platform back to idle so it can bob again.
+ * once the dip has finished (state 2) it sets the platform back to idle so it can dip again.
  */
 static EVT_BEGIN(dou_puka_event_rev_0)
     IF_INT_NOT_EQUAL(GW(0), 2)
@@ -152,7 +180,7 @@ EVT_END()
 
 /**
  * Idle bobbing of floating platform 0: after a random 0.2 to 0.6 second delay it runs the shared bobbing loop
- * dou_normal_puka, pauses it while the platform is being ridden and restarts it once Mario steps off.
+ * dou_normal_puka, stops it during a dip and restarts it when the dip has finished.
  */
 static EVT_BEGIN(dou_puka_event_sub0)
     CALL(evt_sub_random, 400, LW(0))
@@ -180,8 +208,8 @@ static EVT_BEGIN(dou_puka_event_sub0)
 EVT_END()
 
 /**
- * Clears the state and offset registers of floating platform 1 (state 0 = idle, 1 = being ridden,
- * 2 = stepped off; offset = its current height).
+ * Clears the state and offset registers of floating platform 1 (state 0 = idle, 1 = dipping,
+ * 2 = dip finished; offset = its current height).
  */
 static EVT_BEGIN(dou_puka_event_init1)
     SET_VALUE(GW(2), 0)
@@ -193,7 +221,7 @@ EVT_END()
  * Stand-on case script for floating platform 1:
  * if idle it marks the platform as ridden, runs the extra callback in LW(3)
  * when there is one (e.g. the boat or barrel creak sound), then the shared dip animation dou_puka_event,
- * and marks it as stepped off.
+ * and marks the dip as finished (state 2).
  */
 static EVT_BEGIN(dou_puka_event_1)
     IF_INT_NOT_EQUAL(GW(2), 0)
@@ -211,7 +239,7 @@ EVT_END()
 
 /**
  * Step-off case script for floating platform 1:
- * once the dip has finished (state 2) it sets the platform back to idle so it can bob again.
+ * once the dip has finished (state 2) it sets the platform back to idle so it can dip again.
  */
 static EVT_BEGIN(dou_puka_event_rev_1)
     IF_INT_NOT_EQUAL(GW(2), 2)
@@ -238,7 +266,7 @@ EVT_END()
 
 /**
  * Idle bobbing of floating platform 1: after a random 0.2 to 0.6 second delay it runs the shared bobbing loop
- * dou_normal_puka, pauses it while the platform is being ridden and restarts it once Mario steps off.
+ * dou_normal_puka, stops it during a dip and restarts it when the dip has finished.
  */
 static EVT_BEGIN(dou_puka_event_sub1)
     CALL(evt_sub_random, 400, LW(0))
@@ -266,8 +294,8 @@ static EVT_BEGIN(dou_puka_event_sub1)
 EVT_END()
 
 /**
- * Clears the state and offset registers of floating platform 2 (state 0 = idle, 1 = being ridden,
- * 2 = stepped off; offset = its current height).
+ * Clears the state and offset registers of floating platform 2 (state 0 = idle, 1 = dipping,
+ * 2 = dip finished; offset = its current height).
  */
 static EVT_BEGIN(dou_puka_event_init2)
     SET_VALUE(GW(4), 0)
@@ -279,7 +307,7 @@ EVT_END()
  * Stand-on case script for floating platform 2:
  * if idle it marks the platform as ridden, runs the extra callback in LW(3)
  * when there is one (e.g. the boat or barrel creak sound), then the shared dip animation dou_puka_event,
- * and marks it as stepped off.
+ * and marks the dip as finished (state 2).
  */
 static EVT_BEGIN(dou_puka_event_2)
     IF_INT_NOT_EQUAL(GW(4), 0)
@@ -297,7 +325,7 @@ EVT_END()
 
 /**
  * Step-off case script for floating platform 2:
- * once the dip has finished (state 2) it sets the platform back to idle so it can bob again.
+ * once the dip has finished (state 2) it sets the platform back to idle so it can dip again.
  */
 static EVT_BEGIN(dou_puka_event_rev_2)
     IF_INT_NOT_EQUAL(GW(4), 2)
@@ -324,7 +352,7 @@ EVT_END()
 
 /**
  * Idle bobbing of floating platform 2: after a random 0.2 to 0.6 second delay it runs the shared bobbing loop
- * dou_normal_puka, pauses it while the platform is being ridden and restarts it once Mario steps off.
+ * dou_normal_puka, stops it during a dip and restarts it when the dip has finished.
  */
 static EVT_BEGIN(dou_puka_event_sub2)
     CALL(evt_sub_random, 400, LW(0))
@@ -352,8 +380,8 @@ static EVT_BEGIN(dou_puka_event_sub2)
 EVT_END()
 
 /**
- * Clears the state and offset registers of floating platform 3 (state 0 = idle, 1 = being ridden,
- * 2 = stepped off; offset = its current height).
+ * Clears the state and offset registers of floating platform 3 (state 0 = idle, 1 = dipping,
+ * 2 = dip finished; offset = its current height).
  */
 static EVT_BEGIN(dou_puka_event_init3)
     SET_VALUE(GW(6), 0)
@@ -365,7 +393,7 @@ EVT_END()
  * Stand-on case script for floating platform 3:
  * if idle it marks the platform as ridden, runs the extra callback in LW(3)
  * when there is one (e.g. the boat or barrel creak sound), then the shared dip animation dou_puka_event,
- * and marks it as stepped off.
+ * and marks the dip as finished (state 2).
  */
 static EVT_BEGIN(dou_puka_event_3)
     IF_INT_NOT_EQUAL(GW(6), 0)
@@ -383,7 +411,7 @@ EVT_END()
 
 /**
  * Step-off case script for floating platform 3:
- * once the dip has finished (state 2) it sets the platform back to idle so it can bob again.
+ * once the dip has finished (state 2) it sets the platform back to idle so it can dip again.
  */
 static EVT_BEGIN(dou_puka_event_rev_3)
     IF_INT_NOT_EQUAL(GW(6), 2)
@@ -410,7 +438,7 @@ EVT_END()
 
 /**
  * Idle bobbing of floating platform 3: after a random 0.2 to 0.6 second delay it runs the shared bobbing loop
- * dou_normal_puka, pauses it while the platform is being ridden and restarts it once Mario steps off.
+ * dou_normal_puka, stops it during a dip and restarts it when the dip has finished.
  */
 static EVT_BEGIN(dou_puka_event_sub3)
     CALL(evt_sub_random, 400, LW(0))
@@ -471,7 +499,7 @@ EVT_END()
 /**
  * Case script run when Bobbery bombs the cracked wall S_ki:
  * plays SFX_OFF_WALL_BREAK1, enables the w_bero exit,
- * sets GSWF_DOU09_BOMB_WALL_BLOWN and shatters the wall as a folding paper image (OFF_d_bom_ver2)
+ * sets GSWF_DOU_09_BOMB_WALL_BLOWN and shatters the wall as a folding paper image (OFF_d_bom_ver2)
  * before hiding it and its hit area.
  */
 static EVT_BEGIN(bombwall_bomb)
@@ -482,13 +510,15 @@ static EVT_BEGIN(bombwall_bomb)
     END_INLINE_EVENT
     SET_VALUE(LW(0), STRING("w_bero"))
     CALL_CHILD(bero_case_switch_on)
-    CALL(evt_hitobj_attr_onoff, 1, 1, STRING("w_bero"), 4)
-    SET_VALUE(GSWF(GSWF_DOU09_BOMB_WALL_BLOWN), 1)
+    CALL(evt_hitobj_attr_onoff, 1, 1, STRING("w_bero"), HIT_ATTR_NPC_ONLY)
+    SET_VALUE(GSWF_DOU_09_BOMB_WALL_BLOWN, 1)
     CALL(evt_img_entry, STRING("capture_img"))
     CALL(evt_img_set_paper, STRING("capture_img"), STRING("OFF_d_bom_ver2"))
     CALL(evt_offscreen_entry, STRING("offscreen"))
     CALL(evt_mapobj_set_offscreen, 1, STRING("S_ki"), STRING("offscreen"))
     CALL(evt_offscreen_get_boundingbox2, STRING("offscreen"), LW(10), LW(11), LW(12), LW(13))
+
+    // Skip the capture animation only when both bounding-box dimensions are zero.
     SET_VALUE(LF(0), 0)
     IF_INT_EQUAL(LW(12), 0)
         IF_INT_EQUAL(LW(13), 0)
@@ -499,11 +529,11 @@ static EVT_BEGIN(bombwall_bomb)
         CALL(evt_img_alloc_capture, STRING("capture_img"), 0, STRING("offscreen"), 1, LW(10), LW(11), LW(12), LW(13))
         CALL(evt_img_clear_virtual_point, STRING("capture_img"))
         CALL(evt_img_set_paper_anim, STRING("capture_img"), STRING("A_1"))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ki"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ki"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_ki1"), 1, 0)
         CALL(evt_img_wait_animend, STRING("capture_img"))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ki"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ki"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_ki1"), 1, 0)
     END_IF
     CALL(evt_mapobj_clear_offscreen, 1, STRING("S_ki"))
@@ -516,18 +546,18 @@ static EVT_BEGIN(bombwall_bomb)
 EVT_END()
 
 /**
- * Sets up the bomb wall: until GSWF_DOU09_BOMB_WALL_BLOWN is set it closes the w_bero exit
+ * Sets up the bomb wall: until GSWF_DOU_09_BOMB_WALL_BLOWN is set it closes the w_bero exit
  * and lets Bobbery's bomb trigger bombwall_bomb on A_ki1; afterwards the wall is already hidden.
  */
 static EVT_BEGIN(bombwall_init)
-    IF_INT_EQUAL(GSWF(GSWF_DOU09_BOMB_WALL_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_DOU_09_BOMB_WALL_BLOWN, 0)
         SET_VALUE(LW(0), STRING("w_bero"))
         CALL_CHILD(bero_case_switch_off)
-        CALL(evt_hitobj_attr_onoff, 1, 0, STRING("w_bero"), 4)
+        CALL(evt_hitobj_attr_onoff, 1, 0, STRING("w_bero"), HIT_ATTR_NPC_ONLY)
         CALL(evt_paper_entry, STRING("OFF_d_bom_ver2"))
-        CALL(evt_run_case_evt, CASE_COND_BOBBERY, 1, STRING("A_ki1"), 0, PTR(bombwall_bomb), 0)
+        CALL(evt_run_case_evt, CASE_BOBBERY, 1, STRING("A_ki1"), 0, PTR(bombwall_bomb), 0)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ki"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_ki"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_ki1"), 1, 0)
     END_IF
     RETURN
@@ -535,24 +565,24 @@ EVT_END()
 
 /**
  * Init script of dou_09, the hub linking dou_03, dou_10 and dou_13:
- * music and ambience, exits, which gate model is shown (closed before STORY_STG5_22_FLOODGATE, open after),
+ * music and ambience, exits, which gate model is shown (closed before STG5_22_FLOODGATE_HANDLE, open after),
  * three bobbing barrels and a boat that dip when stood on, a Shine Sprite block, a hidden brick,
  * and the wall that Bobbery can blow open.
  */
 EVT_BEGIN(dou_09_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_DOU1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_DOU11"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_DOU1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_DOU11"))
     CALL(evt_snd_set_rev_mode, 2)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     WAIT_FRAMES(1)
-    CALL(evt_map_playanim, STRING("nami"), 1, 0)
-    CALL(evt_map_playanim, STRING("moku"), 1, 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG5_22_FLOODGATE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mon_b"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_map_playanim, STRING("nami"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("moku"), MAP_ANIM_PLAY_LOOP, 0)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG5_22_FLOODGATE_HANDLE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mon_b"), MAP_OBJ_FLAG_HIDDEN)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mon_a"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("mon_a"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     CALL(evt_hit_damage_return_set, PTR(hitDmgRetPoints))
     CALL_CHILD(evt_gazigazi_entry)
@@ -563,8 +593,8 @@ EVT_BEGIN(dou_09_init_evt)
     CALL_CHILD(dou_puka_event_init0)
     SPAWN_EVENT(dou_puka_event_main0)
     SPAWN_EVENT(dou_puka_event_sub0)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("A_taru01"), 0, PTR(dou_puka_event_0), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_STAND_ON, 1, STRING("A_taru01"), 0, PTR(dou_puka_event_rev_0), 0)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("A_taru01"), 0, PTR(dou_puka_event_0), 0)
+    CALL(evt_run_case_evt, CASE_NOT_STAND_ON, 1, STRING("A_taru01"), 0, PTR(dou_puka_event_rev_0), 0)
     SET_VALUE(LW(0), STRING("S_taru02"))
     SET_VALUE(LW(1), STRING("A_taru02"))
     SET_VALUE(LW(2), STRING("A_taru02"))
@@ -572,8 +602,8 @@ EVT_BEGIN(dou_09_init_evt)
     CALL_CHILD(dou_puka_event_init1)
     SPAWN_EVENT(dou_puka_event_main1)
     SPAWN_EVENT(dou_puka_event_sub1)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("A_taru02"), 0, PTR(dou_puka_event_1), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_STAND_ON, 1, STRING("A_taru02"), 0, PTR(dou_puka_event_rev_1), 0)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("A_taru02"), 0, PTR(dou_puka_event_1), 0)
+    CALL(evt_run_case_evt, CASE_NOT_STAND_ON, 1, STRING("A_taru02"), 0, PTR(dou_puka_event_rev_1), 0)
     SET_VALUE(LW(0), STRING("S_taru03"))
     SET_VALUE(LW(1), STRING("A_taru03"))
     SET_VALUE(LW(2), STRING("A_taru03"))
@@ -581,8 +611,8 @@ EVT_BEGIN(dou_09_init_evt)
     CALL_CHILD(dou_puka_event_init2)
     SPAWN_EVENT(dou_puka_event_main2)
     SPAWN_EVENT(dou_puka_event_sub2)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("A_taru03"), 0, PTR(dou_puka_event_2), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_STAND_ON, 1, STRING("A_taru03"), 0, PTR(dou_puka_event_rev_2), 0)
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("A_taru03"), 0, PTR(dou_puka_event_2), 0)
+    CALL(evt_run_case_evt, CASE_NOT_STAND_ON, 1, STRING("A_taru03"), 0, PTR(dou_puka_event_rev_2), 0)
     SET_VALUE(LW(0), STRING("s09_fune01"))
     SET_VALUE(LW(1), STRING("a09_fune01"))
     SET_VALUE(LW(2), STRING("a09_fune_ata1"))
@@ -590,10 +620,10 @@ EVT_BEGIN(dou_09_init_evt)
     CALL_CHILD(dou_puka_event_init3)
     SPAWN_EVENT(dou_puka_event_main3)
     SPAWN_EVENT(dou_puka_event_sub3)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, STRING("a09_fune_ata1"), 0, PTR(dou_puka_event_3), 0)
-    CALL(evt_run_case_evt, CASE_COND_NOT_STAND_ON, 1, STRING("a09_fune_ata1"), 0, PTR(dou_puka_event_rev_3), 0)
-    CALL(evt_mobj_powerupblk, STRING("pblk1"), 500, 140, -100, 0, GSWF(GSWF_DOU09_SHINE_SPRITE), 0)
-    CALL(evt_mobj_brick, STRING("hblk1"), 500, 50, -100, 0, 13, 0, GSWF(GSWF_DOU09_HIDDEN_COIN_BLOCK_EMPTIED))
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, STRING("a09_fune_ata1"), 0, PTR(dou_puka_event_3), 0)
+    CALL(evt_run_case_evt, CASE_NOT_STAND_ON, 1, STRING("a09_fune_ata1"), 0, PTR(dou_puka_event_rev_3), 0)
+    CALL(evt_mobj_powerupblk, STRING("pblk1"), 500, 140, -100, 0, GSWF_SHINE_32, 0)
+    CALL(evt_mobj_brick, STRING("hblk1"), 500, 50, -100, ITEM_NULL, MOBJ_BRICK_HIDDEN_TEN_COIN, 0, GSWF_DOU_09_HIDDEN_TEN_COIN_BLOCK)
     SPAWN_EVENT(bombwall_init)
     RETURN
 EVT_END()

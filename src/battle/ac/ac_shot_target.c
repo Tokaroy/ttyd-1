@@ -1,16 +1,24 @@
-// Action command: shooting at a target (ac_shot_target); line up the sight on the target and fire.
+// Action command: shooting at a target (ac_shot_target); a cursor that drifts on its own and is steered with the
+// Control Stick.
+
 #include "battle/battle.h"
 #include "battle/battle_ac.h"
 #include "battle/battle_pad.h"
 #include "battle/battle_unit.h"
-#include "battle/battle_sub.h"
 #include "pmario_sound.h"
 #include "system.h"
 #include <string.h>
 #include "version.h"
+#include "battle/battle_sub.h"
 #include "battle/battle_disp.h"
-// US battle texture ids are 0x16 higher for these entries.
-#define BTL_TEX(id) ((id) + VERSION_PICK(0, 0x16))
+
+// Local setup parameter slots, named from their exact consumers below.
+typedef enum ShotTargetParam {
+    SHOT_TARGET_PARAM_UNIT_ID = 0,
+    SHOT_TARGET_PARAM_PARTS_ID = 1,
+    SHOT_TARGET_PARAM_START_FRAMES = 2,
+    SHOT_TARGET_PARAM_RUMBLE_DIFFICULTY = 3,
+} ShotTargetParam;
 
 typedef struct ShotTargetWork {
     s32 frame;    // 0x0
@@ -25,16 +33,8 @@ typedef struct ShotTargetWork {
     s16 periodY;  // 0x30
     s16 cntY;     // 0x32
     f32 ampY;     // 0x34
-    s32 sfxId;    // 0x38
+    u32 sfxId;    // 0x38 (u32: its -1 tests are unsigned compares in the retail code)
 } ShotTargetWork;
-
-#define ST_WORK(ac) ((ShotTargetWork*)(ac)->work)
-#define ST_DISP(ac) (&(ac)->disp)
-
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
-// FAKE: inlining off for the whole file (FAKES.md); without it 2 functions change length, e.g. battleAcDisp_ShotTarget 60 -> 372 instructions
-#pragma dont_inline on
 
 static void _ac_disp_init(BattleWork* work);
 static void actionCommandDisp(f32 x, f32 y);
@@ -57,23 +57,24 @@ s32 battleAcMain_ShotTarget(BattleWork* work) {
     BattleUnit* unit;
     BattleUnitPart* parts;
     Vec hit;
+    f32 s;
 
     ac = &work->actionCommands;
-    cw = ST_WORK(ac);
+    cw = (ShotTargetWork*)ac->work;
     autoCommand = FALSE;
     if (ac->acUnit->badgesEquipped.AutoCommand) {
         autoCommand = TRUE;
     }
-    difficulty = work->actionCommands.params[3];
+    difficulty = work->actionCommands.params[SHOT_TARGET_PARAM_RUMBLE_DIFFICULTY];
     do {
         sfxName = "SFX_AC_CURSOR_MOVE1";
         repeat = FALSE;
         switch (ac->acState) {
-            case 0:
+            case AC_STATE_INIT:
                 _ac_disp_init(work);
-                ac->result = 1;
-                unit = BattleGetUnitPtr(work, work->actionCommands.params[0]);
-                parts = BtlUnit_GetPartsPtr(unit, work->actionCommands.params[1]);
+                ac->result = AC_RESULT_RUNNING;
+                unit = BattleGetUnitPtr(work, work->actionCommands.params[SHOT_TARGET_PARAM_UNIT_ID]);
+                parts = BtlUnit_GetPartsPtr(unit, work->actionCommands.params[SHOT_TARGET_PARAM_PARTS_ID]);
                 BtlUnit_GetHitPos(unit, parts, &hit.x, &hit.y, &hit.z);
                 cw->hitPos = hit;
                 cw->inRange = 0;
@@ -85,39 +86,35 @@ s32 battleAcMain_ShotTarget(BattleWork* work) {
                 _ac_rumble_param_set(difficulty, &cw->periodX, &cw->cntX, &cw->ampX);
                 _ac_rumble_param_set(difficulty, &cw->periodY, &cw->cntY, &cw->ampY);
                 cw->sfxId = -1;
-                ac->acState = 99;
+                ac->acState = AC_STATE_WAIT_START;
                 break;
-            case 99:
+            case AC_STATE_WAIT_START:
                 break;
-            case 100:
-                cw->frame = work->actionCommands.params[2];
-                ac->acState = 1000;
+            case AC_STATE_START:
+                cw->frame = work->actionCommands.params[SHOT_TARGET_PARAM_START_FRAMES];
+                ac->acState = AC_STATE_RUN;
                 cw->sfxId = psndSFXOn(sfxName);
-            case 1000:
+            case AC_STATE_RUN:
                 if (work->actionCommands.countdown > 0) {
-                    (work->actionCommands.countdown)--;
-                    ac->result = 2;
+                    work->actionCommands.countdown--;
+                    ac->result = AC_RESULT_SUCCESS;
                     repeat = TRUE;
                     ac->resultCount++;
-                    ac->acState = 1001;
+                    ac->acState = AC_STATE_RUN + 1;
                     break;
                 }
                 cw->cntX--;
                 if (cw->cntX < 0) {
                     _ac_rumble_param_set(difficulty, &cw->periodX, &cw->cntX, &cw->ampX);
                 }
-                {
-                    f32 s = cw->ampX * sinfd((cw->cntX + 1) * 180 / cw->periodX);
-                    cw->pos.x += cw->ampX * sinfd(cw->cntX * 180 / cw->periodX) - s;
-                }
+                s = cw->ampX * sinfd((cw->cntX + 1) * 180 / cw->periodX);
+                cw->pos.x += cw->ampX * sinfd(cw->cntX * 180 / cw->periodX) - s;
                 cw->cntY--;
                 if (cw->cntY < 0) {
                     _ac_rumble_param_set(difficulty, &cw->periodY, &cw->cntY, &cw->ampY);
                 }
-                {
-                    f32 s = cw->ampY * sinfd((cw->cntY + 1) * 180 / cw->periodY);
-                    cw->pos.y += cw->ampY * sinfd(cw->cntY * 180 / cw->periodY) - s;
-                }
+                s = cw->ampY * sinfd((cw->cntY + 1) * 180 / cw->periodY);
+                cw->pos.y += cw->ampY * sinfd(cw->cntY * 180 / cw->periodY) - s;
                 cw->pos.x += work->padWork[0].padData[0].stickX / 10.0f;
                 cw->pos.y += work->padWork[0].padData[0].stickY / 10.0f;
                 if (autoCommand) {
@@ -142,45 +139,47 @@ s32 battleAcMain_ShotTarget(BattleWork* work) {
                     cw->inRange = 0;
                 }
                 cw->frame--;
-                if ((ac->setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && ((u32)ac->acUnit->tokenFlags & TOKEN_FLAG_CONFUSED_ACTION)) {
+                if ((ac->setupFlags & AC_SETUP_FLAG_CONFUSED_AUTO) && (ac->acUnit->tokenFlags & kConfusedAction)) {
+                    // irand(100) is never negative: a confused auto-play always fails
                     if (irand(100) >= 0) {
                         ac->result = 0;
                     } else {
-                        ac->result = 2;
+                        ac->result = AC_RESULT_SUCCESS;
                         ac->resultCount++;
                     }
-                    ac->acState = 1001;
+                    ac->acState = AC_STATE_RUN + 1;
                     break;
                 }
                 if (cw->frame < 0) {
                     if (cw->inRange) {
-                        ac->result = 2;
+                        ac->result = AC_RESULT_SUCCESS;
                         ac->resultCount++;
                     } else {
                         ac->result = 0;
                     }
-                    ac->acState = 1001;
+                    ac->acState = AC_STATE_RUN + 1;
                 }
                 break;
-            case 1001:
-                ac->acState = 1002;
+            case AC_STATE_RUN + 1:
+                ac->acState = AC_STATE_RUN + 2;
                 break;
-            case 1002:
+            case AC_STATE_RUN + 2:
                 break;
-            case 1003:
+            case AC_STATE_RUN + 3:
                 cw->endTimer = 60;
-                ac->acState = 1004;
-                if ((u32)cw->sfxId != 0xFFFFFFFF) {
+                ac->acState = AC_STATE_RUN + 4;
+
+                if (cw->sfxId != -1) {
                     psndSFXOff(cw->sfxId);
                 }
                 break;
-            case 1004:
+            case AC_STATE_RUN + 4:
                 cw->endTimer--;
                 if (cw->endTimer <= 0) {
-                    ac->acState = 1005;
+                    ac->acState = AC_STATE_RUN + 5;
                 }
                 break;
-            case 1005:
+            case AC_STATE_RUN + 5:
                 ac->maincb = NULL;
                 ac->dispcb = NULL;
                 ac->resultcb = NULL;
@@ -237,24 +236,24 @@ s32 battleAcResult_ShotTarget(BattleWork* work) {
 void battleAcDisp_ShotTarget(CameraId cameraId, void* param) {
     BattleWork* work = param;
     BattleActions* ac = &work->actionCommands;
-    BattleACDispParams* d = ST_DISP(ac);
+    BattleACDispParams* d = &ac->disp;
 
     switch (ac->acState) {
-        case 99:
-        case 100:
-        case 1000:
-        case 1001:
-        case 1002:
-            d->iconX = intplGetValue(4, -200.0f, 30.0f, 20 - d->slideTimer, 20);
+        case AC_STATE_WAIT_START:
+        case AC_STATE_START:
+        case AC_STATE_RUN:
+        case AC_STATE_RUN + 1:
+        case AC_STATE_RUN + 2:
+            d->iconX = intplGetValue(EASING_QUADRATIC_OUT, -200.0f, 30.0f, 20 - d->slideTimer, 20);
             actionCommandDisp(d->iconX, d->iconY);
             if (d->slideTimer > 0) {
                 d->slideTimer--;
             }
             break;
-        case 1003:
-        case 1004:
+        case AC_STATE_RUN + 3:
+        case AC_STATE_RUN + 4:
             if (d->slideTimer >= 40) {
-                d->iconX = intplGetValue(4, 30.0f, -200.0f, d->slideTimer - 40, 20);
+                d->iconX = intplGetValue(EASING_QUADRATIC_OUT, 30.0f, -200.0f, d->slideTimer - 40, 20);
             } else {
                 d->iconX = 30.0f;
             }
@@ -268,13 +267,13 @@ void battleAcDisp_ShotTarget(CameraId cameraId, void* param) {
 
 /** Called by btlevtcmd_StopAC: stops the cursor sound and starts the 60-frame end wait. */
 void battleAcDelete_ShotTarget(BattleWork* work) {
-    work->actionCommands.acState = 1003;
+    work->actionCommands.acState = AC_STATE_RUN + 3;
 }
 
 /** Resets the display state: off screen to the left with a 20-frame slide, white colour, empty fill. */
 static void _ac_disp_init(BattleWork* work) {
-    BattleACDispParams* d = ST_DISP(&work->actionCommands);
-    memset(d, 0, 0x2C);
+    BattleACDispParams* d = &work->actionCommands.disp;
+    memset(d, 0, sizeof(BattleACDispParams));
     d->iconX = -200.0f;
     d->iconY = 0.0f;
     d->slideTimer = 20;
@@ -293,15 +292,15 @@ static void _ac_disp_init(BattleWork* work) {
 static void actionCommandDisp(f32 x, f32 y) {
     BattleWork* work = _battleWorkPointer;
     BattleActions* ac = &work->actionCommands;
-    ShotTargetWork* cw = ST_WORK(ac);
+    ShotTargetWork* cw = (ShotTargetWork*)ac->work;
     Vec screen;
     Vec screen2;
 
     switch (ac->acState) {
-        case 100:
-        case 1000:
-        case 1001:
-        case 1002:
+        case AC_STATE_START:
+        case AC_STATE_RUN:
+        case AC_STATE_RUN + 1:
+        case AC_STATE_RUN + 2:
             cw->angle += 2.0f;
             btlGetScreenPoint(&cw->pos, &screen);
             btlDispTex4(BTL_TEX(0x42), screen, (Vec){1.0f, 1.0f, 1.0f}, (Vec){0.0f, 0.0f, 0.0f}, (GXColor){255, 255, 255, 255});

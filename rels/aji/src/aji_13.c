@@ -1,9 +1,33 @@
 // aji_13 (敵のアジト, X-Naut Fortress): the conveyor-belt room (move_left_right, move_up_down) with clockwork
 // switches and the card key (evt_key_get).
+
 #include "version.h"
+#include "evt/evt_window.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
+#include "mario/mario_cam.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_case.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_img.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_offscreen.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_sub.h"
+#include "evt/evt_item.h"
+#include "evt/evt_pouch.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "driver/hitdrv.h"
 #include "string.h"
@@ -16,32 +40,13 @@
 #include "evt/evt_bero.h"
 #include "aji.h"
 #include "mario/mario_pouch.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_img.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_offscreen.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_sub.h"
-#include "evt/evt_window.h"
-#include "mario/mario_cam.h"
-#include "memory.h"
-#include "libc_decls.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
-#if VERSION >= VERSION_DEMO_EU
-#include "mario/mariost.h"
-#endif
 
 static BOOL _hitIsGroupSub(HitEntry* target, HitEntry* node, BOOL checkSibling);
+
+#if VERSION >= VERSION_US
+#include "memory.h"
+#endif
+
 typedef struct {
     Vec pos;
     Vec delta;
@@ -49,20 +54,28 @@ typedef struct {
 
 static USER_FUNC(bg_cam_chk);
 static USER_FUNC(mario_chk);
-#if VERSION >= VERSION_JP
-// Declaration of hit_group_chk (JP and later), the script function defined at the end of this file.
 USER_FUNC(hit_group_chk);
-#endif
 static BOOL hitIsGroup(HitEntry* target, HitEntry* group);
-static BOOL _hitIsGroupSub(HitEntry* target, HitEntry* node, BOOL checkSibling);
 
-extern EvtWord evt_snd_stop[];
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e_door_close[22];
+static EvtWord e_door_open[22];
+static EvtWord evt_snd_stop[12];
+static EvtWord evt_haikei_in[16];
 static BeroEntry bero_entry_data[15];
 static const char* name_tbl[13];
-const char* name_tbl2[6];
-extern EvtWord move_left_right[];
-extern EvtWord move_up_down[];
-extern EvtWord move_r[];
+static const char* name_tbl2[6];
+static EvtWord move_left_right[128];
+
+#if VERSION == VERSION_DEMO_JP
+static EvtWord move_up_down[128];
+#else
+static EvtWord move_up_down[226];
+#endif
+
+static EvtWord move_r[84];
+
 /* moving-floor gimmick read by shikake_init: hit, mapobj, two motion params, time; a NULL mapobj ends the table */
 typedef struct ShikakeMove {
     const char* hit;
@@ -75,31 +88,43 @@ typedef struct ShikakeMoveTbl7 {
     ShikakeMove rows[7];
     const char* end[2];
 } ShikakeMoveTbl7;
-ShikakeMoveTbl7 left_right_tbl;
+static ShikakeMoveTbl7 left_right_tbl;
 typedef struct ShikakeMoveTbl6 {
     ShikakeMove rows[6];
     const char* end[2];
 } ShikakeMoveTbl6;
-ShikakeMoveTbl6 up_down_tbl;
+static ShikakeMoveTbl6 up_down_tbl;
 typedef struct ShikakeMoveTbl15 {
     ShikakeMove rows[15];
     const char* end[2];
 } ShikakeMoveTbl15;
-ShikakeMoveTbl15 r_tbl;
-extern EvtWord shikake_init[];
-extern EvtWord evt_bcv_sw[];
-extern EvtWord evt_key_get[];
+static ShikakeMoveTbl15 r_tbl;
+static EvtWord shikake_init[66];
+static EvtWord evt_sw[134];
+static EvtWord evt_hari[70];
+static EvtWord evt_ramp[68];
+static EvtWord evt_bcv_sw[99];
+static EvtWord evt_key_get[5];
 static s32 key_tbl[2];
 
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord evt_door_msg[85];
+extern EvtWord aji_13_init_evt[];
+#else
+static EvtWord evt_door_msg[87];
+EvtWord aji_13_init_evt[295];
+#endif
+
 /**
- * Recursive helper of hitIsGroup: whether the joint name of target equals that of node,
- * of any of node's descendants, or (when checkSibling is TRUE) of the siblings that follow.
+ * Searches by target joint name: visits node, then returns the child search directly when a child exists.
+ * Only a node without a child can continue to its following sibling when checkSibling is TRUE.
  */
 static BOOL _hitIsGroupSub(HitEntry* target, HitEntry* node, BOOL checkSibling) {
     if (strcmp(target->joint->name, node->joint->name) == 0) {
         return TRUE;
     }
     if (node->child != NULL) {
+        // Return this branch result directly, including a miss.
         return _hitIsGroupSub(target, node->child, TRUE);
     }
     if (checkSibling && node->sibling != NULL) {
@@ -108,9 +133,12 @@ static BOOL _hitIsGroupSub(HitEntry* target, HitEntry* node, BOOL checkSibling) 
     return FALSE;
 }
 
-/** Whether the hit area target is group itself or one of its descendants. */
+/**
+ * Returns whether hit entry target is the hit group `group` or an entry _hitIsGroupSub reaches below it, comparing
+ * joint names (not every entry below: a node with a child never goes on to its siblings).
+ */
 static BOOL hitIsGroup(HitEntry* target, HitEntry* group) {
-    // whether target is group or one of its descendants
+    // Search by joint name, excluding the root sibling chain; child recursion skips the current node's siblings.
     return _hitIsGroupSub(target, group, FALSE);
 }
 
@@ -184,10 +212,10 @@ EVT_END()
 
 /**
  * Script that silences the conveyor sound handle in GW(11) once the story has reached
- * STORY_STG7_17_CONVEYOR_BELT; returns LW(0) = 0.
+ * STG7_17_CONVEYOR_BELT; returns LW(0) = 0.
  */
-EVT_BEGIN(evt_snd_stop)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG7_17_CONVEYOR_BELT)
+static EVT_BEGIN(evt_snd_stop)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG7_17_CONVEYOR_BELT)
         CALL(evt_snd_sfxoff, GW(11))
     END_IF
     SET_VALUE(LW(0), 0)
@@ -196,12 +224,12 @@ EVT_END()
 
 /**
  * Entry event of the background-camera section:
- * after the entrance finishes it releases the keep-camera mode and switches on Y-following for Mario's camera,
+ * after the entrance finishes it enables Y-following for Mario's camera,
  * and returns LW(0) = 1, which makes evt_bero_mario_enter skip the normal walk-in.
  */
 static EVT_BEGIN(evt_haikei_in)
     BEGIN_INLINE_EVENT
-        CALL(evt_bero_exec_wait, 65536)
+        CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
         WAIT_FRAMES(10)
         CALL(evt_mario_cam_keep_off)
         CALL(evt_mario_cam_y_on)
@@ -222,7 +250,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)evt_snd_stop, // exitEvent
+        evt_snd_stop, // exitEvent
         "aji_18", // nextMapName
         "e_bero", // nextBeroName
         5, // enterAnimeType
@@ -240,7 +268,7 @@ static BeroEntry bero_entry_data[] = {
         -1, // length
         NULL, // enterEvent
         -1, // caseType
-        (s32*)evt_snd_stop, // exitEvent
+        evt_snd_stop, // exitEvent
         "aji_14", // nextMapName
         "w_bero", // nextBeroName
         5, // enterAnimeType
@@ -336,7 +364,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)evt_haikei_in, // enterEvent
+        evt_haikei_in, // enterEvent
         6, // caseType
         NULL, 0, // exitEvent..nextMapName
         "dokan_1", // nextBeroName
@@ -352,7 +380,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)evt_haikei_in, // enterEvent
+        evt_haikei_in, // enterEvent
         6, // caseType
         NULL, 0, // exitEvent..nextMapName
         "dokan_2", // nextBeroName
@@ -368,7 +396,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)evt_haikei_in, // enterEvent
+        evt_haikei_in, // enterEvent
         6, // caseType
         NULL, 0, // exitEvent..nextMapName
         "dokan_3", // nextBeroName
@@ -384,7 +412,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)evt_haikei_in, // enterEvent
+        evt_haikei_in, // enterEvent
         6, // caseType
         NULL, 0, // exitEvent..nextMapName
         "dokan_4", // nextBeroName
@@ -400,7 +428,7 @@ static BeroEntry bero_entry_data[] = {
         BERO_POS_AUTO, // centerPosition
         0, 0, // centerPositionY..centerPositionZ
         -1, // length
-        (s32*)evt_haikei_in, // enterEvent
+        evt_haikei_in, // enterEvent
         6, // caseType
         NULL, 0, // exitEvent..nextMapName
         "dokan_5", // nextBeroName
@@ -461,7 +489,7 @@ static const char* name_tbl[] = {
 };
 
 /** Hit areas of the clockwork (zenmai) platform groups. */
-const char* name_tbl2[] = {
+static const char* name_tbl2[] = {
     "A_zenmai1",
     "A_zenmai2",
     "A_zenmai3",
@@ -473,8 +501,8 @@ const char* name_tbl2[] = {
 /**
  * Script function that carries Mario and his partner on the moving platforms of the room:
  * every frame it measures how far each of the 13 platform groups in name_tbl moved
- * and adds that to the floor motion of whoever stands on it;
- * after STORY_STG7_17_CONVEYOR_BELT it pushes them along the conveyor belt A_bel at 0.6 per frame (scaled for
+ * and sets Mario's or partner slot 0's X/Z floor motion to 10 times that translation delta;
+ * after STG7_17_CONVEYOR_BELT it pushes them along the conveyor belt A_bel at 0.6 per frame (scaled for
  * the frame rate on PAL); and on the six rotating platforms in name_tbl2 it moves Mario around the platform's
  * pivot by the angle the platform turned. Blocks forever.
  */
@@ -501,6 +529,8 @@ static USER_FUNC(mario_chk) {
         HitEntry* hit = hitNameToPtr((const char*)name_tbl[i]);
         if (hit != NULL && hit->mapObj != NULL) {
             Vec pos = (Vec){hit->mapObj->transformMtx[0][3], hit->mapObj->transformMtx[1][3], hit->mapObj->transformMtx[2][3]};
+
+            // Cache this frame's translation delta before replacing the previous position.
             PSVECSubtract(&pos, &work[i].pos, &work[i].delta);
             work[i].pos = pos;
         }
@@ -523,7 +553,7 @@ static USER_FUNC(mario_chk) {
             break;
         }
     }
-    if (evtGetValue(event, GSW(GSW_STORY_PROGRESS)) >= STORY_STG7_17_CONVEYOR_BELT) {
+    if (evtGetValue(event, GSW_STORY_PROGRESS) >= STG7_17_CONVEYOR_BELT) {
         MarioWork* mario = marioGetPtr();
         PartyEntry* party = partyGetPtr(0);
         if (mario != NULL && mario->hitobjStandOn != NULL && hitIsGroup(mario->hitobjStandOn, hitNameToPtr("A_bel"))) {
@@ -532,6 +562,9 @@ static USER_FUNC(mario_chk) {
             mario->floorMove.x *= 60.0f / gp->framerate; // PAL: the push per frame is scaled to the frame rate
 #endif
         }
+
+        // BUG: tests hitobjUnder (only ever cleared, never set) but passes hitobjStandOn, so this test is always
+        // false and the partner never gets the belt push here.
         if (party != NULL && party->hitobjUnder != NULL && hitIsGroup(party->hitobjStandOn, hitNameToPtr("A_bel"))) {
             party->floorMoveX = 0.6f;
 #if VERSION >= VERSION_DEMO_EU
@@ -579,7 +612,7 @@ static USER_FUNC(mario_chk) {
  * and forth between the two positions, pausing 300 ms at each end and then waiting while GF(0) is set
  * (evt_sw raises it during the staircase-reveal cutscene).
  */
-EVT_BEGIN(move_left_right)
+static EVT_BEGIN(move_left_right)
     SET_VALUE(LW(5), LW(0))
     SET_VALUE(LW(6), LW(1))
     SET_VALUE(LW(7), LW(2))
@@ -591,7 +624,7 @@ EVT_BEGIN(move_left_right)
     MULTIPLY(LW(7), 100)
     MULTIPLY(LW(8), 100)
     LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 11, LW(7), LW(8), LW(9))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(7), LW(8), LW(9))
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -610,7 +643,7 @@ EVT_BEGIN(move_left_right)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, LW(8), LW(7), LW(9))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(8), LW(7), LW(9))
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -636,10 +669,8 @@ EVT_END()
 /**
  * Script for one platform of up_down_tbl: binds the hit area to the map object
  * and moves it between two heights over the row's time.
- * In the JP and later releases the platform A_ugoku_2 only starts
- * after something is standing on it (GF(1) is set once its movement value passes a small threshold).
  */
-EVT_BEGIN(move_up_down)
+static EVT_BEGIN(move_up_down)
     // The hit area is tied to the platform and the row's heights are scaled for smooth movement.
     SET_VALUE(LW(5), LW(0))
     SET_VALUE(LW(6), LW(1))
@@ -656,7 +687,6 @@ EVT_BEGIN(move_up_down)
     IF_STR_EQUAL(LW(5), STRING("A_ugoku_2"))
         SET_VALUE(LW(3), 1)
         SET_VALUE(GF(1), 0)
-        // The first platform (A_ugoku_2) starts only after someone is standing on it.
         BEGIN_SIBLING_EVENT
             LOOP(0)
                 CALL(evt_mario_get_name_hitobj_head, LW(10))
@@ -674,9 +704,10 @@ EVT_BEGIN(move_up_down)
         SET_VALUE(LW(3), 0)
     END_IF
 #endif
+
     // Each cycle the platform glides from its first height to its second over the row's time, then pauses.
     LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 11, LW(7), LW(8), LW(9))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(7), LW(8), LW(9))
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -687,7 +718,7 @@ EVT_BEGIN(move_up_down)
 #if VERSION >= VERSION_JP
         IF_INT_NOT_EQUAL(LW(3), 0)
             IF_INT_NOT_EQUAL(GF(1), 0)
-#if VERSION == VERSION_JP
+#if VERSION < VERSION_US
                 MULTIPLY_FLOAT(LW(0), FLOAT(100.0f))
 #endif
                 GOTO(5)
@@ -729,7 +760,8 @@ EVT_BEGIN(move_up_down)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_sub_intpl_msec_init, 11, LW(8), LW(7), LW(9))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(8), LW(7), LW(9))
+
         // Then it glides back, and the cycle repeats forever.
         LABEL(1)
         CALL(evt_sub_intpl_msec_get_value)
@@ -761,7 +793,7 @@ EVT_END()
  * and turns it between two angles over the row's time, again and again; while GF(0) is set
  * (evt_sw raises it during the staircase-reveal cutscene) it stops mid-swing and waits.
  */
-EVT_BEGIN(move_r)
+static EVT_BEGIN(move_r)
     SET_VALUE(LW(5), LW(0))
     SET_VALUE(LW(6), LW(1))
     SET_VALUE(LW(7), LW(2))
@@ -773,7 +805,7 @@ EVT_BEGIN(move_r)
     MULTIPLY(LW(7), 100)
     MULTIPLY(LW(8), 100)
     LOOP(0)
-        CALL(evt_sub_intpl_msec_init, 0, LW(7), LW(8), LW(9))
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, LW(7), LW(8), LW(9))
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -803,7 +835,7 @@ EVT_END()
  * The platforms that slide sideways: for each, the hit area, the map object, the two end positions and the
  * travel time.
  */
-ShikakeMoveTbl7 left_right_tbl = {
+static ShikakeMoveTbl7 left_right_tbl = {
     {
         {"A_ugoku_1", "S_ugoku_1", 0, -150, 3000},
         {"A_ugoku_3", "S_ugoku_3", 0, 100, 1500},
@@ -820,7 +852,7 @@ ShikakeMoveTbl7 left_right_tbl = {
  * The platforms that move up and down: hit area, map object, the two end positions and the travel time of
  * each.
  */
-ShikakeMoveTbl6 up_down_tbl = {
+static ShikakeMoveTbl6 up_down_tbl = {
     {
         {"A_ugoku_2", "S_ugoku_2", 0, -150, 2800},
         {"A_ugoku_h_4", "S_ugoku_h_4", 0, 100, 3000},
@@ -840,7 +872,7 @@ ShikakeMoveTbl6 up_down_tbl = {
  * The clockwork (zenmai) platforms that rotate: hit area, map object, the two angles and the swing time of
  * each.
  */
-ShikakeMoveTbl15 r_tbl = {
+static ShikakeMoveTbl15 r_tbl = {
     {
         {"A_zenmai1", "S_zenmai1", 0, 360, 6000},
         {"A_zenmai2", "S_zenmai2", 0, -360, 6000},
@@ -865,7 +897,7 @@ ShikakeMoveTbl15 r_tbl = {
  * Starts all the moving platforms of the room: reads left_right_tbl,
  * up_down_tbl and r_tbl and spawns move_left_right, move_up_down and move_r for each row.
  */
-EVT_BEGIN(shikake_init)
+static EVT_BEGIN(shikake_init)
     SET_VALUE(GF(0), 0)
     SET_INT_READ_ADDR(PTR(&left_right_tbl))
     LOOP(0)
@@ -901,14 +933,14 @@ EVT_BEGIN(shikake_init)
 EVT_END()
 
 /**
- * Clockwork switch script that reveals the off-screen staircase:
- * pans the camera to the stairs, builds a paper-and-offscreen image of S_kaidan (OFF_hei_07) that unfolds,
- * and sets the story progress to STORY_STG7_18_OFF_SCREEN_STAIRS.
+ * Script of the blue floor switch (sw) that reveals the off-screen staircase:
+ * pans the camera to the stairs, builds a paper-and-offscreen image of S_kaidan (OFF_hei_07) using animation A_1,
+ * and sets the story progress to STG7_18_OFF_SCREEN_STAIRS.
  */
 static EVT_BEGIN(evt_sw)
     CALL(evt_mario_key_onoff, 0)
     SET_VALUE(GF(0), 1)
-    CALL(evt_cam3d_evt_set, 475, 425, 743, 475, 325, 0, 1000, 11)
+    CALL(evt_cam3d_evt_set, 475, 425, 743, 475, 325, 0, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(2500)
     CALL(evt_paper_entry, STRING("OFF_hei_07"))
     CALL(evt_img_entry, STRING("img"))
@@ -924,7 +956,7 @@ static EVT_BEGIN(evt_sw)
     CALL(evt_img_onoff, STRING("img"), 1)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_OFF7_KAIDAN_APPEAR1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_kaidan"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_kaidan"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("A_kaidan"), 1, 1)
     WAIT_MS(1800)
     CALL(evt_img_wait_animend, STRING("img"))
@@ -932,9 +964,9 @@ static EVT_BEGIN(evt_sw)
     CALL(evt_img_release, STRING("img"))
     CALL(evt_mapobj_clear_offscreen, 1, STRING("S_kaidan"))
     CALL(evt_offscreen_delete, STRING("ofs"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_18_OFF_SCREEN_STAIRS)
+    SET_VALUE(GSW_STORY_PROGRESS, STG7_18_OFF_SCREEN_STAIRS)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_off, 1000, 11)
+    CALL(evt_cam3d_evt_off, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     SET_VALUE(GF(0), 0)
     WAIT_MS(500)
@@ -946,7 +978,6 @@ EVT_END()
  * Swings the needle map object whose name is in LW(0) (S_hari01 to S_hari04, started by evt_ramp
  * when the conveyor belt is switched on) around its Z axis forever, to random angles up to 90 degrees
  * on alternating sides over 1.5 to 3 seconds each, like evt_hari in aji_03 but without a stop.
- * Guess: the needles are dial pointers on the machinery.
  */
 static EVT_BEGIN(evt_hari)
     SET_VALUE(LW(8), LW(0))
@@ -962,7 +993,7 @@ static EVT_BEGIN(evt_hari)
         END_IF
         CALL(evt_sub_random, 1500, LW(9))
         ADD(LW(9), 1500)
-        CALL(evt_sub_intpl_msec_init, 11, LW(2), LW(3), LW(9))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, LW(2), LW(3), LW(9))
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(10.0f))
@@ -983,7 +1014,7 @@ EVT_END()
 static EVT_BEGIN(evt_ramp)
     CALL(evt_mapobj_get_position, STRING("S_bel"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_CONVEYER_MOVE1"), LW(0), LW(1), LW(2), GW(11))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_pato1"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_pato1"), MAP_OBJ_FLAG_HIDDEN)
     BEGIN_INLINE_EVENT
         SET_FLOAT_VALUE(LW(0), FLOAT(0.0f))
         LOOP(0)
@@ -1007,37 +1038,37 @@ static EVT_BEGIN(evt_ramp)
 EVT_END()
 
 /**
- * Case script of the blue switch bcv_sw: sets the story to STORY_STG7_17_CONVEYOR_BELT,
- * pans the camera to the machine, switches the lamp objects meta_1 to 4 from state 1 to state 2,
- * starts the conveyor sound and animation (kon) and the ramp (evt_ramp).
+ * Script of the blue switch bcv_sw: sets the story to STG7_17_CONVEYOR_BELT, pans the camera to the belt,
+ * hides the lamp objects meta_1_1 to meta_4_1 and shows meta_1_2 to meta_4_2, starts the conveyor sound,
+ * the looping kon animation and the ramp (evt_ramp), then gives the camera and control back.
  */
-EVT_BEGIN(evt_bcv_sw)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_17_CONVEYOR_BELT)
+static EVT_BEGIN(evt_bcv_sw)
+    SET_VALUE(GSW_STORY_PROGRESS, STG7_17_CONVEYOR_BELT)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_cam3d_evt_set, -575, 152, 578, -575, 57, 37, 1000, 11)
+    CALL(evt_cam3d_evt_set, -575, 152, 578, -575, 57, 37, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     WAIT_MS(1000)
     CALL(evt_mapobj_get_position, STRING("S_bel"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_CONVEYER_ACTIVE1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_1_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_2_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_3_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_4_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_1_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_2_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_3_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_4_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_map_playanim, STRING("kon"), 1, 0)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_1_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_2_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_3_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_4_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_1_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_2_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_3_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_4_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_map_playanim, STRING("kon"), MAP_ANIM_PLAY_LOOP, 0)
     SPAWN_EVENT(evt_ramp)
     WAIT_MS(3000)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
-/** Pick-up event of the Card Key (ITEM_CARD_KEY_0x20): sets GSWF_AJI13_CARD_KEY_TAKEN. */
-EVT_BEGIN(evt_key_get)
-    SET_VALUE(GSWF(GSWF_AJI13_CARD_KEY_TAKEN), 1)
+/** Pick-up event of the Card Key (ITEM_CARD_KEY_0x20): sets GSWF_AJI_13_CARD_KEY. */
+static EVT_BEGIN(evt_key_get)
+    SET_VALUE(GSWF_AJI_13_CARD_KEY, 1)
     RETURN
 EVT_END()
 
@@ -1049,8 +1080,8 @@ static s32 key_tbl[] = {
 /**
  * Case script on the locked door to Lord Crump: without the Card Key (ITEM_CARD_KEY_0x20) it shows stg7_aji_67;
  * with it, opens the item menu, and if the key is chosen removes it,
- * unlocks the door's entrance and sets the story progress to STORY_STG7_19_THE_DOOR_TO_LORD_CRUMP.
- * Menu argument layout differs between the demos and the final game.
+ * unlocks the door's entrance and sets the story progress to STG7_19_THE_DOOR_TO_LORD_CRUMP.
+ * Menu argument layout differs between the early demos and the final game.
  */
 static EVT_BEGIN(evt_door_msg)
     CALL(evt_mario_key_onoff, 0)
@@ -1069,11 +1100,11 @@ static EVT_BEGIN(evt_door_msg)
         CALL(evt_pouch_remove_item, LW(0), LW(1))
         SET_VALUE(LW(0), STRING("e_bero"))
         CALL_CHILD(bero_case_switch_on)
-        SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG7_19_THE_DOOR_TO_LORD_CRUMP)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_kagi1_mid"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kagi1_aka"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_lights1_m"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_lights1_r"), MAPOBJ_FLAG_HIDE)
+        SET_VALUE(GSW_STORY_PROGRESS, STG7_19_THE_DOOR_TO_LORD_CRUMP)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_kagi1_mid"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kagi1_aka"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_lights1_m"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_lights1_r"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG7_DOOR_UNLOCK1"), LW(0), LW(1), LW(2), 0)
         CALL(evt_exit_case_evt)
@@ -1083,16 +1114,14 @@ static EVT_BEGIN(evt_door_msg)
 EVT_END()
 
 /**
- * Init script of aji_13, the conveyor-belt room:
- * plays BGM_STG7_DUN2, sets up the exits and the moving platforms,
- * places the blue switches (bcv_sw for the conveyor until STORY_STG7_17_CONVEYOR_BELT,
- * sw for the stairs until STORY_STG7_18_OFF_SCREEN_STAIRS), the Card Key, a save block,
- * a recovery block and an Ultra Shroom, and locks the exit e_bero
- * until STORY_STG7_19_THE_DOOR_TO_LORD_CRUMP (the key door A_kagi1, evt_door_msg).
+ * Map init of aji_13 (relSetEvtAddr in aji.c): BGM_STG7_DUN2 / ENV_STG7_AJI7 (JP and later reverb mode 1), entrances,
+ * shikake_init, the hikou1 harbor; before STG7_17 the conveyor switch (evt_bcv_sw), else the running conveyor, with the
+ * panels to match; the card key, before STG7_18 the stairs switch (stairs hidden), before STG7_19 the locked e_bero
+ * door, save and recovery blocks, an Ultra Shroom (JP+ scale 0.6); from STG7_20 the underling and Yux Z NPCs go.
  */
 EVT_BEGIN(aji_13_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG7_DUN2"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG7_AJI7"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG7_DUN2"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG7_AJI7"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 1)
 #endif
@@ -1101,57 +1130,57 @@ EVT_BEGIN(aji_13_init_evt)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(shikake_init)
     CALL(evt_map_entry_airport_harbor, 0, STRING("hikou1"), STRING("A_hikou1"))
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_ami2"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dai5"), MAPOBJ_FLAG_BBOX_CULL)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dai3"), MAPOBJ_FLAG_BBOX_CULL)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG7_17_CONVEYOR_BELT)
-        CALL(evt_mobj_switch_blue, 0, STRING("bcv_sw"), -150, 0, 100, PTR(evt_bcv_sw), GSWF(GSWF_AJI13_CONVEYOR_SWITCH_PRESSED))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_pato1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_1_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_2_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_3_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_4_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_1_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_2_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_3_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_4_2"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_ami2"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dai5"), MAP_OBJ_FLAG_CLIP)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_dai3"), MAP_OBJ_FLAG_CLIP)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG7_17_CONVEYOR_BELT)
+        CALL(evt_mobj_switch_blue, 0, STRING("bcv_sw"), -150, 0, 100, PTR(evt_bcv_sw), GSWF_AJI_13_CONVEYOR_SWITCH_PRESSED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_pato1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_1_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_2_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_3_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_4_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_1_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_2_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_3_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_4_2"), MAP_OBJ_FLAG_HIDDEN)
     ELSE
-        CALL(evt_map_playanim, STRING("kon"), 1, 0)
+        CALL(evt_map_playanim, STRING("kon"), MAP_ANIM_PLAY_LOOP, 0)
         CALL_CHILD(evt_ramp)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_1_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_2_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_3_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_4_1"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_1_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_2_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_3_2"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_4_2"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_1_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_2_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_3_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("meta_4_1"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_1_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_2_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_3_2"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("meta_4_2"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_AJI13_CARD_KEY_TAKEN), 0)
-        CALL(evt_item_entry, STRING("key"), ITEM_CARD_KEY_0x20, -50, 100, 100, ITEM_ENTRY_FIXED, -1, PTR(evt_key_get))
+    IF_INT_EQUAL(GSWF_AJI_13_CARD_KEY, 0)
+        CALL(evt_item_entry, STRING("key"), ITEM_CARD_KEY_0x20, -50, 100, 100, ITEM_TYPE_STILL, -1, PTR(evt_key_get))
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG7_18_OFF_SCREEN_STAIRS)
-        CALL(evt_mobj_switch_blue, 0, STRING("sw"), 650, 200, 100, PTR(evt_sw), GSWF(GSWF_AJI13_STAIRS_SWITCH_PRESSED))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kaidan"), MAPOBJ_FLAG_HIDE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG7_18_OFF_SCREEN_STAIRS)
+        CALL(evt_mobj_switch_blue, 0, STRING("sw"), 650, 200, 100, PTR(evt_sw), GSWF_AJI_13_STAIRS_SWITCH_PRESSED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kaidan"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_kaidan"), 1, 0)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG7_19_THE_DOOR_TO_LORD_CRUMP)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG7_19_THE_DOOR_TO_LORD_CRUMP)
         SET_VALUE(LW(0), STRING("e_bero"))
         CALL_CHILD(bero_case_switch_off)
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_kagi1"), 0, PTR(evt_door_msg), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kagi1_mid"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_lights1_m"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_kagi1"), 0, PTR(evt_door_msg), 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kagi1_mid"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_lights1_m"), MAP_OBJ_FLAG_HIDDEN)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kagi1_aka"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_lights1_r"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_kagi1_aka"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_lights1_r"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
     CALL(evt_mobj_save_blk, STRING("mobj_save"), 200, 60, 100, 0, 0)
     CALL(evt_mobj_recovery_blk, STRING("mobj_recover"), 10, 300, 60, 100, 0, 0)
-    CALL(evt_item_entry, STRING("item00"), ITEM_ULTRA_SHROOM, -670, 320, -450, ITEM_ENTRY_FIXED, GSWF(GSWF_AJI13_ULTRA_SHROOM), 0)
+    CALL(evt_item_entry, STRING("item00"), ITEM_ULTRA_SHROOM, -670, 320, -450, ITEM_TYPE_STILL, GSWF_AJI_13_ULTRA_SHROOM, 0)
 #if VERSION >= VERSION_JP
     CALL(evt_item_set_scale, STRING("item00"), FLOAT(0.5996094f))
 #endif
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG7_20_LORD_CRUMP_DEFEATED)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG7_20_LORD_CRUMP_DEFEATED)
         CALL(evt_npc_check_delete, STRING("軍団ザコ魔法使い"))
         CALL(evt_npc_check_delete, STRING("バリアーンＺ"))
     END_IF
@@ -1162,11 +1191,12 @@ EVT_BEGIN(aji_13_init_evt)
     RETURN
 EVT_END()
 
-#if VERSION >= VERSION_JP
 /**
- * Script function: returns TRUE in args[2] if the hit area named by args[0] is the area named by args[1]
- * or one of its descendants (hitIsGroup), otherwise FALSE (JP and later).
+ * Script helper (JP and later): returns TRUE in args[2] when hit objects args[0] and args[1] exist and the first
+ * belongs to the second's group (hitIsGroup), else FALSE.
  */
+// Descriptive name (not in the symbol maps); placeholder unk_aji_000035a0, JP aji .text+0x34DC. See docs/NAME_PROVENANCE.md.
+#if VERSION >= VERSION_JP
 USER_FUNC(hit_group_chk) {
     EvtWord* args = event->args;
     const char* name1 = (const char*)evtGetValue(event, args[0]);
@@ -1186,15 +1216,15 @@ USER_FUNC(hit_group_chk) {
 /**
  * Script function that keeps the camera following Mario's height:
  * when Mario is in background mode, the camera's Y-follow is off
- * and he is on the ground (in the JP and later releases), it turns Y-follow back on. Blocks forever.
+ * and (in JP and later releases) Mario's airTimer is zero, it turns Y-follow back on. Blocks forever.
  */
 static USER_FUNC(bg_cam_chk) {
-    CameraEntry* camera = camGetPtr(CAMERA_3D);
 
+    CameraEntry* camera = camGetPtr(CAMERA_3D);
 #if VERSION <= VERSION_DEMO_JP
-    if (marioBgmodeChk() && (camera->flags & CAM_FLAG_FOLLOW_Y_OFF)) {
+    if (marioBgmodeChk() && (camera->flags & CAMERA_FLAG_NO_Y_FOLLOW)) {
 #else
-    if (marioBgmodeChk() && (camera->flags & CAM_FLAG_FOLLOW_Y_OFF) && marioGetPtr()->airTimer == 0) {
+    if (marioBgmodeChk() && (camera->flags & CAMERA_FLAG_NO_Y_FOLLOW) && marioGetPtr()->airTimer == 0) {
 #endif
         camFollowYOn();
     }

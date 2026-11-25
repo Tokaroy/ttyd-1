@@ -1,29 +1,47 @@
 // eki_01 (駅, Riverside Station): central hub: paper-fold (origami) switch, stairs, a key lock and six paper panels; doors to eki_00, eki_02 and eki_03.
+
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_cloud.h"
+#include "evt/evt_window.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "mario/mario_pouch.h"
 #include "evt/evt_cam.h"
-#include "evt/evt_cloud.h"
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mario.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_pouch.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_window.h"
-#include "eki.h"
-#include "evt/evt_story.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
 
+static EvtWord e_close[12];
+static EvtWord e_open[12];
+static EvtWord w_close[12];
+static EvtWord w_open[12];
+static EvtWord n_close[12];
+static EvtWord n_open[12];
 static BeroEntry bero_data[4];
+static EvtWord evt_origami[129];
 static s32 key_tbl[2];
-extern EvtWord evt_kami_1[];
-extern EvtWord evt_kami_2[];
-extern EvtWord evt_kami_3[];
-extern EvtWord evt_kami_4[];
-extern EvtWord evt_kami_5[];
-extern EvtWord evt_kami_6[];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord evt_chk[21];
+#else
+static EvtWord evt_chk[23];
+#endif
+
+static EvtWord evt_lock[10];
+static EvtWord evt_kami_1[5];
+static EvtWord evt_kami_2[5];
+static EvtWord evt_kami_3[5];
+static EvtWord evt_kami_4[5];
+static EvtWord evt_kami_5[5];
+static EvtWord evt_kami_6[5];
+EvtWord eki_01_init_evt[223];
 
 /**
  * Door animation callback, closing for the e_bero exit to eki_03:
@@ -146,13 +164,13 @@ static BeroEntry bero_data[] = {
 
 /**
  * Cutscene when Mario unfolds the paper staircase (Riverside Station):
- * the camera moves to the stairs, the "dann" and "n_origami" map objects are hidden
+ * the camera moves to the stairs, the "dann" map object is shown and "n_origami" is hidden
  * and the anm_kaidan animation plays while step sounds (SFX_STG6_PERA_KAI_DOWN1/2) play,
- * and the story moves to STORY_STG6_30_ORIGAMI_STAIRS.
+ * and the story moves to STG6_30_ORIGAMI_STAIRS.
  */
 static EVT_BEGIN(evt_origami)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_cam3d_evt_set, 516, 126, 408, 171, 90, -55, 1000, 11)
+    CALL(evt_cam3d_evt_set, 516, 126, 408, 171, 90, -55, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_mapobj_get_position, STRING("dann"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_PERA_KAI_DOWN1"), LW(0), LW(1), LW(2), 0)
@@ -170,15 +188,15 @@ static EVT_BEGIN(evt_origami)
         WAIT_MS(333)
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG6_PERA_KAI_DOWN2"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dann"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_origami"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dann"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_origami"), MAP_OBJ_FLAG_HIDDEN)
     CALL(evt_hitobj_onoff, STRING("a_oritatami"), 1, 1)
-    CALL(evt_map_playanim, STRING("anm_kaidan"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_kaidan"), MAP_ANIM_PLAY_ONCE, 0)
     CALL(evt_map_checkanim, STRING("anm_kaidan"), LW(0), LW(1))
     WAIT_MS(LW(1))
     WAIT_MS(1000)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_30_ORIGAMI_STAIRS)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_30_ORIGAMI_STAIRS)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_mario_key_onoff, 1)
     RETURN
@@ -210,51 +228,66 @@ EVT_END()
 
 /**
  * Runs when the station door lock is opened with the key:
- * switches on the bero case (the door can be used) and sets the story to STORY_STG6_32_UNLOCKING_THE_DOOR.
+ * switches on the bero case (the door can be used) and sets the story to STG6_32_UNLOCKING_THE_DOOR.
  */
 static EVT_BEGIN(evt_lock)
     SET_VALUE(LW(0), 0)
     CALL_CHILD(bero_case_switch_on)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_32_UNLOCKING_THE_DOOR)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_32_UNLOCKING_THE_DOOR)
     RETURN
 EVT_END()
 
 /**
- * Case event run when Flurrie's breath blows paper panel 1 off the wall:
- * sets GSWF_EKI01_PAPER_1_BLOWN so it stays gone.
+ * End event of paper kami_1 (evt_cloud_ent), run once Flurrie's breath blows it away: sets
+ * GSWF_EKI_01_PAPER_1_BLOWN_AWAY, so the init keeps it hidden.
  */
-EVT_BEGIN(evt_kami_1)
-    SET_VALUE(GSWF(GSWF_EKI01_PAPER_1_BLOWN), 1)
+static EVT_BEGIN(evt_kami_1)
+    SET_VALUE(GSWF_EKI_01_PAPER_1_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
-/** Case event run when Flurrie's breath blows paper panel 2 off the wall: sets GSWF_EKI01_PAPER_2_BLOWN. */
-EVT_BEGIN(evt_kami_2)
-    SET_VALUE(GSWF(GSWF_EKI01_PAPER_2_BLOWN), 1)
+/**
+ * End event of paper kami_2 (evt_cloud_ent), run once Flurrie's breath blows it away: sets
+ * GSWF_EKI_01_PAPER_2_BLOWN_AWAY, so the init keeps it hidden.
+ */
+static EVT_BEGIN(evt_kami_2)
+    SET_VALUE(GSWF_EKI_01_PAPER_2_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
-/** Case event run when Flurrie's breath blows paper panel 3 off the wall: sets GSWF_EKI01_PAPER_3_BLOWN. */
-EVT_BEGIN(evt_kami_3)
-    SET_VALUE(GSWF(GSWF_EKI01_PAPER_3_BLOWN), 1)
+/**
+ * End event of paper kami_3 (evt_cloud_ent), run once Flurrie's breath blows it away: sets
+ * GSWF_EKI_01_PAPER_3_BLOWN_AWAY, so the init keeps it hidden.
+ */
+static EVT_BEGIN(evt_kami_3)
+    SET_VALUE(GSWF_EKI_01_PAPER_3_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
-/** Case event run when Flurrie's breath blows paper panel 4 off the wall: sets GSWF_EKI01_PAPER_4_BLOWN. */
-EVT_BEGIN(evt_kami_4)
-    SET_VALUE(GSWF(GSWF_EKI01_PAPER_4_BLOWN), 1)
+/**
+ * End event of paper kami_4 (evt_cloud_ent), run once Flurrie's breath blows it away: sets
+ * GSWF_EKI_01_PAPER_4_BLOWN_AWAY, so the init keeps it hidden.
+ */
+static EVT_BEGIN(evt_kami_4)
+    SET_VALUE(GSWF_EKI_01_PAPER_4_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
-/** Case event run when Flurrie's breath blows paper panel 5 off the wall: sets GSWF_EKI01_PAPER_5_BLOWN. */
-EVT_BEGIN(evt_kami_5)
-    SET_VALUE(GSWF(GSWF_EKI01_PAPER_5_BLOWN), 1)
+/**
+ * End event of paper kami_5 (evt_cloud_ent), run once Flurrie's breath blows it away: sets
+ * GSWF_EKI_01_PAPER_5_BLOWN_AWAY, so the init keeps it hidden.
+ */
+static EVT_BEGIN(evt_kami_5)
+    SET_VALUE(GSWF_EKI_01_PAPER_5_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
-/** Case event run when Flurrie's breath blows paper panel 6 off the wall: sets GSWF_EKI01_PAPER_6_BLOWN. */
-EVT_BEGIN(evt_kami_6)
-    SET_VALUE(GSWF(GSWF_EKI01_PAPER_6_BLOWN), 1)
+/**
+ * End event of paper kami_6 (evt_cloud_ent), run once Flurrie's breath blows it away: sets
+ * GSWF_EKI_01_PAPER_6_BLOWN_AWAY, so the init keeps it hidden.
+ */
+static EVT_BEGIN(evt_kami_6)
+    SET_VALUE(GSWF_EKI_01_PAPER_6_BLOWN_AWAY, 1)
     RETURN
 EVT_END()
 
@@ -268,59 +301,59 @@ EVT_BEGIN(eki_01_init_evt)
     SET_VALUE(LW(0), PTR(bero_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_EKI2_2"))
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_30_ORIGAMI_STAIRS)
-        CALL(evt_mobj_switch_blue, 0, STRING("origami_sw"), 90, 10, -60, PTR(evt_origami), GSWF(GSWF_EKI01_STAIRS_SWITCH_PRESSED))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dann"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_origami"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_EKI2_2"))
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_30_ORIGAMI_STAIRS)
+        CALL(evt_mobj_switch_blue, 0, STRING("origami_sw"), 90, 10, -60, PTR(evt_origami), GSWF_EKI_01_ORIGAMI_SWITCH_PRESSED)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("dann"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("n_origami"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_oritatami"), 1, 0)
     ELSE
-        CALL(evt_map_playanim, STRING("anm_kaidan"), 2, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dann"), MAPOBJ_FLAG_HIDE)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_origami"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_map_playanim, STRING("anm_kaidan"), MAP_ANIM_PLAY_AT_END, 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("dann"), MAP_OBJ_FLAG_HIDDEN)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("n_origami"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_oritatami"), 1, 1)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_32_UNLOCKING_THE_DOOR)
-        CALL(evt_mobj_lock, STRING("lock"), ITEM_STATION_KEY_0x19, 394, 10, 0, -80, PTR(evt_chk), PTR(evt_lock), GSWF(GSWF_EKI01_DOOR_UNLOCKED))
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_32_UNLOCKING_THE_DOOR)
+        CALL(evt_mobj_lock, STRING("lock"), 25, 394, 10, 0, -80, PTR(evt_chk), PTR(evt_lock), GSWF_EKI_01_DOOR_UNLOCKED)
         SET_VALUE(LW(0), 0)
         CALL_CHILD(bero_case_switch_off)
     END_IF
     CALL(evt_cloud_init)
-    IF_INT_EQUAL(GSWF(GSWF_EKI01_PAPER_1_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_EKI_01_PAPER_1_BLOWN_AWAY, 0)
         CALL(evt_cloud_ent, 0, STRING("kami_1"), STRING("a_kami_1"), PTR(evt_kami_1))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_1"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_1"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_kami_1"), 1, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_EKI01_PAPER_2_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_EKI_01_PAPER_2_BLOWN_AWAY, 0)
         CALL(evt_cloud_ent, 0, STRING("kami_2"), STRING("a_kami_2"), PTR(evt_kami_2))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_2"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_2"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_kami_2"), 1, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_EKI01_PAPER_3_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_EKI_01_PAPER_3_BLOWN_AWAY, 0)
         CALL(evt_cloud_ent, 0, STRING("kami_3"), STRING("a_kami_3"), PTR(evt_kami_3))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_3"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_3"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_kami_3"), 1, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_EKI01_PAPER_4_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_EKI_01_PAPER_4_BLOWN_AWAY, 0)
         CALL(evt_cloud_ent, 0, STRING("kami_4"), STRING("a_kami_4"), PTR(evt_kami_4))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_4"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_4"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_kami_4"), 1, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_EKI01_PAPER_5_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_EKI_01_PAPER_5_BLOWN_AWAY, 0)
         CALL(evt_cloud_ent, 0, STRING("kami_5"), STRING("a_kami_5"), PTR(evt_kami_5))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_5"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_5"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_kami_5"), 1, 0)
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_EKI01_PAPER_6_BLOWN), 0)
+    IF_INT_EQUAL(GSWF_EKI_01_PAPER_6_BLOWN_AWAY, 0)
         CALL(evt_cloud_ent, 0, STRING("kami_6"), STRING("a_kami_6"), PTR(evt_kami_6))
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_6"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kami_6"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("a_kami_6"), 1, 0)
     END_IF
     RETURN

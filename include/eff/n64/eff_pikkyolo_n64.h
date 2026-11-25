@@ -1,4 +1,5 @@
 // eff_pikkyolo_n64.c: pikkyolo effect entry (effPikkyoloN64Entry).
+
 #pragma once
 
 #include <dolphin/types.h>

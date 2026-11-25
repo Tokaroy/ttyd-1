@@ -1,4 +1,5 @@
 // Action command help text: displays the short on-screen hint that explains the current action command.
+
 #include "battle/battle_ac_help.h"
 #include "battle/battle.h"
 #include "battle/battle_audience.h"
@@ -6,16 +7,18 @@
 #include "driver/msgdrv.h"
 #include "driver/windowdrv.h"
 #include "manager/fontmgr.h"
+
 /** Sets the message id of the action-command hint box shown above the stage (the weapon's acHelpMsg). */
 void BattleAcHelpSetHelp(const char* msg) {
-    _battleWorkPointer->acHelpMsg = msg;
+    _battleWorkPointer->acHelp.msg = msg;
 }
+
 /**
  * Sets how the action-command hint is drawn: 0 hides it, 1 draws it half transparent, 2 fully opaque.
  * The audience window is only allowed while the hint is hidden.
  */
 void BattleAcHelpSetDispType(s32 type) {
-    _battleWorkPointer->acHelpDispType = type;
+    _battleWorkPointer->acHelp.dispType = type;
     switch (type) {
         case 0:
             BattleAudience_WinSetActive(TRUE);
@@ -25,21 +28,24 @@ void BattleAcHelpSetDispType(s32 type) {
             break;
     }
 }
-/** Empty in the retail games; called once from battle setup. */
+
+/** Empty in every version; called once from battle setup. */
 void BattleAcHelpInit(void) {
-    // stubbed in retail
+    // stubbed in every version
 }
+
 static void _ac_help_disp(CameraId cameraId, void* param);
+
 /** Per-frame battle hook: queues the hint box draw when a hint is set and shown, except during a First Strike. */
 void BattleAcHelpMain(void) {
     BattleWork* wp = _battleWorkPointer;
-    s32* type = &wp->acHelpDispType;
-    if (wp->acHelpMsg && *type && !(wp->flags & BATTLE_FLAG_FIRST_ATTACK)) {
-        dispEntry(CAMERA_2D, 498.0f, 1, _ac_help_disp, NULL);
-    }
-    if (_ac_help_disp) {
+    BattleAcHelpWork* help = &wp->acHelp;
+
+    if (help->msg && help->dispType && !(wp->flags & BATTLE_FLAG_FIRST_ATTACK)) {
+        dispEntry(CAMERA_2D, 498.0f, DISP_MODE_ALPHA_TEST, _ac_help_disp, NULL);
     }
 }
+
 /**
  * Draws the action-command hint: a white framed window near the top of the screen sized to the message,
  * with the text centred inside. Falls back to a "message not found" string when the id is missing.
@@ -52,21 +58,23 @@ static void _ac_help_disp(CameraId cameraId, void* param) {
     u8 alpha;
     f32 x;
     f32 y;
-    const char** help = &wp->acHelpMsg;
+    BattleAcHelpWork* help = &wp->acHelp;
+
     alpha = 0xFF;
-    if (wp->acHelpDispType == 1) {
+    if (help->dispType == AC_HELP_DISP_XLU) {
         alpha = 0x80;
     }
-    msgs[0] = msgSearch(*help);
+    msgs[0] = msgSearch(help->msg);
     if (!msgs[0]) {
-        msgs[0] = (0, "めっせーじがみつかりません");
+        msgs[0] = "めっせーじがみつかりません";
     }
     msgs[1] = msgs[0];
     width = FontGetMessageWidthLine(msgs[1], &lines);
     lines++;
     y = 0.0f;
-    windowDispGX_Waku_col(0, (GXColor){0xFF, 0xFF, 0xFF, alpha}, (x = y - (width / 2)) - 20.0f, (-145.0f) + ((lines - 1) * 29), width + 40, (lines * 29) + 1, 10.0f);
+
+    windowDispGX_Waku_col((x = y - (width / 2)) - 20.0f, (-145.0f) + ((lines - 1) * 29), width + 40, (lines * 29) + 1, 10.0f, 0, (GXColor){0xFF, 0xFF, 0xFF, alpha});
     y = -148.0f;
     FontDrawStart_alpha(alpha);
-    FontDrawMessage(x, ((s32)y) + ((lines - 1) * 29), msgs[1]);
+    FontDrawMessage(x, (s32)y + ((lines - 1) * 29), msgs[1]);
 }

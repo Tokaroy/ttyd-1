@@ -1,24 +1,24 @@
-// party_move.c: partner movement and the footmark trail (PartyFootmark) the followers walk along.
 #pragma once
 
+#include "version.h"
 #include "party.h"
 #include "dolphin/types.h"
+#include <dolphin/mtx.h>
 
-// One point of the trail a partner follows (a ring of 80 per follower, written each frame Mario moves).
-// PartyFootmark.flags bits; retail partyPutFootmark takes the same bits as its argument.
-enum PartyFootmarkFlag {
-    PARTY_FOOTMARK_JUMP = 0x1,          // the leader was jumping here
-    PARTY_FOOTMARK_DEMO_ARG_SLIT = 0x2, // demo: partyPutFootmark's argument bit for PARTY_FOOTMARK_SLIT
-    PARTY_FOOTMARK_SLIT = 0x4,          // Mario was passing through a paper slit here (marioChkSlitThrouh)
-};
+struct HitEntry;
 
-typedef struct PartyFootmark {
-    u8 flags;  // 0x0, PartyFootmarkFlag bits
-    u8 pad[3]; // 0x1
-    Vec pos;   // 0x4
-} PartyFootmark;
+// Footmark.flag bits, set by partyRecordFootmark from the leader it follows
+#if VERSION <= VERSION_DEMO_JP
+#define PARTY_FOOTMARK_DEMO_ARG_SLIT 2 // demo: partyRecordFootmarkSub's argument bit for FOOTMARK_FLAG_SLIT
+#endif
 
-PartyFootmark* partyGetFootmarkPtr(s32 id);
+#define FOOTMARK_FLAG_JUMP 1 // the leader was jumping
+#define FOOTMARK_FLAG_SLIT 4 // Mario was passing through a slit (marioChkSlitThrouh)
+
+typedef struct Footmark {
+    u8 flag; // 0x0
+    Vec pos; // 0x4
+} Footmark;
 
 void partyChgMot(PartyEntry* party, s32 mot);
 void partyClearFootmark(void);
@@ -33,43 +33,53 @@ void party_move_mode_behind_mario(PartyEntry* party);
 void party_move_mode_beside_mario(PartyEntry* party);
 void party_move_mode_stay(PartyEntry* party);
 void party_move_mode_walk(PartyEntry* party);
+void party_move_mode_stay_post(PartyEntry* party);
+void party_move_mode_walk_post(PartyEntry* party);
+void party_move_mode_behind_mario_post(PartyEntry* party);
+void party_move_mode_beside_mario_post(PartyEntry* party);
+void party_move_mode_slitwall(PartyEntry* party);
 
-struct HitEntry;
-
+void partyLandonSe(PartyEntry* party);
+void partyChgMoveMode(PartyEntry* party, s32 mode);
+void partyChgStayPose(PartyEntry* party);
+void partyMoveAnime(PartyEntry* party, f32 spd);
+void partyChkWall(PartyEntry* party);
+void partyClearFootmark2(void);
+void partyFlyMain(PartyEntry* party);
+void partyForceWalk(PartyEntry* party);
+Footmark* partyGetFootmarkPtr(s32 id);
 s32 partyGetFootmarkReadId(s32 id);
 s32 partyGetFootmarkWriteId(s32 id);
-s32 partyGetFootmarkId(PartyEntry* party);
-f32 partyGetTargetDir(s32 id, f32 x, f32 z);
-f32 partyGetTargetDist(s32 id, f32 x, f32 z);
-f32 partyGetTargetDist3D(s32 id, Vec* p);
-f32 partyGetTargetDistY(s32 id, f32 y);
-f32 partyGetTargetMovespd2(PartyEntry* party);
-void partyNextReadId(s32 id);
 void partyGetReadId(s32 id, f32* x, f32* y, f32* z);
 void partyGetReadId2(s32 id, Vec* pos);
-void partyClearFootmark2(void);
 void L_getTargetPos(s32 id, Vec* pos);
+f32 partyGetTargetDir(s32 id, f32 x, f32 z);
+f32 partyGetTargetDist(s32 id, f32 x, f32 z);
+f32 partyGetTargetDistY(s32 id, f32 y);
 f32 partyGetTargetMovespd(s32 id);
-f32 partySetTargetSpd(PartyEntry* party, f32 spd);
-f32 partyForceSetSpd(PartyEntry* party, f32 spd);
-void N_partyPlaySfxPartyLanding1(PartyEntry* party);
-void partyChgStayPose(PartyEntry* party);
-void partySetDispDirToMario(PartyEntry* party);
-BOOL partyChkNoStandMobj(struct HitEntry* hit);
-void partyChgMoveMode(PartyEntry* party, s32 mode);
-void partySetDir(PartyEntry* party, f32 x, f32 z);
-void partyMoveBehindMario(PartyEntry* party, s32 arg);
-void partyMoveBehindMario3(PartyEntry* party, s32 arg, f32 dir);
-void partyMoveBesideMario(PartyEntry* party, s32 arg);
+f32 partyGetTargetMovespd2(PartyEntry* party);
 void partyMoveCheckWall(PartyEntry* party);
-void partyChkWall(PartyEntry* party);
 void partyMoveFlyInit(PartyEntry* party, s32 arg);
-void partyFlyMain(PartyEntry* party);
-BOOL partyGetAppearPos5(PartyEntry* party, struct HitEntry* hit, Vec* out);
-s32 partyMarioHosei(PartyEntry* party);
-
+void partyNextReadId(s32 id);
+void partySetDir(PartyEntry* party, f32 x, f32 z);
+void partySetDispDirToMario(PartyEntry* party);
+void party_move_mode_wait(PartyEntry* party);
+f32 partyForceSetSpd(PartyEntry* party, f32 spd);
+void partyMoveBehindMario(PartyEntry* party, s32 arg);
+void partyMoveBesideMario(PartyEntry* party, s32 arg);
+f32 partySetTargetSpd(PartyEntry* party, f32 spd);
+BOOL partyChkNoStandMobj(struct HitEntry* hit);
 BOOL partyGetAppearPos(PartyEntry* party, Vec* out);
+BOOL partyGetAppearPos2(PartyEntry* party, Vec* out);
 BOOL partyGetAppearPos3(PartyEntry* party, Vec* out);
 BOOL partyGetAppearPos4(PartyEntry* party, Vec* out);
-void partyWalkInit(PartyEntry* party);
+BOOL partyGetFrontPos(PartyEntry* party, struct HitEntry* hit, Vec* out);
+f32 partyGetTargetDist3D(s32 id, Vec* p);
+
 f32 partyUpdMoveSpd(PartyEntry* party);
+
+void partyMoveBehindMario3(PartyEntry* party, s32 arg, f32 dir);
+void party_set_behind_dir(PartyEntry* party, f32 dir);
+
+s32 partyGetFootmarkId(PartyEntry* party);
+void partyRecordFootmarkSub(s32 id, Vec pos, u32 flags);

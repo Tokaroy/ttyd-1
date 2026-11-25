@@ -76,6 +76,8 @@ u8 __gUnknown800030E3 AT_ADDRESS(OS_BASE_CACHED | 0x30E3);
 #define OS_CORE_CLOCK  __OSCoreClock
 #define OS_TIMER_CLOCK (OS_BUS_CLOCK/4)
 
+#define OSDiffTick(tick1, tick0)     ((s32)(tick1) - (s32)(tick0))
+
 #define OSTicksToSeconds(ticks)      ((ticks)   / (OS_TIMER_CLOCK))
 #define OSTicksToMilliseconds(ticks) ((ticks)   / (OS_TIMER_CLOCK/1000))
 #define OSTicksToMicroseconds(ticks) ((ticks) * 8 / (OS_TIMER_CLOCK/125000))
@@ -231,7 +233,7 @@ extern int __OSInIPL;
 #define ASSERTMSGLINE(line, cond, msg) \
     ((cond) || (OSPanic(__FILE__, line, msg), 0))
 
-// This is dumb but we dont have a Metrowerks way to do variadic macros in the macro to make this done in a not scrubby way.
+// MWCC has no variadic macros, so there is one assert macro per argument count.
 #define ASSERTMSG1LINE(line, cond, msg, arg1) \
     ((cond) || (OSPanic(__FILE__, line, msg, arg1), 0))
     

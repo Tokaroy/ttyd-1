@@ -1,6 +1,7 @@
-// Chorobon gundan (Fuzzy Horde) and the gold Chorobon that summons it: shared by the hei units and
-// their tst copies.
 #pragma once
+
+// Chorobon gundan (Fuzzy Horde) and the gold Chorobon that summons it: shared by the two units and their copies
+// in the hei and tst RELs.
 
 #include "battle/battle_database_common.h"
 #include "battle/battle_unit.h"
@@ -22,11 +23,7 @@ typedef struct Chorogun {
     Vec target; // 0x24
 } Chorogun;
 
-extern Chorogun* chorogun;
-extern s32 chorogun_targetId;
-
 extern BattleUnitKind unit_chorobon_gundan;
-extern BattleWeapon weapon_chorobon_gundan_attack;
 
 // unit_chorobon_gundan.c
 USER_FUNC(chorogun_appear);

@@ -23,7 +23,7 @@ force_active:
 - shadowSetVolumeDecay
 - evt_map_replace_mapobj
 - animPoseGetGroupName
-- L_animPoseWorldPositionEvalOff
+- animPoseWorldPositionEvalOff
 - animPosePaperPeraOff
 - fbatHitCheckAll
 - fbatSetAttackAnnounceEnable
@@ -39,10 +39,10 @@ force_active:
 - evt_mobj_set_z_position
 - evt_mobj_set_x_position
 - evt_set_case_wrk
-- N_evt_img_set_z
+- evt_img_set_z
 - evt_img_set_color
 - evt_hitobj_name_callback
-- L_evt_hitobj_flag_onoff
+- evt_hitobj_flag_onoff
 - marioChgRollMotion
 - marioRollFixOn
 - marioShipForceStop
@@ -70,7 +70,7 @@ force_active:
 - evt_msg_pri
 - evt_msg_print_party_add
 - evt_ext_reset
-- L_evt_mario_keyon_wait
+- evt_mario_keyon_wait
 - evt_mario_get_name_hitobj_push
 - evt_mario_get_name_hitobj_under
 - evt_mario_dump_item
@@ -87,12 +87,12 @@ force_active:
 - evt_mario_balloon_tenten
 - evt_party_cloud_breathout
 - evt_party_yoshi_fly
-- L_evt_party_vivian_tail
+- evt_party_vivian_tail
 - evt_party_vivian_unhold
 - evt_party_vivian_hold
 - evt_party_thunders_use
 - evt_party_get_status
-- L_evt_party_dokan
+- evt_party_dokan
 - evt_party_trigflg_onoff
 - evt_pouch_set_yoshiname
 - evt_pouch_party_left

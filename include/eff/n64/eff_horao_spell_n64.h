@@ -1,4 +1,3 @@
-// eff_horao_spell_n64.c: Paper Mario 64 HoraoSpell effect entry (effHoraoSpellN64Entry).
 #pragma once
 
 #include "driver/effdrv.h"

@@ -2,27 +2,21 @@
 #define ULONG_MAX 0xFFFFFFFFUL
 #define ULLONG_MAX 0xFFFFFFFFFFFFFFFFULL
 
-extern unsigned char __ctype_map[];
-extern unsigned char __upper_map[];
+#include "ctype_map.h"
+#include "strtoul.h"
 
-#define __control_char 0x01
-#define __motion_char 0x02
-#define __space_char 0x04
-#define __punctuation 0x08
-#define __digit 0x10
-#define __hex_digit 0x20
-#define __lower_case 0x40
-#define __upper_case 0x80
+#define LONG_MAX 0x7FFFFFFFL
+#define LONG_MIN (-LONG_MAX - 1)
+#define LLONG_MAX 0x7FFFFFFFFFFFFFFFLL
+#define LLONG_MIN (-LLONG_MAX - 1)
+#define ERANGE 34
 
-#define __letter (__lower_case | __upper_case)
-#define __whitespace (__motion_char | __space_char)
+extern int errno;
 
 #define isalpha(c) ((int)(__ctype_map[(unsigned char)(c)] & __letter))
 #define isdigit(c) ((int)(__ctype_map[(unsigned char)(c)] & __digit))
 #define isspace(c) ((int)(__ctype_map[(unsigned char)(c)] & __whitespace))
 #define toupper(c) ((c == EOF) ? EOF : ((int)__upper_map[(unsigned char)(c)]))
-
-enum __ReadProcActions { __GetAChar, __UngetAChar, __TestForError };
 
 enum scan_states {
     start = 0x01,
@@ -39,6 +33,129 @@ enum scan_states {
 #define fetch() (count++, (*ReadProc)(ReadProcArg, 0, __GetAChar))
 #define unfetch(c) (*ReadProc)(ReadProcArg, c, __UngetAChar)
 
+unsigned long __strtoul(int base, int max_width, int (*ReadProc)(void*, int, int), void* ReadProcArg,
+                        int* chars_scanned, int* negative, int* overflow) {
+    int scan_state = start;
+    int count = 0;
+    int spaces = 0;
+    unsigned long value = 0;
+    unsigned long value_max = 0;
+    int c;
+
+    *negative = *overflow = 0;
+
+    // BUG: as in __strtoull, c is read unassigned on an invalid base or width
+    if (base < 0 || base == 1 || base > 36 || max_width < 1)
+        scan_state = failure;
+    else
+        c = fetch();
+
+    if (base != 0)
+        value_max = ULONG_MAX / base;
+
+    while (count <= max_width && c != EOF && !final_state(scan_state)) {
+        switch (scan_state) {
+        case start:
+            if (isspace(c)) {
+                c = fetch();
+                count--;
+                spaces++;
+                break;
+            }
+
+            if (c == '+')
+                c = fetch();
+            else if (c == '-') {
+                c = fetch();
+                *negative = 1;
+            }
+
+            scan_state = check_for_zero;
+            break;
+
+        case check_for_zero:
+            if (base == 0 || base == 16) {
+                if (c == '0') {
+                    scan_state = leading_zero;
+                    c = fetch();
+                    break;
+                }
+            }
+
+            scan_state = need_digit;
+            break;
+
+        case leading_zero:
+            if (c == 'X' || c == 'x') {
+                base = 16;
+                scan_state = need_digit;
+                c = fetch();
+                break;
+            }
+
+            if (base == 0)
+                base = 8;
+
+            scan_state = digit_loop;
+            break;
+
+        case need_digit:
+        case digit_loop:
+            if (base == 0)
+                base = 10;
+
+            if (!value_max)
+                value_max = ULONG_MAX / base;
+
+            if (isdigit(c)) {
+                if ((c -= '0') >= base) {
+                    if (scan_state == digit_loop)
+                        scan_state = finished;
+                    else
+                        scan_state = failure;
+
+                    c += '0';
+                    break;
+                }
+            } else if (!isalpha(c) || (toupper(c) - 'A' + 10) >= base) {
+                if (scan_state == digit_loop)
+                    scan_state = finished;
+                else
+                    scan_state = failure;
+
+                break;
+            } else
+                c = toupper(c) - 'A' + 10;
+
+            if (value > value_max)
+                *overflow = 1;
+
+            value *= base;
+
+            if (c > (ULONG_MAX - value))
+                *overflow = 1;
+
+            value += c;
+            scan_state = digit_loop;
+            c = fetch();
+            break;
+        }
+    }
+
+    if (!success(scan_state)) {
+        count = value = 0;
+        *chars_scanned = 0;
+    } else {
+        count--;
+        *chars_scanned = count + spaces;
+    }
+
+    unfetch(c);
+
+    return value;
+}
+
+/* A twin of __strtoul for unsigned long long values. */
 unsigned long long __strtoull(int base, int max_width, int (*ReadProc)(void*, int, int), void* ReadProcArg,
                               int* chars_scanned, int* negative, int* overflow) {
     int scan_state = start;
@@ -50,6 +167,7 @@ unsigned long long __strtoull(int base, int max_width, int (*ReadProc)(void*, in
 
     *negative = *overflow = 0;
 
+    // BUG: on an invalid base or width, c is never assigned, but the loop test and the final unfetch(c) read it
     if (base < 0 || base == 1 || base > 36 || max_width < 1)
         scan_state = failure;
     else
@@ -159,123 +277,100 @@ unsigned long long __strtoull(int base, int max_width, int (*ReadProc)(void*, in
     return value;
 }
 
-unsigned long __strtoul(int base, int max_width, int (*ReadProc)(void*, int, int), void* ReadProcArg,
-                        int* chars_scanned, int* negative, int* overflow) {
-    int scan_state = start;
-    int count = 0;
-    int spaces = 0;
-    unsigned long value = 0;
-    unsigned long value_max = 0;
-    int c;
+unsigned long strtoul(const char* str, char** end, int base) {
+    unsigned long value;
+    int count, negative, overflow;
+    __InStr isc;
 
-    *negative = *overflow = 0;
+    isc.str = (char*)str;
+    isc.eos = 0;
 
-    if (base < 0 || base == 1 || base > 36 || max_width < 1)
-        scan_state = failure;
-    else
-        c = fetch();
+    value = __strtoul(base, 0x7FFFFFFF, &__StringRead, (void*)&isc, &count, &negative, &overflow);
 
-    if (base != 0)
-        value_max = ULONG_MAX / base;
+    if (end)
+        *end = (char*)str + count;
 
-    while (count <= max_width && c != EOF && !final_state(scan_state)) {
-        switch (scan_state) {
-        case start:
-            if (isspace(c)) {
-                c = fetch();
-                count--;
-                spaces++;
-                break;
-            }
-
-            if (c == '+')
-                c = fetch();
-            else if (c == '-') {
-                c = fetch();
-                *negative = 1;
-            }
-
-            scan_state = check_for_zero;
-            break;
-
-        case check_for_zero:
-            if (base == 0 || base == 16) {
-                if (c == '0') {
-                    scan_state = leading_zero;
-                    c = fetch();
-                    break;
-                }
-            }
-
-            scan_state = need_digit;
-            break;
-
-        case leading_zero:
-            if (c == 'X' || c == 'x') {
-                base = 16;
-                scan_state = need_digit;
-                c = fetch();
-                break;
-            }
-
-            if (base == 0)
-                base = 8;
-
-            scan_state = digit_loop;
-            break;
-
-        case need_digit:
-        case digit_loop:
-            if (base == 0)
-                base = 10;
-
-            if (!value_max)
-                value_max = ULONG_MAX / base;
-
-            if (isdigit(c)) {
-                if ((c -= '0') >= base) {
-                    if (scan_state == digit_loop)
-                        scan_state = finished;
-                    else
-                        scan_state = failure;
-
-                    c += '0';
-                    break;
-                }
-            } else if (!isalpha(c) || (toupper(c) - 'A' + 10) >= base) {
-                if (scan_state == digit_loop)
-                    scan_state = finished;
-                else
-                    scan_state = failure;
-
-                break;
-            } else
-                c = toupper(c) - 'A' + 10;
-
-            if (value > value_max)
-                *overflow = 1;
-
-            value *= base;
-
-            if (c > (ULONG_MAX - value))
-                *overflow = 1;
-
-            value += c;
-            scan_state = digit_loop;
-            c = fetch();
-            break;
-        }
-    }
-
-    if (!success(scan_state)) {
-        count = value = 0;
-        *chars_scanned = 0;
-    } else {
-        count--;
-        *chars_scanned = count + spaces;
-    }
-
-    unfetch(c);
+    if (overflow) {
+        value = ULONG_MAX;
+        errno = ERANGE;
+    } else if (negative)
+        value = -value;
 
     return value;
+}
+
+unsigned long long strtoull(const char* str, char** end, int base) {
+    unsigned long long value;
+    int count, negative, overflow;
+    __InStr isc;
+
+    isc.str = (char*)str;
+    isc.eos = 0;
+
+    value = __strtoull(base, 0x7FFFFFFF, &__StringRead, (void*)&isc, &count, &negative, &overflow);
+
+    if (end)
+        *end = (char*)str + count;
+
+    if (overflow) {
+        value = ULLONG_MAX;
+        errno = ERANGE;
+    } else if (negative)
+        value = -value;
+
+    return value;
+}
+
+long strtol(const char* str, char** end, int base) {
+    unsigned long uvalue;
+    long svalue;
+    int count, negative, overflow;
+    __InStr isc;
+
+    isc.str = (char*)str;
+    isc.eos = 0;
+
+    uvalue = __strtoul(base, 0x7FFFFFFF, &__StringRead, (void*)&isc, &count, &negative, &overflow);
+
+    if (end)
+        *end = (char*)str + count;
+
+    if (overflow || (!negative && uvalue > LONG_MAX) || (negative && uvalue > -LONG_MIN)) {
+        svalue = (negative ? -LONG_MIN : LONG_MAX);
+        errno = ERANGE;
+    } else
+        svalue = (negative ? (long)-uvalue : (long)uvalue);
+
+    return svalue;
+}
+
+long long strtoll(const char* str, char** end, int base) {
+    unsigned long long uvalue;
+    long long svalue;
+    int count, negative, overflow;
+    __InStr isc;
+
+    isc.str = (char*)str;
+    isc.eos = 0;
+
+    uvalue = __strtoull(base, 0x7FFFFFFF, &__StringRead, (void*)&isc, &count, &negative, &overflow);
+
+    if (end)
+        *end = (char*)str + count;
+
+    if (overflow || (!negative && uvalue > LLONG_MAX) || (negative && uvalue > -LLONG_MIN)) {
+        svalue = (negative ? -LLONG_MIN : LLONG_MAX);
+        errno = ERANGE;
+    } else
+        svalue = (negative ? -uvalue : uvalue);
+
+    return svalue;
+}
+
+int atoi(const char* str) {
+    return strtol(str, 0, 10);
+}
+
+long atol(const char* str) {
+    return strtol(str, 0, 10);
 }

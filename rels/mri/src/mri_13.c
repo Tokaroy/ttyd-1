@@ -1,8 +1,29 @@
 // mri_13 (巨木の中, The Great Tree): the room with the moving floor set off by the counter switches
 // (yuka_event), a Puni-ball pad, a save block and a recovery block.
+
+#include "version.h"
 #include "mri_puni.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_mobj.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "driver/npcdrv.h"
+#include "driver/mapdrv.h"
+#include "mario/mario_pouch.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "driver/hitdrv.h"
 #include "dolphin/mtx.h"
@@ -11,35 +32,33 @@
 #include "mri.h"
 #include "data_tables.h"
 #include "manager/evtmgr_cmd.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
-#include "driver/mapdrv.h"
-#include "driver/camdrv.h"
 
+static USER_FUNC(evt_puni_force_pose);
 static USER_FUNC(yuka_fall_check);
 
-BeroEntry bero_dai3_kanbu[1];
+static BeroEntry bero_dai3_kanbu[1];
 static BeroEntry bero_entry_data[3];
-extern EvtWord yuka_slot[];
-extern EvtWord yuka_shake[];
-extern EvtWord yuka_shake2[];
+static EvtWord punipuni_mario_halt[33];
+static EvtWord punipuni_ball00_init[54];
+static EvtWord punipuni_ball00[68];
+static EvtWord yuka_init[48];
+static EvtWord yuka_slot[113];
+static EvtWord yuka_shake[11];
+static EvtWord yuka_shake2[68];
+static EvtWord yuka_check[133];
+
+#if VERSION <= VERSION_DEMO_JP
 extern EvtWord yuka_event[];
+#else
+EvtWord yuka_event[421];
+#endif
+
+static EvtWord evt_f1_ueki_01[20];
 static KusaAccess ueki_access_data[7];
+EvtWord mri_13_init_evt[205];
 
 /** Exit of mri_13: east road e_bero to mri_14. */
-BeroEntry bero_dai3_kanbu[] = {
+static BeroEntry bero_dai3_kanbu[] = {
     {
         "e_bero", // hitName
         0, 0, // type..sfxId
@@ -120,22 +139,22 @@ EVT_END()
 /**
  * Init script of the orb pedestal in the water room: runs the shared Puni-switch setup;
  * if the orb is on the pedestal it is placed at the pedestal height,
- * which drops by 309 units once the water has been drained (STORY_STG2_21_06_WATER_SWITCH).
+ * which drops by 309 units once the water has been drained (STG2_21_06_WATER_SWITCH).
  * Otherwise the beam of light is hidden. The target point also follows the water level.
  */
 static EVT_BEGIN(punipuni_ball00_init)
     CALL_CHILD(mri_punipuni_setup)
-    IF_INT_EQUAL(GSWF(GSWF_MRI13_ORB_ON_PEDESTAL), 1)
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_06_WATER_SWITCH)
+    IF_INT_EQUAL(GSWF_MRI_13_PUNI_ORB_PLACED, 1)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG2_21_06_WATER_SWITCH)
             CALL(evt_item_set_position, LW(10), -55, 30, 0)
         ELSE
             CALL(evt_item_set_position, LW(10), -55, -279, 0)
         END_IF
         CALL(evt_target_flag_onoff, LW(11), 0, 3)
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAP_OBJ_FLAG_HIDDEN)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_06_WATER_SWITCH)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG2_21_06_WATER_SWITCH)
         CALL(evt_target_set_position, LW(11), -55, 0, 50)
     ELSE
         CALL(evt_target_set_position, LW(11), -55, -309, 50)
@@ -144,31 +163,31 @@ static EVT_BEGIN(punipuni_ball00_init)
 EVT_END()
 
 /**
- * Hit/talk script of the orb pedestal in the water room:
+ * A-button script of the orb pedestal in the water room:
  * if empty, Mario picks an item to put on it (cancel ends the script)
  * and the orb is placed at the current pedestal height with the beam of light; if full, Mario takes it back.
  * GF(0) is set while the orb is set down. Mario is frozen during this.
  */
 static EVT_BEGIN(punipuni_ball00)
     CALL(evt_mario_key_onoff, 0)
-    IF_INT_EQUAL(GSWF(GSWF_MRI13_ORB_ON_PEDESTAL), 0)
+    IF_INT_EQUAL(GSWF_MRI_13_PUNI_ORB_PLACED, 0)
         CALL_CHILD(mri_punipuni_itemselect)
         IF_INT_EQUAL(LW(1), 0)
             GOTO(100)
         END_IF
-        SET_VALUE(GSWF(GSWF_MRI13_ORB_ON_PEDESTAL), 1)
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_06_WATER_SWITCH)
+        SET_VALUE(GSWF_MRI_13_PUNI_ORB_PLACED, 1)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG2_21_06_WATER_SWITCH)
             CALL(evt_item_set_position, LW(10), -55, 30, 0)
         ELSE
             CALL(evt_item_set_position, LW(10), -55, -279, 0)
         END_IF
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_sui_hikari"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_sui_hikari"), MAP_OBJ_FLAG_HIDDEN)
         SET_VALUE(GF(0), 1)
         CALL_CHILD(mri_punipuni_itemset)
         SET_VALUE(GF(0), 0)
     ELSE
-        SET_VALUE(GSWF(GSWF_MRI13_ORB_ON_PEDESTAL), 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAPOBJ_FLAG_HIDE)
+        SET_VALUE(GSWF_MRI_13_PUNI_ORB_PLACED, 0)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_hikari"), MAP_OBJ_FLAG_HIDDEN)
         CALL_CHILD(mri_punipuni_itemremove)
     END_IF
     LABEL(100)
@@ -190,18 +209,18 @@ static EVT_BEGIN(yuka_init)
     CALL(evt_mapobj_trans, 1, STRING("S_sui_l"), 0, -309, 0)
     CALL(evt_mapobj_trans, 1, STRING("S_sui_hikari"), 0, -309, 0)
     CALL(evt_hitobj_onoff, STRING("A_sui_l1"), 1, 0)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_kage"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_kage"), MAP_OBJ_FLAG_HIDDEN)
     RETURN
 EVT_END()
 
 /**
  * Runs the three-digit display on the wall of the elevator room:
  * shows the count GW(0) (Punies still needed) with the ones, tens and hundreds drums turned to match,
- * hides the hundreds drum while the count is under 10 and plays a click when the number changes.
+ * shows the S_isk_03_c cover below 10 and hides it at 10 or more, and plays a click when the number changes.
  */
-EVT_BEGIN(yuka_slot)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_isk_02_c"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_isk_03_c"), MAPOBJ_FLAG_HIDE)
+static EVT_BEGIN(yuka_slot)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_isk_02_c"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_isk_03_c"), MAP_OBJ_FLAG_HIDDEN)
     SET_VALUE(LW(13), GW(0))
     LOOP(0)
         SET_VALUE(LW(2), GW(0))
@@ -221,9 +240,9 @@ EVT_BEGIN(yuka_slot)
         CALL(evt_mapobj_rotate, 1, STRING("S_isk_03"), LW(11), 0, 0)
         CALL(evt_mapobj_rotate, 1, STRING("S_isk_04"), LW(12), 0, 0)
         IF_INT_GREATER_OR_EQUAL(GW(0), 10)
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_isk_03_c"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_isk_03_c"), MAP_OBJ_FLAG_HIDDEN)
         ELSE
-            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_isk_03_c"), MAPOBJ_FLAG_HIDE)
+            CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("S_isk_03_c"), MAP_OBJ_FLAG_HIDDEN)
         END_IF
         IF_INT_NOT_EQUAL(GW(0), LW(13))
             CALL(evt_snd_sfxon_3d, STRING("SFX_STG2_SWITCH_COUNTER1"), -150, 0, -20, 0)
@@ -235,8 +254,8 @@ EVT_BEGIN(yuka_slot)
 EVT_END()
 
 /**
- * Drops every active Puni by 3 units per call until it lands on the floor beneath it (uses a downward hit check
- * of 3 units); called while the platform sinks so the Punies follow it down.
+ * Script helper: drops each active Puni in slots 1 to 102 by 3 units, onto the floor when a hit check finds one within
+ * 3 units below.
  */
 static USER_FUNC(yuka_fall_check) {
     s32 i;
@@ -253,8 +272,8 @@ static USER_FUNC(yuka_fall_check) {
 
             dist = 3.0f;
             pos = puni->pos;
-            if (hitCheckFilter(NULL, &hit.x, &hit.y, &hit.z, &dist, &n.x, &n.y, &n.z, pos.x, pos.y, pos.z, dir.x, dir.y,
-                               dir.z)) {
+            if (hitCheckFilter(NULL, pos.x, pos.y, pos.z, dir.x, dir.y, dir.z, &hit.x, &hit.y, &hit.z, &dist, &n.x,
+                               &n.y, &n.z)) {
                 puni->pos = hit;
             } else {
                 PSVECAdd(&puni->pos, &fall, &puni->pos);
@@ -269,16 +288,18 @@ static USER_FUNC(yuka_fall_check) {
  * clears its offsets, spin and velocity so it stands still.
  */
 static USER_FUNC(evt_puni_force_pose) {
-    s32 offset = evtGetValue(event, event->args[0]) * sizeof(PuniData);
-    PuniData* puni = (PuniData*)((u8*)puniGetPunidat() + offset);
+    PuniData* puni = &puniGetPunidat()[evtGetValue(event, event->args[0])];
 
     puni->dispOfs.y = puni->spin = puni->rotOffsetY = 0.0f;
     puni->vel = (Vec){0.0f, 0.0f, 0.0f};
     return EVT_RETURN_DONE;
 }
 
-/** Camera shake while the elevator platform moves (a long shake in the demo builds, five 1-second shakes later). */
-EVT_BEGIN(yuka_shake)
+/**
+ * Camera shake while the elevator platform moves (in the June US demo and the JP demo 1.5-second shakes repeated
+ * until the script is deleted, in later builds five 1-second shakes).
+ */
+static EVT_BEGIN(yuka_shake)
 #if VERSION <= VERSION_DEMO_JP
     LOOP(0)
         CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 1500)
@@ -294,7 +315,7 @@ EVT_END()
  * Fading camera shake for the last part of the elevator descent:
  * a series of shakes that die down over about 10 seconds, ending in a final stronger one.
  */
-EVT_BEGIN(yuka_shake2)
+static EVT_BEGIN(yuka_shake2)
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.009765625f), FLOAT(0.0f), 500)
     CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0087890625f), FLOAT(0.0f), 1000)
@@ -324,9 +345,9 @@ EVT_BEGIN(yuka_shake2)
 EVT_END()
 
 /**
- * Counts every frame the Punies standing on the platform (alive, not lost, not in mode 13,
+ * Counts every frame the active Punies on the platform, excluding Jabble and mode 13,
  * within the platform area and height band; the band moves down by 309 after the water has been drained)
- * and drives the platform with that weight.
+ * and sets GW(0) to 101 minus that count, clamped from 0 to 101.
  */
 static EVT_BEGIN(yuka_check)
     LOOP(0)
@@ -335,14 +356,14 @@ static EVT_BEGIN(yuka_check)
         LOOP(0)
             CALL(evt_puni_get_flag, LW(10), LW(0))
             CALL(evt_puni_get_flag, LW(10), LW(1))
-            AND(LW(0), 1024)
-            AND(LW(1), 128)
+            AND(LW(0), PUNI_FLAG_ACTIVE)
+            AND(LW(1), PUNI_FLAG_NPC_CHIBI_TOGE)
             CALL(evt_puni_get_mode, LW(10), LW(2))
             IF_INT_NOT_EQUAL(LW(0), 0)
                 IF_INT_EQUAL(LW(1), 0)
-                    IF_INT_NOT_EQUAL(LW(2), 13)
+                    IF_INT_NOT_EQUAL(LW(2), PUNI_MODE_WIND)
                         CALL(evt_puni_get_position, LW(10), LW(0), LW(1), LW(2))
-                        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_06_WATER_SWITCH)
+                        IF_INT_LESS(GSW_STORY_PROGRESS, STG2_21_06_WATER_SWITCH)
                             IF_INT_GREATER_OR_EQUAL(LW(1), -20)
                                 IF_INT_LESS_OR_EQUAL(LW(1), 20)
                                     CALL(evt_sub_area_check, 0, -50, 60, 50, LW(0), LW(2), LW(15))
@@ -384,25 +405,22 @@ EVT_END()
 
 /**
  * Elevator event: waits until the Puni Orb is on the pedestal,
- * the counter GW(0) has reached 0 (every Puni is standing on the platform) and Mario
+ * the counter GW(0) has reached 0 (at least 101 eligible Punies were counted) and Mario
  * and the partner are on it too.
  * Then Mario stops, the Punies freeze, the floor starts moving with a quake and the camera pans down,
- * and the platform, Puni Orb and light move 309 units down over 10 seconds.
- * Afterwards the Punies are released and the story is set to STORY_STG2_21_06_WATER_SWITCH.
+ * and the platform, Puni Orb and light move 309.5 units down over 10 seconds.
+ * Afterwards the Punies are released and the story is set to STG2_21_06_WATER_SWITCH.
  */
 EVT_BEGIN(yuka_event)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_area_check, 1, -50, 60, 60, LW(0), LW(2), LW(14))
-        // Wait until the Puni Orb is on the pedestal, every Puni is on the platform and Mario and his partner
-        // stand on it too.
-        // Wait until the Puni Orb is on the pedestal, every Puni is on the platform and Mario and his partner
-        // stand on it too.
-        // Wait until the Puni Orb is on the pedestal, every Puni is on the platform and Mario and his partner
-        // stand on it too.
+
+        // Wait until the Puni Orb is on the pedestal, the counter is zero and Mario and his partner
+        // stand on the platform too.
         CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_sub_area_check, 1, -50, 60, 60, LW(0), LW(2), LW(15))
-        IF_INT_EQUAL(GSWF(GSWF_MRI13_ORB_ON_PEDESTAL), 1)
+        IF_INT_EQUAL(GSWF_MRI_13_PUNI_ORB_PLACED, 1)
             IF_INT_EQUAL(GW(0), 0)
                 IF_INT_EQUAL(GF(0), 0)
                     IF_INT_EQUAL(LW(14), 1)
@@ -415,6 +433,7 @@ EVT_BEGIN(yuka_event)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // Mario stops and the Punies freeze; the floor starts to quake.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_normalize)
@@ -438,16 +457,17 @@ EVT_BEGIN(yuka_event)
     WAIT_MS(1000)
     CALL(evt_snd_sfxon, STRING("SFX_STG2_QUAKE1"), GW(4))
     SPAWN_EVENT_GET_ID(PTR(yuka_shake), LW(10))
-    CALL(evt_puni_flag_onoff, 1, 0, 262144)
+    CALL(evt_puni_flag_onoff, 1, 0, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_mode, 1, PUNI_MODE_INERT)
-    CALL(evt_npc_flag_onoff, 1, STRING("ガイドsp"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガイドsp"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
+
     // Punio comments on the shaking floor while the camera drops to the shaft.
     CALL(evt_msg_print, 0, STRING("stg2_mri_e21_00"), 0, STRING("ガイドsp"))
-    CALL(evt_puni_flag_onoff, 1, 1, 262144)
+    CALL(evt_puni_flag_onoff, 1, 1, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_mode, 1, PUNI_MODE_INERT)
-    CALL(evt_cam3d_evt_set, 330, -240, 404, -50, -60, 50, 0, 11)
+    CALL(evt_cam3d_evt_set, 330, -240, 404, -50, -60, 50, 0, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
-    CALL(evt_cam3d_evt_set, -225, -80, 355, -50, -270, 50, 9000, 11)
+    CALL(evt_cam3d_evt_set, -225, -80, 355, -50, -270, 50, 9000, EASING_SINE_IN_OUT)
     CALL(evt_snd_sfxoff, GW(4))
     DELETE_EVENT(LW(10))
     CALL(evt_snd_sfxon, STRING("SFX_STG2_QUAKE1"), GW(3))
@@ -455,11 +475,12 @@ EVT_BEGIN(yuka_event)
     CALL(evt_hit_bind_mapobj, STRING("A_sui_l1"), STRING("S_sui_l"))
     CALL(evt_hit_bind_mapobj, STRING("A_dai"), STRING("S_dai"))
     CALL(evt_hit_bind_mapobj, STRING("A_dai_02"), STRING("S_dai"))
-    // The platform, the Puni Orb and the light move down 309 units over ten seconds.
+
+    // The platform, the Puni Orb and the light move down 309.5 units over ten seconds.
     CALL(evt_snd_sfxon, STRING("SFX_STG2_FLOOR_MOVE1"), GW(2))
     CALL(evt_item_get_position, STRING("punipuni"), LW(3), LW(4), LW(5))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, FLOAT(0.5f), FLOAT(1.0f), 10000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, FLOAT(0.5f), FLOAT(1.0f), 10000)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
             CALL(evt_mapobj_scale, 1, STRING("S_sui_kage"), LW(0), LW(0), LW(0))
@@ -468,9 +489,9 @@ EVT_BEGIN(yuka_event)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_kage"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_sui_kage"), MAP_OBJ_FLAG_HIDDEN)
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 0, 0, -30950, 10000)
+    CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, -30950, 10000)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value_para, LW(0), LW(1))
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -491,32 +512,33 @@ EVT_BEGIN(yuka_event)
     END_LOOP
     CALL(evt_snd_sfxoff, GW(2))
     CALL(evt_snd_sfxoff, GW(3))
+
     // The platform stops; the Punies are released and the story advances.
     CALL(evt_snd_sfxon, STRING("SFX_STG2_FLOOR_STOP1"), 0)
     WAIT_MS(1000)
-    CALL(evt_puni_flag_onoff, 1, 0, 262144)
+    CALL(evt_puni_flag_onoff, 1, 0, PUNI_FLAG_SCRIPT_CONTROL)
     CALL(evt_puni_set_mode, 1, PUNI_MODE_INERT)
     CALL(evt_npc_get_position, STRING("ガイドsp"), LW(0), LW(1), LW(2))
     ADD(LW(1), 20)
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg2_mri_e21_00_01"), 0, STRING("ガイドsp"))
-    CALL(evt_puni_flag_onoff, 1, 1, 262144)
+    CALL(evt_puni_flag_onoff, 1, 1, PUNI_FLAG_SCRIPT_CONTROL)
     SET_VALUE(LW(10), 1)
     LOOP(0)
         CALL(evt_puni_set_mode, LW(10), PUNI_MODE_JOIN)
-        CALL(evt_puni_flag_onoff, LW(10), 0, 32768)
+        CALL(evt_puni_flag_onoff, LW(10), 0, PUNI_FLAG_STRAY)
         ADD(LW(10), 1)
         IF_INT_EQUAL(LW(10), 103)
             BREAK_LOOP
         END_IF
     END_LOOP
     CALL(evt_hitobj_onoff, STRING("A_sui_l1"), 1, 0)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     SPAWN_EVENT(yuka_check)
     CALL(evt_target_flag_onoff, 0, 0, 1)
     CALL(evt_target_set_position, 0, -55, -309, 50)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_06_WATER_SWITCH)
+    SET_VALUE(GSW_STORY_PROGRESS, STG2_21_06_WATER_SWITCH)
     CALL(evt_puni_set_hamari, -180, -310, 60, 2, -2, -306, -312)
 #if VERSION >= VERSION_JP
     CALL(evt_puni_winddisable_onoff, 0)
@@ -526,13 +548,13 @@ EVT_BEGIN(yuka_event)
 EVT_END()
 
 /**
- * Planter hit script 1: the first time it is hit it launches a Mushroom out of the planter (remembered with a
+ * Planter search script 1: the first time it is searched it launches a Mushroom out of the planter (remembered with a
  * flag).
  */
 static EVT_BEGIN(evt_f1_ueki_01)
     CALL(evt_item_delete_check, STRING("item_ueki_01"), LW(0))
     IF_INT_EQUAL(LW(0), 1)
-        CALL(evt_item_entry, STRING("item_ueki_01"), ITEM_MUSHROOM, -190, -309, 115, ITEM_ENTRY_LAUNCH, GSWF(GSWF_MRI13_PLANTER_MUSHROOM_TAKEN), 0)
+        CALL(evt_item_entry, STRING("item_ueki_01"), ITEM_MUSHROOM, -190, -309, 115, ITEM_TYPE_SCATTER_NO_PICKUP, GSWF_MRI_13_MUSHROOM_PLANT, 0)
     END_IF
     RETURN
 EVT_END()
@@ -555,8 +577,8 @@ static KusaAccess ueki_access_data[] = {
  * Map init script of mri_13, the Puni elevator room:
  * sets up the Puni, planters, save block and recovery block, the counter GW(0) at 101,
  * the Puni Orb pedestal and the moving floor depending on the story state (before or after
- * STORY_STG2_21_06_WATER_SWITCH), and the east exit that leads to Lord Crump's room
- * before STORY_STG2_22_LORD_CRUMP_APPEARS.
+ * STG2_21_06_WATER_SWITCH), and the east exit that leads to Lord Crump's room
+ * before STG2_22_LORD_CRUMP_APPEARS.
  */
 EVT_BEGIN(mri_13_init_evt)
     CALL(evt_puni_mem_init)
@@ -574,23 +596,23 @@ EVT_BEGIN(mri_13_init_evt)
     SPAWN_EVENT(mri_countdown)
     SET_VALUE(LW(0), PTR(ueki_access_data))
     CALL_CHILD(evt_sub_kusa_access_entry)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG2_23_TIME_BOMB_ACTIVATED, STORY_STG2_23_01_X_NAUT_BATTLE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_DANGER4"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI9"))
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG2_23_TIME_BOMB_ACTIVATED, STG2_23_01_X_NAUT_BATTLE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_DANGER4"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI9"))
         CASE_DEFAULT
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG2_MRI1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG2_MRI1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG2_MRI1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG2_MRI1"))
     END_SWITCH
-    CALL(evt_map_playanim, STRING("mizu_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("mizu_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_01"), 1, 0)
-    CALL(evt_map_playanim, STRING("awa_02"), 1, 0)
-    CALL(evt_map_playanim, STRING("sui_hikari"), 1, 0)
+    CALL(evt_map_playanim, STRING("mizu_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("mizu_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_01"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("awa_02"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("sui_hikari"), MAP_ANIM_PLAY_LOOP, 0)
     CALL(evt_mobj_save_blk, STRING("mobj_save"), -150, -249, 0, PTR(mri_puni_save), 0)
     CALL(evt_mobj_recovery_blk, STRING("mobj_recover"), 8, -200, -249, 0, 0, 0)
     SET_VALUE(GW(0), 101)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG2_21_06_WATER_SWITCH)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG2_21_06_WATER_SWITCH)
         CALL(evt_hitobj_onoff, STRING("A_f2_rak"), 1, 0)
         SPAWN_EVENT_GET_ID(PTR(yuka_slot), GW(1))
         SPAWN_EVENT_GET_ID(PTR(yuka_check), GW(2))
@@ -608,8 +630,8 @@ EVT_BEGIN(mri_13_init_evt)
     SET_VALUE(LW(10), STRING("punipuni"))
     SET_VALUE(LW(11), 0)
     SPAWN_EVENT(punipuni_ball00_init)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("A_dai"), 0, PTR(punipuni_ball00), 0)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG2_22_LORD_CRUMP_APPEARS)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("A_dai"), 0, PTR(punipuni_ball00), 0)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG2_22_LORD_CRUMP_APPEARS)
         SET_VALUE(LW(0), STRING("e_bero"))
         CALL_CHILD(bero_case_switch_off)
         CALL(evt_bero_overwrite, STRING("e_bero"), PTR(bero_dai3_kanbu))

@@ -1,11 +1,8 @@
 // Battle action records: counts and points used to judge the conditions of the battle ranking.
+
 #include "battle/battle_actrecord.h"
 #include "battle/battle.h"
 
-// this unit is size-optimised, as in the original (the object differs without it)
-#pragma optimize_for_size on
-// FAKE: inlining off for the whole file (FAKES.md); without it 2 functions change length, e.g. BtlActRec_JudgeRuleKeep 508 -> 1226 instructions
-#pragma dont_inline on
 static s32 _check_turn_count_0_end(s32 n);
 static s32 _check_turn_count_0_turn(s32 n);
 static s32 _check_use(s32 n);
@@ -19,7 +16,7 @@ void BtlActRec_AddCount(u8* count) {
 }
 
 /** Adds amount to an action-record point total, capped at 100. */
-void BtlActRec_AddPoint(u8* point, s32 amount) {
+void BtlActRec_AddPoint(u8* point, u8 amount) {
     *point += amount;
     if (*point > 100) {
         *point = 100;
@@ -27,8 +24,8 @@ void BtlActRec_AddPoint(u8* point, s32 amount) {
 }
 
 /**
- * Re-judges the battle's turn-based condition (the Glitz Pit "don't act/attack for N turns" kind) at the end of
- * each turn from battle_seq, by counting the relevant actions so far;
+ * Re-judges the battle's turn-based condition (the Glitz Pit "don't act/attack for N turns" kind) at the start of
+ * each turn from battle_seq (btlseqTurnFirstProcess), by counting the relevant actions so far;
  * other condition types are judged at battle end.
  */
 void BtlActRec_JudgeTurnRuleKeep(void) {
@@ -37,24 +34,24 @@ void BtlActRec_JudgeTurnRuleKeep(void) {
     FieldBattleInfo* rec = wp->fbatInfo;
     BattleActRecord* ar = &wp->actRecord;
     switch (rec->ruleType) {
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ACTIONS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTNER_ACTIONS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ACTIONS:
-            if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ACTIONS) {
+        case kConditionWaitTurnsBeforeMarioActions:
+        case kConditionWaitTurnsBeforePartnerActions:
+        case kConditionWaitTurnsBeforePartyActions:
+            if (rec->ruleType == kConditionWaitTurnsBeforePartyActions) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioSpecialSupports + ar->marioAttackItems + ar->marioSupportItems + ar->marioPartyChanges + ar->marioCharges + ar->marioSuperCharges + ar->marioEscapes + ar->partnerAttackMoves + ar->partnerSupportMoves + ar->partnerAttackItems + ar->partnerSupportItems + ar->partnerPartyChanges + ar->partnerCharges + ar->partnerSuperCharges + ar->partnerEscapes;
-            } else if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ACTIONS) {
+            } else if (rec->ruleType == kConditionWaitTurnsBeforeMarioActions) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioSpecialSupports + ar->marioAttackItems + ar->marioSupportItems + ar->marioPartyChanges + ar->marioCharges + ar->marioSuperCharges + ar->marioEscapes;
             } else {
                 v = ar->partnerAttackMoves + ar->partnerSupportMoves + ar->partnerAttackItems + ar->partnerSupportItems + ar->partnerPartyChanges + ar->partnerCharges + ar->partnerSuperCharges + ar->partnerEscapes;
             }
             _check_turn_count_0_turn(v);
             break;
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ATTACKS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTNER_ATTACKS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ATTACKS:
-            if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ATTACKS) {
+        case kConditionWaitTurnsBeforeMarioAttacks:
+        case kConditionWaitTurnsBeforePartnerAttacks:
+        case kConditionWaitTurnsBeforePartyAttacks:
+            if (rec->ruleType == kConditionWaitTurnsBeforePartyAttacks) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioAttackItems + ar->partnerAttackMoves + ar->partnerAttackItems;
-            } else if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ATTACKS) {
+            } else if (rec->ruleType == kConditionWaitTurnsBeforeMarioAttacks) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioAttackItems;
             } else {
                 v = ar->partnerAttackMoves + ar->partnerAttackItems;
@@ -82,242 +79,242 @@ void BtlActRec_JudgeRuleKeep(void) {
     mario = BattleGetMarioPtr(wp);
     BattleGetPartyPtr(wp);
     switch (rec->ruleType) {
-        case ACT_RECORD_COND_NONE:
-            rec->ruleKeepResult = 6;
+        case kNoFailureCondition:
+            rec->ruleKeepResult = RULE_KEEP_KEPT;
             break;
-        case ACT_RECORD_COND_JUMP_LESS:
+        case kConditionJumpLess:
             rec->ruleKeepResult = _check_no_use(ar->marioJumpMoves);
             break;
-        case ACT_RECORD_COND_JUMP_MORE:
+        case kConditionJumpMore:
             rec->ruleKeepResult = _check_use(ar->marioJumpMoves);
             break;
-        case ACT_RECORD_COND_HAMMER_LESS:
+        case kConditionHammerLess:
             rec->ruleKeepResult = _check_no_use(ar->marioHammerMoves);
             break;
-        case ACT_RECORD_COND_HAMMER_MORE:
+        case kConditionHammerMore:
             rec->ruleKeepResult = _check_use(ar->marioHammerMoves);
             break;
-        case ACT_RECORD_COND_USE_SPECIAL_MOVES_LESS:
+        case kConditionUseSpecialMovesLess:
             rec->ruleKeepResult = _check_no_use(ar->marioSpecialAttacks + ar->marioSpecialSupports);
             break;
-        case ACT_RECORD_COND_USE_SPECIAL_MOVES_MORE:
+        case kConditionUseSpecialMovesMore:
             rec->ruleKeepResult = _check_use(ar->marioSpecialAttacks + ar->marioSpecialSupports);
             break;
-        case ACT_RECORD_COND_MARIO_TAKE_LESS_DAMAGE:
+        case kConditionMarioTakeLessDamage:
             rec->ruleKeepResult = _check_no_use(ar->marioDamageTaken);
             break;
-        case ACT_RECORD_COND_MARIO_TAKE_MORE_DAMAGE:
+        case kConditionMarioTakeMoreDamage:
             rec->ruleKeepResult = _check_use(ar->marioDamageTaken);
             break;
-        case ACT_RECORD_COND_PARTNERS_TAKE_LESS_DAMAGE:
+        case kConditionPartnersTakeLessDamage:
             rec->ruleKeepResult = _check_no_use(ar->partnerDamageTaken);
             break;
-        case ACT_RECORD_COND_PARTNERS_TAKE_MORE_DAMAGE:
+        case kConditionPartnersTakeMoreDamage:
             rec->ruleKeepResult = _check_use(ar->partnerDamageTaken);
             break;
-        case ACT_RECORD_COND_PARTY_TAKE_LESS_DAMAGE:
+        case kConditionPartyTakeLessDamage:
             rec->ruleKeepResult = _check_no_use(ar->marioDamageTaken + ar->partnerDamageTaken);
             break;
-        case ACT_RECORD_COND_PARTY_TAKE_MORE_DAMAGE:
+        case kConditionPartyTakeMoreDamage:
             rec->ruleKeepResult = _check_use(ar->marioDamageTaken + ar->partnerDamageTaken);
             break;
-        case ACT_RECORD_COND_MARIO_TAKE_FEWER_HITS:
+        case kConditionMarioTakeFewerHits:
             rec->ruleKeepResult = _check_no_use(ar->marioHitsTaken);
             break;
-        case ACT_RECORD_COND_MARIO_TAKE_MORE_HITS:
+        case kConditionMarioTakeMoreHits:
             rec->ruleKeepResult = _check_use(ar->marioHitsTaken);
             break;
-        case ACT_RECORD_COND_PARTNERS_TAKE_FEWER_HITS:
+        case kConditionPartnersTakeFewerHits:
             rec->ruleKeepResult = _check_no_use(ar->partnerHitsTaken);
             break;
-        case ACT_RECORD_COND_PARTNERS_TAKE_MORE_HITS:
+        case kConditionPartnersTakeMoreHits:
             rec->ruleKeepResult = _check_use(ar->partnerHitsTaken);
             break;
-        case ACT_RECORD_COND_PARTY_TAKE_FEWER_HITS:
+        case kConditionPartyTakeFewerHits:
             rec->ruleKeepResult = _check_no_use(ar->marioHitsTaken + ar->partnerHitsTaken);
             break;
-        case ACT_RECORD_COND_PARTY_TAKE_MORE_HITS:
+        case kConditionPartyTakeMoreHits:
             rec->ruleKeepResult = _check_use(ar->marioHitsTaken + ar->partnerHitsTaken);
             break;
-        case ACT_RECORD_COND_MARIO_WIN_MORE_HP:
+        case kConditionMarioWinMoreHp:
             if (mario != NULL) {
                 rec->ruleKeepResult = _check_use(mario->currentHp);
             } else {
-                rec->ruleKeepResult = 1;
+                rec->ruleKeepResult = RULE_KEEP_BROKEN;
             }
             break;
-        case ACT_RECORD_COND_MARIO_WIN_LESS_HP:
+        case kConditionMarioWinLessHp:
             if (mario != NULL) {
                 rec->ruleKeepResult = _check_no_use(mario->currentHp);
             } else {
-                rec->ruleKeepResult = 1;
+                rec->ruleKeepResult = RULE_KEEP_BROKEN;
             }
             break;
-        case ACT_RECORD_COND_POWER_BOUNCE_COMBO:
+        case kConditionPowerBounceCombo:
             rec->ruleKeepResult = _check_use(ar->powerBounceCombo);
             break;
-        case ACT_RECORD_COND_MARIO_USE_FEWER_ITEMS:
+        case kConditionMarioUseFewerItems:
             rec->ruleKeepResult = _check_no_use(ar->marioAttackItems + ar->marioSupportItems);
             break;
-        case ACT_RECORD_COND_MARIO_USE_MORE_ITEMS:
+        case kConditionMarioUseMoreItems:
             rec->ruleKeepResult = _check_use(ar->marioAttackItems + ar->marioSupportItems);
             break;
-        case ACT_RECORD_COND_PARTNERS_USE_FEWER_ITEMS:
+        case kConditionPartnersUseFewerItems:
             rec->ruleKeepResult = _check_no_use(ar->partnerAttackItems + ar->partnerSupportItems);
             break;
-        case ACT_RECORD_COND_PARTNERS_USE_MORE_ITEMS:
+        case kConditionPartnersUseMoreItems:
             rec->ruleKeepResult = _check_use(ar->partnerAttackItems + ar->partnerSupportItems);
             break;
-        case ACT_RECORD_COND_PARTY_USE_FEWER_ITEMS:
+        case kConditionPartyUseFewerItems:
             rec->ruleKeepResult = _check_no_use(ar->marioAttackItems + ar->marioSupportItems + ar->partnerAttackItems + ar->partnerSupportItems);
             break;
-        case ACT_RECORD_COND_PARTY_USE_MORE_ITEMS:
+        case kConditionPartyUseMoreItems:
             rec->ruleKeepResult = _check_use(ar->marioAttackItems + ar->marioSupportItems + ar->partnerAttackItems + ar->partnerSupportItems);
             break;
-        case ACT_RECORD_COND_MARIO_SWAP_PARTNERS_LESS:
+        case kConditionMarioSwapPartnersLess:
             rec->ruleKeepResult = _check_no_use(ar->marioPartyChanges);
             break;
-        case ACT_RECORD_COND_MARIO_SWAP_PARTNERS_MORE:
+        case kConditionMarioSwapPartnersMore:
             rec->ruleKeepResult = _check_use(ar->marioPartyChanges);
             break;
-        case ACT_RECORD_COND_PARTNERS_SWAP_PARTNERS_LESS:
+        case kConditionPartnersSwapPartnersLess:
             rec->ruleKeepResult = _check_no_use(ar->partnerPartyChanges);
             break;
-        case ACT_RECORD_COND_PARTNERS_SWAP_PARTNERS_MORE:
+        case kConditionPartnersSwapPartnersMore:
             rec->ruleKeepResult = _check_use(ar->partnerPartyChanges);
             break;
-        case ACT_RECORD_COND_PARTY_SWAP_PARTNERS_LESS:
+        case kConditionPartySwapPartnersLess:
             rec->ruleKeepResult = _check_no_use(ar->marioPartyChanges + ar->partnerPartyChanges);
             break;
-        case ACT_RECORD_COND_PARTY_SWAP_PARTNERS_MORE:
+        case kConditionPartySwapPartnersMore:
             rec->ruleKeepResult = _check_use(ar->marioPartyChanges + ar->partnerPartyChanges);
             break;
-        case ACT_RECORD_COND_MARIO_ATTACK_AUDIENCE_LESS:
+        case kConditionMarioAttackAudienceLess:
             rec->ruleKeepResult = _check_no_use(ar->marioAudienceAttacks);
             break;
-        case ACT_RECORD_COND_MARIO_ATTACK_AUDIENCE_MORE:
+        case kConditionMarioAttackAudienceMore:
             rec->ruleKeepResult = _check_use(ar->marioAudienceAttacks);
             break;
-        case ACT_RECORD_COND_PARTNERS_ATTACK_AUDIENCE_LESS:
+        case kConditionPartnersAttackAudienceLess:
             rec->ruleKeepResult = _check_no_use(ar->partnerAudienceAttacks);
             break;
-        case ACT_RECORD_COND_PARTNERS_ATTACK_AUDIENCE_MORE:
+        case kConditionPartnersAttackAudienceMore:
             rec->ruleKeepResult = _check_use(ar->partnerAudienceAttacks);
             break;
-        case ACT_RECORD_COND_MARIO_APPEAL_LESS:
+        case kConditionMarioAppealLess:
             rec->ruleKeepResult = _check_no_use(ar->marioAppeals);
             break;
-        case ACT_RECORD_COND_MARIO_APPEAL_MORE:
+        case kConditionMarioAppealMore:
             rec->ruleKeepResult = _check_use(ar->marioAppeals);
             break;
-        case ACT_RECORD_COND_PARTNERS_APPEAL_LESS:
+        case kConditionPartnersAppealLess:
             rec->ruleKeepResult = _check_no_use(ar->partnerAppeals);
             break;
-        case ACT_RECORD_COND_PARTNERS_APPEAL_MORE:
+        case kConditionPartnersAppealMore:
             rec->ruleKeepResult = _check_use(ar->partnerAppeals);
             break;
-        case ACT_RECORD_COND_PARTY_APPEAL_LESS:
+        case kConditionPartyAppealLess:
             rec->ruleKeepResult = _check_no_use(ar->marioAppeals + ar->partnerAppeals);
             break;
-        case ACT_RECORD_COND_PARTY_APPEAL_MORE:
+        case kConditionPartyAppealMore:
             rec->ruleKeepResult = _check_use(ar->marioAppeals + ar->partnerAppeals);
             break;
-        case ACT_RECORD_COND_MARIO_SPEND_LESS_FP:
+        case kConditionMarioSpendLessFp:
             rec->ruleKeepResult = _check_no_use(ar->marioFpSpent);
             break;
-        case ACT_RECORD_COND_MARIO_SPEND_MORE_FP:
+        case kConditionMarioSpendMoreFp:
             rec->ruleKeepResult = _check_use(ar->marioFpSpent);
             break;
-        case ACT_RECORD_COND_PARTNERS_SPEND_LESS_FP:
+        case kConditionPartnersSpendLessFp:
             rec->ruleKeepResult = _check_no_use(ar->partnerFpSpent);
             break;
-        case ACT_RECORD_COND_PARTNERS_SPEND_MORE_FP:
+        case kConditionPartnersSpendMoreFp:
             rec->ruleKeepResult = _check_use(ar->partnerFpSpent);
             break;
-        case ACT_RECORD_COND_PARTY_SPEND_LESS_FP_0x30:
+        case kConditionPartySpendLessFp_0x30:
             rec->ruleKeepResult = _check_no_use(ar->marioFpSpent + ar->partnerFpSpent);
             break;
-        case ACT_RECORD_COND_PARTY_SPEND_MORE_FP_0x31:
+        case kConditionPartySpendMoreFp_0x31:
             rec->ruleKeepResult = _check_use(ar->marioFpSpent + ar->partnerFpSpent);
             break;
-        case ACT_RECORD_COND_MARIO_USE_MOVES_LESS:
+        case kConditionMarioUseMovesLess:
             rec->ruleKeepResult = _check_no_use(ar->marioFpMoves);
             break;
-        case ACT_RECORD_COND_MARIO_USE_MOVES_MORE:
+        case kConditionMarioUseMovesMore:
             rec->ruleKeepResult = _check_use(ar->marioFpMoves);
             break;
-        case ACT_RECORD_COND_PARTNERS_USE_MOVES_LESS:
+        case kConditionPartnerUseMovesLess:
             rec->ruleKeepResult = _check_no_use(ar->partnerFpMoves);
             break;
-        case ACT_RECORD_COND_PARTNERS_USE_MOVES_MORE:
+        case kConditionPartnerUseMovesMore:
             rec->ruleKeepResult = _check_use(ar->partnerFpMoves);
             break;
-        case ACT_RECORD_COND_PARTY_SPEND_LESS_FP_0x36:
+        case kConditionPartySpendLessFp_0x36:
             rec->ruleKeepResult = _check_no_use(ar->marioFpSpent + ar->partnerFpSpent);
             break;
-        case ACT_RECORD_COND_PARTY_SPEND_MORE_FP_0x37:
+        case kConditionPartySpendMoreFp_0x37:
             rec->ruleKeepResult = _check_use(ar->marioFpSpent + ar->partnerFpSpent);
             break;
-        case ACT_RECORD_COND_PARTY_USE_MOVES_LESS:
+        case kConditionPartyUseMovesLess:
             rec->ruleKeepResult = _check_no_use(ar->marioFpMoves + ar->partnerFpMoves);
             break;
-        case ACT_RECORD_COND_PARTY_USE_MOVES_MORE:
+        case kConditionPartyUseMovesMore:
             rec->ruleKeepResult = _check_use(ar->marioFpMoves + ar->partnerFpMoves);
             break;
-        case ACT_RECORD_COND_WIN_IN_MORE_TURNS:
+        case kConditionWinInMoreTurns:
             if (ar->turnCount > rec->ruleParam) {
-                rec->ruleKeepResult = 6;
+                rec->ruleKeepResult = RULE_KEEP_KEPT;
             } else if (ar->turnCount > rec->ruleParam2) {
-                rec->ruleKeepResult = 2;
+                rec->ruleKeepResult = RULE_KEEP_WITHIN_LOOSE;
             } else {
-                rec->ruleKeepResult = 1;
+                rec->ruleKeepResult = RULE_KEEP_BROKEN;
             }
             break;
-        case ACT_RECORD_COND_WIN_IN_FEWER_TURNS:
+        case kConditionWinInFewerTurns:
             if (ar->turnCount <= rec->ruleParam) {
-                rec->ruleKeepResult = 6;
+                rec->ruleKeepResult = RULE_KEEP_KEPT;
             } else if (ar->turnCount <= rec->ruleParam2) {
-                rec->ruleKeepResult = 2;
+                rec->ruleKeepResult = RULE_KEEP_WITHIN_LOOSE;
             } else {
-                rec->ruleKeepResult = 1;
+                rec->ruleKeepResult = RULE_KEEP_BROKEN;
             }
             break;
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ACTIONS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTNER_ACTIONS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ACTIONS:
-            if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ACTIONS) {
+        case kConditionWaitTurnsBeforeMarioActions:
+        case kConditionWaitTurnsBeforePartnerActions:
+        case kConditionWaitTurnsBeforePartyActions:
+            if (rec->ruleType == kConditionWaitTurnsBeforePartyActions) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioSpecialSupports + ar->marioAttackItems + ar->marioSupportItems + ar->marioPartyChanges + ar->marioCharges + ar->marioSuperCharges + ar->marioEscapes + ar->partnerAttackMoves + ar->partnerSupportMoves + ar->partnerAttackItems + ar->partnerSupportItems + ar->partnerPartyChanges + ar->partnerCharges + ar->partnerSuperCharges + ar->partnerEscapes;
-            } else if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ACTIONS) {
+            } else if (rec->ruleType == kConditionWaitTurnsBeforeMarioActions) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioSpecialSupports + ar->marioAttackItems + ar->marioSupportItems + ar->marioPartyChanges + ar->marioCharges + ar->marioSuperCharges + ar->marioEscapes;
             } else {
                 v = ar->partnerAttackMoves + ar->partnerSupportMoves + ar->partnerAttackItems + ar->partnerSupportItems + ar->partnerPartyChanges + ar->partnerCharges + ar->partnerSuperCharges + ar->partnerEscapes;
             }
             _check_turn_count_0_end(v);
             break;
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ATTACKS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTNER_ATTACKS:
-        case ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ATTACKS:
-            if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_PARTY_ATTACKS) {
+        case kConditionWaitTurnsBeforeMarioAttacks:
+        case kConditionWaitTurnsBeforePartnerAttacks:
+        case kConditionWaitTurnsBeforePartyAttacks:
+            if (rec->ruleType == kConditionWaitTurnsBeforePartyAttacks) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioAttackItems + ar->partnerAttackMoves + ar->partnerAttackItems;
-            } else if (rec->ruleType == ACT_RECORD_COND_WAIT_TURNS_BEFORE_MARIO_ATTACKS) {
+            } else if (rec->ruleType == kConditionWaitTurnsBeforeMarioAttacks) {
                 v = ar->marioJumpMoves + ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioAttackItems;
             } else {
                 v = ar->partnerAttackMoves + ar->partnerAttackItems;
             }
             _check_turn_count_0_end(v);
             break;
-        case ACT_RECORD_COND_MARIO_ONLY_JUMP_OR_DEFEND:
+        case kConditionMarioOnlyJumpOrDefend:
             if (ar->marioHammerMoves + ar->marioSpecialAttacks + ar->marioSpecialSupports + ar->marioAttackItems + ar->marioSupportItems + ar->marioPartyChanges + ar->marioCharges + ar->marioSuperCharges + ar->marioAppeals + ar->marioEscapes == 0) {
-                rec->ruleKeepResult = 6;
+                rec->ruleKeepResult = RULE_KEEP_KEPT;
             } else {
-                rec->ruleKeepResult = 1;
+                rec->ruleKeepResult = RULE_KEEP_BROKEN;
             }
             break;
-        case ACT_RECORD_COND_MARIO_ONLY_HAMMER_OR_DEFEND:
+        case kConditionMarioOnlyHammerOrDefend:
             if (ar->marioJumpMoves + ar->marioSpecialAttacks + ar->marioSpecialSupports + ar->marioAttackItems + ar->marioSupportItems + ar->marioPartyChanges + ar->marioCharges + ar->marioSuperCharges + ar->marioAppeals + ar->marioEscapes == 0) {
-                rec->ruleKeepResult = 6;
+                rec->ruleKeepResult = RULE_KEEP_KEPT;
             } else {
-                rec->ruleKeepResult = 1;
+                rec->ruleKeepResult = RULE_KEEP_BROKEN;
             }
             break;
     }
@@ -358,16 +355,16 @@ static s32 _check_turn_count_0_turn(s32 n) {
     BattleActRecord* ar = &wp->actRecord;
     if (ar->turnCount <= rec->ruleParam2 || rec->ruleParam2 == 0xff) {
         if (n == 0) {
-            rec->ruleKeepResult = 2;
+            rec->ruleKeepResult = RULE_KEEP_WITHIN_LOOSE;
         } else {
-            rec->ruleKeepResult = 1;
+            rec->ruleKeepResult = RULE_KEEP_BROKEN;
         }
     }
     if (ar->turnCount <= rec->ruleParam || rec->ruleParam == 0xff) {
         if (n == 0) {
-            rec->ruleKeepResult = 6;
-        } else if (!(rec->ruleKeepResult & 2)) {
-            rec->ruleKeepResult = 1;
+            rec->ruleKeepResult = RULE_KEEP_KEPT;
+        } else if (!(rec->ruleKeepResult & RULE_KEEP_WITHIN_LOOSE)) {
+            rec->ruleKeepResult = RULE_KEEP_BROKEN;
         }
     }
     return rec->ruleKeepResult;
@@ -380,16 +377,16 @@ static s32 _check_turn_count_0_end(s32 n) {
     BattleActRecord* ar = &wp->actRecord;
     if (ar->turnCount <= rec->ruleParam2 || rec->ruleParam2 == 0xff) {
         if (n == 0) {
-            rec->ruleKeepResult = 2;
+            rec->ruleKeepResult = RULE_KEEP_WITHIN_LOOSE;
         } else {
-            rec->ruleKeepResult = 1;
+            rec->ruleKeepResult = RULE_KEEP_BROKEN;
         }
     }
     if (ar->turnCount <= rec->ruleParam || rec->ruleParam == 0xff) {
         if (n == 0) {
-            rec->ruleKeepResult = 6;
-        } else if (!(rec->ruleKeepResult & 2)) {
-            rec->ruleKeepResult = 1;
+            rec->ruleKeepResult = RULE_KEEP_KEPT;
+        } else if (!(rec->ruleKeepResult & RULE_KEEP_WITHIN_LOOSE)) {
+            rec->ruleKeepResult = RULE_KEEP_BROKEN;
         }
     }
     return rec->ruleKeepResult;

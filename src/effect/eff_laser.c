@@ -1,4 +1,5 @@
-// Laser effect: plays the MOBJ_EFF_laser animation at a point; types 0-3, one type also fades in white.
+// Laser effect: plays the MOBJ_EFF_laser animation at a point; the type is stored but never read, and the white-fade state is never reached.
+
 #include "eff/eff_laser.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
@@ -7,8 +8,8 @@
 #include "memory.h"
 #include "system.h"
 #include <dolphin/mtx.h>
-#include "version.h"
-
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
 static void effLaserDisp(CameraId cameraId, EffectEntry* effect);
 static void effLaserMain(EffectEntry* effect);
 
@@ -18,13 +19,16 @@ typedef struct EffLaserWork {
     Vec target;   // 0x10
     f32 scale;    // 0x1C
     s32 poseId;   // 0x20
-    s32 counter;  // 0x24, only cleared at entry
+    s32 counter;  // 0x24
     s32 timer;    // 0x28
     s32 state;    // 0x2C
     s32 alpha;    // 0x30
 } EffLaserWork;
 
-/** Spawns a laser strike on (x, y, z), starting 1000 units above the target. Spawned by an event script in tik. */
+/**
+ * Spawns a laser strike on (x, y, z), placed 1000 units above the target until effLaserMain eases it down from
+ * 500 above. Spawned by an event script in tik.
+ */
 EffectEntry* effLaserEntry(s32 type, f32 x, f32 y, f32 z) {
     EffectEntry* effect;
     EffLaserWork* work;
@@ -35,7 +39,7 @@ EffectEntry* effLaserEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffLaserWork) * effect->count);
     effect->userdata = work;
     effect->callback = effLaserMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->target.x = x;
     work->target.y = y;
@@ -52,18 +56,21 @@ EffectEntry* effLaserEntry(s32 type, f32 x, f32 y, f32 z) {
     return effect;
 }
 
-/** Eases the beam down over 60 frames, then flashes the screen white and fades the laser out. */
+/**
+ * Eases the beam down over 60 frames, then plays A_1 and fades the laser out (alpha 1 per frame). State 2, the
+ * white screen fade, is skipped: state 1 jumps to 3.
+ */
 static void effLaserMain(EffectEntry* effect) {
     EffLaserWork* work = effect->userdata;
     Vec position;
-    BOOL inBattle;
+    s32 inBattle;
 
     position = (Vec){work->position.x, work->position.y, work->position.z};
     inBattle = gp->inBattle != 0;
 
     // soft delete
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (work->poseId != -1) {
             animPoseRelease(work->poseId);
         }
@@ -76,7 +83,7 @@ static void effLaserMain(EffectEntry* effect) {
     switch (work->state) {
         case 0:
             if (work->poseId == -1) {
-                work->poseId = animPoseEntry("MOBJ_EFF_laser", (u32)inBattle);
+                work->poseId = animPoseEntry("MOBJ_EFF_laser", inBattle);
                 animPoseSetAnim(work->poseId, "S_1", TRUE);
                 animPoseSetLocalTimeRate(work->poseId, 0.5f);
             }
@@ -84,10 +91,12 @@ static void effLaserMain(EffectEntry* effect) {
             break;
         case 1:
             work->timer++;
-            work->position.y = intplGetValue(1, 500.0f + work->target.y, work->target.y, work->timer, 60);
+            work->position.y = intplGetValue(EASING_QUADRATIC_IN, 500.0f + work->target.y, work->target.y, work->timer, 60);
             if (work->timer >= 60) {
                 animPoseSetAnim(work->poseId, "A_1", TRUE);
                 animPoseSetLocalTimeRate(work->poseId, 0.5f);
+
+                // Advance from state 1 to state 3, skipping the white-fade state.
                 work->state += 2;
             }
             break;
@@ -108,7 +117,7 @@ static void effLaserMain(EffectEntry* effect) {
             }
             break;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effLaserDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effLaserDisp, effect);
 }
 
 /** Draws the MOBJ_EFF_laser pose billboarded toward the camera. */
@@ -124,7 +133,7 @@ static void effLaserDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 10.0f);

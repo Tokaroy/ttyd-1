@@ -1,6 +1,7 @@
 // Paper Mario 64 effect: cool leaf, four leaves tumbling and spinning; types 0-2 pick the spin.
-#include "eff/n64/eff_cool_leaf_n64.h"
+
 #include "eff/eff_n64.h"
+#include "eff/n64/eff_cool_leaf_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
@@ -9,6 +10,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffCoolLeafN64Work {
@@ -52,7 +54,7 @@ static effN64Vtx size12x12_tex64x64_red_vtx[] = {
 };
 
 static void effCoolLeafMain(EffectEntry* effect);
-static void effCoolLeafDisp(CameraId cameraId, EffectEntry* effect);
+static void effCoolLeafDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns four leaves that swirl for 100 frames, each starting at a random offset near (75-125, 70-90).
@@ -268,14 +270,15 @@ static void effCoolLeafMain(EffectEntry* effect) {
             }
             break;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effCoolLeafDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effCoolLeafDisp, effect);
 }
 
 /**
  * Draws each leaf as a two-sided sprite with texture 0x14, rotated about Z and Y;
  * type 0 uses the brown leaf vertices and type 1 the red ones.
  */
-static void effCoolLeafDisp(CameraId cameraId, EffectEntry* effect) {
+static void effCoolLeafDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffCoolLeafN64Work* work;
     s32 type;

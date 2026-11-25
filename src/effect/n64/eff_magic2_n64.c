@@ -1,5 +1,5 @@
 // Paper Mario 64 magic effect 2 at a point with a scale and life.
-#include "eff/n64/eff_magic2_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,29 +8,31 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
+#include "eff/n64/eff_magic2_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffMagic2N64Work {
-    s32 type;        // 0x0
-    Vec position;    // 0x4
-    Vec offset;      // 0x10
-    f32 scale;       // 0x1C
-    f32 scaleTarget; // 0x20
-    s32 alpha;       // 0x24
-    s32 life;        // 0x28
-    s32 age;         // 0x2C
-    s32 a30;
-    s32 a34;
-    s32 a38;
-    s32 a3c;
-    s32 a40;
-    s32 a44;
-    s32 a48;
-    s32 a4c;
-    f32 f50;
-    f32 f54;
-    f32 f58;
-    f32 f5c;
+    s32 type;            // 0x0
+    Vec position;        // 0x4
+    Vec offset;          // 0x10
+    f32 scale;           // 0x1C
+    f32 scaleTarget;     // 0x20
+    s32 alpha;           // 0x24
+    s32 life;            // 0x28
+    s32 age;             // 0x2C
+    s32 tex0ScrollX;     // 0x30, X translation (/4) of texture matrix GX_TEXMTX0 in effMagic2Disp; += tex0ScrollXStep each frame
+    s32 tex0ScrollXStep; // 0x34, per-frame step of tex0ScrollX (always 0)
+    s32 tex1ScrollX;     // 0x38, X translation (/4) of texture matrix GX_TEXMTX1 in effMagic2Disp; += tex1ScrollXStep each frame
+    s32 tex1ScrollXStep; // 0x3C, per-frame step of tex1ScrollX (0x60 for type 1, else 0)
+    s32 tex0ScrollY;     // 0x40, Y translation (/4) of texture matrix GX_TEXMTX0; += tex0ScrollYStep, wrapped by +0x100 when negative
+    s32 tex0ScrollYStep; // 0x44, per-frame step of tex0ScrollY (-2 for type 0, else 0)
+    s32 tex1ScrollY;     // 0x48, Y translation (/4) of texture matrix GX_TEXMTX1; += tex1ScrollYStep, wrapped by +0x100 when negative
+    s32 tex1ScrollYStep; // 0x4C, per-frame step of tex1ScrollY (-4 for type 0, else 0)
+    f32 reserved_50;     // 0x50, starts 0, += reserved_54 every frame; nothing else reads it
+    f32 reserved_54;     // 0x54, only set to 0
+    f32 angle;
+    f32 angleStep;
 } EffMagic2N64Work;
 
 /** Colours the magic burst cycles through, eight RGB entries. */
@@ -38,12 +40,12 @@ static u8 color_rotation_data[24] = {0xFF, 0xC5, 0x9C, 0xFF, 0x9C, 0xFF, 0xFF, 0
                                      0xFF, 0xC5, 0x7B, 0xFF, 0xB4, 0xFF, 0xDE, 0x73, 0xFF, 0xFF, 0x94, 0x9C};
 
 static void effMagic2Main(EffectEntry* effect);
-static void effMagic2Disp(CameraId cameraId, EffectEntry* effect);
+static void effMagic2Disp(CameraId cameraId, void* param);
 static void magic2_2_line_dl(void);
 static void magic2_4_dl(void);
 
 /** Type 0 mesh: a 12-sided tube of long streaks reaching 2000 units deep. */
-effN64Vtx stg_magic2_2_line_v[] = {
+static effN64Vtx stg_magic2_2_line_v[] = {
     {-87, 50, 0, 5461, 2048, 255, 255, 255, 0},
     {-87, 50, -2000, 5461, 0, 255, 255, 255, 255},
     {-50, 87, -2000, 4779, 0, 255, 255, 255, 255},
@@ -73,7 +75,7 @@ effN64Vtx stg_magic2_2_line_v[] = {
 };
 
 /** Type 1 mesh: a 12-sided short ring, 50 units deep. */
-effN64Vtx stg_magic2_1_v[] = {
+static effN64Vtx stg_magic2_1_v[] = {
     {-87, 50, 0, 5461, 512, 255, 255, 255, 255},
     {-87, 50, -50, 5461, 0, 255, 255, 255, 255},
     {-50, 87, -50, 4779, 0, 255, 255, 255, 255},
@@ -123,31 +125,29 @@ EffectEntry* effMagic2N64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 scal
     w->offset.x = x;
     w->offset.y = y;
     w->offset.z = z;
-    w->a40 = w->a44 = 0;
-    w->a48 = w->a4c = 0;
-    w->a30 = w->a34 = 0;
-    w->a38 = w->a3c = 0;
+    w->tex0ScrollY = w->tex0ScrollYStep = 0;
+    w->tex1ScrollY = w->tex1ScrollYStep = 0;
+    w->tex0ScrollX = w->tex0ScrollXStep = 0;
+    w->tex1ScrollX = w->tex1ScrollXStep = 0;
     w->position.x = x;
     w->position.y = y;
     w->position.z = z;
     w->scale = 10.0f;
-    w->f58 = (f32)(rand() % 360);
-    w->f5c = 4.0f;
-    w->f50 = 0.0f;
-    w->f54 = 0.0f;
+    w->angle = (f32)(rand() % 360);
+    w->angleStep = 4.0f;
+    w->reserved_50 = 0.0f;
+    w->reserved_54 = 0.0f;
     if (type == 1) {
-        w->a3c = 0x60;
+        w->tex1ScrollXStep = 0x60;
         w->scaleTarget = scale;
     } else {
-        w->a44 = -2;
-        w->a4c = -4;
+        w->tex0ScrollYStep = -2;
+        w->tex1ScrollYStep = -4;
         w->scaleTarget = 0.2f * scale;
     }
     return effect;
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
-#pragma opt_common_subs off
 /**
  * Fades the burst in over 10 frames and out over the last 6, eases its scale with a sine pulse,
  * projects the world position to screen coordinates for the draw, and scrolls the two texture offsets.
@@ -181,20 +181,17 @@ static void effMagic2Main(EffectEntry* effect) {
         w->scale *= 0.7f;
     }
     if (w->type == 1) {
-        {
-            f32 sn = (f32)sin(6.2831855f * (f32)(life * 10) / 360.0f);
-            f32 st = w->scaleTarget;
-            w->scale = 0.4f * ((st * (0.1f * sn) + st) - w->scale) + w->scale;
-        }
+        f32 sn = (f32)sin(6.2831855f * (f32)(life * 10) / 360.0f);
+        f32 st = w->scaleTarget;
+        w->scale += 0.4f * ((st * (0.1f * sn) + st) - w->scale);
     } else {
-        {
-            f32 sn = (f32)sin(6.2831855f * (f32)(life * 10) / 360.0f);
-            f32 st = w->scaleTarget;
-            w->scale = 0.3f * ((st * (0.1f * sn) + st) - w->scale) + w->scale;
-        }
+        f32 sn = (f32)sin(6.2831855f * (f32)(life * 10) / 360.0f);
+        f32 st = w->scaleTarget;
+        w->scale += 0.3f * ((st * (0.1f * sn) + st) - w->scale);
     }
     {
         Vec tmp2 = {0.0f, 0.0f, 0.0f};
+
         tmp2.x = w->position.x;
         tmp2.y = w->position.y;
         tmp2.z = w->position.z;
@@ -206,28 +203,28 @@ static void effMagic2Main(EffectEntry* effect) {
     w->offset.y = 240.0f * pos2.y;
     w->offset.z = 0.0f;
     for (i = 0; i < effect->count; i++, w++) {
-        w->f58 += w->f5c;
-        w->f50 += w->f54;
-        w->a30 += w->a34;
-        w->a38 += w->a3c;
-        w->a40 += w->a44;
-        w->a48 += w->a4c;
-        if (w->a40 < 0) {
-            w->a40 += 0x100;
+        w->angle += w->angleStep;
+        w->reserved_50 += w->reserved_54;
+        w->tex0ScrollX += w->tex0ScrollXStep;
+        w->tex1ScrollX += w->tex1ScrollXStep;
+        w->tex0ScrollY += w->tex0ScrollYStep;
+        w->tex1ScrollY += w->tex1ScrollYStep;
+        if (w->tex0ScrollY < 0) {
+            w->tex0ScrollY += 0x100;
         }
-        if (w->a48 < 0) {
-            w->a48 += 0x100;
+        if (w->tex1ScrollY < 0) {
+            w->tex1ScrollY += 0x100;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMagic2Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effMagic2Disp, effect);
 }
 
-#pragma opt_common_subs reset
 /**
  * Draws the burst with an N64-style perspective projection (narrow for type 0, wide for type 1) once per record,
  * scrolling two textures and cycling a color table.
  */
-static void effMagic2Disp(CameraId cameraId, EffectEntry* effect) {
+static void effMagic2Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     s32 fov;
     s32 half;
     EffMagic2N64Work* w;
@@ -235,11 +232,11 @@ static void effMagic2Disp(CameraId cameraId, EffectEntry* effect) {
     s32 idx;
     s32 alpha;
     s32 type;
-    Mtx m13c;
-    Mtx m10c;
-    Mtx44 mcc;
-    Mtx44 m8c;
-    Mtx44 m4c;
+    Mtx mtx;
+    Mtx texScale;
+    Mtx44 persp;
+    Mtx44 model;
+    Mtx44 modelScale;
     f32 proj[7];
     f32 vp[6];
 
@@ -248,59 +245,60 @@ static void effMagic2Disp(CameraId cameraId, EffectEntry* effect) {
     type = w->type;
     GXGetProjectionv(proj);
     GXGetViewportv(vp);
-    PSMTX44Trans(m8c, w->offset.x, w->offset.y, w->offset.z);
-    PSMTX44Scale(m4c, w->scale, w->scale, 1.0f);
-    PSMTX44Concat(m8c, m4c, m8c);
+    PSMTX44Trans(model, w->offset.x, w->offset.y, w->offset.z);
+    PSMTX44Scale(modelScale, w->scale, w->scale, 1.0f);
+    PSMTX44Concat(model, modelScale, model);
     fov = (type == 1) ? 130 : 30;
-    C_MTXPerspective(mcc, fov, 1.2666667f, 1.0f, 32768.0f);
-    PSMTX44Concat(mcc, m8c, mcc);
-    GXSetProjection(mcc, 0);
+    C_MTXPerspective(persp, fov, 1.2666667f, 1.0f, 32768.0f);
+    PSMTX44Concat(persp, model, persp);
+    GXSetProjection(persp, GX_PERSPECTIVE);
     switch (type) {
         case 1:
-            PSMTXTrans(m13c, 0.0f, 0.0f, -70.0f);
+            PSMTXTrans(mtx, 0.0f, 0.0f, -70.0f);
             break;
         case 0:
-            PSMTXTrans(m13c, 0.0f, 0.0f, -80.0f);
+            PSMTXTrans(mtx, 0.0f, 0.0f, -80.0f);
             break;
     }
-    GXLoadPosMtxImm(m13c, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(mtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     alpha = w->alpha;
     idx = w->age * 3;
     half = alpha / 2;
     for (i = 0; i < effect->count; i++, w++) {
         u8* d;
-        s32 b30;
-        s32 b40;
-        s32 b38;
-        s32 b48;
+        s32 tex0X;
+        s32 tex0Y;
+        s32 tex1X;
+        s32 tex1Y;
+
         idx += 30;
         idx = idx % 24;
         d = color_rotation_data + idx;
         GXSetTevColor(GX_TEVREG0, (GXColor){d[0], 0, d[2], alpha});
         GXSetTevColor(GX_TEVREG1, (GXColor){0, 0, 0, half});
-        b30 = w->a30;
-        b40 = w->a40;
-        b38 = w->a38;
-        b48 = w->a48;
+        tex0X = w->tex0ScrollX;
+        tex0Y = w->tex0ScrollY;
+        tex1X = w->tex1ScrollX;
+        tex1Y = w->tex1ScrollY;
         if (type == 0) {
-            PSMTXScale(m10c, 0.015625f, 0.015625f, 1.0f);
-            PSMTXTrans(m13c, (f32)(b30 / 4), (f32)(b40 / 4), 0.0f);
-            PSMTXConcat(m10c, m13c, m13c);
-            GXLoadTexMtxImm(m13c, 0x1e, 1);
-            PSMTXScale(m10c, 0.015625f, 0.015625f, 1.0f);
-            PSMTXTrans(m13c, (f32)(b38 / 4), (f32)(b48 / 4), 0.0f);
-            PSMTXConcat(m10c, m13c, m13c);
-            GXLoadTexMtxImm(m13c, 0x21, 1);
+            PSMTXScale(texScale, 0.015625f, 0.015625f, 1.0f);
+            PSMTXTrans(mtx, (f32)(tex0X / 4), (f32)(tex0Y / 4), 0.0f);
+            PSMTXConcat(texScale, mtx, mtx);
+            GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
+            PSMTXScale(texScale, 0.015625f, 0.015625f, 1.0f);
+            PSMTXTrans(mtx, (f32)(tex1X / 4), (f32)(tex1Y / 4), 0.0f);
+            PSMTXConcat(texScale, mtx, mtx);
+            GXLoadTexMtxImm(mtx, GX_TEXMTX1, GX_MTX2x4);
         } else {
-            PSMTXScale(m10c, 0.015625f, 0.0625f, 0.0f);
-            PSMTXTrans(m13c, (f32)(b30 / 4), (f32)(b40 / 4), 0.0f);
-            PSMTXConcat(m10c, m13c, m13c);
-            GXLoadTexMtxImm(m13c, 0x1e, 1);
-            PSMTXScale(m10c, 0.015625f, 0.0625f, 1.0f);
-            PSMTXTrans(m13c, (f32)(b38 / 4), (f32)(b48 / 4), 0.0f);
-            PSMTXConcat(m10c, m13c, m13c);
-            GXLoadTexMtxImm(m13c, 0x21, 1);
+            PSMTXScale(texScale, 0.015625f, 0.0625f, 0.0f);
+            PSMTXTrans(mtx, (f32)(tex0X / 4), (f32)(tex0Y / 4), 0.0f);
+            PSMTXConcat(texScale, mtx, mtx);
+            GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
+            PSMTXScale(texScale, 0.015625f, 0.0625f, 1.0f);
+            PSMTXTrans(mtx, (f32)(tex1X / 4), (f32)(tex1Y / 4), 0.0f);
+            PSMTXConcat(texScale, mtx, mtx);
+            GXLoadTexMtxImm(mtx, GX_TEXMTX1, GX_MTX2x4);
         }
         switch (type) {
             case 0:
@@ -319,32 +317,32 @@ static void effMagic2Disp(CameraId cameraId, EffectEntry* effect) {
 static void magic2_2_line_dl(void) {
     GXTexObj texObj;
     GXSetNumChans(1);
-    GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen2(0, 1, 4, 30, 0, 125);
-    GXSetTexCoordGen2(1, 1, 4, 33, 0, 125);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
     effGetTexObjN64(17, &texObj);
-    GXLoadTexObj(&texObj, 0);
-    GXLoadTexObj(&texObj, 1);
+    GXLoadTexObj(&texObj, GX_TEXMAP0);
+    GXLoadTexObj(&texObj, GX_TEXMAP1);
     GXSetNumTevStages(3);
-    GXSetTevOrder(0, 0, 0, 255);
-    GXSetTevColorOp(0, 1, 0, 0, 1, 3);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 15, 4, 8, 12);
-    GXSetTevAlphaIn(0, 7, 2, 4, 7);
-    GXSetTevOrder(1, 1, 1, 4);
-    GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(1, 15, 2, 8, 2);
-    GXSetTevAlphaIn(1, 7, 0, 5, 7);
-    GXSetTevOrder(2, 1, 1, 4);
-    GXSetTevColorOp(2, 1, 0, 0, 1, 0);
-    GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(2, 15, 8, 6, 0);
-    GXSetTevAlphaIn(2, 7, 4, 5, 0);
-    GXSetCullMode(0);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG2);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C1, GX_CC_TEXC, GX_CC_ONE);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A1, GX_CA_TEXA, GX_CA_ZERO);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_C0);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_APREV, GX_CA_RASA, GX_CA_ZERO);
+    GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_TEXC, GX_CC_C2, GX_CC_CPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_TEXA, GX_CA_RASA, GX_CA_APREV);
+    GXSetCullMode(GX_CULL_NONE);
     effSetVtxDescN64(stg_magic2_2_line_v);
-    GXBegin(144, 0, 72);
+    GXBegin(GX_TRIANGLES, GX_VTXFMT0, 72);
     tri2(0, 1, 2, 0, 0, 2, 3, 0);
     tri2(4, 5, 1, 0, 4, 1, 0, 0);
     tri2(3, 2, 6, 0, 3, 6, 7, 0);
@@ -363,33 +361,33 @@ static void magic2_2_line_dl(void) {
 static void magic2_4_dl(void) {
     GXTexObj texObj;
     GXSetNumChans(1);
-    GXSetChanCtrl(4, 0, 0, 1, 0, 0, 2);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_VTX, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen2(0, 1, 4, 30, 0, 125);
-    GXSetTexCoordGen2(1, 1, 4, 33, 0, 125);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
     effGetTexObjN64(18, &texObj);
-    GXLoadTexObj(&texObj, 0);
+    GXLoadTexObj(&texObj, GX_TEXMAP0);
     effGetTexObjN64(19, &texObj);
-    GXLoadTexObj(&texObj, 1);
+    GXLoadTexObj(&texObj, GX_TEXMAP1);
     GXSetNumTevStages(3);
-    GXSetTevOrder(0, 0, 0, 255);
-    GXSetTevColorOp(0, 1, 0, 0, 1, 3);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 15, 4, 8, 12);
-    GXSetTevAlphaIn(0, 7, 2, 4, 7);
-    GXSetTevOrder(1, 1, 1, 255);
-    GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(1, 15, 2, 8, 2);
-    GXSetTevAlphaIn(1, 7, 0, 1, 7);
-    GXSetTevOrder(2, 1, 1, 255);
-    GXSetTevColorOp(2, 1, 0, 0, 1, 0);
-    GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(2, 15, 8, 6, 0);
-    GXSetTevAlphaIn(2, 7, 4, 1, 0);
-    GXSetCullMode(0);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG2);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_C1, GX_CC_TEXC, GX_CC_ONE);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A1, GX_CA_TEXA, GX_CA_ZERO);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C0, GX_CC_TEXC, GX_CC_C0);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_APREV, GX_CA_A0, GX_CA_ZERO);
+    GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_TEXC, GX_CC_C2, GX_CC_CPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_APREV);
+    GXSetCullMode(GX_CULL_NONE);
     effSetVtxDescN64(stg_magic2_1_v);
-    GXBegin(144, 0, 72);
+    GXBegin(GX_TRIANGLES, GX_VTXFMT0, 72);
     tri2(0, 1, 2, 0, 0, 2, 3, 0);
     tri2(4, 5, 1, 0, 4, 1, 0, 0);
     tri2(3, 2, 6, 0, 3, 6, 7, 0);

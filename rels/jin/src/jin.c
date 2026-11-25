@@ -1,5 +1,6 @@
 // jin (ダイム寺院, Creepy Steeple): shared code for the whole area: REL prolog/epilog (registers jin_00 to jin_11 and
 // battle tables, swaps the Vivian pose table) and evt_jin_vivian_pose_set.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
@@ -9,9 +10,15 @@
 #include "string.h"
 #include "data/party_data.h"
 #include "jin.h"
-#include "rel_module.h"
 
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
 static void* pose_buf;
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Script helper: sets entry args[0] of Vivian's pose table (partyPoseTbl[6]) to the animation name args[1],

@@ -1,4 +1,5 @@
 // Excess Express (rsh) battle database: the Smorg (moamoa) boss setup, its stage and background scripting, and the area battle tables.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "manager/evtmgr_cmd.h"
@@ -9,38 +10,38 @@
 #include "battle/battle_database_common.h"
 #include "battle/battle_stage.h"
 #include "driver/npcdrv.h"
-#include "rsh.h"
 
 static USER_FUNC(_set_destroy_flag);
 static USER_FUNC(_set_offset);
+extern BattleUnitKind unit_boss_moamoa;
 
-BattleStageObjectData rsh_btlobject_data[7];
-BattleStageData rsh_btlstage_data[1];
-BattleUnitSetup btlparty_rsh_rsh_06_01_off_1[1];
-BattleGroupSetup btlgrp_rsh_rsh_06_01_off_1;
-NpcBattleSelect btlgrpsel_rsh_btlno_rsh_test1_off[2];
-NpcBattleSelect btlgrpsel_rsh_btlno_rsh_06_01_off[2];
+static BattleStageObjectData rsh_btlobject_data[7];
+static BattleStageData rsh_btlstage_data[1];
+static BattleUnitSetup btlparty_rsh_rsh_06_01_off_1[1];
+static BattleGroupSetup btlgrp_rsh_rsh_06_01_off_1;
+static NpcBattleSelect btlgrpsel_rsh_btlno_rsh_test1_off[2];
+static NpcBattleSelect btlgrpsel_rsh_btlno_rsh_06_01_off[2];
 NpcSetupBattleInfo btlsetup_rsh_tbl[3];
 NpcTerritoryInfo btl_rsh_setup_no_tbl[3];
-extern EvtWord bgset_rsh_bg_event[];
+static EvtWord bgset_rsh_bg_event[30];
 
 /**
  * Scenery props of the Excess Express battle stage (stg_06_0): rocks and scenery hills with their positions.
  */
-BattleStageObjectData rsh_btlobject_data[] = {
-    {"r_mae", 2, 1, {170.0f, 0.0f, -50.0f}, 0, 60, {0}},
-    {"r_oku", 2, 1, {170.0f, -1000.0f, -50.0f}, 10, 50, {0}},
-    {"l_mae", 2, 1, {-170.0f, 0.0f, -50.0f}, 20, 40, {0}},
-    {"l_oku", 2, 1, {-170.0f, -1000.0f, -50.0f}, 30, 30, {0}},
-    {"iwayama_1", 2, 2, {0}, 0, 60, {0}},
-    {"iwayama_2", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
+static BattleStageObjectData rsh_btlobject_data[] = {
+    {"r_mae", 2, STAGE_LAYER_A2, {170.0f, 0.0f, -50.0f}, 0, 60, {0}},
+    {"r_oku", 2, STAGE_LAYER_A2, {170.0f, -1000.0f, -50.0f}, 10, 50, {0}},
+    {"l_mae", 2, STAGE_LAYER_A2, {-170.0f, 0.0f, -50.0f}, 20, 40, {0}},
+    {"l_oku", 2, STAGE_LAYER_A2, {-170.0f, -1000.0f, -50.0f}, 30, 30, {0}},
+    {"iwayama_1", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"iwayama_2", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
 };
 
 /**
  * The Excess Express battle stage (bti_01 backdrop, stg_06_0 scenery) with its scrolling background script.
  */
-BattleStageData rsh_btlstage_data[] = {
+static BattleStageData rsh_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_06_0", // specificStageDataDir
@@ -54,11 +55,10 @@ BattleStageData rsh_btlstage_data[] = {
     },
 };
 
-/** Enemies of the rsh_06_01_off_1 fight: Smorg. */
-BattleUnitSetup btlparty_rsh_rsh_06_01_off_1[] = {
+static BattleUnitSetup btlparty_rsh_rsh_06_01_off_1[] = {
     {
         &unit_boss_moamoa, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {70.0f, -20.0f, 0.0f}, // position
@@ -68,11 +68,7 @@ BattleUnitSetup btlparty_rsh_rsh_06_01_off_1[] = {
     },
 };
 
-/**
- * Battle group of the rsh_06_01_off_1 fight (btlparty_rsh_rsh_06_01_off_1): never drops an item;
- * heart drop table default, flower drop table battle_heart_drop_param_default (the heart table).
- */
-BattleGroupSetup btlgrp_rsh_rsh_06_01_off_1 = {
+static BattleGroupSetup btlgrp_rsh_rsh_06_01_off_1 = {
     1, // numEnemies
     btlparty_rsh_rsh_06_01_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -82,14 +78,13 @@ BattleGroupSetup btlgrp_rsh_rsh_06_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Enemy group of the rsh_test1_off encounter: btlgrp_rsh_rsh_06_01_off_1. */
-NpcBattleSelect btlgrpsel_rsh_btlno_rsh_test1_off[] = {
+// Test and story selectors share the boss party and stage; setup flags/music differ below.
+static NpcBattleSelect btlgrpsel_rsh_btlno_rsh_test1_off[] = {
     {50, &btlgrp_rsh_rsh_06_01_off_1, rsh_btlstage_data},
     {0},
 };
 
-/** Enemy group of the rsh_06_01_off encounter: btlgrp_rsh_rsh_06_01_off_1. */
-NpcBattleSelect btlgrpsel_rsh_btlno_rsh_06_01_off[] = {
+static NpcBattleSelect btlgrpsel_rsh_btlno_rsh_06_01_off[] = {
     {50, &btlgrp_rsh_rsh_06_01_off_1, rsh_btlstage_data},
     {0},
 };
@@ -105,7 +100,7 @@ NpcSetupBattleInfo btlsetup_rsh_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_rsh_btlno_rsh_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -115,7 +110,7 @@ NpcSetupBattleInfo btlsetup_rsh_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_rsh_btlno_rsh_06_01_off, // select
-        NPC_BATTLE_MAX_COUNT | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         6, // randomMode
         {{3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {3, 3}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_BOSS_STG6_GREAT_MOAMOA1", // bgmName
@@ -123,7 +118,6 @@ NpcSetupBattleInfo btlsetup_rsh_tbl[] = {
     {0},
 };
 
-/** Maps the BTLNO_RSH battle names to their positions in btlsetup_rsh_tbl. */
 NpcTerritoryInfo btl_rsh_setup_no_tbl[] = {
     {"BTLNO_RSH_TEST1", 0},
     {"BTLNO_RSH_06_01", 1},
@@ -136,7 +130,7 @@ NpcTerritoryInfo btl_rsh_setup_no_tbl[] = {
  * and scrolls the two rock mountains (iwayama_1, iwayama_2) sideways forever, with a different phase for each,
  * to fake the train moving past them.
  */
-EVT_BEGIN(bgset_rsh_bg_event)
+static EVT_BEGIN(bgset_rsh_bg_event)
     CALL(_set_destroy_flag)
     SET_VALUE(LW(0), 0)
     SET_VALUE(LW(1), 200)
@@ -149,11 +143,9 @@ EVT_BEGIN(bgset_rsh_bg_event)
 EVT_END()
 
 /**
- * Script helper for bgset_rsh_bg_event.
- * Args: [0] stage object name, [1] the script variable holding the step counter (read and updated),
- * [2] total steps, [3] base x offset, [4] x amplitude.
- * Sets the object's x position offset to base + amplitude * step / total and counts the step down,
- * wrapping around at zero, so the scenery loops.
+ * Script helper (args[0] = stage object name, args[1] = step variable, args[2] = total, args[3] = base, args[4] =
+ * amplitude): sets the object's x offset to base + amplitude * step / total, then counts the step down, wrapping from 0
+ * back to total.
  */
 static USER_FUNC(_set_offset) {
     EvtWord* args = event->args;
@@ -173,11 +165,12 @@ static USER_FUNC(_set_offset) {
     evtSetValue(event, outVar, step);
     return EVT_RETURN_DONE;
 }
+
 /**
  * Script helper: sets flag 8 in the battle stage object work so the stage objects are destroyed
  * when the battle ends.
  */
 static USER_FUNC(_set_destroy_flag) {
-    _battleWorkPointer->stageObjectWork.flags |= 8;
+    _battleWorkPointer->stageObjectWork.flags |= STAGE_FLAG_NO_BG_B_DESTROY;
     return EVT_RETURN_DONE;
 }

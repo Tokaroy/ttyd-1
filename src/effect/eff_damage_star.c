@@ -1,5 +1,6 @@
 // Damage star burst (DamageStar): a star pops out and spins with the damage number; type 1 is the FP-damage variant.
 // Spawned for HP and FP damage in battle.
+
 #include "eff/eff_damage_star.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -11,12 +12,11 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <dolphin/os.h>
-#include "eff/eff_number.h"
 #include "libc_decls.h"
-#include <string.h>
+#include "poly_trig.h"
+#include "eff/eff_number.h"
 
-#define PI 3.1415927f
-#define HALF_PI 1.5707964f
+#include <string.h>
 
 typedef struct DamageStarWork {
     s32 type;       // 0x0
@@ -33,80 +33,6 @@ typedef struct DamageStarWork {
     MayaAnim* anim; // 0x44
 } DamageStarWork;
 
-/** Polynomial sine approximation (input in radians, 0 to 2 pi) used instead of libm. */
-static inline f32 _sinf(f32 x) {
-    f32 a = 0.00761f;
-    f32 b = 0.16605f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * x;
-        } else {
-            y = HALF_PI - (x - HALF_PI);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = a * y;
-        }
-    } else if (x < 4.712389f) {
-        y = x - PI;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    } else {
-        y = HALF_PI - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = a * y;
-        a = -a;
-    }
-    return a;
-}
-
-/** Polynomial cosine approximation matching _sinf. */
-static inline f32 _cosf(f32 x) {
-    f32 a = 0.03705f;
-    f32 b = 0.4967f;
-    f32 c = 1.0f;
-    f32 y;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-        } else {
-            y = HALF_PI - (x - HALF_PI);
-            x2 = y * y;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = -a;
-        }
-    } else if (x < 4.712389f) {
-        y = x - PI;
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = -a;
-    } else {
-        y = HALF_PI - (x - 4.712389f);
-        x2 = y * y;
-        a = a * x2 - b;
-        a = a * x2 + c;
-    }
-    return a;
-}
-
 /**
  * Per-frame size in percent of each spark star for its first 20 frames: it swells to 240%, then wobbles
  * and settles at 150%. Read by effDamageStarMain.
@@ -115,6 +41,7 @@ static u8 scale_data[] = {
     0x32, 0x37, 0x3C, 0x46, 0x50, 0x64, 0x96, 0xDC, 0xF0, 0xC8,
     0x8C, 0x64, 0x8C, 0xA0, 0x8C, 0x96, 0x9B, 0x96, 0x94, 0x96,
 };
+
 /**
  * Twelve pastel RGB tints (pink, peach, lilac, blue, cyan, green) the spark stars cycle through, one step
  * per frame and offset per star, so the burst shimmers. Read by effDamageStarDisp.
@@ -126,10 +53,10 @@ static u8 color_rotation_data[] = {
 };
 
 /**
- * Keyframes of the damage badge's parent joint: it slides in from the left with a small bob and settles
+ * Keyframes of the damage star's parent joint: it slides in from the left with a small bob and settles
  * slightly to the side of the hit over 65 frames.
  */
-MayaHermitKey damageStar_effHermit_0[] = {
+static MayaHermitKey damageStar_effHermit_0[] = {
     {
         0, // time
         {
@@ -208,11 +135,12 @@ MayaHermitKey damageStar_effHermit_0[] = {
         },
     },
 };
+
 /**
- * Keyframes of the damage badge itself: it pops in with a squash and stretch, tips over around frame 40,
+ * Keyframes of the damage star itself: it pops in with a squash and stretch, tips over around frame 40,
  * then shrinks to nothing by frame 65. The damage number is drawn on this joint.
  */
-MayaHermitKey damageStar_effHermit_1[] = {
+static MayaHermitKey damageStar_effHermit_1[] = {
     {
         0, // time
         {
@@ -325,31 +253,34 @@ MayaHermitKey damageStar_effHermit_1[] = {
     },
 };
 
-/** The damage badge's square face: four corners with texture coordinates. */
-s16 damageStar_effFace_pPlane168_0[] = {
+/** The damage star's square face: four corners with texture coordinates. */
+static s16 damageStar_effFace_pPlane168_0[] = {
     4, // vertex count
     -1024, -1024, 0, 0, 512,
     1024, -1024, 0, 512, 512,
     1024, 1024, 0, 512, 0,
     -1024, 1024, 0, 0, 0,
 };
-s16* damageStar_effFaceDt_pPlane168 = damageStar_effFace_pPlane168_0;
-/** The two badge joints and their keyframes; only the second joint has a face to draw. */
-MayaPoly damageStar_effAnimRST[] = {
+static s16* damageStar_effFaceDt_pPlane168 = damageStar_effFace_pPlane168_0;
+
+/** The two star joints and their keyframes; only the second joint has a face to draw. */
+static MayaPoly damageStar_effAnimRST[] = {
     {7, damageStar_effHermit_0, 0, NULL},
     {10, damageStar_effHermit_1, 1, &damageStar_effFaceDt_pPlane168},
 };
-/** Joint list of the damage badge animation. */
-MayaPolyList damageStar_effAnimRSTDt = {2, damageStar_effAnimRST};
-/** The damage badge animation (65 frames), started by effDamageStarEntry and positioning the number. */
-MayaAnimData damageStar_effAnimDt = {{0}, 65.0f, &damageStar_effAnimRSTDt};
+
+/** Joint list of the damage star animation. */
+static MayaKeyList damageStar_effAnimRSTDt = {2, damageStar_effAnimRST};
+
+/** The damage star animation (65 frames), started by effDamageStarEntry and positioning the number. */
+static MayaAnimData damageStar_effAnimDt = {{0}, 65.0f, &damageStar_effAnimRSTDt};
 
 static void effDamageStarMain(EffectEntry* effect);
-static void effDamageStarDisp(CameraId cameraId, EffectEntry* effect);
+static void effDamageStarDisp(CameraId cameraId, void* payload);
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
+// kept: without it effDamageStarEntry changes; -opt noprop,nolifetimes for the whole file changes other functions
+// (propagation and lifetimes off together, as in the rels' extdrv functions)
 #pragma opt_propagation off
-// FAKE: lifetimes optimisation off for effDamageStarEntry: the original register allocation and scheduling need it
 #pragma opt_lifetimes off
 /**
  * Spawns the damage star burst at (x, y, z): a central star plus up to 20 spark stars for the damage `number`.
@@ -397,8 +328,8 @@ EffectEntry* effDamageStarEntry(s32 type, s32 number, f32 x, f32 y, f32 z, f32 s
         work->position.y = 0.0f;
         work->position.z = 0.0f;
         a = 6.2831855f * ang / 360.0f;
-        work->velocity.x = 1.5f * (scale * -_sinf(a));
-        work->velocity.y = 1.5f * (scale * _cosf(a));
+        work->velocity.x = 1.5f * (scale * -polySinf(a));
+        work->velocity.y = 1.5f * (scale * polyCosf(a));
         work->velocity.z = 0.0f;
         work->rotation = 0.0f;
         work->alpha = 255;
@@ -453,14 +384,14 @@ static void effDamageStarMain(EffectEntry* effect) {
             if (frame < 20) {
                 work->scale.x = work->scale.y = work->scale.z = 0.01f * scale_data[frame];
             } else if (frame < 40) {
-                work->rotation = intplGetValue(11, 0.0f, 720.0f, frame - 20, 19);
+                work->rotation = intplGetValue(EASING_SINE_IN_OUT, 0.0f, 720.0f, frame - 20, 19);
             } else if (frame < 50) {
-                work->scale.x = intplGetValue(4, 1.0f, 1.5f, frame - 40, 9);
-                work->scale.y = intplGetValue(4, 1.0f, 0.5f, frame - 40, 9);
+                work->scale.x = intplGetValue(EASING_QUADRATIC_OUT, 1.0f, 1.5f, frame - 40, 9);
+                work->scale.y = intplGetValue(EASING_QUADRATIC_OUT, 1.0f, 0.5f, frame - 40, 9);
             } else if (frame < 60) {
-                work->scale.x = intplGetValue(1, 1.5f, 0.1f, frame - 50, 9);
-                work->scale.y = intplGetValue(1, 0.5f, 1.0f, frame - 50, 9);
-                work->position.y = intplGetValue(1, work->position.y, 10.0f + work->position.y, frame - 50, 9);
+                work->scale.x = intplGetValue(EASING_QUADRATIC_IN, 1.5f, 0.1f, frame - 50, 9);
+                work->scale.y = intplGetValue(EASING_QUADRATIC_IN, 0.5f, 1.0f, frame - 50, 9);
+                work->position.y = intplGetValue(EASING_QUADRATIC_IN, work->position.y, 10.0f + work->position.y, frame - 50, 9);
             } else {
                 work->scale.x = work->scale.y = work->scale.z = 0.0f;
             }
@@ -472,24 +403,27 @@ static void effDamageStarMain(EffectEntry* effect) {
             work->position.z += work->velocity.z;
         }
     }
-    work = effect->userdata;
-    work->tick = gp->retraceCount;
-    dispEntry(CAMERA_3D, dispCalcZ(&calcPos), 8, (DispCallback)effDamageStarDisp, effect);
+    ((DamageStarWork*)effect->userdata)->tick = gp->retraceCount;
+    dispEntry(CAMERA_3D, dispCalcZ(&calcPos), DISP_MODE_CUSTOM_MID, effDamageStarDisp, effect);
 }
 
-#define QUAD(h, u)                    \
-    GXBegin(GX_QUADS, GX_VTXFMT0, 4); \
-    GXPosition3f32(-(h), (h), 0.0f);  \
-    GXTexCoord2f32(0.0f, 0.0f);       \
-    GXPosition3f32((h), (h), 0.0f);   \
-    GXTexCoord2f32((u), 0.0f);        \
-    GXPosition3f32((h), -(h), 0.0f);  \
-    GXTexCoord2f32((u), 1.0f);        \
-    GXPosition3f32(-(h), -(h), 0.0f); \
+/** One textured square of half-size h, u = horizontal texture repeat. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void polyRectangle(f32 h, f32 u) {
+    GXBegin(GX_QUADS, GX_VTXFMT0, 4);
+    GXPosition3f32(-h, h, 0.0f);
+    GXTexCoord2f32(0.0f, 0.0f);
+    GXPosition3f32(h, h, 0.0f);
+    GXTexCoord2f32(u, 0.0f);
+    GXPosition3f32(h, -h, 0.0f);
+    GXTexCoord2f32(u, 1.0f);
+    GXPosition3f32(-h, -h, 0.0f);
     GXTexCoord2f32(0.0f, 1.0f);
+}
 
 /** Draws the star sprites and the damage number as digit quads in front of them. */
-static void effDamageStarDisp(CameraId cameraId, EffectEntry* effect) {
+static void effDamageStarDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* cam;
     GXColor color;
     DamageStarWork* work;
@@ -540,7 +474,7 @@ static void effDamageStarDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
     GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetChanAmbColor(GX_COLOR0A0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     GXSetCullMode(GX_CULL_NONE);
     GXClearVtxDesc();
@@ -548,7 +482,7 @@ static void effDamageStarDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
-    part = (DamageStarWork*)effect->userdata + 2; // the star pieces start at entry 2
+    part = (DamageStarWork*)effect->userdata + 2;
     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_CLEAR);
     GXSetZCompLoc(GX_FALSE);
     GXSetAlphaCompare(GX_GEQUAL, 0x80, GX_AOP_OR, GX_NEVER, 0);
@@ -582,10 +516,10 @@ static void effDamageStarDisp(CameraId cameraId, EffectEntry* effect) {
         GXSetCurrentMtx(GX_PNMTX0);
         GXSetCullMode(GX_CULL_BACK);
         GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        QUAD(8.0f, 2.0f)
+        polyRectangle(8.0f, 2.0f);
         GXSetCullMode(GX_CULL_FRONT);
         GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_DIVIDE_2, GX_TRUE, GX_TEVPREV);
-        QUAD(8.0f, 2.0f)
+        polyRectangle(8.0f, 2.0f);
     }
     work = effect->userdata;
     PSMTXRotRad(numRot, 'y', 0.017453292f * -camGetPtr(cameraId)->viewYaw);
@@ -620,9 +554,9 @@ static void effDamageStarDisp(CameraId cameraId, EffectEntry* effect) {
     if (type == 1) {
         effGetTexObj(39, &texObj);
         GXLoadTexObj(&texObj, GX_TEXMAP3);
-        QUAD(2.0f, 2.0f)
+        polyRectangle(2.0f, 2.0f);
     } else {
-        QUAD(2.0f, 2.0f)
+        polyRectangle(2.0f, 2.0f);
     }
     PSMTXConcat(cam->view, numMtx, finalMtx);
     GXLoadPosMtxImm(finalMtx, GX_PNMTX0);
@@ -637,9 +571,9 @@ static void effDamageStarDisp(CameraId cameraId, EffectEntry* effect) {
         effGetTexObj(19, &texObj);
         GXLoadTexObj(&texObj, GX_TEXMAP2);
         GXSetTevOp(GX_TEVSTAGE0, GX_REPLACE);
-        QUAD(2.0f, 1.0f)
+        polyRectangle(2.0f, 1.0f);
     } else {
-        QUAD(2.0f, 2.0f)
+        polyRectangle(2.0f, 2.0f);
     }
     mtxGetRotationElement(numMtx, invMtx, 'y', 'x');
     PSMTXInverse(invMtx, invMtx);

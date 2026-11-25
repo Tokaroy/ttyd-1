@@ -1,18 +1,22 @@
-// evt_goryuugijo: Pianta Parlor (遊技場) hall helpers in gor_03: slot machine and token counter minigame driver.
+// evt_goryuugijo: Pianta Parlor hall helpers: the driver of the Monte medal counter and slot machine minigames.
 
+#include "eff/eff_minigame.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "rels/gor/include/gor.h"
+#include "evt/evt_yuugijou.h"
 
 #include "manager/evtmgr_cmd.h"
 #include "memory.h"
 #include "driver/camdrv.h"
 #include "string.h"
 #include "driver/dispdrv.h"
-#include "evt/evt_yuuminigame.h"
-#include "eff/eff_minigame.h"
-#include "gor.h"
 
 static void evt_goryuugijo_disp_func(CameraId camera, void* param);
+
+static USER_FUNC(evt_goryuugijo_main_func);
+USER_FUNC(eff_call_yuugijo);
+USER_FUNC(evt_goryuugijo_free);
 
 static EvtWord main_evt[4];
 
@@ -46,7 +50,7 @@ USER_FUNC(evt_goryuugijo_free) {
     if (isFirstCall) {
         wp->flags |= MINIGAME_FLAG_QUIT;
     }
-    if (!(wp->flags & MINIGAME_FLAG_STOPPED)) {
+    if (!(wp->flags & MINIGAME_FLAG_QUIT_DONE)) {
         return EVT_RETURN_BLOCK;
     }
     if (wp->data != NULL) {
@@ -101,7 +105,7 @@ static USER_FUNC(evt_goryuugijo_main_func) {
     MiniGameWork* wp = (MiniGameWork*)event->lwData[0];
 
     if (wp->flags & MINIGAME_FLAG_QUIT) {
-        wp->flags |= MINIGAME_FLAG_STOPPED;
+        wp->flags |= MINIGAME_FLAG_QUIT_DONE;
         return EVT_RETURN_DONE;
     }
     if (wp->subEvent != NULL) {
@@ -112,7 +116,7 @@ static USER_FUNC(evt_goryuugijo_main_func) {
     }
     wp->main(event, isFirstCall);
 disp:
-    dispEntry(CAMERA_2D, 1000.0f, 0, evt_goryuugijo_disp_func, wp);
+    dispEntry(CAMERA_2D, 1000.0f, DISP_MODE_OPAQUE, evt_goryuugijo_disp_func, wp);
     return EVT_RETURN_BLOCK;
 }
 

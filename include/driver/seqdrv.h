@@ -1,12 +1,11 @@
 // seqdrv.c: the sequence driver (SequenceType, SequenceWork): switches the top-level game states (logo, title, game...).
+
 #pragma once
 
-#include <dolphin/types.h>
 #include "version.h"
+#include <dolphin/types.h>
 
-typedef struct SequenceWork SequenceWork;
-
-typedef void (*SequenceCallback)(SequenceWork* work);
+typedef void (*SequenceCallback)(struct SequenceWork* work);
 
 typedef enum SequenceType {
     SEQ_UNDEFINED = -1,
@@ -18,23 +17,24 @@ typedef enum SequenceType {
     SEQ_GAME_OVER = 5,
     SEQ_LOAD = 6,
 #if VERSION <= VERSION_DEMO_JP
-    // The demo has one more sequence before SEQ_E3.
     SEQ_E3 = 8
 #else
     SEQ_E3 = 7
 #endif
 } SequenceType;
 
-struct SequenceWork {
+typedef struct SequenceWork {
     SequenceType sequence; // 0x0
     s32 state;             // 0x4, 0-7
     const char* mapName;   // 0x8
     const char* beroName;  // 0xC
-    s32 counter;           // 0x10, frame counter (seq_battle's steps)
+    s32 counter;           // 0x10, frame counter (seq_battle)
     u32 pad_14;            // 0x14, never accessed
     u32 pad_18;            // 0x18, never accessed
     u32 pad_1C;            // 0x1C, never accessed
-};
+} SequenceWork;
+
+extern SequenceCallback seq_data[][3]; // Init, Main and Exit per SequenceType (sequence/seqdef.c)
 
 void seqInit_MARIOSTORY(void);
 void seqMain(void);

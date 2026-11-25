@@ -1,5 +1,6 @@
 // Script commands for NPCs that wander about at random ("urouro").
-#include "evt/evt_urouro.h"
+
+#include "version.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_npc.h"
 #include "driver/animdrv.h"
@@ -9,12 +10,18 @@
 #include "memory.h"
 #include "pmario_sound.h"
 #include "system.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
-#include "version.h"
 #include "mario/mario_sbr.h"
+#include "driver/mapdrv.h"
+#include "sfx_name_word.h"
 
-#define fabs(x) __fabs(x)
-#define fabsf(x) __fabsf(x)
+typedef enum UrouroState {
+    UROURO_STATE_CHOOSE_WALK = 0,
+    UROURO_STATE_WALK = 1,
+    UROURO_STATE_CHOOSE_WAIT = 2,
+    UROURO_STATE_WAIT = 3,
+} UrouroState;
 
 typedef struct UrouroWork {
     u32 flags;    // 0x0
@@ -30,12 +37,18 @@ typedef struct UrouroWork {
     f32 radius;   // 0x28
 } UrouroWork;
 
-// UrouroWork.flags bits; the high half is the flag word passed to urouro_init_func.
-enum UrouroFlags {
-    UROURO_FLAG_OUTSIDE = 0x1,         // left the wander radius: heading back to the centre
-    UROURO_FLAG_TURN_BACK = 0x2,       // turn toward the centre on the next paper-turn end
-    UROURO_FLAG_LOOK_AROUND = 0x10000, // turn around a few times while idle
-};
+// UrouroWork.flags (the init script's sixth argument sets the whole word)
+typedef enum UrouroFlags {
+    UROURO_FLAG_OUTSIDE = (1 << 0),             // 0x1, wandered past the radius
+    UROURO_FLAG_TURN_HOME = (1 << 1),           // 0x2, face the centre at the next step
+    UROURO_FLAG_TURN_AROUND_UNUSED = (1 << 16), // 0x10000, turn round 2-4 times while waiting; every script passes 0
+} UrouroFlags;
+
+/** Rounds frame count t down to a multiple of 20. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+s32 urouro_jikan_hosei(s32 t) {
+    return t - t % 20;
+}
 
 /**
  * Sets up NPC args[0] to wander around centre (args[1], args[2]) within radius args[3] at speed args[4];
@@ -56,7 +69,7 @@ USER_FUNC(urouro_init_func) {
     event->lwData[10] = (EvtWord)_mapAlloc(sizeof(UrouroWork));
     work = (UrouroWork*)event->lwData[10];
     work->flags = flags;
-    work->state = 0;
+    work->state = UROURO_STATE_CHOOSE_WALK;
     work->timer = 0;
     work->count = 0;
     work->walkTime = sysMsec2Frame(6000);
@@ -67,7 +80,7 @@ USER_FUNC(urouro_init_func) {
     work->z = z;
     work->radius = radius;
     npc->moveSpeed = speed;
-    npc->flags |= NPC_FLAG_RESUME_ON_LEAVE;
+    npc->flags |= NPC_FLAG_RESUME_AFTER_TALK;
     return EVT_RETURN_DONE;
 }
 
@@ -75,7 +88,7 @@ USER_FUNC(urouro_init_func) {
  * Per-frame wander step for NPC args[0]: walk in a random direction for 3-6 s,
  * turn back toward the centre when outside the radius,
  * after hitting a wall or when Mario walks into it from behind, then stand 4.5-9 s.
- * Retail versions also play the NPC's footstep sounds. Never returns DONE.
+ * JP and later also play the NPC's footstep sounds. Never returns DONE.
  */
 USER_FUNC(urouro_main_func) {
     const char* name = (const char*)evtGetValue(event, *event->args);
@@ -85,49 +98,49 @@ USER_FUNC(urouro_main_func) {
     f32 dist;
     f32 step;
     f32 lim;
+#if VERSION <= VERSION_DEMO_JP
     f32 temp;
-#if VERSION >= VERSION_JP
+#else
     s32 sfxFlag;
 #endif
-
     switch (work->state) {
-        case 0:
+        case UROURO_STATE_CHOOSE_WALK:
             work->timer = work->walkTime / 2 + irand(work->walkTime / 2 + 1);
-            work->timer = work->timer - work->timer % 20;
+            work->timer = urouro_jikan_hosei(work->timer);
             work->count = 0;
             npc->direction = reviseAngle(npc->direction + (f32)irand(60) - 30.0f);
             npc->moveDir = npc->direction;
-            work->state = 1;
+            work->state = UROURO_STATE_WALK;
             break;
-        case 1:
+        case UROURO_STATE_WALK:
             dist = distABf(npc->position.x, npc->position.z, work->x, work->z);
             if (animPoseGetPeraEnd(npc->poseId)) {
                 if (dist > work->radius) {
                     if (!(work->flags & UROURO_FLAG_OUTSIDE)) {
-                        work->flags |= UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_BACK;
+                        work->flags |= UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_HOME;
                     }
-                    if (work->flags & UROURO_FLAG_TURN_BACK) {
+                    if (work->flags & UROURO_FLAG_TURN_HOME) {
                         npc->direction = reviseAngle(angleABf(npc->position.x, npc->position.z, work->x, work->z));
                         npc->moveDir = npc->direction;
-                        work->flags &= ~UROURO_FLAG_TURN_BACK;
+                        work->flags &= ~UROURO_FLAG_TURN_HOME;
                     }
                 } else if (work->flags & UROURO_FLAG_OUTSIDE) {
-                    work->flags &= ~(UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_BACK);
+                    work->flags &= ~(UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_HOME);
                 }
             }
-            if (animPoseGetPeraEnd(npc->poseId) && npc == marioGetTouchNpcPtr() && fabsf(compAngle(npc->moveDir, mario->directionView)) < 90.0f && fabsf(compAngle(angleABf(npc->position.x, npc->position.z, mario->position.x, mario->position.z), mario->directionView)) < 90.0f && dist < work->radius) {
+            if (animPoseGetPeraEnd(npc->poseId) && npc == marioGetTouchNpcPtr() && __fabsf(compAngle(npc->moveDir, mario->directionView)) < 90.0f && __fabsf(compAngle(angleABf(npc->position.x, npc->position.z, mario->position.x, mario->position.z), mario->directionView)) < 90.0f && dist < work->radius) {
                 npc->direction = reviseAngle(npc->moveDir - 180.0f);
                 npc->moveDir = npc->direction;
-                work->flags &= ~(UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_BACK);
+                work->flags &= ~(UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_HOME);
             }
             if (animPoseGetPeraEnd(npc->poseId) && npc->wallHit != 0) {
                 npc->direction = reviseAngle(angleABf(npc->position.x, npc->position.z, work->x, work->z));
                 npc->moveDir = npc->direction;
-                work->flags &= ~(UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_BACK);
+                work->flags &= ~(UROURO_FLAG_OUTSIDE | UROURO_FLAG_TURN_HOME);
             }
             work->timer--;
             if (work->timer == 0) {
-                work->state = 2;
+                work->state = UROURO_STATE_CHOOSE_WAIT;
                 break;
             }
             if (animPoseGetPeraEnd(npc->poseId)) {
@@ -137,13 +150,15 @@ USER_FUNC(urouro_main_func) {
                     step = lim;
                 }
                 npc->moveOffset.x = step * (f32)sin(npc->moveDir * 6.2831855f / 360.0f);
+#if VERSION <= VERSION_DEMO_JP
                 temp = (f32)cos(npc->moveDir * 6.2831855f / 360.0f);
                 npc->moveOffset.z = step * -temp;
-#if VERSION >= VERSION_JP
+#else
+                npc->moveOffset.z = step * -(f32)cos(npc->moveDir * 6.2831855f / 360.0f);
                 sfxFlag = 0;
-                if (psndGetFlag() & PSND_FLAG_MUTE_DOOR_SFX) {
-                    if (!(animPoseGetMaterialFlag(npc->poseId) & (ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2))) {
-                        sfxFlag = 0x10000;
+                if (psndGetFlag() & PSND_FLAG_DOOR_IN) {
+                    if (!(animPoseGetMaterialFlag(npc->poseId) & (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2))) {
+                        sfxFlag = PSND_SFX_DOOR_MUTE;
                     }
                 }
                 if (npc->footstepAccum > (f32)npc->footstepStride / npc->moveSpeed) {
@@ -151,10 +166,8 @@ USER_FUNC(urouro_main_func) {
                         if (npc->footstepSfxA != 0) {
                             psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxA)), &npc->position, 0xff, 0xff, 0, 8);
                         }
-                    } else {
-                        if (npc->footstepSfxB != 0) {
-                            psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
-                        }
+                    } else if (npc->footstepSfxB != 0) {
+                        psndSFXOnEx_3D(SFX_NAME_WORD(sfxFlag | searchPSSFXList(npc->footstepSfxB)), &npc->position, 0xff, 0xff, 0, 8);
                     }
                     npc->footstepAccum = 0.0f;
                     npc->footstepToggle = (s8)(1 - npc->footstepToggle);
@@ -165,22 +178,22 @@ USER_FUNC(urouro_main_func) {
 #endif
             }
             break;
-        case 2:
+        case UROURO_STATE_CHOOSE_WAIT:
             work->timer = work->waitTime / 2 + irand(work->waitTime / 2 + 1);
             npc->direction = reviseAngle(npc->direction + (f32)irand(60) - 30.0f);
             npc->moveDir = npc->direction;
             work->count = 0;
-            if (work->flags & UROURO_FLAG_LOOK_AROUND) {
+            if (work->flags & UROURO_FLAG_TURN_AROUND_UNUSED) {
                 work->count = irand(1000) % 3 + 2;
             }
-            work->state = 3;
+            work->state = UROURO_STATE_WAIT;
             break;
-        case 3:
+        case UROURO_STATE_WAIT:
             work->timer--;
             if (work->timer == 0) {
                 work->timer = work->turnTime / 2 + irand(work->turnTime / 2 + 1);
                 if (work->count == 0) {
-                    work->state = 0;
+                    work->state = UROURO_STATE_CHOOSE_WALK;
                 } else {
                     work->count--;
                     npc->direction = reviseAngle(180.0f + npc->direction);

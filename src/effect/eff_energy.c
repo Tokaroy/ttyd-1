@@ -1,13 +1,15 @@
 // Energy orb (Energy): a glowing sprite that spins, scales and pulses in brightness; type picks the colour pair.
 // Spawned by Mario's battle moves.
+
 #include "eff/eff_energy.h"
 #include "driver/dispdrv.h"
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "version.h"
-// US effect texture ids are 0x1C lower for these entries.
-#define EFF_TEX(id) ((id) - VERSION_PICK(0, 0x1C))
+#include "driver/effdrv.h"
+static void effEnergyDisp(CameraId cameraId, EffectEntry* effect);
+static void effEnergyMain(EffectEntry* effect);
 
 typedef struct EffEnergyWork {
     s32 type;        // 0x0, index into color_tbl
@@ -76,8 +78,8 @@ static void effEnergyMain(EffectEntry* effect) {
     position = (Vec){work->position.x, work->position.y, work->position.z};
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 16;
     }
     if (work->timer < 1000) {
@@ -92,6 +94,7 @@ static void effEnergyMain(EffectEntry* effect) {
     }
     work->rotZ += work->rotSpeed;
     work->scale += work->scaleSpeed;
+
     // pulse brightness up and down
     work->brightness += work->brightSpeed;
     if (work->brightness > 255) {
@@ -102,7 +105,7 @@ static void effEnergyMain(EffectEntry* effect) {
         work->brightness = 0;
         work->brightSpeed = 32;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effEnergyDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effEnergyDisp, effect);
 }
 
 /** Draws the orb as a camera-facing sprite rotated around Z, with colours chosen by type. */

@@ -1,8 +1,19 @@
 // gor.rel (ゴロツキタウン, Rogueport): shared code and the REL prolog/epilog.
 // Registers the init events of gor_00..gor_04 and gor_10..gor_12.
 
+#include "version.h"
 #include "battle/battle_unit.h"
+#include "evt/evt_urouro.h"
+#include "evt/evt_window.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_party.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "evt/evt_johoya.h"
+#include "rels/gor/include/gor.h"
 
 #include "data/mapdata.h"
 #include "mario/mariost.h"
@@ -12,23 +23,32 @@
 #include "stdio.h"
 #include "manager/evtmgr_cmd.h"
 #include "dolphin/mtx.h"
-#include "evt/evt_johoya.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
-#include "evt/evt_urouro.h"
-#include "evt/evt_window.h"
 #include "system.h"
 #include "pmario_sound.h"
-#include "gor.h"
-#include "evt/evt_story.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
 
 #if VERSION >= VERSION_JP
 static s32 gor_inemuri_snd_id;
 static char* gor_msg_cat_buf;
+#endif
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
+
+EvtWord gor_villager_urouro[19];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord inemuri_snd[];
+extern EvtWord mario_and_party_sleep[];
+extern EvtWord luigi_gor_first_talk[];
+#else
+EvtWord inemuri_snd[27];
+EvtWord mario_and_party_sleep[259];
+EvtWord luigi_gor_first_talk[205];
 #endif
 
 /**
@@ -73,6 +93,7 @@ void _unresolved(void) {
 }
 
 #if VERSION >= VERSION_JP
+// Descriptive name (not in the symbol maps); placeholder unk_gor_0000050c, JP gor .text+0x440. See docs/NAME_PROVENANCE.md.
 /** Script helper (Japanese release and later): frees the string built by evt_gor_msg_cat_alloc, if there is one. */
 USER_FUNC(evt_gor_msg_cat_free) {
     if (gor_msg_cat_buf == NULL) {
@@ -82,7 +103,16 @@ USER_FUNC(evt_gor_msg_cat_free) {
     gor_msg_cat_buf = NULL;
     return EVT_RETURN_DONE;
 }
+#endif
 
+/**
+ * Script helper (Japanese release and later): builds one string out of args[0],
+ * the message named args[1] and args[2], in a map-allocated buffer,
+ * and writes the buffer's address into args[3].
+ * Used to put fixed text around a looked-up message in Rogueport scripts.
+ * Descriptive name (not in the symbol maps); placeholder unk_gor_0000041c, JP gor .text+0x350. See docs/NAME_PROVENANCE.md.
+ */
+#if VERSION >= VERSION_JP
 /**
  * Script helper (Japanese release and later): builds one string out of args[0],
  * the message named args[1] and args[2], in a map-allocated buffer,
@@ -168,6 +198,11 @@ USER_FUNC(evt_goki_sub_intpl_get_value) {
     return EVT_RETURN_DONE;
 }
 
+/**
+ * Script helper (Japanese release and later): remembers the sound effect id args[0] of Mario's snoring
+ * so it can be stopped later (-1 for none).
+ * Descriptive name (not in the symbol maps); placeholder unk_gor_00000104, JP gor .text+0x38. See docs/NAME_PROVENANCE.md.
+ */
 #if VERSION >= VERSION_JP
 /**
  * Script helper (Japanese release and later): remembers the sound effect id args[0] of Mario's snoring
@@ -177,7 +212,14 @@ USER_FUNC(evt_gor_inemuri_snd_set) {
     gor_inemuri_snd_id = evtGetValue(event, event->args[0]);
     return EVT_RETURN_DONE;
 }
+#endif
 
+/**
+ * Script helper (Japanese release and later): stops the snoring sound effect saved by evt_gor_inemuri_snd_set,
+ * if any.
+ * Descriptive name (not in the symbol maps); placeholder unk_gor_000000cc, JP gor .text+0x0. See docs/NAME_PROVENANCE.md.
+ */
+#if VERSION >= VERSION_JP
 /**
  * Script helper (Japanese release and later): stops the snoring sound effect saved by evt_gor_inemuri_snd_set,
  * if any.
@@ -224,8 +266,8 @@ EVT_END()
 
 /**
  * Plays while Mario listens to Luigi's long talk (started by luigi_gor_first_talk):
- * after 1200 frames (20 s) Mario dozes off and snores, after 900 frames the partner falls asleep too,
- * and after 600 frames Mario yawns and stretches.
+ * counted from the start, after 600 frames Mario yawns and stretches, after 900 frames the partner falls asleep,
+ * and after 1200 frames (20 s) Mario dozes off and snores.
  * It runs until GF(0) is set, then wakes Mario (and the partner) up, with a wake-up voice and a short stretch.
  */
 EVT_BEGIN(mario_and_party_sleep)
@@ -235,6 +277,7 @@ EVT_BEGIN(mario_and_party_sleep)
     SET_VALUE(LW(3), 600)
     SET_VALUE(LF(0), 0)
     SET_VALUE(LW(15), -1)
+
     // Every frame while Luigi talks on:
     LOOP(0)
         // Mario nods off and starts to snore.
@@ -242,29 +285,31 @@ EVT_BEGIN(mario_and_party_sleep)
             CALL(evt_mario_set_pose, STRING("M_N_5A"))
             SPAWN_EVENT_GET_ID(PTR(inemuri_snd), LW(15))
         END_IF
+
         // The partner falls asleep as well, in its own sleeping pose.
         IF_INT_EQUAL(LW(2), 0)
             CALL(evt_mario_get_party, LW(0))
             IF_INT_NOT_EQUAL(LW(0), 0)
                 SWITCH(LW(0))
-                    CASE_EQUAL(1)
+                    CASE_EQUAL(PARTY_GOOMBELLA)
                     CALL(evt_party_set_pose, 0, STRING("PKR_N_1"))
-                    CASE_EQUAL(2)
+                    CASE_EQUAL(PARTY_KOOPS)
                     CALL(evt_party_set_pose, 0, STRING("PNK_N_1"))
-                    CASE_EQUAL(3)
+                    CASE_EQUAL(PARTY_BOBBERY)
                     CALL(evt_party_set_pose, 0, STRING("PBM_N_1"))
-                    CASE_EQUAL(4)
+                    CASE_EQUAL(PARTY_YOSHI)
                     CALL(evt_party_set_pose, 0, STRING("PYS_N_1"))
-                    CASE_EQUAL(5)
+                    CASE_EQUAL(PARTY_FLURRIE)
                     CALL(evt_party_set_pose, 0, STRING("PWD_N_1"))
-                    CASE_EQUAL(6)
+                    CASE_EQUAL(PARTY_VIVIAN)
                     CALL(evt_party_set_pose, 0, STRING("PTR_N_1"))
-                    CASE_EQUAL(7)
+                    CASE_EQUAL(PARTY_MS_MOWZ)
                     CALL(evt_party_set_pose, 0, STRING("PCH_N_1"))
                 END_SWITCH
             END_IF
         END_IF
-        // Mario yawns and stretches, then goes back to standing; this repeats.
+
+        // Mario yawns and stretches, then goes back to standing 51 frames later; this happens once.
         IF_INT_EQUAL(LW(3), 0)
             IF_INT_EQUAL(LF(0), 0)
                 SET_VALUE(LF(0), 1)
@@ -291,6 +336,7 @@ EVT_BEGIN(mario_and_party_sleep)
             SUBTRACT(LW(3), 1)
         END_IF
     END_LOOP
+
     // Luigi has finished: the snoring stops.
     IF_INT_NOT_EQUAL(LW(15), -1)
         DELETE_EVENT(LW(15))
@@ -298,28 +344,30 @@ EVT_BEGIN(mario_and_party_sleep)
         CALL(evt_gor_inemuri_snd_off)
 #endif
     END_IF
+
     // The partner wakes up.
     IF_INT_LESS_OR_EQUAL(LW(2), 0)
         CALL(evt_mario_get_party, LW(0))
         IF_INT_NOT_EQUAL(LW(0), 0)
             SWITCH(LW(0))
-                CASE_EQUAL(1)
+                CASE_EQUAL(PARTY_GOOMBELLA)
                 CALL(evt_party_set_pose, 0, STRING("PKR_S_1"))
-                CASE_EQUAL(2)
+                CASE_EQUAL(PARTY_KOOPS)
                 CALL(evt_party_set_pose, 0, STRING("PNK_S_1"))
-                CASE_EQUAL(3)
+                CASE_EQUAL(PARTY_BOBBERY)
                 CALL(evt_party_set_pose, 0, STRING("PBM_S_1"))
-                CASE_EQUAL(4)
+                CASE_EQUAL(PARTY_YOSHI)
                 CALL(evt_party_set_pose, 0, STRING("PYS_S_1"))
-                CASE_EQUAL(5)
+                CASE_EQUAL(PARTY_FLURRIE)
                 CALL(evt_party_set_pose, 0, STRING("PWD_S_1"))
-                CASE_EQUAL(6)
+                CASE_EQUAL(PARTY_VIVIAN)
                 CALL(evt_party_set_pose, 0, STRING("PTR_S_1"))
-                CASE_EQUAL(7)
+                CASE_EQUAL(PARTY_MS_MOWZ)
                 CALL(evt_party_set_pose, 0, STRING("PCH_S_1"))
             END_SWITCH
         END_IF
     END_IF
+
     // If Mario was mid-yawn, let him finish.
     IF_INT_EQUAL(LF(0), 1)
         IF_INT_NOT_EQUAL(LW(3), 0)
@@ -328,6 +376,7 @@ EVT_BEGIN(mario_and_party_sleep)
         WAIT_FRAMES(LW(3))
         CALL(evt_mario_set_pose, STRING("M_S_1"))
     END_IF
+
     // If Mario was asleep he wakes with a voice and a short stretch.
     IF_INT_LESS_OR_EQUAL(LW(1), 0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -351,67 +400,64 @@ EVT_END()
  */
 EVT_BEGIN(luigi_gor_first_talk)
     CALL(evt_party_stop, 0)
-    IF_INT_EQUAL(GSWF(GSWF_GOR_LUIGI_FIRST_TALK), 0)
+    IF_INT_EQUAL(GSWF_GOR_LUIGI_FIRST_TALK_DONE, 0)
         CALL(evt_msg_print, 0, STRING("gor_luigi_00"), 0, STRING("me"))
         CALL(evt_mario_set_pose, STRING("M_I_2"))
         WAIT_MS(500)
-        // Both early demos print the greeting in each branch; the releases pick the message into LW(2) and print it
-        // once
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG8_16_THE_RETURN_OF_THE_QUEEN)
 #if VERSION <= VERSION_DEMO_JP
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_16_SHADOW_QUEEN)
             CALL(evt_msg_print, 0, STRING("gor_luigi_01"), 0, STRING("me"))
-        ELSE
-            CALL(evt_msg_print, 0, STRING("gor_luigi_01_1"), 0, STRING("me"))
-        END_IF
 #else
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_16_SHADOW_QUEEN)
             SET_VALUE(LW(2), STRING("gor_luigi_01"))
+#endif
         ELSE
+#if VERSION <= VERSION_DEMO_JP
+            CALL(evt_msg_print, 0, STRING("gor_luigi_01_1"), 0, STRING("me"))
+#else
             SET_VALUE(LW(2), STRING("gor_luigi_01_1"))
+#endif
         END_IF
+#if VERSION >= VERSION_JP
         CALL(evt_msg_print, 0, LW(2), 0, STRING("me"))
 #endif
         CALL(evt_mario_set_pose, STRING("M_N_5B"))
         WAIT_MS(500)
-        SET_VALUE(GSWF(GSWF_GOR_LUIGI_FIRST_TALK), 1)
+        SET_VALUE(GSWF_GOR_LUIGI_FIRST_TALK_DONE, 1)
     END_IF
-    // Both early demos print each Luigi line in its case; the releases pick the message into LW(2) and print it once
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_BETWEEN(STG1_17_FATHER_SON_REUNITED, STG2_24_BOSS_BATTLE)
 #if VERSION <= VERSION_DEMO_JP
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG1_17_FATHER_AND_SON_REUNITED, STORY_STG2_24_BOSS_BATTLE)
         CALL(evt_msg_print, 0, STRING("gor_luigi_02"), 0, STRING("me"))
-        CASE_BETWEEN(STORY_STG2_25_AFTER_THE_BOSS_BATTLE, STORY_STG3_31_GRUBBAS_PLANS)
+        CASE_BETWEEN(STG2_25_AFTER_THE_BOSS_BATTLE, STG3_31_GRUBBAS_PLANS)
         CALL(evt_msg_print, 0, STRING("gor_luigi_03"), 0, STRING("me"))
-        CASE_BETWEEN(STORY_STG3_32_BOSS_BATTLE, STORY_STG4_15_04_SHADOW_SIRENS_AND_DOOPLISS)
+        CASE_BETWEEN(STG3_32_BOSS_BATTLE, STG4_15_04_SHADOW_SIRENS_DOOPLISS)
         CALL(evt_msg_print, 0, STRING("gor_luigi_04"), 0, STRING("me"))
-        CASE_BETWEEN(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT, STORY_STG5_42_PIRATES_VS_X_NAUTS)
+        CASE_BETWEEN(STG4_15_05_PEACH_X_NAUT_PHD_REPORT, STG5_42_PIRATES_VS_X_NAUTS)
         CALL(evt_msg_print, 0, STRING("gor_luigi_05"), 0, STRING("me"))
-        CASE_BETWEEN(STORY_STG5_43_X_NAUTS_RETREAT, STORY_STG6_53_THE_REAL_GARNET_STAR)
+        CASE_BETWEEN(STG5_43_X_NAUTS_RETREAT, STG6_53_THE_REAL_GARNET_STAR)
         CALL(evt_msg_print, 0, STRING("gor_luigi_06"), 0, STRING("me"))
-        CASE_BETWEEN(STORY_STG6_54_WELCOME_BACK, STORY_STG7_19_THE_DOOR_TO_LORD_CRUMP)
+        CASE_BETWEEN(STG6_54_WELCOME_BACK, STG7_19_THE_DOOR_TO_LORD_CRUMP)
         CALL(evt_msg_print, 0, STRING("gor_luigi_07"), 0, STRING("me"))
-        CASE_BETWEEN(STORY_STG7_20_LORD_CRUMP_DEFEATED, STORY_STG8_15_GRODUS)
+        CASE_BETWEEN(STG7_20_LORD_CRUMP_DEFEATED, STG8_15_GRODUS)
         CALL(evt_msg_print, 0, STRING("gor_luigi_08"), 0, STRING("me"))
-        CASE_GREATER_OR_EQUAL(STORY_STG8_16_SHADOW_QUEEN)
+        CASE_GREATER_OR_EQUAL(STG8_16_THE_RETURN_OF_THE_QUEEN)
         CALL(evt_msg_print, 0, STRING("gor_luigi_09"), 0, STRING("me"))
     END_SWITCH
 #else
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_BETWEEN(STORY_STG1_17_FATHER_AND_SON_REUNITED, STORY_STG2_24_BOSS_BATTLE)
         SET_VALUE(LW(2), STRING("gor_luigi_02"))
-        CASE_BETWEEN(STORY_STG2_25_AFTER_THE_BOSS_BATTLE, STORY_STG3_31_GRUBBAS_PLANS)
+        CASE_BETWEEN(STG2_25_AFTER_THE_BOSS_BATTLE, STG3_31_GRUBBAS_PLANS)
         SET_VALUE(LW(2), STRING("gor_luigi_03"))
-        CASE_BETWEEN(STORY_STG3_32_BOSS_BATTLE, STORY_STG4_15_04_SHADOW_SIRENS_AND_DOOPLISS)
+        CASE_BETWEEN(STG3_32_BOSS_BATTLE, STG4_15_04_SHADOW_SIRENS_DOOPLISS)
         SET_VALUE(LW(2), STRING("gor_luigi_04"))
-        CASE_BETWEEN(STORY_STG4_15_05_PEACH_X_NAUT_PHD_REPORT, STORY_STG5_42_PIRATES_VS_X_NAUTS)
+        CASE_BETWEEN(STG4_15_05_PEACH_X_NAUT_PHD_REPORT, STG5_42_PIRATES_VS_X_NAUTS)
         SET_VALUE(LW(2), STRING("gor_luigi_05"))
-        CASE_BETWEEN(STORY_STG5_43_X_NAUTS_RETREAT, STORY_STG6_53_THE_REAL_GARNET_STAR)
+        CASE_BETWEEN(STG5_43_X_NAUTS_RETREAT, STG6_53_THE_REAL_GARNET_STAR)
         SET_VALUE(LW(2), STRING("gor_luigi_06"))
-        CASE_BETWEEN(STORY_STG6_54_WELCOME_BACK, STORY_STG7_19_THE_DOOR_TO_LORD_CRUMP)
+        CASE_BETWEEN(STG6_54_WELCOME_BACK, STG7_19_THE_DOOR_TO_LORD_CRUMP)
         SET_VALUE(LW(2), STRING("gor_luigi_07"))
-        CASE_BETWEEN(STORY_STG7_20_LORD_CRUMP_DEFEATED, STORY_STG8_15_GRODUS)
+        CASE_BETWEEN(STG7_20_LORD_CRUMP_DEFEATED, STG8_15_GRODUS)
         SET_VALUE(LW(2), STRING("gor_luigi_08"))
-        CASE_GREATER_OR_EQUAL(STORY_STG8_16_SHADOW_QUEEN)
+        CASE_GREATER_OR_EQUAL(STG8_16_THE_RETURN_OF_THE_QUEEN)
         SET_VALUE(LW(2), STRING("gor_luigi_09"))
     END_SWITCH
     CALL(evt_msg_print, 0, LW(2), 0, STRING("me"))
@@ -425,16 +471,16 @@ EVT_BEGIN(luigi_gor_first_talk)
     CALL(johoya_data_alloc, STRING("gor_luigi_talk"))
     SET_VALUE(LW(10), 0)
     LABEL(0)
-    CALL(evt_win_other_select, 18)
+    CALL(evt_win_other_select, SELECT_TYPE_INFORMANT_LUIGI)
     IF_INT_EQUAL(LW(0), 0)
         CALL(johoya_data_free)
         CALL(evt_msg_print, 0, STRING("gor_luigi_13"), 0, STRING("me"))
         GOTO(1)
     END_IF
     IF_INT_EQUAL(LW(10), 0)
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon_f, PSND_FADE_IN | PSND_CH(1), STRING("BGM_EVT_RUIJI1"), 500)
-        CALL(evt_snd_envoff, PSND_FADE_HOLD)
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon_f, PSND_FADEIN | PSND_SLOT(1), STRING("BGM_EVT_RUIJI1"), 500)
+        CALL(evt_snd_envoff, PSND_PAUSE)
         SET_VALUE(LW(10), 1)
     END_IF
     SET_VALUE(GF(0), 0)
@@ -446,10 +492,10 @@ EVT_BEGIN(luigi_gor_first_talk)
     GOTO(0)
     LABEL(1)
     IF_INT_EQUAL(LW(10), 1)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
-        CALL(evt_snd_envoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_envon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
+        CALL(evt_snd_envoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_envon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_IF
     CALL(evt_party_run, 0)
     RETURN

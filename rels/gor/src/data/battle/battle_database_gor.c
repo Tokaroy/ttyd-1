@@ -10,22 +10,25 @@
 #include "battle/battle_stage_object.h"
 #include "driver/npcdrv.h"
 
-BattleStageObjectData gor_btlobject_data[6];
-BattleStageData gor_btlstage_data[2];
-BattleUnitSetup btlparty_gor_gor_00_01_off_1[1];
-BattleGroupSetup btlgrp_gor_gor_00_01_off_1;
-BattleUnitSetup btlparty_gor_gor_02_ac_lecture[1];
-BattleGroupSetup btlgrp_gor_gor_02_ac_lecture;
-BattleUnitSetup btlparty_gor_gor_02_sac_lecture[1];
-BattleGroupSetup btlgrp_gor_gor_02_sac_lecture;
-BattleUnitSetup btlparty_gor_gor_02_01_off_1[1];
-BattleGroupSetup btlgrp_gor_gor_02_01_off_1;
-NpcBattleSelect btlgrpsel_gor_btlno_gor_test1_off[2];
-NpcBattleSelect btlgrpsel_gor_btlno_gor_test2_off[2];
-NpcBattleSelect btlgrpsel_gor_btlno_gor_00_01_off[2];
-NpcBattleSelect btlgrpsel_gor_btlno_gor_02_aclec_off[2];
-NpcBattleSelect btlgrpsel_gor_btlno_gor_02_saclec_off[2];
-NpcBattleSelect btlgrpsel_gor_btlno_gor_02_01_off[2];
+extern BattleUnitKind unit_boss_kanbu1;
+extern BattleUnitKind unit_lecture_christine;
+
+static BattleStageObjectData gor_btlobject_data[6];
+static BattleStageData gor_btlstage_data[2];
+static BattleUnitSetup btlparty_gor_gor_00_01_off_1[1];
+static BattleGroupSetup btlgrp_gor_gor_00_01_off_1;
+static BattleUnitSetup btlparty_gor_gor_02_ac_lecture[1];
+static BattleGroupSetup btlgrp_gor_gor_02_ac_lecture;
+static BattleUnitSetup btlparty_gor_gor_02_sac_lecture[1];
+static BattleGroupSetup btlgrp_gor_gor_02_sac_lecture;
+static BattleUnitSetup btlparty_gor_gor_02_01_off_1[1];
+static BattleGroupSetup btlgrp_gor_gor_02_01_off_1;
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_test1_off[2];
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_test2_off[2];
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_00_01_off[2];
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_02_aclec_off[2];
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_02_saclec_off[2];
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_02_01_off[2];
 NpcSetupBattleInfo btlsetup_gor_tbl[7];
 NpcTerritoryInfo btl_gor_setup_no_tbl[7];
 
@@ -33,20 +36,20 @@ NpcTerritoryInfo btl_gor_setup_no_tbl[7];
  * Props of the Rogueport battle stage: each entry names a model of the backdrop and where it stands, the last
  * entries being the background layers.
  */
-BattleStageObjectData gor_btlobject_data[] = {
-    {"A1", 2, 0, {33.0f, 0.0f, -48.0f}, 0, 60, {0}},
-    {"A2", 2, 1, {0.0f, 0.0f, 71.0f}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
-    {"B", 2, 2, {0}, 0, 60, {0}},
-    {"C", 2, 3, {0}, 0, 60, {0}},
+static BattleStageObjectData gor_btlobject_data[] = {
+    {"A1", 2, STAGE_LAYER_A1, {33.0f, 0.0f, -48.0f}, 0, 60, {0}},
+    {"A2", 2, STAGE_LAYER_A2, {0.0f, 0.0f, 71.0f}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
+    {"B", 2, STAGE_LAYER_B, {0}, 0, 60, {0}},
+    {"C", 2, STAGE_LAYER_C, {0}, 0, 60, {0}},
 };
 
 /**
  * Battle stage of Rogueport: the stage model directories, the props above, the backdrop weapons and the
  * background event that runs during the fight.
  */
-BattleStageData gor_btlstage_data[] = {
+static BattleStageData gor_btlstage_data[] = {
     {
         "bti_01", // globalStageDataDir
         "stg_00_0", // specificStageDataDir
@@ -69,13 +72,10 @@ BattleStageData gor_btlstage_data[] = {
     },
 };
 
-/**
- * Enemy party of battle gor_00_01 in Rogueport: Lord Crump (start positions and item drop tables included).
- */
-BattleUnitSetup btlparty_gor_gor_00_01_off_1[] = {
+static BattleUnitSetup btlparty_gor_gor_00_01_off_1[] = {
     {
         &unit_boss_kanbu1, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -85,11 +85,7 @@ BattleUnitSetup btlparty_gor_gor_00_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gor_00_01 in Rogueport: the party above with its item-drop weights and the heart and
- * flower drop tables.
- */
-BattleGroupSetup btlgrp_gor_gor_00_01_off_1 = {
+static BattleGroupSetup btlgrp_gor_gor_00_01_off_1 = {
     1, // numEnemies
     btlparty_gor_gor_00_01_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -99,14 +95,10 @@ BattleGroupSetup btlgrp_gor_gor_00_01_off_1 = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gor_02_ac_lecture in Rogueport: Goombella (action command tutorial) (start positions
- * and item drop tables included).
- */
-BattleUnitSetup btlparty_gor_gor_02_ac_lecture[] = {
+static BattleUnitSetup btlparty_gor_gor_02_ac_lecture[] = {
     {
         &unit_lecture_christine, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -116,11 +108,7 @@ BattleUnitSetup btlparty_gor_gor_02_ac_lecture[] = {
     },
 };
 
-/**
- * Enemy group of battle gor_02_ac_lecture in Rogueport: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gor_gor_02_ac_lecture = {
+static BattleGroupSetup btlgrp_gor_gor_02_ac_lecture = {
     1, // numEnemies
     btlparty_gor_gor_02_ac_lecture, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -130,14 +118,10 @@ BattleGroupSetup btlgrp_gor_gor_02_ac_lecture = {
     5, // reserved_1C
 };
 
-/**
- * Enemy party of battle gor_02_sac_lecture in Rogueport: Professor Frankly (special action command tutorial)
- * (start positions and item drop tables included).
- */
-BattleUnitSetup btlparty_gor_gor_02_sac_lecture[] = {
+static BattleUnitSetup btlparty_gor_gor_02_sac_lecture[] = {
     {
         &unit_lecture_frankli_sac, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -147,11 +131,7 @@ BattleUnitSetup btlparty_gor_gor_02_sac_lecture[] = {
     },
 };
 
-/**
- * Enemy group of battle gor_02_sac_lecture in Rogueport: the party above with its item-drop weights and the
- * heart and flower drop tables.
- */
-BattleGroupSetup btlgrp_gor_gor_02_sac_lecture = {
+static BattleGroupSetup btlgrp_gor_gor_02_sac_lecture = {
     1, // numEnemies
     btlparty_gor_gor_02_sac_lecture, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -161,11 +141,10 @@ BattleGroupSetup btlgrp_gor_gor_02_sac_lecture = {
     5, // reserved_1C
 };
 
-/** Enemy party of battle gor_02_01 in Rogueport: Gus (start positions and item drop tables included). */
-BattleUnitSetup btlparty_gor_gor_02_01_off_1[] = {
+static BattleUnitSetup btlparty_gor_gor_02_01_off_1[] = {
     {
         &unit_monban, // unitKindParams
-        1, // alliance
+        ALLIANCE_ENEMY, // alliance
         {0}, // pad_05
         BATTLE_PHASE_ENEMY, // attackPhase
         {90.0f, 0.0f, 0.0f}, // position
@@ -175,11 +154,7 @@ BattleUnitSetup btlparty_gor_gor_02_01_off_1[] = {
     },
 };
 
-/**
- * Enemy group of battle gor_02_01 in Rogueport: the party above with its item-drop weights and the heart and
- * flower drop tables.
- */
-BattleGroupSetup btlgrp_gor_gor_02_01_off_1 = {
+static BattleGroupSetup btlgrp_gor_gor_02_01_off_1 = {
     1, // numEnemies
     btlparty_gor_gor_02_01_off_1, // enemyData
     0, 0, // heldItemWeight..randomItemWeight
@@ -189,38 +164,32 @@ BattleGroupSetup btlgrp_gor_gor_02_01_off_1 = {
     5, // reserved_1C
 };
 
-/** Developer test battle 1 in Rogueport: always fights gor_02_01_off_1. */
-NpcBattleSelect btlgrpsel_gor_btlno_gor_test1_off[] = {
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_test1_off[] = {
     {50, &btlgrp_gor_gor_02_01_off_1, gor_btlstage_data},
     {0},
 };
 
-/** Developer test battle 2 in Rogueport: always fights gor_02_01_off_1. */
-NpcBattleSelect btlgrpsel_gor_btlno_gor_test2_off[] = {
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_test2_off[] = {
     {50, &btlgrp_gor_gor_02_01_off_1, &gor_btlstage_data[1]},
     {0},
 };
 
-/** Battle 00_01 in Rogueport always fights one group, gor_00_01_off_1. */
-NpcBattleSelect btlgrpsel_gor_btlno_gor_00_01_off[] = {
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_00_01_off[] = {
     {50, &btlgrp_gor_gor_00_01_off_1, gor_btlstage_data},
     {0},
 };
 
-/** Battle 02_aclec in Rogueport always fights one group, gor_02_ac_lecture. */
-NpcBattleSelect btlgrpsel_gor_btlno_gor_02_aclec_off[] = {
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_02_aclec_off[] = {
     {50, &btlgrp_gor_gor_02_ac_lecture, &gor_btlstage_data[1]},
     {0},
 };
 
-/** Battle 02_saclec in Rogueport always fights one group, gor_02_sac_lecture. */
-NpcBattleSelect btlgrpsel_gor_btlno_gor_02_saclec_off[] = {
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_02_saclec_off[] = {
     {50, &btlgrp_gor_gor_02_sac_lecture, &gor_btlstage_data[1]},
     {0},
 };
 
-/** Battle 02_01 in Rogueport always fights one group, gor_02_01_off_1. */
-NpcBattleSelect btlgrpsel_gor_btlno_gor_02_01_off[] = {
+static NpcBattleSelect btlgrpsel_gor_btlno_gor_02_01_off[] = {
     {50, &btlgrp_gor_gor_02_01_off_1, &gor_btlstage_data[1]},
     {0},
 };
@@ -236,7 +205,7 @@ NpcSetupBattleInfo btlsetup_gor_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gor_btlno_gor_test1_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -246,7 +215,7 @@ NpcSetupBattleInfo btlsetup_gor_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gor_btlno_gor_test2_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_ZAKO_BATTLE1", // bgmName
     },
@@ -257,7 +226,7 @@ NpcSetupBattleInfo btlsetup_gor_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gor_btlno_gor_00_01_off, // select
-        NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        (NPC_BATTLE_NO_ESCAPE | NPC_BATTLE_STORY), // battleFlags
         0, // randomMode
         {{0}, {5, 5}, {0}, {0}, {0}, {5, 5}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_CHUBOSS_BATTLE1", // bgmName
@@ -269,7 +238,7 @@ NpcSetupBattleInfo btlsetup_gor_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gor_btlno_gor_02_aclec_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_KOBOSS_BATTLE1", // bgmName
     },
@@ -280,7 +249,7 @@ NpcSetupBattleInfo btlsetup_gor_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gor_btlno_gor_02_saclec_off, // select
-        0, 0, // battleFlags, randomMode
+        0, 0, // battleFlags..randomMode
         {{1, 1}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}, {0}}, // randomRanges
         "BGM_KOBOSS_BATTLE1", // bgmName
     },
@@ -291,7 +260,7 @@ NpcSetupBattleInfo btlsetup_gor_tbl[] = {
         -1, // swFlag
         NULL, // altSelect
         btlgrpsel_gor_btlno_gor_02_01_off, // select
-        NPC_BATTLE_MARIO_PAUSE3_VOICE, // battleFlags
+        NPC_BATTLE_STORY, // battleFlags
         0, // randomMode
         {{5, 5}, {0}, {0}, {0}, {0}, {5, 5}, {0}, {0}, {0}, {0}, {5, 5}, {0}, {1, 1}, {1, 1}, {1, 1}, {1, 1}}, // randomRanges
         "BGM_KOBOSS_BATTLE1", // bgmName
@@ -299,10 +268,6 @@ NpcSetupBattleInfo btlsetup_gor_tbl[] = {
     {0},
 };
 
-/**
- * Battle ids of Rogueport (BTLNO_GOR_*) and their index into btlsetup_gor_tbl; handed to the battle system by
- * relSetBtlAddr.
- */
 NpcTerritoryInfo btl_gor_setup_no_tbl[] = {
     {"BTLNO_GOR_TEST1", 0},
     {"BTLNO_GOR_TEST2", 1},

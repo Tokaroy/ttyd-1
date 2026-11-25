@@ -1,12 +1,13 @@
 // The moving boulder (iwa) of Twilight Trail: one shared work block and the script that drives it.
 
 #include "battle/battle_unit.h"
+#include "gra.h"
 #include "evt/evt_cmd.h"
+#include "party.h"
+#include "statuswindow.h"
 
 #include "mario/mario.h"
 #include "driver/hitdrv.h"
-#include "party.h"
-#include "statuswindow.h"
 #include "system.h"
 
 typedef struct IwaMoveWork {
@@ -16,9 +17,11 @@ typedef struct IwaMoveWork {
     EventEntry* event;
     EvtWord* script;
 } IwaMoveWork;
-IwaMoveWork iwamove;
+static IwaMoveWork iwamove;
 
-extern EvtWord evt_iwamove_main_evt[];
+static USER_FUNC(evt_iwamove_main);
+
+static EvtWord evt_iwamove_main_evt[4];
 
 /**
  * Starts the boulder push watcher: stores the script in args[0] (run when the push is done)
@@ -92,7 +95,7 @@ static USER_FUNC(evt_iwamove_main) {
 }
 
 /** Wrapper that runs evt_iwamove_main. */
-EVT_BEGIN(evt_iwamove_main_evt)
+static EVT_BEGIN(evt_iwamove_main_evt)
     CALL(evt_iwamove_main)
     RETURN
 EVT_END()

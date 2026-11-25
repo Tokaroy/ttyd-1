@@ -1,10 +1,29 @@
 // kpa_01 (クッパ編, Bowser's interludes): a Bowser's Castle scene in the hall with Kammy Koopa, the Hammer Bros. and the
-// Spiny guards.
+// Koopatrol guards.
 
+#include "version.h"
+#include "koopa.h"
+#include "kpa.h"
 #include "driver/msgdrv.h"
+#include "kpa_act.h"
 #include "memory.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_img.h"
+#include "evt/evt_map.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_offscreen.h"
+#include "evt/evt_paper.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "driver/npcdrv.h"
+#include "driver/mapdrv.h"
+#include "system.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
 
 #include "stdio.h"
 #include "manager/evtmgr_cmd.h"
@@ -14,40 +33,92 @@
 #include "evt/evt_npc.h"
 #include "evt/evt_case.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_img.h"
-#include "evt/evt_map.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_offscreen.h"
-#include "evt/evt_paper.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
-#include "kpa_act.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
-#include "driver/mapdrv.h"
-#include "driver/camdrv.h"
-#if VERSION == VERSION_EU
-#include "koopa.h"
+#include "driver/seqdrv.h"
 #include "kpa.h"
-#endif
 
 static USER_FUNC(get_togenoko_pos);
+
+/**
+ * Script helper: args[0] = number, returns "hi_<number>" in args[1],
+ * the name of a wall fire object (shan_init walks 1..12).
+ */
 static USER_FUNC(make_name);
 static void kpa_stg1_008_cb(s32 type, smartEntry* smart);
 static void kpa_stg1_014_2_cb(s32 type, smartEntry* smart);
 static void kpa_stg1_036_cb(s32 type, smartEntry* smart);
 static void kpa_stg1_034_cb(s32 type, smartEntry* smart);
 
+static EvtWord kpa_01_door_open[219];
+static EvtWord kpa_01_door_close[237];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord kpa_01_touzyo_evt[];
+extern EvtWord kpa_01_syuppatu_evt[];
+#else
+EvtWord kpa_01_touzyo_evt[217];
+EvtWord kpa_01_syuppatu_evt[1729];
+#endif
+
+static EvtWord kpa_01_pos_check[23];
+static EvtWord douzou_1_touch_evt[19];
+static EvtWord douzou_2_touch_evt[19];
+static EvtWord douzou_3_touch_evt[43];
+static EvtWord togenoko_A_talk_evt[8];
+static EvtWord togenoko_B_talk_evt[8];
+static EvtWord togenoko_C_init_evt[14];
+static EvtWord hammer_AB_init_evt[13];
+static EvtWord hammer_AB_talk_evt[111];
+static EvtWord hammer_C_talk_evt[19];
+static EvtWord hammer_D_talk_evt[8];
+static EvtWord hammer_E_init_evt[9];
+static EvtWord hammer_E_talk_evt[8];
+static EvtWord baba_init_evt[13];
+static EvtWord kamek_init_evt[9];
+static EvtWord hkoopa_init_evt[9];
 static NpcSetupInfo npcEnt[13];
+static EvtWord shan_init[46];
+EvtWord kpa_01_init_evt[];
+
+#if VERSION == VERSION_EU
+
+/** PAL only: called at the start of kpa_03's jumpstand_evt. */
+USER_FUNC(kpa_cancel_attack_mode) {
+    kpaCancelAttackMode();
+    return EVT_RETURN_DONE;
+}
+#endif
 
 /**
- * Throne-room door opens: the two Spiny guards walk to their posts and swing the double door open,
- * the door objects rotating 180 degrees over 2 s with a sound at the door. Used by the arrival cutscene.
+ * Script helper: rotates the point (args[2], args[3]) about the centre (args[0], args[1]) by args[4] degrees
+ * around Y, returning x in args[5] and z in args[6]. Moves the Koopatrol guards along an arc around the door.
  */
-EVT_BEGIN(kpa_01_door_open)
+static USER_FUNC(get_togenoko_pos) {
+    EvtWord* args = event->args;
+    f32 cx = evtGetFloat(event, args[0]);
+    f32 cz = evtGetFloat(event, args[1]);
+    f32 x = evtGetFloat(event, args[2]);
+    f32 z = evtGetFloat(event, args[3]);
+    f32 angle = evtGetFloat(event, args[4]);
+    Mtx mtx;
+    Vec pos;
+
+    PSMTXRotRad(mtx, 'Y', 0.017453292f * angle);
+    pos.x = x - cx;
+    pos.y = 0.0f;
+    pos.z = z - cz;
+    PSMTXMultVec(mtx, &pos, &pos);
+    pos.x += cx;
+    pos.z += cz;
+    evtSetFloat(event, args[5], pos.x);
+    evtSetFloat(event, args[6], pos.z);
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Throne-room door opens: the two Koopatrol guards walk to their posts and swing the double door open,
+ * each door leaf rotating about 100 degrees over 2 s with a sound at the door. Used by the arrival cutscene.
+ */
+static EVT_BEGIN(kpa_01_door_open)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_set_ry, STRING("トゲノコＡ"), 270)
         CALL(evt_npc_move_position, STRING("トゲノコＡ"), -729, -5, 1000, 0, 0)
@@ -60,7 +131,7 @@ EVT_BEGIN(kpa_01_door_open)
     CALL(evt_mapobj_get_position, STRING("door"), LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_OPEN_CASTLE1"), LW(0), LW(1), LW(2), 0)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 5, 0, 180, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_OUT, 0, 180, 2000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.5546875f))
@@ -127,18 +198,19 @@ EVT_BEGIN(kpa_01_door_open)
     RETURN
 EVT_END()
 
-/** Reverse of kpa_01_door_open: the double door swings shut over 2 s with the Spiny guards stepping aside. */
-EVT_BEGIN(kpa_01_door_close)
+/** Reverse of kpa_01_door_open: the double door swings shut over 2 s with the Koopatrol guards stepping aside. */
+static EVT_BEGIN(kpa_01_door_close)
     SET_FLOAT_VALUE(GW(0), 0)
     SET_VALUE(GW(1), 1)
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 2, 180, 0, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_CUBIC_IN, 180, 0, 2000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.5546875f))
         SET_FLOAT_VALUE(GW(0), LW(0))
         SET_VALUE(GW(1), LW(1))
         WAIT_FRAMES(1)
+
         // The two door leaves swing shut, easing to the closed angle.
         IF_INT_EQUAL(LW(1), 1)
             GOTO(0)
@@ -159,7 +231,8 @@ EVT_BEGIN(kpa_01_door_close)
         CALL(evt_mapobj_rotate, 0, STRING("door_2"), 0, 0, 0)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        // The first Spiny guard walks back to its post beside the door.
+
+        // The first Koopatrol guard walks back to its post beside the door.
         CALL(evt_npc_set_anim, STRING("トゲノコＡ"), STRING("W_3"))
         LOOP(0)
             IF_INT_NOT_EQUAL(GW(1), 1)
@@ -177,6 +250,7 @@ EVT_BEGIN(kpa_01_door_close)
         CALL(evt_npc_set_stop_anim, STRING("トゲノコＡ"))
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
+
         // The second guard does the same on the other side.
         CALL(evt_npc_set_anim, STRING("トゲノコＢ"), STRING("W_3"))
         LOOP(0)
@@ -198,6 +272,7 @@ EVT_BEGIN(kpa_01_door_close)
     BEGIN_INLINE_EVENT
         WAIT_MS(1500)
         CALL(evt_mapobj_get_position, STRING("door"), LW(0), LW(1), LW(2))
+
         // The door slams with its shutting sound.
         CALL(evt_snd_sfxon_3d, STRING("SFX_DOOR_SHUT_CASTLE1"), LW(0), LW(1), LW(2), 0)
     END_INLINE_EVENT
@@ -218,23 +293,23 @@ EVT_BEGIN(kpa_01_door_close)
 EVT_END()
 
 /**
- * Arrival cutscene for Bowser (story progress STORY_STG1_19_PEACH_TEC):
- * the camera follows the long corridor, Bowser stomps in, the Spiny guards open the door and he laughs.
- * After Bowser's line and a guard's reply, the story advances to STORY_STG1_19_01_BOWSER_CASTLE
+ * Arrival cutscene for Bowser (story progress STG1_19_PEACH_TEC):
+ * the camera follows the long corridor, Bowser stomps in, the Koopatrol guards open the door and he laughs.
+ * After Bowser's line and a guard's reply, the story advances to STG1_19_01_BOWSER_BOWSER_CASTLE
  * and the player gets control.
  */
 EVT_BEGIN(kpa_01_touzyo_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STGK_CASTLE1"))
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STGK_CASTLE1"))
+    CALL(evt_snd_envoff, PSND_FADEOUT)
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_kill_party, 0)
     CALL(evt_mario_set_pos, -810, 0, 0)
     CALL(evt_mario_set_dir, 90, 0, 0)
     CALL(evt_mario_set_dispdir, 180)
-    CALL(evt_cam3d_evt_set, 622, 172, 546, 622, 77, 5, 0, 11)
-    CALL(evt_seq_wait, 2)
-    CALL(evt_cam3d_evt_set, -630, 172, 546, -630, 77, 5, 9000, 11)
+    CALL(evt_cam3d_evt_set, 622, 172, 546, 622, 77, 5, 0, EASING_SINE_IN_OUT)
+    CALL(evt_seq_wait, SEQ_GAME)
+    CALL(evt_cam3d_evt_set, -630, 172, 546, -630, 77, 5, 9000, EASING_SINE_IN_OUT)
     WAIT_MS(9000)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     SET_VALUE(LW(0), -1600)
@@ -248,26 +323,26 @@ EVT_BEGIN(kpa_01_touzyo_evt)
     WAIT_MS(700)
     ADD(LW(0), 100)
     CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_MOVE2"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("トゲノコＡ"), 0, 0, 0, 0, 0, 0, 0, 60)
-    CALL(evt_eff_fukidashi, 1, STRING(""), STRING("トゲノコＢ"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("トゲノコＡ"), 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, STRING(""), STRING("トゲノコＢ"), 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     CALL_CHILD(kpa_01_door_open)
-    CALL(evt_cam3d_evt_set, -470, 60, 269, -683, 65, 24, 0, 11)
+    CALL(evt_cam3d_evt_set, -470, 60, 269, -683, 65, 24, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
-    CALL(evt_cam3d_evt_set, -430, 60, 234, -644, 65, -11, 2800, 11)
+    CALL(evt_cam3d_evt_set, -430, 60, 234, -644, 65, -11, 2800, EASING_SINE_IN_OUT)
     CALL(evt_mario_mov_pos, -650, 0, 2800)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_LAUGH2_2"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_000"), 0, STRING("mario"))
     CALL_CHILD(kpa_01_door_close)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     WAIT_MS(100)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_001"), 0, STRING("トゲノコＡ"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG1_19_01_BOWSER_CASTLE)
+    SET_VALUE(GSW_STORY_PROGRESS, STG1_19_01_BOWSER_BOWSER_CASTLE)
 #if VERSION >= VERSION_JP
-    CALL(N_evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
+    CALL(evt_bero_set_mario_bottomless_respawn_pos_to_current_mario_pos)
 #endif
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_snd_bgm_scope, 0, 0)
@@ -275,9 +350,42 @@ EVT_BEGIN(kpa_01_touzyo_evt)
 EVT_END()
 
 /**
+ * Message callback for kpa_stg1_034: sets LSWF_KPA_01_MSG_CUE once the text entry index exceeds 117,
+ * the cue for Kammy's next animation.
+ */
+static void kpa_stg1_034_cb(s32 type, smartEntry* smart) {
+    MsgWinData* info = smart->address;
+
+    switch (type) {
+        case 5:
+            if (info->nextEntry > 117) {
+                evtSetValue(NULL, LSWF_KPA_01_MSG_CUE, 1);
+            }
+            break;
+    }
+}
+
+/**
+ * Message callback for kpa_stg1_036: sets LSWF_KPA_01_MSG_CUE when the third page appears (curPage 2),
+ * which a waiting inline event of the departure cutscene reacts to.
+ */
+static void kpa_stg1_036_cb(s32 type, smartEntry* smart) {
+    MsgWinData* info = smart->address;
+
+    switch (type) {
+        case 3:
+            if (info->curPage == 2) {
+                evtSetValue(NULL, LSWF_KPA_01_MSG_CUE, 1);
+            }
+            break;
+    }
+}
+
+/**
  * Departure cutscene: the door opens, a startled Bowser meets the out-of-breath Kammy Koopa and the two talk,
  * with a choice in the middle (kpa_stg1_032).
- * Kammy then flies off, and play returns to kpa_00 for the flight to Petalburg.
+ * After the news that Princess Peach was abducted, Bowser leaves through the wall in his airship, Kammy follows on
+ * her broom, and play returns to kpa_00 for the flight to Petalburg.
  * Plays when Bowser reaches x = 625 or re-enters from the other side.
  */
 EVT_BEGIN(kpa_01_syuppatu_evt)
@@ -295,16 +403,17 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     WAIT_MS(1500)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_SURPRISED1_1"), LW(0), LW(1), LW(2), 0)
-    CALL(evt_eff_fukidashi, 0, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, STRING(""), 0, 0, 0, 0, 0, 0, 0, 0, 60)
     WAIT_MS(1000)
     CALL(evt_mario_set_dir, 270, 300, 0)
     WAIT_MS(500)
     CALL(evt_npc_set_position, STRING("ババ"), -760, 0, 0)
     CALL(evt_npc_set_ry, STRING("ババ"), 90)
-    CALL(evt_cam3d_evt_set, -630, 134, 428, -630, 57, -13, 0, 11)
+    CALL(evt_cam3d_evt_set, -630, 134, 428, -630, 57, -13, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_npc_move_position, STRING("ババ"), -650, 0, 0, FLOAT(60.0f), 0)
     WAIT_FRAMES(1)
+
     // Kammy Koopa arrives out of breath; the door shuts behind her.
     CALL(evt_msg_print, 0, STRING("kpa_stg1_021"), 0, STRING("ババ"))
     SPAWN_EVENT(kpa_01_door_close)
@@ -314,7 +423,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     WAIT_MS(1000)
     CALL(evt_npc_set_ry, STRING("ハンマーＥ"), 90)
     CALL(evt_npc_set_ry, STRING("ハンマーＤ"), 90)
-    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_npc_set_tribe, STRING("ババ"), STRING("カメックババ（息切れ）"))
     CALL(evt_npc_set_position, STRING("ババ"), 350, 0, 0)
@@ -325,32 +434,34 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     CALL(evt_npc_set_tribe, STRING("ババ"), STRING("カメックババ（地上）"))
     WAIT_FRAMES(1)
     CALL(evt_npc_set_stay_anim, STRING("ババ"))
-    CALL(evt_cam3d_evt_set, 470, 85, 311, 470, 44, -14, 0, 11)
+    CALL(evt_cam3d_evt_set, 470, 85, 311, 470, 44, -14, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
+
     // Bowser demands to know why she called him here; she asks for patience and explains that Mario is hunting
     // for treasure, the Crystal Stars.
     CALL(evt_msg_print, 0, STRING("kpa_stg1_022"), 0, STRING("ババ"))
-    CALL(evt_cam3d_evt_set, 600, 158, 338, 600, 99, 20, 0, 11)
+    CALL(evt_cam3d_evt_set, 600, 158, 338, 600, 99, 20, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_023"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_025"), 0, STRING("ババ"))
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_026"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 470, 85, 311, 470, 44, -14, 0, 11)
+    CALL(evt_cam3d_evt_set, 470, 85, 311, 470, 44, -14, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_027"), 0, STRING("ババ"))
-    CALL(evt_cam3d_evt_set, 600, 158, 338, 600, 99, 20, 0, 11)
+    CALL(evt_cam3d_evt_set, 600, 158, 338, 600, 99, 20, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_028"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 0, 11)
+    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 0, EASING_SINE_IN_OUT)
     WAIT_FRAMES(1)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_029"), 0, STRING("ババ"))
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_030"), 0, STRING("mario"))
+
     // Bowser loves the idea of using the Crystal Stars to conquer the world; Kammy asks the question of the
     // choice (does he like fried eggs?).
     CALL(evt_msg_print, 0, STRING("kpa_stg1_031"), 0, STRING("ババ"))
@@ -364,10 +475,10 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
         CALL(evt_msg_print, 0, STRING("kpa_stg1_033_1"), 0, STRING("mario"))
     END_SWITCH
-    SET_VALUE(LSWF(1), 0)
+    SET_VALUE(LSWF_KPA_01_MSG_CUE, 0)
     BEGIN_INLINE_EVENT_GET_ID(LW(0))
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(1), 0)
+            IF_INT_NOT_EQUAL(LSWF_KPA_01_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -375,12 +486,13 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         CALL(evt_npc_set_anim, STRING("ババ"), STRING("A_2A"))
     END_INLINE_EVENT
     CALL(evt_npc_set_autotalkpose, STRING("ババ"), STRING("U_1"), STRING("T_5"))
-    // Kammy confesses she took a picnic break in Petal Meadows and Bowser explodes in rage, shaking the room
+
+    // Kammy says she stopped in Petal Meadows and planned a picnic there, and Bowser explodes in rage, shaking the room
     // and scaring the guards.
     CALL(evt_msg_print, 0, STRING("kpa_stg1_034"), PTR(kpa_stg1_034_cb), STRING("ババ"))
     CALL(evt_npc_set_autotalkpose, STRING("ババ"), STRING("S_1"), STRING("T_1"))
     DELETE_EVENT(LW(0))
-    SET_VALUE(LSWF(1), 0)
+    SET_VALUE(LSWF_KPA_01_MSG_CUE, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_cam_shake, CAMERA_3D, FLOAT(0.0048828125f), FLOAT(0.0048828125f), 800)
     END_INLINE_EVENT
@@ -405,10 +517,10 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_KOOPA_ANGRY2_1"), LW(0), LW(1), LW(2), 0)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_035"), 0, STRING("mario"))
-    SET_VALUE(LSWF(1), 0)
+    SET_VALUE(LSWF_KPA_01_MSG_CUE, 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(1), 0)
+            IF_INT_NOT_EQUAL(LSWF_KPA_01_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
@@ -452,7 +564,8 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     CALL(evt_npc_set_autotalkpose, STRING("ババ"), STRING("P_1"), STRING("T_6"))
     CALL(evt_npc_set_anim, STRING("ババ"), STRING("P_1"))
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_set, 470, 85, 311, 470, 44, -14, 500, 11)
+    CALL(evt_cam3d_evt_set, 470, 85, 311, 470, 44, -14, 500, EASING_SINE_IN_OUT)
+
     // Kammy tries to calm him down; a message arrives that Princess Peach was abducted in Rogueport and Bowser
     // rages again.
     CALL(evt_msg_print, 0, STRING("kpa_stg1_037"), 0, STRING("ババ"))
@@ -466,7 +579,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_039"), 0, STRING("カメック"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_040"), 0, STRING("ババ"))
     WAIT_MS(500)
-    CALL(evt_cam3d_evt_set, 555, 180, 501, 555, 90, 0, 500, 11)
+    CALL(evt_cam3d_evt_set, 555, 180, 501, 555, 90, 0, 500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
         CALL(evt_npc_move_position, STRING("カメック"), 300, 0, 0, FLOAT(90.0f), 0)
         CALL(evt_npc_set_position, STRING("カメック"), 0, -1000, 0)
@@ -476,25 +589,26 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_041"), 0, STRING("ババ"))
     CALL(kpa_chg_pose, STRING("KPA_S_1"))
     SET_VALUE(GF(0), 1)
-    CALL(evt_cam3d_evt_set, 600, 158, 338, 600, 99, 20, 600, 11)
+    CALL(evt_cam3d_evt_set, 600, 158, 338, 600, 99, 20, 600, EASING_SINE_IN_OUT)
     WAIT_MS(600)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_042"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 800, 11)
+    CALL(evt_cam3d_evt_set, 555, 180, 517, 555, 90, 0, 800, EASING_SINE_IN_OUT)
     WAIT_MS(600)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_043"), 0, STRING("ババ"))
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_4"), STRING("KPA_T_3"))
-    // Bowser storms off; the Spiny guards break through the wall as he leaves in his airship.
+
+    // Bowser storms off and breaks through the wall in his airship while the Koopatrol guards react.
     CALL(evt_msg_print, 0, STRING("kpa_stg1_044"), 0, STRING("mario"))
-    CALL(evt_cam3d_evt_set, 430, 180, 517, 430, 90, 0, 1500, 11)
+    CALL(evt_cam3d_evt_set, 430, 180, 517, 430, 90, 0, 1500, EASING_SINE_IN_OUT)
     BEGIN_INLINE_EVENT
-        CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_HIT)
         WAIT_MS(900)
         CALL(evt_npc_get_position, STRING("ババ"), LW(0), LW(1), LW(2))
         SUBTRACT(LW(2), 30)
         CALL(evt_npc_jump_position_nohit, STRING("ババ"), LW(0), LW(1), LW(2), 200, 20)
         WAIT_MS(1100)
-        CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 0, STRING("ババ"), NPC_FLAG_NO_HIT)
         CALL(evt_npc_move_position, STRING("ババ"), 325, 0, 0, 40, 0)
         WAIT_MS(100)
         CALL(evt_npc_set_anim, STRING("ババ"), STRING("P_1"))
@@ -512,11 +626,11 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT
         WAIT_MS(500)
-        CALL(evt_cam3d_evt_set, 553, 177, 501, 553, 90, 0, 1500, 11)
+        CALL(evt_cam3d_evt_set, 553, 177, 501, 553, 90, 0, 1500, EASING_SINE_IN_OUT)
     END_INLINE_EVENT
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, 0, 360, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 0, 360, 2000)
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_sub_get_sincos, LW(0), LW(2), LW(3))
@@ -526,9 +640,10 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
             GOTO(0)
         END_IF
     END_INLINE_EVENT
+
     // The airship flies across the hall and out of the castle; the camera follows it.
     CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_AIRSHIP_MOVE1"), 200, 50, 0, LW(9))
-    CALL(evt_sub_intpl_msec_init, 11, 200, 625, 2000)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 200, 625, 2000)
     LABEL(1)
     CALL(evt_sub_intpl_msec_get_value)
     SET_FLOAT_VALUE(LW(2), GW(0))
@@ -547,7 +662,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     SET_VALUE(GW(0), 50)
     CALL(evt_npc_get_position, STRING("飛クッパ"), LW(2), LW(3), LW(4))
     CALL(evt_snd_sfxon_3d, STRING("SFX_KUPPA_AIRSHIP_MOVE1"), LW(2), LW(3), LW(4), LW(9))
-    CALL(evt_sub_intpl_msec_init, 1, 0, 1000, 1500)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 0, 1000, 1500)
     LABEL(2)
     CALL(evt_sub_intpl_msec_get_value)
     DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -609,7 +724,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     CALL(evt_npc_get_position, STRING("飛クッパ"), LW(2), LW(3), LW(4))
     BEGIN_INLINE_EVENT
         WAIT_MS(1300)
-        CALL(evt_sub_intpl_msec_init, 0, 1000, 100, 1000)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 1000, 100, 1000)
         LABEL(3)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -625,7 +740,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         END_IF
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 180, 430, 3300)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 430, 3300)
         LABEL(4)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_sub_get_sincos, LW(0), LW(2), LW(3))
@@ -637,7 +752,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         SET_VALUE(GF(0), 1)
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 1, 0, 1000, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_IN, 0, 1000, 2000)
         LABEL(5)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -671,7 +786,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_snd_sfxoff, LW(15))
-    CALL(evt_npc_flag_onoff, 1, STRING("飛クッパ"), NPC_FLAG_HIDDEN)
+    CALL(evt_npc_flag_onoff, 1, STRING("飛クッパ"), NPC_FLAG_NO_DRAW)
     CALL(evt_npc_set_tribe, STRING("ババ"), STRING("カメックババ"))
     CALL(evt_sub_get_sincos, 132, LW(2), LW(3))
     MULTIPLY_FLOAT(LW(3), FLOAT(60.0f))
@@ -680,7 +795,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     CALL(evt_npc_set_ry, STRING("ババ"), 90)
     SET_FLOAT_VALUE(GW(0), FLOAT(0.0f))
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 0, 180, 540, 2500)
+        CALL(evt_sub_intpl_msec_init, EASING_LINEAR, 180, 540, 2500)
         LABEL(6)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_sub_get_sincos, LW(0), LW(2), LW(3))
@@ -704,7 +819,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
             WAIT_FRAMES(10)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 11, 300, 500, 2500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 300, 500, 2500)
     LABEL(7)
     CALL(evt_sub_intpl_msec_get_value)
     SET_FLOAT_VALUE(LW(2), GW(0))
@@ -716,6 +831,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         GOTO(7)
     END_IF
     SET_VALUE(GF(0), 1)
+
     // Kammy rushes after him on her broom and the scene returns to kpa_00 for the flight to Petalburg.
     CALL(evt_msg_print, 0, STRING("kpa_stg1_045"), 0, STRING("ババ"))
     CALL(evt_sub_get_sincos, 132, LW(0), LW(1))
@@ -724,7 +840,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
     SET_FLOAT_VALUE(GW(2), FLOAT(0.0f))
     BEGIN_INLINE_EVENT
         WAIT_MS(700)
-        CALL(evt_sub_intpl_msec_init, 11, 1000, 300, 800)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 1000, 300, 800)
         LABEL(8)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(1000.0f))
@@ -740,7 +856,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         END_IF
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 132, 360, 2000)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 132, 360, 2000)
         LABEL(9)
         CALL(evt_sub_intpl_msec_get_value)
         CALL(evt_sub_get_sincos, LW(0), LW(2), LW(3))
@@ -751,7 +867,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         END_IF
     END_INLINE_EVENT
     BEGIN_INLINE_EVENT
-        CALL(evt_sub_intpl_msec_init, 11, 0, -90, 1700)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -90, 1700)
         LABEL(10)
         CALL(evt_sub_intpl_msec_get_value)
         SET_FLOAT_VALUE(GW(1), LW(0))
@@ -776,7 +892,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
             WAIT_FRAMES(10)
         END_LOOP
     END_INLINE_EVENT
-    CALL(evt_sub_intpl_msec_init, 4, 500, 560, 2000)
+    CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, 500, 560, 2000)
     LABEL(11)
     CALL(evt_sub_intpl_msec_get_value)
     SET_FLOAT_VALUE(LW(2), GW(0))
@@ -790,7 +906,7 @@ EVT_BEGIN(kpa_01_syuppatu_evt)
         GOTO(11)
     END_IF
     SET_VALUE(GF(0), 1)
-    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_HIDDEN)
+    CALL(evt_npc_flag_onoff, 1, STRING("ババ"), NPC_FLAG_NO_DRAW)
     WAIT_MS(500)
     CALL(evt_bero_mapchange, STRING("kpa_00"), STRING(""))
     CALL(evt_mario_key_onoff, 1)
@@ -801,8 +917,8 @@ EVT_END()
  * Waits until Bowser reaches x = 625 at the far end of the hall,
  * then starts the departure cutscene kpa_01_syuppatu_evt.
  */
-EVT_BEGIN(kpa_01_pos_check)
-    CALL(evt_seq_wait, 2)
+static EVT_BEGIN(kpa_01_pos_check)
+    CALL(evt_seq_wait, SEQ_GAME)
     LOOP(0)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         IF_INT_GREATER_OR_EQUAL(LW(0), 625)
@@ -815,7 +931,7 @@ EVT_BEGIN(kpa_01_pos_check)
 EVT_END()
 
 /** Examine script for the first statue (a_zou_1): Bowser comments on it. */
-EVT_BEGIN(douzou_1_touch_evt)
+static EVT_BEGIN(douzou_1_touch_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_014"), 0, STRING("mario"))
@@ -824,7 +940,7 @@ EVT_BEGIN(douzou_1_touch_evt)
 EVT_END()
 
 /** Examine script for the second statue (a_zou_2): Bowser comments on it. */
-EVT_BEGIN(douzou_2_touch_evt)
+static EVT_BEGIN(douzou_2_touch_evt)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_014_1"), 0, STRING("mario"))
@@ -832,74 +948,103 @@ EVT_BEGIN(douzou_2_touch_evt)
     RETURN
 EVT_END()
 
+/** Message callback for kpa_stg1_014_2: sets LSWF_KPA_01_MSG_CUE on page 2, which plays the item jingle in douzou_3_touch_evt. */
+static void kpa_stg1_014_2_cb(s32 type, smartEntry* smart) {
+    MsgWinData* info = smart->address;
+
+    switch (type) {
+        case 3:
+            if (info->curPage == 2) {
+                evtSetValue(NULL, LSWF_KPA_01_MSG_CUE, 1);
+            }
+            break;
+    }
+}
+
 /**
  * Examine script for the third statue (a_zou_3): Bowser comments;
  * a jingle (BGM_FF_GET_ITEM1) plays when the message reaches its third page.
  */
-EVT_BEGIN(douzou_3_touch_evt)
+static EVT_BEGIN(douzou_3_touch_evt)
     CALL(evt_mario_key_onoff, 0)
-    SET_VALUE(LSWF(1), 0)
+    SET_VALUE(LSWF_KPA_01_MSG_CUE, 0)
     BEGIN_INLINE_EVENT
         LOOP(0)
-            IF_INT_NOT_EQUAL(LSWF(1), 0)
+            IF_INT_NOT_EQUAL(LSWF_KPA_01_MSG_CUE, 0)
                 BREAK_LOOP
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        CALL(evt_snd_bgmon, PSND_FADE_OUT | PSND_CH(1), STRING("BGM_FF_GET_ITEM1"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT | PSND_SLOT(1), STRING("BGM_FF_GET_ITEM1"))
     END_INLINE_EVENT
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_014_2"), PTR(kpa_stg1_014_2_cb), STRING("mario"))
     WAIT_MS(300)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
-/** Talk script of the first Spiny guard. */
-EVT_BEGIN(togenoko_A_talk_evt)
+/** Talk script of the first Koopatrol guard. */
+static EVT_BEGIN(togenoko_A_talk_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_002"), 0, STRING("me"))
     RETURN
 EVT_END()
 
-/** Talk script of the second Spiny guard. */
-EVT_BEGIN(togenoko_B_talk_evt)
+/** Talk script of the second Koopatrol guard. */
+static EVT_BEGIN(togenoko_B_talk_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_004"), 0, STRING("me"))
     RETURN
 EVT_END()
 
-/** Init for the third Spiny guard: standard NPC init, then it is set to jump and land on the floor. */
-EVT_BEGIN(togenoko_C_init_evt)
+/** Init for the third Koopatrol guard: standard NPC init, then gravity, floor collision and NPC_STATUS_FACE_MOVE_DIR. */
+static EVT_BEGIN(togenoko_C_init_evt)
     CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_JUMPING | NPC_FLAG_LAND_ON_FLOOR)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_FLOOR_COLLISION | NPC_FLAG_GRAVITY)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
 /**
- * Init for the first two Hammer Bros.: until Bowser has spoken to them once (GSWF_KPA01_HAMMER_BROS_TALKED) they
- * do not turn to face him.
+ * Init of Hammer Bros. A and B: until Bowser has spoken to them once (GSWF_KPA_01_HAMMER_BROS_FIRST_TALK_DONE)
+ * they do not turn to face him.
  */
-EVT_BEGIN(hammer_AB_init_evt)
+static EVT_BEGIN(hammer_AB_init_evt)
     CALL_CHILD(npc_init_evt)
-    IF_INT_EQUAL(GSWF(GSWF_KPA01_HAMMER_BROS_TALKED), 0)
-        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_NO_TURN_TO_MARIO)
+    IF_INT_EQUAL(GSWF_KPA_01_HAMMER_BROS_FIRST_TALK_DONE, 0)
+        CALL(evt_npc_flag_onoff, 1, STRING("me"), NPC_FLAG_NO_TALK_TURN)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * Talk script of the two Hammer Bros.: the first conversation sets GSWF_KPA01_HAMMER_BROS_TALKED;
+ * Message callback for kpa_stg1_008: when the text reaches page 1 it sets LSWF_KPA_01_MSG_CUE,
+ * which lets the Hammer Bro turn toward Bowser.
+ */
+static void kpa_stg1_008_cb(s32 type, smartEntry* smart) {
+    MsgWinData* info = smart->address;
+
+    switch (type) {
+        case 3:
+            if (info->curPage == 1) {
+                evtSetValue(NULL, LSWF_KPA_01_MSG_CUE, 1);
+            }
+            break;
+    }
+}
+
+/**
+ * Talk script of the two Hammer Bros.: the first conversation sets GSWF_KPA_01_HAMMER_BROS_FIRST_TALK_DONE;
  * afterwards they turn to Bowser and repeat a short line each.
  */
-EVT_BEGIN(hammer_AB_talk_evt)
-    IF_INT_EQUAL(GSWF(GSWF_KPA01_HAMMER_BROS_TALKED), 0)
+static EVT_BEGIN(hammer_AB_talk_evt)
+    IF_INT_EQUAL(GSWF_KPA_01_HAMMER_BROS_FIRST_TALK_DONE, 0)
         CALL(evt_msg_print, 0, STRING("kpa_stg1_006"), 0, STRING("ハンマーＡ"))
         CALL(evt_msg_print, 0, STRING("kpa_stg1_007"), 0, STRING("ハンマーＢ"))
-        SET_VALUE(LSWF(1), 0)
+        SET_VALUE(LSWF_KPA_01_MSG_CUE, 0)
         BEGIN_INLINE_EVENT
             LOOP(0)
-                IF_INT_NOT_EQUAL(LSWF(1), 0)
+                IF_INT_NOT_EQUAL(LSWF_KPA_01_MSG_CUE, 0)
                     BREAK_LOOP
                 END_IF
                 WAIT_FRAMES(1)
@@ -914,9 +1059,9 @@ EVT_BEGIN(hammer_AB_talk_evt)
         CALL(evt_msg_print, 0, STRING("kpa_stg1_008"), PTR(kpa_stg1_008_cb), STRING("ハンマーＡ"))
         CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_1"), STRING("KPA_T_1"))
         CALL(evt_msg_print, 0, STRING("kpa_stg1_009"), 0, STRING("mario"))
-        SET_VALUE(GSWF(GSWF_KPA01_HAMMER_BROS_TALKED), 1)
-        CALL(evt_npc_flag_onoff, 0, STRING("ハンマーＡ"), NPC_FLAG_NO_TURN_TO_MARIO)
-        CALL(evt_npc_flag_onoff, 0, STRING("ハンマーＢ"), NPC_FLAG_NO_TURN_TO_MARIO)
+        SET_VALUE(GSWF_KPA_01_HAMMER_BROS_FIRST_TALK_DONE, 1)
+        CALL(evt_npc_flag_onoff, 0, STRING("ハンマーＡ"), NPC_FLAG_NO_TALK_TURN)
+        CALL(evt_npc_flag_onoff, 0, STRING("ハンマーＢ"), NPC_FLAG_NO_TALK_TURN)
     ELSE
         CALL(evt_set_dir_to_target, STRING("ハンマーＡ"), STRING("mario"))
         CALL(evt_set_dir_to_target, STRING("ハンマーＢ"), STRING("mario"))
@@ -930,7 +1075,7 @@ EVT_BEGIN(hammer_AB_talk_evt)
 EVT_END()
 
 /** Talk script of the third Hammer Bro., with a reply from Bowser. */
-EVT_BEGIN(hammer_C_talk_evt)
+static EVT_BEGIN(hammer_C_talk_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_012"), 0, STRING("me"))
     CALL(evt_npc_set_autotalkpose, STRING("mario"), STRING("KPA_S_7"), STRING("KPA_T_7"))
     CALL(evt_msg_print, 0, STRING("kpa_stg1_013"), 0, STRING("mario"))
@@ -938,53 +1083,53 @@ EVT_BEGIN(hammer_C_talk_evt)
 EVT_END()
 
 /** Talk script of the fourth Hammer Bro. */
-EVT_BEGIN(hammer_D_talk_evt)
+static EVT_BEGIN(hammer_D_talk_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_015"), 0, STRING("me"))
     RETURN
 EVT_END()
 
 /** Init for the fifth Hammer Bro.: standard NPC init plus NPC_STATUS_FACE_MOVE_DIR. */
-EVT_BEGIN(hammer_E_init_evt)
+static EVT_BEGIN(hammer_E_init_evt)
     CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
 /** Talk script of the fifth Hammer Bro. */
-EVT_BEGIN(hammer_E_talk_evt)
+static EVT_BEGIN(hammer_E_talk_evt)
     CALL(evt_msg_print, 0, STRING("kpa_stg1_016"), 0, STRING("me"))
     RETURN
 EVT_END()
 
 /** Init for Kammy Koopa: standard NPC init, NPC_STATUS_FACE_MOVE_DIR, and the grounded tribe model. */
-EVT_BEGIN(baba_init_evt)
+static EVT_BEGIN(baba_init_evt)
     CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_set_tribe, STRING("me"), STRING("カメックババ（地上）"))
     RETURN
 EVT_END()
 
 /** Init for the Magikoopa: standard NPC init plus NPC_STATUS_FACE_MOVE_DIR. */
-EVT_BEGIN(kamek_init_evt)
+static EVT_BEGIN(kamek_init_evt)
     CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
 /** Init for the flying Bowser NPC: standard NPC init plus NPC_STATUS_FACE_MOVE_DIR. */
-EVT_BEGIN(hkoopa_init_evt)
+static EVT_BEGIN(hkoopa_init_evt)
     CALL_CHILD(npc_init_evt)
-    CALL(evt_npc_status_onoff, 1, STRING("me"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("me"), NPC_STATUS_FACE_MOVE_DIR)
     RETURN
 EVT_END()
 
 /**
- * NPCs of Bowser's hall: the four Spiny guards (A and B can be talked to), the five Hammer Bros., Kammy
+ * NPCs of Bowser's hall: the four Koopatrol guards (A and B can be talked to), the five Hammer Bros., Kammy
  * Koopa (ババ), a Magikoopa (カメック) and Bowser's airship.
  */
 static NpcSetupInfo npcEnt[] = {
     {
-        "トゲノコＡ", // name
+        "トゲノコＡ", // name (a Koopatrol guard in Bowser's castle (talkable))
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, // regularEvent
@@ -995,7 +1140,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲノコＢ", // name
+        "トゲノコＢ", // name (a Koopatrol guard in Bowser's castle (talkable))
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, // regularEvent
@@ -1006,7 +1151,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲノコＣ", // name
+        "トゲノコＣ", // name (a Koopatrol guard in Bowser's castle)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -1015,7 +1160,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "トゲノコＤ", // name
+        "トゲノコＤ", // name (a Koopatrol guard in Bowser's castle)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -1024,7 +1169,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ハンマーＡ", // name
+        "ハンマーＡ", // name (a Hammer Bro in Bowser's castle (gossips about Peach))
         0, 0, // flags..reactionFlags
         hammer_AB_init_evt, // initEvent
         NULL, // regularEvent
@@ -1035,7 +1180,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ハンマーＢ", // name
+        "ハンマーＢ", // name (a Hammer Bro in Bowser's castle)
         0, 0, // flags..reactionFlags
         hammer_AB_init_evt, // initEvent
         NULL, // regularEvent
@@ -1046,7 +1191,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ハンマーＣ", // name
+        "ハンマーＣ", // name (a Hammer Bro in Bowser's castle)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, // regularEvent
@@ -1057,7 +1202,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ハンマーＤ", // name
+        "ハンマーＤ", // name (a Hammer Bro in Bowser's castle)
         0, 0, // flags..reactionFlags
         npc_init_evt, // initEvent
         NULL, // regularEvent
@@ -1068,7 +1213,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ハンマーＥ", // name
+        "ハンマーＥ", // name (a Hammer Bro in Bowser's castle)
         0, 0, // flags..reactionFlags
         hammer_E_init_evt, // initEvent
         NULL, // regularEvent
@@ -1079,7 +1224,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "ババ", // name
+        "ババ", // name (Kammy Koopa)
         0, 0, // flags..reactionFlags
         baba_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -1088,7 +1233,7 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "カメック", // name
+        "カメック", // name (a Magikoopa in Bowser's castle)
         0, 0, // flags..reactionFlags
         kamek_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -1097,8 +1242,8 @@ static NpcSetupInfo npcEnt[] = {
         0.0f, 0.0f, 0.0f, 0.0f, 0, // searchRange..battleInfoId
     },
     {
-        "飛クッパ", // name
-        NPC_FLAG_INTANGIBLE, // flags
+        "飛クッパ", // name (Bowser flying in his airship)
+        NPC_FLAG_NO_HIT, // flags
         0, // reactionFlags
         hkoopa_init_evt, // initEvent
         NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, // regularEvent..territoryType
@@ -1109,6 +1254,16 @@ static NpcSetupInfo npcEnt[] = {
     {0},
 };
 
+/** Script helper: formats the name "hi_<args[0]>" into a static buffer and returns its address in args[1]. */
+static USER_FUNC(make_name) {
+    EvtWord* args = event->args;
+    static char name[8];
+
+    sprintf(name, "hi_%d", evtGetValue(event, args[0]));
+    evtSetValue(event, args[1], (EvtWord)name);
+    return EVT_RETURN_DONE;
+}
+
 /**
  * Prepares the twelve wall fire objects of the throne hall (named by make_name, numbers 1 to 12):
  * hides each map object and puts a small "fire" effect at its position, 2.5 units lower,
@@ -1118,7 +1273,7 @@ static EVT_BEGIN(shan_init)
     SET_VALUE(LW(0), 1)
     LOOP(12)
         CALL(make_name, LW(0), LW(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, LW(1), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_mapobj_get_position, LW(1), LW(2), LW(3), LW(4))
         SUBTRACT_FLOAT(LW(3), FLOAT(2.5f))
         CALL(evt_eff, STRING(""), STRING("fire"), 6, LW(2), LW(3), LW(4), FLOAT(0.2998047f), 1000, 0, 0, 0, 0, 0, 0)
@@ -1136,16 +1291,16 @@ EVT_END()
 EVT_BEGIN(kpa_01_init_evt)
     CALL(evt_mario_set_mode, 2)
     CALL(evt_npc_setup, PTR(npcEnt))
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_zou_1"), 0, PTR(douzou_1_touch_evt), 0)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_zou_2"), 0, PTR(douzou_2_touch_evt), 0)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_zou_3"), 0, PTR(douzou_3_touch_evt), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_zou_1"), 0, PTR(douzou_1_touch_evt), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_zou_2"), 0, PTR(douzou_2_touch_evt), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_zou_3"), 0, PTR(douzou_3_touch_evt), 0)
     CALL_CHILD(shan_init)
-    SWITCH(GSW(GSW_STORY_PROGRESS))
-        CASE_EQUAL(STORY_STG1_19_PEACH_TEC)
+    SWITCH(GSW_STORY_PROGRESS)
+        CASE_EQUAL(STG1_19_PEACH_TEC)
         SPAWN_EVENT(kpa_01_touzyo_evt)
         SPAWN_EVENT(kpa_01_pos_check)
-        CASE_EQUAL(STORY_STG1_19_01_BOWSER_CASTLE)
-        CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(80))
+        CASE_EQUAL(STG1_19_01_BOWSER_BOWSER_CASTLE)
+        CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(7))
         CALL(evt_bero_get_entername, LW(0))
         IF_STR_EQUAL(LW(0), STRING("player"))
             CALL(evt_mario_set_pos, -700, 0, 0)
@@ -1155,123 +1310,11 @@ EVT_BEGIN(kpa_01_init_evt)
             CALL(evt_mario_set_pos, 625, 30, 0)
             CALL(evt_mario_set_dir, 90, 0, 0)
             BEGIN_INLINE_EVENT
-                CALL(evt_seq_wait, 2)
+                CALL(evt_seq_wait, SEQ_GAME)
                 WAIT_MS(300)
                 SPAWN_EVENT(kpa_01_syuppatu_evt)
             END_INLINE_EVENT
         END_IF
     END_SWITCH
     RETURN
-#if VERSION <= VERSION_DEMO_JP
 EVT_END()
-#else
-EVT_END_PAD()
-#endif
-
-/**
- * Script helper: args[0] = number, returns "hi_<number>" in args[1],
- * the name of a wall fire object (shan_init walks 1..12).
- */
-static USER_FUNC(make_name) {
-    EvtWord* args = event->args;
-    static char name[8];
-
-    sprintf(name, "hi_%d", evtGetValue(event, args[0]));
-    evtSetValue(event, args[1], (EvtWord)name);
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Message callback for kpa_stg1_008: when the text reaches page 1 it sets LSWF(1),
- * which lets the Hammer Bro turn toward Bowser.
- */
-static void kpa_stg1_008_cb(s32 type, smartEntry* smart) {
-    MsgWinData* info = smart->address;
-
-    switch (type) {
-        case 3:
-            if (info->curPage == 1) {
-                evtSetValue(NULL, LSWF(1), 1);
-            }
-            break;
-    }
-}
-
-/** Message callback for kpa_stg1_014_2: sets LSWF(1) on page 2, which plays the item jingle in douzou_3_touch_evt. */
-static void kpa_stg1_014_2_cb(s32 type, smartEntry* smart) {
-    MsgWinData* info = smart->address;
-
-    switch (type) {
-        case 3:
-            if (info->curPage == 2) {
-                evtSetValue(NULL, LSWF(1), 1);
-            }
-            break;
-    }
-}
-
-/**
- * Message callback for kpa_stg1_036: sets LSWF(1) on page 2,
- * which a waiting inline event of the departure cutscene reacts to.
- */
-static void kpa_stg1_036_cb(s32 type, smartEntry* smart) {
-    MsgWinData* info = smart->address;
-
-    switch (type) {
-        case 3:
-            if (info->curPage == 2) {
-                evtSetValue(NULL, LSWF(1), 1);
-            }
-            break;
-    }
-}
-
-/**
- * Message callback for kpa_stg1_034: sets LSWF(1) once the text reaches entry 117,
- * the cue for Kammy's next animation.
- */
-static void kpa_stg1_034_cb(s32 type, smartEntry* smart) {
-    MsgWinData* info = smart->address;
-
-    switch (type) {
-        case 5:
-            if (info->nextEntry > 117) {
-                evtSetValue(NULL, LSWF(1), 1);
-            }
-            break;
-    }
-}
-
-/**
- * Script helper: rotates the point (args[2], args[3]) about the centre (args[0], args[1]) by args[4] degrees
- * around Y, returning x in args[5] and z in args[6]. Moves the Spiny guards along an arc around the door.
- */
-static USER_FUNC(get_togenoko_pos) {
-    EvtWord* args = event->args;
-    f32 cx = evtGetFloat(event, args[0]);
-    f32 cz = evtGetFloat(event, args[1]);
-    f32 x = evtGetFloat(event, args[2]);
-    f32 z = evtGetFloat(event, args[3]);
-    f32 angle = evtGetFloat(event, args[4]);
-    Mtx mtx;
-    Vec pos;
-
-    PSMTXRotRad(mtx, 'Y', 0.017453292f * angle);
-    pos.x = x - cx;
-    pos.y = 0.0f;
-    pos.z = z - cz;
-    PSMTXMultVec(mtx, &pos, &pos);
-    pos.x += cx;
-    pos.z += cz;
-    evtSetFloat(event, args[5], pos.x);
-    evtSetFloat(event, args[6], pos.z);
-    return EVT_RETURN_DONE;
-}
-
-#if VERSION == VERSION_EU
-/** PAL only: called at the start of kpa_03's jumpstand_evt */
-USER_FUNC(kpa_cancel_attack_mode) {
-    kpaCancelAttackMode();
-    return EVT_RETURN_DONE;
-}
-#endif

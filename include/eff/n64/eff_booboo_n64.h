@@ -1,8 +1,9 @@
-// eff_booboo_n64.c: Paper Mario 64 Booboo effect entry (effBoobooN64Entry).
+// eff_booboo_n64.c: Paper Mario 64 booboo effect entry (effBoobooN64Entry). The entry ignores its arguments; evt_eff
+// passes the same six as to its siblings (effGlassN64Entry, effPikkyoloN64Entry), whose names the parameters take.
+
 #pragma once
 
-#include <dolphin/types.h>
 #include "driver/effdrv.h"
+#include <dolphin/types.h>
 
-// evt_eff64 passes the usual N64 effect arguments; the effect reads none of them
-EffectEntry* effBoobooN64Entry(s32 type, s32 time, f32 x, f32 y, f32 z, f32 scale);
+EffectEntry* effBoobooN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale);

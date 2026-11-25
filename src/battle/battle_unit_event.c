@@ -1,5 +1,7 @@
 // Battle unit events: running the hit, phase, wait and init event scripts attached to a unit.
+
 #include "battle/battle_unit_event.h"
+#include "battle/battle.h"
 
 /**
  * Checks whether every unit's init event script has finished, clearing the ids of those that have;
@@ -63,7 +65,7 @@ s32 BattleRunHitEventDirect(BattleUnit* unit, s32 damageCode, void* code) {
     }
 
     if (code) {
-        evt = evtEntry(code, 0xA, EVENT_START_NOW);
+        evt = evtEntry(code, 0xA, EVENT_START_IMMEDIATE);
         evt->unitId = unit->unitId;
         unit->damageCode = damageCode;
         newId = evt->eventId;
@@ -84,7 +86,7 @@ s32 BattleRunHitEvent(BattleUnit* unit, s32 damageCode) {
 
     id = 0;
     valid = TRUE;
-    if ((u8)damageCode == 0x28 && !BtlUnit_CheckData(unit, 0x2E)) {
+    if ((u8)damageCode == DAMAGE_CODE_MISS && !BtlUnit_CheckData(unit, UNIT_DATA_AVOID_MISS_EVENT)) {
         valid = FALSE;
     }
     if (!valid) {
@@ -111,12 +113,12 @@ s32 BattleRunPhaseEvent(BattleUnit* unit, BOOL isUnison) {
     if (isUnison) {
         code = unit->unisonPhaseEventCode;
         if (code) {
-            evt = evtEntry(code, 0xA, EVENT_START_NOW);
+            evt = evtEntry(code, 0xA, EVENT_START_IMMEDIATE);
         }
     } else {
         code = unit->phaseEventCode;
         if (code) {
-            evt = evtEntry(code, 0xA, EVENT_START_NOW);
+            evt = evtEntry(code, 0xA, EVENT_START_IMMEDIATE);
         }
     }
     if (evt) {

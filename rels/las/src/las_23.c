@@ -1,5 +1,6 @@
 // las_23 (ラストダンジョン, Palace of Shadow): a junction room.
 
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
@@ -9,13 +10,27 @@
 #include "evt/evt_hit.h"
 #include "evt/evt_map.h"
 #include "evt/evt_snd.h"
-#include "version.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
 #include "driver/mapdrv.h"
+#include "pmario_sound.h"
 
+static EvtWord w_door_close[22];
+static EvtWord w_door_open[22];
+static EvtWord e1_door_close[22];
+static EvtWord e1_door_open[22];
+static EvtWord e2_door_close[22];
+static EvtWord e2_door_open[22];
 static BeroEntry bero_entry_data[6];
 static BeroEntry w_bero_mapchg[1];
 static HitDamageReturn dmgRetPoint[6];
+
+#if VERSION >= VERSION_US
+EvtWord las_23_init_evt[98];
+#elif VERSION == VERSION_DEMO_JP
+EvtWord las_23_init_evt[90];
+#else
+EvtWord las_23_init_evt[93];
+#endif
 
 /**
  * Door animation script (closing) for the west door, used as the enter/exit animation of this room's bero entry.
@@ -216,7 +231,7 @@ static BeroEntry w_bero_mapchg[] = {
     },
 };
 
-/** Where Mario is put back after falling into the pits A_oti_01 to A_oti_03 (a point far below the floor). */
+/** Where Mario is put back after falling into the pits A_oti_01 to A_oti_05 (each hit object's position, selected by the y -1000 sentinel). */
 static HitDamageReturn dmgRetPoint[] = {
     {"A_oti_01", {0.0f, -1000.0f, 0.0f}},
     {"A_oti_02", {0.0f, -1000.0f, 0.0f}},
@@ -229,33 +244,33 @@ static HitDamageReturn dmgRetPoint[] = {
 /**
  * Map init script for las_23, a junction room of the Palace:
  * music (first or third Palace theme by story), the doors, return points for the bottomless pits,
- * and before STORY_STG8_06_MOVING_PLANETS it hides the lower floor and pipe;
- * afterwards it switches to the moved layout with the west door leading to a different room (w_bero_mapchg).
+ * and before STG8_06_MOVING_PLANETS it hides the lower floor and pipe;
+ * afterwards it switches to the moved layout with the west door leading to a different entrance in las_21 (w_bero_mapchg).
  */
 EVT_BEGIN(las_23_init_evt)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST1"))
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST1"))
     ELSE
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG8_LST3"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG8_LST3"))
     END_IF
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG8_LAS1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG8_LAS1"))
 #if VERSION >= VERSION_JP
     CALL(evt_snd_set_rev_mode, 2)
 #endif
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG8_06_MOVING_PLANETS)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_under"), MAPOBJ_FLAG_HIDE)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG8_06_MOVING_PLANETS)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_under"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_under"), 1, 0)
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_paipu"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_paipu"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("jav_01"), 1, 0)
         CALL(evt_hitobj_onoff, STRING("jav_02"), 1, 0)
 #if VERSION >= VERSION_US
         CALL(evt_hitobj_onoff, STRING("jav_03"), 1, 0)
 #endif
     ELSE
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAPOBJ_FLAG_HIDE)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("S_yuka"), MAP_OBJ_FLAG_HIDDEN)
         CALL(evt_hitobj_onoff, STRING("A_be"), 1, 0)
         SET_VALUE(LW(0), STRING("w_bero"))
         CALL_CHILD(bero_case_switch_off)

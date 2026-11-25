@@ -1,13 +1,15 @@
-// DEMOPad: the SDK demo-library pad reader (button edges, repeat, stick directions) used by makeKey.
+// DEMOPad: the SDK demo-library pad reader (button edges, stick directions) used by makeKey, which adds the auto-repeat.
+
 #include <demo/DEMOPad.h>
 
 #define DEMO_STICK_THRESHOLD 48
 
 DEMOPadStatus DemoPad[PAD_MAX_CONTROLLERS];
 u32 DemoNumValidPads;
-PADStatus Pad[PAD_MAX_CONTROLLERS];
+static PADStatus Pad[PAD_MAX_CONTROLLERS];
+
 /** Bit of each controller port, used by DEMOPadRead to reset ports with no controller attached. */
-u32 PadChanMask[PAD_MAX_CONTROLLERS] = {PAD_CHAN0_BIT, PAD_CHAN1_BIT, PAD_CHAN2_BIT, PAD_CHAN3_BIT};
+static u32 PadChanMask[PAD_MAX_CONTROLLERS] = {PAD_CHAN0_BIT, PAD_CHAN1_BIT, PAD_CHAN2_BIT, PAD_CHAN3_BIT};
 
 /**
  * Updates one demo pad from a PAD read: stick and C-stick directions past 48,

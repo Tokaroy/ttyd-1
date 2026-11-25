@@ -4,19 +4,24 @@
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
+#include "gra.h"
+#include "data_tables.h"
 #include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_npc.h"
 #include "evt/evt_party.h"
 #include "evt/evt_seq.h"
 #include "evt/evt_snd.h"
-#include "gra.h"
-#include "data_tables.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_mobj.h"
+#include "driver/seqdrv.h"
+#include "pmario_sound.h"
+#include "driver/npcdrv.h"
 
 static BeroEntry bero_entry_data[3];
+static EvtWord gra_01_after_ranpel2[94];
 static TreeAccess tree_tbl[4];
+EvtWord gra_01_init_evt[107];
 
 /** Doors of this room: the west exit (w_bero1) to gra_00 and the east exit (e_bero1) to gra_02. */
 static BeroEntry bero_entry_data[] = {
@@ -58,9 +63,9 @@ static BeroEntry bero_entry_data[] = {
 /**
  * Cutscene on the first visit after Vivian has joined:
  * Vivian is placed behind Mario, runs up and says her first trail line (stg4_gra_16_01);
- * sets GSWF_GRA01_VIVIAN_FIRST_TRAIL_TALK so it plays once.
+ * sets GSWF_GRA_01_AFTER_DOOPLISS_SCENE_SEEN so it plays once.
  */
-EVT_BEGIN(gra_01_after_ranpel2)
+static EVT_BEGIN(gra_01_after_ranpel2)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_run, 0)
     CALL(evt_party_set_pos, 0, -640, 0, 0)
@@ -70,7 +75,7 @@ EVT_BEGIN(gra_01_after_ranpel2)
     CALL(evt_gra_vivian_pose_set, 3, STRING("PTR_S_4"))
     CALL(evt_gra_vivian_pose_set, 7, STRING("PTR_T_5"))
     CALL(evt_party_set_homing_dist, 0, FLOAT(20.0f))
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(evt_mario_mov_pos2, -540, 0, FLOAT(150.0f))
     CALL(evt_mario_set_dir, 270, 300, 0)
     CALL(evt_party_stop, 0)
@@ -80,12 +85,12 @@ EVT_BEGIN(gra_01_after_ranpel2)
     CALL(evt_gra_vivian_pose_set, 2, STRING("PTR_W_1"))
     CALL(evt_gra_vivian_pose_set, 3, STRING("PTR_R_1"))
     CALL(evt_gra_vivian_pose_set, 7, STRING("PTR_T_1"))
-    SET_VALUE(GSWF(GSWF_GRA01_VIVIAN_FIRST_TRAIL_TALK), 1)
+    SET_VALUE(GSWF_GRA_01_AFTER_DOOPLISS_SCENE_SEEN, 1)
     CALL_CHILD(bero_case_entry)
     CALL(evt_party_set_homing_dist, 0, FLOAT(50.0f))
     CALL(evt_party_run, 0)
     CALL(evt_mario_key_onoff, 1)
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     RETURN
 EVT_END()
 
@@ -103,25 +108,25 @@ static TreeAccess tree_tbl[] = {
 /**
  * Init script of gra_01: trail music, the shake-tree spots and the exits, a coin block,
  * a hidden Super Shroom block and a ten-coin brick,
- * and Vivian's first-talk cutscene once the story reaches STORY_STG4_13_VIVIAN_JOINS.
+ * and Vivian's first-talk cutscene once the story reaches STG4_13_VIVIAN_JOINS.
  */
 EVT_BEGIN(gra_01_init_evt)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_GRA1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_USU1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_GRA1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_USU1"))
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(tree_tbl))
     CALL_CHILD(evt_sub_tree_access_entry)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
-    CALL(evt_mobj_badgeblk, STRING("blk00"), 0, 0, -100, ITEM_COIN, 0, GSWF(GSWF_GRA01_COIN_BLOCK_HIT), 0)
-    CALL(evt_mobj_brick, STRING("blk02"), -350, 0, -100, 0, 0, 0, LSWF(2))
-    CALL(evt_mobj_brick, STRING("blk03"), -200, 60, 100, 0, 0, 0, LSWF(3))
-    CALL(evt_mobj_brick, STRING("blk04"), 200, 60, 100, 0, 0, 0, LSWF(4))
-    CALL(evt_mobj_brick, STRING("blk05"), 0, 85, -100, ITEM_SUPER_SHROOM, 11, 0, GSWF(GSWF_GRA01_HIDDEN_SUPER_SHROOM_BLOCK_HIT))
-    CALL(evt_mobj_brick, STRING("blk06"), 475, 60, -100, 0, 3, 0, GSWF(GSWF_GRA01_TEN_COIN_BLOCK_EMPTIED))
+    CALL(evt_mobj_badgeblk, STRING("blk00"), 0, 0, -100, ITEM_COIN, 0, GSWF_GRA_01_COIN_BLOCK, 0)
+    CALL(evt_mobj_brick, STRING("blk02"), -350, 0, -100, ITEM_NULL, MOBJ_BRICK_PLAIN, 0, LSWF_GRA_01_BRICK_BLK02)
+    CALL(evt_mobj_brick, STRING("blk03"), -200, 60, 100, ITEM_NULL, MOBJ_BRICK_PLAIN, 0, LSWF_GRA_01_BRICK_BLK03)
+    CALL(evt_mobj_brick, STRING("blk04"), 200, 60, 100, ITEM_NULL, MOBJ_BRICK_PLAIN, 0, LSWF_GRA_01_BRICK_BLK04)
+    CALL(evt_mobj_brick, STRING("blk05"), 0, 85, -100, ITEM_SUPER_SHROOM, MOBJ_BRICK_HIDDEN_ITEM, 0, GSWF_GRA_01_SUPER_SHROOM_HIDDEN_BLOCK)
+    CALL(evt_mobj_brick, STRING("blk06"), 475, 60, -100, ITEM_NULL, MOBJ_BRICK_TEN_COIN, 0, GSWF_GRA_01_TEN_COIN_BRICK)
     SET_VALUE(LF(0), 0)
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG4_13_VIVIAN_JOINS)
-        IF_INT_EQUAL(GSWF(GSWF_GRA01_VIVIAN_FIRST_TRAIL_TALK), 0)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG4_13_VIVIAN_JOINS)
+        IF_INT_EQUAL(GSWF_GRA_01_AFTER_DOOPLISS_SCENE_SEEN, 0)
             SET_VALUE(LF(0), 1)
         END_IF
     END_IF

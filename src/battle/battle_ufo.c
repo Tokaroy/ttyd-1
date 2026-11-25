@@ -1,5 +1,6 @@
-// PAL only: the UFO test enemy (UNIT_UNUSED_UFO, "bll_un_ufo" in tst.rel). It flies in, hovers over a
-// target, drops an item part (part 2) that bounces on the floor and blinks out, then flies away.
+// Built for the early demos, PAL and the PAL demo (not JP, US or the September US demo): the UFO test enemy
+// (UNIT_UNUSED_UFO, "bll_un_ufo" in tst.rel). It flies in, hovers over a target, drops an item part (part 2)
+// that bounces on the floor and hides when it reaches the target, then flies away.
 // The unit's 0x44-byte work (BtlUnit_Entry allocates it for this kind) sits in countersetWeapon.
 #include "battle/battle.h"
 #include "battle/battle_sub.h"
@@ -89,7 +90,7 @@ USER_FUNC(btlevtcmd_UFOAction) {
     }
     targetId = work->targetUnitId;
     partId = work->targetPartId;
-    if (work->state < 6 && (wp->flags & BATTLE_FLAG_ACT_DECIDED)) {
+    if (work->state < 6 && (wp->flags & BATTLE_FLAG_ACT_DECIDED_UNUSED)) {
         return EVT_RETURN_BLOCK;
     }
     if (work->state < 6 && targetId != -1) {
@@ -162,10 +163,10 @@ USER_FUNC(btlevtcmd_UFOAction) {
                 hy4 += oy4;
                 hz4 += oz4;
                 BtlUnit_SetPartsPos(part, hx4, hy4, hz4);
-                part->attributes |= PART_ATTR_WORLD_POSITION;
+                part->attributes |= kAbsolutePosition;
                 work->dropState = 1;
                 work->timer = 60;
-                BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->attributes |= PART_ATTR_NOT_TARGETABLE;
+                BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->attributes |= kNotTargetable;
                 work->state = 5;
                 _SetUfoPos_Float(unit, TRUE);
                 break;
@@ -197,7 +198,7 @@ USER_FUNC(btlevtcmd_UFOAction) {
                     work->state = 11;
                 }
                 if (x7 >= 240.0f) {
-                    BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->attributes |= PART_ATTR_NOT_TARGETABLE;
+                    BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->attributes |= kNotTargetable;
                 }
                 _SetUfoPos_Float(unit, TRUE);
                 break;
@@ -208,7 +209,7 @@ USER_FUNC(btlevtcmd_UFOAction) {
                 break;
             case 10:
                 work->state = 6;
-                BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->attributes |= PART_ATTR_NOT_TARGETABLE;
+                BtlUnit_GetPartsPtr(unit, BtlUnit_GetBodyPartsId(unit))->attributes |= kNotTargetable;
                 break;
             case 11:
             default:
@@ -311,7 +312,7 @@ static void _UFOItemAction(EventEntry* event) {
         case 1:
             BtlUnit_GetPartsPos(part, &work->dropPos.x, &work->dropPos.y, &work->dropPos.z);
             targetPart = BtlUnit_GetPartsPtr(target, targetPartId);
-            if (targetPart->attributes & PART_ATTR_WORLD_POSITION) {
+            if (targetPart->attributes & kAbsolutePosition) {
                 BtlUnit_GetPartsPos(targetPart, &work->dropTarget.x, &work->dropTarget.y, &work->dropTarget.z);
             } else {
                 BtlUnit_GetPos(target, &ux, &uy, &uz);
@@ -348,14 +349,14 @@ static void _UFOItemAction(EventEntry* event) {
     if (work->dropTimer > 0) {
         work->dropTimer--;
         if (work->dropTimer <= 0) {
-            part->attributes |= PART_ATTR_HIDDEN;
+            part->attributes |= kHidden;
             work->dropState = 5;
             return;
         }
         if (work->dropTimer & 2) {
-            part->attributes |= PART_ATTR_HIDDEN;
+            part->attributes |= kHidden;
         } else {
-            part->attributes &= ~PART_ATTR_HIDDEN;
+            part->attributes &= ~kHidden;
         }
     }
     if (target == NULL) {
@@ -365,7 +366,7 @@ static void _UFOItemAction(EventEntry* event) {
     targetPart = BtlUnit_GetPartsPtr(target, targetPartId);
     x = work->dropPos.x;
     y = work->dropPos.y;
-    if (targetPart->attributes & PART_ATTR_WORLD_POSITION) {
+    if (targetPart->attributes & kAbsolutePosition) {
         BtlUnit_GetPartsPos(targetPart, &tx, &ty, &tz);
     } else {
         BtlUnit_GetPos(target, &px, &py, &pz);
@@ -386,6 +387,6 @@ static void _UFOItemAction(EventEntry* event) {
         hit = TRUE;
     }
     if (hit) {
-        part->attributes |= PART_ATTR_HIDDEN;
+        part->attributes |= kHidden;
     }
 }

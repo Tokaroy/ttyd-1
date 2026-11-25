@@ -1,7 +1,6 @@
 #include <dolphin.h>
 
-#define REG_MAX 5
-#define REG(chan, idx) (__EXIRegs[((chan) * REG_MAX) + (idx)])
+#define REG(chan, idx) (__EXIRegs[((chan) * EXI_CHAN_REGS) + (idx)])
 
 #define STATE_IDLE     0
 #define STATE_DMA      1
@@ -21,14 +20,12 @@
 #define EXI_0LENGTH_EXILENGTH_MASK 0x03FFFFE0
 
 #if DEBUG
-/** Library version string kept in the binary (debug build). */
 const char * __EXIVersion = "<< Dolphin SDK - EXI\tdebug build: Apr  5 2004 03:55:29 (0x2301) >>";
 #else
-/** Library version string kept in the binary (release build). */
 const char * __EXIVersion = "<< Dolphin SDK - EXI\trelease build: Apr  5 2004 04:14:14 (0x2301) >>";
 #endif
 
-static EXIControl Ecb[3];
+static EXIControl Ecb[MAX_CHAN];
 static u32 IDSerialPort1;
 
 // external functions
@@ -38,11 +35,6 @@ extern void __OSEnableBarnacle(s32 chan, u32 dev);
 u32 EXIClearInterrupts(s32 chan, int exi, int tc, int ext);
 static int __EXIProbe(s32 chan);
 
-/**
- * Masks or unmasks the PI interrupt for a channel's EXI (device) interrupt:
- * it is unmasked only when the channel has an EXI callback and is not locked.
- * Channel 0 shares its interrupt with channel 2's, and channel 2 follows the PI debug interrupt handler.
- */
 static void SetExiInterruptMask(s32 chan, EXIControl* exi) {
     EXIControl* exi2;
     exi2 = &Ecb[2];
@@ -72,10 +64,6 @@ static void SetExiInterruptMask(s32 chan, EXIControl* exi) {
     }
 }
 
-/**
- * Ends the busy state of a channel's transfer; for an immediate read it also unpacks the data register into the
- * caller's buffer, most significant byte first.
- */
 static void CompleteTransfer(s32 chan) {
     EXIControl* exi;
     u8* buf;
@@ -90,7 +78,7 @@ static void CompleteTransfer(s32 chan) {
         if (exi->state & STATE_IMM) {
             if ((len = exi->immLen) != 0) {
                 buf = exi->immBuf;
-                data = __EXIRegs[(chan * 5) + 4];
+                data = REG(chan, EXI_DATA);
                 for(i = 0; i < len; i++) {
                     *buf++ = data >> ((3 - i) * 8);
                 }
@@ -100,11 +88,6 @@ static void CompleteTransfer(s32 chan) {
     }
 }
 
-/**
- * Starts an immediate transfer of up to 4 bytes (type 0 = read, 1 = write) on the selected device of a channel.
- * If a callback is given it is run from the transfer-complete interrupt.
- * Returns 0 if the channel is busy or no device is selected.
- */
 int EXIImm(s32 chan, void* buf, s32 len, u32 type, EXICallback callback) {
     EXIControl* exi;
     BOOL enabled;
@@ -126,51 +109,43 @@ int EXIImm(s32 chan, void* buf, s32 len, u32 type, EXICallback callback) {
     exi->tcCallback = callback;
     if (exi->tcCallback) {
         EXIClearInterrupts(chan, 0, 1, 0);
-        __OSUnmaskInterrupts(0x200000U >> (chan * 3));
+        __OSUnmaskInterrupts(OS_INTERRUPTMASK_EXI_0_TC >> (chan * 3));
     }
 
     exi->state |= STATE_IMM;
-    if (type != 0) {
+    if (type != EXI_READ) {
         data = 0;
         for(i = 0; i < len; i++) {
             data |= ((u8*)buf)[i] << ((3 - i) * 8);
         }
-        __EXIRegs[(chan * 5) + 4] = data;
+        REG(chan, EXI_DATA) = data;
     }
 
     exi->immBuf = buf;
-    exi->immLen = (type != 1) ? len : 0; 
-    __EXIRegs[(chan * 5) + 3] = (type << 2) | 1 | ((len - 1) << 4);
+    exi->immLen = (type != EXI_WRITE) ? len : 0; 
+    REG(chan, EXI_CR) = (type << 2) | EXI_CR_TSTART | ((len - 1) << 4);
     OSRestoreInterrupts(enabled);
     return 1;
 }
 
-/**
- * Immediate transfer of any length: splits it into 4 byte EXIImm calls, waiting for each with EXISync.
- * Returns 1 if all succeeded.
- */
 int EXIImmEx(s32 chan, void* buf, s32 len, u32 mode) {
     s32 xLen;
 
     while (len) {
-        xLen = (len < 4) ? len : 4;
+        xLen = (len < MAX_IMM) ? len : MAX_IMM;
         if (EXIImm(chan, buf, xLen, mode, 0) == 0) {
             return 0;
         }
         if (EXISync(chan) == 0) {
             return 0;
         }
-        ((u8*)buf) += xLen;
+        ((u8*)buf) += xLen; // cast as an lvalue (MWCC extension) steps the parameter
         len -= xLen;
     }
 
     return 1;
 }
 
-/**
- * Starts a DMA transfer (type 0 = read, 1 = write) of len bytes between memory and the selected device,
- * with an optional completion callback. Returns 0 if the channel is busy or no device is selected.
- */
 int EXIDma(s32 chan, void* buf, s32 len, u32 type, EXICallback callback) {
     EXIControl* exi;
     BOOL enabled;
@@ -190,24 +165,20 @@ int EXIDma(s32 chan, void* buf, s32 len, u32 type, EXICallback callback) {
     }
 
     exi->tcCallback = callback;
-    if ((u32)exi->tcCallback) {
+    if (exi->tcCallback) {
         EXIClearInterrupts(chan, 0, 1, 0);
-        __OSUnmaskInterrupts(0x200000U >> (chan * 3));
+        __OSUnmaskInterrupts(OS_INTERRUPTMASK_EXI_0_TC >> (chan * 3));
     }
 
     exi->state |= STATE_DMA;
-    __EXIRegs[(chan * 5) + 1] = (u32)buf & EXI_0LENGTH_EXILENGTH_MASK;
-    __EXIRegs[(chan * 5) + 2] = len;
-    __EXIRegs[(chan * 5) + 3] = (type * 4) | 3;
+    REG(chan, EXI_MAR) = (u32)buf & EXI_0LENGTH_EXILENGTH_MASK;
+    REG(chan, EXI_LENGTH) = len;
+    REG(chan, EXI_CR) = (type * 4) | (EXI_CR_DMA | EXI_CR_TSTART);
 
     OSRestoreInterrupts(enabled);
     return 1;
 }
 
-/**
- * Busy-waits until the transfer in progress on the channel has finished and completes it.
- * Returns 1 for a finished transfer, 0 if the device is no longer selected.
- */
 int EXISync(s32 chan) {
     EXIControl* exi;
     int rc;
@@ -218,11 +189,15 @@ int EXISync(s32 chan) {
     ASSERTLINE(565, 0 <= chan && chan < MAX_CHAN);
 
     while ((exi->state & STATE_SELECTED)) {
-        if (!(__EXIRegs[(chan * 5) + 3] & 1)) {
+        if (!(REG(chan, EXI_CR) & EXI_CR_TSTART)) {
             enabled = OSDisableInterrupts();
             if (exi->state & STATE_SELECTED) {
                 CompleteTransfer(chan);
-                if (__OSGetDIConfig() != 0xFF || (OSGetConsoleType() & 0xf0000000) == 0x20000000 || exi->immLen != 4 || (__EXIRegs[chan * 5] & 0x70) || (__EXIRegs[(chan * 5) + 4] != 0x01010000 && __EXIRegs[(chan * 5) + 4] != 0x05070000 && __EXIRegs[(chan * 5) + 4] != 0x04220001) || __OSDeviceCode == 0x8200) {
+
+                // success unless this is a 4-byte immediate read that returned the ID of a USB adapter, IS viewer or
+                // Ether viewer (with CPR bits 0x70 clear) on a console with DI config 0xFF that is not a TDEV and has no
+                // device code 0x8200
+                if (__OSGetDIConfig() != 0xFF || (OSGetConsoleType() & OS_CONSOLE_MASK) == OS_CONSOLE_TDEV || exi->immLen != 4 || (REG(chan, EXI_CSR) & EXI_CSR_CLK) || (REG(chan, EXI_DATA) != EXI_USB_ADAPTER && REG(chan, EXI_DATA) != EXI_IS_VIEWER && REG(chan, EXI_DATA) != EXI_ETHER_VIEWER) || __OSDeviceCode == 0x8200) {
                     rc = 1;
                 }
             }
@@ -235,39 +210,31 @@ int EXISync(s32 chan) {
     return rc;
 }
 
-/**
- * Acknowledges the EXI, transfer-complete and ext interrupt bits of a channel selected by the three flags,
- * and returns the control register as it was.
- */
 u32 EXIClearInterrupts(s32 chan, int exi, int tc, int ext) {
     u32 cpr;
     u32 prev;
 
     ASSERTLINE(614, 0 <= chan && chan < MAX_CHAN);
 
-    cpr = prev = __EXIRegs[(chan * 5)];
+    cpr = prev = REG(chan, EXI_CSR);
     prev &= 0x7F5;
 
     if (exi != 0) {
-        prev |= 2;
+        prev |= EXI_CSR_EXIINT;
     }
 
     if (tc != 0) {
-        prev |= 8;
+        prev |= EXI_CSR_TCINT;
     }
 
     if (ext != 0) {
-        prev |= 0x800;
+        prev |= EXI_CSR_EXTINT;
     }
 
-    __EXIRegs[(chan * 5)] = prev;
+    REG(chan, EXI_CSR) = prev;
     return cpr;
 }
 
-/**
- * Sets the callback for the device interrupt of a channel and updates the interrupt mask.
- * Returns the callback that was set before.
- */
 EXICallback EXISetExiCallback(s32 chan, EXICallback exiCallback) {
     EXIControl* exi;
     EXICallback prev;
@@ -289,7 +256,6 @@ EXICallback EXISetExiCallback(s32 chan, EXICallback exiCallback) {
     return prev;
 }
 
-/** Clears the saved device ID time stamps for channels 0 and 1 and probes both again. */
 void EXIProbeReset() {
     __gUnknown800030C0[0] = __gUnknown800030C0[1] = 0;
     Ecb[0].idTime = Ecb[1].idTime = 0;
@@ -297,11 +263,6 @@ void EXIProbeReset() {
     __EXIProbe(1);
 }
 
-/**
- * Returns whether a device is plugged into the channel. Channel 2 always counts as present.
- * A newly seen device is only reported once the ext line has been stable for two to three 100 ms intervals;
- * removal is reported at once and clears the timestamps.
- */
 static int __EXIProbe(s32 chan) {
     EXIControl* exi;
     BOOL enabled;
@@ -317,15 +278,15 @@ static int __EXIProbe(s32 chan) {
 
     rc = 1;
     enabled = OSDisableInterrupts();
-    cpr = __EXIRegs[(chan * 5)];
+    cpr = REG(chan, EXI_CSR);
 
     if (!(exi->state & STATE_ATTACHED)) {
-        if (cpr & 0x800) {
+        if (cpr & EXI_CSR_EXTINT) {
             EXIClearInterrupts(chan, 0, 0, 1);
             __gUnknown800030C0[chan] = exi->idTime = 0;
         }
 
-        if (cpr & 0x1000) {
+        if (cpr & EXI_CSR_EXT) {
             t = ((s32)(OSTicksToMilliseconds(OSGetTime()) / 100) + 1);
 
             if (__gUnknown800030C0[chan] == 0) {
@@ -339,7 +300,7 @@ static int __EXIProbe(s32 chan) {
             __gUnknown800030C0[chan] = exi->idTime = 0;
             rc = 0;
         }
-    } else if(!(cpr & 0x1000) || (cpr & 0x800)) {
+    } else if(!(cpr & EXI_CSR_EXT) || (cpr & EXI_CSR_EXTINT)) {
         __gUnknown800030C0[chan] = exi->idTime = 0;
         rc = 0;
     }
@@ -348,7 +309,6 @@ static int __EXIProbe(s32 chan) {
     return rc;
 }
 
-/** Returns whether a device is present: __EXIProbe, and if the device has no saved ID yet, a successful EXIGetID. */
 int EXIProbe(s32 chan) {
     EXIControl* exi = &Ecb[chan];
     int rc;
@@ -362,10 +322,6 @@ int EXIProbe(s32 chan) {
     return rc;
 }
 
-/**
- * Returns 1 if a device is present.
- * Otherwise 0 if the debounce timestamp for the channel is set and -1 if it is not.
- */
 s32 EXIProbeEx(s32 chan) {
     if (EXIProbe(chan)) {
         return 1;
@@ -378,11 +334,6 @@ s32 EXIProbeEx(s32 chan) {
     return -1;
 }
 
-/**
- * Attaches without probing the ID: fails if already attached or no device is detected;
- * otherwise clears the ext interrupt, saves the ext callback,
- * unmasks the ext interrupt and marks the channel attached.
- */
 static int __EXIAttach(s32 chan, EXICallback extCallback) {
     EXIControl* exi;
     BOOL enabled;
@@ -398,17 +349,13 @@ static int __EXIAttach(s32 chan, EXICallback extCallback) {
 
     EXIClearInterrupts(chan, 1, 0, 0);
     exi->extCallback = extCallback;
-    __OSUnmaskInterrupts(0x100000U >> (chan * 3));
+    __OSUnmaskInterrupts(OS_INTERRUPTMASK_EXI_0_EXT >> (chan * 3));
     exi->state |= STATE_ATTACHED;
 
     OSRestoreInterrupts(enabled);
     return 1;
 }
 
-/**
- * Probes the channel and, if a device with a saved ID is there, attaches so that its removal calls extCallback.
- * Returns 1 on success, 0 otherwise.
- */
 int EXIAttach(s32 chan, EXICallback extCallback) {
     EXIControl* exi;
     BOOL enabled;
@@ -429,10 +376,6 @@ int EXIAttach(s32 chan, EXICallback extCallback) {
     return rc;
 }
 
-/**
- * Removes the attached state and masks the ext interrupt of a channel.
- * Returns 0 if the channel is locked on device 0, otherwise 1.
- */
 int EXIDetach(s32 chan) {
     EXIControl* exi;
     BOOL enabled;
@@ -452,16 +395,12 @@ int EXIDetach(s32 chan) {
     }
 
     exi->state &= ~STATE_ATTACHED;
-    __OSMaskInterrupts(0x500000U >> (chan * 3));
+    __OSMaskInterrupts((OS_INTERRUPTMASK_EXI_0_EXI | OS_INTERRUPTMASK_EXI_0_EXT) >> (chan * 3));
 
     OSRestoreInterrupts(enabled);
     return 1;
 }
 
-/**
- * Like EXISelect but at clock frequency freq without setting any device chip-select bit (for the SD adapter).
- * Returns 0 if the channel is already selected or not locked for this device.
- */
 int EXISelectSD(s32 chan, u32 dev, u32 freq) {
     EXIControl* exi;
     u32 cpr;
@@ -481,18 +420,18 @@ int EXISelectSD(s32 chan, u32 dev, u32 freq) {
     }
 
     exi->state |= STATE_SELECTED;
-    cpr = __EXIRegs[(chan * 5)];
-    cpr &= 0x405;
+    cpr = REG(chan, EXI_CSR);
+    cpr &= (EXI_CSR_EXTINTMASK | EXI_CSR_TCINTMASK | EXI_CSR_EXIINTMASK);
     cpr |= freq * 0x10;
-    __EXIRegs[(chan * 5)] = cpr;
+    REG(chan, EXI_CSR) = cpr;
 
     if (exi->state & STATE_ATTACHED) {
         switch (chan) {
         case 0:
-            __OSMaskInterrupts(0x100000U);
+            __OSMaskInterrupts(OS_INTERRUPTMASK_EXI_0_EXT);
             break;
         case 1:
-            __OSMaskInterrupts(0x20000U);
+            __OSMaskInterrupts(OS_INTERRUPTMASK_EXI_1_EXT);
             break;
         }
     }
@@ -501,11 +440,6 @@ int EXISelectSD(s32 chan, u32 dev, u32 freq) {
     return 1;
 }
 
-/**
- * Selects device dev on a channel at clock frequency freq (the chip-select bit is set),
- * after the channel has been locked for that device. Masks the channel's ext interrupt while selected.
- * Returns 0 if already selected, not locked by this device, or no device is present.
- */
 int EXISelect(s32 chan, u32 dev, u32 freq) {
     EXIControl* exi;
     u32 cpr;
@@ -525,18 +459,18 @@ int EXISelect(s32 chan, u32 dev, u32 freq) {
     }
 
     exi->state |= STATE_SELECTED;
-    cpr = __EXIRegs[(chan * 5)];
-    cpr &= 0x405;
+    cpr = REG(chan, EXI_CSR);
+    cpr &= (EXI_CSR_EXTINTMASK | EXI_CSR_TCINTMASK | EXI_CSR_EXIINTMASK);
     cpr |= (((1 << dev) << 7) | (freq * 0x10));
-    __EXIRegs[(chan * 5)] = cpr;
+    REG(chan, EXI_CSR) = cpr;
 
     if (exi->state & STATE_ATTACHED) {
         switch (chan) {
         case 0:
-            __OSMaskInterrupts(0x100000U);
+            __OSMaskInterrupts(OS_INTERRUPTMASK_EXI_0_EXT);
             break;
         case 1:
-            __OSMaskInterrupts(0x20000U);
+            __OSMaskInterrupts(OS_INTERRUPTMASK_EXI_1_EXT);
             break;
         }
     }
@@ -545,10 +479,6 @@ int EXISelect(s32 chan, u32 dev, u32 freq) {
     return 1;
 }
 
-/**
- * Clears the chip select of the channel and re-enables its ext interrupt.
- * Returns 0 if nothing was selected or if the device disappeared while selected, otherwise 1.
- */
 int EXIDeselect(s32 chan) {
     EXIControl* exi;
     u32 cpr;
@@ -564,16 +494,16 @@ int EXIDeselect(s32 chan) {
     }
 
     exi->state &= ~STATE_SELECTED;
-    cpr = __EXIRegs[(chan * 5)];
-    __EXIRegs[(chan * 5)] = cpr & 0x405;
+    cpr = REG(chan, EXI_CSR);
+    REG(chan, EXI_CSR) = cpr & (EXI_CSR_EXTINTMASK | EXI_CSR_TCINTMASK | EXI_CSR_EXIINTMASK);
 
     if (exi->state & STATE_ATTACHED) {
         switch (chan) {
         case 0:
-            __OSUnmaskInterrupts(0x100000U);
+            __OSUnmaskInterrupts(OS_INTERRUPTMASK_EXI_0_EXT);
             break;
         case 1:
-            __OSUnmaskInterrupts(0x20000U);
+            __OSUnmaskInterrupts(OS_INTERRUPTMASK_EXI_1_EXT);
             break;
         }
     }
@@ -590,10 +520,6 @@ int EXIDeselect(s32 chan) {
     return 1;
 }
 
-/**
- * PI interrupt handler for a channel's EXI (device) interrupt:
- * acknowledges it and calls the channel's EXI callback with the channel number.
- */
 static void EXIIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     s32 chan;
     EXIControl* exi;
@@ -617,10 +543,6 @@ static void EXIIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     }
 }
 
-/**
- * PI interrupt handler for transfer-complete: masks the interrupt, acknowledges it,
- * completes the transfer and calls the channel's one-shot transfer callback.
- */
 static void TCIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     s32 chan;
     EXIControl* exi;
@@ -630,7 +552,7 @@ static void TCIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
 
     ASSERTLINE(1107, 0 <= chan && chan < MAX_CHAN);
     exi = &Ecb[chan];
-    __OSMaskInterrupts(0x80000000U >> interrupt);
+    __OSMaskInterrupts(OS_INTERRUPTMASK(interrupt));
     EXIClearInterrupts(chan, 0, 1, 0);
 
     callback = exi->tcCallback;
@@ -648,10 +570,6 @@ static void TCIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     }
 }
 
-/**
- * PI interrupt handler for a channel's ext (insert/remove) interrupt:
- * masks it, clears the attached state and calls the one-shot ext callback.
- */
 static void EXTIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     s32 chan;
     EXIControl* exi;
@@ -660,7 +578,7 @@ static void EXTIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     chan = (interrupt - 11) / 3;
 
     ASSERTLINE(1147, 0 <= chan && chan < 2);
-    __OSMaskInterrupts(0x500000U >> (chan * 3));
+    __OSMaskInterrupts((OS_INTERRUPTMASK_EXI_0_EXI | OS_INTERRUPTMASK_EXI_0_EXT) >> (chan * 3));
     exi = &Ecb[chan];
     callback = exi->extCallback;
     exi->state &= ~STATE_ATTACHED;
@@ -677,31 +595,25 @@ static void EXTIntrruptHandler(__OSInterrupt interrupt, OSContext* context) {
     }
 }
 
-/**
- * Starts the EXI library: waits for running transfers, masks and clears all three channels, installs the EXI,
- * transfer-complete and ext handlers for channels 0 to 2,
- * and reads the ID of the device on channel 0 device 2 (serial port 1).
- * Outside the IPL it checks channels 0 and 1 for a device with ID 0x07010000
- * and enables the Barnacle debug UART on the other channel.
- */
 void EXIInit() {
     u32 id;
 
-    while (((REG(0, 3) & 1) == 1) || ((REG(1, 3) & 1) == 1) || ((REG(2, 3) & 1) == 1)) {}
+    while (((REG(0, EXI_CR) & EXI_CR_TSTART) == EXI_CR_TSTART) || ((REG(1, EXI_CR) & EXI_CR_TSTART) == EXI_CR_TSTART) ||
+           ((REG(2, EXI_CR) & EXI_CR_TSTART) == EXI_CR_TSTART)) {}
 
-    __OSMaskInterrupts(0x7F8000U);
-    __EXIRegs[0] = 0;
-    __EXIRegs[5] = 0;
-    __EXIRegs[10] = 0;
-    __EXIRegs[0] = 0x2000;
-    __OSSetInterruptHandler(9,  EXIIntrruptHandler);
-    __OSSetInterruptHandler(10, TCIntrruptHandler);
-    __OSSetInterruptHandler(11, EXTIntrruptHandler);
-    __OSSetInterruptHandler(12, EXIIntrruptHandler);
-    __OSSetInterruptHandler(13, TCIntrruptHandler);
-    __OSSetInterruptHandler(14, EXTIntrruptHandler);
-    __OSSetInterruptHandler(15, EXIIntrruptHandler);
-    __OSSetInterruptHandler(16, TCIntrruptHandler);
+    __OSMaskInterrupts(OS_INTERRUPTMASK_EXI);
+    __EXIRegs[EXI0_CSR] = 0;
+    __EXIRegs[EXI1_CSR] = 0;
+    __EXIRegs[EXI2_CSR] = 0;
+    __EXIRegs[EXI0_CSR] = EXI_CSR_ROMDIS;
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_0_EXI,  EXIIntrruptHandler);
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_0_TC, TCIntrruptHandler);
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_0_EXT, EXTIntrruptHandler);
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_1_EXI, EXIIntrruptHandler);
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_1_TC, TCIntrruptHandler);
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_1_EXT, EXTIntrruptHandler);
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_2_EXI, EXIIntrruptHandler);
+    __OSSetInterruptHandler(__OS_INTERRUPT_EXI_2_TC, TCIntrruptHandler);
 
     EXIGetID(0, 2, &IDSerialPort1);
 
@@ -716,12 +628,6 @@ void EXIInit() {
     OSRegisterVersion(__EXIVersion);
 }
 
-/**
- * Takes ownership of a channel for device dev. Returns 1 if acquired.
- * If the channel is already locked it returns 0 and,
- * when a callback is given and that device is not already queued,
- * queues the callback to run when the channel is released.
- */
 int EXILock(s32 chan, u32 dev, EXICallback unlockedCallback) {
     EXIControl* exi;
     BOOL enabled;
@@ -757,7 +663,6 @@ int EXILock(s32 chan, u32 dev, EXICallback unlockedCallback) {
     return 1;
 }
 
-/** Releases a channel and, if a lock request is queued, calls its callback. Returns 0 if the channel was not locked. */
 int EXIUnlock(s32 chan) {
     EXIControl* exi;
     BOOL enabled;
@@ -777,7 +682,7 @@ int EXIUnlock(s32 chan) {
     if (exi->items > 0) {
         unlockedCallback = exi->queue[0].callback;
         if (--exi->items > 0) {
-            memmove(&exi->queue[0], &exi->queue[1], exi->items * 8);
+            memmove(&exi->queue[0], &exi->queue[1], exi->items * sizeof(exi->queue[0]));
         }
         unlockedCallback(chan, 0);
     }
@@ -786,7 +691,6 @@ int EXIUnlock(s32 chan) {
     return 1;
 }
 
-/** Returns the state bits of a channel (DMA, immediate, busy, selected, attached, locked). */
 u32 EXIGetState(s32 chan) {
     EXIControl* exi;
 
@@ -795,17 +699,11 @@ u32 EXIGetState(s32 chan) {
     return exi->state;
 }
 
-/** Lock callback used by EXIGetID when the channel was busy: retries reading the ID. */
 static void UnlockedHandler(s32 chan, OSContext* context) {
     u32 id;
     EXIGetID(chan, 0, &id);
 }
 
-/**
- * Reads the 32-bit ID of the device on a channel by sending a 2 byte zero command and reading 4 bytes.
- * The ID of channel 0 device 2 is returned from the copy saved at EXIInit.
- * For memory card slots the ID is cached and tied to the probe timestamp. Returns 0 on failure.
- */
 s32 EXIGetID(s32 chan, u32 dev, u32* id) {
     EXIControl* exi = &Ecb[chan];
     int err;
@@ -840,12 +738,12 @@ s32 EXIGetID(s32 chan, u32 dev, u32* id) {
 
     err = !EXILock(chan, dev, (chan < 2 && dev == 0) ? &UnlockedHandler : NULL);
     if (err == 0) {
-        err = !EXISelect(chan, dev, 0);
+        err = !EXISelect(chan, dev, EXI_FREQ_1M);
         if (err == 0) {
             cmd = 0;
-            err |= !EXIImm(chan, &cmd, 2, 1, 0);
+            err |= !EXIImm(chan, &cmd, 2, EXI_WRITE, 0);
             err |= !EXISync(chan);
-            err |= !EXIImm(chan, id, 4, 0, 0);
+            err |= !EXIImm(chan, id, 4, EXI_READ, 0);
             err |= !EXISync(chan);
             err |= !EXIDeselect(chan);
         }
@@ -881,11 +779,6 @@ s32 EXIGetID(s32 chan, u32 dev, u32* id) {
     return 1;
 }
 
-/**
- * Reads the device ID and reduces it to a type code:
- * memory cards are identified by their size byte, known adapters and the IS viewer by the upper part of the ID,
- * anything else returns the full ID. Returns 0 if the ID could not be read.
- */
 s32 EXIGetType(s32 chan, u32 dev, u32* type) {
     u32 _type;
     s32 probe;
@@ -929,10 +822,6 @@ s32 EXIGetType(s32 chan, u32 dev, u32* type) {
     }
 }
 
-/**
- * Returns the name of an EXI device type (Memory Card 59 to 2043, USB Adapter, Modem, Broadband Adapter,
- * Mic and so on), or "Unknown".
- */
 char* EXIGetTypeString(u32 type) {
     switch (type) {
     case EXI_MEMORY_CARD_59:

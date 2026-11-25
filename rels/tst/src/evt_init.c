@@ -1,7 +1,12 @@
 // The init events of the tst maps, plus a test that draws a polygon with the stick and fills it through the GLU
 // tessellator (glu/). The tst_nakayama map runs the test. The Japanese demo has no test (the tess code and the
 // tst_nakayama events came after it), but the GLU units are still linked into its tst.rel.
+#include "version.h"
+#include "driver/itemdrv.h"
+#include "system.h"
+#include "pmario_sound.h"
 #include "evt/evt_cmd.h"
+#include "party/party_motion.h"
 #include "tst.h"
 #include "evt_init.h"
 
@@ -35,7 +40,8 @@
 #include "npc_event.h"
 #include "evt/evt_snd.h"
 #include "driver/mapdrv.h"
-#include "version.h"
+#include "driver/npcdrv.h"
+extern EvtWord testnpc_move_event[];
 
 #if VERSION >= VERSION_JP
 // One point of the drawn outline (and of the vertices the tessellator adds where edges cross).
@@ -80,6 +86,7 @@ void tess_test(void);
 #if VERSION >= VERSION_JP
 TessTestWork* tess_test_work;
 #endif
+
 char item_name[32];
 
 /** Init event of the tst_00 test map: puts Mario at (-525, 0, -15). */
@@ -135,7 +142,7 @@ EVT_END()
 // Never ends, so it has no end command.
 EvtWord tst_npc_env_evt[] = {
     CALL(evt_snd_envon, 0, STRING("ENV_STG1_HEI2"))
-    CALL(evt_snd_envon, PSND_CH(1), STRING("ENV_STG1_HEI1"))
+    CALL(evt_snd_envon, PSND_SLOT(1), STRING("ENV_STG1_HEI1"))
     LABEL(0)
     CALL(evt_npc_get_position, STRING("NPC_01"), LW(0), LW(1), LW(2))
     WAIT_MS(1000)
@@ -144,16 +151,16 @@ EvtWord tst_npc_env_evt[] = {
 
 /**
  * Init event of the NPC test map: gives NPC_01 the Goomba-style testnpc_move_event as its move interrupt and
- * tst_npc_talk_evt as its defeat interrupt (type 8), sets its reaction flag 2 and NPC_FLAG_MOVE_ANIM and
- * NPC_FLAG_TALK_ANIM, sets the field-battle (fbat) mode to 1
+ * tst_npc_talk_evt as its defeat interrupt (type 8), sets its reaction flag 2 and NPC_FLAG_AUTO_MOVE_ANIM and
+ * NPC_FLAG_TALK_POSE, sets the field-battle (fbat) mode to 1
  * and starts the ambient sound loop (tst_npc_env_evt).
  */
 EVT_BEGIN(tst_npc_init_evt)
     CALL(evt_npc_change_interrupt, STRING("NPC_01"), 1, PTR(testnpc_move_event))
     CALL(evt_npc_change_interrupt, STRING("NPC_01"), 8, PTR(tst_npc_talk_evt))
-    CALL(evt_npc_reaction_flag_onoff, 1, STRING("NPC_01"), 2)
-    CALL(evt_npc_flag_onoff, 1, STRING("NPC_01"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
-    CALL(evt_npc_change_fbat_mode, 1)
+    CALL(evt_npc_reaction_flag_onoff, 1, STRING("NPC_01"), NPC_REACTION_HAMMER)
+    CALL(evt_npc_flag_onoff, 1, STRING("NPC_01"), NPC_FLAG_AUTO_MOVE_ANIM | NPC_FLAG_TALK_POSE)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
     SPAWN_EVENT(tst_npc_env_evt)
     RETURN
 EVT_END()
@@ -239,7 +246,7 @@ EVT_END()
 
 /**
  * Init event of the tst_moj_03 map-object test map:
- * places jump stands, a locked door, item boxes, a sign, an arrow, breaking floors and a breakable rock.
+ * places jump stands, a padlock, item boxes, a sign, an arrow, breaking floors and a breakable rock.
  */
 EVT_BEGIN(tst_moj_03_init_evt)
     CALL(evt_mobj_jumpstand_red, 0, STRING("j1r"), 0, 0, -100, 0, LSWF(0))
@@ -306,24 +313,24 @@ EVT_END()
  * tree and hill map objects (saku, kusa, ki, yama) so the plain stage shows.
  */
 EVT_BEGIN(btl_tst_00_init_evt)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("saku_00"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("saku_01"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("saku_02"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_01"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_02"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_04"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_05"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_06"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_07"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_08"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ki_1"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ki_2"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ki_6"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_01"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_02"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_03"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_04"), MAPOBJ_FLAG_HIDE)
-    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_05"), MAPOBJ_FLAG_HIDE)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("saku_00"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("saku_01"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("saku_02"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_01"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_02"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_04"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_05"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_06"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_07"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("kusa_b_08"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ki_1"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ki_2"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("ki_6"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_01"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_02"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_03"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_04"), MAP_OBJ_FLAG_HIDDEN)
+    CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("yama_a_05"), MAP_OBJ_FLAG_HIDDEN)
     RETURN
 EVT_END()
 
@@ -412,7 +419,7 @@ void tess_test_line_disp(CameraId cameraId, void* param) {
     {
         // "Trail buffer %d / %d"
         GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
-        dbgDrawPrintf(120, -200, &white, 1.0f, "@Py\x8B\x4F\x90\xD5\x83\x6F\x83\x62\x83\x74\x83\x40 %d / %d@Pw",
+        dbgDrawPrintf(120, -200, &white, 1.0f, "@Py軌跡バッファ %d / %d@Pw",
                       tess_test_work->vertexCount, TESS_MAX_VERTICES);
     }
     GXSetBlendMode(GX_BM_NONE, GX_BL_ONE, GX_BL_ZERO, GX_LO_OR);
@@ -420,7 +427,7 @@ void tess_test_line_disp(CameraId cameraId, void* param) {
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
     GXSetZMode(GX_FALSE, GX_ALWAYS, GX_FALSE);
     GXSetNumChans(1);
-    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, 0, GX_DF_NONE, GX_AF_NONE);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
     GXSetNumTexGens(0);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
@@ -456,7 +463,7 @@ void tess_test_line_disp(CameraId cameraId, void* param) {
 
 /** Copies the screen into the texture the filled polygon is drawn with. */
 void tess_test_capture(CameraId cameraId, void* param) {
-    tess_test_work->capture = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_I8, GX_FALSE, 0), 1);
+    tess_test_work->capture = smartAlloc(GXGetTexBufferSize(608, 480, GX_TF_I8, GX_FALSE, 0), SMART_GROUP_MAP);
     GXSetTexCopySrc(0, 0, 608, 480);
     GXSetTexCopyDst(608, 480, GX_TF_I8, GX_FALSE);
     GXCopyTex(tess_test_work->capture->address, GX_FALSE);
@@ -526,12 +533,12 @@ USER_FUNC(tess_test_draw) {
                 for (j = 0; j < i; j++) {
                     tess_test_work->vertices[j] = tess_test_work->vertices[tess_test_work->vertexCount - 1];
                 }
-                dispEntry(CAMERA_2D, 0.0f, 0, tess_test_capture, NULL);
+                dispEntry(CAMERA_2D, 0.0f, DISP_MODE_OPAQUE, tess_test_capture, NULL);
                 return EVT_RETURN_DONE;
             }
         }
     }
-    dispEntry(CAMERA_2D, 0.0f, 0, tess_test_line_disp, NULL);
+    dispEntry(CAMERA_2D, 0.0f, DISP_MODE_OPAQUE, tess_test_line_disp, NULL);
     return EVT_RETURN_BLOCK;
 }
 
@@ -586,7 +593,7 @@ USER_FUNC(tess_test_run) {
 
 /** Script helper: queues the tessellated polygon draw (tess_test_disp) on the second offscreen camera. */
 USER_FUNC(tess_test_disp_entry) {
-    dispEntry(CAMERA_OFFSCREEN2, 0.0f, 1, tess_test_disp, NULL);
+    dispEntry(CAMERA_OFFSCREEN2, 0.0f, DISP_MODE_ALPHA_TEST, tess_test_disp, NULL);
     return EVT_RETURN_DONE;
 }
 
@@ -782,7 +789,7 @@ EVT_BEGIN(tst_item_00_show_evt)
     SET_VALUE(LW(2), -400)
     LOOP(31)
         CALL(make_item_name, LW(0), LW(1))
-        CALL(evt_item_entry, LW(1), LW(0), LW(2), 0, -100, ITEM_ENTRY_FIXED, -1, 0)
+        CALL(evt_item_entry, LW(1), LW(0), LW(2), 0, -100, ITEM_TYPE_STILL, -1, 0)
         ADD(LW(2), 25)
         ADD(LW(0), 1)
         IF_INT_GREATER_OR_EQUAL(LW(0), 339)
@@ -800,7 +807,7 @@ EVT_END()
 /**
  * Init event of the tst_item_00 item display map:
  * starts at item 1, shows the first 31 items and creates a red switch that shows the next 31, plus power-up,
- * save and recovery blocks and a locked door.
+ * save and recovery blocks and a padlock.
  */
 EVT_BEGIN(tst_item_00_init_evt)
     SET_VALUE(GW(0), 1)

@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: a jagged yellow lightning bolt between two points, wobbling from frame to frame.
+
 #include "eff/n64/eff_pokopi_thunder_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,6 +9,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include "dolphin/os.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include <math.h>
 #include "eff/eff_n64.h"
@@ -15,47 +17,49 @@
 /**
  * Wobble frames of the lightning bolt (yuragi, "sway"), one row per frame:
  * twelve sideways offsets of the bolt's points,
- * then twelve ribbon widths that thin it out toward the far end. Used by types 0 and 2.
+ * then twelve ribbon widths, one per point. Used by types 0 and 2.
  */
-u8 yuragi_data[11][24] = {
-5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 10, 9, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0, 0, 0,
-35, 5, 25, 5, 0, 25, 35, 5, 15, 0, 0, 0, 10, 13, 15, 12, 11, 13, 10, 12, 5, 1, 0, 0,
-45, 15, 35, 15, 0, 35, 45, 55, 25, 5, 2, 0, 13, 10, 12, 10, 13, 10, 13, 10, 12, 9, 5, 1,
-15, 15, 15, 15, 15, 15, 0, 15, 15, 5, 2, 0, 14, 10, 15, 10, 13, 30, 32, 30, 24, 50, 40, 60,
-1, 5, 15, 15, 35, 45, 40, 35, 25, 5, 2, 0, 4, 6, 10, 5, 8, 14, 6, 10, 14, 35, 50, 50,
-1, 15, 25, 15, 25, 35, 45, 40, 35, 15, 5, 0, 2, 2, 23, 12, 8, 15, 15, 5, 6, 18, 38, 60,
-30, 25, 15, 5, 15, 15, 25, 30, 35, 25, 5, 0, 3, 3, 3, 11, 3, 12, 4, 5, 2, 12, 42, 50,
-33, 33, 20, 12, 25, 17, 15, 20, 22, 20, 5, 0, 3, 3, 3, 2, 10, 2, 2, 12, 2, 2, 2, 20,
-30, 30, 25, 25, 35, 20, 15, 10, 15, 15, 5, 0, 2, 2, 2, 2, 2, 2, 6, 2, 2, 2, 6, 5,
-27, 27, 22, 22, 32, 17, 12, 7, 12, 12, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0
+static u8 yuragi_data[11][24] = {
+    {5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 10, 9, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0},
+    {5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 8, 7, 6, 5, 4, 3, 2, 1, 0, 0, 0, 0},
+    {35, 5, 25, 5, 0, 25, 35, 5, 15, 0, 0, 0, 10, 13, 15, 12, 11, 13, 10, 12, 5, 1, 0, 0},
+    {45, 15, 35, 15, 0, 35, 45, 55, 25, 5, 2, 0, 13, 10, 12, 10, 13, 10, 13, 10, 12, 9, 5, 1},
+    {15, 15, 15, 15, 15, 15, 0, 15, 15, 5, 2, 0, 14, 10, 15, 10, 13, 30, 32, 30, 24, 50, 40, 60},
+    {1, 5, 15, 15, 35, 45, 40, 35, 25, 5, 2, 0, 4, 6, 10, 5, 8, 14, 6, 10, 14, 35, 50, 50},
+    {1, 15, 25, 15, 25, 35, 45, 40, 35, 15, 5, 0, 2, 2, 23, 12, 8, 15, 15, 5, 6, 18, 38, 60},
+    {30, 25, 15, 5, 15, 15, 25, 30, 35, 25, 5, 0, 3, 3, 3, 11, 3, 12, 4, 5, 2, 12, 42, 50},
+    {33, 33, 20, 12, 25, 17, 15, 20, 22, 20, 5, 0, 3, 3, 3, 2, 10, 2, 2, 12, 2, 2, 2, 20},
+    {30, 30, 25, 25, 35, 20, 15, 10, 15, 15, 5, 0, 2, 2, 2, 2, 2, 2, 6, 2, 2, 2, 6, 5},
+    {27, 27, 22, 22, 32, 17, 12, 7, 12, 12, 2, 0, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 0},
 };
+
 /** The wobble frames used by type 1, a looser bolt with wider swings. */
-u8 yuragi_data2[11][24] = {
-25, 25, 25, 5, 25, 5, 25, 25, 5, 25, 25, 25, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-15, 15, 15, 25, 15, 15, 5, 25, 25, 15, 25, 25, 4, 4, 4, 4, 4, 3, 2, 1, 0, 0, 0, 0,
-25, 25, 25, 5, 15, 25, 5, 5, 15, 5, 5, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 0, 0,
-25, 25, 25, 5, 25, 5, 25, 25, 5, 15, 5, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5,
-15, 15, 15, 45, 35, 45, 35, 35, 25, 35, 15, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5,
-45, 55, 35, 25, 55, 15, 45, 25, 45, 35, 15, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5,
-85, 25, 15, 75, 25, 65, 35, 45, 75, 85, 15, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5,
-85, 15, 35, 55, 65, 45, 25, 75, 35, 45, 35, 40, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5,
-85, 15, 35, 55, 65, 45, 25, 75, 35, 45, 35, 40, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5,
-85, 15, 35, 55, 65, 45, 25, 75, 35, 45, 35, 40, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5,
-30, 30, 25, 25, 35, 20, 15, 10, 15, 15, 5, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 0
+static u8 yuragi_data2[11][24] = {
+    {25, 25, 25, 5, 25, 5, 25, 25, 5, 25, 25, 25, 4, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0},
+    {15, 15, 15, 25, 15, 15, 5, 25, 25, 15, 25, 25, 4, 4, 4, 4, 4, 3, 2, 1, 0, 0, 0, 0},
+    {25, 25, 25, 5, 15, 25, 5, 5, 15, 5, 5, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 0, 0},
+    {25, 25, 25, 5, 25, 5, 25, 25, 5, 15, 5, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5},
+    {15, 15, 15, 45, 35, 45, 35, 35, 25, 35, 15, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5},
+    {45, 55, 35, 25, 55, 15, 45, 25, 45, 35, 15, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5},
+    {85, 25, 15, 75, 25, 65, 35, 45, 75, 85, 15, 0, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5},
+    {85, 15, 35, 55, 65, 45, 25, 75, 35, 45, 35, 40, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5},
+    {85, 15, 35, 55, 65, 45, 25, 75, 35, 45, 35, 40, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5},
+    {85, 15, 35, 55, 65, 45, 25, 75, 35, 45, 35, 40, 4, 4, 4, 4, 4, 4, 6, 4, 4, 4, 6, 5},
+    {30, 30, 25, 25, 35, 20, 15, 10, 15, 15, 5, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 2, 0},
 };
 
 static u8 (*yuragi_data_table[2])[24] = {yuragi_data, yuragi_data2};
 
 static void effPokopiThunderMain(EffectEntry* effect);
-static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect);
+static void effPokopiThunderDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a lightning bolt from (x, y, z) to (x2, y2, z2) scaled by scale,
  * lasting duration frames (<= 0 means until deleted).
- * Type 10 and above (type mod 10 picks the shape) draws with camera 8 instead of 4.
+ * Type 10 and above (type mod 10 picks the shape) draws with CAMERA_2D instead of CAMERA_3D.
  * Returns NULL if the two points coincide.
- * Used by Dark Puff-type units, the X-Naut leader fight and aji_10 via evt_eff64.
+ * Used by Dark Puff-type units and aji_10 via evt_eff64, and from C by las_29 and the X-Naut leader and
+ * Shadow Queen units.
  */
 EffectEntry* effPokopiThunderN64Entry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 x2, f32 y2, f32 z2, f32 scale) {
     EffectEntry* effect;
@@ -63,14 +67,13 @@ EffectEntry* effPokopiThunderN64Entry(s32 type, s32 duration, f32 x, f32 y, f32 
     s32 cam;
     f32 len;
     f32 dx;
-    f32 nv;
     f32 dy;
     f32 dz;
 
     effect = effEntry();
-    cam = 4;
+    cam = CAMERA_3D;
     if (type >= 10) {
-        cam = 8;
+        cam = CAMERA_2D;
     }
     type = type % 10;
     effect->type = "PokopiThunderN64";
@@ -78,13 +81,13 @@ EffectEntry* effPokopiThunderN64Entry(s32 type, s32 duration, f32 x, f32 y, f32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffPokopiThunderN64Work));
     effect->userdata = work;
     effect->callback = effPokopiThunderMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (duration <= 0) {
-        work->timeLeft = 1000;
+        work->lifetime = 1000;
     } else {
-        work->timeLeft = duration;
+        work->lifetime = duration;
     }
     work->alpha = 255;
     dy = y - y2;
@@ -100,12 +103,15 @@ EffectEntry* effPokopiThunderN64Entry(s32 type, s32 duration, f32 x, f32 y, f32 
     work->position.x = x;
     work->position.y = y;
     work->position.z = z;
-    nv = 0.0f;
+
     work->scale = scale;
     work->cameraId = cam;
-    if (len != nv) {
+    if (len) {
         work->length = sqrtf(len);
     } else {
+
+        // BUG: the effect stays registered with its callback, length and colours unset, and the caller gets NULL,
+        // so it runs on (endless when duration <= 0) and cannot be deleted by the caller.
         return NULL;
     }
     work->length = 0.005f * work->length;
@@ -117,11 +123,6 @@ EffectEntry* effPokopiThunderN64Entry(s32 type, s32 duration, f32 x, f32 y, f32 
     work->b2 = 255;
     work->seed = rand() % 360;
     return effect;
-}
-
-/** Returns i * step. */
-inline float inline_fn(s32 i, float step) {
-    return ((f32)i) * step;
 }
 
 /** Counts down the lifetime and halves the alpha every frame after the first 11 frames (40 for type 2). */
@@ -137,39 +138,47 @@ static void effPokopiThunderMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
-        work->timeLeft = 16;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
+        work->lifetime = 16;
     }
-    if (work->timeLeft < 1000) {
-        work->timeLeft--;
+    if (work->lifetime < 1000) {
+        work->lifetime--;
     }
     work->frame++;
-    if (work->timeLeft < 0) {
+    if (work->lifetime < 0) {
         effDelete(effect);
         return;
     }
     frame = work->frame;
+
     if (type == 2) {
         if (frame >= 40) {
-            work->alpha = (s32)inline_fn(work->alpha, 0.5f);
+            work->alpha *= 0.5f;
         }
     } else if (frame >= 11) {
-        work->alpha = (s32)inline_fn(work->alpha, 0.5f);
+        work->alpha *= 0.5f;
     }
-    dispEntry(work->cameraId, dispCalcZ(&position), 2, (DispCallback)effPokopiThunderDisp, effect);
+    dispEntry(work->cameraId, dispCalcZ(&position), DISP_MODE_XLU, effPokopiThunderDisp, effect);
 }
 
-/** Returns a->end.y - b->start.y, the vertical span of the bolt. */
-inline float pt_dy(EffPokopiThunderN64Work* a, EffPokopiThunderN64Work* b) {
-    return a->end.y - b->start.y;
+/** The bolt's span from start to end along x, y and z. */
+static inline f32 pt_dx(EffPokopiThunderN64Work* w) {
+    return w->end.x - w->start.x;
+}
+static inline f32 pt_dy(EffPokopiThunderN64Work* w) {
+    return w->end.y - w->start.y;
+}
+static inline f32 pt_dz(EffPokopiThunderN64Work* w) {
+    return w->end.z - w->start.z;
 }
 
 /**
  * Rebuilds a 12-point jagged ribbon along the bolt each frame, wobbling the points from the frame table,
  * and draws it as quads with texture 0x54.
  */
-static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect) {
+static void effPokopiThunderDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     s32 alpha;
     f32 scale;
@@ -184,7 +193,6 @@ static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect) {
     effN64Vtx* v;
     u8* data;
     s32 u;
-
     GXTexObj texObj;
     Mtx mtx;
     f32 proj[7];
@@ -192,12 +200,14 @@ static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect) {
 
     camera = camGetPtr(cameraId);
     work = effect->userdata;
+
+    // zero is added to every z value; the adds are in the retail code
     zero = 0.0f;
     frame = work->frame;
     alpha = work->alpha;
     type = work->type;
     scale = work->scale;
-    if (work->cameraId != 4) {
+    if (work->cameraId != CAMERA_3D) {
         camera = camGetPtr(CAMERA_3D);
         GXGetProjectionv(proj);
         GXGetViewportv(vp);
@@ -211,36 +221,36 @@ static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevColor(GX_TEVREG1, (GXColor){work->r2, work->g2, work->b2, 128});
     GXSetNumChans(0);
     GXSetNumTevStages(4);
-    GXSetTevOrder(0, 0, 0, 0xff);
-    GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 3);
-    GXSetTevColorIn(0, 0xf, 8, 8, 0xf);
-    GXSetTevAlphaIn(0, 7, 7, 7, 4);
-    GXSetTevOrder(1, 0xff, 0xff, 0xff);
-    GXSetTevColorOp(1, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(1, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(1, 2, 4, 0, 0xf);
-    GXSetTevAlphaIn(1, 3, 7, 2, 7);
-    GXSetTevOrder(2, 1, 1, 0xff);
-    GXSetTevColorOp(2, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(2, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(2, 0xf, 0xf, 0xf, 0);
-    GXSetTevAlphaIn(2, 7, 3, 4, 0);
-    GXSetTevOrder(3, 0xff, 0xff, 0xff);
-    GXSetTevColorOp(3, 0, 0, 0, 1, 0);
-    GXSetTevAlphaOp(3, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(3, 0xf, 0xf, 0xf, 0);
-    GXSetTevAlphaIn(3, 7, 1, 0, 7);
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG2);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_TEXC, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+    GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_C0, GX_CC_C1, GX_CC_CPREV, GX_CC_ZERO);
+    GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_A2, GX_CA_ZERO, GX_CA_A1, GX_CA_ZERO);
+    GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_A2, GX_CA_TEXA, GX_CA_APREV);
+    GXSetTevOrder(GX_TEVSTAGE3, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+    GXSetTevColorOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE3, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE3, GX_CA_ZERO, GX_CA_A0, GX_CA_APREV, GX_CA_ZERO);
     GXSetNumTexGens(2);
-    GXSetTexCoordGen2(0, 1, 4, 0x1e, 0, 0x7d);
-    GXSetTexCoordGen2(1, 1, 4, 0x21, 0, 0x7d);
+    GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+    GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
     PSMTXScale(mtx, 0.0078125f, 0.03125f, 0.0f);
-    GXLoadTexMtxImm(mtx, 0x1e, 1);
-    GXLoadTexMtxImm(mtx, 0x21, 1);
+    GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
+    GXLoadTexMtxImm(mtx, GX_TEXMTX1, GX_MTX2x4);
     effGetTexObjN64(0x54, &texObj);
-    GXLoadTexObj(&texObj, 0);
-    GXLoadTexObj(&texObj, 1);
-    GXSetCullMode(0);
+    GXLoadTexObj(&texObj, GX_TEXMAP0);
+    GXLoadTexObj(&texObj, GX_TEXMAP1);
+    GXSetCullMode(GX_CULL_NONE);
     idx = frame - 1;
     if (type != 2) {
         if (idx < 11) {
@@ -258,20 +268,21 @@ static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect) {
     for (i = 0; i < 12; i++) {
         f32 w, dx, dy, a, s, c, off;
         w = (f32)data[i];
-        dx = 0.09090909f * (work->end.x - work->start.x);
-        dy = 0.09090909f * pt_dy(work, work);
+        dx = 0.09090909f * pt_dx(work);
+
+        dy = 0.09090909f * pt_dy(work);
         a = 6.2831855f * (f32)((work->seed + (i - frame) * 10) % 120 - 60) / 360.0f;
         s = (f32)sin(a);
         off = 0.04f * (w * s);
         s = dy * off;
         c = (f32)cos(a);
         c = 0.04f * (w * c);
-        work->x[i] = (dx * c - s) + (0.09090909f * ((f32)i * (work->end.x - work->start.x)) + work->start.x);
-        work->y[i] = (dx * off + dy * c) + (0.09090909f * ((f32)i * pt_dy(work, work)) + work->start.y);
-        work->z[i] = zero + (0.09090909f * ((f32)i * (work->end.z - work->start.z)) + work->start.z);
+        work->x[i] = (dx * c - s) + (0.09090909f * ((f32)i * pt_dx(work)) + work->start.x);
+        work->y[i] = (dx * off + dy * c) + (0.09090909f * ((f32)i * pt_dy(work)) + work->start.y);
+        work->z[i] = zero + (0.09090909f * ((f32)i * pt_dz(work)) + work->start.z);
         work->w[i] = 0.1f * (f32)data[i + 12];
     }
-    vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 48, 3)->address;
+    vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 48, SMART_GROUP_TEMP)->address;
     v = vtx;
     for (i = 0; i < 12; i++) {
         f32 ox, a, oy, r, ang2;
@@ -318,7 +329,7 @@ static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect) {
         v[1].b = i * 30;
         v += 2;
     }
-    DCFlushRange(vtx, 0x2a0);
+    DCFlushRange(vtx, sizeof(effN64Vtx) * 48);
     GXInvalidateVtxCache();
     effSetVtxDescN64(vtx);
     for (idx = 0; idx < i - 1; idx++) {
@@ -326,7 +337,7 @@ static void effPokopiThunderDisp(CameraId cameraId, EffectEntry* effect) {
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
         tri2(n, n + 2, n + 1, 2, n + 1, n + 2, n + 3, 0);
     }
-    if (work->cameraId != 4) {
+    if (work->cameraId != CAMERA_3D) {
         GXSetProjectionv(proj);
         GXSetViewport(vp[0], vp[1], vp[2], vp[3], vp[4], vp[5]);
     }

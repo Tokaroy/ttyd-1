@@ -1,6 +1,8 @@
 // cardmgr.c: the memory card manager (CardMetadata and save file layout): mount, create, read and write the save file.
+
 #pragma once
 
+#include "version.h"
 #include "evt/evt_badgeshop.h"
 #include "evt/evt_johoya.h"
 #include "evt/evt_yuugijou.h"
@@ -8,7 +10,6 @@
 #include "mario/mariost.h"
 #include <dolphin/card.h>
 #include <dolphin/os.h>
-#include "version.h"
 
 typedef struct {
     struct {
@@ -26,28 +27,24 @@ typedef struct {
     u32 checksum2;               // 0x1FFC
 } CardMetadata;
 
-// CardSaveSlot.data.flags bits.
-enum CardSaveFlags {
-    CARD_SAVE_FLAG_EMPTY = 0x1,   // a blank slot made by the card set-up: the file menu shows New Game; saving clears it
-    CARD_SAVE_FLAG_CORRUPT = 0x2, // neither copy of the slot passed its checksum: shown as broken; saving clears it
-};
+// CardSaveSlot.data.flags: erased slot and failure to validate either saved copy.
+#define CARD_SAVE_FLAG_ERASED (1 << 0)
+#define CARD_SAVE_FLAG_NO_VALID_COPY (1 << 1)
 
 typedef struct {
     struct {
-        u16 flags;                // 0x0
-        u8 pad_2[0x8 - 0x2];      // 0x2
-        GlobalWork global;        // 0x8
-        PouchData pouch;          // 0x13E0
-        NpcDeadInfo deadInfo[64]; // 0x19B4
-        BadgeShopWork badgeShop;  // 0x1EB4
-        PiantaParlorWork parlor;  // 0x1FD8
+        u16 flags;                    // 0x0
+        GlobalWork global;            // 0x8
+        PouchData pouch;              // 0x13E0
+        NpcDeadInfo deadInfo[64];     // 0x19B4
+        BadgeShopWork badgeShop;      // 0x1EB4
+        PiantaParlorWork parlor;      // 0x1FD8
+        InformantReadFlags informant; // 0x2110
 #if VERSION >= VERSION_US
-        InformantUnknown informant;   // 0x2230 (US parlor work is 0x120 bigger)
         u8 pad_225B[0x2260 - 0x225B]; // 0x225B
     } data;
     u8 __align[0x3FF0 - 0x2260]; // 0x2260
 #else
-        InformantUnknown informant;   // 0x2110
         u8 pad_213B[0x2140 - 0x213B]; // 0x213B
     } data;
     u8 __align[0x3FF0 - 0x2140]; // 0x2140
@@ -63,9 +60,23 @@ typedef struct {
     CardSaveSlot saves[4]; // 0x2000 (+ 0x4000 * save_index)
 } CardData;
 
+// CardWork.flags (cardmgr.c)
+typedef enum CardFlags {
+    CARD_FLAG_BUSY = (1 << 0),            // 0x1, a memcard_* card call is in progress
+    CARD_FLAG_EXEC = (1 << 1),            // 0x2, an operation is running (cardIsExec)
+    CARD_FLAG_DONE = (1 << 8),            // 0x100, the last operation finished
+    CARD_FLAG_FAILED = (1 << 9),          // 0x200, the last operation stopped with a card error
+    CARD_FLAG_HEADER_INVALID = (1 << 10), // 0x400, read_main / read_all_main: headerCheck failed (cleared when the
+                                          // next operation starts)
+    CARD_FLAG_ERASE = (1 << 11),          // 0x800, set by cardErase and cardCopy: write_main writes writeBuf instead
+                                          // of the slot and copies it into the slot when done
+    CARD_FLAG_WRITTEN = (1 << 13),        // 0x2000, a write completed (memcard_open rechecks the serial)
+    CARD_FLAG_INSERT_CHANGED = (1 << 14), // 0x4000, cardInsertChanged
+    CARD_FLAG_INSERT_WATCH = (1 << 15),   // 0x8000, cardInsertWatchStart .. cardInsertWatchEnd
+} CardFlags;
+
 typedef struct {
-    vu16 flags;             // 0x0
-    u8 pad_2[0x4 - 0x2];    // 0x2
+    vu16 flags;             // 0x0, CardFlags
     void* workArea;         // 0x4
     s32 chan;               // 0x8
     s32 fileNo;             // 0xC
@@ -83,7 +94,6 @@ typedef struct {
     BOOL validSave2;        // 0xB8, is backup save valid?
     s32 writeFirst;         // 0xBC
     s32 writeSecond;        // 0xC0
-    u8 pad_C4[0xC8 - 0xC4]; // 0xC4
     OSTime lastSaveTime1;   // 0xC8
     OSTime lastSaveTime2;   // 0xD0
     s32 opStep;             // 0xD8, step within the current operation
@@ -103,15 +113,14 @@ BOOL cardInsertChanged(void);    // called by evt_memcard
 BOOL cardIsExec(void);
 s32 cardGetCode(void);
 void cardMain(void);
+void cardCopy2Buffer(s32 slot); // inlined into cardWrite
 void cardCopy2Main(s32 slot);
 void cardErase(s32 slot);
 void cardCopy(s32 from, s32 to);
 void cardWrite(s32 slot);
 void cardWriteHeader(void);
 void cardReadAll(void);
+void cardRead(s32 slot);
 void cardCreate(void);
 void cardFormat(void);
-
-void cardInsertWatchStart(void);
-void cardInsertWatchEnd(void);
-BOOL cardInsertChanged(void);
+void cardDelete(void);

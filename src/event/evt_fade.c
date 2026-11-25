@@ -1,4 +1,5 @@
 // Script commands for screen fades and transitions (fadedrv).
+
 #include "evt/evt_fade.h"
 #include "driver/fadedrv.h"
 #include "driver/camdrv.h"
@@ -52,6 +53,17 @@ USER_FUNC(evt_fade_entry) {
     return EVT_RETURN_DONE;
 }
 
+/** Writes TRUE to args[0] when the last fade started has finished, FALSE while it runs. */
+// Original name and size (0x54) from the JP demo map (UNUSED there: no script uses it), at this slot between
+// evt_fade_entry and evt_fade_end_wait. Body: end_wait's fadeIsFinish() != TRUE test as a value, with evt_fade_in's
+// args local (without it 0x4c). Any comparison with TRUE builds the same code; `!= 0` is the same size but other code.
+USER_FUNC(evt_fade_end_check) {
+    EvtWord* args = event->args;
+
+    evtSetValue(event, args[0], fadeIsFinish() == TRUE);
+    return EVT_RETURN_DONE;
+}
+
 /** Blocks the script until the last fade started has finished. */
 USER_FUNC(evt_fade_end_wait) {
     return fadeIsFinish() != TRUE ? EVT_RETURN_BLOCK : EVT_RETURN_DONE;
@@ -63,9 +75,9 @@ USER_FUNC(evt_fade_set_spot_pos) {
     CameraEntry* camera;
     s32 x, y, z;
     f32 sx, sy, sz;
-    f32 proj[7];
-    f32 viewport[6];
-    f32 savedProj[7];
+    f32 proj[GX_PROJECTION_SZ];
+    f32 viewport[GX_VIEWPORT_SZ];
+    f32 savedProj[GX_PROJECTION_SZ];
 
     x = evtGetValue(event, args[0]);
     y = evtGetValue(event, args[1]);
@@ -92,7 +104,7 @@ USER_FUNC(evt_fade_set_anim_ofs_pos) {
     return EVT_RETURN_DONE;
 }
 
-/** Sets the world point (floats args[0..2]) that animated fades with FADE_ENTRY_VIRTUAL_POS are drawn at. */
+/** Places the curtain and stage animation of animated fades at the world position (args[0], args[1], args[2]). */
 USER_FUNC(evt_fade_set_anim_virtual_pos) {
     EvtWord* args = event->args;
     f32 x, y, z;
@@ -106,8 +118,8 @@ USER_FUNC(evt_fade_set_anim_virtual_pos) {
 
 /**
  * Sets the fades used on the next map change (args[0] 0) or area change (nonzero):
- * args[1] fade-out type (leaving the map), args[2] its duration, args[3] fade-in type (entering the next), args[4] its duration;
- * -1 keeps the current value.
+ * args[1] fade-out type (leaving the map), args[2] its duration, args[3] fade-in type (entering the next map),
+ * args[4] its duration; -1 keeps the current value.
  */
 USER_FUNC(evt_fade_set_mapchange_type) {
     EvtWord* args = event->args;
@@ -164,12 +176,10 @@ USER_FUNC(evt_fade_tec_onoff) {
         } else {
             fadeTecOn();
         }
+    } else if (soft) {
+        fadeTecSoftOff();
     } else {
-        if (soft) {
-            fadeTecSoftOff();
-        } else {
-            fadeTecOff();
-        }
+        fadeTecOff();
     }
     return EVT_RETURN_DONE;
 }

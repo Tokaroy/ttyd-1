@@ -5,7 +5,14 @@
 
 #include "data/mapdata.h"
 #include "pik.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Module entry point: runs the static constructors,
@@ -34,6 +41,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Placeholder the linker points unresolved relocations at; it does nothing. */
 void _unresolved(void) {
 }

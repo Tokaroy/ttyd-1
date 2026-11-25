@@ -1,6 +1,8 @@
 // Paper Mario 64 effect: water shield (wprotect) around a point that spawns water-damage splashes.
-#include "eff/n64/eff_opuku_wprotect_n64.h"
+
 #include "driver/camdrv.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
 #include "mario/mariost.h"
@@ -10,7 +12,7 @@
 #include <stdlib.h>
 #include "eff/n64/eff_water_damage_n64.h"
 #include "eff/eff_n64.h"
-#include "libc_decls.h"
+#include "eff/n64/eff_opuku_wprotect_n64.h"
 
 typedef struct PointData {
     s8 x, y, z;
@@ -19,28 +21,28 @@ typedef struct PointData {
 } PointData;
 
 typedef struct EffOpukuWprotectN64Work {
-    s32 type;     // 0x0
-    Vec position; // 0x4
-    s32 lifetime; // 0x10
-    s32 frame;    // 0x14
-    s32 colorR;   // 0x18
-    s32 colorG;   // 0x1C
-    s32 colorB;   // 0x20
-    s32 alpha;    // 0x24
-    s32 alpha2;   // 0x28
-    f32 scale;    // 0x2C
-    f32 wobble;   // 0x30, recomputed each frame; never read
-    f32 scroll;   // 0x34, wraps at 128
-    f32 a[4];     // 0x38
-    f32 b[4];     // 0x48
-    f32 c[4];     // 0x58
-    f32 d[4];     // 0x68
-    f32 e[4];     // 0x78
-    s32 g[4];     // 0x88
+    s32 type;          // 0x0
+    Vec position;      // 0x4
+    s32 lifetime;      // 0x10
+    s32 frame;         // 0x14
+    s32 colorR;        // 0x18
+    s32 colorG;        // 0x1C
+    s32 colorB;        // 0x20
+    s32 alpha;         // 0x24
+    s32 alpha2;        // 0x28
+    f32 scale;         // 0x2C
+    f32 wave;          // 0x30
+    f32 scroll;        // 0x34
+    f32 x[4];          // 0x38
+    f32 y[4];          // 0x48
+    f32 velX[4];       // 0x58
+    f32 velY[4];       // 0x68
+    f32 size[4];       // 0x78
+    s32 spawnDelay[4]; // 0x88
 } EffOpukuWprotectN64Work;
 
 static void effOpukuWprotectMain(EffectEntry* effect);
-static void effOpukuWprotectDisp(CameraId cameraId, EffectEntry* effect);
+static void effOpukuWprotectDisp(CameraId cameraId, void* param);
 
 /**
  * Spawns a water shield box around (x, y, z) scaled by scale,
@@ -57,7 +59,7 @@ EffectEntry* effOpukuWprotectN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffOpukuWprotectN64Work));
     effect->userdata = work;
     effect->callback = effOpukuWprotectMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -73,17 +75,17 @@ EffectEntry* effOpukuWprotectN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 
     work->colorR = 47;
     work->colorG = 127;
     work->colorB = 255;
-    work->wobble = 0.0f;
+    work->wave = 0.0f;
     work->scroll = 0.0f;
-    work->g[0] = -1;
-    work->g[1] = -5;
-    work->g[2] = -9;
-    work->g[3] = -13;
+    work->spawnDelay[0] = -1;
+    work->spawnDelay[1] = -5;
+    work->spawnDelay[2] = -9;
+    work->spawnDelay[3] = -13;
     return effect;
 }
 
 /**
- * Fades the shield in and out, pulses its color, scrolls the texture and moves the bubbles upward;
+ * Fades the shield in (type 0 also fades out over its last 16 frames), pulses its color, scrolls the texture and moves the bubbles upward;
  * at the end of a type 1 shield it spawns two water-damage splashes above the shield.
  */
 static void effOpukuWprotectMain(EffectEntry* effect) {
@@ -91,6 +93,7 @@ static void effOpukuWprotectMain(EffectEntry* effect) {
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
     s32 i;
+    s32 frame;
     s32 type;
     f32 t;
     f32 s1;
@@ -105,12 +108,12 @@ static void effOpukuWprotectMain(EffectEntry* effect) {
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
         if (type == 1) {
-            effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+            effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
             work->lifetime = 4;
         } else {
-            effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+            effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
             work->lifetime = 16;
         }
     }
@@ -118,7 +121,7 @@ static void effOpukuWprotectMain(EffectEntry* effect) {
         work->lifetime--;
     }
     work->frame++;
-    if (work->frame > 0x50000 - 0xE60) {
+    if (work->frame > 324000) {
         work->frame = 256;
     }
     if (work->lifetime < 0) {
@@ -129,59 +132,57 @@ static void effOpukuWprotectMain(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    i = work->frame;
+    frame = work->frame;
     if (type == 0) {
         if (work->lifetime < 16) {
             work->alpha2 = work->alpha = work->lifetime << 4;
         }
-        if (i < 16) {
-            work->alpha2 = work->alpha = (i << 4) + 15;
+        if (frame < 16) {
+            work->alpha2 = work->alpha = (frame << 4) + 15;
         }
-    } else {
-        if (i < 4) {
-            work->alpha2 = work->alpha = (i << 6) + 63;
-        }
+    } else if (frame < 4) {
+        work->alpha2 = work->alpha = (frame << 6) + 63;
     }
-    u = (f32)sin(6.2831855f * (f32)(i + i * 6) / 360.0f);
-    work->colorG = (u8)(s32)(127.0f + 32.0f * u);
-    t = 0.01f * (f32)i;
+    u = (f32)sin(6.2831855f * (f32)(frame + frame * 6) / 360.0f);
+    work->colorG = (u8)(127.0f + 32.0f * u);
+    t = 0.01f * (f32)frame;
     a1 = 6.2831855f * t / 360.0f;
     s1 = (f32)sin(a1);
     s6 = (f32)sin(6.2831855f * (6.0f * t) / 360.0f);
     c2 = (f32)cos(6.2831855f * (2.0f * t) / 360.0f);
     c1 = (f32)cos(a1);
-    work->wobble = 32.0f * s6 * s1 + 256.0f + 32.0f * c2 + 32.0f * c1;
+    work->wave = 32.0f * s6 * s1 + 256.0f + 32.0f * c2 + 32.0f * c1;
     work->scroll += 0.2f;
     if (work->scroll >= 128.0f) {
         work->scroll = 0.0f;
     }
     for (i = 0; i < 4; i++) {
-        work->g[i]++;
-        if (work->g[i] >= 0) {
-            if (work->g[i] == 0) {
-                work->a[i] = 0.0f;
-                work->b[i] = 240.0f;
-                work->c[i] = 0.2f * (f32)(rand() % 11 - 5);
-                work->d[i] = (f32)(rand() % 11 + 2);
-                work->e[i] = (f32)(rand() % 11 + 1);
+        work->spawnDelay[i]++;
+        if (work->spawnDelay[i] >= 0) {
+            if (work->spawnDelay[i] == 0) {
+                work->x[i] = 0.0f;
+                work->y[i] = 240.0f;
+                work->velX[i] = 0.2f * (f32)(rand() % 11 - 5);
+                work->velY[i] = (f32)(rand() % 11 + 2);
+                work->size[i] = (f32)(rand() % 11 + 1);
             }
-            work->a[i] += work->c[i];
-            work->b[i] += work->d[i];
-            work->c[i] *= 0.97f;
-            work->d[i] += 0.1f * (10.0f - work->d[i]);
-            if (work->b[i] > 480.0f) {
-                work->g[i] = -(rand() % 11) - 1;
+            work->x[i] += work->velX[i];
+            work->y[i] += work->velY[i];
+            work->velX[i] *= 0.97f;
+            work->velY[i] += 0.1f * (10.0f - work->velY[i]);
+            if (work->y[i] > 480.0f) {
+                work->spawnDelay[i] = -(rand() % 11) - 1;
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effOpukuWprotectDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effOpukuWprotectDisp, effect);
 }
 
 /**
- * The water shield's 40-vertex box (position, texture coordinate, grey colour),
- * drawn with the upper vertices jittering every frame.
+ * The water shield's 40-vertex box (position, texture coordinate, per-vertex grey or tinted colour),
+ * drawn with every vertex above the base (y != 0) jittering every frame.
  */
-PointData point_data[40] = {
+static PointData point_data[40] = {
     {25, 4, -25, 1025, 72, 176, 176, 176},
     {22, 0, -22, 963, 0, 176, 176, 176},
     {-22, 0, -22, 61, 0, 176, 176, 176},
@@ -233,10 +234,11 @@ static effN64Vtx size8x8_tex32x32_vtx[4] = {
 };
 
 /**
- * Draws the shield as a 40-point box whose upper vertices jitter each frame (texture 0x90),
+ * Draws the shield as a 40-point box whose vertices above the base jitter each frame (texture 0x90),
  * plus the rising bubble sprites (texture 0x91).
  */
-static void effOpukuWprotectDisp(CameraId cameraId, EffectEntry* effect) {
+static void effOpukuWprotectDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffOpukuWprotectN64Work* work;
     s32 i;
@@ -256,20 +258,26 @@ static void effOpukuWprotectDisp(CameraId cameraId, EffectEntry* effect) {
     alpha = work->alpha;
     PSMTXTrans(mtx, work->position.x, work->position.y, work->position.z);
     PSMTXConcat(camera->view, mtx, mtx);
-    vtx = p = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 80, 3)->address;
+    vtx = p = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 80, SMART_GROUP_TEMP)->address;
     pd = point_data;
     r = gp->retraceCount >> 1;
-    for (i = 0; i < 40; i++) {
+    for (i = 0; i < 40; i++, pd++, p++) {
         x = pd->x * 10;
         y = pd->y * 10;
         z = pd->z * 10;
         if (y != 0.0f) {
+            f32 offsetX, offsetY, offsetZ;
+
             fx = (f32)sin((f32)(s32)(r + effTblRandN64(1000, (s32)(10.0f * y + x + 100.0f * z))));
             fy = (f32)sin((f32)(s32)(r + effTblRandN64(1000, (s32)(10.0f * x + 100.0f * y + z))));
             fz = (f32)sin((f32)(s32)(r + effTblRandN64(1000, (s32)(100.0f * x + y + 10.0f * z))));
-            x = x + (f32)(20.0f * fx);
-            y = y + (f32)(20.0f * fy);
-            z = z + (f32)(20.0f * fz);
+
+            offsetX = 20.0f * fx;
+            offsetY = 20.0f * fy;
+            offsetZ = 20.0f * fz;
+            x += offsetX;
+            y += offsetY;
+            z += offsetZ;
         }
         p->x = x;
         p->y = y;
@@ -280,8 +288,6 @@ static void effOpukuWprotectDisp(CameraId cameraId, EffectEntry* effect) {
         p->g = pd->g;
         p->b = pd->b;
         p->a = 80;
-        pd++;
-        p++;
     }
     GXSetTevColor(GX_TEVREG0, (GXColor){255, 255, 255, alpha});
     GXSetTevColor(GX_TEVREG1, (GXColor){0, 0, 255, work->alpha2});
@@ -300,11 +306,11 @@ static void effOpukuWprotectDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadTexMtxImm(scale, GX_TEXMTX0, GX_MTX2x4);
     GXSetCullMode(GX_CULL_NONE);
     for (i = 0; i < 4; i++) {
-        if (work->g[i] >= 0) {
+        if (work->spawnDelay[i] >= 0) {
             PSMTXScale(scale, 0.1f, 0.1f, 0.1f);
-            PSMTXTrans(mtx2, work->a[i], work->b[i], 0.0f);
+            PSMTXTrans(mtx2, work->x[i], work->y[i], 0.0f);
             PSMTXConcat(scale, mtx2, mtx2);
-            PSMTXScale(scale, work->e[i], work->e[i], work->e[i]);
+            PSMTXScale(scale, work->size[i], work->size[i], work->size[i]);
             PSMTXConcat(mtx2, scale, mtx2);
             PSMTXConcat(mtx, mtx2, mtx2);
             GXLoadPosMtxImm(mtx2, GX_PNMTX0);
@@ -335,7 +341,7 @@ static void effOpukuWprotectDisp(CameraId cameraId, EffectEntry* effect) {
     GXLoadTexMtxImm(scale, GX_TEXMTX0, GX_MTX2x4);
     GXSetTevColor(GX_TEVREG0, (GXColor){work->colorR, work->colorG, work->colorB, (s32)(0.3f * (f32)alpha)});
     GXSetCullMode(GX_CULL_FRONT);
-    DCFlushRange(vtx, 0x460);
+    DCFlushRange(vtx, sizeof(effN64Vtx) * 80);
     GXInvalidateVtxCache();
     PSMTXScale(scale, 0.1f, 0.1f, 0.1f);
     PSMTXConcat(mtx, scale, scale);

@@ -1,14 +1,18 @@
 // Swap effect (irekaeru: swap places): plays the language-specific EFF_Irekae animation at a point, fading in and out.
+
 #include "version.h"
-#if VERSION >= VERSION_US
-#include "mario/mariost.h"
-#endif
+
 #include "eff/eff_irekaeru.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
+static void effIrekaeruDisp(CameraId cameraId, EffectEntry* effect);
+static void effIrekaeruMain(EffectEntry* effect);
+
 #if VERSION >= VERSION_US
 /**
  * Animation group of the partner-swap effect by language
@@ -23,7 +27,7 @@ typedef struct EffIrekaeruWork {
     f32 scale;    // 0x10
     s32 poseId;   // 0x14
     s32 state;    // 0x18
-    s32 timer;    // 0x1C, only cleared at entry
+    s32 timer;    // 0x1C
     s32 alpha;    // 0x20
 } EffIrekaeruWork;
 
@@ -38,7 +42,7 @@ EffectEntry* effIrekaeruEntry(s32 type, f32 x, f32 y, f32 z) {
     work = __memAlloc(HEAP_EFFECT, sizeof(EffIrekaeruWork) * effect->count);
     effect->userdata = work;
     effect->callback = effIrekaeruMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -55,7 +59,7 @@ EffectEntry* effIrekaeruEntry(s32 type, f32 x, f32 y, f32 z) {
 static void effIrekaeruMain(EffectEntry* effect) {
     EffIrekaeruWork* work = effect->userdata;
     Vec position;
-    BOOL inBattle;
+    s32 inBattle;
 
     position = (Vec){work->position.x, work->position.y, work->position.z};
 #if VERSION >= VERSION_US
@@ -64,9 +68,9 @@ static void effIrekaeruMain(EffectEntry* effect) {
     inBattle = gp->inBattle != 0;
 #endif
 
-    // soft delete
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    // soft delete: release the pose and delete at once
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         if (work->poseId != -1) {
             animPoseRelease(work->poseId);
         }
@@ -82,10 +86,11 @@ static void effIrekaeruMain(EffectEntry* effect) {
 #endif
                 return;
             }
+
 #if VERSION >= VERSION_US
-            work->poseId = animPoseEntry(eff_irekae_str_tbl[gp->language], (u32)inBattle);
+            work->poseId = animPoseEntry(eff_irekae_str_tbl[gp->language], inBattle);
 #else
-            work->poseId = animPoseEntry("EFF_Irekae", (u32)inBattle);
+            work->poseId = animPoseEntry("EFF_Irekae", inBattle);
 #endif
             animPoseSetAnim(work->poseId, "Z_1", TRUE);
             work->state++;
@@ -98,6 +103,7 @@ static void effIrekaeruMain(EffectEntry* effect) {
             }
             break;
     }
+
     // fade in, then fade out over the last quarter of the animation
     if (animPoseGetLoopTimes(work->poseId) < 0.75f) {
         work->alpha += 20;
@@ -110,7 +116,7 @@ static void effIrekaeruMain(EffectEntry* effect) {
             work->alpha = 0;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effIrekaeruDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effIrekaeruDisp, effect);
 }
 
 /** Draws the EFF_Irekae pose billboarded to the camera with the current alpha. */
@@ -126,7 +132,7 @@ static void effIrekaeruDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 2.0f);

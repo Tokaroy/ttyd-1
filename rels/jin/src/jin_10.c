@@ -1,29 +1,43 @@
 // jin_10 (ダイム寺院, Creepy Steeple): room with a sliding gate and a block with the Tornado Jump badge;
 // doors to jin_09 and jin_11.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_party.h"
+#include "evt/evt_case.h"
+#include "evt/evt_snd.h"
+#include "party/party_motion.h"
+#include "evt/evt_mobj.h"
+#include "driver/casedrv.h"
+#include "pmario_sound.h"
 
 #include "mario/mario.h"
 #include "manager/evtmgr_cmd.h"
 #include "party.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_case.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
-#include "evt/evt_party.h"
-#include "evt/evt_snd.h"
 #include "jin.h"
-#include "evt/evt_story.h"
-#include "driver/casedrv.h"
 
 static USER_FUNC(get_pos);
 static USER_FUNC(get_width);
+static USER_FUNC(set_pos);
 
+static EvtWord door_close[12];
+static EvtWord door_open[12];
 static BeroEntry bero_entry_data[3];
-extern EvtWord unpush_evt[];
-extern EvtWord vivi_chk[];
+
+#if VERSION <= VERSION_DEMO_JP
+static EvtWord push_evt[126];
+#else
+static EvtWord push_evt[132];
+#endif
+
+static EvtWord unpush_evt[252];
+static EvtWord vivi_chk[42];
+EvtWord jin_10_init_evt[59];
 
 /** Script helper: returns Mario's current position in args[0..2]. */
 static USER_FUNC(get_pos) {
@@ -113,6 +127,7 @@ static USER_FUNC(set_pos) {
  * advancing 0.5 per frame when Mario is on the left and moving back at 1 unit per frame otherwise;
  * GW(10) holds the offset and the gate's hit area follows it.
  */
+// The grille rises by one quarter of its X offset; Mario receives the same horizontal step.
 static EVT_BEGIN(push_evt)
     IF_INT_EQUAL(GF(0), 0)
         CALL(evt_mapobj_get_position, STRING("saku"), LW(0), LW(1), LW(2))
@@ -163,10 +178,11 @@ EVT_END()
 
 /**
  * Looping script that moves the sliding gate (saku) back toward its resting place when Mario stops pushing:
- * the gate slides back at 0.5 units per frame unless Mario, his partner or Vivian is blocking it,
+ * the gate slides back at 0.5 units per frame unless Mario, his partner or the follower is blocking it
+ * (checked only while Mario is left of the gate, and skipped while Mario is hidden in Vivian's Veil),
  * and plays the grid-movement sound while it moves.
  */
-EVT_BEGIN(unpush_evt)
+static EVT_BEGIN(unpush_evt)
     LOOP(0)
         // Waits while Mario is pushing the gate.
         LOOP(0)
@@ -176,7 +192,9 @@ EVT_BEGIN(unpush_evt)
             END_IF
             WAIT_FRAMES(1)
         END_LOOP
-        // Checks whether Mario, his partner or Vivian is standing in the gate's way back.
+
+        // Checks whether Mario, his partner or the follower is standing in the gate's way back
+        // (no check while Mario is hidden in Vivian's Veil).
         SET_VALUE(LF(0), 1)
         CALL(evt_mapobj_get_position, STRING("saku"), LW(0), LW(1), LW(2))
         CALL(evt_mario_get_pos, 0, LW(3), LW(4), LW(5))
@@ -227,6 +245,7 @@ EVT_BEGIN(unpush_evt)
                 BREAK_LOOP
             END_LOOP
         END_IF
+
         // Slides the gate back and plays its grid-movement sound.
         IF_INT_EQUAL(LF(0), 0)
             IF_INT_EQUAL(GF(0), 1)
@@ -262,11 +281,8 @@ EVT_BEGIN(unpush_evt)
     RETURN
 EVT_END()
 
-/**
- * Looping script that checks, while Vivian is out as the partner, how far the gate is from Mario;
- * the checks themselves currently do nothing.
- */
-EVT_BEGIN(vivi_chk)
+// This loop polls Vivian and Mario proximity, but the distance test has no action in either branch.
+static EVT_BEGIN(vivi_chk)
     LOOP(0)
         CALL(evt_party_get_status, 6, LW(0))
         IF_INT_EQUAL(LW(0), 2)
@@ -291,28 +307,25 @@ EVT_END()
  */
 EVT_BEGIN(jin_10_init_evt)
     SET_VALUE(GF(0), 0)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG4_JIN1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG4_JIN1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG4_JIN1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG4_JIN1"))
     CALL(evt_snd_set_rev_mode, 2)
     CALL(evt_kagemario_init)
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     CALL_CHILD(evt_usu_kagemario_party_kill)
-    CALL(evt_mobj_badgeblk, STRING("m"), 60, 60, -25, ITEM_TORNADO_JUMP, 0, GSWF(GSWF_JIN10_TORNADO_JUMP_BLOCK_HIT), 1)
+    CALL(evt_mobj_badgeblk, STRING("m"), 60, 60, -25, ITEM_TORNADO_JUMP, 0, GSWF_JIN_10_TORNADO_JUMP_BADGE_BLOCK, 1)
     SET_FLOAT_VALUE(GW(10), FLOAT(0.0f))
     SET_FLOAT_VALUE(GW(11), FLOAT(0.0f))
     CALL(evt_hit_bind_mapobj, STRING("a_saku"), STRING("saku"))
-    CALL(evt_run_case_evt, CASE_COND_PUSH, 1, STRING("a_saku"), 0, PTR(push_evt), 0)
+    CALL(evt_run_case_evt, CASE_PUSH, 1, STRING("a_saku"), 0, PTR(push_evt), 0)
     SPAWN_EVENT(unpush_evt)
     SPAWN_EVENT(vivi_chk)
     RETURN
 EVT_END()
 
-/**
- * Script helper: returns 0.8 times the width of the partner args[0] in args[1],
- * used as the distance from the gate that counts as blocking it.
- */
+/** Script helper: returns in args[1] 0.8 times the width of party entry args[0]. */
 static USER_FUNC(get_width) {
     EvtWord* args = event->args;
     PartyEntry* party = partyGetPtr(evtGetValue(event, args[0]));

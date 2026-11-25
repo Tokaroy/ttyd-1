@@ -1,7 +1,8 @@
-// Paper Mario 64 effect: horao spell, two wavy 16-segment glow ribbons at fixed angles that sway, scroll their texture
-// and cycle through a 17-step green colour table; fades in over 16 frames and out over the last 16.
-#include "eff/n64/eff_horao_spell_n64.h"
+// Paper Mario 64 effect: horao spell, two wavy 15-segment glow ribbons at fixed angles that sway, scroll their texture
+// and cycle through a 17-step pale blue colour table; fades in over 16 frames and out over the last 16.
+
 #include "driver/camdrv.h"
+#include "eff/eff_magic1_n64.h"
 #include "driver/dispdrv.h"
 #include "driver/effdrv.h"
 #include "memory.h"
@@ -10,7 +11,6 @@
 #include <dolphin/os/OSFastCast.h>
 #include <string.h>
 #include "eff/eff_n64.h"
-#include "libc_decls.h"
 
 typedef struct EffHoraoSpellN64Work {
     s32 type;     // 0x0
@@ -28,15 +28,20 @@ typedef struct EffHoraoSpellN64Work {
     f32 scale;    // 0x38
 } EffHoraoSpellN64Work;
 
-/** Red of the glow ribbon's colour at each of its 17 points, shifting along the ribbon. */
+/**
+ * Red of the ribbon colour on each of the 17 steps it cycles through, one step per frame
+ * (the second ribbon runs 4 steps ahead).
+ */
 static u8 colr[17] = {0x78, 0x82, 0x8C, 0x96, 0xA0, 0xAA, 0xB4, 0xBE, 0xC8, 0xC8, 0xBE, 0xB4, 0xAA, 0xA0, 0x96, 0x8C, 0x82};
-/** Green of the glow ribbon's colour at each of its 17 points. */
+
+/** Green of the ribbon colour on each of the 17 steps. */
 static u8 colg[17] = {0xAA, 0xA0, 0x96, 0x8C, 0x82, 0x78, 0x82, 0x8C, 0x96, 0xA0, 0xAA, 0xB4, 0xBE, 0xC8, 0xC8, 0xBE, 0xB4};
-/** Blue of the glow ribbon's colour at each of its 17 points (always full). */
+
+/** Blue of the ribbon colour on each of the 17 steps (always full). */
 static u8 colb[17] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 /** Template points of a glow ribbon: top and bottom vertex pairs that are copied and swayed each frame. */
-effN64Vtx horao_spell_vtx[] = {
+static effN64Vtx horao_spell_vtx[] = {
     {0, -8, 0, 0, 0, 0, 0, 0, 0},
     {0, 8, 0, 0, 1024, 0, 0, 0, 0},
     {0, -8, 0, 512, 0, 0, 0, 0, 50},
@@ -72,7 +77,7 @@ effN64Vtx horao_spell_vtx[] = {
 };
 
 static void effHoraoSpellMain(EffectEntry* effect);
-static void effHoraoSpellDisp(CameraId cameraId, EffectEntry* effect);
+static void effHoraoSpellDisp(CameraId cameraId, void* payload);
 
 /**
  * Spawns the horao spell effect at (x, y, z) for lifetime frames (0 = until soft-deleted).
@@ -90,7 +95,7 @@ EffectEntry* effHoraoSpellN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, 
     work = __memAlloc(HEAP_EFFECT, sizeof(EffHoraoSpellN64Work));
     effect->userdata = work;
     effect->callback = effHoraoSpellMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (lifetime <= 0) {
@@ -118,13 +123,14 @@ static void effHoraoSpellMain(EffectEntry* effect) {
     EffHoraoSpellN64Work* work = effect->userdata;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
+    s32 frame;
 
     tmp.x = work->position.x;
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -135,32 +141,45 @@ static void effHoraoSpellMain(EffectEntry* effect) {
         effDelete(effect);
         return;
     }
-    {
-        int frame;
-        frame = work->frame;
-        if (work->lifetime < 16) {
-            work->alpha = work->lifetime * 16;
-        }
-        if (frame < 16) {
-            work->alpha = frame * 16 + 15;
-        }
+    frame = work->frame;
+    if (work->lifetime < 16) {
+        work->alpha = work->lifetime * 16;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effHoraoSpellDisp, effect);
+    if (frame < 16) {
+        work->alpha = frame * 16 + 15;
+    }
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effHoraoSpellDisp, effect);
+}
+
+/** Copies vertex `src` to `dst` and transforms its position by `mtx` (fast-cast s16 <-> f32 conversions). */
+static void vtx_copy(effN64Vtx* dst, effN64Vtx* src, Mtx mtx) {
+    Vec v;
+
+    memcpy(dst, src, sizeof(effN64Vtx));
+    OSInitFastCast();
+    OSs16tof32(&dst->x, &v.x);
+    OSs16tof32(&dst->y, &v.y);
+    OSs16tof32(&dst->z, &v.z);
+    PSMTXMultVec(mtx, &v, &v);
+    OSInitFastCast();
+    // FAKE: x stored through an s16* view of dst; &dst->x lets the loop fold the address into its own register
+    OSf32tos16(&v.x, (s16*)dst);
+    OSf32tos16(&v.y, &dst->y);
+    OSf32tos16(&v.z, &dst->z);
 }
 
 /**
- * Draws two 16-segment ribbons 36 degrees apart that sway with a sine and scroll texture 0x73.
+ * Draws two 15-segment (16-point) ribbons 36 degrees apart that sway with a sine and scroll texture 0x73.
  * The vertices are rebuilt every frame in smartAlloc memory.
  */
-static void effHoraoSpellDisp(CameraId cameraId, EffectEntry* effect) {
+static void effHoraoSpellDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     GXTexObj texObj;
     Mtx mtx;
     Mtx scale;
     Mtx rot;
     Mtx base;
     Mtx mtx2;
-    Vec v1;
-    Vec v2;
     effN64Vtx* p;
     effN64Vtx* q;
     EffHoraoSpellN64Work* work;
@@ -171,9 +190,8 @@ static void effHoraoSpellDisp(CameraId cameraId, EffectEntry* effect) {
     s32 j;
     effN64Vtx* vtx;
     CameraEntry* camera;
-
-    GXColor white;
     f32 s;
+
     camera = camGetPtr(cameraId);
     work = effect->userdata;
     frame = work->frame;
@@ -225,7 +243,7 @@ static void effHoraoSpellDisp(CameraId cameraId, EffectEntry* effect) {
         s = sin(6.2831855f * (78.75f + (f32)(frame * 8)) / 360.0f);
         PSMTXRotRad(rot, 'y', 0.017453292f * (-30.0f * s));
         PSMTXConcat(mtx, rot, mtx2);
-        vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, 3)->address;
+        vtx = (effN64Vtx*)smartAlloc(sizeof(effN64Vtx) * 32, SMART_GROUP_TEMP)->address;
         for (j = 0; j < 16; j++) {
             k = j * 2;
             PSMTXTrans(mtx, 8.0f, 0.0f, 0.0f);
@@ -238,35 +256,14 @@ static void effHoraoSpellDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTXScale(scale, s, s, s);
             PSMTXConcat(mtx, scale, mtx);
             PSMTXConcat(mtx2, mtx, mtx2);
-            p = &vtx[k];
-            memcpy(p, &horao_spell_vtx[k], sizeof(effN64Vtx));
-
-            OSInitFastCast();
-            OSs16tof32(&p->x, &v1.x);
-            OSs16tof32(&p->y, &v1.y);
-            OSs16tof32(&p->z, &v1.z);
-            PSMTXMultVec(mtx2, &v1, &v1);
-            OSInitFastCast();
-            OSf32tos16(&v1.x, &p->x);
-            OSf32tos16(&v1.y, &p->y);
-            OSf32tos16(&v1.z, &p->z);
-            q = &vtx[k + 1];
-            memcpy(q, &horao_spell_vtx[k + 1], sizeof(effN64Vtx));
-
-            OSInitFastCast();
-            OSs16tof32(&q->x, &v2.x);
-            OSs16tof32(&q->y, &v2.y);
-            OSs16tof32(&q->z, &v2.z);
-            PSMTXMultVec(mtx2, &v2, &v2);
-            OSInitFastCast();
-            OSf32tos16(&v2.x, &q->x);
-            OSf32tos16(&v2.y, &p[1].y);
-            OSf32tos16(&v2.z, &p[1].z);
+            vtx_copy(&vtx[k], &horao_spell_vtx[k], mtx2);
+            vtx_copy(&vtx[k + 1], &horao_spell_vtx[k + 1], mtx2);
         }
         DCFlushRange(vtx, sizeof(effN64Vtx) * 32);
         GXInvalidateVtxCache();
         effSetVtxDescN64(vtx);
-        for (j = 0, k = 0; j < 15; j++, k += 2) {
+        for (j = 0; j < 15; j++) {
+            k = j * 2;
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(k, k + 2, k + 1, k, k + 1, k + 2, k + 3, k);
         }

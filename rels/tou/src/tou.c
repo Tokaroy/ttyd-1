@@ -2,9 +2,30 @@
 // Registers the init events of tou_00..tou_20 (the arena tou_03 lives in the tou2 REL).
 
 #include "version.h"
+#include "evt/evt_story.h"
 #include "mario/mariost.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "sfx_name_word.h"
+#include "libc_decls.h"
+#include "eff/eff_starstone.h"
+#include "evt/evt_cam.h"
+#include "evt/evt_case.h"
+#include "evt/evt_eff.h"
+#include "evt/evt_hit.h"
+#include "evt/evt_item.h"
+#include "evt/evt_map.h"
+#include "evt/evt_mario.h"
+#include "evt/evt_msg.h"
+#include "evt/evt_npc.h"
+#include "evt/evt_party.h"
+#include "evt/evt_pouch.h"
+#include "evt/evt_seq.h"
+#include "party/party_motion.h"
+#include "evt/evt_snd.h"
+#include "mario/mario_party.h"
+#include "driver/casedrv.h"
+#include "driver/itemdrv.h"
 
 #include "data/mapdata.h"
 #include "driver/swdrv.h"
@@ -19,7 +40,6 @@
 #include "driver/icondrv.h"
 #include "driver/camdrv.h"
 #include "dolphin/gx.h"
-#include "dolphin/pad.h"
 #include "dolphin/mtx.h"
 #include "stdio.h"
 #include "system.h"
@@ -31,73 +51,45 @@
 #include "mario/mario.h"
 #include "manager/evtmgr.h"
 #include "driver/effdrv.h"
-#include "driver/itemdrv.h"
 #include "icon_ids.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "eff/eff_starstone.h"
-#include "evt/evt_cam.h"
-#include "evt/evt_case.h"
-#include "evt/evt_eff.h"
-#include "evt/evt_hit.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_mario.h"
-#include "evt/evt_msg.h"
-#include "evt/evt_npc.h"
-#include "evt/evt_party.h"
-#include "party.h"
-#include "evt/evt_pouch.h"
-#include "evt/evt_seq.h"
-#include "evt/evt_snd.h"
 #include "tou.h"
-#include "map/tou_ranking.h"
-#include "mario/mario_party.h"
-#include "libc_decls.h"
-#include "evt/evt_story.h"
-#include "rel_module.h"
-#include "driver/casedrv.h"
+#include <dolphin/pad.h>
+#include "driver/seqdrv.h"
+#include "evt/evt_save_flags.h"
+#include "rels/tou/include/tou_ranking.h"
 
+static USER_FUNC(chk);
+static USER_FUNC(onoff);
+static USER_FUNC(make_monitor);
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
 static void rankingInit(void);
-void rankingInit(void);
-static RankData* rank_wp;
+static RankWork* rank_wp;
 static void rankingExit(void);
-static RankDispWork* dwp;
-static FighterData fighterDt[23];
-static FighterData fighterDt_re[21];
+static DispWork* dwp;
 static void rankingControll(void);
-#define GET_RANK(rank, i)                        \
-    rank = 0;                                    \
-    for (i = 0; i < rank_wp->count; i++) {       \
-        if (!(rank_wp->entries[i].flags & 2)) {  \
-            if (rank_wp->entries[i].flags & 4) { \
-                break;                           \
-            }                                    \
-            rank++;                              \
-        }                                        \
+
+// Count the visible fighters preceding the player entry.
+// A macro, not an inline function: as an inline returning the rank, the loop index's start becomes a copy of the
+// rank's zero (mr instead of li) at every call site.
+#define GET_RANK(rank, i)                                       \
+    rank = 0;                                                   \
+    for (i = 0; i < rank_wp->count; i++) {                      \
+        if (!(rank_wp->entries[i].flags & RANK_FLAG_HIDDEN)) {  \
+            if (rank_wp->entries[i].flags & RANK_FLAG_PLAYER) { \
+                break;                                          \
+            }                                                   \
+            rank++;                                             \
+        }                                                       \
     }
 static void insert(s32* list, s32 num, s32 from, s32 to);
-#define SORT_SCORE(list, n)                                                                        \
-    for (i = 0; i < n - 1; i++) {                                                                  \
-        for (j = i + 1; j < n; j++) {                                                              \
-            if (rank_wp->entries[list[i]].points.total < rank_wp->entries[list[j]].points.total) { \
-                tmp = list[i];                                                                     \
-                list[i] = list[j];                                                                 \
-                list[j] = tmp;                                                                     \
-            }                                                                                      \
-        }                                                                                          \
-    }
-#define SORT_FLAG(list, n)                                                                \
-    for (i = 0; i < n - 1; i++) {                                                         \
-        for (j = i + 1; j < n; j++) {                                                     \
-            pb = &fighterDt[rank_wp->entries[list[i]].id];                                \
-            if ((fighterDt[rank_wp->entries[list[j]].id].flags & 5) && (pb->flags & 2)) { \
-                tmp = list[i];                                                            \
-                list[i] = list[j];                                                        \
-                list[j] = tmp;                                                            \
-            }                                                                             \
-        }                                                                                 \
-    }
+
+// Find the first listed fighter carrying the requested FighterData flag; MOVE_FLAG moves it to slot pos.
+// Macros, not inline functions: as inline functions the registers in rankingControll change.
 #define FIND_FLAG(k, list, n, flag)                                 \
     for (k = 0; k < n; k++) {                                       \
         if (fighterDt[rank_wp->entries[list[k]].id].flags & flag) { \
@@ -110,12 +102,11 @@ static void insert(s32* list, s32 num, s32 from, s32 to);
         insert(list, n, k, pos);      \
     }
 static void printRanking(void);
-static RuleData ruleDt_2bu[10];
-static RuleData ruleDt_1bu[14];
-static RuleData ruleDt_re[14];
-static s32 tou_bss_1C;
-static RankData rank_work;
-static RankDispWork disp_work;
+
+static RankWork rank_work;
+static DispWork disp_work;
+static const char* suuji[10];
+static void disp_proc(CameraId cameraId, void* param);
 typedef struct GansWork {
     smartEntry* buf;
     GXTexObj tex;
@@ -123,42 +114,123 @@ typedef struct GansWork {
     s32 alpha;
     s32 ready;
 } GansWork;
-GansWork* gans_wp;
-typedef struct StarStoneWork {
-    u8 typeFlags[8];
-    Vec pos;
-    u8 scaleParams[8];
-    f32 rot;
-} StarStoneWork; /* mirrors EffStarStoneWork: type + flags, then scale + f18 */
+static GansWork* gans_wp;
 static s32 champion_belt_onoff;
 
-static USER_FUNC(chk);
 static USER_FUNC(evt_rankingReInit);
-static USER_FUNC(evt_tou_get_fighter_rank);
-static USER_FUNC(evt_tou_get_next_match);
-static USER_FUNC(evt_tou_get_rule_info);
-static USER_FUNC(evt_tou_print_ranking);
+USER_FUNC(evt_tou_get_fighter_info);
+USER_FUNC(evt_tou_get_fighter_rank);
+USER_FUNC(evt_tou_get_next_match);
+USER_FUNC(evt_tou_get_ranking);
+USER_FUNC(evt_tou_get_rule_info);
+USER_FUNC(evt_tou_get_rule_msg2);
+USER_FUNC(evt_tou_print_ranking);
 static USER_FUNC(getYoshiColor);
-static USER_FUNC(make_monitor);
-static USER_FUNC(onoff);
-#if VERSION >= VERSION_JP
-USER_FUNC(tou_mario_keyoff_check);
-USER_FUNC(tou_mario_free_wait);
-#endif
-#if VERSION >= VERSION_US
-USER_FUNC(tou_mario_talk_end_wait);
-#endif
-static USER_FUNC(tou_champion_belt_onoff);
+USER_FUNC(tou_champion_belt_onoff);
+USER_FUNC(tou_champion_belt);
+static f32 camGetRy(void);
 static void monitor_tev(MapTevCallbackInfo* info);
-static USER_FUNC(evt_tou_set_rule_result);
-static USER_FUNC(evt_tou_set_ranking_win_lose);
-static USER_FUNC(evt_tou_get_fighter_battle_msg);
-static USER_FUNC(evt_tou_get_fighter_name2);
+USER_FUNC(evt_tou_set_rule_result);
+USER_FUNC(evt_tou_set_ranking_win_lose);
+USER_FUNC(evt_tou_get_fighter_battle_msg);
+USER_FUNC(evt_tou_get_fighter_name2);
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
-const char* lockerDt[46];
+static const char* lockerDt[46];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord evt_close[];
+#else
+EvtWord evt_close[188];
+#endif
+
 static EvtWord evt_open[VERSION_PICK(165, 173)];
+EvtWord evt_tou_locker_init[109];
+EvtWord evt_tou_monitor_on[18];
+EvtWord evt_tou_monitor_off[18];
+EvtWord evt_tou_monitor_init[69];
+static EvtWord talk_gardman_doku[18];
+static EvtWord dummy_party_msg_pkr[10];
+static EvtWord dummy_party_msg_pnk[10];
+static EvtWord dummy_party_msg_yos[10];
+static EvtWord dummy_party_msg_win[10];
+static EvtWord party_npc_replace[139];
+static EvtWord evt_tamago_scale[89];
+static EvtWord evt_tamago_scale2[83];
+static EvtWord evt_tamago_byebye[160];
+static EvtWord talk_gardman[191];
+
+#if VERSION == VERSION_DEMO_JP
+static EvtWord evt_gardman[357];
+#else
+static EvtWord evt_gardman[VERSION_PICK(318, 335)];
+#endif
+
+#if VERSION >= VERSION_JP
+EvtWord evt_gardman_spawn[4];
+#endif
+
+EvtWord evt_tou_match_make_default_sub[];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord evt_tou_match_make_default[];
+#else
+EvtWord evt_tou_match_make_default[303];
+#endif
+
+static EvtWord evt_talk_doku_cake[14];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord evt_eat_doku_cake[];
 extern EvtWord evt_doku_cake[];
-extern EvtWord evt_michel_1[];
+#else
+EvtWord evt_eat_doku_cake[270];
+EvtWord evt_doku_cake[234];
+#endif
+
+static EvtWord evt_michel_1[39];
+static EvtWord evt_michel_2[42];
+static EvtWord evt_michel_3_sub[97];
+static EvtWord evt_michel_3[256];
+static EvtWord evt_michel_4[312];
+static EvtWord evt_michel_5[42];
+static EvtWord evt_michel_6[42];
+static EvtWord evt_michel_7[42];
+
+#if VERSION == VERSION_DEMO_JP
+static EvtWord evt_michel_8[606];
+#else
+static EvtWord evt_michel_8[VERSION_PICK(620, 616)];
+#endif
+
+static EvtWord evt_michel_9[40];
+static EvtWord evt_mail_1[157];
+static EvtWord evt_mail_2[154];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord evt_eat_cake[];
+extern EvtWord evt_cake_init[];
+#else
+EvtWord evt_eat_cake[157];
+EvtWord evt_cake_init[31];
+#endif
+
+static EvtWord evt_cake[37];
+static EvtWord evt_koopa_after[5];
+static EvtWord evt_mail_3[157];
+static EvtWord evt_mail_4[151];
+static EvtWord evt_mail_5[157];
+static EvtWord evt_tamago_hello[41];
+static EvtWord evt_tamago_hello2[75];
+EvtWord evt_tou_ranking_msg[62];
+
+#if VERSION == VERSION_DEMO_JP
+EvtWord evt_tou_match_after_default[1472];
+#else
+EvtWord evt_tou_match_after_default[VERSION_PICK(1474, 1621)];
+#endif
 
 /**
  * Glitz Pit REL prolog: runs the static constructors,
@@ -203,611 +275,59 @@ void _unresolved(void) {
 }
 
 /**
- * Builds rank_wp, the Glitz Pit fighter ranking:
- * 23 entries before Chapter 3 ends (Return to Rogueport), 21 afterwards.
- * Restores each fighter's lost-flag and score from saved flags (or the initial points of fighterDt),
- * hides Swoops and Spinia until the story reaches them, and sorts the board via rankingControll.
- */
-static void rankingInit(void) {
-    s32 i;
-    s32 j;
-    RankEntry* entry;
-
-    memset(rank_wp, 0, sizeof(RankData));
-    rank_wp->count = evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT ? 23 : 21;
-    rank_wp->entries = _mapAlloc(rank_wp->count * sizeof(RankEntry));
-    memset(rank_wp->entries, 0, rank_wp->count * sizeof(RankEntry));
-    entry = rank_wp->entries;
-    for (i = 0; i < rank_wp->count; i++, entry++) {
-        entry->flags = 0;
-        entry->id = i;
-        if (swGet(entry->id + GSWF_TOU_FIGHTER_BELOW_BASE)) {
-            entry->flags |= 1;
-        }
-        if (swGet(GSWF_TOU_RANKING_SAVED)) {
-            for (j = 0; j < 2; j++) {
-                entry->points.bytes[j] = swByteGet(j + (entry->id * 2 + GSW_TOU_FIGHTER_POINTS_BASE));
-            }
-        } else {
-            entry->points.total = fighterDt[entry->id].initPoints;
-        }
-        if (entry->id == 20) {
-            entry->flags |= 4;
-        }
-    }
-    swSet(GSWF_TOU_RANKING_SAVED);
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
-        rank_wp->entries[21].flags |= 2;
-        rank_wp->entries[22].flags |= 2;
-        if (evtGetValue(NULL, GSWF(GSWF_TOU_RANK12_KING_K_GONE))) {
-            rank_wp->entries[18].flags |= 2;
-        }
-        if (evtGetValue(NULL, GSWF(GSWF_TOU_RANK11_SWOOPS_JOINS))) {
-            rank_wp->entries[21].flags &= ~2;
-            if (!evtGetValue(NULL, GSWF(GSWF_TOU_SWOOPS_ADDED))) {
-                rank_wp->entries[21].flags |= 1;
-            }
-            evtSetValue(NULL, GSWF(GSWF_TOU_SWOOPS_ADDED), 1);
-        }
-#if VERSION <= VERSION_DEMO_JP
-        if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) >= STORY_STG3_20_06_RAWK_HAWKS_WARNING) {
-#else
-        if (evtGetValue(NULL, GSWF(GSWF_TOU_MAIL4_RECEIVED))) {
-#endif
-            rank_wp->entries[11].flags |= 2;
-            rank_wp->entries[22].flags &= ~2;
-            if (!evtGetValue(NULL, GSWF(GSWF_TOU_SPINIA_ADDED))) {
-                rank_wp->entries[22].flags |= 1;
-            }
-            evtSetValue(NULL, GSWF(GSWF_TOU_SPINIA_ADDED), 1);
-        }
-    }
-    rankingControll();
-}
-
-/**
- * Saves the ranking back to the game state: each fighter's "has fallen below" flag and two score bytes,
- * then frees the entry array.
- */
-static void rankingExit(void) {
-    s32 i;
-    s32 j;
-    RankEntry* entry = rank_wp->entries;
-
-    for (i = 0; i < rank_wp->count; i++, entry++) {
-        if (entry->flags & 1) {
-            swSet(entry->id + GSWF_TOU_FIGHTER_BELOW_BASE);
-        } else {
-            swClear(entry->id + GSWF_TOU_FIGHTER_BELOW_BASE);
-        }
-        for (j = 0; j < 2; j++) {
-            swByteSet(j + (entry->id * 2 + GSW_TOU_FIGHTER_POINTS_BASE), entry->points.bytes[j]);
-        }
-    }
-    _mapFree(rank_wp->entries);
-}
-
-/** Script helper (no arguments): saves and rebuilds the ranking, so story-flag changes made by a script take effect. */
-static USER_FUNC(evt_rankingReInit) {
-    rankingExit();
-    rankingInit();
-    return EVT_RETURN_DONE;
-}
-
-#if VERSION >= VERSION_JP
-/**
- * Script helper (no arguments): resets the Glitz Pit to its starting state.
- * Removes item 0x41 from the pouch, clears every fighter's lost flag
- * and the first-match/champion/title-match/last-opponent flags, then rebuilds the ranking.
- */
-USER_FUNC(evt_rankingReset) {
-    s32 i;
-
-    rankingExit();
-    pouchRemoveItem(0x41);
-    for (i = 0; i < 20; i++) {
-        swClear(i + GSWF_TOU_FIGHTER_BELOW_BASE);
-    }
-    swClear(GSWF_TOU10_FIRST_MATCH_AFTER_SEEN);
-    swClear(GSWF_TOU_CHAMP_OPENING_SEEN);
-    swClear(GSWF_TOU_CHAMP_WIN_SEEN);
-    swClear(GSWF_TOU_TITLE_MATCH_RESERVED);
-    swClear(GSWF_TOU_RANKING_SAVED);
-    swClear(GSWF_TOU_LAST_OPPONENT_VALID);
-    swClear(GSWF_TOU02_LOBBY_CROWD_CHAMP_SEEN);
-    rankingInit();
-    return EVT_RETURN_DONE;
-}
-#endif
-
-/** Moves list[from] to position `to`, shifting the entries in between by one (the ranking's reorder primitive). */
-static void insert(s32* list, s32 num, s32 from, s32 to) {
-    s32 i;
-
-    if (from < to) {
-        s32 tmp = list[from];
-        for (i = from; i < to; i++) {
-            list[i] = list[i + 1];
-        }
-        list[to] = tmp;
-    } else {
-        s32 tmp = list[from];
-        for (i = from; i > to; i--) {
-            list[i] = list[i - 1];
-        }
-        list[to] = tmp;
-    }
-}
-
-/**
- * Re-sorts the ranking.
- * Fighters who are still above Mario ("win" group) are ordered by score
- * and some are pinned to fixed slots (the champion first, then slots 1, 10, 14, 18,
- * 19 for the flagged fighters); the last opponent is pushed to the end of its group.
- * Mario's marker (id 20) sits between the two groups and his rank goes to GSW_TOU_PLAYER_RANK.
- */
-static void rankingControll(void) {
-    s32 win[32];
-    s32 lose[32];
-    s32 nwin = 0;
-    s32 nlose = 0;
-    s32 i;
-    s32 j;
-    s32 m;
-    s32 k;
-    s32 tmp;
-    FighterData* pb;
-    RankEntry* entry;
-    RankEntry* work;
-
-    entry = rank_wp->entries;
-    for (i = 0; i < rank_wp->count; i++, entry++) {
-        if (!(entry->flags & 4)) {
-            if (entry->flags & 1) {
-                lose[nlose++] = i;
-            } else {
-                win[nwin++] = i;
-            }
-        }
-    }
-    if (nwin > 0) {
-        SORT_SCORE(win, nwin);
-        SORT_FLAG(win, nwin);
-        if (nwin > 0) {
-            MOVE_FLAG(win, nwin, 0x4, 0);
-        }
-        if (nwin > 1) {
-            MOVE_FLAG(win, nwin, 0x1000, 1);
-        }
-        if (nwin > 10) {
-            MOVE_FLAG(win, nwin, 0x800, 10);
-        }
-        if (nwin > 18) {
-            MOVE_FLAG(win, nwin, 0x200, 18);
-        }
-        if (nwin > 19) {
-            MOVE_FLAG(win, nwin, 0x400, 19);
-        }
-        if (nwin > 16) {
-            MOVE_FLAG(win, nwin, 0x100, 14);
-        }
-        if (swGet(GSWF_TOU_LAST_OPPONENT_VALID)) {
-            for (i = 0; i < nwin; i++) {
-                if (win[i] == swByteGet(GSW_TOU_LAST_OPPONENT_ID)) {
-                    break;
-                }
-            }
-            if (i < nwin) {
-                insert(win, nwin, i, nwin - 1);
-            }
-        }
-    }
-    if (nlose > 0) {
-        SORT_SCORE(lose, nlose);
-        SORT_FLAG(lose, nlose);
-        if (nlose > 0) {
-            MOVE_FLAG(lose, nlose, 0x4, 0);
-        }
-        if (nlose > 0) {
-            FIND_FLAG(m, lose, nlose, 0x800);
-            if (m < nlose) {
-                FIND_FLAG(k, lose, nlose, 0x2);
-                if (k < nlose && k > 0) {
-                    insert(lose, nlose, m, k - 1);
-                }
-            }
-        }
-        if (swGet(GSWF_TOU_LAST_OPPONENT_VALID)) {
-            for (i = 0; i < nlose; i++) {
-                if (lose[i] == swByteGet(GSW_TOU_LAST_OPPONENT_ID)) {
-                    break;
-                }
-            }
-            if (i < nlose) {
-                insert(lose, nlose, i, 0);
-            }
-        }
-    }
-    work = __memAlloc(HEAP_DEFAULT, rank_wp->count * sizeof(RankEntry));
-    for (i = 0; i < nwin; i++) {
-        work[i] = rank_wp->entries[win[i]];
-    }
-    work[nwin].flags = 4;
-    work[nwin].id = 20;
-    work[nwin].points.total = 0;
-    for (i = 0; i < nlose; i++) {
-        work[nwin + 1 + i] = rank_wp->entries[lose[i]];
-    }
-    memcpy(rank_wp->entries, work, rank_wp->count * sizeof(RankEntry));
-    __memFree(HEAP_DEFAULT, work);
-    GET_RANK(j, i);
-    swByteSet(GSW_TOU_PLAYER_RANK, j);
-}
-
-/** Script helper: args[0] receives Mario's current rank (0 = the champion's seat). */
-USER_FUNC(evt_tou_get_ranking) {
-    EvtWord* args = event->args;
-    s32 rank;
-    s32 i;
-
-    GET_RANK(rank, i);
-    evtSetValue(event, args[0], rank);
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Script helper: args[0] receives the id of the fighter Mario fights next:
- * the one ranked just above him, or the one just below
- * after the last rule was not met (GSWF_TOU_LAST_RULE_MET clear). Mario at rank 0 gets the second fighter.
- */
-static USER_FUNC(evt_tou_get_next_match) {
-    EvtWord* args = event->args;
-    s32 flag = evtGetValue(event, GSWF(GSWF_TOU_LAST_RULE_MET));
-    s32 rank;
-    RankEntry* entry;
-    s32 i;
-    s32 n = 0;
-    s32 list[32];
-
-    for (i = 0; i < rank_wp->count; i++) {
-        entry = &rank_wp->entries[i];
-        if (!(entry->flags & 2)) {
-            list[n++] = entry->id;
-        }
-    }
-    GET_RANK(rank, i);
-    if (rank > 0) {
-        if (flag) {
-            evtSetValue(event, args[0], list[rank - 1]);
-#if VERSION <= VERSION_DEMO_JP
-        } else if (rank != n - 1) {
-#else
-        } else if (rank + 1 < n) {
-#endif
-            evtSetValue(event, args[0], list[rank + 1]);
-        } else {
-            evtSetValue(event, args[0], list[rank - 1]);
-        }
-    } else {
-        evtSetValue(event, args[0], list[1]);
-    }
-    printRanking();
-    return EVT_RETURN_DONE;
-}
-
-/** Script helper: args[0] = fighter id; args[1] receives the fighter's name string, args[2] its battle setup id. */
-USER_FUNC(evt_tou_get_fighter_info) {
-    EvtWord* args = event->args;
-    s32 id = evtGetValue(event, args[0]);
-    FighterData* dt;
-
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
-        dt = fighterDt;
-    } else {
-        dt = fighterDt_re;
-    }
-    evtSetValue(event, args[1], (EvtWord)msgSearch(dt[id].name));
-    evtSetValue(event, args[2], fighterDt[id].setupId);
-    return EVT_RETURN_DONE;
-}
-
-/** Script helper: args[0] = fighter id; args[1] receives the fighter's title (second name string). */
-static USER_FUNC(evt_tou_get_fighter_name2) {
-    EvtWord* args = event->args;
-    s32 id = evtGetValue(event, args[0]);
-    FighterData* dt;
-
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
-        dt = fighterDt;
-    } else {
-        dt = fighterDt_re;
-    }
-    evtSetValue(event, args[1], (EvtWord)msgSearch(dt[id].title));
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Script helper: args[0] = fighter id; args[1] receives that fighter's current position on the board (hidden
- * fighters are skipped).
- */
-static USER_FUNC(evt_tou_get_fighter_rank) {
-    EvtWord* args = event->args;
-    s32 id = evtGetValue(event, args[0]);
-    s32 rank = 0;
-    s32 i;
-    RankEntry* entry;
-
-    for (i = 0; i < rank_wp->count; i++) {
-        entry = &rank_wp->entries[i];
-        if (!(entry->flags & 2)) {
-            if (id == entry->id) {
-                break;
-            }
-            rank++;
-        }
-    }
-    evtSetValue(event, args[1], rank);
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Script helper: args[0] = fighter id; args[1] and args[2] receive the fighter's pre-match taunt
- * and victory message ids.
- */
-static USER_FUNC(evt_tou_get_fighter_battle_msg) {
-    EvtWord* args = event->args;
-    s32 id = evtGetValue(event, args[0]);
-    FighterData* dt;
-
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
-        dt = fighterDt;
-    } else {
-        dt = fighterDt_re;
-    }
-    evtSetValue(event, args[1], (EvtWord)dt[id].taunt);
-    evtSetValue(event, args[2], (EvtWord)dt[id].victory);
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Script helper: picks a match rule for the registration.
- * args[0] = mode (0 forces the rule with id 6, 10 excludes the special ids 0x20/0x30/0x40,
- * anything else is random); returns name (args[1]),
- * rule id (args[2]) and the two rule parameters (args[3], args[4]).
- * The table depends on Mario's rank and the story.
- */
-static USER_FUNC(evt_tou_get_rule_info) {
-    EvtWord* args = event->args;
-    s32 mode = evtGetValue(event, args[0]);
-    s32 num;
-    RuleData* dt;
-    s32 i;
-    s32 rank;
-
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
-#if VERSION <= VERSION_DEMO_JP
-        // the demo also counts the fighters taken out of the ranking
-        for (i = 0; i < rank_wp->count; i++) {
-            if (rank_wp->entries[i].flags & 4) {
-                break;
-            }
-        }
-        rank = i;
-#else
-        GET_RANK(rank, i);
-#endif
-        if (rank > 10) {
-            num = 10;
-            dt = ruleDt_2bu;
-        } else {
-            num = 14;
-            dt = ruleDt_1bu;
-        }
-    } else {
-        num = 14;
-        dt = ruleDt_re;
-    }
-    if (mode == 0) {
-        for (i = 0; i < num; i++) {
-            if (dt[i].id == 6) {
-                break;
-            }
-        }
-    } else if (mode == 10) {
-        while (TRUE) {
-            i = rand() % num;
-            if (dt[i].id != 0x30 && dt[i].id != 0x20 && dt[i].id != 0x40) {
-                break;
-            }
-        }
-    } else {
-        i = rand() % num;
-    }
-    evtSetValue(event, args[1], (EvtWord)dt[i].name);
-    evtSetValue(event, args[2], dt[i].id);
-    evtSetValue(event, args[3], dt[i].param);
-    evtSetValue(event, args[4], dt[i].param2);
-    return EVT_RETURN_DONE;
-}
-
-/** Script helper: args[0] = rule id; args[1] receives the message string describing that rule's conditions. */
-USER_FUNC(evt_tou_get_rule_msg2) {
-    EvtWord* args = event->args;
-    s32 id = evtGetValue(event, args[0]);
-    s32 num;
-    RuleData* dt;
-    s32 i;
-    s32 rank;
-
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
-#if VERSION <= VERSION_DEMO_JP
-        // the demo also counts the fighters taken out of the ranking
-        for (i = 0; i < rank_wp->count; i++) {
-            if (rank_wp->entries[i].flags & 4) {
-                break;
-            }
-        }
-        rank = i;
-#else
-        GET_RANK(rank, i);
-#endif
-        if (rank > 10) {
-            num = 10;
-            dt = ruleDt_2bu;
-        } else {
-            num = 14;
-            dt = ruleDt_1bu;
-        }
-    } else {
-        num = 14;
-        dt = ruleDt_re;
-    }
-    for (i = 0; i < num; i++) {
-        if (id == dt[i].id) {
-            break;
-        }
-    }
-    if (i == num) {
-        i = num - 1;
-    }
-    evtSetValue(event, args[1], (EvtWord)msgSearch(dt[i].desc));
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Script helper: args[0] = 0 if Mario won the match, else lost; args[1] = opponent id.
- * Updates the opponent's lost flag and GSWF_TOU_LAST_MATCH_WON,
- * jitters every fighter's score by a random amount,
- * records the opponent in GSW_TOU_LAST_OPPONENT_ID and re-sorts the board.
- */
-static USER_FUNC(evt_tou_set_ranking_win_lose) {
-    EvtWord* args = event->args;
-    s32 lose = evtGetValue(event, args[0]);
-    s32 id = evtGetValue(event, args[1]);
-    s32 i;
-    s16 min;
-    s16 max;
-
-    if (lose == 0) {
-        for (i = 0; i < rank_wp->count; i++) {
-            if (id == rank_wp->entries[i].id) {
-                rank_wp->entries[i].flags |= 1;
-                break;
-            }
-        }
-        swSet(GSWF_TOU_LAST_MATCH_WON);
-    } else {
-        for (i = 0; i < rank_wp->count; i++) {
-            if (id == rank_wp->entries[i].id) {
-                rank_wp->entries[i].flags &= ~1;
-                break;
-            }
-        }
-        swClear(GSWF_TOU_LAST_MATCH_WON);
-    }
-    min = 1000;
-    max = -1000;
-    for (i = 0; i < rank_wp->count; i++) {
-        if (!(rank_wp->entries[i].flags & 2)) {
-            rank_wp->entries[i].points.total += rand() % 4 + (rand() % 4 - 3);
-            if (rank_wp->entries[i].points.total < min) {
-                min = rank_wp->entries[i].points.total;
-            }
-            if (rank_wp->entries[i].points.total > max) {
-                max = rank_wp->entries[i].points.total;
-            }
-        }
-    }
-    swByteSet(GSW_TOU_LAST_OPPONENT_ID, id);
-    swSet(GSWF_TOU_LAST_OPPONENT_VALID);
-    rankingControll();
-    return EVT_RETURN_DONE;
-}
-
-/**
- * Script helper: args[0] = rule result bits from the match (bit 2 = rule met);
- * sets or clears GSWF_TOU_LAST_RULE_MET.
- */
-static USER_FUNC(evt_tou_set_rule_result) {
-    s32 result = evtGetValue(event, event->args[0]);
-
-    if (result & 4) {
-        swSet(GSWF_TOU_LAST_RULE_MET);
-    } else if (result & 2) {
-        swClear(GSWF_TOU_LAST_RULE_MET);
-    } else if (result & 1) {
-        swClear(GSWF_TOU_LAST_RULE_MET);
-    }
-    return EVT_RETURN_DONE;
-}
-
-/** Debug stub left from the original build: reads the story progress and loops over the entries; prints nothing. */
-static void printRanking(void) {
-    s32 i;
-
-    evtGetValue(NULL, GSW(GSW_STORY_PROGRESS));
-    for (i = 0; i < rank_wp->count; i++) {
-    }
-}
-
-/**
  * The Glitz Pit fighters during chapter 3, by FighterId:
  * from the champion Rawk Hawk down to the Goomba Bros., then Mario (The Great Gonzales)
  * and the late arrivals Wings of Night and The Destructors.
  * Each has its name, title, battle setup, pre-match and victory lines and starting ranking points.
  */
 static FighterData fighterDt[] = {
-    {4, "stg3_tou_sensyu_00", "stg3_tou_sensyu2_00", 22, "stg3_tou_400_02", "stg3_tou_400_03", 250},
-    {4097, "stg3_tou_sensyu_01", "stg3_tou_sensyu2_01", 19, "stg3_tou_118_00", "stg3_tou_118_01", 200},
-    {1, "stg3_tou_sensyu_02", "stg3_tou_sensyu2_02", 18, "stg3_tou_118_02", "stg3_tou_118_03", 180},
-    {1, "stg3_tou_sensyu_03", "stg3_tou_sensyu2_03", 17, "stg3_tou_118_04", "stg3_tou_118_05", 170},
-    {1, "stg3_tou_sensyu_04", "stg3_tou_sensyu2_04", 16, "stg3_tou_118_06", "stg3_tou_118_07", 160},
-    {1, "stg3_tou_sensyu_05", "stg3_tou_sensyu2_05", 15, "stg3_tou_118_08", "stg3_tou_118_09", 150},
-    {1, "stg3_tou_sensyu_06", "stg3_tou_sensyu2_06", 14, "stg3_tou_118_10", "stg3_tou_118_11", 140},
-    {1, "stg3_tou_sensyu_07", "stg3_tou_sensyu2_07", 13, "stg3_tou_118_12", "stg3_tou_118_13", 130},
-    {1, "stg3_tou_sensyu_08", "stg3_tou_sensyu2_08", 12, "stg3_tou_118_14", "stg3_tou_118_15", 120},
-    {1, "stg3_tou_sensyu_09", "stg3_tou_sensyu2_09", 11, "stg3_tou_118_16", "stg3_tou_118_17", 110},
-    {2049, "stg3_tou_sensyu_10", "stg3_tou_sensyu2_10", 10, "stg3_tou_118_18", "stg3_tou_118_19", 100},
-    {258, "stg3_tou_sensyu_11", "stg3_tou_sensyu2_11", 9, "stg3_tou_118_20", "stg3_tou_118_21", 90},
-    {2, "stg3_tou_sensyu_12", "stg3_tou_sensyu2_12", 8, "stg3_tou_118_22", "stg3_tou_118_23", 80},
-    {2, "stg3_tou_sensyu_13", "stg3_tou_sensyu2_13", 7, "stg3_tou_118_24", "stg3_tou_118_25", 70},
-    {2, "stg3_tou_sensyu_14", "stg3_tou_sensyu2_14", 6, "stg3_tou_118_26", "stg3_tou_118_27", 60},
-    {2, "stg3_tou_sensyu_15", "stg3_tou_sensyu2_15", 5, "stg3_tou_118_28", "stg3_tou_118_29", 50},
-    {2, "stg3_tou_sensyu_16", "stg3_tou_sensyu2_16", 4, "stg3_tou_118_30", "stg3_tou_118_31", 40},
-    {2, "stg3_tou_sensyu_17", "stg3_tou_sensyu2_17", 3, "stg3_tou_118_32", "stg3_tou_118_33", 30},
-    {514, "stg3_tou_sensyu_18", "stg3_tou_sensyu2_18", 2, "stg3_tou_118_34", "stg3_tou_118_35", 20},
-    {1026, "stg3_tou_sensyu_19", "stg3_tou_sensyu2_19", 1, "stg3_tou_118_36", "stg3_tou_118_36_01", 10},
-    {8, "stg3_tou_sensyu_20", "stg3_tou_sensyu2_20", 1, 0, 0, 0},
-    {2, "stg3_tou_sensyu_21", "stg3_tou_sensyu2_21", 20, "stg3_tou_118_36_02", "stg3_tou_118_36_03", 5},
-    {2, "stg3_tou_sensyu_22", "stg3_tou_sensyu2_22", 21, "stg3_tou_118_36_04", "stg3_tou_118_36_05", 0},
+    {FIGHT_CHAMPION, "stg3_tou_sensyu_00", "stg3_tou_sensyu2_00", 22, "stg3_tou_400_02", "stg3_tou_400_03", 250},
+    {FIGHT_KOOPATROL | FIGHT_MAJOR, "stg3_tou_sensyu_01", "stg3_tou_sensyu2_01", 19, "stg3_tou_118_00", "stg3_tou_118_01", 200},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_02", "stg3_tou_sensyu2_02", 18, "stg3_tou_118_02", "stg3_tou_118_03", 180},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_03", "stg3_tou_sensyu2_03", 17, "stg3_tou_118_04", "stg3_tou_118_05", 170},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_04", "stg3_tou_sensyu2_04", 16, "stg3_tou_118_06", "stg3_tou_118_07", 160},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_05", "stg3_tou_sensyu2_05", 15, "stg3_tou_118_08", "stg3_tou_118_09", 150},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_06", "stg3_tou_sensyu2_06", 14, "stg3_tou_118_10", "stg3_tou_118_11", 140},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_07", "stg3_tou_sensyu2_07", 13, "stg3_tou_118_12", "stg3_tou_118_13", 130},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_08", "stg3_tou_sensyu2_08", 12, "stg3_tou_118_14", "stg3_tou_118_15", 120},
+    {FIGHT_MAJOR, "stg3_tou_sensyu_09", "stg3_tou_sensyu2_09", 11, "stg3_tou_118_16", "stg3_tou_118_17", 110},
+    {FIGHT_CLEFTS | FIGHT_MAJOR, "stg3_tou_sensyu_10", "stg3_tou_sensyu2_10", 10, "stg3_tou_118_18", "stg3_tou_118_19", 100},
+    {FIGHT_BANDITS | FIGHT_MINOR, "stg3_tou_sensyu_11", "stg3_tou_sensyu2_11", 9, "stg3_tou_118_20", "stg3_tou_118_21", 90},
+    {FIGHT_MINOR, "stg3_tou_sensyu_12", "stg3_tou_sensyu2_12", 8, "stg3_tou_118_22", "stg3_tou_118_23", 80},
+    {FIGHT_MINOR, "stg3_tou_sensyu_13", "stg3_tou_sensyu2_13", 7, "stg3_tou_118_24", "stg3_tou_118_25", 70},
+    {FIGHT_MINOR, "stg3_tou_sensyu_14", "stg3_tou_sensyu2_14", 6, "stg3_tou_118_26", "stg3_tou_118_27", 60},
+    {FIGHT_MINOR, "stg3_tou_sensyu_15", "stg3_tou_sensyu2_15", 5, "stg3_tou_118_28", "stg3_tou_118_29", 50},
+    {FIGHT_MINOR, "stg3_tou_sensyu_16", "stg3_tou_sensyu2_16", 4, "stg3_tou_118_30", "stg3_tou_118_31", 40},
+    {FIGHT_MINOR, "stg3_tou_sensyu_17", "stg3_tou_sensyu2_17", 3, "stg3_tou_118_32", "stg3_tou_118_33", 30},
+    {FIGHT_KOOPAS | FIGHT_MINOR, "stg3_tou_sensyu_18", "stg3_tou_sensyu2_18", 2, "stg3_tou_118_34", "stg3_tou_118_35", 20},
+    {FIGHT_GOOMBAS | FIGHT_MINOR, "stg3_tou_sensyu_19", "stg3_tou_sensyu2_19", 1, "stg3_tou_118_36", "stg3_tou_118_36_01", 10},
+    {FIGHT_PLAYER, "stg3_tou_sensyu_20", "stg3_tou_sensyu2_20", 1, 0, 0, 0},
+    {FIGHT_MINOR, "stg3_tou_sensyu_21", "stg3_tou_sensyu2_21", 20, "stg3_tou_118_36_02", "stg3_tou_118_36_03", 5},
+    {FIGHT_MINOR, "stg3_tou_sensyu_22", "stg3_tou_sensyu2_22", 21, "stg3_tou_118_36_04", "stg3_tou_118_36_05", 0},
 };
 
-/**
- * The same roster after chapter 3 (from STORY_STG3_34_RETURN_TO_ROGUEPORT on), with Jolene's era lines;
- * the two late arrivals are gone, so it has 21 entries.
- */
 static FighterData fighterDt_re[] = {
-    {4, "stg3_tou_re_315", "stg3_tou_re_338", 22, "stg3_tou_re_289", "stg3_tou_re_290", 250},
-    {4097, "stg3_tou_re_316", "stg3_tou_re_339", 19, "stg3_tou_re_179", "stg3_tou_re_180", 200},
-    {1, "stg3_tou_re_317", "stg3_tou_re_340", 18, "stg3_tou_re_181", "stg3_tou_re_182", 180},
-    {1, "stg3_tou_re_318", "stg3_tou_re_341", 17, "stg3_tou_re_183", "stg3_tou_re_184", 170},
-    {1, "stg3_tou_re_319", "stg3_tou_re_342", 16, "stg3_tou_re_185", "stg3_tou_re_186", 160},
-    {1, "stg3_tou_re_320", "stg3_tou_re_343", 15, "stg3_tou_re_187", "stg3_tou_re_188", 150},
-    {1, "stg3_tou_re_321", "stg3_tou_re_344", 14, "stg3_tou_re_189", "stg3_tou_re_190", 140},
-    {1, "stg3_tou_re_322", "stg3_tou_re_345", 13, "stg3_tou_re_191", "stg3_tou_re_192", 130},
-    {1, "stg3_tou_re_323", "stg3_tou_re_346", 12, "stg3_tou_re_193", "stg3_tou_re_194", 120},
-    {1, "stg3_tou_re_324", "stg3_tou_re_347", 11, "stg3_tou_re_195", "stg3_tou_re_196", 110},
-    {2049, "stg3_tou_re_325", "stg3_tou_re_348", 10, "stg3_tou_re_197", "stg3_tou_re_198", 100},
-    {258, "stg3_tou_re_326", "stg3_tou_re_349", 9, "stg3_tou_re_199", "stg3_tou_re_200", 90},
-    {2, "stg3_tou_re_327", "stg3_tou_re_350", 8, "stg3_tou_re_201", "stg3_tou_re_202", 80},
-    {2, "stg3_tou_re_328", "stg3_tou_re_351", 7, "stg3_tou_re_203", "stg3_tou_re_204", 70},
-    {2, "stg3_tou_re_329", "stg3_tou_re_352", 6, "stg3_tou_re_205", "stg3_tou_re_206", 60},
-    {2, "stg3_tou_re_330", "stg3_tou_re_353", 5, "stg3_tou_re_207", "stg3_tou_re_208", 50},
-    {2, "stg3_tou_re_331", "stg3_tou_re_354", 4, "stg3_tou_re_209", "stg3_tou_re_210", 40},
-    {2, "stg3_tou_re_332", "stg3_tou_re_355", 3, "stg3_tou_re_211", "stg3_tou_re_212", 30},
-    {514, "stg3_tou_re_333", "stg3_tou_re_356", 2, "stg3_tou_re_213", "stg3_tou_re_214", 20},
-    {1026, "stg3_tou_re_334", "stg3_tou_re_357", 1, "stg3_tou_re_215", "stg3_tou_re_216", 10},
-    {8, "stg3_tou_re_335", "stg3_tou_re_358", 1, 0, 0, 0},
+    {FIGHT_CHAMPION, "stg3_tou_re_315", "stg3_tou_re_338", 22, "stg3_tou_re_289", "stg3_tou_re_290", 250},
+    {FIGHT_KOOPATROL | FIGHT_MAJOR, "stg3_tou_re_316", "stg3_tou_re_339", 19, "stg3_tou_re_179", "stg3_tou_re_180", 200},
+    {FIGHT_MAJOR, "stg3_tou_re_317", "stg3_tou_re_340", 18, "stg3_tou_re_181", "stg3_tou_re_182", 180},
+    {FIGHT_MAJOR, "stg3_tou_re_318", "stg3_tou_re_341", 17, "stg3_tou_re_183", "stg3_tou_re_184", 170},
+    {FIGHT_MAJOR, "stg3_tou_re_319", "stg3_tou_re_342", 16, "stg3_tou_re_185", "stg3_tou_re_186", 160},
+    {FIGHT_MAJOR, "stg3_tou_re_320", "stg3_tou_re_343", 15, "stg3_tou_re_187", "stg3_tou_re_188", 150},
+    {FIGHT_MAJOR, "stg3_tou_re_321", "stg3_tou_re_344", 14, "stg3_tou_re_189", "stg3_tou_re_190", 140},
+    {FIGHT_MAJOR, "stg3_tou_re_322", "stg3_tou_re_345", 13, "stg3_tou_re_191", "stg3_tou_re_192", 130},
+    {FIGHT_MAJOR, "stg3_tou_re_323", "stg3_tou_re_346", 12, "stg3_tou_re_193", "stg3_tou_re_194", 120},
+    {FIGHT_MAJOR, "stg3_tou_re_324", "stg3_tou_re_347", 11, "stg3_tou_re_195", "stg3_tou_re_196", 110},
+    {FIGHT_CLEFTS | FIGHT_MAJOR, "stg3_tou_re_325", "stg3_tou_re_348", 10, "stg3_tou_re_197", "stg3_tou_re_198", 100},
+    {FIGHT_BANDITS | FIGHT_MINOR, "stg3_tou_re_326", "stg3_tou_re_349", 9, "stg3_tou_re_199", "stg3_tou_re_200", 90},
+    {FIGHT_MINOR, "stg3_tou_re_327", "stg3_tou_re_350", 8, "stg3_tou_re_201", "stg3_tou_re_202", 80},
+    {FIGHT_MINOR, "stg3_tou_re_328", "stg3_tou_re_351", 7, "stg3_tou_re_203", "stg3_tou_re_204", 70},
+    {FIGHT_MINOR, "stg3_tou_re_329", "stg3_tou_re_352", 6, "stg3_tou_re_205", "stg3_tou_re_206", 60},
+    {FIGHT_MINOR, "stg3_tou_re_330", "stg3_tou_re_353", 5, "stg3_tou_re_207", "stg3_tou_re_208", 50},
+    {FIGHT_MINOR, "stg3_tou_re_331", "stg3_tou_re_354", 4, "stg3_tou_re_209", "stg3_tou_re_210", 40},
+    {FIGHT_MINOR, "stg3_tou_re_332", "stg3_tou_re_355", 3, "stg3_tou_re_211", "stg3_tou_re_212", 30},
+    {FIGHT_KOOPAS | FIGHT_MINOR, "stg3_tou_re_333", "stg3_tou_re_356", 2, "stg3_tou_re_213", "stg3_tou_re_214", 20},
+    {FIGHT_GOOMBAS | FIGHT_MINOR, "stg3_tou_re_334", "stg3_tou_re_357", 1, "stg3_tou_re_215", "stg3_tou_re_216", 10},
+    {FIGHT_PLAYER, "stg3_tou_re_335", "stg3_tou_re_358", 1, 0, 0, 0},
 };
 
 /**
@@ -863,11 +383,609 @@ static RuleData ruleDt_re[] = {
     {"stg3_tou_re_376", "stg3_tou_cp_054", 63, 255, 255},
 };
 
+/**
+ * Builds rank_wp, the Glitz Pit fighter ranking:
+ * 23 entries before Chapter 3 ends (Return to Rogueport), 21 afterwards.
+ * Restores each fighter's lost-flag and score from saved flags (or the initial points of fighterDt),
+ * hides Swoops and Spinia until the story reaches them, and sorts the board via rankingControll.
+ */
+static void rankingInit(void) {
+    s32 i;
+    s32 j;
+    RankEntry* entry;
+
+    memset(rank_wp, 0, sizeof(RankWork));
+    rank_wp->count = evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT ? 23 : 21;
+    rank_wp->entries = _mapAlloc(rank_wp->count * sizeof(RankEntry));
+    memset(rank_wp->entries, 0, rank_wp->count * sizeof(RankEntry));
+    entry = rank_wp->entries;
+    for (i = 0; i < rank_wp->count; i++, entry++) {
+        entry->flags = 0;
+        entry->id = i;
+        if (swGet(entry->id + GSWF_TOU_FIGHTER_BELOW_BASE)) {
+            entry->flags |= RANK_FLAG_BEATEN;
+        }
+        if (swGet(GSWF_ID(GSWF_GLITZ_PIT_RANKING_SAVED))) {
+            for (j = 0; j < 2; j++) {
+                entry->points.bytes[j] = swByteGet(j + (entry->id * 2 + GSW_TOU_FIGHTER_POINTS_BASE));
+            }
+        } else {
+            entry->points.total = fighterDt[entry->id].startPoints;
+        }
+        if (entry->id == FIGHTER_PLAYER) {
+            entry->flags |= RANK_FLAG_PLAYER;
+        }
+    }
+    swSet(GSWF_ID(GSWF_GLITZ_PIT_RANKING_SAVED));
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
+        rank_wp->entries[21].flags |= RANK_FLAG_HIDDEN;
+        rank_wp->entries[22].flags |= RANK_FLAG_HIDDEN;
+        if (evtGetValue(NULL, GSWF_GLITZ_PIT_KP_KOOPAS_RETIRED)) {
+            rank_wp->entries[18].flags |= RANK_FLAG_HIDDEN;
+        }
+        if (evtGetValue(NULL, GSWF_GLITZ_PIT_SIR_SWOOP_JOINED)) {
+            rank_wp->entries[21].flags &= ~RANK_FLAG_HIDDEN;
+            if (!evtGetValue(NULL, GSWF_GLITZ_PIT_WINGS_OF_NIGHT_PLACED)) {
+                rank_wp->entries[21].flags |= RANK_FLAG_BEATEN;
+            }
+            evtSetValue(NULL, GSWF_GLITZ_PIT_WINGS_OF_NIGHT_PLACED, 1);
+        }
+#if VERSION <= VERSION_DEMO_JP
+        if (evtGetValue(NULL, GSW_STORY_PROGRESS) >= STG3_20_06_RAWK_HAWKS_WARNING) {
+#else
+        if (evtGetValue(NULL, GSWF_GLITZ_PIT_DESTRUCTORS_JOINED)) {
+#endif
+            rank_wp->entries[11].flags |= RANK_FLAG_HIDDEN;
+            rank_wp->entries[22].flags &= ~RANK_FLAG_HIDDEN;
+            if (!evtGetValue(NULL, GSWF_GLITZ_PIT_DESTRUCTORS_PLACED)) {
+                rank_wp->entries[22].flags |= RANK_FLAG_BEATEN;
+            }
+            evtSetValue(NULL, GSWF_GLITZ_PIT_DESTRUCTORS_PLACED, 1);
+        }
+    }
+    rankingControll();
+}
+
+/**
+ * Saves the ranking back to the game state: each fighter's "has fallen below" flag and two score bytes,
+ * then frees the entry array.
+ */
+static void rankingExit(void) {
+    s32 i;
+    s32 j;
+    RankEntry* entry = rank_wp->entries;
+
+    for (i = 0; i < rank_wp->count; i++, entry++) {
+        if (entry->flags & RANK_FLAG_BEATEN) {
+            swSet(entry->id + GSWF_TOU_FIGHTER_BELOW_BASE);
+        } else {
+            swClear(entry->id + GSWF_TOU_FIGHTER_BELOW_BASE);
+        }
+        for (j = 0; j < 2; j++) {
+            swByteSet(j + (entry->id * 2 + GSW_TOU_FIGHTER_POINTS_BASE), entry->points.bytes[j]);
+        }
+    }
+    _mapFree(rank_wp->entries);
+}
+
+/** Script helper (no arguments): saves and rebuilds the ranking, so story-flag changes made by a script take effect. */
+static USER_FUNC(evt_rankingReInit) {
+    rankingExit();
+    rankingInit();
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper (no arguments): resets the Glitz Pit to its starting state.
+ * Removes item 0x41 from the pouch, clears the lost flag of fighters 0 to 19
+ * and the first-match/champion/title-match/last-opponent flags, then rebuilds the ranking.
+ * Descriptive name (not in the symbol maps); placeholder unk_tou_00002e24, JP tou .text+0x2D60. See docs/NAME_PROVENANCE.md.
+ */
+#if VERSION >= VERSION_JP
+USER_FUNC(evt_rankingReset) {
+    s32 i;
+
+    rankingExit();
+    pouchRemoveItem(ITEM_CHAMPS_BELT);
+    for (i = 0; i < 20; i++) {
+        swClear(i + GSWF_TOU_FIGHTER_BELOW_BASE);
+    }
+    swClear(GSWF_ID(GSWF_TOU_GOOMBA_BROS_AFTER_MATCH_SEEN));
+    swClear(GSWF_ID(GSWF_TOU_RAWK_HAWK_OPENING_SEEN));
+    swClear(GSWF_ID(GSWF_TOU_RAWK_HAWK_FIRST_WIN));
+    swClear(GSWF_ID(GSWF_GLITZ_PIT_TITLE_MATCH_BOOKED));
+    swClear(GSWF_ID(GSWF_GLITZ_PIT_RANKING_SAVED));
+    swClear(GSWF_ID(GSWF_GLITZ_PIT_LAST_OPPONENT_SAVED));
+    swClear(GSWF_ID(GSWF_TOU_02_FANS_MOB_MARIO_SEEN));
+    rankingInit();
+    return EVT_RETURN_DONE;
+}
+#endif
+
+/** Moves list[from] to position `to`, shifting the entries in between by one (the ranking's reorder primitive). */
+static void insert(s32* list, s32 num, s32 from, s32 to) {
+    s32 i;
+
+    if (from < to) {
+        s32 tmp = list[from];
+        for (i = from; i < to; i++) {
+            list[i] = list[i + 1];
+        }
+        list[to] = tmp;
+    } else {
+        s32 tmp = list[from];
+        for (i = from; i > to; i--) {
+            list[i] = list[i - 1];
+        }
+        list[to] = tmp;
+    }
+}
+
+/**
+ * Re-sorts the ranking.
+ * Fighters who are still above Mario ("win" group) are ordered by score
+ * and some are pinned to fixed slots (the champion first, then slots 1, 10, 14, 18,
+ * 19 for the flagged fighters); the last opponent is moved next to Mario's marker
+ * (the end of the "win" group, or the start of the "lose" group).
+ * Mario's marker (id 20) sits between the two groups and his rank goes to GSW_GLITZ_PIT_RANK.
+ */
+static void rankingControll(void) {
+    s32 win[32];
+    s32 lose[32];
+    s32 nwin = 0;
+    s32 nlose = 0;
+    s32 i;
+    s32 j;
+    s32 m;
+    s32 k;
+    s32 tmp;
+    FighterData* pb;
+    RankEntry* entry;
+    RankEntry* work;
+
+    entry = rank_wp->entries;
+    for (i = 0; i < rank_wp->count; i++, entry++) {
+        if (!(entry->flags & RANK_FLAG_PLAYER)) {
+            if (entry->flags & RANK_FLAG_BEATEN) {
+                lose[nlose++] = i;
+            } else {
+                win[nwin++] = i;
+            }
+        }
+    }
+    if (nwin > 0) {
+        // Highest points first.
+        for (i = 0; i < nwin - 1; i++) {
+            for (j = i + 1; j < nwin; j++) {
+                if (rank_wp->entries[win[i]].points.total < rank_wp->entries[win[j]].points.total) {
+                    tmp = win[i];
+                    win[i] = win[j];
+                    win[j] = tmp;
+                }
+            }
+        }
+
+        // A FIGHT_MINOR fighter swaps with any later FIGHT_MAJOR or FIGHT_CHAMPION fighter.
+        for (i = 0; i < nwin - 1; i++) {
+            for (j = i + 1; j < nwin; j++) {
+                pb = &fighterDt[rank_wp->entries[win[i]].id];
+                if ((fighterDt[rank_wp->entries[win[j]].id].flags & (FIGHT_MAJOR | FIGHT_CHAMPION)) &&
+                    (pb->flags & FIGHT_MINOR)) {
+                    tmp = win[i];
+                    win[i] = win[j];
+                    win[j] = tmp;
+                }
+            }
+        }
+        if (nwin > 0) {
+            MOVE_FLAG(win, nwin, 0x4, 0);
+        }
+        if (nwin > 1) {
+            MOVE_FLAG(win, nwin, 0x1000, 1);
+        }
+        if (nwin > 10) {
+            MOVE_FLAG(win, nwin, 0x800, 10);
+        }
+        if (nwin > 18) {
+            MOVE_FLAG(win, nwin, 0x200, 18);
+        }
+        if (nwin > 19) {
+            MOVE_FLAG(win, nwin, 0x400, 19);
+        }
+        if (nwin > 16) {
+            MOVE_FLAG(win, nwin, 0x100, 14);
+        }
+        if (swGet(GSWF_ID(GSWF_GLITZ_PIT_LAST_OPPONENT_SAVED))) {
+            for (i = 0; i < nwin; i++) {
+                // BUG: win[] holds positions in rank_wp->entries, but the saved value is a fighter id (entries[].id);
+                // they agree only until the table is first re-sorted (memcpy below), so later the wrong fighter or none is moved.
+                if (win[i] == swByteGet(GSW_ID(GSW_GLITZ_PIT_LAST_OPPONENT))) {
+                    break;
+                }
+            }
+            if (i < nwin) {
+                insert(win, nwin, i, nwin - 1);
+            }
+        }
+    }
+    if (nlose > 0) {
+        // Highest points first.
+        for (i = 0; i < nlose - 1; i++) {
+            for (j = i + 1; j < nlose; j++) {
+                if (rank_wp->entries[lose[i]].points.total < rank_wp->entries[lose[j]].points.total) {
+                    tmp = lose[i];
+                    lose[i] = lose[j];
+                    lose[j] = tmp;
+                }
+            }
+        }
+
+        // A FIGHT_MINOR fighter swaps with any later FIGHT_MAJOR or FIGHT_CHAMPION fighter.
+        for (i = 0; i < nlose - 1; i++) {
+            for (j = i + 1; j < nlose; j++) {
+                pb = &fighterDt[rank_wp->entries[lose[i]].id];
+                if ((fighterDt[rank_wp->entries[lose[j]].id].flags & (FIGHT_MAJOR | FIGHT_CHAMPION)) &&
+                    (pb->flags & FIGHT_MINOR)) {
+                    tmp = lose[i];
+                    lose[i] = lose[j];
+                    lose[j] = tmp;
+                }
+            }
+        }
+        if (nlose > 0) {
+            MOVE_FLAG(lose, nlose, 0x4, 0);
+        }
+        if (nlose > 0) {
+            FIND_FLAG(m, lose, nlose, 0x800);
+            if (m < nlose) {
+                FIND_FLAG(k, lose, nlose, 0x2);
+                if (k < nlose && k > 0) {
+                    insert(lose, nlose, m, k - 1);
+                }
+            }
+        }
+        if (swGet(GSWF_ID(GSWF_GLITZ_PIT_LAST_OPPONENT_SAVED))) {
+            for (i = 0; i < nlose; i++) {
+                // BUG: lose[] holds positions in rank_wp->entries, but the saved value is a fighter id (entries[].id);
+                // they agree only until the table is first re-sorted (memcpy below), so later the wrong fighter or none is moved.
+                if (lose[i] == swByteGet(GSW_ID(GSW_GLITZ_PIT_LAST_OPPONENT))) {
+                    break;
+                }
+            }
+            if (i < nlose) {
+                insert(lose, nlose, i, 0);
+            }
+        }
+    }
+    work = __memAlloc(HEAP_DEFAULT, rank_wp->count * sizeof(RankEntry));
+    for (i = 0; i < nwin; i++) {
+        work[i] = rank_wp->entries[win[i]];
+    }
+    work[nwin].flags = RANK_FLAG_PLAYER;
+    work[nwin].id = FIGHTER_PLAYER;
+    work[nwin].points.total = 0;
+    for (i = 0; i < nlose; i++) {
+        work[nwin + 1 + i] = rank_wp->entries[lose[i]];
+    }
+    memcpy(rank_wp->entries, work, rank_wp->count * sizeof(RankEntry));
+    __memFree(HEAP_DEFAULT, work);
+    GET_RANK(j, i);
+    swByteSet(GSW_ID(GSW_GLITZ_PIT_RANK), j);
+}
+
+/** Script helper: args[0] receives Mario's current rank (0 = the champion's seat). */
+USER_FUNC(evt_tou_get_ranking) {
+    EvtWord* args = event->args;
+    s32 rank;
+    s32 i;
+
+    GET_RANK(rank, i);
+    evtSetValue(event, args[0], rank);
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper: args[0] receives the id of the fighter Mario fights next:
+ * the one ranked just above him, or the one just below
+ * after the last rule was not met (GSWF_GLITZ_PIT_CONDITION_KEPT clear). Mario at rank 0 gets the second fighter.
+ */
+USER_FUNC(evt_tou_get_next_match) {
+    EvtWord* args = event->args;
+    s32 flag = evtGetValue(event, GSWF_GLITZ_PIT_CONDITION_KEPT);
+    s32 rank;
+    RankEntry* entry;
+    s32 i;
+    s32 n = 0;
+    s32 list[32];
+
+    for (i = 0; i < rank_wp->count; i++) {
+        entry = &rank_wp->entries[i];
+        if (!(entry->flags & RANK_FLAG_HIDDEN)) {
+            list[n++] = entry->id;
+        }
+    }
+    GET_RANK(rank, i);
+
+    // A kept condition selects the fighter above; otherwise select below when available.
+    if (rank > 0) {
+        if (flag) {
+            evtSetValue(event, args[0], list[rank - 1]);
+#if VERSION <= VERSION_DEMO_JP
+        } else if (rank != n - 1) {
+#else
+        } else if (rank + 1 < n) {
+#endif
+            evtSetValue(event, args[0], list[rank + 1]);
+        } else {
+            evtSetValue(event, args[0], list[rank - 1]);
+        }
+    } else {
+        evtSetValue(event, args[0], list[1]);
+    }
+    printRanking();
+    return EVT_RETURN_DONE;
+}
+
+/** Script helper: args[0] = fighter id; args[1] receives the fighter's name string, args[2] its battle setup id. */
+USER_FUNC(evt_tou_get_fighter_info) {
+    EvtWord* args = event->args;
+    s32 id = evtGetValue(event, args[0]);
+    FighterData* dt;
+
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
+        dt = fighterDt;
+    } else {
+        dt = fighterDt_re;
+    }
+    evtSetValue(event, args[1], (EvtWord)msgSearch(dt[id].name));
+    evtSetValue(event, args[2], fighterDt[id].setupId);
+    return EVT_RETURN_DONE;
+}
+
+/** Script helper: args[0] = fighter id; args[1] receives the fighter's title (second name string). */
+USER_FUNC(evt_tou_get_fighter_name2) {
+    EvtWord* args = event->args;
+    s32 id = evtGetValue(event, args[0]);
+    FighterData* dt;
+
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
+        dt = fighterDt;
+    } else {
+        dt = fighterDt_re;
+    }
+    evtSetValue(event, args[1], (EvtWord)msgSearch(dt[id].title));
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper: args[0] = fighter id; args[1] receives that fighter's current position on the board (hidden
+ * fighters are skipped).
+ */
+USER_FUNC(evt_tou_get_fighter_rank) {
+    EvtWord* args = event->args;
+    s32 id = evtGetValue(event, args[0]);
+    s32 rank = 0;
+    s32 i;
+    RankEntry* entry;
+
+    for (i = 0; i < rank_wp->count; i++) {
+        entry = &rank_wp->entries[i];
+        if (!(entry->flags & RANK_FLAG_HIDDEN)) {
+            if (id == entry->id) {
+                break;
+            }
+            rank++;
+        }
+    }
+    evtSetValue(event, args[1], rank);
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper: args[0] = fighter id; args[1] and args[2] receive the fighter's pre-match taunt
+ * and victory message ids.
+ */
+USER_FUNC(evt_tou_get_fighter_battle_msg) {
+    EvtWord* args = event->args;
+    s32 id = evtGetValue(event, args[0]);
+    FighterData* dt;
+
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
+        dt = fighterDt;
+    } else {
+        dt = fighterDt_re;
+    }
+    evtSetValue(event, args[1], (EvtWord)dt[id].taunt);
+    evtSetValue(event, args[2], (EvtWord)dt[id].victory);
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper: picks a match rule for the registration.
+ * args[0] = mode (the script passes the opponent's fighter id: 0, Rawk Hawk, forces the rule with id 6;
+ * 10, the Armored Harriers, excludes the ids 0x20/0x30/0x40; anything else is random); returns name (args[1]),
+ * rule id (args[2]) and the two rule parameters (args[3], args[4]).
+ * The table depends on Mario's rank and the story.
+ */
+USER_FUNC(evt_tou_get_rule_info) {
+    EvtWord* args = event->args;
+    s32 mode = evtGetValue(event, args[0]);
+    s32 num;
+    RuleData* dt;
+    s32 i;
+    s32 rank;
+
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
+#if VERSION <= VERSION_DEMO_JP
+        for (i = 0; i < rank_wp->count; i++) {
+            if (rank_wp->entries[i].flags & RANK_FLAG_PLAYER) {
+                break;
+            }
+        }
+        rank = i;
+#else
+        GET_RANK(rank, i);
+#endif
+        if (rank > 10) {
+            num = 10;
+            dt = ruleDt_2bu;
+        } else {
+            num = 14;
+            dt = ruleDt_1bu;
+        }
+    } else {
+        num = 14;
+        dt = ruleDt_re;
+    }
+    if (mode == 0) {
+        for (i = 0; i < num; i++) {
+            if (dt[i].id == 6) {
+                break;
+            }
+        }
+    } else if (mode == 10) {
+        while (TRUE) {
+            i = rand() % num;
+            if (dt[i].id != 0x30 && dt[i].id != 0x20 && dt[i].id != 0x40) {
+                break;
+            }
+        }
+    } else {
+        i = rand() % num;
+    }
+    evtSetValue(event, args[1], (EvtWord)dt[i].name);
+    evtSetValue(event, args[2], dt[i].id);
+    evtSetValue(event, args[3], dt[i].param);
+    evtSetValue(event, args[4], dt[i].param2);
+    return EVT_RETURN_DONE;
+}
+
+/** Script helper: args[0] = rule id; args[1] receives the message string describing that rule's conditions. */
+USER_FUNC(evt_tou_get_rule_msg2) {
+    EvtWord* args = event->args;
+    s32 id = evtGetValue(event, args[0]);
+    s32 num;
+    RuleData* dt;
+    s32 i;
+    s32 rank;
+
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
+#if VERSION <= VERSION_DEMO_JP
+        for (i = 0; i < rank_wp->count; i++) {
+            if (rank_wp->entries[i].flags & RANK_FLAG_PLAYER) {
+                break;
+            }
+        }
+        rank = i;
+#else
+        GET_RANK(rank, i);
+#endif
+        if (rank > 10) {
+            num = 10;
+            dt = ruleDt_2bu;
+        } else {
+            num = 14;
+            dt = ruleDt_1bu;
+        }
+    } else {
+        num = 14;
+        dt = ruleDt_re;
+    }
+    for (i = 0; i < num; i++) {
+        if (id == dt[i].id) {
+            break;
+        }
+    }
+
+    // An unknown rule ID uses the final entry of the selected division table.
+    if (i == num) {
+        i = num - 1;
+    }
+    evtSetValue(event, args[1], (EvtWord)msgSearch(dt[i].desc));
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper: args[0] = 0 if Mario won the match, else lost; args[1] = opponent id.
+ * Updates the opponent's lost flag and GSWF_GLITZ_PIT_BEAT_LAST_OPPONENT,
+ * jitters the score of every visible (not hidden) fighter by a random amount,
+ * records the opponent in GSW_GLITZ_PIT_LAST_OPPONENT and re-sorts the board.
+ */
+USER_FUNC(evt_tou_set_ranking_win_lose) {
+    EvtWord* args = event->args;
+    s32 lose = evtGetValue(event, args[0]);
+    s32 id = evtGetValue(event, args[1]);
+    s32 i;
+    s16 min;
+    s16 max;
+
+    if (lose == 0) {
+        for (i = 0; i < rank_wp->count; i++) {
+            if (id == rank_wp->entries[i].id) {
+                rank_wp->entries[i].flags |= RANK_FLAG_BEATEN;
+                break;
+            }
+        }
+        swSet(GSWF_ID(GSWF_GLITZ_PIT_BEAT_LAST_OPPONENT));
+    } else {
+        for (i = 0; i < rank_wp->count; i++) {
+            if (id == rank_wp->entries[i].id) {
+                rank_wp->entries[i].flags &= ~RANK_FLAG_BEATEN;
+                break;
+            }
+        }
+        swClear(GSWF_ID(GSWF_GLITZ_PIT_BEAT_LAST_OPPONENT));
+    }
+    min = 1000;
+    max = -1000;
+    for (i = 0; i < rank_wp->count; i++) {
+        if (!(rank_wp->entries[i].flags & RANK_FLAG_HIDDEN)) {
+            rank_wp->entries[i].points.total += rand() % 4 + (rand() % 4 - 3);
+            if (rank_wp->entries[i].points.total < min) {
+                min = rank_wp->entries[i].points.total;
+            }
+            if (rank_wp->entries[i].points.total > max) {
+                max = rank_wp->entries[i].points.total;
+            }
+        }
+    }
+    swByteSet(GSW_ID(GSW_GLITZ_PIT_LAST_OPPONENT), id);
+    swSet(GSWF_ID(GSWF_GLITZ_PIT_LAST_OPPONENT_SAVED));
+    rankingControll();
+    return EVT_RETURN_DONE;
+}
+
+/**
+ * Script helper: args[0] = rule result bits from the match (the 0x4 bit = rule met);
+ * sets GSWF_GLITZ_PIT_CONDITION_KEPT when 0x4 is set and clears it when 0x2 or 0x1 is set.
+ */
+USER_FUNC(evt_tou_set_rule_result) {
+    s32 result = evtGetValue(event, event->args[0]);
+
+    if (result & 4) {
+        swSet(GSWF_ID(GSWF_GLITZ_PIT_CONDITION_KEPT));
+    } else if (result & 2) {
+        swClear(GSWF_ID(GSWF_GLITZ_PIT_CONDITION_KEPT));
+    } else if (result & 1) {
+        swClear(GSWF_ID(GSWF_GLITZ_PIT_CONDITION_KEPT));
+    }
+    return EVT_RETURN_DONE;
+}
+
+/** Debug stub left from the original build: reads the story progress and loops over the entries; prints nothing. */
+static void printRanking(void) {
+    s32 i;
+
+    evtGetValue(NULL, GSW_STORY_PROGRESS);
+    for (i = 0; i < rank_wp->count; i++) {
+    }
+}
+
 /** Pointer to the live ranking (rank_work) that the ranking helpers in this file work on. */
-static RankData* rank_wp = &rank_work;
+static RankWork* rank_wp = &rank_work;
 
 /** Pointer to the ranking board's display state (disp_work). */
-static RankDispWork* dwp = &disp_work;
+static DispWork* dwp = &disp_work;
 
 /** Full-width digits 0 to 9, used to write ranking numbers into the ranking board text. */
 static const char* suuji[] = {
@@ -877,7 +995,7 @@ static const char* suuji[] = {
 
 /**
  * Draws the ranking window: a "Ranking" title and the scrolling two-page list of fighter names with rank numbers
- * (the champion's seat in red), clipped by a scissor box.
+ * (Mario's own entry in red, the Champion's Belt icon beside the top entry), clipped by a scissor box.
  * Runs as a display entry queued by evt_tou_print_ranking.
  */
 static void disp_proc(CameraId cameraId, void* param) {
@@ -895,15 +1013,17 @@ static void disp_proc(CameraId cameraId, void* param) {
 #if VERSION >= VERSION_US
     const char* name;
 #endif
-    s32 yoff;
     s32 w;
     f32 winW;
     f32 top;
     Mtx scale;
     Mtx mtx;
     char buf[0x100];
+    f32 sy;
+    f32 sh;
+    f32 nw;
 
-    if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT) {
+    if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT) {
         dt = fighterDt;
     } else {
         dt = fighterDt_re;
@@ -913,7 +1033,7 @@ static void disp_proc(CameraId cameraId, void* param) {
     x = -winW * x;
     windowDispGX_System(0, 0xFF, x - 30.0f, 165.0f, 310.0f, 330.0f);
 #if VERSION >= VERSION_US
-    if ((u32)gp->language == 0) {
+    if (gp->language == LANGUAGE_JP) {
         title = "ランキング";
     } else {
         title = msgSearch("stg3_ranking");
@@ -938,21 +1058,18 @@ static void disp_proc(CameraId cameraId, void* param) {
 #endif
     sx = 304.0f + x;
     sw = winW;
-    {
-        f32 sy = 145.0f;
-        f32 sh = 220.0f;
-        GXSetScissor(sx, (u16)sy, sw, (u16)sh);
-    }
+    sy = 145.0f;
+    sh = 220.0f;
+    GXSetScissor(sx, (u16)sy, sw, (u16)sh);
     rank = 0;
-    yoff = 0;
     for (i = 0; i < rank_wp->count; i++) {
         tx = 10.0f + x;
-        y = dwp->scroll + (top - yoff - 40.0f);
-        if (!(rank_wp->entries[i].flags & 2)) {
+        y = dwp->scroll + (top - rank * 20 - 40.0f);
+        if (!(rank_wp->entries[i].flags & RANK_FLAG_HIDDEN)) {
             PSMTXScale(scale, 0.8f, 0.8f, 0.8f);
             if (rank != 0) {
 #if VERSION >= VERSION_US
-                if ((u32)gp->language == 0) {
+                if (gp->language == LANGUAGE_JP) {
                     sprintf(buf, "%s%s", rank / 10 ? suuji[rank / 10] : "", suuji[rank % 10]);
                 } else {
                     sprintf(buf, "%2d", rank);
@@ -970,7 +1087,7 @@ static void disp_proc(CameraId cameraId, void* param) {
                 FontDrawMessageMtx(mtx, buf);
             }
             FontDrawStart();
-            if (rank_wp->entries[i].flags & 4) {
+            if (rank_wp->entries[i].flags & RANK_FLAG_PLAYER) {
                 GXColor color = {0xFF, 0x00, 0x00, 0xFF};
                 FontDrawColor(color);
             } else {
@@ -978,20 +1095,17 @@ static void disp_proc(CameraId cameraId, void* param) {
                 FontDrawColor(color);
             }
 #if VERSION >= VERSION_US
-            {
-                f32 nw;
-                name = msgSearch(dt[rank_wp->entries[i].id].name);
-                nw = FontGetMessageWidth(name);
+            name = msgSearch(dt[rank_wp->entries[i].id].name);
+            nw = FontGetMessageWidth(name);
 
-                tx = 40.0f + tx;
-                PSMTXTrans(mtx, tx, y, 0.0f);
+            tx = 40.0f + tx;
+            PSMTXTrans(mtx, tx, y, 0.0f);
+            PSMTXConcat(mtx, scale, mtx);
+            if (nw > 220.0f) {
+                PSMTXScale(scale, 220.0f / nw, 1.0f, 1.0f);
                 PSMTXConcat(mtx, scale, mtx);
-                if (nw > 220.0f) {
-                    PSMTXScale(scale, 220.0f / nw, 1.0f, 1.0f);
-                    PSMTXConcat(mtx, scale, mtx);
-                }
-                FontDrawMessageMtx(mtx, name);
             }
+            FontDrawMessageMtx(mtx, name);
 #else
             tx = 40.0f + tx;
             PSMTXTrans(mtx, tx, y, 0.0f);
@@ -999,54 +1113,46 @@ static void disp_proc(CameraId cameraId, void* param) {
             FontDrawMessageMtx(mtx, msgSearch(dt[rank_wp->entries[i].id].name));
 #endif
             rank++;
-            yoff += 20;
         }
     }
-    {
-        f32 sy = 137.0f;
-        f32 sh = 228.0f;
-        GXSetScissor(sx, (u16)sy, sw, (u16)sh);
-    }
+    sy = 137.0f;
+    sh = 228.0f;
+    GXSetScissor(sx, (u16)sy, sw, (u16)sh);
     {
         f32 yy = 95.0f + dwp->scroll;
         Vec pos = {0.0f, 0.0f, 0.0f};
         pos.x = 15.0f + x;
         pos.y = yy - 24.0f;
-        iconDispGx(&pos, ICON_FLAG_2D, ICON_123, 0.8f);
+        iconDispGx(&pos, ICON_FLAG_2D, 0.8f, ICON_ITEM_CHAMPS_BELT);
     }
     GXSetScissor(0, 0, 0x260, 0x1E0);
     if (dwp->page > 0) {
         {
             Vec pos = {0.0f, 125.0f, 0.0f};
             pos.x = x + winW;
-            iconDispGx(&pos, ICON_FLAG_2D, ICON_205, -1.0f);
+            iconDispGx(&pos, ICON_FLAG_2D, -1.0f, ICON_PAGE_ARROW);
         }
         {
             Vec pos = {0.0f, 75.0f, 0.0f};
             pos.x = x + winW;
-            iconDispGx(&pos, ICON_FLAG_2D, ICON_07E, 0.6f);
+            iconDispGx(&pos, ICON_FLAG_2D, 0.6f, ICON_TRIGGER_L);
         }
     }
     if (dwp->page < 1) {
         {
             Vec pos = {0.0f, -140.0f, 0.0f};
             pos.x = x + winW;
-            iconDispGx(&pos, ICON_FLAG_2D, ICON_205, 1.0f);
+            iconDispGx(&pos, ICON_FLAG_2D, 1.0f, ICON_PAGE_ARROW);
         }
         {
             Vec pos = {0.0f, -125.0f, 0.0f};
             pos.x = x + winW;
-            iconDispGx(&pos, ICON_FLAG_2D, ICON_080, 0.6f);
+            iconDispGx(&pos, ICON_FLAG_2D, 0.6f, ICON_TRIGGER_R);
         }
     }
 }
 
-/**
- * The Glitz Pit lockers (numbers 1-3 and 5-10, there is no 4), five object names each:
- * the collision (R_), the door, its front and back faces and its feet (asi);
- * evt_tou_locker_init reads them five at a time.
- */
-const char* lockerDt[] = {
+static const char* lockerDt[] = {
     "R_door_1",
     "a_door_1",
     "a_door_1_omote",
@@ -1112,7 +1218,7 @@ EVT_BEGIN(evt_close)
         SET_VALUE(LW(9), LW(4))
         CALL(evt_mapobj_get_position, LW(5), LW(10), LW(11), LW(12))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG3_LOCKER_CLOSE1"), LW(10), LW(11), LW(12), 0)
-        CALL(evt_sub_intpl_init, 12, 120, 0, 40)
+        CALL(evt_sub_intpl_init, EASING_SINE_OUT, 120, 0, 40)
         LOOP(41)
             CALL(evt_sub_intpl_get_value)
             IF_INT_EQUAL(LF(0), 1)
@@ -1127,7 +1233,7 @@ EVT_BEGIN(evt_close)
         SET_VALUE(LW(2), LW(7))
         SET_VALUE(LW(3), LW(8))
         SET_VALUE(LW(4), LW(9))
-        CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(2), 0, PTR(evt_open), 0)
+        CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(2), 0, PTR(evt_open), 0)
     ELSE
 #if VERSION >= VERSION_JP
         CALL(evt_mario_key_onoff, 0)
@@ -1140,7 +1246,7 @@ EVT_BEGIN(evt_close)
         SET_VALUE(LW(9), LW(4))
         CALL(evt_mapobj_get_position, LW(5), LW(10), LW(11), LW(12))
         CALL(evt_snd_sfxon_3d, STRING("SFX_STG3_LOCKER_CLOSE1"), LW(10), LW(11), LW(12), 0)
-        CALL(evt_sub_intpl_init, 12, 120, 0, 20)
+        CALL(evt_sub_intpl_init, EASING_SINE_OUT, 120, 0, 20)
         LOOP(21)
             CALL(evt_sub_intpl_get_value)
             IF_INT_EQUAL(LF(0), 1)
@@ -1158,16 +1264,17 @@ EVT_BEGIN(evt_close)
         SET_VALUE(LW(2), LW(7))
         SET_VALUE(LW(3), LW(8))
         SET_VALUE(LW(4), LW(9))
-        CALL(evt_run_case_evt, CASE_COND_PUSH, 1, LW(3), 0, PTR(evt_open), 0)
+        CALL(evt_run_case_evt, CASE_PUSH, 1, LW(3), 0, PTR(evt_open), 0)
     END_IF
     CALL(evt_exit_case_evt)
     RETURN
 EVT_END()
 
 /**
- * Locker door open script, run when Mario pushes on a locker (registered by the locker setup script;
- * evt_close is its counterpart).
- * Before STORY_STG3_05_MATCH in tou_10, with no match reserved yet,
+ * Locker door open script, run when Mario presses A in front of a locker (CASE_FRONT_A, registered by the locker
+ * setup script; after a close triggered by standing on the locker it is registered for CASE_PUSH instead).
+ * evt_close is its counterpart.
+ * Before STG3_05_MATCH in tou_10, with no match reserved yet,
  * the locker stays shut and a staff member says stg3_tou_67 (the US and later versions skip the line if Mario's
  * input is already locked).
  * Otherwise it plays the locker-open sound at the door,
@@ -1175,10 +1282,10 @@ EVT_END()
  * and registers evt_close for pushing at or standing on it.
  */
 static EVT_BEGIN(evt_open)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_05_MATCH)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_05_MATCH)
         CALL(evt_sub_get_mapname, LW(5))
         IF_STR_EQUAL(LW(5), STRING("tou_10"))
-            IF_INT_EQUAL(GSWF(GSWF_TOU_MATCH_RESERVED), 0)
+            IF_INT_EQUAL(GSWF_GLITZ_PIT_MATCH_RESERVED, 0)
 #if VERSION >= VERSION_US
                 CALL(tou_mario_keyoff_check, LW(0))
                 IF_INT_EQUAL(LW(0), 1)
@@ -1200,7 +1307,7 @@ static EVT_BEGIN(evt_open)
     SET_VALUE(LW(9), LW(4))
     CALL(evt_mapobj_get_position, LW(5), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG3_LOCKER_OPEN1"), LW(10), LW(11), LW(12), 0)
-    CALL(evt_sub_intpl_init, 12, 0, 120, 40)
+    CALL(evt_sub_intpl_init, EASING_SINE_OUT, 0, 120, 40)
     LOOP(41)
         CALL(evt_sub_intpl_get_value)
         IF_INT_EQUAL(LF(0), 1)
@@ -1216,14 +1323,14 @@ static EVT_BEGIN(evt_open)
     SET_VALUE(LW(3), LW(8))
     SET_VALUE(LW(4), LW(9))
     SET_VALUE(LW(10), 0)
-    CALL(evt_run_case_evt, CASE_COND_PUSH, 1, LW(2), 0, PTR(evt_close), LW(11))
+    CALL(evt_run_case_evt, CASE_PUSH, 1, LW(2), 0, PTR(evt_close), LW(11))
     SET_VALUE(LW(0), LW(5))
     SET_VALUE(LW(1), LW(6))
     SET_VALUE(LW(2), LW(7))
     SET_VALUE(LW(3), LW(8))
     SET_VALUE(LW(4), LW(9))
     SET_VALUE(LW(10), 1)
-    CALL(evt_run_case_evt, CASE_COND_STAND_ON, 1, LW(4), 0, PTR(evt_close), LW(12))
+    CALL(evt_run_case_evt, CASE_STAND_ON, 1, LW(4), 0, PTR(evt_close), LW(12))
     CALL(evt_set_case_wrk, LW(11), 11, LW(11))
     CALL(evt_set_case_wrk, LW(11), 12, LW(12))
     CALL(evt_set_case_wrk, LW(12), 11, LW(11))
@@ -1278,19 +1385,19 @@ EVT_BEGIN(evt_tou_locker_init)
         END_IF
         IF_INT_EQUAL(LF(0), 0)
             CALL(evt_hit_bind_mapobj, LW(1), LW(0))
-            CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, LW(2), 0, PTR(evt_open), 0)
+            CALL(evt_run_case_evt, CASE_FRONT_A, 1, LW(2), 0, PTR(evt_open), 0)
         END_IF
     END_LOOP
     RETURN
 EVT_END()
 
 /** Script helper: shows the ranking window (disp_proc) and blocks while it is open; L/R switch pages, B closes it. */
-static USER_FUNC(evt_tou_print_ranking) {
+USER_FUNC(evt_tou_print_ranking) {
     s32 rank;
     s32 i;
 
     if (isFirstCall) {
-        memset(dwp, 0, sizeof(RankDispWork));
+        memset(dwp, 0, sizeof(DispWork));
         GET_RANK(rank, i);
         dwp->page = rank / 11;
         dwp->scroll = dwp->target = dwp->page * 220;
@@ -1298,25 +1405,28 @@ static USER_FUNC(evt_tou_print_ranking) {
         return EVT_RETURN_BLOCK;
     }
     if (keyGetButtonTrg(0) & PAD_BUTTON_B) {
-        psndSFXOn((const char*)0x13);
+        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1));
         return EVT_RETURN_YIELD;
     }
     if (dwp->page > 0 && (keyGetButtonTrg(0) & PAD_TRIGGER_L)) {
-        psndSFXOn((const char*)5);
+        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
         dwp->page--;
     }
     if (dwp->page < 1 && (keyGetButtonTrg(0) & PAD_TRIGGER_R)) {
         dwp->page++;
-        psndSFXOn((const char*)5);
+        psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1));
     }
     dwp->target = dwp->page * 220;
     dwp->scroll += (dwp->target - dwp->scroll) / 8.0f;
-    dispEntry(CAMERA_2D, 300.0f, 0, disp_proc, NULL);
+    dispEntry(CAMERA_2D, 300.0f, DISP_MODE_OPAQUE, disp_proc, NULL);
     return EVT_RETURN_BLOCK;
 }
 
 #if VERSION >= VERSION_US
-/** Script helper: args[0] receives 1 if Mario's key input or control is currently disabled, else 0. */
+/**
+ * Script helper: args[0] receives 1 if Mario's key input or control is currently disabled, else 0.
+ * Descriptive name (not in the symbol maps); placeholder unk_tou_000005d0, JP tou .text+0x50C. See docs/NAME_PROVENANCE.md.
+ */
 USER_FUNC(tou_mario_keyoff_check) {
     EvtWord* args = event->args;
 
@@ -1352,22 +1462,9 @@ static void gans_tex(CameraId cameraId, void* param) {
     GXSetScissor(1, 1, 126, 126);
     C_MTXPerspective(projMtx, 25.0f, 1.0f, 1.0f, 1000.0f);
     GXSetProjection(projMtx, GX_PERSPECTIVE);
-    {
-        static const Vec gans_pos = {0.0f, 20.0f, 130.0f};
-        static const Vec gans_up = {0.0f, 1.0f, 0.0f};
-        static const Vec gans_target = {0.0f, 20.0f, 0.0f};
-        Vec pos;
-        Vec up;
-        Vec target;
-
-        target = gans_target;
-        up = gans_up;
-        pos = gans_pos;
-
-        C_MTXLookAt(lookAt, &pos, &up, &target);
-    }
+    C_MTXLookAt(lookAt, &(Vec){0.0f, 20.0f, 130.0f}, &(Vec){0.0f, 1.0f, 0.0f}, &(Vec){0.0f, 20.0f, 0.0f});
     saved = *camGetPtr(cameraId);
-    npc = npcNameToPtr(evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT ? "ガンス" : "キノシコワ");
+    npc = npcNameToPtr(evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT ? "ガンス" : "キノシコワ");
     PSMTXCopy(lookAt, camGetCurPtr()->view);
     animPosePeraOff(npc->poseId);
     PSMTXIdentity(ident);
@@ -1387,11 +1484,69 @@ static void gans_tex(CameraId cameraId, void* param) {
     wp->ready = 1;
 }
 
-/** Returns a white color with the given alpha (used for the monitor's fade). */
-static inline GXColor tou_mkcolor(u8 a) {
-    GXColor c = {0xFF, 0xFF, 0xFF, 0x00};
-    c.a = a;
-    return c;
+/**
+ * Script helper (never finishes): waits until the story's NPC (one before STG3_34_RETURN_TO_ROGUEPORT, another after)
+ * exists, then each frame allocates a 128x128 RGB5A3 texture for the monitor, fades its alpha up to 0x80 while onoff is
+ * set or down to 0, and queues gans_tex to draw it.
+ */
+static USER_FUNC(make_monitor) {
+    NpcEntry* npc = npcNameToPtr_NoAssert(evtGetValue(NULL, GSW_STORY_PROGRESS) < STG3_34_RETURN_TO_ROGUEPORT ? "ガンス" : "キノシコワ");
+    GansWork* wp;
+
+    if (isFirstCall) {
+        wp = _mapAlloc(sizeof(GansWork));
+        event->userdatap[0] = wp;
+        wp->onoff = 0;
+        wp->ready = 0;
+    }
+    if (npc == NULL) {
+        return EVT_RETURN_BLOCK;
+    }
+    wp = event->userdatap[0];
+    gans_wp = wp;
+    wp->buf = smartAlloc(GXGetTexBufferSize(0x80, 0x80, GX_TF_RGB5A3, GX_FALSE, 0), SMART_GROUP_TEMP);
+    GXInitTexObj(&wp->tex, wp->buf->address, 0x80, 0x80, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
+    GXInitTexObjLOD(&wp->tex, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
+    if (gans_wp->onoff) {
+        gans_wp->alpha += 4;
+        if (gans_wp->alpha > 0x80) {
+            gans_wp->alpha = 0x80;
+        }
+    } else {
+        gans_wp->alpha -= 4;
+        if (gans_wp->alpha < 0) {
+            gans_wp->alpha = 0;
+        }
+    }
+    dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_OPAQUE_NO_Z, gans_tex, wp);
+    return EVT_RETURN_BLOCK;
+}
+
+/**
+ * TEV callback for the monitor screen: replaces the screen's color stages with the live texture,
+ * blended by the work alpha, once the texture has been rendered at least once.
+ */
+static void monitor_tev(MapTevCallbackInfo* info) {
+    if (gans_wp->ready) {
+        GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY, GX_FALSE, GX_PTIDENTITY);
+        GXLoadTexObj(smartTexObj(&gans_wp->tex, &gans_wp->buf->address), GX_TEXMAP1);
+        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+        GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+        GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
+        GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_TEXC, GX_CC_CPREV, GX_CC_A0, GX_CC_ZERO);
+        GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+        GXSetTevSwapMode(GX_TEVSTAGE1, GX_TEV_SWAP0, GX_TEV_SWAP0);
+        GXSetTevColor(GX_TEVREG0, (GXColor){0xFF, 0xFF, 0xFF, gans_wp->alpha});
+        info->tevStage = 2;
+        info->texCoord = 2;
+        info->texMap = 2;
+    }
 }
 
 /** Turns the registration monitor on, with the computer sound at the "M_make" console. */
@@ -1421,27 +1576,27 @@ EVT_BEGIN(evt_tou_monitor_init)
     CALL(evt_sub_get_mapname, LW(0))
     IF_STR_EQUAL(LW(0), STRING("tou_10"))
         CALL(evt_map_set_tevcallback, 1, PTR(monitor_tev))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamen"), MAPOBJ_TEV_CALLBACK(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamen"), MAPOBJ_FLAG_DISPLAY_LIST)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamen"), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamen"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     IF_STR_EQUAL(LW(0), STRING("tou_08"))
         CALL(evt_map_set_tevcallback, 1, PTR(monitor_tev))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamenn"), MAPOBJ_TEV_CALLBACK(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamenn"), MAPOBJ_FLAG_DISPLAY_LIST)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamenn"), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamenn"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     IF_STR_EQUAL(LW(0), STRING("tou_07"))
         CALL(evt_map_set_tevcallback, 1, PTR(monitor_tev))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamenn"), MAPOBJ_TEV_CALLBACK(1))
-        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamenn"), MAPOBJ_FLAG_DISPLAY_LIST)
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 1, STRING("gamenn"), MAP_OBJ_TEV_CALLBACK(1))
+        CALL(evt_mapobj_flag_onoff, MAPOBJ_GROUP, 0, STRING("gamenn"), MAP_OBJ_FLAG_DISPLAY_LIST)
     END_IF
     RETURN
 EVT_END()
 
 /**
- * The guard's remark added after the poisoned partner's stand-in speaks (dummy_party_msg_*): when the guard
- * (ガードマン) stands at z above 100 he says they are waiting on Mr. Gonzales (stg3_tou_304).
+ * The guard's remark after a partner stand-in's line (the dummy_party_msg_* scripts): when the guard
+ * (ガードマン) stands at z above 100 he says stg3_tou_304.
  */
-EVT_BEGIN(talk_gardman_doku)
+static EVT_BEGIN(talk_gardman_doku)
     CALL(evt_npc_get_position, STRING("ガードマン"), LW(0), LW(1), LW(2))
     IF_INT_GREATER(LW(2), 100)
         CALL(evt_msg_print, 0, STRING("stg3_tou_304"), 0, STRING("ガードマン"))
@@ -1450,28 +1605,28 @@ EVT_BEGIN(talk_gardman_doku)
 EVT_END()
 
 /** Talk script of Goombella's stand-in NPC: her line, then the guard's remark. */
-EVT_BEGIN(dummy_party_msg_pkr)
+static EVT_BEGIN(dummy_party_msg_pkr)
     CALL(evt_msg_print, 0, STRING("stg3_tou_303_kur"), 0, STRING("me"))
     CALL_CHILD(talk_gardman_doku)
     RETURN
 EVT_END()
 
 /** Talk script of Koops' stand-in NPC: his line, then the guard's remark. */
-EVT_BEGIN(dummy_party_msg_pnk)
+static EVT_BEGIN(dummy_party_msg_pnk)
     CALL(evt_msg_print, 0, STRING("stg3_tou_303_nok"), 0, STRING("me"))
     CALL_CHILD(talk_gardman_doku)
     RETURN
 EVT_END()
 
 /** Talk script of Yoshi's stand-in NPC: his line, then the guard's remark. */
-EVT_BEGIN(dummy_party_msg_yos)
+static EVT_BEGIN(dummy_party_msg_yos)
     CALL(evt_msg_print, 0, STRING("stg3_tou_303_yos"), 0, STRING("me"))
     CALL_CHILD(talk_gardman_doku)
     RETURN
 EVT_END()
 
 /** Talk script of Flurrie's stand-in NPC (Windy in the data names): her line, then the guard's remark. */
-EVT_BEGIN(dummy_party_msg_win)
+static EVT_BEGIN(dummy_party_msg_win)
     CALL(evt_msg_print, 0, STRING("stg3_tou_303_win"), 0, STRING("me"))
     CALL_CHILD(talk_gardman_doku)
     RETURN
@@ -1482,19 +1637,20 @@ EVT_END()
  * matching the current partner (Goombella, Koops, Yoshi in its color, Flurrie),
  * and parks the real partner offscreen.
  */
-EVT_BEGIN(party_npc_replace)
+// Keep a talkable NPC proxy at the partner position while hiding and stopping the actual party actor.
+static EVT_BEGIN(party_npc_replace)
     CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_mario_get_party, LW(3))
     SWITCH(LW(3))
-        CASE_EQUAL(PARTY_MEMBER_GOOMBELLA)
-        CALL(evt_npc_entry, STRING("dummy_party"), STRING("c_pkr"))
+        CASE_EQUAL(1)
+        CALL(evt_npc_entry, STRING("dummy_party"), STRING("c_pkr")) // stand-in for Goombella in the poisoned-cake scene
         CALL(evt_npc_set_anim, STRING("dummy_party"), STRING("PKR_D_3"))
         CALL(evt_npc_change_interrupt, STRING("dummy_party"), 6, PTR(dummy_party_msg_pkr))
-        CASE_EQUAL(PARTY_MEMBER_KOOPS)
+        CASE_EQUAL(2)
         CALL(evt_npc_entry, STRING("dummy_party"), STRING("c_pnk"))
         CALL(evt_npc_set_anim, STRING("dummy_party"), STRING("PNK_D_3"))
         CALL(evt_npc_change_interrupt, STRING("dummy_party"), 6, PTR(dummy_party_msg_pnk))
-        CASE_EQUAL(PARTY_MEMBER_YOSHI)
+        CASE_EQUAL(4)
         CALL(getYoshiColor, LW(5))
         SWITCH(LW(5))
             CASE_EQUAL(0)
@@ -1520,7 +1676,7 @@ EVT_BEGIN(party_npc_replace)
         CALL(evt_npc_set_anim, STRING("dummy_party"), STRING("PWD_D_3"))
         CALL(evt_npc_change_interrupt, STRING("dummy_party"), 6, PTR(dummy_party_msg_win))
     END_SWITCH
-    CALL(evt_npc_flag_onoff, 1, STRING("dummy_party"), NPC_FLAG_NO_TURN_TO_MARIO)
+    CALL(evt_npc_flag_onoff, 1, STRING("dummy_party"), NPC_FLAG_NO_TALK_TURN)
     CALL(evt_npc_set_position, STRING("dummy_party"), LW(0), LW(1), LW(2))
     CALL(evt_party_set_pos, 0, 0, -1000, 0)
     CALL(evt_party_stop, 0)
@@ -1529,9 +1685,10 @@ EVT_BEGIN(party_npc_replace)
 EVT_END()
 
 /**
- * Squash-and-stretch of the egg NPC ("たまご") over a hop of LW(3) milliseconds:
- * the width scale eases from 1.2 down to 0.9 and the height scale from 0.9 up to 1.1 (two inline events),
- * while the loop applies both scales to the egg every frame.
+ * Squash-and-stretch of the egg NPC ("たまご") for a hop whose time is passed in LW(3) (milliseconds):
+ * the width scale eases from 1.2 down to 0.9 and the height scale from 0.9 up to 1.1, each over (LW(3) / 2) + 1
+ * milliseconds (two inline events), while the loop applies both scales to the egg every frame for LW(4) + 1 frames
+ * (LW(4) as passed in).
  */
 static EVT_BEGIN(evt_tamago_scale)
     SET_VALUE(GW(10), FLOAT(1.1992188f))
@@ -1539,7 +1696,7 @@ static EVT_BEGIN(evt_tamago_scale)
     BEGIN_INLINE_EVENT
         DIVIDE(LW(3), 2)
         ADD(LW(3), 1)
-        CALL(evt_sub_intpl_msec_init, 11, 120, 90, LW(3))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 120, 90, LW(3))
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1552,7 +1709,7 @@ static EVT_BEGIN(evt_tamago_scale)
     BEGIN_INLINE_EVENT
         DIVIDE(LW(3), 2)
         ADD(LW(3), 1)
-        CALL(evt_sub_intpl_msec_init, 11, 90, 110, LW(3))
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 90, 110, LW(3))
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1572,15 +1729,15 @@ static EVT_BEGIN(evt_tamago_scale)
 EVT_END()
 
 /**
- * Second squash-and-stretch step for the egg NPC ("たまご"), over LW(3) milliseconds:
- * the width eases from 0.9 back to 1.0 and the height from 1.1 back to 1.0,
- * and the loop applies the scales every frame (the settle after the hops of evt_tamago_scale).
+ * Second squash-and-stretch step for the egg NPC ("たまご"), with LW(3) passed in as milliseconds:
+ * the width eases from 0.9 back to 1.0 and the height from 1.1 back to 1.0, each over (LW(3) / 2) + 1 milliseconds,
+ * and the loop applies the scales every frame for LW(4) + 1 frames (the settle after the hops of evt_tamago_scale).
  */
 static EVT_BEGIN(evt_tamago_scale2)
     BEGIN_INLINE_EVENT
         DIVIDE(LW(3), 2)
         ADD(LW(3), 1)
-        CALL(evt_sub_intpl_msec_init, 4, 90, 100, LW(3))
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, 90, 100, LW(3))
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1593,7 +1750,7 @@ static EVT_BEGIN(evt_tamago_scale2)
     BEGIN_INLINE_EVENT
         DIVIDE(LW(3), 2)
         ADD(LW(3), 1)
-        CALL(evt_sub_intpl_msec_init, 4, 110, 100, LW(3))
+        CALL(evt_sub_intpl_msec_init, EASING_QUADRATIC_OUT, 110, 100, LW(3))
         LABEL(0)
         CALL(evt_sub_intpl_msec_get_value)
         DIVIDE_FLOAT(LW(0), FLOAT(100.0f))
@@ -1616,11 +1773,11 @@ EVT_END()
  * Mini-Yoshi egg scene (story stage 12 to 19): the egg Yoshi NPC takes the partner's place,
  * Yoshi leaves the party, and the egg hops away in squashing jumps.
  */
-EVT_BEGIN(evt_tamago_byebye)
+static EVT_BEGIN(evt_tamago_byebye)
     CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_npc_check, STRING("たまご"), LW(10))
     IF_INT_EQUAL(LW(10), 0)
-        CALL(evt_npc_entry, STRING("たまご"), STRING("c_babyyoshi"))
+        CALL(evt_npc_entry, STRING("たまご"), STRING("c_babyyoshi")) // the egg that hatches into the Yoshi partner
     END_IF
     CALL(evt_npc_set_tribe, STRING("たまご"), STRING("たまご"))
     CALL(evt_npc_set_anim, STRING("たまご"), STRING("PYS_E_2"))
@@ -1665,16 +1822,17 @@ EVT_END()
 
 /**
  * Guard's talk script: after the poison remark or the egg scene,
- * he steps out and swings the door of the current map (tou_10, tou_08 or tou_07) open and closed for Mario.
+ * he steps out and swings the door of the current map (tou_10, tou_08 or tou_07) open, leaves, and Mario walks out;
+ * the script then changes map to tou_04 (title match booked, before chapter 3 ends) or tou_03 (the ring).
  */
-EVT_BEGIN(talk_gardman)
-    IF_INT_EQUAL(GSWF(GSWF_TOU_PARTNER_POISON_CURED), 0)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_PARTNER_POISONED), 1)
+static EVT_BEGIN(talk_gardman)
+    IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_RECOVERED, 0)
+        IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_EATEN, 1)
             CALL(evt_msg_print, 0, STRING("stg3_tou_304_01"), 0, STRING("ガードマン"))
         END_IF
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_12_MINI_YOSHI_EGG)
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_20_MAJORS_10TH)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_12_THE_MINI_YOSHI_EGG)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG3_20_MAJORS_10TH_PLACE)
             CALL(chk, LW(0))
             IF_INT_EQUAL(LW(0), 0)
                 CALL_CHILD(evt_tamago_byebye)
@@ -1694,12 +1852,12 @@ EVT_BEGIN(talk_gardman)
     IF_STR_EQUAL(LW(0), STRING("tou_07"))
         SET_VALUE(LF(2), 1)
     END_IF
-    CALL(evt_npc_flag_onoff, 1, STRING("ガードマン"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("ガードマン"), NPC_FLAG_NO_HIT)
     WAIT_FRAMES(1)
     CALL(evt_npc_move_position, STRING("ガードマン"), 0, -130, 0, FLOAT(80.0f), 1)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -1727,10 +1885,10 @@ EVT_BEGIN(talk_gardman)
     END_INLINE_EVENT
     WAIT_MS(500)
     IF_INT_EQUAL(LF(1), 1)
-        SET_VALUE(GSWF(GSWF_TOU08_GUARD_LET_THROUGH), 1)
+        SET_VALUE(GSWF_TOU_08_GUARD_ESCORT_UNUSED, 1)
     END_IF
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_34_RETURN_TO_ROGUEPORT)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_TITLE_MATCH_RESERVED), 1)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_34_RETURN_TO_ROGUEPORT)
+        IF_INT_EQUAL(GSWF_GLITZ_PIT_TITLE_MATCH_BOOKED, 1)
             CALL(evt_bero_mapchange, STRING("tou_04"), 0)
             RETURN
         END_IF
@@ -1749,7 +1907,8 @@ EVT_END()
  * closes it and tells Gonzales (or the champion, in tou_07) it is time for his match.
  * It then gives the guard his
  * talk event (talk_gardman) back, turns off entrance 0 and returns control to Mario.
- * The versions before the US release wait 240 frames of free movement first.
+ * The early demos first run 241 iterations, each waiting one frame and for Mario's key-input lock to clear.
+ * Retail waits for 241 eligible idle, walking or dashing checks while Mario's controls are enabled.
  */
 static EVT_BEGIN(evt_gardman)
     // Work out which locker room this is: minor league (tou_10), major league (tou_08) or champion (tou_07).
@@ -1766,7 +1925,6 @@ static EVT_BEGIN(evt_gardman)
     IF_STR_EQUAL(LW(0), STRING("tou_07"))
         SET_VALUE(LF(2), 1)
     END_IF
-    // Wait until Mario is free to move.
 #if VERSION <= VERSION_DEMO_JP
     SET_VALUE(LW(0), 0)
     LOOP(0)
@@ -1790,9 +1948,11 @@ static EVT_BEGIN(evt_gardman)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+    CALL(evt_mario_key_onoff, 0)
+    CALL(evt_mario_wait_landon)
+    WAIT_FRAMES(1)
 #else
     CALL(tou_mario_free_wait)
-#endif
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_mario_wait_landon)
 #if VERSION >= VERSION_US
@@ -1802,7 +1962,7 @@ static EVT_BEGIN(evt_gardman)
 #else
     WAIT_FRAMES(1)
 #endif
-    // If Mario is standing in the doorway he is startled and hops out of the way.
+#endif
     BEGIN_INLINE_EVENT
         WAIT_MS(200)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
@@ -1822,19 +1982,20 @@ static EVT_BEGIN(evt_gardman)
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_SURPRISED1"), LW(0), LW(1), LW(2), 0)
 #endif
         CALL(evt_mario_set_pose, STRING("M_N_7"))
-        CALL(evt_npc_flag_onoff, 1, STRING("ガードマン"), NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 1, STRING("ガードマン"), NPC_FLAG_NO_HIT)
         CALL(evt_mario_jump_pos, 40, 0, -120, 400, 1, -1000)
         CALL(evt_mario_set_pos, 40, 0, -120)
-        CALL(evt_npc_flag_onoff, 0, STRING("ガードマン"), NPC_FLAG_INTANGIBLE)
+        CALL(evt_npc_flag_onoff, 0, STRING("ガードマン"), NPC_FLAG_NO_HIT)
         WAIT_MS(500)
         CALL(evt_mario_set_pose, STRING("M_S_1"))
         CALL(evt_mario_dispflag_onoff, 0, MARIO_DISP_FLAG_POSE_LOCK)
         CALL(evt_mario_set_dir_npc, STRING("ガードマン"))
     END_INLINE_EVENT
+
     // The door swings open, the guard steps in and shuts it behind him.
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -1852,14 +2013,14 @@ static EVT_BEGIN(evt_gardman)
             BREAK_LOOP
         END_IF
     END_LOOP
-    CALL(evt_npc_status_onoff, 0, STRING("ガードマン"), 2)
+    CALL(evt_npc_status_onoff, 0, STRING("ガードマン"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_flag_onoff, 1, STRING("ガードマン"), NPC_FLAG_INSTANT_TURN)
     CALL(evt_set_dir_to_target, STRING("ガードマン"), STRING("mario"))
     CALL(evt_npc_set_position, STRING("ガードマン"), 0, 0, -170)
     CALL(evt_npc_move_position, STRING("ガードマン"), 0, -90, 0, FLOAT(80.0f), 1)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, -180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -1877,6 +2038,7 @@ static EVT_BEGIN(evt_gardman)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // The guard tells Mario it is time for his match ("Follow me, bub").
     CALL(evt_set_dir_to_target, STRING("ガードマン"), STRING("mario"))
     IF_INT_EQUAL(LF(0), 1)
@@ -1889,9 +2051,10 @@ static EVT_BEGIN(evt_gardman)
         CALL(evt_msg_print, 0, STRING("stg3_tou_453"), 0, STRING("ガードマン"))
     END_IF
     WAIT_MS(300)
+
     // The guard keeps watch again and Mario can move.
     CALL(evt_npc_change_interrupt, STRING("ガードマン"), 6, PTR(talk_gardman))
-    CALL(evt_npc_status_onoff, 1, STRING("ガードマン"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("ガードマン"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_flag_onoff, 0, STRING("ガードマン"), NPC_FLAG_INSTANT_TURN)
     SET_VALUE(LW(0), 0)
     CALL_CHILD(bero_case_switch_off)
@@ -1900,7 +2063,7 @@ static EVT_BEGIN(evt_gardman)
 EVT_END()
 
 #if VERSION >= VERSION_JP
-/** Spawns the guard's walk-through script (evt_gardman). */
+/** Spawnable wrapper (tou_07 spawns it): runs the guard's match call (evt_gardman) as a child script. */
 EVT_BEGIN(evt_gardman_spawn)
     CALL_CHILD(evt_gardman)
     RETURN
@@ -1908,8 +2071,10 @@ EVT_END()
 #endif
 
 /**
- * Shared part of the match registration console:
- * sets which map (tou_10, tou_08 or tou_07) is running and prepares the registration prompts.
+ * Shared part of the match registration console, run once Mario has chosen to register:
+ * works out which map (tou_10, tou_08 or tou_07) is running, moves Mario and his partner to the monitor,
+ * announces the next opponent and its rank, reads out and stores the special condition,
+ * then sends the guard (evt_gardman) and marks the match as reserved.
  */
 EVT_BEGIN(evt_tou_match_make_default_sub)
     // Work out which locker room this is (and, in French, the order of the inserted rank and name).
@@ -1933,11 +2098,10 @@ EVT_BEGIN(evt_tou_match_make_default_sub)
         SET_VALUE(LF(3), 1) // French: the two inserted values are swapped
     END_IF
 #endif
-    // Mario and the partner step up to the terminal and the screen lights up.
     CALL(evt_party_stop, 0)
     WAIT_FRAMES(1)
     IF_INT_EQUAL(LF(2), 1)
-        CALL(evt_cam3d_evt_set, 35, 91, 188, 35, 57, -1, 1000, 11)
+        CALL(evt_cam3d_evt_set, 35, 91, 188, 35, 57, -1, 1000, EASING_SINE_IN_OUT)
         BEGIN_INLINE_EVENT
             CALL(evt_party_move_pos2, 0, 75, -96, FLOAT(80.0f))
             CALL(evt_party_set_dir, 0, 270, 100)
@@ -1945,7 +2109,7 @@ EVT_BEGIN(evt_tou_match_make_default_sub)
         CALL(evt_mario_mov_pos2, 35, -96, FLOAT(80.0f))
         CALL(evt_mario_mov_pos2, 38, -99, FLOAT(80.0f))
     ELSE
-        CALL(evt_cam3d_evt_set, -75, 91, 188, -75, 57, -1, 1000, 11)
+        CALL(evt_cam3d_evt_set, -75, 91, 188, -75, 57, -1, 1000, EASING_SINE_IN_OUT)
         BEGIN_INLINE_EVENT
             CALL(evt_party_move_pos2, 0, -50, -96, FLOAT(80.0f))
             CALL(evt_party_set_dir, 0, 270, 100)
@@ -1956,70 +2120,68 @@ EVT_BEGIN(evt_tou_match_make_default_sub)
     CALL_CHILD(evt_tou_monitor_on)
     WAIT_MS(800)
     CALL(evt_party_run, 0)
+
     // Minor league: Grubba (or Jolene after chapter 3) names the next opponent and its rank,
     // with a special greeting for the promotion match.
     IF_INT_EQUAL(LF(0), 1)
         CALL(evt_mapobj_get_position, STRING("gamen"), LW(0), LW(1), LW(2))
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_tou_get_next_match, LW(0))
-        SET_VALUE(GSW(GSW_TOU_OPPONENT_ID), LW(0))
+        SET_VALUE(GSW_GLITZ_PIT_OPPONENT, LW(0))
         CALL(evt_tou_get_fighter_info, LW(0), LW(1), LW(2))
         CALL(evt_tou_get_fighter_rank, LW(0), LW(3))
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_34_RETURN_TO_ROGUEPORT)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG3_34_RETURN_TO_ROGUEPORT)
             IF_INT_EQUAL(LW(3), 10)
-                IF_INT_EQUAL(GSWF(GSWF_TOU_IRON_CLEFTS_OPENING_SEEN), 0)
+                IF_INT_EQUAL(GSWF_TOU_ARMORED_HARRIERS_OPENING_SEEN, 0)
 #if VERSION >= VERSION_DEMO_EU
                     IF_INT_EQUAL(LF(3), 0)
                         CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00_01"), 0, STRING("ガンス"), LW(3), LW(1))
                     ELSE
                         CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00_01"), 0, STRING("ガンス"), LW(1), LW(3))
                     END_IF
-#else
-                    CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00_01"), 0, STRING("ガンス"), LW(3), LW(1))
-#endif
                 ELSE
-#if VERSION >= VERSION_DEMO_EU
                     IF_INT_EQUAL(LF(3), 0)
                         CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
                     ELSE
                         CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(1), LW(3))
                     END_IF
-#else
-                    CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
-#endif
                 END_IF
             ELSE
-#if VERSION >= VERSION_DEMO_EU
                 IF_INT_EQUAL(LF(3), 0)
                     CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
                 ELSE
                     CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(1), LW(3))
                 END_IF
-#else
-                CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
-#endif
             END_IF
         ELSE
-#if VERSION >= VERSION_DEMO_EU
             IF_INT_EQUAL(LF(3), 0)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_re_361"), 0, STRING("キノシコワ"), LW(3), LW(1))
             ELSE
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_re_361"), 0, STRING("キノシコワ"), LW(1), LW(3))
             END_IF
 #else
+                    CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00_01"), 0, STRING("ガンス"), LW(3), LW(1))
+                ELSE
+                    CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
+                END_IF
+            ELSE
+                CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
+            END_IF
+        ELSE
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_re_361"), 0, STRING("キノシコワ"), LW(3), LW(1))
 #endif
         END_IF
     END_IF
+
     // Major league: the same announcement; booking Rawk Hawk for the first time reserves the title match.
     IF_INT_EQUAL(LF(1), 1)
         CALL(evt_mapobj_get_position, STRING("gamenn"), LW(0), LW(1), LW(2))
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_tou_get_next_match, LW(0))
-        SET_VALUE(GSW(GSW_TOU_OPPONENT_ID), LW(0))
+        SET_VALUE(GSW_GLITZ_PIT_OPPONENT, LW(0))
         CALL(evt_tou_get_fighter_info, LW(0), LW(1), LW(2))
         CALL(evt_tou_get_fighter_rank, LW(0), LW(3))
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_34_RETURN_TO_ROGUEPORT)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG3_34_RETURN_TO_ROGUEPORT)
             IF_INT_EQUAL(LW(3), 0)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00_01"), 0, STRING("ガンス"), LW(1))
             ELSE
@@ -2048,48 +2210,51 @@ EVT_BEGIN(evt_tou_match_make_default_sub)
 #endif
             END_IF
         END_IF
-        IF_INT_EQUAL(GSW(GSW_TOU_OPPONENT_ID), 0)
-            IF_INT_EQUAL(GSWF(GSWF_TOU_CHAMP_OPENING_SEEN), 0)
-                SET_VALUE(GSWF(GSWF_TOU_TITLE_MATCH_RESERVED), 1)
+        IF_INT_EQUAL(GSW_GLITZ_PIT_OPPONENT, 0)
+            IF_INT_EQUAL(GSWF_TOU_RAWK_HAWK_OPENING_SEEN, 0)
+                SET_VALUE(GSWF_GLITZ_PIT_TITLE_MATCH_BOOKED, 1)
             END_IF
         END_IF
     END_IF
+
     // Champion's room: the same announcement.
     IF_INT_EQUAL(LF(2), 1)
         CALL(evt_mapobj_get_position, STRING("gamenn"), LW(0), LW(1), LW(2))
-        CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+        CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
         CALL(evt_tou_get_next_match, LW(0))
-        SET_VALUE(GSW(GSW_TOU_OPPONENT_ID), LW(0))
+        SET_VALUE(GSW_GLITZ_PIT_OPPONENT, LW(0))
         CALL(evt_tou_get_fighter_info, LW(0), LW(1), LW(2))
         CALL(evt_tou_get_fighter_rank, LW(0), LW(3))
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_34_RETURN_TO_ROGUEPORT)
 #if VERSION >= VERSION_DEMO_EU
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG3_34_RETURN_TO_ROGUEPORT)
             IF_INT_EQUAL(LF(3), 0)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
             ELSE
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(1), LW(3))
             END_IF
-#else
-            CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
-#endif
         ELSE
-#if VERSION >= VERSION_DEMO_EU
             IF_INT_EQUAL(LF(3), 0)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_re_361"), 0, STRING("キノシコワ"), LW(3), LW(1))
             ELSE
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_re_361"), 0, STRING("キノシコワ"), LW(1), LW(3))
             END_IF
-#else
-            CALL(evt_msg_print_insert, 0, STRING("stg3_tou_re_361"), 0, STRING("キノシコワ"), LW(3), LW(1))
-#endif
         END_IF
+#else
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG3_34_RETURN_TO_ROGUEPORT)
+            CALL(evt_msg_print_insert, 0, STRING("stg3_tou_107_00"), 0, STRING("ガンス"), LW(3), LW(1))
+        ELSE
+            CALL(evt_msg_print_insert, 0, STRING("stg3_tou_re_361"), 0, STRING("キノシコワ"), LW(3), LW(1))
+        END_IF
+#endif
     END_IF
+
     // The special condition for this match is read out and stored for the battle.
-    CALL(evt_tou_get_rule_info, GSW(GSW_TOU_OPPONENT_ID), LW(10), LW(13), LW(14), LW(15))
-    SET_VALUE(GSW(GSW_TOU_MATCH_RULE), LW(13))
-    SET_VALUE(GSW(GSW_TOU_MATCH_RULE_PARAM1), LW(14))
-    SET_VALUE(GSW(GSW_TOU_MATCH_RULE_PARAM2), LW(15))
+    CALL(evt_tou_get_rule_info, GSW_GLITZ_PIT_OPPONENT, LW(10), LW(13), LW(14), LW(15))
+    SET_VALUE(GSW_GLITZ_PIT_CONDITION, LW(13))
+    SET_VALUE(GSW_GLITZ_PIT_CONDITION_PARAM, LW(14))
+    SET_VALUE(GSW_GLITZ_PIT_CONDITION_PARAM2, LW(15))
     CALL(evt_msg_print_add, 0, LW(10))
+
     // The screen goes dark and the guard is sent for.
     CALL_CHILD(evt_tou_monitor_off)
     WAIT_MS(500)
@@ -2101,22 +2266,24 @@ EVT_BEGIN(evt_tou_match_make_default_sub)
         CALL_CHILD(bero_case_switch_off)
     END_IF
 #endif
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+
     // At 3rd place the poisoned cake is delivered once.
     CALL(evt_tou_get_ranking, LW(0))
     IF_INT_EQUAL(LW(0), 3)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_POISON_CAKE_EVENT), 0)
-            SET_VALUE(GSWF(GSWF_TOU_POISON_CAKE_EVENT), 1)
+        IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_DELIVERED, 0)
+            SET_VALUE(GSWF_TOU_POISON_CAKE_DELIVERED, 1)
             CALL_CHILD(evt_doku_cake)
         END_IF
     END_IF
+
     // The guard comes to fetch Mario; booking King K's match plays his good-luck scene the first time.
     SPAWN_EVENT(evt_gardman)
-    SET_VALUE(GSWF(GSWF_TOU_MATCH_RESERVED), 1)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_34_RETURN_TO_ROGUEPORT)
-        IF_INT_EQUAL(GSW(GSW_TOU_OPPONENT_ID), 18)
-            IF_INT_EQUAL(GSWF(GSWF_TOU_KING_K_MATCH_SCENE), 0)
-                SET_VALUE(GSWF(GSWF_TOU_KING_K_MATCH_SCENE), 1)
+    SET_VALUE(GSWF_GLITZ_PIT_MATCH_RESERVED, 1)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG3_34_RETURN_TO_ROGUEPORT)
+        IF_INT_EQUAL(GSW_GLITZ_PIT_OPPONENT, 18)
+            IF_INT_EQUAL(GSWF_TOU_KING_K_PREMATCH_TALK_SEEN, 0)
+                SET_VALUE(GSWF_TOU_KING_K_PREMATCH_TALK_SEEN, 1)
                 CALL_CHILD(evt_michel_1)
             END_IF
         END_IF
@@ -2127,7 +2294,7 @@ EVT_END()
 /**
  * Interaction with the match registration console ("M_make"):
  * prints the registration prompt and lets Mario reserve a match, picking the opponent and rule.
- * Returns without effect if Mario's controls are disabled.
+ * JP and later return without effect if Mario's controls are disabled.
  */
 EVT_BEGIN(evt_tou_match_make_default)
 #if VERSION >= VERSION_JP
@@ -2136,7 +2303,6 @@ EVT_BEGIN(evt_tou_match_make_default)
         RETURN
     END_IF
 #endif
-    // The terminal beeps and the reservation texts for this locker room are picked.
     CALL(evt_hit_get_position, STRING("M_make"), LW(10), LW(11), LW(12))
     CALL(evt_snd_sfxon_3d, STRING("SFX_STG3_TOUROKU_COM1"), LW(10), LW(11), LW(12), 0)
     SET_VALUE(LF(0), 0)
@@ -2168,17 +2334,14 @@ EVT_BEGIN(evt_tou_match_make_default)
         SET_VALUE(LW(11), STRING("stg3_tou_476_yn"))
         SET_VALUE(LW(12), STRING("stg3_tou_477_01"))
     END_IF
-    // Mario chooses Reserve a Match or View Rankings.
     CALL(evt_msg_print, 0, LW(10), 0, 0)
     CALL(evt_msg_select, 0, LW(11))
     SWITCH(LW(0))
         CASE_EQUAL(0)
-        // Reservations are suspended at some story points,
-        // and a major-leaguer must use the major-league terminal.
         SET_VALUE(LF(10), 0)
         SET_VALUE(LF(11), 0)
-        SWITCH(GSW(GSW_STORY_PROGRESS))
-            CASE_BETWEEN(STORY_STG3_20_00_MAJORS_8TH_PLACE, STORY_STG3_20_03_THE_YELLOW_BLOCK)
+        SWITCH(GSW_STORY_PROGRESS)
+            CASE_BETWEEN(STG3_20_00_MAJORS_8TH_PLACE, STG3_20_03_THE_YELLOW_BLOCK)
             SET_VALUE(LF(10), 1)
             IF_INT_EQUAL(LF(0), 1)
                 CALL(evt_tou_get_ranking, LW(0))
@@ -2187,24 +2350,24 @@ EVT_BEGIN(evt_tou_match_make_default)
                     SET_VALUE(LF(11), 1)
                 END_IF
             END_IF
-            CASE_EQUAL(STORY_STG3_20_04_CONFISCATED)
+            CASE_EQUAL(STG3_20_04_CONFISCATED)
             IF_INT_EQUAL(LF(0), 1)
                 CALL(evt_tou_get_ranking, LW(0))
                 IF_INT_LESS(LW(0), 11)
                     SET_VALUE(LF(11), 1)
                 END_IF
             END_IF
-            CASE_BETWEEN(STORY_STG3_20_05_MAJORS_4TH_PL, STORY_STG3_20_11_HOLE_IN_THE_FLOOR)
+            CASE_BETWEEN(STG3_20_05_MAJORS_4TH_PL, STG3_20_11_HOLE_IN_THE_FLOOR)
             SET_VALUE(LF(10), 1)
-            CASE_BETWEEN(STORY_STG3_20_13_MAJORS_1ST_PL, STORY_STG3_20_15_UNLOCKING_THE_DOOR)
+            CASE_BETWEEN(STG3_20_13_MAJORS_1ST_PL, STG3_20_15_UNLOCKING_THE_DOOR)
             SET_VALUE(LF(10), 1)
 #if VERSION <= VERSION_DEMO_JP
-            CASE_EQUAL(STORY_STG3_31_GRUBBAS_PLANS)
+            CASE_EQUAL(STG3_31_GRUBBAS_PLANS)
 #else
-            CASE_BETWEEN(STORY_STG3_30_NEW_CHAMPION, STORY_STG3_31_GRUBBAS_PLANS)
+            CASE_BETWEEN(STG3_30_A_NEW_CHAMPION, STG3_31_GRUBBAS_PLANS)
 #endif
             SET_VALUE(LF(10), 1)
-            CASE_GREATER_OR_EQUAL(STORY_STG3_34_RETURN_TO_ROGUEPORT)
+            CASE_GREATER_OR_EQUAL(STG3_34_RETURN_TO_ROGUEPORT)
             IF_INT_EQUAL(LF(0), 1)
                 CALL(evt_tou_get_ranking, LW(0))
                 IF_INT_EQUAL(LW(0), 10)
@@ -2212,10 +2375,9 @@ EVT_BEGIN(evt_tou_match_make_default)
                 END_IF
             END_IF
         END_SWITCH
-        // Reservations suspended: the system says so and the partner comments.
         IF_INT_EQUAL(LF(10), 1)
             CALL(evt_party_stop, 0)
-            CALL(evt_msg_print_add, 1, STRING("<scrl_auto><once_stop>"))
+            CALL(evt_msg_print_add, MSG_PRINT_DIRECT_TEXT, STRING("<scrl_auto><once_stop>"))
             CALL(evt_msg_print_add, 0, STRING("stg3_tou_106_02"))
             CALL(evt_party_get_pos, 0, LW(0), LW(1), LW(2))
             CALL(evt_mario_get_pos, 0, LW(3), LW(4), LW(5))
@@ -2229,24 +2391,21 @@ EVT_BEGIN(evt_tou_match_make_default)
             CALL(evt_mario_key_onoff, 1)
             RETURN
         END_IF
-        // Wrong locker room for Mario's league.
         IF_INT_EQUAL(LF(11), 1)
-            CALL(evt_msg_print_add, 1, STRING("<scrl_auto><once_stop>"))
+            CALL(evt_msg_print_add, MSG_PRINT_DIRECT_TEXT, STRING("<scrl_auto><once_stop>"))
             CALL(evt_msg_print_add, 0, STRING("stg3_tou_104_01_1"))
             CALL(evt_mario_key_onoff, 1)
             RETURN
         END_IF
-        // A match already booked is repeated with its opponent and condition; otherwise a new one is booked.
-        IF_INT_EQUAL(GSWF(GSWF_TOU_MATCH_RESERVED), 1)
-            CALL(evt_tou_get_fighter_info, GSW(GSW_TOU_OPPONENT_ID), LW(0), LW(1))
-            CALL(evt_tou_get_rule_msg2, GSW(GSW_TOU_MATCH_RULE), LW(2))
-            CALL(evt_msg_print_add, 1, STRING("<scrl_auto><once_stop>"))
+        IF_INT_EQUAL(GSWF_GLITZ_PIT_MATCH_RESERVED, 1)
+            CALL(evt_tou_get_fighter_info, GSW_GLITZ_PIT_OPPONENT, LW(0), LW(1))
+            CALL(evt_tou_get_rule_msg2, GSW_GLITZ_PIT_CONDITION, LW(2))
+            CALL(evt_msg_print_add, MSG_PRINT_DIRECT_TEXT, STRING("<scrl_auto><once_stop>"))
             CALL(evt_msg_print_add_insert, 0, LW(12), LW(0), LW(2))
         ELSE
             CALL(evt_msg_continue)
             CALL_CHILD(evt_tou_match_make_default_sub)
         END_IF
-        // View Rankings shows the ranking board.
         CASE_EQUAL(1)
         CALL(evt_msg_continue)
         CALL(evt_tou_print_ranking)
@@ -2258,7 +2417,7 @@ EVT_BEGIN(evt_tou_match_make_default)
 EVT_END()
 
 /** Talk script of the poison cake: Mario gets a message (stg3_tou_307_04). */
-EVT_BEGIN(evt_talk_doku_cake)
+static EVT_BEGIN(evt_talk_doku_cake)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_msg_print, 0, STRING("stg3_tou_307_04"), 0, STRING("me"))
     CALL(evt_mario_key_onoff, 1)
@@ -2267,7 +2426,6 @@ EVT_END()
 
 /** Mario's decision to eat the poison cake: partner remark, a yes/no prompt and, on yes, the eating sequence. */
 EVT_BEGIN(evt_eat_doku_cake)
-    // The partner comes over and comments; the game asks whether to eat the cake and No ends the scene.
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
 #if VERSION >= VERSION_JP
@@ -2290,7 +2448,6 @@ EVT_BEGIN(evt_eat_doku_cake)
         CALL(evt_party_run, 0)
         RETURN
     END_IF
-    // Mario and the partner step up to the table and the partner gobbles the cake.
 #if VERSION >= VERSION_JP
     CALL(evt_party_flg_onoff, 0, 16777216, 1)
 #endif
@@ -2321,39 +2478,41 @@ EVT_BEGIN(evt_eat_doku_cake)
     END_INLINE_EVENT
     WAIT_MS(1000)
     DELETE_EVENT(LW(0))
-    // The partner starts to feel funny, the music stops and a surprise jingle plays.
     CALL(evt_msg_print_party, STRING("stg3_tou_300"))
     WAIT_MS(300)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envoff, PSND_FADE_OUT)
-    CALL(evt_eff_fukidashi, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envoff, PSND_FADEOUT)
+    CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT
-        CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-        CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_ENV_SURPRISED2"))
+        CALL(evt_snd_bgmoff, PSND_PAUSE)
+        CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_ENV_SURPRISED2"))
         WAIT_MS(1000)
-        CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-        CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+        CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+        CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     END_INLINE_EVENT
-    // The partner, now standing apart as an NPC, says their body is going numb.
     CALL_CHILD(party_npc_replace)
     WAIT_MS(300)
     CALL(evt_mario_get_party, LW(3))
     SWITCH(LW(3))
-        CASE_EQUAL(PARTY_MEMBER_GOOMBELLA)
+        CASE_EQUAL(1)
         CALL(evt_msg_print, 0, STRING("stg3_tou_301_kur"), 0, STRING("dummy_party"))
-        CASE_EQUAL(PARTY_MEMBER_KOOPS)
+        CASE_EQUAL(2)
         CALL(evt_msg_print, 0, STRING("stg3_tou_301_nok"), 0, STRING("dummy_party"))
-        CASE_EQUAL(PARTY_MEMBER_FLURRIE)
+        CASE_EQUAL(5)
         CALL(evt_msg_print, 0, STRING("stg3_tou_301_win"), 0, STRING("dummy_party"))
-        CASE_EQUAL(PARTY_MEMBER_YOSHI)
+        CASE_EQUAL(4)
         CALL(evt_msg_print, 0, STRING("stg3_tou_301_yos"), 0, STRING("dummy_party"))
     END_SWITCH
     WAIT_MS(300)
+
     // The cake is gone and the partner is poisoned: all partners leave the party until after the next match.
-    SET_VALUE(GSWF(GSWF_TOU_POISON_CAKE_ON_TABLE), 0)
-    SET_VALUE(GSWF(GSWF_TOU_PARTNER_POISONED), 1)
-#if VERSION >= VERSION_JP
+#if VERSION <= VERSION_DEMO_JP
+    SET_VALUE(GSWF_TOU_POISON_CAKE_ON_TABLE_UNUSED, 0)
+    SET_VALUE(GSWF_TOU_POISON_CAKE_EATEN, 1)
+#else
+    SET_VALUE(GSWF_TOU_POISON_CAKE_ON_TABLE_UNUSED, 0)
+    SET_VALUE(GSWF_TOU_POISON_CAKE_EATEN, 1)
     CALL(evt_party_flg_onoff, 0, 16777216, 0)
 #endif
     CALL(evt_party_stop, 0)
@@ -2362,20 +2521,18 @@ EVT_BEGIN(evt_eat_doku_cake)
     CALL(evt_pouch_party_left, 2)
     CALL(evt_pouch_party_left, 5)
     CALL(evt_pouch_party_left, 4)
-    // The locker room music returns and Mario can move again.
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
-    CALL(evt_snd_bgmoff, PSND_FADE_DIP_TO(70))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG3_TOU6"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
+    CALL(evt_snd_bgmoff, PSND_SILENT | PSND_SILENT_LEVEL(6))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG3_TOU6"))
     CALL(evt_mario_key_onoff, 1)
     CALL(evt_exit_case_evt)
     RETURN
 EVT_END()
 
 /**
- * Poisoned cake delivery, run once at rank 3 (GSWF_TOU_POISON_CAKE_EVENT) when a match is booked: Jolene
- * (キノシコワ) comes in through the door, says another gift arrived from an admirer (stg3_tou_295_doku), sets the
- * Poisoned Cake down (doku_cake, with the eat case event evt_eat_doku_cake on a_cake), leaves, and
- * GSWF_TOU_POISON_CAKE_ON_TABLE is set.
+ * At 3rd place, once (GSWF_TOU_POISON_CAKE_DELIVERED, set by the caller): after 2 s Jolene comes in through door_1 with
+ * the door sounds, says stg3_tou_295_doku and leaves the poisoned cake (ITEM_POISONED_CAKE, not touchable, partner
+ * cannot take it) on the table, then she is put away and GSWF_TOU_POISON_CAKE_ON_TABLE_UNUSED is set.
  */
 EVT_BEGIN(evt_doku_cake)
     WAIT_MS(2000)
@@ -2383,7 +2540,7 @@ EVT_BEGIN(evt_doku_cake)
     CALL(evt_npc_set_ry, STRING("キノシコワ"), 270)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -2397,7 +2554,7 @@ EVT_BEGIN(evt_doku_cake)
         WAIT_MS(1000)
         SET_VALUE(LW(1), 0)
         SPAWN_EVENT(bero_close_door_play_se)
-        CALL(evt_sub_intpl_msec_init, 11, -180, 0, 500)
+        CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -180, 0, 500)
         LOOP(0)
             CALL(evt_sub_intpl_msec_get_value)
             MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -2418,16 +2575,16 @@ EVT_BEGIN(evt_doku_cake)
     CALL(evt_msg_print, 0, STRING("stg3_tou_295_doku"), 0, STRING("キノシコワ"))
     CALL(evt_npc_set_ry, STRING("キノシコワ"), 90)
     WAIT_MS(300)
-    CALL(evt_item_entry, STRING("doku_cake"), ITEM_POISONED_CAKE, 20, 25, -25, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+    CALL(evt_item_entry, STRING("doku_cake"), ITEM_POISONED_CAKE, 20, 25, -25, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
 #if VERSION >= VERSION_JP
-    CALL(evt_item_status_on, STRING("doku_cake"), ITEM_STATUS_NO_KOOPS)
+    CALL(evt_item_status_on, STRING("doku_cake"), ITEM_FLAG2_NO_PARTNER)
 #endif
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_cake"), 0, PTR(evt_eat_doku_cake), 0)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_cake"), 0, PTR(evt_eat_doku_cake), 0)
     WAIT_MS(500)
     CALL(evt_npc_move_position, STRING("キノシコワ"), 0, -130, 0, FLOAT(80.0f), 1)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -2441,7 +2598,7 @@ EVT_BEGIN(evt_doku_cake)
     CALL(evt_npc_set_position, STRING("キノシコワ"), 0, -1000, 0)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -2451,47 +2608,50 @@ EVT_BEGIN(evt_doku_cake)
             BREAK_LOOP
         END_IF
     END_LOOP
-    SET_VALUE(GSWF(GSWF_TOU_POISON_CAKE_ON_TABLE), 1)
+    SET_VALUE(GSWF_TOU_POISON_CAKE_ON_TABLE_UNUSED, 1)
     RETURN
 EVT_END()
 
 /**
- * King K (マイケル) before Mario's match against him (opponent 18, once: GSWF_TOU_KING_K_MATCH_SCENE): Mario and
- * the partner turn to him and he wishes both of them luck (stg3_npc_10_01_01).
+ * King K's good-luck scene the first time his match is booked (GSW_GLITZ_PIT_OPPONENT 18,
+ * GSWF_TOU_KING_K_PREMATCH_TALK_SEEN): Mario and the partner face him, he walks up and says stg3_npc_10_01_01.
  */
-EVT_BEGIN(evt_michel_1)
+static EVT_BEGIN(evt_michel_1)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_set_dir_npc, STRING("マイケル"))
         CALL(evt_party_set_dir_npc, 0, STRING("マイケル"))
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -20, 93, 290, -20, 57, -8, 1000, 11)
+    CALL(evt_cam3d_evt_set, -20, 93, 290, -20, 57, -8, 1000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 40, -80, 0, FLOAT(60.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_npc_10_01_01"), 0, STRING("マイケル"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     RETURN
 EVT_END()
 
 /**
- * King K at rank 18 (once): he walks up, admits Mario beat him fair and square (stg3_npc_10_01_02) and walks
- * back.
+ * King K's talk at rank 18 (GSWF_TOU_RANK_18_KING_K_TALK_DONE): he walks over, says stg3_npc_10_01_02 and goes back to
+ * his spot facing 270.
  */
-EVT_BEGIN(evt_michel_2)
-    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, 11)
+static EVT_BEGIN(evt_michel_2)
+    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 0, -80, 0, FLOAT(60.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_npc_10_01_02"), 0, STRING("マイケル"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 90, -90, 0, FLOAT(60.0f), 1)
     CALL(evt_npc_set_ry, STRING("マイケル"), 270)
     RETURN
 EVT_END()
 
-/** Door helper: the NPC named in LW(0) walks out through door_1 and is hidden at y = -1000 once the door has closed. */
-EVT_BEGIN(evt_michel_3_sub)
+/**
+ * Walks the NPC named in LW(0) out of the locker room: to the door, opens door_1 with its sound, out through it and
+ * away (y -1000), then shuts the door; used by evt_michel_3.
+ */
+static EVT_BEGIN(evt_michel_3_sub)
     SET_VALUE(LW(3), LW(0))
     CALL(evt_npc_move_position, LW(3), 0, -130, 0, FLOAT(80.0f), 1)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -2508,7 +2668,7 @@ EVT_BEGIN(evt_michel_3_sub)
     WAIT_MS(800)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -2522,24 +2682,23 @@ EVT_BEGIN(evt_michel_3_sub)
 EVT_END()
 
 /**
- * King K at rank 17 (once): he greets Mario (stg3_tou_93_17, 18); Jolene (キノシコワ) pushes the fighter ブロッツ in
- * through the door and scolds him for entering the off-limits room (stg3_tou_93_19, 20) and leaves; King K and
- * ブロッツ banter about her (stg3_tou_93_21 to 23_01) and ブロッツ leaves too (evt_michel_3_sub).
+ * King K's talk at rank 17 (GSWF_TOU_RANK_17_KING_K_TALK_DONE): he speaks (stg3_tou_93_17, 18), Jolene comes in with
+ * Bandy Andy and leaves after 93_19 / 20; King K and Bandy Andy talk (21 to 23_01) and he leaves (evt_michel_3_sub).
  */
-EVT_BEGIN(evt_michel_3)
+static EVT_BEGIN(evt_michel_3)
     CALL(evt_set_dir_to_target, STRING("マイケル"), STRING("mario"))
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_17"), 0, STRING("マイケル"))
-    CALL(evt_cam3d_evt_set, 100, 93, 290, 100, 57, -8, 1000, 11)
+    CALL(evt_cam3d_evt_set, 100, 93, 290, 100, 57, -8, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_18"), 0, STRING("マイケル"))
     CALL(evt_npc_set_position, STRING("ブロッツ"), 0, 0, -200)
     CALL(evt_npc_set_position, STRING("キノシコワ"), 0, 0, -170)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_19"), 0, STRING("キノシコワ"))
-    CALL(evt_cam3d_evt_set, 0, 112, 287, 0, 60, -8, 1000, 11)
+    CALL(evt_cam3d_evt_set, 0, 112, 287, 0, 60, -8, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(-0.44433594f))
@@ -2551,18 +2710,18 @@ EVT_BEGIN(evt_michel_3)
     END_LOOP
     BEGIN_INLINE_EVENT
         WAIT_MS(400)
-        CALL(evt_npc_status_onoff, 1, STRING("ブロッツ"), 2)
+        CALL(evt_npc_status_onoff, 1, STRING("ブロッツ"), NPC_STATUS_FACE_MOVE_DIR)
         CALL(evt_npc_move_position, STRING("ブロッツ"), 1, -75, 0, FLOAT(80.0f), 1)
         CALL(evt_npc_move_position, STRING("ブロッツ"), -25, -75, 0, FLOAT(80.0f), 1)
         CALL(evt_set_dir_to_target, STRING("ブロッツ"), STRING("キノシコワ"))
     END_INLINE_EVENT
-    CALL(evt_npc_status_onoff, 1, STRING("キノシコワ"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("キノシコワ"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_move_position, STRING("キノシコワ"), 1, -75, 0, FLOAT(80.0f), 1)
     CALL(evt_npc_move_position, STRING("キノシコワ"), 25, -75, 0, FLOAT(80.0f), 1)
     CALL(evt_set_dir_to_target, STRING("キノシコワ"), STRING("ブロッツ"))
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(-0.44433594f))
@@ -2586,30 +2745,30 @@ EVT_BEGIN(evt_michel_3)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_23_01"), 0, STRING("ブロッツ"))
     SET_VALUE(LW(0), STRING("ブロッツ"))
     CALL_CHILD(evt_michel_3_sub)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 90, -90, 0, FLOAT(60.0f), 1)
     CALL(evt_npc_set_ry, STRING("マイケル"), 270)
     RETURN
 EVT_END()
 
 /**
- * King K at rank 16 (once): he praises Mario (stg3_tou_93_24), a scream comes through the wall
- * (stg3_tou_93_24_01, with Mario's and his "!" bubbles), the camera pans along the wall while voices behind it
- * treat someone's injury (24_02 to 24_10), and King K remarks that this is a brutal sport (24_11, 24_12).
+ * King K's talk at rank 16 (GSWF_TOU_RANK_16_KING_K_TALK_DONE): he says stg3_tou_93_24, Mario, the partner and King K
+ * are startled, and the camera pans along the room while unseen voices speak (stg3_tou_93_24_01 to 24_10, balloons
+ * placed at positions), then King K talks again (24_11, 24_12).
  */
-EVT_BEGIN(evt_michel_4)
-    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, 11)
+static EVT_BEGIN(evt_michel_4)
+    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 0, -80, 0, FLOAT(60.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24"), 0, STRING("マイケル"))
     BEGIN_INLINE_EVENT
         WAIT_MS(400)
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_2"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-        CALL(evt_eff_fukidashi, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
-        CALL(evt_eff_fukidashi, 1, 0, STRING("マイケル"), 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_PARTNER, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_NPC, 0, STRING("マイケル"), 0, 0, 0, 0, 0, 0, 0, 0)
     END_INLINE_EVENT
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_01"), 0, 0)
     BEGIN_INLINE_EVENT
         WAIT_MS(1000)
@@ -2619,12 +2778,12 @@ EVT_BEGIN(evt_michel_4)
         WAIT_MS(1000)
         CALL(evt_party_set_dir, 0, 270, 300)
     END_INLINE_EVENT
-    CALL(evt_cam3d_evt_set, -165, 105, 288, -165, 60, -9, 2000, 11)
+    CALL(evt_cam3d_evt_set, -165, 105, 288, -165, 60, -9, 2000, EASING_SINE_IN_OUT)
     WAIT_MS(2000)
-    CALL(evt_cam3d_evt_set, 185, 105, 288, 185, 60, -9, 15000, 11)
-    CALL(evt_msg_toge, 2, -165, 50, -200)
+    CALL(evt_cam3d_evt_set, 185, 105, 288, 185, 60, -9, 15000, EASING_SINE_IN_OUT)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, -165, 50, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_02"), 0, 0)
-    CALL(evt_msg_toge, 2, -125, 40, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, -125, 40, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_03"), 0, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_mario_set_dir, 90, 300, 0)
@@ -2632,22 +2791,22 @@ EVT_BEGIN(evt_michel_4)
     BEGIN_INLINE_EVENT
         CALL(evt_party_set_dir, 0, 90, 300)
     END_INLINE_EVENT
-    CALL(evt_msg_toge, 2, -85, 20, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, -85, 20, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_04"), 0, 0)
-    CALL(evt_msg_toge, 2, -45, 50, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, -45, 50, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_05"), 0, 0)
-    CALL(evt_msg_toge, 2, 0, 40, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, 0, 40, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_06"), 0, 0)
     CALL(evt_npc_set_ry, STRING("マイケル"), 90)
-    CALL(evt_msg_toge, 2, 45, 10, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, 45, 10, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_07"), 0, 0)
-    CALL(evt_msg_toge, 2, 85, 30, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, 85, 30, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_08"), 0, 0)
-    CALL(evt_msg_toge, 2, 125, 40, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, 125, 40, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_09"), 0, 0)
-    CALL(evt_msg_toge, 2, 165, 50, -200)
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, 165, 50, -200)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_10"), 0, 0)
-    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 1000, 11)
+    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_11"), 0, STRING("マイケル"))
     WAIT_MS(200)
@@ -2655,111 +2814,47 @@ EVT_BEGIN(evt_michel_4)
     WAIT_MS(200)
     CALL(evt_set_dir_to_target, STRING("マイケル"), STRING("mario"))
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_24_12"), 0, STRING("マイケル"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 90, -90, 0, FLOAT(60.0f), 1)
     CALL(evt_npc_set_ry, STRING("マイケル"), 270)
     RETURN
 EVT_END()
 
-/** King K at rank 15 (once): he tells Mario about the Hot Dog Stand's new item (stg3_tou_93_25). */
-EVT_BEGIN(evt_michel_5)
-    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, 11)
+/**
+ * King K's talk at rank 15 (GSWF_TOU_RANK_15_KING_K_TALK_DONE): he walks over, says stg3_tou_93_25 and goes back to his
+ * spot.
+ */
+static EVT_BEGIN(evt_michel_5)
+    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 0, -80, 0, FLOAT(60.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_25"), 0, STRING("マイケル"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 90, -90, 0, FLOAT(60.0f), 1)
     CALL(evt_npc_set_ry, STRING("マイケル"), 270)
     RETURN
 EVT_END()
 
-/** King K at rank 14 (once): he passes on a rumour about a girl seen at the Fresh Juice Shop (stg3_tou_93_26). */
-EVT_BEGIN(evt_michel_6)
-    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, 11)
+/** King K's talk at rank 14 (GSWF_TOU_RANK_14_KING_K_TALK_DONE): as evt_michel_5 with stg3_tou_93_26. */
+static EVT_BEGIN(evt_michel_6)
+    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 0, -80, 0, FLOAT(60.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_26"), 0, STRING("マイケル"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 90, -90, 0, FLOAT(60.0f), 1)
     CALL(evt_npc_set_ry, STRING("マイケル"), 270)
     RETURN
 EVT_END()
 
-/** King K at rank 13 (once): he confides that he is thinking of retiring after his next match (stg3_tou_93_27). */
-EVT_BEGIN(evt_michel_7)
-    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, 11)
+/** King K's talk at rank 13 (GSWF_TOU_RANK_13_KING_K_TALK_DONE): as evt_michel_5 with stg3_tou_93_27. */
+static EVT_BEGIN(evt_michel_7)
+    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 0, -80, 0, FLOAT(60.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_27"), 0, STRING("マイケル"))
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("マイケル"), 90, -90, 0, FLOAT(60.0f), 1)
     CALL(evt_npc_set_ry, STRING("マイケル"), 270)
     RETURN
 EVT_END()
-
-/**
- * Script helper: sets up and renders the monitor texture each frame.
- * Allocates the work area and a 128x128 texture, fades the screen alpha toward on/off, and queues gans_tex.
- * Blocks forever as the owning script.
- */
-static USER_FUNC(make_monitor) {
-    NpcEntry* npc = npcNameToPtr_NoAssert(evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG3_34_RETURN_TO_ROGUEPORT ? "ガンス" : "キノシコワ");
-    GansWork* wp;
-
-    if (isFirstCall) {
-        wp = _mapAlloc(sizeof(GansWork));
-        event->userdatap[0] = wp;
-        wp->onoff = 0;
-        wp->ready = 0;
-    }
-    if (npc == NULL) {
-        return EVT_RETURN_BLOCK;
-    }
-    wp = event->userdatap[0];
-    gans_wp = wp;
-    wp->buf = smartAlloc(GXGetTexBufferSize(0x80, 0x80, GX_TF_RGB5A3, GX_FALSE, 0), 3);
-    GXInitTexObj(&wp->tex, wp->buf->address, 0x80, 0x80, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
-    GXInitTexObjLOD(&wp->tex, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    if (gans_wp->onoff) {
-        gans_wp->alpha += 4;
-        if (gans_wp->alpha > 0x80) {
-            gans_wp->alpha = 0x80;
-        }
-    } else {
-        gans_wp->alpha -= 4;
-        if (gans_wp->alpha < 0) {
-            gans_wp->alpha = 0;
-        }
-    }
-    dispEntry(CAMERA_SHADOW, 0.0f, 3, gans_tex, wp);
-    return EVT_RETURN_BLOCK;
-}
-
-/**
- * TEV callback for the monitor screen: replaces the screen's color stages with the live texture,
- * blended by the work alpha, once the texture has been rendered at least once.
- */
-static void monitor_tev(MapTevCallbackInfo* info) {
-    if (gans_wp->ready) {
-        GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, 60, GX_FALSE, GX_PTIDENTITY);
-        GXLoadTexObj(smartTexObj(&gans_wp->tex, &gans_wp->buf->address), GX_TEXMAP1);
-        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
-        GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
-        GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
-        GXSetTevSwapMode(GX_TEVSTAGE0, GX_TEV_SWAP0, GX_TEV_SWAP0);
-        GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
-        GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_TEXC, GX_CC_CPREV, GX_CC_A0, GX_CC_ZERO);
-        GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
-        GXSetTevSwapMode(GX_TEVSTAGE1, GX_TEV_SWAP0, GX_TEV_SWAP0);
-        {
-            GXSetTevColor(GX_TEVREG0, tou_mkcolor(gans_wp->alpha));
-        }
-        info->tevStage = 2;
-        info->texMap = 2;
-        info->texCoord = 2;
-    }
-}
 
 /** Script helper: args[0] = 1/0 to fade the registration monitor in or out. */
 static USER_FUNC(onoff) {
@@ -2770,19 +2865,23 @@ static USER_FUNC(onoff) {
 /** Script helper: args[0] receives Yoshi's color (0-6) from the pouch. */
 static USER_FUNC(getYoshiColor) {
     EvtWord* args = event->args;
-    evtSetValue(event, args[0], pouchGetPartyColor(4));
+    evtSetValue(event, args[0], pouchGetPartyColor(PARTY_YOSHI));
     return EVT_RETURN_DONE;
 }
 
 /** Script helper: args[0] receives 1 if Yoshi is currently in the party, else 0. */
 static USER_FUNC(chk) {
     EvtWord* args = event->args;
-    evtSetValue(event, args[0], partyChkJoin(4) != 0);
+    evtSetValue(event, args[0], partyChkJoin(PARTY_YOSHI) != 0);
     return EVT_RETURN_DONE;
 }
 
+/**
+ * Script helper: waits until Mario has been idle, walking or dashing (and not locked out) for 241 frames in total.
+ * Descriptive name (not in the symbol maps); placeholder unk_tou_0000063c, JP tou .text+0x578. See docs/NAME_PROVENANCE.md.
+ */
+// Accumulate 241 eligible checks; ineligible controls or motions pause rather than reset the count.
 #if VERSION >= VERSION_JP
-/** Script helper: waits until Mario has been idle, walking or dashing (and not locked out) for 240 frames in total. */
 USER_FUNC(tou_mario_free_wait) {
     MarioWork* mario = marioGetPtr();
 
@@ -2805,8 +2904,12 @@ USER_FUNC(tou_mario_free_wait) {
 USER_FUNC(tou_mario_talk_end_wait) {
     return marioGetPtr()->currMotionId != MARIO_MOTION_TALK ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
 }
-#elif VERSION >= VERSION_JP
-/** Script helper: args[0] receives 1 if Mario's key input or control is currently disabled, else 0. */
+#else
+/**
+ * Script helper: args[0] receives 1 if Mario's key input or control is currently disabled, else 0.
+ * Descriptive name (not in the symbol maps); placeholder unk_tou_000005d0, JP tou .text+0x50C. See docs/NAME_PROVENANCE.md.
+ */
+#if VERSION >= VERSION_JP
 USER_FUNC(tou_mario_keyoff_check) {
     EvtWord* args = event->args;
 
@@ -2817,6 +2920,7 @@ USER_FUNC(tou_mario_keyoff_check) {
     }
     return EVT_RETURN_DONE;
 }
+#endif
 #endif
 
 /** Script helper: stops Octor's regular script and parks him at (80, 0, 85) facing 270 degrees. */
@@ -2843,8 +2947,9 @@ static USER_FUNC(octo_start) {
 }
 
 /**
- * Script helper: args[0] = Mario's rank, args[1] = won?, args[2] receives the coin payout:
- * 1 on a loss, 20 for the title match, and otherwise a payout growing as the opponent's rank rises.
+ * Script helper: args[0] = Mario's rank after the match, args[1] = won?, args[2] receives the coin payout:
+ * 1 on a loss, 20 on a win that leaves Mario at rank 0 (the champion's seat), and otherwise a payout that grows
+ * as Mario's rank number falls.
  */
 static USER_FUNC(fight_money) {
     EvtWord* args = event->args;
@@ -2884,7 +2989,7 @@ static f32 camGetRy(void) {
  * hides it when the NPC is below the floor or the belt is switched off.
  */
 USER_FUNC(tou_champion_belt) {
-    void** udPtr; // FAKE: alias of &eff->userdata; a typed StarStoneWork* local or direct eff->userdata changes codegen
+    EffStarStoneWork** work;
     EffectEntry* eff;
     s32 idx;
     Vec* positions;
@@ -2900,55 +3005,59 @@ USER_FUNC(tou_champion_belt) {
         champion_belt_onoff = 0;
     }
     pose = animPoseGetAnimPosePtr(npc->poseId);
-    positions = *pose->worldPositions;
+    positions = (Vec*)pose->worldPositions->address;
     idx = animPoseGetGroupIdx(npc->poseId, "locator8");
     angle = reviseAngle(camGetRy() - pose->rotationY);
     eff = event->userdatap[0];
-    udPtr = &eff->userdata;
-    ((StarStoneWork*)(*udPtr))->pos.x = positions[idx].x;
-    ((StarStoneWork*)(*udPtr))->pos.y = positions[idx].y;
-    ((StarStoneWork*)(*udPtr))->pos.z = positions[idx].z;
+
+    // FAKE: the work is read through a pointer to the userdata slot, so userdata is reloaded at every store (as in
+    // tou2's copy of this function; a plain EffStarStoneWork* local or a cast per access changes the code)
+    work = (EffStarStoneWork**)&eff->userdata;
+    (*work)->position.x = positions[idx].x;
+    (*work)->position.y = positions[idx].y;
+    (*work)->position.z = positions[idx].z;
     if ((angle > 90.0f && angle <= 270.0f) || (angle < -90.0f && angle >= -270.0f)) {
-        ((StarStoneWork*)(*udPtr))->rot = 8.0f - (angle + camGetPtr(CAMERA_3D)->viewYaw);
+        (*work)->rot.y = 8.0f - (angle + camGetPtr(CAMERA_3D)->viewYaw);
     } else {
-        ((StarStoneWork*)(*udPtr))->rot = -(angle + camGetPtr(CAMERA_3D)->viewYaw) - 8.0f;
+        (*work)->rot.y = -(angle + camGetPtr(CAMERA_3D)->viewYaw) - 8.0f;
     }
     if (npc->position.y <= -1000.0f) {
-        ((StarStoneWork*)(*udPtr))->pos.x = 0.0f;
-        ((StarStoneWork*)(*udPtr))->pos.y = -1000.0f;
-        ((StarStoneWork*)(*udPtr))->pos.z = 0.0f;
+        (*work)->position.x = 0.0f;
+        (*work)->position.y = -1000.0f;
+        (*work)->position.z = 0.0f;
     }
     if (champion_belt_onoff) {
-        ((StarStoneWork*)(*udPtr))->pos.x = 0.0f;
-        ((StarStoneWork*)(*udPtr))->pos.y = -1000.0f;
-        ((StarStoneWork*)(*udPtr))->pos.z = 0.0f;
+        (*work)->position.x = 0.0f;
+        (*work)->position.y = -1000.0f;
+        (*work)->position.z = 0.0f;
     }
     return EVT_RETURN_BLOCK;
 }
 
 /** Script helper: args[0] = 1 hides the Champion's Belt effect, 0 shows it. */
-static USER_FUNC(tou_champion_belt_onoff) {
+USER_FUNC(tou_champion_belt_onoff) {
     champion_belt_onoff = evtGetValue(event, event->args[0]);
     return EVT_RETURN_DONE;
 }
 
 /**
- * Rank 11 scene (once: GSWF_TOU_RANK11_SWOOPS_JOINS), after King K has gone: オクトール and ガンガン (Cleftor)
+ * Rank 11 scene (once: GSWF_GLITZ_PIT_SIR_SWOOP_JOINED), after King K has gone: オクトール and ガンガン (Cleftor)
  * talk about missing him (stg3_tou_93_28 to 30); Jolene brings in the new fighter Sir Swoop (ポグ), shows him
  * the minor-league room and the match terminal, Grubba (ガンス) books his first match over the monitor
  * (stg3_tou_93_31 to 37) and Swoop introduces himself (stg3_tou_93_38), then the guard comes in.
  */
-EVT_BEGIN(evt_michel_8)
+static EVT_BEGIN(evt_michel_8)
     // The Bob-omb fighter and Cleftor talk about missing King K.
     CALL(evt_npc_set_position, STRING("オクトール"), 145, 0, 50)
     CALL(evt_npc_set_position, STRING("ガンガン"), 95, 0, 50)
-    CALL(evt_cam3d_evt_set, 95, 109, 419, 95, 45, -6, 1000, 11)
+    CALL(evt_cam3d_evt_set, 95, 109, 419, 95, 45, -6, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_28"), 0, STRING("オクトール"))
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_29"), 0, STRING("ガンガン"))
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_30"), 0, STRING("オクトール"))
+
     // Jolene opens the door and leads in the new fighter, Sir Swoop.
-    CALL(evt_cam3d_evt_set, 0, 112, 287, 0, 60, -8, 1000, 11)
+    CALL(evt_cam3d_evt_set, 0, 112, 287, 0, 60, -8, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1000)
 #if VERSION <= VERSION_DEMO_JP
     CALL(evt_npc_set_position, STRING("ポグ"), 0, 0, -200)
@@ -2958,7 +3067,7 @@ EVT_BEGIN(evt_michel_8)
     CALL(evt_npc_set_position, STRING("キノシコワ"), 0, 0, -180)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -2985,7 +3094,7 @@ EVT_BEGIN(evt_michel_8)
 #endif
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, -180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
 #if VERSION <= VERSION_DEMO_JP
@@ -2999,13 +3108,14 @@ EVT_BEGIN(evt_michel_8)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // Jolene shows Swoop his dressing room and the match terminal, and Mario steps aside.
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_31"), 0, STRING("キノシコワ"))
     WAIT_MS(300)
     CALL(evt_npc_set_anim, STRING("キノシコワ"), STRING("M_1"))
     WAIT_MS(600)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_32"), 0, STRING("キノシコワ"))
-    CALL(evt_cam3d_evt_set, -70, 112, 287, -70, 60, -8, 1000, 11)
+    CALL(evt_cam3d_evt_set, -70, 112, 287, -70, 60, -8, 1000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("キノシコワ"), -40, -100, 0, FLOAT(80.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_33"), 0, STRING("キノシコワ"))
     BEGIN_INLINE_EVENT
@@ -3017,6 +3127,7 @@ EVT_BEGIN(evt_michel_8)
     CALL(evt_npc_move_position, STRING("ポグ"), -70, -120, 0, FLOAT(80.0f), 1)
     WAIT_MS(1000)
 #endif
+
     // Swoop uses the terminal and Grubba books his first match over the monitor.
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_34"), 0, STRING("キノシコワ"))
     CALL(evt_npc_get_position, STRING("ポグ"), LW(0), LW(1), LW(2))
@@ -3024,10 +3135,11 @@ EVT_BEGIN(evt_michel_8)
     CALL_CHILD(evt_tou_monitor_on)
     WAIT_MS(800)
     CALL(evt_mapobj_get_position, STRING("gamen"), LW(0), LW(1), LW(2))
-    CALL(evt_msg_toge, 2, LW(0), LW(1), LW(2))
+    CALL(evt_msg_toge, MSG_TOGE_AT_POS, LW(0), LW(1), LW(2))
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_35"), 0, STRING("ガンス"))
     CALL_CHILD(evt_tou_monitor_off)
     WAIT_MS(500)
+
     // Jolene explains how fights work, then Swoop introduces himself.
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_36"), 0, STRING("キノシコワ"))
     CALL(evt_npc_get_position, STRING("ポグ"), LW(0), LW(1), LW(2))
@@ -3047,10 +3159,11 @@ EVT_BEGIN(evt_michel_8)
 #endif
     CALL(evt_msg_print, 0, STRING("stg3_tou_93_38"), 0, STRING("ポグ"))
     WAIT_MS(2000)
+
     // The guard comes in to fetch Swoop for his battle and Jolene sees him off.
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, -180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, -180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
 #if VERSION <= VERSION_DEMO_JP
@@ -3074,7 +3187,7 @@ EVT_BEGIN(evt_michel_8)
     CALL(evt_set_dir_to_target, STRING("ガードマン"), STRING("mario"))
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, -180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, -180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
 #if VERSION <= VERSION_DEMO_JP
@@ -3101,11 +3214,12 @@ EVT_BEGIN(evt_michel_8)
         CALL(evt_set_dir_to_target, STRING("キノシコワ"), STRING("ポグ"))
     END_INLINE_EVENT
 #endif
+
     // The guard, Swoop and Jolene leave through the door in turn.
     CALL(evt_npc_move_position, STRING("ガードマン"), 0, -130, 0, FLOAT(80.0f), 1)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
 #if VERSION <= VERSION_DEMO_JP
@@ -3141,7 +3255,7 @@ EVT_BEGIN(evt_michel_8)
     WAIT_MS(2000)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -3151,16 +3265,17 @@ EVT_BEGIN(evt_michel_8)
             BREAK_LOOP
         END_IF
     END_LOOP
+
     // Cleftor goes back to his spot and the camera returns to Mario.
     CALL(evt_npc_set_position, STRING("ガンガン"), -75, 0, 90)
     CALL(evt_npc_set_ry, STRING("ガンガン"), 90)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     RETURN
 EVT_END()
 
-/** Pogo's line (stg3_tou_255_01) with a camera move, then he walks off. */
-EVT_BEGIN(evt_michel_9)
-    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, 11)
+/** The ポグ NPC's line (stg3_tou_255_01; tou_10 calls him Poku) with a camera move, then he walks off. */
+static EVT_BEGIN(evt_michel_9)
+    CALL(evt_cam3d_evt_set, -45, 105, 288, -45, 60, -9, 2000, EASING_SINE_IN_OUT)
     CALL(evt_npc_move_position, STRING("ポグ"), 0, -80, 0, FLOAT(60.0f), 1)
     CALL(evt_msg_print, 0, STRING("stg3_tou_255_01"), 0, STRING("ポグ"))
     BEGIN_INLINE_EVENT
@@ -3171,16 +3286,16 @@ EVT_BEGIN(evt_michel_9)
 EVT_END()
 
 /** Mail scene: Mario notices a notification (bubble, mail jingle, vibration) and the party reads stg3_tou_297_03. */
-EVT_BEGIN(evt_mail_1)
+static EVT_BEGIN(evt_mail_1)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT_GET_ID(LW(11))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_3"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         WAIT_MS(1500)
     END_INLINE_EVENT
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION2"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION2"))
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     CALL(evt_msg_print_party, STRING("stg3_tou_297_03"))
@@ -3194,14 +3309,14 @@ EVT_BEGIN(evt_mail_1)
     CALL(evt_mario_balloon_bikkuri)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_INT_EQUAL(LW(0), 256)
+        IF_INT_EQUAL(LW(0), PAD_BUTTON_A)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MAIL_RECEPTION1"), LW(0), LW(1), LW(2), 0)
     DELETE_EVENT(LW(10))
@@ -3218,22 +3333,22 @@ EVT_BEGIN(evt_mail_1)
     CALL(evt_msg_print_party, STRING("stg3_tou_297_05"))
     CALL(evt_pouch_receive_mail, 7)
     CALL(evt_pouch_open_mail, 7)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_20_00_MAJORS_8TH_PLACE)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_20_00_MAJORS_8TH_PLACE)
     RETURN
 EVT_END()
 
 /** Mail scene: the same notification with message stg3_tou_297_22. */
-EVT_BEGIN(evt_mail_2)
+static EVT_BEGIN(evt_mail_2)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT_GET_ID(LW(11))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_3"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         WAIT_MS(1500)
     END_INLINE_EVENT
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION2"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION2"))
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     CALL(evt_msg_print_party, STRING("stg3_tou_297_22"))
@@ -3247,14 +3362,14 @@ EVT_BEGIN(evt_mail_2)
     CALL(evt_mario_balloon_bikkuri)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_INT_EQUAL(LW(0), 256)
+        IF_INT_EQUAL(LW(0), PAD_BUTTON_A)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MAIL_RECEPTION1"), LW(0), LW(1), LW(2), 0)
     DELETE_EVENT(LW(10))
@@ -3271,11 +3386,12 @@ EVT_BEGIN(evt_mail_2)
     CALL(evt_msg_print_party, STRING("stg3_tou_297_24"))
     CALL(evt_pouch_receive_mail, 9)
     CALL(evt_pouch_open_mail, 9)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
     RETURN
 EVT_END()
 
 /** Mario eats the Glitz Pit cake: partner warning, a yes/no prompt and the eating sequence. */
+// Only accepting the cake consumes it and restores health; declining leaves it available.
 EVT_BEGIN(evt_eat_cake)
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
@@ -3327,7 +3443,7 @@ EVT_BEGIN(evt_eat_cake)
         DELETE_EVENT(LW(0))
         CALL(evt_pouch_mario_recovery)
         CALL(evt_pouch_all_party_recovery)
-        SET_VALUE(GSWF(GSWF_TOU_CAKE_WAITING), 0)
+        SET_VALUE(GSWF_TOU_CAKE_ON_TABLE, 0)
 #if VERSION >= VERSION_JP
         CALL(evt_party_flg_onoff, 0, 16777216, 0)
 #endif
@@ -3344,11 +3460,11 @@ EVT_END()
 EVT_BEGIN(evt_cake_init)
     CALL(evt_tou_get_ranking, LW(0))
     IF_INT_EQUAL(LW(0), 6)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_CAKE_EVENT_DONE), 0)
-            IF_INT_EQUAL(GSWF(GSWF_TOU_CAKE_WAITING), 0)
-                CALL(evt_item_entry, STRING("cake"), ITEM_CAKE, 20, 25, -25, ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+        IF_INT_EQUAL(GSWF_TOU_RANK_6_CAKE_DONE, 0)
+            IF_INT_EQUAL(GSWF_TOU_CAKE_ON_TABLE, 0)
+                CALL(evt_item_entry, STRING("cake"), ITEM_CAKE, 20, 25, -25, ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
 #if VERSION >= VERSION_JP
-                CALL(evt_item_status_on, STRING("cake"), ITEM_STATUS_NO_KOOPS)
+                CALL(evt_item_status_on, STRING("cake"), ITEM_FLAG2_NO_PARTNER)
 #endif
             END_IF
         END_IF
@@ -3357,23 +3473,23 @@ EVT_BEGIN(evt_cake_init)
 EVT_END()
 
 /**
- * Cake scene at rank 6 (once: GSWF_TOU_CAKE_EVENT_DONE): registers the eat case event (evt_eat_cake) on a_cake,
- * moves the camera to the cake and the fighter トゲノコエース says Jolene brought Gonzales a piece of cake from a
- * fan (stg3_tou_295); then sets GSWF_TOU_CAKE_WAITING.
+ * Cake scene, run from the post-match events at rank 6 once (the caller sets GSWF_TOU_RANK_6_CAKE_DONE):
+ * registers evt_eat_cake as the case event of a_cake, moves the camera to the cake while トゲノコエース speaks
+ * (stg3_tou_295), then sets GSWF_TOU_CAKE_ON_TABLE.
  */
-EVT_BEGIN(evt_cake)
-    CALL(evt_run_case_evt, CASE_COND_FRONT_A, 1, STRING("a_cake"), 0, PTR(evt_eat_cake), 0)
-    CALL(evt_cam3d_evt_set, 55, 102, 362, 55, 45, -9, 1000, 11)
+static EVT_BEGIN(evt_cake)
+    CALL(evt_run_case_evt, CASE_FRONT_A, 1, STRING("a_cake"), 0, PTR(evt_eat_cake), 0)
+    CALL(evt_cam3d_evt_set, 55, 102, 362, 55, 45, -9, 1000, EASING_SINE_IN_OUT)
     WAIT_MS(1100)
     CALL(evt_msg_print, 0, STRING("stg3_tou_295"), 0, STRING("トゲノコエース"))
     WAIT_MS(300)
-    CALL(evt_cam3d_evt_off, 500, 11)
-    SET_VALUE(GSWF(GSWF_TOU_CAKE_WAITING), 1)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
+    SET_VALUE(GSWF_TOU_CAKE_ON_TABLE, 1)
     RETURN
 EVT_END()
 
 /**
- * Partner remark after Bowser's visit to the Glitz Pit (GSWF_TOU_BOWSER_RAID_DONE):
+ * Partner remark after Bowser's visit to the Glitz Pit (GSWF_TOU_RANK_5_BOWSER_EVENT_DONE):
  * the party partner says stg3_tou_403_11.
  */
 static EVT_BEGIN(evt_koopa_after)
@@ -3382,16 +3498,16 @@ static EVT_BEGIN(evt_koopa_after)
 EVT_END()
 
 /** Mail scene: the same notification with message stg3_tou_297_25. */
-EVT_BEGIN(evt_mail_3)
+static EVT_BEGIN(evt_mail_3)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT_GET_ID(LW(11))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_3"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         WAIT_MS(1500)
     END_INLINE_EVENT
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION2"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION2"))
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     CALL(evt_msg_print_party, STRING("stg3_tou_297_25"))
@@ -3405,14 +3521,14 @@ EVT_BEGIN(evt_mail_3)
     CALL(evt_mario_balloon_bikkuri)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_INT_EQUAL(LW(0), 256)
+        IF_INT_EQUAL(LW(0), PAD_BUTTON_A)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MAIL_RECEPTION1"), LW(0), LW(1), LW(2), 0)
     DELETE_EVENT(LW(10))
@@ -3429,22 +3545,22 @@ EVT_BEGIN(evt_mail_3)
     CALL(evt_msg_print_party, STRING("stg3_tou_297_27"))
     CALL(evt_pouch_receive_mail, 10)
     CALL(evt_pouch_open_mail, 10)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_20_05_MAJORS_4TH_PL)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_20_05_MAJORS_4TH_PL)
     RETURN
 EVT_END()
 
 /** Mail scene: the same notification, with its own message. */
-EVT_BEGIN(evt_mail_4)
+static EVT_BEGIN(evt_mail_4)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT_GET_ID(LW(11))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_3"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         WAIT_MS(1500)
     END_INLINE_EVENT
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION2"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION2"))
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     LOOP(0)
@@ -3457,14 +3573,14 @@ EVT_BEGIN(evt_mail_4)
     CALL(evt_mario_balloon_bikkuri)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_INT_EQUAL(LW(0), 256)
+        IF_INT_EQUAL(LW(0), PAD_BUTTON_A)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MAIL_RECEPTION1"), LW(0), LW(1), LW(2), 0)
     DELETE_EVENT(LW(10))
@@ -3481,21 +3597,21 @@ EVT_BEGIN(evt_mail_4)
     CALL(evt_msg_print_party, STRING("stg3_tou_326_02"))
     CALL(evt_pouch_receive_mail, 13)
     CALL(evt_pouch_open_mail, 13)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
     RETURN
 EVT_END()
 
 /** Mail scene: the same notification with message stg3_tou_307_05. */
-EVT_BEGIN(evt_mail_5)
+static EVT_BEGIN(evt_mail_5)
     WAIT_MS(1000)
     BEGIN_INLINE_EVENT_GET_ID(LW(11))
         CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
         CALL(evt_snd_sfxon_3d, STRING("SFX_VOICE_MARIO_FIND1_3"), LW(0), LW(1), LW(2), 0)
-        CALL(evt_eff_fukidashi, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+        CALL(evt_eff_fukidashi, FUKIDASHI_AT_MARIO, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
         WAIT_MS(1500)
     END_INLINE_EVENT
-    CALL(evt_snd_bgmoff, PSND_FADE_HOLD)
-    CALL(evt_snd_bgmon, PSND_CH(1), STRING("BGM_FF_MAIL_RECEPTION2"))
+    CALL(evt_snd_bgmoff, PSND_PAUSE)
+    CALL(evt_snd_bgmon, PSND_SLOT(1), STRING("BGM_FF_MAIL_RECEPTION2"))
     SPAWN_EVENT_GET_ID(PTR(evt_sub_mail_vibration), LW(10))
     WAIT_MS(500)
     CALL(evt_msg_print_party, STRING("stg3_tou_307_05"))
@@ -3509,14 +3625,14 @@ EVT_BEGIN(evt_mail_5)
     CALL(evt_mario_balloon_bikkuri)
     LOOP(0)
         CALL(evt_key_get_buttontrg, 0, LW(0))
-        IF_INT_EQUAL(LW(0), 256)
+        IF_INT_EQUAL(LW(0), PAD_BUTTON_A)
             BREAK_LOOP
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
     CALL(evt_mario_balloon_off)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT | PSND_CH(1))
-    CALL(evt_snd_bgmon, PSND_FADE_RESUME | PSND_FADE_IN, 0)
+    CALL(evt_snd_bgmoff, PSND_FADEOUT | PSND_SLOT(1))
+    CALL(evt_snd_bgmon, PSND_CONTINUE | PSND_FADEIN, 0)
     CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
     CALL(evt_snd_sfxon_3d, STRING("SFX_MAIL_RECEPTION1"), LW(0), LW(1), LW(2), 0)
     DELETE_EVENT(LW(10))
@@ -3533,13 +3649,13 @@ EVT_BEGIN(evt_mail_5)
     CALL(evt_msg_print_party, STRING("stg3_tou_307_07"))
     CALL(evt_pouch_receive_mail, 14)
     CALL(evt_pouch_open_mail, 14)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG3_TOU1"))
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG3_20_13_MAJORS_1ST_PL)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG3_TOU1"))
+    SET_VALUE(GSW_STORY_PROGRESS, STG3_20_13_MAJORS_1ST_PL)
     RETURN
 EVT_END()
 
 /** Mini-Yoshi egg arrives: spawns the egg NPC near Mario and takes the Yoshi partner off the field. */
-EVT_BEGIN(evt_tamago_hello)
+static EVT_BEGIN(evt_tamago_hello)
     CALL(evt_npc_check, STRING("たまご"), LW(10))
     IF_INT_EQUAL(LW(10), 0)
         CALL(evt_npc_entry, STRING("たまご"), STRING("c_babyyoshi"))
@@ -3554,7 +3670,7 @@ EVT_BEGIN(evt_tamago_hello)
 EVT_END()
 
 /** Mini-Yoshi egg hops three times and then hatches back into the Yoshi partner. */
-EVT_BEGIN(evt_tamago_hello2)
+static EVT_BEGIN(evt_tamago_hello2)
     LOOP(3)
         CALL(evt_npc_get_position, STRING("たまご"), LW(0), LW(1), LW(2))
         CALL(evt_sub_random, 200, LW(3))
@@ -3578,9 +3694,10 @@ EVT_BEGIN(evt_tamago_hello2)
 EVT_END()
 
 /** Prints the rank-change message after a match: champion, moved up, moved down or unchanged (stg3_rank_01 to 06). */
+// Compare visible ranks first; an unchanged rank is then described relative to the last opponent.
 EVT_BEGIN(evt_tou_ranking_msg)
     CALL(evt_tou_get_ranking, LW(0))
-    IF_INT_LESS(LW(0), GSW(GSW_TOU_RANK_BEFORE_MATCH))
+    IF_INT_LESS(LW(0), GSW_GLITZ_PIT_RANK_BEFORE_MATCH)
         IF_INT_EQUAL(LW(0), 0)
             CALL(evt_msg_print_add, 0, STRING("stg3_rank_05"))
         ELSE
@@ -3588,7 +3705,7 @@ EVT_BEGIN(evt_tou_ranking_msg)
         END_IF
         RETURN
     END_IF
-    IF_INT_GREATER(LW(0), GSW(GSW_TOU_RANK_BEFORE_MATCH))
+    IF_INT_GREATER(LW(0), GSW_GLITZ_PIT_RANK_BEFORE_MATCH)
         CALL(evt_msg_print_add_insert, 0, STRING("stg3_rank_04"), LW(0))
         RETURN
     END_IF
@@ -3596,7 +3713,7 @@ EVT_BEGIN(evt_tou_ranking_msg)
         CALL(evt_msg_print_add, 0, STRING("stg3_rank_06"))
         RETURN
     END_IF
-    CALL(evt_tou_get_fighter_rank, GSW(GSW_TOU_LAST_OPPONENT_ID), LW(1))
+    CALL(evt_tou_get_fighter_rank, GSW_GLITZ_PIT_LAST_OPPONENT, LW(1))
     IF_INT_LESS(LW(0), LW(1))
         CALL(evt_msg_print_add_insert, 0, STRING("stg3_rank_03"), LW(0))
     ELSE
@@ -3609,11 +3726,12 @@ EVT_END()
  * Script run after a match: story follow-ups (Yoshi egg, poison cake, Swoops joining),
  * ranking announcements and cleanup.
  */
+// Reward routing uses the room and pre-match rank; later one-time events use the current rank.
 EVT_BEGIN(evt_tou_match_after_default)
     // Back in the locker room: the partner is hidden for the Yoshi egg scenes,
     // and the Shady Koopa and Cleftor are placed where needed.
     SET_VALUE(LF(0), 0)
-    IF_INT_EQUAL(GSW(GSW_TOU_OPPONENT_ID), 10)
+    IF_INT_EQUAL(GSW_GLITZ_PIT_OPPONENT, 10)
         CALL(chk, LW(0))
         IF_INT_EQUAL(LW(0), 0)
             SET_VALUE(LF(0), 1)
@@ -3622,8 +3740,8 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_party_cont_onoff, 1, 0)
         END_IF
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_12_MINI_YOSHI_EGG)
-        IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG3_20_MAJORS_10TH)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_12_THE_MINI_YOSHI_EGG)
+        IF_INT_LESS(GSW_STORY_PROGRESS, STG3_20_MAJORS_10TH_PLACE)
             IF_INT_EQUAL(LF(0), 0)
                 CALL(chk, LW(0))
                 IF_INT_EQUAL(LW(0), 0)
@@ -3632,10 +3750,10 @@ EVT_BEGIN(evt_tou_match_after_default)
             END_IF
         END_IF
     END_IF
-    IF_INT_EQUAL(GSWF(GSWF_TOU_POISON_CAKE_EVENT), 1)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_PARTNER_POISON_CURED), 0)
-            IF_INT_EQUAL(GSWF(GSWF_TOU_PARTNER_POISONED), 0)
-                CALL(evt_npc_flag_onoff, 0, STRING("ウラノコ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+    IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_DELIVERED, 1)
+        IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_RECOVERED, 0)
+            IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_EATEN, 0)
+                CALL(evt_npc_flag_onoff, 0, STRING("ウラノコ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
                 CALL(evt_npc_set_anim, STRING("ウラノコ"), STRING("NKT_K_2"))
             ELSE
                 WAIT_MS(100)
@@ -3644,13 +3762,14 @@ EVT_BEGIN(evt_tou_match_after_default)
     END_IF
     CALL(evt_tou_get_ranking, LW(0))
     IF_INT_EQUAL(LW(0), 11)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK11_SWOOPS_JOINS), 0)
+        IF_INT_EQUAL(GSWF_GLITZ_PIT_SIR_SWOOP_JOINED, 0)
             CALL(evt_npc_check, STRING("ガンガン"), LW(0))
             IF_INT_EQUAL(LW(0), 1)
                 CALL(evt_npc_set_position, STRING("ガンガン"), 95, 0, 50)
             END_IF
         END_IF
     END_IF
+
     // Work out which locker room this is; Jolene stands beside Mario and his partner.
     SET_VALUE(LF(0), 0)
     SET_VALUE(LF(1), 0)
@@ -3667,12 +3786,12 @@ EVT_BEGIN(evt_tou_match_after_default)
     END_IF
     CALL(evt_mario_key_onoff, 0)
     CALL(evt_party_stop, 0)
-    CALL(evt_npc_flag_onoff, 1, STRING("キノシコワ"), NPC_FLAG_INTANGIBLE)
+    CALL(evt_npc_flag_onoff, 1, STRING("キノシコワ"), NPC_FLAG_NO_HIT)
     IF_INT_EQUAL(LF(2), 1)
         CALL(evt_mario_set_pos, 65, 0, -95)
         CALL(evt_party_set_pos, 0, 95, 0, -105)
         CALL(evt_npc_set_position, STRING("キノシコワ"), 30, 0, -95)
-        CALL(evt_cam3d_evt_set, 45, 91, 266, 45, 57, -11, 0, 11)
+        CALL(evt_cam3d_evt_set, 45, 91, 266, 45, 57, -11, 0, EASING_SINE_IN_OUT)
         CALL(evt_set_dir_to_target, STRING("キノシコワ"), STRING("mario"))
         CALL(evt_mario_set_dir, 270, 0, 0)
         CALL(evt_party_set_dir, 0, 270, 0)
@@ -3680,17 +3799,18 @@ EVT_BEGIN(evt_tou_match_after_default)
         CALL(evt_mario_set_pos, -90, 0, -95)
         CALL(evt_party_set_pos, 0, -120, 0, -105)
         CALL(evt_npc_set_position, STRING("キノシコワ"), -55, 0, -95)
-        CALL(evt_cam3d_evt_set, -75, 91, 266, -75, 57, -11, 0, 11)
+        CALL(evt_cam3d_evt_set, -75, 91, 266, -75, 57, -11, 0, EASING_SINE_IN_OUT)
         CALL(evt_set_dir_to_target, STRING("キノシコワ"), STRING("mario"))
         CALL(evt_mario_set_dir, 90, 0, 0)
         CALL(evt_party_set_dir, 0, 90, 0)
     END_IF
-    CALL(evt_seq_wait, 2)
+    CALL(evt_seq_wait, SEQ_GAME)
     CALL(octo_stop)
     WAIT_MS(1000)
+
     // Fight money for the match, more for a win.
     CALL(evt_tou_get_ranking, LW(0))
-    IF_INT_EQUAL(GSWF(GSWF_TOU_LAST_MATCH_WON), 1)
+    IF_INT_EQUAL(GSWF_GLITZ_PIT_BEAT_LAST_OPPONENT, 1)
         CALL(fight_money, LW(0), 1, LW(10))
     ELSE
         CALL(fight_money, LW(0), 0, LW(10))
@@ -3699,9 +3819,10 @@ EVT_BEGIN(evt_tou_match_after_default)
     SET_VALUE(LF(11), 0)
     SET_VALUE(LF(12), 0)
     SET_VALUE(LF(13), 0)
+
     // Minor-league room: Jolene pays out, first telling Mario if he has dropped back to the minors.
     IF_INT_EQUAL(LF(0), 1)
-        IF_INT_LESS(GSW(GSW_TOU_RANK_BEFORE_MATCH), 11)
+        IF_INT_LESS(GSW_GLITZ_PIT_RANK_BEFORE_MATCH, 11)
             CALL(evt_msg_print, 0, STRING("stg3_tou_114_00"), 0, STRING("キノシコワ"))
             WAIT_MS(300)
             CALL(evt_npc_set_anim, STRING("キノシコワ"), STRING("A_1"))
@@ -3709,7 +3830,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             ADD(LW(0), 20)
             ADD(LW(1), 20)
-            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_item_delete, STRING("fmoney"))
@@ -3721,7 +3842,7 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_114_01"), 0, STRING("キノシコワ"), LW(10))
                 CASE_DEFAULT
                 CALL(evt_msg_fmt_int, 0, LW(14), STRING("stg3_tou_114_01"), LW(10))
-                CALL(evt_msg_print, 1, LW(14), 0, STRING("キノシコワ"))
+                CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, LW(14), 0, STRING("キノシコワ"))
             END_SWITCH
 #else
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_114_01"), 0, STRING("キノシコワ"), LW(10))
@@ -3743,7 +3864,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             ADD(LW(0), 20)
             ADD(LW(1), 20)
-            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_item_delete, STRING("fmoney"))
@@ -3755,7 +3876,7 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_179_01"), 0, STRING("キノシコワ"), LW(10))
                 CASE_DEFAULT
                 CALL(evt_msg_fmt_int, 0, LW(14), STRING("stg3_tou_179_01"), LW(10))
-                CALL(evt_msg_print, 1, LW(14), 0, STRING("キノシコワ"))
+                CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, LW(14), 0, STRING("キノシコワ"))
             END_SWITCH
 #else
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_179_01"), 0, STRING("キノシコワ"), LW(10))
@@ -3770,9 +3891,10 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_npc_set_anim, STRING("キノシコワ"), STRING("S_1"))
         END_IF
     END_IF
+
     // Major-league room: Jolene pays out, announcing a lost title or a return from the minors.
     IF_INT_EQUAL(LF(1), 1)
-        SWITCH(GSW(GSW_TOU_RANK_BEFORE_MATCH))
+        SWITCH(GSW_GLITZ_PIT_RANK_BEFORE_MATCH)
             CASE_LESS(1)
             CALL(evt_msg_print, 0, STRING("stg3_tou_365_00"), 0, STRING("キノシコワ"))
             WAIT_MS(300)
@@ -3781,7 +3903,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             ADD(LW(0), 20)
             ADD(LW(1), 20)
-            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_item_delete, STRING("fmoney"))
@@ -3793,7 +3915,7 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_365_01"), 0, STRING("キノシコワ"), LW(10))
                 CASE_DEFAULT
                 CALL(evt_msg_fmt_int, 0, LW(14), STRING("stg3_tou_365_01"), LW(10))
-                CALL(evt_msg_print, 1, LW(14), 0, STRING("キノシコワ"))
+                CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, LW(14), 0, STRING("キノシコワ"))
             END_SWITCH
 #else
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_365_01"), 0, STRING("キノシコワ"), LW(10))
@@ -3807,7 +3929,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             WAIT_MS(600)
             CALL(evt_npc_set_anim, STRING("キノシコワ"), STRING("S_1"))
             SET_VALUE(LF(11), 1)
-            SET_VALUE(GSWF(GSWF_TOU_REMATCH_MAJORS_LEFT), 0)
+            SET_VALUE(GSWF_TOU_REMATCH_DEMOTED_TO_MINORS, 0)
             CASE_GREATER(10)
             CALL(evt_msg_print, 0, STRING("stg3_tou_365_03_00"), 0, STRING("キノシコワ"))
             WAIT_MS(300)
@@ -3816,7 +3938,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             ADD(LW(0), 20)
             ADD(LW(1), 20)
-            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_item_delete, STRING("fmoney"))
@@ -3828,7 +3950,7 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_365_03_01"), 0, STRING("キノシコワ"), LW(10))
                 CASE_DEFAULT
                 CALL(evt_msg_fmt_int, 0, LW(14), STRING("stg3_tou_365_03_01"), LW(10))
-                CALL(evt_msg_print, 1, LW(14), 0, STRING("キノシコワ"))
+                CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, LW(14), 0, STRING("キノシコワ"))
             END_SWITCH
 #else
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_365_03_01"), 0, STRING("キノシコワ"), LW(10))
@@ -3850,7 +3972,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             ADD(LW(0), 20)
             ADD(LW(1), 20)
-            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_item_delete, STRING("fmoney"))
@@ -3862,7 +3984,7 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_180_01"), 0, STRING("キノシコワ"), LW(10))
                 CASE_DEFAULT
                 CALL(evt_msg_fmt_int, 0, LW(14), STRING("stg3_tou_180_01"), LW(10))
-                CALL(evt_msg_print, 1, LW(14), 0, STRING("キノシコワ"))
+                CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, LW(14), 0, STRING("キノシコワ"))
             END_SWITCH
 #else
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_180_01"), 0, STRING("キノシコワ"), LW(10))
@@ -3877,9 +3999,10 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_npc_set_anim, STRING("キノシコワ"), STRING("S_1"))
         END_SWITCH
     END_IF
+
     // Champion's room: Jolene pays out, welcoming Mario back if he won the title back.
     IF_INT_EQUAL(LF(2), 1)
-        IF_INT_GREATER(GSW(GSW_TOU_RANK_BEFORE_MATCH), 0)
+        IF_INT_GREATER(GSW_GLITZ_PIT_RANK_BEFORE_MATCH, 0)
             CALL(evt_msg_print, 0, STRING("stg3_tou_365_04_00"), 0, STRING("キノシコワ"))
             WAIT_MS(300)
             CALL(evt_npc_set_anim, STRING("キノシコワ"), STRING("A_1"))
@@ -3887,7 +4010,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             SUBTRACT(LW(0), 20)
             ADD(LW(1), 20)
-            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_item_delete, STRING("fmoney"))
@@ -3899,7 +4022,7 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_365_04_01"), 0, STRING("キノシコワ"), LW(10))
                 CASE_DEFAULT
                 CALL(evt_msg_fmt_int, 0, LW(14), STRING("stg3_tou_365_04_01"), LW(10))
-                CALL(evt_msg_print, 1, LW(14), 0, STRING("キノシコワ"))
+                CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, LW(14), 0, STRING("キノシコワ"))
             END_SWITCH
 #else
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_365_04_01"), 0, STRING("キノシコワ"), LW(10))
@@ -3921,7 +4044,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_mario_get_pos, 0, LW(0), LW(1), LW(2))
             SUBTRACT(LW(0), 20)
             ADD(LW(1), 20)
-            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_ENTRY_FIXED_NO_TOUCH, -1, 0)
+            CALL(evt_item_entry, STRING("fmoney"), ITEM_COIN, LW(0), LW(1), LW(2), ITEM_TYPE_STILL_NO_TOUCH, -1, 0)
             CALL(evt_mario_set_pose, STRING("M_C_3"))
             WAIT_MS(1000)
             CALL(evt_item_delete, STRING("fmoney"))
@@ -3933,7 +4056,7 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_msg_print_insert, 0, STRING("stg3_tou_181_01"), 0, STRING("キノシコワ"), LW(10))
                 CASE_DEFAULT
                 CALL(evt_msg_fmt_int, 0, LW(14), STRING("stg3_tou_181_01"), LW(10))
-                CALL(evt_msg_print, 1, LW(14), 0, STRING("キノシコワ"))
+                CALL(evt_msg_print, MSG_PRINT_DIRECT_TEXT, LW(14), 0, STRING("キノシコワ"))
             END_SWITCH
 #else
             CALL(evt_msg_print_insert, 0, STRING("stg3_tou_181_01"), 0, STRING("キノシコワ"), LW(10))
@@ -3948,12 +4071,13 @@ EVT_BEGIN(evt_tou_match_after_default)
             CALL(evt_npc_set_anim, STRING("キノシコワ"), STRING("S_1"))
         END_IF
     END_IF
+
     // Jolene leaves through the door.
-    CALL(evt_npc_status_onoff, 1, STRING("キノシコワ"), 2)
+    CALL(evt_npc_status_onoff, 1, STRING("キノシコワ"), NPC_STATUS_FACE_MOVE_DIR)
     CALL(evt_npc_move_position, STRING("キノシコワ"), 0, -130, 0, FLOAT(80.0f), 1)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_open_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 0, 180, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 0, 180, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -3978,7 +4102,7 @@ EVT_BEGIN(evt_tou_match_after_default)
     WAIT_MS(800)
     SET_VALUE(LW(1), 0)
     SPAWN_EVENT(bero_close_door_play_se)
-    CALL(evt_sub_intpl_msec_init, 11, 180, 0, 500)
+    CALL(evt_sub_intpl_msec_init, EASING_SINE_IN_OUT, 180, 0, 500)
     LOOP(0)
         CALL(evt_sub_intpl_msec_get_value)
         MULTIPLY_FLOAT(LW(0), FLOAT(0.44433594f))
@@ -3996,15 +4120,16 @@ EVT_BEGIN(evt_tou_match_after_default)
         END_IF
         WAIT_FRAMES(1)
     END_LOOP
+
     // After the poisoned cake: a poisoned partner recovers and everyone rejoins;
     // otherwise the Shady Koopa who ate it lies numb.
-    IF_INT_EQUAL(GSWF(GSWF_TOU_POISON_CAKE_EVENT), 1)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_PARTNER_POISON_CURED), 0)
-            IF_INT_EQUAL(GSWF(GSWF_TOU_PARTNER_POISONED), 1)
+    IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_DELIVERED, 1)
+        IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_RECOVERED, 0)
+            IF_INT_EQUAL(GSWF_TOU_POISON_CAKE_EATEN, 1)
                 CALL(evt_mario_set_dir, 270, 300, 0)
                 CALL(evt_party_stop, 0)
                 WAIT_MS(300)
-                IF_INT_EQUAL(GSWF(GSWF_TOU_LAST_MATCH_WON), 1)
+                IF_INT_EQUAL(GSWF_GLITZ_PIT_BEAT_LAST_OPPONENT, 1)
                     CALL(evt_msg_print_party, STRING("stg3_tou_306"))
                 ELSE
                     CALL(evt_msg_print_party, STRING("stg3_tou_307"))
@@ -4015,14 +4140,14 @@ EVT_BEGIN(evt_tou_match_after_default)
                 CALL(evt_pouch_party_join, 4)
                 CALL(evt_party_run, 0)
             ELSE
-                CALL(evt_npc_flag_onoff, 0, STRING("ウラノコ"), NPC_FLAG_MOVE_ANIM | NPC_FLAG_TALK_ANIM)
+                CALL(evt_npc_flag_onoff, 0, STRING("ウラノコ"), NPC_FLAG_TALK_POSE | NPC_FLAG_AUTO_MOVE_ANIM)
                 CALL(evt_npc_set_anim, STRING("ウラノコ"), STRING("NKT_K_2"))
                 CALL(evt_mario_set_dir, 270, 300, 0)
                 CALL(evt_party_stop, 0)
                 WAIT_MS(300)
                 CALL(evt_msg_print_party, STRING("stg3_tou_307_01"))
                 CALL(evt_npc_get_position, STRING("ウラノコ"), LW(0), LW(1), LW(2))
-                CALL(evt_cam3d_evt_set, LW(0), 90, 283, LW(0), 45, -9, 1000, 11)
+                CALL(evt_cam3d_evt_set, LW(0), 90, 283, LW(0), 45, -9, 1000, EASING_SINE_IN_OUT)
                 BEGIN_INLINE_EVENT
                     CALL(evt_mario_set_dir_npc, STRING("ウラノコ"))
                 END_INLINE_EVENT
@@ -4032,23 +4157,24 @@ EVT_BEGIN(evt_tou_match_after_default)
                 WAIT_MS(1000)
                 CALL(evt_msg_print, 0, STRING("stg3_tou_307_02"), 0, STRING("ウラノコ"))
                 CALL(evt_npc_change_interrupt, STRING("ウラノコ"), 6, PTR(evt_talk_doku_cake))
-                CALL(evt_cam3d_evt_set, -75, 91, 266, -75, 57, -11, 500, 11)
+                CALL(evt_cam3d_evt_set, -75, 91, 266, -75, 57, -11, 500, EASING_SINE_IN_OUT)
                 CALL(evt_mario_set_dir, 270, 300, 0)
                 CALL(evt_party_set_dir, 0, 90, 300)
                 WAIT_MS(500)
                 CALL(evt_msg_print_party, STRING("stg3_tou_307_03"))
                 CALL(evt_party_run, 0)
             END_IF
-            SET_VALUE(GSWF(GSWF_TOU_PARTNER_POISON_CURED), 1)
+            SET_VALUE(GSWF_TOU_POISON_CAKE_RECOVERED, 1)
         END_IF
     END_IF
+
     // The partner reacts to a demotion, a lost title, a promotion or a regained title
     // (the Champ's Belt goes or comes back).
     IF_INT_EQUAL(LF(10), 1)
         CALL(evt_mario_set_dir, 270, 300, 0)
         CALL(evt_msg_print_party, STRING("stg3_tou_114"))
-        IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_34_RETURN_TO_ROGUEPORT)
-            SET_VALUE(GSWF(GSWF_TOU_REMATCH_MAJORS_LEFT), 1)
+        IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_34_RETURN_TO_ROGUEPORT)
+            SET_VALUE(GSWF_TOU_REMATCH_DEMOTED_TO_MINORS, 1)
         END_IF
     END_IF
     IF_INT_EQUAL(LF(11), 1)
@@ -4065,13 +4191,14 @@ EVT_BEGIN(evt_tou_match_after_default)
         CALL(evt_msg_print_party, STRING("stg3_tou_365_04_03"))
         CALL(evt_pouch_add_item, ITEM_CHAMPS_BELT, LW(0))
     END_IF
-    // After the Iron Clefts match the egg hatches into Yoshi (or Pogo has a word);
-    // otherwise the egg says hello.
+
+    // After the Armored Harriers match (fighter 10) with Yoshi away, the egg hatches into Yoshi from the egg story
+    // on (before it the ポグ NPC has a word); after any other match the egg hops and Yoshi returns.
     SET_VALUE(LF(0), 0)
-    IF_INT_EQUAL(GSW(GSW_TOU_OPPONENT_ID), 10)
+    IF_INT_EQUAL(GSW_GLITZ_PIT_OPPONENT, 10)
         CALL(chk, LW(0))
         IF_INT_EQUAL(LW(0), 0)
-            IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_12_MINI_YOSHI_EGG)
+            IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_12_THE_MINI_YOSHI_EGG)
                 CALL_CHILD(evt_tou_chibi_yoshi)
             ELSE
                 CALL_CHILD(evt_michel_9)
@@ -4079,7 +4206,7 @@ EVT_BEGIN(evt_tou_match_after_default)
             SET_VALUE(LF(0), 1)
         END_IF
     END_IF
-    IF_INT_GREATER_OR_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG3_12_MINI_YOSHI_EGG)
+    IF_INT_GREATER_OR_EQUAL(GSW_STORY_PROGRESS, STG3_12_THE_MINI_YOSHI_EGG)
         IF_INT_EQUAL(LF(0), 0)
             CALL(chk, LW(0))
             IF_INT_EQUAL(LW(0), 0)
@@ -4087,89 +4214,91 @@ EVT_BEGIN(evt_tou_match_after_default)
             END_IF
         END_IF
     END_IF
+
     // Ranking milestones: the King K scenes at 18th to 13th,
     // his departure at 12th and Sir Swoop's arrival at 11th.
     CALL_CHILD(evt_cake_init)
-    CALL(evt_cam3d_evt_off, 500, 11)
+    CALL(evt_cam3d_evt_off, 500, EASING_SINE_IN_OUT)
     WAIT_MS(500)
     CALL(evt_tou_get_ranking, LW(0))
     SWITCH(LW(0))
         CASE_EQUAL(18)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK18_SCENE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK18_SCENE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_18_KING_K_TALK_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_18_KING_K_TALK_DONE, 1)
             CALL_CHILD(evt_michel_2)
         END_IF
         CASE_EQUAL(17)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK17_SCENE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK17_SCENE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_17_KING_K_TALK_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_17_KING_K_TALK_DONE, 1)
             CALL_CHILD(evt_michel_3)
         END_IF
         CASE_EQUAL(16)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK16_SCENE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK16_SCENE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_16_KING_K_TALK_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_16_KING_K_TALK_DONE, 1)
             CALL_CHILD(evt_michel_4)
         END_IF
         CASE_EQUAL(15)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK15_SCENE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK15_SCENE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_15_KING_K_TALK_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_15_KING_K_TALK_DONE, 1)
             CALL_CHILD(evt_michel_5)
         END_IF
         CASE_EQUAL(14)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK14_SCENE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK14_SCENE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_14_KING_K_TALK_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_14_KING_K_TALK_DONE, 1)
             CALL_CHILD(evt_michel_6)
         END_IF
         CASE_EQUAL(13)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK13_SCENE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK13_SCENE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_13_KING_K_TALK_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_13_KING_K_TALK_DONE, 1)
             CALL_CHILD(evt_michel_7)
         END_IF
         CASE_EQUAL(12)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK12_KING_K_GONE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK12_KING_K_GONE), 1)
+        IF_INT_EQUAL(GSWF_GLITZ_PIT_KP_KOOPAS_RETIRED, 0)
+            SET_VALUE(GSWF_GLITZ_PIT_KP_KOOPAS_RETIRED, 1)
             CALL(evt_npc_set_position, STRING("マイケル"), 0, -1000, 0)
             CALL(evt_rankingReInit)
         END_IF
         CASE_EQUAL(11)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK11_SWOOPS_JOINS), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK11_SWOOPS_JOINS), 1)
+        IF_INT_EQUAL(GSWF_GLITZ_PIT_SIR_SWOOP_JOINED, 0)
+            SET_VALUE(GSWF_GLITZ_PIT_SIR_SWOOP_JOINED, 1)
             CALL_CHILD(evt_michel_8)
             CALL(evt_rankingReInit)
         END_IF
-        // Major-league milestones: the mystery e-mails, the cake at 6th and Bowser's raid at 5th.
+
+        // Major-league milestones: the mystery e-mails, the cake at 6th and Bowser's visit at 5th.
         CASE_EQUAL(10)
         CASE_EQUAL(9)
         CASE_EQUAL(8)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_MAIL1_RECEIVED), 0)
-            SET_VALUE(GSWF(GSWF_TOU_MAIL1_RECEIVED), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_8_MAIL_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_8_MAIL_DONE, 1)
             CALL_CHILD(evt_mail_1)
         END_IF
         CASE_EQUAL(7)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_MAIL2_RECEIVED), 0)
-            SET_VALUE(GSWF(GSWF_TOU_MAIL2_RECEIVED), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_7_MAIL_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_7_MAIL_DONE, 1)
             CALL_CHILD(evt_mail_2)
         END_IF
         CASE_EQUAL(6)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_CAKE_EVENT_DONE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_CAKE_EVENT_DONE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_6_CAKE_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_6_CAKE_DONE, 1)
             CALL_CHILD(evt_cake)
         END_IF
         CASE_EQUAL(5)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_BOWSER_RAID_DONE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_BOWSER_RAID_DONE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_5_BOWSER_EVENT_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_5_BOWSER_EVENT_DONE, 1)
             CALL_CHILD(evt_koopa_after)
         END_IF
-        IF_INT_EQUAL(GSWF(GSWF_TOU_CAKE_WAITING), 1)
+        IF_INT_EQUAL(GSWF_TOU_CAKE_ON_TABLE, 1)
             CALL_CHILD(evt_tou_08_cake)
         END_IF
         CASE_EQUAL(4)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_MAIL3_RECEIVED), 0)
-            SET_VALUE(GSWF(GSWF_TOU_MAIL3_RECEIVED), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_4_MAIL_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_4_MAIL_DONE, 1)
             CALL_CHILD(evt_mail_3)
         END_IF
         CASE_EQUAL(3)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_MAIL4_RECEIVED), 0)
-            SET_VALUE(GSWF(GSWF_TOU_MAIL4_RECEIVED), 1)
+        IF_INT_EQUAL(GSWF_GLITZ_PIT_DESTRUCTORS_JOINED, 0)
+            SET_VALUE(GSWF_GLITZ_PIT_DESTRUCTORS_JOINED, 1)
             CALL_CHILD(evt_mail_4)
 #if VERSION >= VERSION_JP
             CALL(evt_rankingReInit)
@@ -4177,8 +4306,8 @@ EVT_BEGIN(evt_tou_match_after_default)
         END_IF
         CASE_EQUAL(2)
         CASE_EQUAL(1)
-        IF_INT_EQUAL(GSWF(GSWF_TOU_RANK1_SCENE), 0)
-            SET_VALUE(GSWF(GSWF_TOU_RANK1_SCENE), 1)
+        IF_INT_EQUAL(GSWF_TOU_RANK_1_MAIL_DONE, 0)
+            SET_VALUE(GSWF_TOU_RANK_1_MAIL_DONE, 1)
             CALL_CHILD(evt_mail_5)
         END_IF
     END_SWITCH

@@ -1,5 +1,6 @@
-// System helpers: angle and distance maths, interpolation (intplGetValue), sorting (qqsort, fsort),
-// pad input (makeKey), frame-time conversions and small GX drawing helpers.
+/* "system" - Useful Functions
+ * Lots of helper functions for complex math.
+ */
 
 #include "version.h"
 #include "system.h"
@@ -7,11 +8,11 @@
 #include <dolphin/pad.h>
 #include <math.h>
 #include <stdlib.h>
-// #include <string.h>
 #include <demo/DEMOPad.h>
 #include "mario/mariost.h"
 #include "R_build.h"
 #include "driver/mapdrv.h"
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 #define HALF_PI 1.570796f
@@ -19,7 +20,7 @@
 #define TWO_PI 6.283185307179586f
 
 //.data
-static f32 angleABTBL[] = { 1.0f,       1.273187f,  1.27303f,   1.272768f,  1.272402f,  1.271932f,  1.271358f,
+f32 angleABTBL[] = { 1.0f,       1.273187f,  1.27303f,   1.272768f,  1.272402f,  1.271932f,  1.271358f,
                             1.270681f,  1.269902f,  1.269021f,  1.268038f,  1.266956f,  1.265774f,  1.2644939f,
                             1.263116f,  1.2616431f, 1.260075f,  1.258413f,  1.256659f,  1.254815f,  1.2528811f,
                             1.250859f,  1.248752f,  1.24656f,   1.244285f,  1.2419291f, 1.239494f,  1.236981f,
@@ -35,36 +36,30 @@ static f32 angleABTBL[] = { 1.0f,       1.273187f,  1.27303f,   1.272768f,  1.27
 
 /**
  * The build date and time of this release (from R_build.c);
- * the title screen shows them while Z is held.
+ * the title screen shows them while Z is held in debug mode (JP and later).
  */
 const char* build_date_ptr = R_build_date;
 const char* build_time_ptr = R_build_time;
-
-// FAKE: stand-in for the assertion helper that every version but PAL and the EU demo strips (those two keep it,
-// below); it only keeps the original's message string in its place in .rodata.
-#if VERSION < VERSION_DEMO_EU
-const char* systemStrippedPool0(void) {
-    return "assertion \"%s\" failed.\n \"%s\"\n";
-}
-#endif
 
 /** Returns the root directory for the game's disc file paths: "." (the disc root). */
 const char* getMarioStDvdRoot(void) {
     return ".";
 }
 
-#if VERSION >= VERSION_DEMO_EU
-/** PAL and the EU demo keep the assertion helpers that the other versions strip */
-BOOL __assert(const char* filename, s32 line, const char* assertion) {
+/**
+ * Assertion failure: halts with OSPanic. Only the PAL demo and PAL keep it; the JP demo map lists it UNUSED
+ * (0x28), and the other versions strip it too.
+ */
+BOOL __assert(const char* filename, int line, const char* assertion) {
     OSPanic(filename, line, assertion);
     return TRUE;
 }
 
 /**
- * PAL only: assertion failure with a printf-style message;
- * formats it and halts with OSPanic, reporting file and line.
+ * Assertion failure with a printf-style message; formats it and halts with OSPanic. Kept only in the PAL demo
+ * and PAL; the JP demo map lists it UNUSED (0xdc). Its format string stays in every version's pool.
  */
-BOOL __assert2(const char* filename, s32 line, const char* assertion, const char* message, ...) {
+BOOL __assert2(const char* filename, int line, const char* assertion, const char* message, ...) {
     char buf[1024];
     va_list args;
 
@@ -73,14 +68,25 @@ BOOL __assert2(const char* filename, s32 line, const char* assertion, const char
     OSPanic(filename, line, "assertion \"%s\" failed.\n \"%s\"\n", assertion, buf);
     return TRUE;
 }
-#endif
+
+/**
+ * Rounds to the nearest integer, halves away from zero. Only angleABf calls it, and those calls are inlined (JP demo
+ * map: UNUSED, 0x54). This body compiles to the map size (the float-constant and plain x - 0.5 forms do not) and
+ * adds no pool constants, as the map's numbering shows.
+ */
+s32 roundi(f32 x) {
+    if (x >= 0.0f) {
+        return (s32)(0.5 + x);
+    } else {
+        return -(s32)(0.5 - x);
+    }
+}
 
 /** Wraps an angle in degrees into [0, 360); NaN becomes 0. */
 f32 reviseAngle(f32 angle) {
-    f32 result, temp;
+    f32 result;
 
-    temp = (f32)fmod(angle, 360.0);
-    result = temp;
+    result = fmodf(angle, 360.0f);
 
     if (result != result) { // check for NaN
         result = 0.0f;
@@ -104,16 +110,16 @@ f32 distABf(f32 x1, f32 y1, f32 x2, f32 y2) {
     return sqrtf((xdiff * xdiff) + (ydiff * ydiff));
 }
 
-/** Returns the signed shortest turn in degrees from angle1 to angle2 (within -180..180). */
-f32 compAngle(f32 angle1, f32 angle2) {
-    if (fabsf(angle2 - angle1) >= 180.0f) {
-        if (angle2 < angle1) {
-            angle2 += 360.0f;
+/** Returns the signed shortest turn in degrees between the angles from and to (within -180..180). */
+f32 compAngle(f32 from, f32 to) {
+    if (fabsf(to - from) >= 180.0f) {
+        if (to < from) {
+            to += 360.0f;
         } else {
-            angle2 -= 360.0f;
+            to -= 360.0f;
         }
     }
-    return angle2 - angle1;
+    return to - from;
 }
 
 /**
@@ -124,64 +130,47 @@ f32 compAngle(f32 angle1, f32 angle2) {
 f32 angleABf(f32 x1, f32 y1, f32 x2, f32 y2) {
     f32 xdiff, ydiff;
     f32 xabs, yabs;
-    f32 approxY;
-    f32 tblPos;
-    int tblIdx;
-    f32 angle;
     f32 approxX;
-    f32 corr;
+    int tableIndex;
+    f32 angle;
+    f32 approxY;
+    f32 corrected;
 
     xdiff = x2 - x1;
     ydiff = y2 - y1;
     xabs = fabsf(xdiff);
     yabs = fabsf(ydiff);
     if (xabs > yabs) {
-        approxY = 45.0f * (yabs / xabs);
-        tblPos = 2.0f * approxY;
-        if (tblPos >= 0.0f) {
-            tblIdx = (int)(0.5 + tblPos);
-        } else {
-            tblIdx = -(int)(0.5 - tblPos);
-        }
-        corr = approxY * angleABTBL[tblIdx];
+        approxX = 45.0f * (yabs / xabs);
+        tableIndex = roundi(2.0f * approxX);
+        corrected = approxX * angleABTBL[tableIndex];
         if (xdiff >= 0.0f) {
             if (ydiff >= 0.0f) {
-                angle = 90.0f + corr;
+                angle = 90.0f + corrected;
             } else {
-                angle = 90.0f - corr;
+                angle = 90.0f - corrected;
             }
+        } else if (ydiff >= 0.0f) {
+            angle = 270.0f - corrected;
         } else {
-            if (ydiff >= 0.0f) {
-                angle = 270.0f - corr;
-            } else {
-                angle = 270.0f + corr;
-            }
+            angle = 270.0f + corrected;
         }
+    } else if (yabs == 0.0f) {
+        return 0.0f;
     } else {
-        if (yabs == 0.0f) {
-            return 0.0f;
+        approxY = 45.0f * (xabs / yabs);
+        tableIndex = roundi(2.0f * approxY);
+        corrected = approxY * angleABTBL[tableIndex];
+        if (ydiff >= 0.0f) {
+            if (xdiff >= 0.0f) {
+                angle = 180.0f - corrected;
+            } else {
+                angle = 180.0f + corrected;
+            }
+        } else if (xdiff >= 0.0f) {
+            angle = 0.0f + corrected;
         } else {
-            approxX = 45.0f * (xabs / yabs);
-            tblPos = 2.0f * approxX;
-            if (tblPos >= 0.0f) {
-                tblIdx = (int)(0.5 + tblPos);
-            } else {
-                tblIdx = -(int)(0.5 - tblPos);
-            }
-            corr = approxX * angleABTBL[tblIdx];
-            if (ydiff >= 0.0f) {
-                if (xdiff >= 0.0f) {
-                    angle = 180.0f - corr;
-                } else {
-                    angle = 180.0f + corr;
-                }
-            } else {
-                if (xdiff >= 0.0f) {
-                    angle = 0.0f + corr;
-                } else {
-                    angle = 360.0f - corr;
-                }
-            }
+            angle = 360.0f - corrected;
         }
     }
     return angle;
@@ -189,15 +178,14 @@ f32 angleABf(f32 x1, f32 y1, f32 x2, f32 y2) {
 
 /**
  * Interpolates from start to end at step currStep of steps, along curve mode:
- * 0 linear, 1-3 accelerating (power 2-4), 4-6 decelerating, 7-11 overshoot,
- * wobble ("bururun") and bounce curves, 12 sine ease-out, 13 cosine ease-in.
+ * 0 linear, 1-3 accelerating (power 2-4), 4-6 decelerating, 7-10
+ * wobble ("bururun") and bounce curves, 11 sine ease-in-out, 12 sine ease-out, 13 cosine ease-in.
  * Any other mode value is called as a custom curve function. Returns end when steps is 0.
  * Used everywhere for movement, fades and camera moves.
  */
 f32 intplGetValue(s32 mode, f32 start, f32 end, s32 currStep, s32 steps) {
     f32 step;
     f32 total;
-    f32 f0, f1, f2, f3, f4;
 
     if (!steps) {
         return end;
@@ -205,59 +193,66 @@ f32 intplGetValue(s32 mode, f32 start, f32 end, s32 currStep, s32 steps) {
     step = (f32)currStep;
     total = (f32)steps;
     switch (mode) {
-        case 0:
+        case EASING_LINEAR:
             return start + ((step * (end - start)) / total);
-        case 1:
+        case EASING_QUADRATIC_IN:
             return start + (((step * step) * (end - start)) / (total * total));
-        case 2:
+        case EASING_CUBIC_IN:
             return start + (((step * step * step) * (end - start)) / (total * total * total));
-        case 3:
+        case EASING_QUARTIC_IN:
             return start + (((step * step * step * step) * (end - start)) / (total * (total * (total * total))));
-        case 7:
-            f2 = (f32)cos(4.0f * (3.141592f * (step / total)));
-            f1 = (end - start);
-            f3 = (total - step);
-            return end - ((f3 * (f3 * (f1 * f2))) / (total * total));
-        case 8:
-            f2 = (f32)cos((4.0f * (3.141592f * ((step * step) / total))) / ((15.0f * total) / 100.0f));
-            f1 = (end - start);
-            f3 = (total - step);
-            return end - ((f3 * (f3 * (f1 * f2))) / (total * total));
-        case 9:
+        case EASING_WAVE_SHRINKING: {
+            f32 wave = (f32)cos(4.0f * (3.141592f * (step / total)));
+            f32 range = (end - start);
+            f32 left = (total - step);
+            return end - ((left * (left * (range * wave))) / (total * total));
+        }
+        case EASING_WAVE_SHRINKING_FASTER: {
+            f32 wave = (f32)cos((4.0f * (3.141592f * ((step * step) / total))) / ((15.0f * total) / 100.0f));
+            f32 range = (end - start);
+            f32 left = (total - step);
+            return end - ((left * (left * (range * wave))) / (total * total));
+        }
+        case EASING_WAVE_GROWING_FASTER:
             return end - ((step * (step * ((end - start) * (f32)cos((4.0f * (3.141592f * ((step * step) / total))) /
                                                                     ((15.0f * total) / 100.0f))))) /
                           (total * total));
-        case 4:
-            f1 = (total - step);
-            return (start + (end - start)) - (((f1 * f1) * (end - start)) / (total * total));
-        case 5:
-            f4 = (total - step);
-            return (start + (end - start)) - (((f4 * f4 * f4) * (end - start)) / (total * total * total));
-        case 6:
-            f4 = (total - step);
-            return (start + (end - start)) - (((f4 * f4 * f4 * f4) * (end - start)) / (total * total * total * total));
-        case 10:
-            f2 = (f32)cos((4.0f * (3.141592f * ((step * step) / total))) / ((40.0f * total) / 100.0f));
-            f3 = (total - step);
-            f1 = (f3 * (f3 * f2)) / (total * total);
-            if (f1 < 0.0f) {
-                f1 = -f1;
+        case EASING_QUADRATIC_OUT: {
+            f32 left = (total - step);
+            return (start + (end - start)) - (((left * left) * (end - start)) / (total * total));
+        }
+        case EASING_CUBIC_OUT: {
+            f32 left = (total - step);
+            return (start + (end - start)) - (((left * left * left) * (end - start)) / (total * total * total));
+        }
+        case EASING_QUARTIC_OUT: {
+            f32 left = (total - step);
+            return (start + (end - start)) - (((left * left * left * left) * (end - start)) / (total * total * total * total));
+        }
+        case EASING_BOUNCE_SHRINKING: {
+            f32 wave = (f32)cos((4.0f * (3.141592f * ((step * step) / total))) / ((40.0f * total) / 100.0f));
+            f32 left = (total - step);
+            f32 bounce = (left * (left * wave)) / (total * total);
+            if (bounce < 0.0f) {
+                bounce = -bounce;
             }
-            return -((f1 * (end - start)) - end);
-        case 11:
-            f3 = (f32)cos((3.141592f * step) / total);
-            f2 = (end - start);
-            f0 = 0.5f;
-            f1 = (f2 * (1.0f - f3));
-            return start + (f1 * f0);
-        case 12:
-            f1 = (f32)sin((HALF_PI * step) / total);
-            f0 = (end - start);
-            return start + (f0 * f1);
-        case 13:
-            f2 = (f32)cos((HALF_PI * step) / total);
-            f1 = (end - start);
-            return start + (f1 * (1.0f - f2));
+            return -((bounce * (end - start)) - end);
+        }
+        case EASING_SINE_IN_OUT: {
+            f32 c = (f32)cos((3.141592f * step) / total);
+            f32 range = (end - start);
+            return start + (range * (1.0f - c)) / 2.0f;
+        }
+        case EASING_SINE_OUT: {
+            f32 s = (f32)sin((HALF_PI * step) / total);
+            f32 range = (end - start);
+            return start + (range * s);
+        }
+        case EASING_SINE_IN: {
+            f32 c = (f32)cos((HALF_PI * step) / total);
+            f32 range = (end - start);
+            return start + (range * (1.0f - c));
+        }
         default:
             return ((f32 (*)(s32, s32, f32, f32))mode)(currStep, steps, start, end);
     }
@@ -266,7 +261,7 @@ f32 intplGetValue(s32 mode, f32 start, f32 end, s32 currStep, s32 steps) {
 static void* tmp0[0xC00];
 static u8 tmp1[0x100];
 
-static s32 (*comp)(const void* a, const void* b);
+static QSortCompare comp;
 
 /** Sorts an array of n element pointers with a quicksort, comparing through the callback qqsort stored in comp. */
 static void fsort(void** base, u32 n) {
@@ -275,28 +270,16 @@ static void fsort(void** base, u32 n) {
     static void** gt;
     static void** tail;
     static void* p;
-    void** end;   /* r30 */
-    void** mid;   /* r29 */
-    void** start; /* r28 */
-    void** pv;    /* r27 */
+    void** mid;
     int c;
-    int s;
-    int b;
-    int half;
-    u32 g;
-    u32 t;
-    u32 k;
-    int step;
-    u32 mask;
 
     do {
-        end = &base[n - 1];
-        tail = end;
+        tail = &base[n - 1];
 
         if (n == 2) {
-            if (comp(base[0], *tail) > 0) {
-                p = base[0];
-                base[0] = *tail;
+            if (comp(*base, *tail) > 0) {
+                p = *base;
+                *base = *tail;
                 *tail = p;
             }
             return;
@@ -304,37 +287,35 @@ static void fsort(void** base, u32 n) {
 
         if (n == 4) {
             lo = base;
-            mid = tail;
-            gt = tail;
+            mid = gt = tail;
             hi = tail - 1;
         } else if (n < 40) {
-            mid = &base[n >> 1];
-            if (comp(base[0], *tail) > 0) {
-                if (comp(base[0], *mid) < 0) {
+            /* median of three */
+            mid = &base[n / 2];
+            if (comp(*base, *tail) > 0) {
+                if (comp(*base, *mid) < 0) {
                     p = *tail;
                     *tail = *mid;
-                    *mid = base[0];
-                    base[0] = p;
+                    *mid = *base;
+                    *base = p;
                 } else if (comp(*mid, *tail) < 0) {
-                    p = base[0];
-                    base[0] = *mid;
+                    p = *base;
+                    *base = *mid;
                     *mid = *tail;
                     *tail = p;
                 } else {
-                    p = base[0];
-                    base[0] = *tail;
+                    p = *base;
+                    *base = *tail;
                     *tail = p;
                 }
-            } else {
-                if (comp(base[0], *mid) > 0) {
-                    p = base[0];
-                    base[0] = *mid;
-                    *mid = p;
-                } else if (comp(*mid, *tail) > 0) {
-                    p = *mid;
-                    *mid = *tail;
-                    *tail = p;
-                }
+            } else if (comp(*base, *mid) > 0) {
+                p = *base;
+                *base = *mid;
+                *mid = p;
+            } else if (comp(*mid, *tail) > 0) {
+                p = *mid;
+                *mid = *tail;
+                *tail = p;
             }
             if (n == 3) {
                 return;
@@ -343,65 +324,70 @@ static void fsort(void** base, u32 n) {
             gt = tail;
             hi = tail - 1;
         } else {
-            /* bit length of n */
-            mask = 0xFFFFFFFF;
-            step = 32;
-            k = 63;
-            while (mask != 0) {
+            void** first;
+            void** pv;
+            int s;
+            int bits;
+            int half;
+            u32 g;
+            u32 t;
+            u32 clz;
+            int step;
+            u32 mask;
+
+            /* bit length of n: count leading zeros by binary search */
+            for (mask = ~0, step = 32, clz = 63; mask != 0; step = half) {
                 t = mask & n;
                 half = step >> 1;
-                mask &= mask << ((half == 0) ? 1 : half);
-                if (t != 0)
-                    k -= step;
-                if (t == 0)
+                mask &= mask << (half ? half : 1);
+                if (t != 0) {
+                    clz -= step;
+                } else {
                     mask >>= step;
-                step = half;
+                }
             }
-            b = (k > 32) ? 0 : 32 - k;
+            bits = (clz > 32) ? 0 : 32 - clz;
 
-            /* s ~ sqrt(n) */
-            if (b & 1) {
-                s = 1 << (b >> 1);
-            } else {
-                s = n >> (b >> 1);
-            }
-
+            /* sample about sqrt(n) elements, n / s apart */
+            s = (bits & 1) ? 1 << (bits >> 1) : n >> (bits >> 1);
             g = n / s;
+
             mid = &base[(s / 2) * g];
             tail = &base[(s - 1) * g];
-            start = base;
+            first = base;
 
-            /* quickselect the median of the strided sample to *mid */
-            for (;;) {
-                lo = start;
-                gt = tail;
-                hi = tail;
-                pv = &start[(tail - start) / 2 / g * g];
+            /* quickselect the median of the sample into *mid */
+            do {
+                lo = first;
+                hi = gt = tail;
+                pv = &first[(tail - first) / 2 / g * g];
 
-            sel_scan:
+            sel_right:
                 while (hi >= lo) {
                     c = comp(*hi, *pv);
-                    if (c > 0)
+                    if (c > 0) {
                         gt = hi;
-                    else if (c < 0)
-                        goto sel_lscan;
+                    } else if (c < 0) {
+                        goto sel_left;
+                    }
                     hi -= g;
                 }
                 goto sel_done;
-            sel_lscan:
+            sel_left:
                 while (lo < hi) {
                     c = comp(*lo, *pv);
                     if (c >= 0) {
                         p = *lo;
                         *lo = *hi;
                         *hi = p;
-                        if (c > 0)
+                        if (c > 0) {
                             gt = hi;
-                        if (!(c > 0))
+                        } else {
                             pv = hi;
+                        }
                         lo += g;
                         hi -= g;
-                        goto sel_scan;
+                        goto sel_right;
                     }
                     lo += g;
                 }
@@ -413,48 +399,46 @@ static void fsort(void** base, u32 n) {
                     gt += g;
                 }
 
-                if (gt <= mid)
-                    start = gt;
-                else if (hi >= mid)
+                if (gt <= mid) {
+                    first = gt;
+                } else if (hi >= mid) {
                     tail = hi;
-                else
+                } else {
                     break;
-
-                if (start >= tail)
-                    break;
-            }
+                }
+            } while (first < tail);
 
             lo = base;
-            tail = end;
-            gt = end;
-            hi = end;
+            hi = gt = tail = &base[n - 1];
         }
 
-        /* main partition around *mid */
-    scan:
+        /* three-way partition around *mid */
+    right:
         while (hi >= lo) {
             c = comp(*hi, *mid);
-            if (c > 0)
+            if (c > 0) {
                 gt = hi;
-            else if (c < 0)
-                goto lscan;
+            } else if (c < 0) {
+                goto left;
+            }
             hi--;
         }
         goto done;
-    lscan:
+    left:
         while (lo < hi) {
             c = comp(*lo, *mid);
             if (c >= 0) {
                 p = *lo;
                 *lo = *hi;
                 *hi = p;
-                if (c > 0)
+                if (c > 0) {
                     gt = hi;
-                if (!(c > 0))
+                } else {
                     mid = hi;
+                }
                 lo++;
                 hi--;
-                goto scan;
+                goto right;
             }
             lo++;
         }
@@ -465,7 +449,7 @@ static void fsort(void** base, u32 n) {
             *mid = p;
         }
 
-        /* recurse smaller side, iterate larger side */
+        /* recurse into the smaller side, loop on the larger */
         if (hi - base < tail - gt) {
             lo = hi;
             hi = base;
@@ -475,9 +459,9 @@ static void fsort(void** base, u32 n) {
             tail = hi;
             hi = gt;
         }
-        n = (tail - base) + 1;
+        n = tail - base + 1;
         if (lo > hi) {
-            fsort(hi, (lo - hi) + 1);
+            fsort(hi, lo - hi + 1);
         }
     } while (n > 1);
 }
@@ -487,64 +471,62 @@ static void fsort(void** base, u32 n) {
  * sorts a table of pointers (at most 0xC00 elements, size at most 0x100 bytes) with fsort,
  * then moves the elements into place by following the permutation cycles.
  */
-void qqsort(void* base, u32 n, u32 size, s32 (*compare)(const void* a, const void* b)) {
-    u8* dst;      /* r27 */
-    void** idx;   /* r26 */
-    u32 i;        /* r25 */
-    void** table; /* r24 */
-    u8* buf;      /* r23 */
-    void** slot;  /* r22 */
-    u8* cur;      /* r21 */
-    void* p;      /* r0  */
-    u32 j;
-    void** pp; /* r4  */
-    u8* src;   /* r5  */
+void qqsort(void* base, u32 n, u32 size, QSortCompare compare) {
+    u8* dst;
+    void** idx;
+    u32 i;
+    void** table = tmp0;
+    u8* buf = tmp1;
 
-    table = tmp0;
-    buf = tmp1;
     comp = compare;
     if (n <= 1) {
         return;
     }
 
-    src = (u8*)base;
-    pp = table;
-    j = 0;
-    while (j++ < n) {
-        *pp++ = src;
-        src += size;
-    }
+    /* sort an array of pointers to the elements */
+    {
+        void** pp;
+        u8* src;
+        u32 j;
 
+        for (src = base, pp = table, j = 0; j < n; j++, src += size) {
+            *pp++ = src;
+        }
+    }
     fsort(table, n);
 
-    dst = (u8*)base;
-    idx = table;
-    i = 0;
-    while (i++ < n) {
-        p = *idx;
-        if (p != NULL) {
-            slot = idx;
-            if (p != dst) {
-                memcpy(buf, cur = dst, size);
+    /* apply the permutation in place, cycle by cycle */
+    for (dst = base, idx = table, i = 0; i++ < n; dst += size, idx++) {
+        if (*idx != NULL) {
+            void** slot = idx;
+
+            if (*slot != dst) {
+                u8* hole;
+
+                memcpy(buf, hole = dst, size);
                 do {
-                    memcpy(cur, *slot, size);
-                    cur = (u8*)*slot;
+                    memcpy(hole, *slot, size);
+                    hole = *slot;
                     *slot = NULL;
-                    slot = &table[(u32)(cur - (u8*)base) / size];
-                } while ((p = *slot) != dst);
-                memcpy(cur, buf, size);
+                    slot = &table[(hole - (u8*)base) / size];
+                } while (*slot != dst);
+                memcpy(hole, buf, size);
                 *slot = NULL;
             }
         }
-        dst += size;
-        idx++;
     }
 }
 
 /** Returns the DEMO pad library's status for controller i. */
-static inline DEMOPadStatus* GET_DEMO_PAD_STATUS(u32 i) {
+static inline DEMOPadStatus* getDemoPadStatus(u32 i) {
     return DemoPad + i;
 }
+
+#if VERSION >= VERSION_US
+#define KEY_REPEAT_FRAMES(n) ((gp->framerate * (n)) / 60)
+#else
+#define KEY_REPEAT_FRAMES(n) (n)
+#endif
 
 /**
  * Reads the controllers once per frame (DEMOPadRead) into the global input state:
@@ -553,11 +535,8 @@ static inline DEMOPadStatus* GET_DEMO_PAD_STATUS(u32 i) {
  * and, in the releases, applies rumble changes to the motors when rumble is enabled.
  */
 void makeKey(void) {
-    s32 delay;
 #if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
-    // All four demos keep button/dirs in 32-bit locals: with no u16 masks to fold, the global optimiser's
-    // constant propagation changes nothing in makeKey, so its dead-li deletion never runs and loop 2's count
-    // register is colour-coalesced with i's zero (the demos' loop-2 register assignment).
+    // the demos keep button/dirs in 32-bit locals
     u32 button;
     u32 dirs;
 #else
@@ -568,57 +547,56 @@ void makeKey(void) {
 
     DEMOPadRead();
     for (i = 0; i < 4; i++) {
-        dirs = GET_DEMO_PAD_STATUS(i)->dirs;
+        dirs = getDemoPadStatus(i)->dirs;
         gp->dirsNew[i] = dirs & (dirs ^ gp->dirs[i]);
         gp->dirsRepeat[i] = gp->dirsNew[i];
         if (dirs && dirs == gp->dirs[i]) {
             if (!--gp->dirsRepeatDelay[i]) {
                 gp->dirsRepeat[i] = dirs;
-                gp->dirsRepeatDelay[i] = FPS_FRAMES(6);
+                gp->dirsRepeatDelay[i] = KEY_REPEAT_FRAMES(6);
             }
         } else {
-            gp->dirsRepeatDelay[i] = FPS_FRAMES(24);
+            gp->dirsRepeatDelay[i] = KEY_REPEAT_FRAMES(24);
         }
         gp->dirs[i] = dirs;
     }
 
     for (i = 0; i < 4; i++) {
-        button = GET_DEMO_PAD_STATUS(i)->pst.button;
+        button = getDemoPadStatus(i)->pst.button;
         gp->buttonNew[i] = button & (button ^ gp->button[i]);
         gp->buttonRepeat[i] = gp->buttonNew[i];
         if (button && button == gp->button[i]) {
             if (!--gp->buttonRepeatDelay[i]) {
                 gp->buttonRepeat[i] = button;
-                gp->buttonRepeatDelay[i] = FPS_FRAMES(6);
+                gp->buttonRepeatDelay[i] = KEY_REPEAT_FRAMES(6);
             }
         } else {
-            gp->buttonRepeatDelay[i] = FPS_FRAMES(24);
+            gp->buttonRepeatDelay[i] = KEY_REPEAT_FRAMES(24);
         }
         gp->button[i] = button;
-        gp->buttonUp[i] = GET_DEMO_PAD_STATUS(i)->buttonUp;
+        gp->buttonUp[i] = getDemoPadStatus(i)->buttonUp;
     }
 
     for (i = 0; i < 4; i++) {
-        gp->stickX[i] = GET_DEMO_PAD_STATUS(i)->pst.stickX;
-        gp->stickY[i] = GET_DEMO_PAD_STATUS(i)->pst.stickY;
-        gp->substickX[i] = GET_DEMO_PAD_STATUS(i)->pst.substickX;
-        gp->substickY[i] = GET_DEMO_PAD_STATUS(i)->pst.substickY;
-        gp->triggerLeft[i] = GET_DEMO_PAD_STATUS(i)->pst.triggerLeft;
-        gp->triggerRight[i] = GET_DEMO_PAD_STATUS(i)->pst.triggerRight;
+        gp->stickX[i] = getDemoPadStatus(i)->pst.stickX;
+        gp->stickY[i] = getDemoPadStatus(i)->pst.stickY;
+        gp->substickX[i] = getDemoPadStatus(i)->pst.substickX;
+        gp->substickY[i] = getDemoPadStatus(i)->pst.substickY;
+        gp->triggerLeft[i] = getDemoPadStatus(i)->pst.triggerLeft;
+        gp->triggerRight[i] = getDemoPadStatus(i)->pst.triggerRight;
     }
-
 #if VERSION >= VERSION_US
     for (i = 0; i < 4; i++) {
         if ((gp->button[i] & (PAD_BUTTON_X | PAD_BUTTON_Y | PAD_BUTTON_START)) == (PAD_BUTTON_X | PAD_BUTTON_Y | PAD_BUTTON_START)) {
             gp->button[i] = 0;
             gp->buttonNew[i] = 0;
             gp->buttonRepeat[i] = 0;
-            gp->buttonRepeatDelay[i] = FPS_FRAMES(24);
+            gp->buttonRepeatDelay[i] = KEY_REPEAT_FRAMES(24);
             gp->buttonUp[i] = 0;
             gp->dirs[i] = 0;
             gp->dirsNew[i] = 0;
             gp->dirsRepeat[i] = 0;
-            gp->dirsRepeatDelay[i] = FPS_FRAMES(24);
+            gp->dirsRepeatDelay[i] = KEY_REPEAT_FRAMES(24);
             gp->stickX[i] = 0;
             gp->stickY[i] = 0;
             gp->substickX[i] = 0;
@@ -630,26 +608,24 @@ void makeKey(void) {
 #endif
 
 #if VERSION == VERSION_JP || VERSION == VERSION_US || VERSION == VERSION_EU
-    // Only the releases drive the rumble motors; none of the four demos does.
+    // only the releases drive the rumble motors
     if (gp->rumbleEnabled) {
         for (i = 0; i < 4; i++) {
             if (gp->rumbleHardStop[i]) {
-                PADControlMotor(i, 2);
-            } else {
-                if (gp->prevRumbleStatus[i] != gp->rumbleStatus[i]) {
-                    switch (gp->rumbleStatus[i]) {
-                        case 0:
-                            PADControlMotor(i, 0);
-                            break;
-                        case 1:
-                            PADControlMotor(i, 1);
-                            break;
-                        case 2:
-                            PADControlMotor(i, 2);
-                            break;
-                    }
-                    gp->prevRumbleStatus[i] = gp->rumbleStatus[i];
+                PADControlMotor(i, PAD_MOTOR_STOP_HARD);
+            } else if (gp->prevRumbleStatus[i] != gp->rumbleStatus[i]) {
+                switch (gp->rumbleStatus[i]) {
+                    case PAD_MOTOR_STOP:
+                        PADControlMotor(i, PAD_MOTOR_STOP);
+                        break;
+                    case PAD_MOTOR_RUMBLE:
+                        PADControlMotor(i, PAD_MOTOR_RUMBLE);
+                        break;
+                    case PAD_MOTOR_STOP_HARD:
+                        PADControlMotor(i, PAD_MOTOR_STOP_HARD);
+                        break;
                 }
+                gp->prevRumbleStatus[i] = gp->rumbleStatus[i];
             }
         }
     }
@@ -657,7 +633,7 @@ void makeKey(void) {
     gp->keyDataValid = 1;
 }
 
-/** Returns the stick and d-pad directions held on controller chan. */
+/** Returns the main and C stick directions held on controller chan (DEMO_STICK_*, DEMO_SUBSTICK_*). */
 u32 keyGetDir(u32 chan) {
     return gp->dirs[chan];
 }
@@ -697,7 +673,7 @@ s8 keyGetStickY(u32 chan) {
     return gp->stickY[chan];
 }
 
-/** unused on retail */
+/** Returns the C stick's x position on controller chan; no version calls it. */
 s8 keyGetSubStickX(u32 chan) {
     return gp->substickX[chan];
 }
@@ -705,6 +681,16 @@ s8 keyGetSubStickX(u32 chan) {
 /** Returns the C stick's y position on controller chan. */
 s8 keyGetSubStickY(u32 chan) {
     return gp->substickY[chan];
+}
+
+/** Returns the analog L trigger on controller chan; no version calls it (JP demo map: UNUSED, 0x10). */
+u8 keyGetTriggerL(u32 chan) {
+    return gp->triggerLeft[chan];
+}
+
+/** Returns the analog R trigger on controller chan; no version calls it (JP demo map: UNUSED, 0x10). */
+u8 keyGetTriggerR(u32 chan) {
+    return gp->triggerRight[chan];
 }
 
 /** Starts rumble on controller chan (applied by makeKey). */
@@ -729,11 +715,11 @@ u8 padGetRumbleStatus(u32 chan) {
 
 /** Returns the sine and the negated cosine of an angle in degrees, the game's x/z direction for that facing. */
 void sincosf(f32* ret_sin, f32* ret_cos, f32 degree) {
-    float result; // fp31
+    f32 radian;
 
-    result = PI * degree / 180.0f; // convert to radian
-    *ret_sin = (f32)sin(result);
-    *ret_cos = -(f32)cos(result);
+    radian = PI * degree / 180.0f;
+    *ret_sin = (f32)sin(radian);
+    *ret_cos = -(f32)cos(radian);
 }
 
 /**
@@ -750,6 +736,16 @@ void movePos(float* ret_sin, float* ret_cos, f32 dist, f32 degree) {
     *ret_cos = -((dist * result2) - *ret_cos);
 }
 
+/**
+ * FAKE stand-in for the dead-stripped movePos2 (0xc8) and movePos3 (0xd0) of the JP demo map, which sat here:
+ * their double constants 1.5, 2.5 and 1.7 (map @1111, @1112, @1117) stay in .rodata. Their bodies are not known.
+ */
+void systemStrippedPool1b(f64* d) {
+    d[0] = 1.5;
+    d[1] = 2.5;
+    d[2] = 1.7;
+}
+
 /** Returns a random integer in [0, scalar), or 0 when scalar is 0. */
 s32 irand(s32 scalar) {
     if (scalar == 0) {
@@ -757,6 +753,13 @@ s32 irand(s32 scalar) {
     }
     return rand() % scalar;
 }
+
+// Stripped: nothing in any version reads or writes them (JP demo map: UNUSED, 4 bytes each, in .sbss after
+// sysGetToken's token and before fsort's statics; declared in this order, loop first, the emission comes out
+// as in the map). The names point to an OSReport log ring that sysOSReport does not use (the JP demo's 0xc8
+// sysOSReport is this file's); their types are not shown by any byte (s32 chosen, like the other counters here).
+s32 osreport_log_loop;
+s32 osreport_log_index;
 
 /** Returns the next 16-bit draw sync token. */
 u16 sysGetToken(void) {
@@ -785,12 +788,12 @@ void sysWaitDrawSync(void) {
 void sysDummyDraw(Mtx mtx) {
     f32 vtxMin, vtxMax;
 
-    GXLoadPosMtxImm(mtx, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(mtx, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetNumChans(0);
     GXSetNumTexGens(1);
     GXSetNumTevStages(1);
-    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, 0x3C);
+    GXSetTexCoordGen(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_IDENTITY);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
     GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -820,17 +823,36 @@ void sysDummyDraw(Mtx mtx) {
 }
 
 /** Scales a per-frame (60 fps) amount by the real time between two OSTime stamps. */
-f32 getV60FPS(f32 perFrame, s64 prevTime, s64 nowTime) {
-    u64 prevMs, nowMs;
+f32 getV60FPS(f32 perFrame, s64 startTick, s64 endTick) {
+    u64 startMs, endMs;
 
-    prevMs = (u64)OSTicksToMilliseconds(prevTime);
-    nowMs = (u64)OSTicksToMilliseconds(nowTime);
-    if (nowMs >= prevMs) {
-        nowMs = nowMs - prevMs;
+    startMs = (u64)OSTicksToMilliseconds(startTick);
+    endMs = (u64)OSTicksToMilliseconds(endTick);
+    if (endMs >= startMs) {
+        endMs = endMs - startMs;
     } else {
-        nowMs = (-1 - prevMs) + nowMs; // the millisecond count wrapped
+        endMs = (-1 - startMs) + endMs;
     }
-    return ((60.0f * perFrame) * (f32)nowMs) / 1000.0f;
+    return ((60.0f * perFrame) * (f32)endMs) / 1000.0f;
+}
+
+/**
+ * Converts seconds to frames at 60 frames per second; no version calls it (JP demo map: UNUSED, 0x8).
+ * The stripped converters (sysSec2Frame* and sysFrame2Sec/Msec*) are written at 60 frames per second, which fits
+ * their JP demo map sizes (the JP demo strips them too); whether US and later switched them to gp->framerate, like the kept ones, is unknown.
+ */
+s32 sysSec2Frame(s32 sec) {
+    return sec * 60;
+}
+
+/** Converts seconds to frames as a float at 60 frames per second; no version calls it (JP demo map: UNUSED, 0xc). */
+f32 sysSec2FrameFloat(f32 sec) {
+    return sec * 60.0f;
+}
+
+/** Converts frames to whole seconds at 60 frames per second; no version calls it (JP demo map: UNUSED, 0x20). */
+s32 sysFrame2Sec(s32 frame) {
+    return frame / 60;
 }
 
 /** Converts frames to seconds at 60 frames per second. */
@@ -839,7 +861,7 @@ f32 sysFrame2SecFloat(f32 frame) {
 }
 
 /**
- * Converts milliseconds to whole frames at the current frame rate (50 or 60 in US, PAL and the 2004-09 demos;
+ * Converts milliseconds to whole frames at the current frame rate (50 or 60 in US and later;
  * always 60 in JP and the early demos).
  */
 s32 sysMsec2Frame(s32 msec) {
@@ -859,9 +881,28 @@ f32 sysMsec2FrameFloat(f32 msec) {
 #endif
 }
 
-#if VERSION >= VERSION_DEMO_EU
-/** PAL and the EU demo keep the file:line debug print that the other versions strip */
-void sysDebugReport(const char* filename, s32 line, const char* format, ...) {
+/**
+ * Converts frames to milliseconds at 60 frames per second, the inverse of sysMsec2Frame; no version calls it
+ * (JP demo map: UNUSED, 0x24).
+ */
+s32 sysFrame2Msec(s32 frame) {
+    return (frame * 1000) / 60;
+}
+
+/**
+ * Converts frames to milliseconds as a float at 60 frames per second; no version calls it (JP demo map: UNUSED,
+ * 0x14). Its 1000.0f is the first float constant of the pool after the GX colour.
+ */
+f32 sysFrame2MsecFloat(f32 frame) {
+    return (frame * 1000.0f) / 60.0f;
+}
+
+/**
+ * Prints a printf-style debug line with file and line through OSReport. Only the PAL demo and PAL keep it (their
+ * RELs call it); the JP demo map lists it UNUSED (0xc8) under this name (formerly called sysDebugReport here),
+ * and its format string stays in every version's pool.
+ */
+void sysOSReport(const char* filename, int line, const char* format, ...) {
     char buf[2048];
     va_list args;
 
@@ -869,7 +910,6 @@ void sysDebugReport(const char* filename, s32 line, const char* format, ...) {
     vsprintf(buf, format, args);
     OSReport("[%8s:% 4d] %s", filename, line, buf);
 }
-#endif
 
 /**
  * Extracts the pure rotation of src into dst: normalises the two named axes (firstAxis, secondAxis: 'x', 'y' or
@@ -984,7 +1024,7 @@ void mtxGetRotationElement(Mtx src, Mtx dst, s8 firstAxis, s8 secondAxis) {
  * Returns the decompressed size, 0 when the header is not LZ77.
  */
 s32 LZ77Decode(u8* inputBuffer, u8* outputBuffer) {
-    u8* output;
+    u8* outputStart;
     s8 flag;
     s8 bitsLeft;
     s32 bytesWritten;
@@ -996,7 +1036,7 @@ s32 LZ77Decode(u8* inputBuffer, u8* outputBuffer) {
     u8* lookback;
     int i;
 
-    output = outputBuffer;
+    outputStart = outputBuffer;
     bitsLeft = 0;
     if (*inputBuffer != 0x10) {
         return 0;
@@ -1006,7 +1046,7 @@ s32 LZ77Decode(u8* inputBuffer, u8* outputBuffer) {
     expectedSize += (inputBuffer[3] << 16) & 0xFF0000;
     input = inputBuffer + 4;
     while (1) {
-        bytesWritten = outputBuffer - output;
+        bytesWritten = outputBuffer - outputStart;
         if (expectedSize == bytesWritten) {
             break;
         }
@@ -1035,18 +1075,37 @@ s32 LZ77Decode(u8* inputBuffer, u8* outputBuffer) {
 }
 
 // clang-format off
+// Original name and size from the JP demo's link map (UNUSED there, 0x34 after memset_as4): nothing calls it, so
+// the linker strips it. Behaviour from Super Paper Mario's memcmp_as4 (spm-decomp, CC0).
+/** Compares count / 4 words of a and b: 0 when all are equal, else 1. */
+s32 memcmp_as4(const void* a, const void* b, u32 count) {
+    const u32* p = (const u32*)a;
+    const u32* q = (const u32*)b;
+    u32 n = count >> 2;
+    while (n--) {
+        if (*p++ != *q++) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 #ifdef __MWERKS__
+/**
+ * Copies count / 4 words from src to dest. Returns the address of the last word written (r3 is advanced by
+ * stwu) and, given count < 4, loops 2^32 times (ctr = 0); no caller uses the result or passes less than one word.
+ */
 asm void* memcpy_as4(void* dest, const void* src, u32 count) {
-	nofralloc
-	addi    r3, r3, -4
-	srwi    r5, r5, 2
-	addi    r4, r4, -4
-	mtctr   r5
-	@0:
-	lwzu    r11, 4(r4)
-	stwu    r11, 4(r3)
-	bdnz    @0
-	blr
+    nofralloc
+    addi    r3, r3, -4
+    srwi    r5, r5, 2
+    addi    r4, r4, -4
+    mtctr   r5
+    @0:
+    lwzu    r11, 4(r4)
+    stwu    r11, 4(r3)
+    bdnz    @0
+    blr
 }
 #else
 /**
@@ -1055,65 +1114,28 @@ asm void* memcpy_as4(void* dest, const void* src, u32 count) {
  * loops 2^32 times (ctr = 0); no caller uses the result or passes less than one word.
  */
 void* memcpy_as4(void* dest, const void* src, u32 count) {
-	u32* d = (u32*)dest;
-	const u32* s = (const u32*)src;
-	u32 n = count >> 2;
-	while (n--) {
-		*d++ = *s++;
-	}
-	return dest;
+    u32* d = (u32*)dest;
+    const u32* s = (const u32*)src;
+    u32 n = count >> 2;
+    while (n--) {
+        *d++ = *s++;
+    }
+    return dest;
 }
 #endif
 // clang-format on
 
-// FAKE: the original file had debug functions that the linker dead-stripped; their constants
-// stayed in the literal pools. These stand-ins recreate the pool contents in order.
-#if VERSION >= VERSION_US
 /**
- * US pools the int->float constant between the strings and the doubles;
- * functions are emitted in reverse order, so the doubles come first in the source
+ * FAKE stand-in for constants of functions the linker dead-stripped (JP demo map: intplStringData and
+ * intplStringToEnum UNUSED, mtxGetScaleElement UNUSED 0x75c): the interpolation mode names, which stay in .rodata,
+ * then 1.0f and the sqrtf constants. The original table has a 4-byte entry (map @491) between BOUND and SIN_ACCEL
+ * that the pool does not show, and JP and later lack ACCEL, DECEL and BOUND, so the table cannot be rebuilt yet.
+ * Functions are emitted in reverse source order, so this last function's constants come first.
  */
-void systemStrippedPool1b(f32* f, f64* d) {
-    d[0] = 1.5;
-    d[1] = 2.5;
-    d[2] = 1.7;
-    f[2] = 1000.0f;
-}
-
-/**
- * FAKE stand-in (see above): keeps the int-to-float conversion constant of the stripped debug code in its pool
- * place.
- */
-f32 systemStrippedPool2(s32 x) {
-    return (f32)x;
-}
-
-/**
- * FAKE stand-in (see above): recreates the stripped debug code's constants (the interpolation mode names LINEAR,
- * ACCEL, ..., the file:line report format and a few numbers) in their original pool order.
- */
-void systemStrippedPool1(const char** str, f32* f, f64* d, f32 x) {
+void systemStrippedPool1(const char** str, f32* f, f32 x) {
     f[0] = 1.0f;
     str[0] = "LINEAR";
-    str[1] = "DOUBLE_ACCEL";
-    str[2] = "TRIPLE_ACCEL";
-    str[3] = "DOUBLE_DECEL";
-    str[4] = "TRIPLE_DECEL";
-    str[5] = "GEMINI";
-    str[6] = "BURURUN";
-    str[7] = "BURURUN_DECEL";
-    str[8] = "SIN_ACCEL";
-    str[9] = "SIN_DECEL";
-    f[1] = sqrtf(x);
-    str[10] = "[%8s:% 4d] %s";
-}
-#else
-/** FAKE stand-in, JP and early-demo form of systemStrippedPool1 above (the early demos keep all the mode names). */
-void systemStrippedPool1(const char** str, f32* f, f64* d, f32 x) {
-    f[0] = 1.0f;
 #if VERSION <= VERSION_DEMO_JP
-    // the early demos' small-data limit leaves the 6-byte names in .rodata, so the whole name table stays
-    str[0] = "LINEAR";
     str[1] = "ACCEL";
     str[2] = "DOUBLE_ACCEL";
     str[3] = "TRIPLE_ACCEL";
@@ -1127,7 +1149,6 @@ void systemStrippedPool1(const char** str, f32* f, f64* d, f32 x) {
     str[11] = "SIN_ACCEL";
     str[12] = "SIN_DECEL";
 #else
-    str[0] = "LINEAR";
     str[1] = "DOUBLE_ACCEL";
     str[2] = "TRIPLE_ACCEL";
     str[3] = "DOUBLE_DECEL";
@@ -1139,10 +1160,4 @@ void systemStrippedPool1(const char** str, f32* f, f64* d, f32 x) {
     str[9] = "SIN_DECEL";
 #endif
     f[1] = sqrtf(x);
-    str[10] = "[%8s:% 4d] %s";
-    d[0] = 1.5;
-    d[1] = 2.5;
-    d[2] = 1.7;
-    f[2] = 1000.0f;
 }
-#endif

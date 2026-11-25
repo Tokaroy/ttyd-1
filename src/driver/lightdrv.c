@@ -1,5 +1,6 @@
 // Light driver: the named map and character lights (ambient, point, spot, directional) and the GX
 // light setup for the lights nearest to an object.
+
 #include "driver/lightdrv.h"
 #include "system.h"
 #include "driver/camdrv.h"
@@ -12,15 +13,15 @@
 static LightWork work[2];
 
 //.bss
-LightEntry paperLight3D;
-LightEntry paperLight3DImg;
-LightEntry paperCraft;
-LightEntry booLight;
+static LightEntry paperLight3D;
+static LightEntry paperLight3DImg;
+static LightEntry paperCraft;
+static LightEntry booLight;
 
-// local prototypes
-static s32 _sort(const void* a, const void* b);
-
-#define lightGetWork() (mapGetActiveGroup() == 1 ? &work[1] : &work[0])
+/** The field (group 0) or battle (group 1) light work. */
+static inline LightWork* lightGetWork(void) {
+    return mapGetActiveGroup() == 1 ? &work[1] : &work[0];
+}
 
 /**
  * Allocates the field and battle light tables and sets up the fixed lights:
@@ -79,16 +80,13 @@ void lightReInit(void) {
     memset(wp->entries, 0, sizeof(LightEntry) * wp->count);
 }
 
-/** The camera's forward axis; lightMain turns it into world space to place the paper characters' light. */
-static const Vec camDir = {0.0f, 0.0f, 1.0f};
-
 /**
- * Per-frame update: places the PAPER light far away along the camera direction (turned into view space)
+ * Per-frame update: places the PAPER light far away along the camera direction (turned into world space)
  * so paper characters are lit from the camera, and parks the Boo light 1000 units overhead.
  */
 void lightMain(void) {
     CameraEntry* camera;
-    Vec w = camDir;
+    Vec w = {0.0f, 0.0f, 1.0f}; // the camera's forward axis
     Vec a, b, c;
     Vec position;
 
@@ -97,7 +95,7 @@ void lightMain(void) {
     b = *(Vec*)camera->view[1];
     c = *(Vec*)camera->view[2];
     {
-        Vec r = {0.0f, 0.0f, 0.0f};
+        Vec r = {0.0f, 0.0f, 0.0f}; // zero-initialised, then overwritten (as in the game code)
         r.x = a.x * w.x + b.x * w.y + c.x * w.z;
         r.y = a.y * w.x + b.y * w.y + c.y * w.z;
         r.z = a.z * w.x + b.z * w.y + c.z * w.z;
@@ -115,20 +113,17 @@ void lightMain(void) {
     booLight.position = (Vec){0.0f, 1000.0f, 0.0f};
 }
 
-/**
- * Distance falloff of a map light by its attenuation type: none, linear, quadratic, quadratic
- * (constant, linear and squared coefficients); lightEntry copies the chosen row into the light.
- */
 static const Vec decay_tbl[] = {
     {1.0f, 0.0f, 0.0f},
     {0.0f, 0.1f, 0.0f},
     {0.0f, 0.0f, 0.01f},
-    {0.0f, 0.0f, 0.01f}};
+    {0.0f, 0.0f, 0.01f}
+};
 
 /**
- * Adds a light from the map file: type 0-3 is ambient, point, spot or directional,
- * attenType picks the distance falloff from decay_tbl, flag 2 marks a character-only light.
- * A clashing name gets a _0000-style suffix. Returns the slot index.
+ * Adds a light: type is ambient, point, directional or spot (LIGHT_TYPE_*), attenType picks the distance falloff
+ * from decay_tbl, and LIGHT_LFLAG_CHARA in flags marks it LIGHT_CHARA. A name already in use gets a "_%04d"
+ * suffix. Returns the slot index.
  */
 s32 lightEntry(const char* name, s32 type, Vec* position, Vec* rotation, GXColor color, f32 spotAngle, f32 attenAngle, s32 attenType, s32 flags) {
     LightWork* wp = lightGetWork();
@@ -142,12 +137,14 @@ s32 lightEntry(const char* name, s32 type, Vec* position, Vec* rotation, GXColor
             break;
         }
     }
-    // the name is taken: try name_0000, name_0001, ...
+
+    // BUG: a name already in use gets "_%04d" appended until a free name is found, but from the second try
+    // `name` points at uniqueName itself, so sprintf reads its own destination and the suffixes pile up
     if (i < LIGHT_ENTRY_COUNT) {
         for (j = 0;; j++) {
             sprintf(uniqueName, "%s_%04d", name, j);
             entry = wp->entries;
-            name = uniqueName; // BUG: a second clash formats uniqueName into itself and stacks suffixes
+            name = uniqueName;
             for (i = 0; i < wp->count; i++, entry++) {
                 if (entry->flags & LIGHT_ENABLED && !strcmp(entry->name, name)) {
                     break;
@@ -178,20 +175,20 @@ s32 lightEntry(const char* name, s32 type, Vec* position, Vec* rotation, GXColor
     entry->attenDistCoef.z = decay_tbl[attenType].z;
     entry->flags |= LIGHT_ENABLED;
     switch (type) {
-        case 0:
+        case LIGHT_TYPE_AMBIENT:
             entry->flags |= LIGHT_AMBIENT;
             break;
-        case 1:
+        case LIGHT_TYPE_POINT:
             entry->flags |= LIGHT_POINT;
             break;
-        case 2:
-            entry->flags |= LIGHT_SPOT;
-            break;
-        case 3:
+        case LIGHT_TYPE_DIRECTIONAL:
             entry->flags |= LIGHT_DIRECTIONAL;
             break;
+        case LIGHT_TYPE_SPOT:
+            entry->flags |= LIGHT_SPOT;
+            break;
     }
-    if (flags & 2) {
+    if (flags & LIGHT_LFLAG_CHARA) {
         entry->flags |= LIGHT_CHARA;
     }
     return n;
@@ -218,15 +215,15 @@ typedef struct NearWork {
 
 /** qsort comparator for lightGetNearObj: orders lights by distance, nearest first. */
 static s32 _sort(const void* a, const void* b) {
-    f32 distB, distA;
+    f32 value2, value1;
 
-    distA = ((const NearWork*)a)->dist;
-    distB = ((const NearWork*)b)->dist;
+    value1 = ((NearWork*)a)->dist;
+    value2 = ((NearWork*)b)->dist;
 
-    if (distA > distB) {
+    if (value1 > value2) {
         return 1;
     }
-    if (distA < distB) {
+    if (value1 < value2) {
         return -1;
     }
     return 0;
@@ -237,27 +234,34 @@ static s32 _sort(const void* a, const void* b) {
  * keeping only lights with any of flags (0 = all); NULL-pads the rest and returns how many were found.
  * mapdrv uses it to light map parts and characters.
  */
-s32 lightGetNearObj(Vec* position, LightEntry** out, s32 count, LightEntryFlags flags) {
+s32 lightGetNearObj(const Vec* position, LightEntry** out, s32 count, u16 flags) {
+    s32 found;
     LightWork* wp = lightGetWork();
     NearWork tmp[LIGHT_ENTRY_COUNT];
+    LightEntry** op;
+    NearWork* tp;
     LightEntry* entry;
-    u32 n;
     s32 i;
-    s32 j;
+    u32 n;
+    u32 mask;
 
     if (lightGetEntryNum() > 8) {
+        entry = wp->entries;
+        tp = tmp;
         n = 0;
-        for (i = 0, entry = wp->entries; i < wp->count; i++, entry++) {
+        for (i = 0; i < wp->count; i++, entry++) {
             if (entry->flags & LIGHT_ENABLED) {
-                tmp[n].entry = entry;
-                tmp[n].dist = VECDistance(position, &entry->position);
+                tp->entry = entry;
+                tp->dist = VECDistance(position, &entry->position);
+                tp++;
                 n++;
             }
         }
         qqsort(tmp, n, sizeof(NearWork), _sort);
     } else {
+        entry = wp->entries;
         n = 0;
-        for (j = 0, entry = wp->entries; j < wp->count; j++, entry++) {
+        for (i = 0; i < wp->count; i++, entry++) {
             if (entry->flags & LIGHT_ENABLED) {
                 tmp[n].entry = entry;
                 n++;
@@ -265,25 +269,26 @@ s32 lightGetNearObj(Vec* position, LightEntry** out, s32 count, LightEntryFlags 
         }
     }
 
-    j = 0;
-    for (i = 0; i < n; i++) {
-        entry = tmp[i].entry;
-        if (entry->flags & LIGHT_AMBIENT) {
-            continue;
-        }
-        if (flags && !(flags & entry->flags)) {
-            continue;
-        }
-        out[j] = entry;
-        j++;
-        if (j >= count) {
-            break;
+    op = out;
+    tp = tmp;
+    mask = flags;
+    found = 0;
+    for (i = 0; i < n; i++, tp++) {
+        u32 fl;
+        LightEntry* e = tp->entry;
+        fl = e->flags;
+        if (!(fl & LIGHT_AMBIENT) && (!mask || (mask & fl))) {
+            *op++ = e;
+            found++;
+            if (found >= count) {
+                break;
+            }
         }
     }
-    for (i = j; i < count; i++) {
+    for (i = found; i < count; i++) {
         out[i] = NULL;
     }
-    return j;
+    return found;
 }
 
 /** Returns the first enabled map (non-character) ambient light, or NULL. */
@@ -338,7 +343,7 @@ LightEntry* lightGetPaper(void) {
     if (cam == CAMERA_3D) {
         return &paperLight3D;
     }
-    if (cam == CAMERA_3D_IMAGE) {
+    if (cam == CAMERA_3D_IMAGE) { // the same result as the fall-through (game code)
         return &paperLight3DImg;
     }
     return &paperLight3DImg;

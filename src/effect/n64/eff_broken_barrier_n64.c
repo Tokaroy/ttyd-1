@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: broken barrier, 60 pieces of a shattering barrier that scatter and fade.
-#include "eff/n64/eff_broken_barrier_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -9,6 +9,7 @@
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
 #include <stdlib.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include <math.h>
 
@@ -82,13 +83,12 @@ static effN64Vtx size8x8_tex22x22_vtx[] = {
 
 /**
  * Spawns 60 barrier shards around (x, y, z) for `life` frames (0 or less: until soft deleted).
- * Type 0 is the staff barrier breaking, 2 plays in reverse (shards flow inward); 1 is Peach's (Guess).
- * Used in the Palace of Shadow (las_29).
+ * Pattern names in the effect table: type 0 the staff barrier breaking, 1 Peach's transformation coming undone,
+ * 2 reverse playback (shards flow inward). Used in the Palace of Shadow (las_29, types 1 and 2).
  */
 EffectEntry* effBrokenBarrierN64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
     EffBrokenBarrierN64Work* work;
-    EffBrokenBarrierN64Work* piece;
     f32 step;
     s32 i;
 
@@ -98,7 +98,7 @@ EffectEntry* effBrokenBarrierN64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f
     work = __memAlloc(HEAP_EFFECT, sizeof(EffBrokenBarrierN64Work) * 61);
     effect->userdata = work;
     effect->callback = effBrokenBarrierMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->frame = 0;
     if (life <= 0) {
@@ -108,7 +108,6 @@ EffectEntry* effBrokenBarrierN64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f
     }
     work->alpha = 255;
     work->position.x = x;
-    piece = work + 1;
     work->position.y = y;
     work->position.z = z;
     work->scale = scale;
@@ -121,13 +120,14 @@ EffectEntry* effBrokenBarrierN64Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f
     work->g2 = 255;
     work->b2 = 235;
     work->alpha2 = 255;
+    work++;
     if (life < 20) {
         step = 1.0f / 3.0f;
     } else {
         step = (f32)life / 60.0f;
     }
-    for (i = 1; i < 61; i++, piece++) {
-        piece->timer = (s32)(-(f32)i * step) - 1;
+    for (i = 1; i < 61; i++, work++) {
+        work->timer = (s32)(-(f32)i * step) - 1;
     }
     return effect;
 }
@@ -147,20 +147,21 @@ static void effBrokenBarrierMain(EffectEntry* effect) {
     f32 halfH;
     f32 width;
     f32 height;
-    f32 ca;
     f32 b;
     f32 a;
     f32 t;
     Vec position;
     Vec tmp = {0.0f, 0.0f, 0.0f};
+    f32 lat;
+    f32 lon;
 
     tmp.x = work->position.x;
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -201,14 +202,11 @@ static void effBrokenBarrierMain(EffectEntry* effect) {
             t = (f32)(rand() % 360);
             switch (type) {
                 case 0:
-                case 2: {
-                    f32 lat = 6.2831855f * t / 360.0f;
-                    f32 lon;
-                    f32 c;
-                    work->position.x = width * (f32)sin(lon = 6.2831855f * a / 360.0f) * (c = (f32)cos(lat));
-                    work->position.y = height * (f32)cos(lon) * (c = (f32)cos(lat));
+                case 2:
+                    lat = 6.2831855f * t / 360.0f;
+                    work->position.x = width * (f32)sin(lon = 6.2831855f * a / 360.0f) * (f32)cos(lat);
+                    work->position.y = height * (f32)cos(lon) * (f32)cos(lat);
                     work->position.z = width * (f32)sin(lat);
-                }
                     work->velocity.x = 0.4f * work->position.x;
                     work->velocity.y = 0.4f * work->position.y;
                     work->velocity.z = 0.4f * work->position.z;
@@ -246,8 +244,8 @@ static void effBrokenBarrierMain(EffectEntry* effect) {
                     a = (f32)(rand() % 360);
                     t = (f32)(rand() % 360);
                     b = 6.2831855f * t / 360.0f;
-                    work->position.x = width * (f32)sin(a = 6.2831855f * a / 360.0f) * (ca = (f32)cos(b));
-                    work->position.y = height * (f32)cos(a) * (ca = (f32)cos(b));
+                    work->position.x = width * (f32)sin(a = 6.2831855f * a / 360.0f) * (f32)cos(b);
+                    work->position.y = height * (f32)cos(a) * (f32)cos(b);
                     work->position.z = width * (f32)sin(b);
                 }
                 break;
@@ -261,7 +259,7 @@ static void effBrokenBarrierMain(EffectEntry* effect) {
         work->velocity.y += 0.04f * (work->targetVel.y - work->velocity.y);
         work->velocity.z += 0.04f * (work->targetVel.z - work->velocity.z);
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effBrokenBarrierDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effBrokenBarrierDisp, effect);
 }
 
 /** Draws the shard cloud three times: as is, and rotated by +/-120 degrees about a tilted axis. */
@@ -299,6 +297,7 @@ static void effBrokenBarrierDisp(CameraId cameraId, EffectEntry* effect) {
     main_dl(effect, mtx2);
     {
         Vec axis = {0.4f, 0.0f, 0.8f};
+
         PSMTXRotAxisRad(rotMtx, &axis, 2.0943952f);
         PSMTXConcat(mtx, rotMtx, mtx2);
         PSMTXConcat(camera->view, mtx2, mtx2);

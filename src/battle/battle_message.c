@@ -1,5 +1,6 @@
 // Battle message announcements: the on-screen text banner shown by battle scripts.
-#include <dolphin/pad.h>
+
+#include "version.h"
 #include "battle/battle.h"
 #include "data/item_data.h"
 #include "driver/dispdrv.h"
@@ -7,15 +8,13 @@
 #include "driver/windowdrv.h"
 #include "manager/evtmgr_cmd.h"
 #include "manager/fontmgr.h"
-#include "evt/evt_msg.h"
 #include <stdio.h>
-#include "version.h"
+#include "evt/evt_msg.h"
+
 #if VERSION >= VERSION_US
 #include <string.h>
 #include "mario/mariost.h"
 #endif
-// FAKE: battle_message.c calls windowDispGX_Waku_col through this prototype (the types it was compiled with) instead of the one in driver/windowdrv.h; same registers, behaviour-identical.
-typedef void (*WindowDispWakuColPtrFn)(u16, GXColor*, f32, f32, f32, f32, f32);
 
 static void _disp(CameraId cameraId, void* param);
 
@@ -28,7 +27,7 @@ USER_FUNC(btlevtcmd_AnnounceMessage) {
     EvtWord* args = event->args;
     s32 type, x, y, frames;
     const char* msg;
-#if VERSION <= VERSION_JP
+#if VERSION < VERSION_US
     const char* text;
 #endif
 
@@ -48,7 +47,7 @@ USER_FUNC(btlevtcmd_AnnounceMessage) {
         switch (type) {
             case 1:
 #if VERSION >= VERSION_US
-                if ((u32)gp->language == 0) {
+                if (gp->language == LANGUAGE_JP) {
                     sprintf(announce->text, text, msgSearch(itemDataTable[announce->params[0]].name));
                 } else {
                     strcpy(announce->text, text);
@@ -63,7 +62,7 @@ USER_FUNC(btlevtcmd_AnnounceMessage) {
                 break;
         }
     }
-    dispEntry(CAMERA_2D, 900.0f, 1, _disp, NULL);
+    dispEntry(CAMERA_2D, 900.0f, DISP_MODE_ALPHA_TEST, _disp, NULL);
 #if VERSION >= VERSION_US
     if (type == 2) {
         if (BattlePadCheckTrigger(PAD_BUTTON_A) || BattlePadCheckTrigger(PAD_BUTTON_B)) {
@@ -82,20 +81,15 @@ USER_FUNC(btlevtcmd_AnnounceMessage) {
  */
 static void _disp(CameraId cameraId, void* param) {
     BattleAnnounce* announce = &_battleWorkPointer->announce;
-    GXColor* col;
     u16 lines;
     u16 width;
-    f32 x, y, w, h;
+    f32 x, y;
 
     x = announce->x;
     y = announce->y + 120;
     width = FontGetMessageWidthLine(announce->text, &lines);
     lines++;
-    col = &(GXColor){0xFF, 0xFF, 0xFF, 0xFF};
-    w = (s32)width + 20;
-    x -= (s32)width / 2;
-    h = (s32)(lines * 29) + 3;
-    ((WindowDispWakuColPtrFn)windowDispGX_Waku_col)(0, col, x - 10.0f, -29.0f + (3.0f + y), w, h, 10.0f);
+    windowDispGX_Waku_col((x -= (s32)width / 2) - 10.0f, -29.0f + (3.0f + y), (s32)width + 20, (s32)(lines * 29) + 3, 10.0f, 0, (GXColor){0xFF, 0xFF, 0xFF, 0xFF});
     FontDrawStart();
     FontDrawMessage(x, (s32)y - 29, announce->text);
 }

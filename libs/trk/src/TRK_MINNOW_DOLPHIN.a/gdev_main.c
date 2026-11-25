@@ -31,10 +31,9 @@ static CircleBuffer gRecvCB;
 static u8 gRecvBuf[GDEV_BUF_SIZE];
 static BOOL gIsInitialized;
 
-/**
- * Starts the GDEV debug channel: DBInitComm with the input-pending pointer and callback,
- * then sets up the 0x500-byte receive circular buffer. Returns 0.
- */
+/* Stripped (JP demo map, UNUSED); error codes are int here. */
+static int gLastError;
+
 int gdev_cc_initialize(void* inputPendingPtrRef, void* monitorCallback) {
     MWTRACE(1, "CALLING EXI2_Init\n");
     DBInitComm(inputPendingPtrRef, monitorCallback);
@@ -43,12 +42,10 @@ int gdev_cc_initialize(void* inputPendingPtrRef, void* monitorCallback) {
     return 0;
 }
 
-/** GDEV channel shutdown; nothing to do, returns 0. */
 int gdev_cc_shutdown(void) {
     return 0;
 }
 
-/** Marks the GDEV channel open; returns -10005 if it was already open, else 0. */
 int gdev_cc_open(void) {
     if (gIsInitialized)
         return -10005;
@@ -57,57 +54,49 @@ int gdev_cc_open(void) {
     return 0;
 }
 
-/** GDEV channel close; nothing to do, returns 0. */
 int gdev_cc_close(void) {
     return 0;
 }
 
-/**
- * Blocks until size bytes have arrived (pulling data from the hardware into the receive circular buffer as it
- * comes), then copies them out to dest.
- * Returns -10001 if the channel was never opened, otherwise 0 or the read error.
- */
 int gdev_cc_read(u8* dest, int size) {
     u8 buff[GDEV_BUF_SIZE];
-    u32 p1;
-    int r3;
-    int p2;
+    u32 readResult;
+    int copySize;
+    int requiredSize;
     int poll;
 
-    p1 = 0;
+    readResult = 0;
 
     if (!gIsInitialized)
         return -10001;
 
-    r3 = size;
+    copySize = size;
     MWTRACE(1, "Expected packet size : 0x%08x (%ld)\n", size, size);
 
-    p2 = size;
+    requiredSize = size;
 
-    while (CBGetBytesAvailableForRead(&gRecvCB) < p2) {
-        p1 = 0;
+    // waits with no timeout; readResult is reset on each pass, so only the last read's error is reported
+    while (CBGetBytesAvailableForRead(&gRecvCB) < requiredSize) {
+        readResult = 0;
         poll = DBQueryData();
         if (poll != 0) {
-            p1 = DBRead(buff, p2);
-            if (p1 == 0)
+            // BUG: reads requiredSize bytes but queues poll bytes (the DDH driver in main.c reads poll bytes)
+            readResult = DBRead(buff, requiredSize);
+            if (readResult == 0)
                 CircleBufferWriteBytes(&gRecvCB, buff, poll);
         }
     }
 
-    if (p1 == 0)
-        CircleBufferReadBytes(&gRecvCB, dest, r3);
+    if (readResult == 0)
+        CircleBufferReadBytes(&gRecvCB, dest, copySize);
     else
-        MWTRACE(8, "cc_read : error reading bytes from EXI2 %ld\n", p1);
+        MWTRACE(8, "cc_read : error reading bytes from EXI2 %ld\n", readResult);
 
-    return p1;
+    return readResult;
 }
 
-/**
- * Sends length bytes to the host, repeating DBWrite until all are sent or it makes no progress.
- * Returns -10001 if the channel was never opened, else 0.
- */
 int gdev_cc_write(const u8* bytes, int length) {
-    int exi2Len;
+    int writeResult;
     int n_copy;
     u32 hexCopy;
 
@@ -123,34 +112,28 @@ int gdev_cc_write(const u8* bytes, int length) {
 
     while (n_copy > 0) {
         MWTRACE(1, "cc_write sending %ld bytes\n", n_copy);
-        exi2Len = DBWrite((const void*)hexCopy, n_copy);
+        writeResult = DBWrite((const void*)hexCopy, n_copy);
 
-        if (exi2Len == 0)
+        if (writeResult == 0)
             break;
 
-        hexCopy += exi2Len;
-        n_copy -= exi2Len;
+        hexCopy += writeResult;
+        n_copy -= writeResult;
     }
 
     return 0;
 }
 
-/** Runs before the game resumes: closes the debug hardware (DBClose) so the game can use the port. Returns 0. */
 int gdev_cc_pre_continue(void) {
     DBClose();
     return 0;
 }
 
-/** Runs after the game stops: reopens the debug hardware (DBOpen). Returns 0. */
 int gdev_cc_post_stop(void) {
     DBOpen();
     return 0;
 }
 
-/**
- * Pulls any bytes the hardware has into the receive circular buffer
- * and returns how many it moved (0 if none, -10009 if the hardware read failed).
- */
 int gdev_cc_peek(void) {
     int poll;
     u8 buff[GDEV_BUF_SIZE];
@@ -168,7 +151,6 @@ int gdev_cc_peek(void) {
     return poll;
 }
 
-/** Enables the GDEV hardware's interrupts (DBInitInterrupts). Returns 0. */
 int gdev_cc_initinterrupts(void) {
     DBInitInterrupts();
     return 0;

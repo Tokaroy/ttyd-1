@@ -1,6 +1,8 @@
 #include "musyx/dsp_import.h"
 #if MUSY_TARGET == MUSY_TARGET_DOLPHIN
 
+// dspSlave: the DSP program image that salInitDsp loads (dsp_task.iram_mmem_addr). One copy each for MusyX
+// 2.0.1 and earlier, 2.0.3 and later (extracted from the game) and 2.0.2 (the #else branch).
 #if MUSY_VERSION <= MUSY_VERSION_CHECK(2, 0, 1)
 char dspSlave[] ATTRIBUTE_ALIGN(32) = {
     0x00, 0x00, 0x00, 0x00, 0x02, 0x9F, 0x0C, 0x10, 0x02, 0x9F, 0x0C, 0x1F, 0x02, 0x9F, 0x0C, 0x3B,
@@ -895,7 +897,6 @@ char dspSlave[] ATTRIBUTE_ALIGN(32) = {
     0x03, 0xC0, 0x80, 0x00, 0x02, 0x9C, 0x0E, 0x97, 0x02, 0xDF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 #endif
-/** Size in bytes of the DSP slave program above. */
 u16 dspSlaveLength = sizeof(dspSlave);
 
 #endif

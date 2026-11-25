@@ -1,4 +1,5 @@
 // Mist effect 2: puffs that grow, spin and fade around a point; type 0 spawns 30 puffs, other types 10.
+
 #include "driver/camdrv.h"
 #include "eff/eff_mist2.h"
 #include "driver/dispdrv.h"
@@ -9,20 +10,41 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 static void effMist2Main(EffectEntry* effect);
-static void effMist2Disp(CameraId cameraId, EffectEntry* effect);
+static void effMist2Disp(CameraId cameraId, void* param);
+
+/** Respawns a puff at a random spot within spawnRadius with a random target size, spin, life and delay. */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static void _init_mist(EffMist2Work* p) {
+    f32 amp;
+    f32 ang;
+
+    amp = irand((s32)p->spawnRadius);
+    ang = 6.2831855f * irand(360) / 360.0f;
+    p->position.x = amp * (f32)sin(ang);
+    p->position.y = 0.0f;
+    p->position.z = amp * (f32)cos(ang);
+    p->scale = 0.0f;
+    p->scaleTarget = 0.5f + irand(100) / 100.0f;
+    p->alpha = 255.0f;
+    p->life = irand(60) + 60;
+    p->timer = 0;
+    p->rotSpeed = 5 - irand(10);
+    p->rot = 0.0f;
+    p->delay = irand(30);
+    p->gravity = 0.2f;
+    p->vy = 0.0f;
+}
 
 /** Spawns the second mist effect at (x, y, z) for `life` frames; called through evt_eff ("mist2", the black mist). */
 EffectEntry* effMist2Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 a, f32 b) {
     EffectEntry* effect;
     EffMist2Work* work;
-    EffMist2Work* p;
     s32 i;
     s32 count;
-    f32 ang;
-    f32 amp;
 
     effect = effEntry();
     count = (type == 0 ? 30 : 10) + 1;
@@ -31,7 +53,7 @@ EffectEntry* effMist2Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 a, f32 b
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffMist2Work));
     effect->userdata = work;
     effect->callback = effMist2Main;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -47,51 +69,35 @@ EffectEntry* effMist2Entry(s32 type, s32 life, f32 x, f32 y, f32 z, f32 a, f32 b
     work->r = 0;
     work->g = 0;
     work->b8 = 0;
-    for (i = 1, p = work + 1; i < effect->count; i++, p++) {
-        p->a = a;
-        p->b = b;
-        amp = irand((s32)p->a);
-        ang = 6.2831855f * irand(360) / 360.0f;
-        p->position.x = amp * (f32)sin(ang);
-        p->position.y = 0.0f;
-        p->position.z = amp * (f32)cos(ang);
-        p->scale = 0.0f;
-        p->scaleTarget = 0.5f + irand(100) / 100.0f;
-        p->alpha = 255.0f;
-        p->life = irand(60) + 60;
-        p->timer = 0;
-        p->rotSpeed = 5 - irand(10);
-        p->rot = 0.0f;
-        p->delay = irand(30);
-        p->decay = 0.2f;
-        p->vy = 0.0f;
+    for (i = 1, work++; i < effect->count; i++, work++) {
+        work->spawnRadius = a;
+        work->spawnHeight = b;
+        _init_mist(work);
         if (type == 1) {
             f32 t = 6.2831855f * irand(360) / 360.0f;
-            p->position.x = p->a * (f32)sin(t);
-            p->position.y = p->b;
-            p->position.z = p->a * (f32)cos(t);
+            work->position.x = work->spawnRadius * (f32)sin(t);
+            work->position.y = work->spawnHeight;
+            work->position.z = work->spawnRadius * (f32)cos(t);
         }
     }
     return effect;
 }
 
-/** Per frame: grows, spins and fades each puff and deletes the effect when its life is over. */
+/** Per frame: grows, spins and fades each puff (respawning it once faded) and deletes the effect when its life is over. */
 static void effMist2Main(EffectEntry* effect) {
     EffMist2Work* work = effect->userdata;
     Vec position;
     Vec v = {0.0f, 0.0f, 0.0f};
     s32 i;
     s32 type;
-    f32 ang;
-    f32 amp;
 
     v.x = work->position.x;
     v.y = work->position.y;
     v.z = work->position.z;
     position = v;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 32;
     }
     if (work->life < 1000) {
@@ -116,38 +122,25 @@ static void effMist2Main(EffectEntry* effect) {
             work->alpha = work->life * 8;
         }
         if (work->alpha <= 0.0f) {
-            amp = irand((s32)work->a);
-            ang = 6.2831855f * irand(360) / 360.0f;
-            work->position.x = amp * (f32)sin(ang);
-            work->position.y = 0.0f;
-            work->position.z = amp * (f32)cos(ang);
-            work->scale = 0.0f;
-            work->scaleTarget = 0.5f + irand(100) / 100.0f;
-            work->alpha = 255.0f;
-            work->life = irand(60) + 60;
-            work->timer = 0;
-            work->rotSpeed = 5 - irand(10);
-            work->rot = 0.0f;
-            work->delay = irand(30);
-            work->decay = 0.2f;
-            work->vy = 0.0f;
+            _init_mist(work);
         } else {
             work->rot += work->rotSpeed;
             work->scale += (work->scaleTarget - work->scale) / 10.0f;
             if (type == 1) {
                 work->position.y += work->vy;
-                work->vy -= work->decay;
+                work->vy -= work->gravity;
                 if (work->position.y < 0.0f) {
                     work->position.y = 0.0f;
                 }
             }
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effMist2Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effMist2Disp, effect);
 }
 
 /** Draws each puff as a rotated textured quad (effect texture 0x5E). */
-static void effMist2Disp(CameraId cameraId, EffectEntry* effect) {
+static void effMist2Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     EffMist2Work* work = effect->userdata;
     Mtx trans;
     Mtx rot;
@@ -158,6 +151,8 @@ static void effMist2Disp(CameraId cameraId, EffectEntry* effect) {
     s32 i;
     s32 alpha;
     u8 r, g, b;
+
+    // w, k and h are variables: the retail code negates and divides by them at run time
     f32 w = 16.0f;
     f32 k = 255.0f;
     f32 h = 8.0f;

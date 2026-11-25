@@ -1,4 +1,5 @@
 // eff_splash.c: water splash effect entry (effSplashEntry).
+
 #pragma once
 
 #include "driver/effdrv.h"

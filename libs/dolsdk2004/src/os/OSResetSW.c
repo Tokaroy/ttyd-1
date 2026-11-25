@@ -9,22 +9,17 @@ static BOOL LastState;
 static OSTime HoldUp;
 static OSTime HoldDown;
 
-/**
- * PI interrupt handler for the console RESET button.
- * Waits up to 100 microseconds for the button to be released;
- * if it is still held it marks the button down,
- * masks the reset interrupt and calls (once) the callback set with OSSetResetCallback,
- * then acknowledges the interrupt in PI register 0.
- */
+// PI_INTSR_RSWST is clear while the reset button is down; writing PI_INT_RSW clears the reset-switch
+// interrupt. The press must last 100 us before the callback runs.
 void __OSResetSWInterruptHandler(s16 exception, OSContext* context) {
     OSResetCallback callback;
 
     HoldDown = __OSGetSystemTime();
     while (__OSGetSystemTime() - HoldDown < OSMicrosecondsToTicks(100) &&
-           !(__PIRegs[0] & 0x00010000)) {
+           !(__PIRegs[PI_INTSR] & PI_INTSR_RSWST)) {
         ;
     }
-    if (!(__PIRegs[0] & 0x00010000)) {
+    if (!(__PIRegs[PI_INTSR] & PI_INTSR_RSWST)) {
         LastState = Down = TRUE;
         __OSMaskInterrupts(OS_INTERRUPTMASK_PI_RSW);
         if (ResetCallback) {
@@ -33,13 +28,9 @@ void __OSResetSWInterruptHandler(s16 exception, OSContext* context) {
             callback();
         }
     }
-    __PIRegs[0] = 2;
+    __PIRegs[PI_INTSR] = PI_INT_RSW;
 }
 
-/**
- * Installs the function the OS calls when the user presses the RESET button, and returns the previous callback.
- * Setting a callback unmasks the PI reset-switch interrupt (mask 0x200); setting NULL masks it.
- */
 OSResetCallback OSSetResetCallback(OSResetCallback callback) {
     BOOL enabled;
     OSResetCallback prevCallback;
@@ -49,21 +40,18 @@ OSResetCallback OSSetResetCallback(OSResetCallback callback) {
     ResetCallback = callback;
 
     if (callback) {
-        __PIRegs[0] = 2;
-        __OSUnmaskInterrupts(0x200);
+        __PIRegs[PI_INTSR] = PI_INT_RSW;
+        __OSUnmaskInterrupts(OS_INTERRUPTMASK_PI_RSW);
     } else {
-        __OSMaskInterrupts(0x200);
+        __OSMaskInterrupts(OS_INTERRUPTMASK_PI_RSW);
     }
     OSRestoreInterrupts(enabled);
     return prevCallback;
 }
 
-/**
- * Polls the RESET button (bit 16 of PI register 0, active low) and returns TRUE while it counts as pressed:
- * a press must last over 100 microseconds, and a release is held as pressed for 40 ms.
- * Surprising: if a reset-button timer was set with __OSSetResetButtonTimer
- * and that many minutes have passed since boot, it reports a pressed/released toggle every two seconds.
- */
+// A press counts once held for 100 us; after a counted press is released the state stays TRUE for 40 ms.
+// When the timer in the low 5 bits of __gUnknown800030E3 (minutes, see __OSSetResetButtonTimer) has run
+// out since start-up, the state alternates every 2 seconds.
 BOOL OSGetResetButtonState(void) {
     BOOL enabled = OSDisableInterrupts();
     int state;
@@ -75,8 +63,8 @@ BOOL OSGetResetButtonState(void) {
     ASSERTLINE(159, HoldUp == 0 || HoldUp < now);
     ASSERTLINE(160, HoldDown == 0 || HoldDown < now);
 
-    reg = __PIRegs[0];
-    if (!(reg & 0x00010000)) {
+    reg = __PIRegs[PI_INTSR];
+    if (!(reg & PI_INTSR_RSWST)) {
         if (!Down) {
             Down = TRUE;
             state = HoldUp ? TRUE : FALSE;
@@ -121,16 +109,10 @@ BOOL OSGetResetButtonState(void) {
     return state;
 }
 
-/** Older name for OSGetResetButtonState; returns the same value. */
 int OSGetResetSwitchState(void) {
     return OSGetResetButtonState();
 }
 
-/**
- * Sets, in minutes (clamped to 31), the delay after
- * which OSGetResetButtonState starts reporting a simulated button press.
- * Stored in the low 5 bits of the byte at 0x800030E3 in low memory.
- */
 void __OSSetResetButtonTimer(u8 min) {
     BOOL enabled = OSDisableInterrupts();
     if (min > 0x1F) {

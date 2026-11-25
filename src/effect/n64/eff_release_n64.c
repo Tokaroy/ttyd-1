@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: a flickering glowing orb that drifts, then flashes into expanding glow rings.
+
 #include "eff/n64/eff_release_n64.h"
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
@@ -7,6 +8,7 @@
 #include "memory.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 
 typedef struct EffReleaseN64Work {
@@ -26,7 +28,7 @@ typedef struct EffReleaseN64Work {
     f32 scale;      // 0x3C
     f32 size[4];    // 0x40
     s32 alpha[4];   // 0x50
-    s32 counter[4]; // 0x60, only cleared at entry
+    s32 counter[4]; // 0x60
     s32 state;      // 0x70
     s32 step;       // 0x74
 } EffReleaseN64Work;
@@ -37,7 +39,7 @@ typedef struct AnimeEntry {
 } AnimeEntry;
 
 static void effReleaseMain(EffectEntry* effect);
-static void effReleaseDisp(CameraId cameraId, EffectEntry* effect);
+static void effReleaseDisp(CameraId cameraId, void* payload);
 
 /**
  * Growth of the orb's glow rings over the 30 steps after the release flash:
@@ -80,7 +82,7 @@ static AnimeEntry anime_data[30] = {
  * The 30 steps over which the inner glow ring shrinks back and brightens:
  * size in hundredths and alpha per step.
  */
-AnimeEntry anime_data_2[30] = {
+static AnimeEntry anime_data_2[30] = {
     {0x0BB8, 0x0000},
     {0x0B54, 0x0005},
     {0x0AF0, 0x000A},
@@ -122,7 +124,7 @@ static effN64Vtx size16x16_tex64x64_vtx[] = {
 };
 
 /** The ring strip as eight thin bands, each half mirrored, drawn in pairs from the outside in. */
-effN64Vtx size16x16_tex256x32_vtx[] = {
+static effN64Vtx size16x16_tex256x32_vtx[] = {
     {-8, -8, 0, 0, 0, 0, 0, 0, 255},
     {8, -8, 0, 8192, 0, 0, 0, 0, 255},
     {8, -6, 0, 8192, 1024, 0, 0, 0, 255},
@@ -158,7 +160,7 @@ effN64Vtx size16x16_tex256x32_vtx[] = {
 };
 
 /** 16x16 quad lying flat in the ground plane, drawn for the large glow. */
-effN64Vtx size16x16_tex128x128_vtx[] = {
+static effN64Vtx size16x16_tex128x128_vtx[] = {
     {-8, 0, -8, 0, 0, 0, 0, 0, 255},
     {8, 0, -8, 4096, 0, 0, 0, 0, 255},
     {8, 0, 8, 4096, 4096, 0, 0, 0, 255},
@@ -166,7 +168,7 @@ effN64Vtx size16x16_tex128x128_vtx[] = {
 };
 
 /** The release flash as two mirrored halves of one 16x16 quad. */
-effN64Vtx size16x16_tex64x64_0_vtx[] = {
+static effN64Vtx size16x16_tex64x64_0_vtx[] = {
     {-8, -8, 0, 0, 0, 0, 0, 0, 255},
     {8, -8, 0, 2048, 0, 0, 0, 0, 255},
     {8, 0, 0, 2048, 1024, 0, 0, 0, 255},
@@ -177,8 +179,8 @@ effN64Vtx size16x16_tex64x64_0_vtx[] = {
     {-8, 8, 0, 2048, 0, 0, 0, 0, 255},
 };
 
-/** Full-screen 640x480 rectangle drawn for the light-grey screen flash of variants 2 and 3. */
-effN64Vtx rectangle_vtx[] = {
+/** Full-screen 640x480 rectangle drawn for the white screen flash of variants 2 and 3. */
+static effN64Vtx rectangle_vtx[] = {
     {0, 0, 0, 2048, 1024, 0, 0, 0, 255},
     {640, 0, 0, 0, 1024, 0, 0, 0, 255},
     {640, 480, 0, 0, 0, 0, 0, 0, 255},
@@ -186,8 +188,9 @@ effN64Vtx rectangle_vtx[] = {
 };
 
 /**
- * Spawns the glowing orb at (x, y, z); the 0xFF00 bits of `type` pick the variant,
- * and a lifetime of 0 or less lasts until soft-deleted. Spawned by event scripts through evt_eff.
+ * Spawns the glowing orb at (x, y, z); the low byte of `type` picks the variant (variant 3 starts in state 1,
+ * the release), the 0xFF00 bits, when nonzero, make the orb wobble and release after 50 frames;
+ * a lifetime of 0 or less lasts until soft-deleted. Spawned by event scripts through evt_eff.
  */
 EffectEntry* effReleaseN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32 scale) {
     EffectEntry* effect;
@@ -248,7 +251,7 @@ EffectEntry* effReleaseN64Entry(s32 type, s32 lifetime, f32 x, f32 y, f32 z, f32
  * after 50 frames starts the release (state 100 for variant 3, else 1).
  * State 1: a 2-frame flash, then rings 1-2 grow and fade by anime_data over 30 steps;
  * state 4 shrinks ring 1 by anime_data_2 over 30 steps; state 5 hides everything.
- * State 100 keeps growing its rings until deleted.
+ * State 100 keeps growing its rings until deleted; it is never reached, since variant 3 starts in state 1.
  */
 static void effReleaseMain(EffectEntry* effect) {
     EffReleaseN64Work* work = effect->userdata;
@@ -259,17 +262,15 @@ static void effReleaseMain(EffectEntry* effect) {
     f32 sn;
     f32 v;
     s32 i;
-    s32 step;
     s32 val;
-    AnimeEntry* e;
 
     tmp.x = work->position.x;
     tmp.y = work->position.y;
     tmp.z = work->position.z;
     position = tmp;
     sub = work->sub;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->lifetime = 16;
     }
     if (work->lifetime < 1000) {
@@ -417,7 +418,7 @@ static void effReleaseMain(EffectEntry* effect) {
             work->size[i] = 0.0f;
         }
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effReleaseDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effReleaseDisp, effect);
 }
 
 /**
@@ -425,11 +426,11 @@ static void effReleaseMain(EffectEntry* effect) {
  * 0 the core (texture 0x44), 1 a four-band ring strip (0x45),
  * 2 a large glow (0x46, skipped for variant 1; it falls through and also draws layer 3's quads)
  * and 3 the flash (0x47).
- * Variants 2 and 3 also flash the whole screen light grey for a few frames at the release and at state 5.
+ * Variants 2 and 3 also flash the whole screen white (the 0xD0 material colour supplies only the alpha)
+ * for a few frames at the release and at state 5.
  */
-static void effReleaseDisp(CameraId cameraId, EffectEntry* effect) {
-    GXColor c0;
-    GXColor c1;
+static void effReleaseDisp(CameraId cameraId, void* payload) {
+    EffectEntry* effect = payload;
     CameraEntry* camera;
     EffReleaseN64Work* work;
     GXTexObj texObj;
@@ -460,10 +461,7 @@ static void effReleaseDisp(CameraId cameraId, EffectEntry* effect) {
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_TEXA, GX_CA_ZERO);
     GXSetNumTexGens(1);
     GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
-    {
-
-        GXSetTevColor(GX_TEVREG1, (GXColor){work->r2, work->g2, work->b2, work->a2});
-    }
+    GXSetTevColor(GX_TEVREG1, (GXColor){work->r2, work->g2, work->b2, work->a2});
     GXSetCullMode(GX_CULL_NONE);
     for (i = 0; i < 4; i++) {
         if (variant == 1 && i == 2) {
@@ -476,11 +474,8 @@ static void effReleaseDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXConcat(tmp, scale, scale);
         PSMTXConcat(camera->view, scale, scale);
         GXLoadPosMtxImm(scale, GX_PNMTX0);
-        GXSetCurrentMtx(0);
-        {
-
-            GXSetTevColor(GX_TEVREG0, (GXColor){work->r, work->g, work->b, work->alpha[i]});
-        }
+        GXSetCurrentMtx(GX_PNMTX0);
+        GXSetTevColor(GX_TEVREG0, (GXColor){work->r, work->g, work->b, work->alpha[i]});
         switch (i) {
             case 0:
                 effGetTexObjN64(0x44, &texObj);
@@ -532,6 +527,8 @@ static void effReleaseDisp(CameraId cameraId, EffectEntry* effect) {
                 effSetVtxDescN64(size16x16_tex128x128_vtx);
                 GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
                 tri2(0, 1, 2, 0, 0, 2, 3, 0);
+
+                // case 2 has no break: it also draws the case 3 quads.
             case 3:
                 effGetTexObjN64(0x47, &texObj);
                 GXLoadTexObj(&texObj, GX_TEXMAP0);
@@ -564,9 +561,7 @@ static void effReleaseDisp(CameraId cameraId, EffectEntry* effect) {
             GXSetProjection(proj, GX_ORTHOGRAPHIC);
             GXSetNumChans(1);
             GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
-            {
-                GXSetChanMatColor(GX_COLOR0A0, (GXColor){0xD0, 0xD0, 0xD0, alpha});
-            }
+            GXSetChanMatColor(GX_COLOR0A0, (GXColor){0xD0, 0xD0, 0xD0, alpha});
             GXSetNumTevStages(1);
             GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
             GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
@@ -575,7 +570,7 @@ static void effReleaseDisp(CameraId cameraId, EffectEntry* effect) {
             GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
             PSMTXIdentity(mtx);
             GXLoadPosMtxImm(mtx, GX_PNMTX0);
-            GXSetCurrentMtx(0);
+            GXSetCurrentMtx(GX_PNMTX0);
             effSetVtxDescN64(rectangle_vtx);
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(0, 1, 2, 0, 0, 2, 3, 0);

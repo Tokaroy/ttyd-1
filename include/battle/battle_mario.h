@@ -1,4 +1,5 @@
 // Declares Mario's badge weapons and attack events for battle.
+
 #pragma once
 
 #include "battle/battle_database_common.h"
@@ -38,7 +39,11 @@ extern BattleWeapon marioWeapon_JyabaraJump;
 extern BattleWeapon marioWeapon_KaitenHammer;
 extern BattleWeapon marioWeapon_KaitenHammerInvolved;
 extern BattleWeapon marioWeapon_UltraHammer;
-extern s32 marioWeapon_UltraHammerFinish[];
+extern BattleWeapon marioWeapon_UltraHammerFinish;
 extern BattleWeapon marioWeapon_UltraHammerInvolved;
 USER_FUNC(mario_get_renzoku_count_max);
 extern BattleWeapon* superActionTable[];
+
+extern BattleWeapon marioDefaultWeapon_Jump;
+extern BattleWeapon marioWeapon_KururinJump;
+extern BattleWeapon marioDefaultWeapon_Hammer;

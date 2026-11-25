@@ -1,22 +1,20 @@
 // ARAM manager: allocates auxiliary RAM, copies data between main memory and ARAM with ARQ, and
 // collects the space of freed entries.
+
 #include "manager/arammgr.h"
 #include "memory.h"
 #include <dolphin/os.h>
 #include <string.h>
 
 #define ARAM_OWNER 0x19751128
+#define ARAM_GARBAGE_BUFFER_SIZE 0x8000
+#define ARAM_POOL_BYTES 0x3FC000
 
 //.bss
 static ARAMWork work;
 
 //.sdata
 static ARAMWork* wp = &work;
-
-// local prototypes
-static void aramCallbackGarbage(u32 request);
-static void arqCallbackToAram(u32 request);
-static void arqCallbackToMram(u32 request);
 
 /**
  * Boot-time setup from mariost.c: starts AR/ARQ, claims a 0x3FC000-byte ARAM region and a table of 64 entries.
@@ -28,7 +26,7 @@ void aramMgrInit(void) {
         ARInit(wp->arStack, 8);
     }
     ARQInit();
-    wp->size = 0x3FC000;
+    wp->size = ARAM_POOL_BYTES;
     wp->count = 64;
     wp->baseAddr = ARAlloc(wp->size);
     wp->nextAddr = wp->baseAddr;
@@ -50,7 +48,7 @@ static void aramCallbackGarbage(u32 request) {
 
 /**
  * Compacts ARAM when the bump allocator runs off the end:
- * waits for transfers in flight, unlinks entries already copied back to main RAM (flag 0x20),
+ * waits for transfers in flight, unlinks entries already copied back to main RAM (ARAM_FLAG_FREE),
  * then slides the live ones down through a 32 KB main-RAM bounce buffer.
  */
 static void aramMgrGarbage(void) {
@@ -58,18 +56,17 @@ static void aramMgrGarbage(void) {
     ARAMEntry* entry;
     ARAMEntry* prev;
     ARAMEntry* first;
-    u32 offset;
     u32 addr;
     ARAMEntry* curr;
     int i, n;
 
     head = wp->head;
     for (entry = head; entry != NULL; entry = entry->next) {
-        if (entry->flags & ARAM_ENTRY_TO_ARAM) {
-            while (!(entry->flags & ARAM_ENTRY_TO_ARAM_DONE)) {}
+        if (entry->flags & ARAM_FLAG_TO_ARAM) {
+            while (!(entry->flags & ARAM_FLAG_IN_ARAM)) {}
         }
-        if (entry->flags & ARAM_ENTRY_TO_MRAM) {
-            while (!(entry->flags & ARAM_ENTRY_TO_MRAM_DONE)) {}
+        if (entry->flags & ARAM_FLAG_TO_MRAM) {
+            while (!(entry->flags & ARAM_FLAG_IN_MRAM)) {}
         }
     }
 
@@ -77,7 +74,7 @@ static void aramMgrGarbage(void) {
     prev = NULL;
     first = NULL;
     while (entry != NULL) {
-        if (entry->flags & ARAM_ENTRY_SPENT) {
+        if (entry->flags & ARAM_FLAG_FREE) {
             entry->flags = 0;
             if (prev != NULL) {
                 prev->next = entry->next;
@@ -97,17 +94,17 @@ static void aramMgrGarbage(void) {
     addr = wp->baseAddr;
     for (curr = wp->head; curr != NULL; curr = curr->next) {
         if (curr->aramAddr != addr) {
-            wp->bufferSize = 0x8000;
+            wp->bufferSize = ARAM_GARBAGE_BUFFER_SIZE;
             wp->buffer = __memAlloc(HEAP_DEFAULT, wp->bufferSize);
             n = (curr->size + (wp->bufferSize - 1)) / wp->bufferSize;
-            for (i = 0, offset = 0; i < n; i++, offset += 0x8000) {
+            for (i = 0; i < n; i++) {
                 wp->busy = 1;
                 ARQPostRequest(&wp->request, ARAM_OWNER, ARQ_TYPE_ARAM_TO_MRAM, ARQ_PRIORITY_LOW,
-                               curr->aramAddr + offset, (u32)wp->buffer, wp->bufferSize, aramCallbackGarbage);
+                               curr->aramAddr + i * ARAM_GARBAGE_BUFFER_SIZE, (u32)wp->buffer, wp->bufferSize, aramCallbackGarbage);
                 while (wp->busy) {}
                 wp->busy = 1;
                 ARQPostRequest(&wp->request, ARAM_OWNER, ARQ_TYPE_MRAM_TO_ARAM, ARQ_PRIORITY_LOW,
-                               (u32)wp->buffer, addr + offset, wp->bufferSize, aramCallbackGarbage);
+                               (u32)wp->buffer, addr + i * ARAM_GARBAGE_BUFFER_SIZE, wp->bufferSize, aramCallbackGarbage);
                 while (wp->busy) {}
             }
             __memFree(HEAP_DEFAULT, wp->buffer);
@@ -119,15 +116,16 @@ static void aramMgrGarbage(void) {
     wp->nextAddr = addr;
 }
 
-/** ARQ completion for an upload: marks the matching entry's copy to ARAM as finished (ARAM_ENTRY_TO_ARAM_DONE). */
+/** ARQ callback when a copy into ARAM ends: marks the entry of that request ARAM_FLAG_IN_ARAM. */
 static void arqCallbackToAram(u32 request) {
     ARAMEntry* entry;
 
     for (entry = wp->head; entry != NULL; entry = entry->next) {
-        if (request == (u32)&entry->request)
+        if (request == (u32)&entry->request) {
             break;
+        }
     }
-    entry->flags |= ARAM_ENTRY_TO_ARAM_DONE;
+    entry->flags |= ARAM_FLAG_IN_ARAM;
 }
 
 /**
@@ -142,13 +140,15 @@ ARAMEntry* aramMgrToAramAsync(void* src, u32 size) {
     int i;
 
     for (i = 0, curr = wp->entries; i < wp->count; i++, curr++) {
-        if (!(curr->flags & ARAM_ENTRY_IN_USE)) {
+        if (!(curr->flags & ARAM_FLAG_IN_USE)) {
             entry = curr;
             break;
         }
     }
+
+    // entry is still NULL here when all entries are in use; the pool is assumed to have room.
     memset(entry, 0, sizeof(ARAMEntry));
-    size = (size + 31) & ~31;
+    size = OSRoundUp32B(size);
     addr = wp->nextAddr;
     wp->nextAddr += size;
     if (wp->nextAddr >= wp->baseAddr + wp->size) {
@@ -159,8 +159,8 @@ ARAMEntry* aramMgrToAramAsync(void* src, u32 size) {
     DCStoreRange(src, size);
     ARQPostRequest(&entry->request, ARAM_OWNER, ARQ_TYPE_MRAM_TO_ARAM, ARQ_PRIORITY_LOW,
                    (u32)src, addr, size, arqCallbackToAram);
-    entry->flags |= ARAM_ENTRY_IN_USE;
-    entry->flags |= ARAM_ENTRY_TO_ARAM;
+    entry->flags |= ARAM_FLAG_IN_USE;
+    entry->flags |= ARAM_FLAG_TO_ARAM;
     entry->mramAddr = src;
     entry->size = size;
     entry->aramAddr = addr;
@@ -178,25 +178,40 @@ ARAMEntry* aramMgrToAramAsync(void* src, u32 size) {
 /** Copies a block to ARAM and spins until the transfer is done; mapdrv uses it to stash the previous map's data. */
 ARAMEntry* aramMgrToAram(void* src, u32 size) {
     ARAMEntry* entry = aramMgrToAramAsync(src, size);
-    while (!(entry->flags & ARAM_ENTRY_TO_ARAM_DONE)) {}
+    while (!(entry->flags & ARAM_FLAG_IN_ARAM)) {}
     return entry;
 }
 
 /**
- * ARQ completion for a download: marks the entry as back in main RAM and spent (ARAM_ENTRY_TO_MRAM_DONE and ARAM_ENTRY_SPENT,
- * so the next compaction frees it), then invalidates the caches over the destination.
+ * ARQ callback when a copy back to main memory ends: marks the entry of that request ARAM_FLAG_IN_MRAM and
+ * ARAM_FLAG_FREE and invalidates the data and instruction caches over its destination.
  */
 static void arqCallbackToMram(u32 request) {
     ARAMEntry* entry;
 
     for (entry = wp->head; entry != NULL; entry = entry->next) {
-        if (request == (u32)&entry->request)
+        if (request == (u32)&entry->request) {
             break;
+        }
     }
-    entry->flags |= ARAM_ENTRY_TO_MRAM_DONE;
-    entry->flags |= ARAM_ENTRY_SPENT;
+    entry->flags |= ARAM_FLAG_IN_MRAM;
+    entry->flags |= ARAM_FLAG_FREE;
     DCInvalidateRange(entry->dest, entry->size);
     ICInvalidateRange(entry->dest, entry->size);
+}
+
+/**
+ * Starts copying an entry back from ARAM to dest once its upload has finished; arqCallbackToMram marks it done
+ * (and free).
+ */
+// Original name and size (0x7c) from the JP demo map (UNUSED there: its one call, in aramMgrToMram, is inlined).
+// aramMgrToMram is this plus the wait, as aramMgrToAram is aramMgrToAramAsync plus the wait.
+void aramMgrToMramAsync(ARAMEntry* entry, void* dest) {
+    while (!(entry->flags & ARAM_FLAG_IN_ARAM)) {}
+    ARQPostRequest(&entry->request, ARAM_OWNER, ARQ_TYPE_ARAM_TO_MRAM, ARQ_PRIORITY_LOW,
+                   entry->aramAddr, (u32)dest, entry->size, arqCallbackToMram);
+    entry->flags |= ARAM_FLAG_TO_MRAM;
+    entry->dest = dest;
 }
 
 /**
@@ -204,10 +219,14 @@ static void arqCallbackToMram(u32 request) {
  * Each entry is read back once; mapdrv restores a stashed map with it.
  */
 void aramMgrToMram(ARAMEntry* entry, void* dest) {
-    while (!(entry->flags & ARAM_ENTRY_TO_ARAM_DONE)) {}
-    ARQPostRequest(&entry->request, ARAM_OWNER, ARQ_TYPE_ARAM_TO_MRAM, ARQ_PRIORITY_LOW,
-                   entry->aramAddr, (u32)dest, entry->size, arqCallbackToMram);
-    entry->flags |= ARAM_ENTRY_TO_MRAM;
-    entry->dest = dest;
-    while (!(entry->flags & ARAM_ENTRY_TO_MRAM_DONE)) {}
+    aramMgrToMramAsync(entry, dest);
+    while (!(entry->flags & ARAM_FLAG_IN_MRAM)) {}
+}
+
+/** Gives up an entry without copying it back: aramMgrGarbage drops it and reuses its space. */
+// Original name and size (0x10) from the JP demo map (UNUSED there: nothing calls it; listed after aramMgrToMram).
+// The ARAM_FLAG_FREE mark that arqCallbackToMram sets after a copy back, the flag aramMgrGarbage collects by
+// (a plain store instead of |= is 0xc).
+void aramMgrDeleteAram(ARAMEntry* entry) {
+    entry->flags |= ARAM_FLAG_FREE;
 }

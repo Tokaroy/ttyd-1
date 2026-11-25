@@ -1,4 +1,5 @@
 // eff_pointget.c: point-get effect entry (effPointGetEntry).
+
 #pragma once
 
 #include <dolphin/types.h>

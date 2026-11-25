@@ -9,7 +9,6 @@ C4 = -2.75573143513906633035e-07,
 C5 = 2.08757232129817482790e-09,
 C6 = -1.13596475577881948265e-11;
 
-/** Cosine on the reduced range |x| <= pi/4 by polynomial (fdlibm); y is the tail of x. */
 double __kernel_cos(double x, double y) {
     double a, hz, z, r, qx;
     int ix;
@@ -25,6 +24,7 @@ double __kernel_cos(double x, double y) {
         if (ix > 0x3fe90000) {
             qx = 0.28125;
         } else {
+            // qx = x/4 with the low word cleared (exponent minus 2)
             __HI(qx) = ix - 0x00200000;
             __LO(qx) = 0;
         }

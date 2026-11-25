@@ -79,17 +79,17 @@ driver/camdrv.c:
 driver/dispdrv.c:
 	.text       start:0x80010A28 end:0x80010E98
 	.data       start:0x803101A0 end:0x803101E0
-	.sdata      start:0x80421818 end:0x80421860
+	.sdata      start:0x80421818 end:0x80421844
 	.sbss       start:0x8042AF30 end:0x8042AF40
-	.sdata2     start:0x8042C1E0 end:0x8042C1F0
+	.sdata2     start:0x8042C1E0 end:0x8042C1F8
 
 driver/fadedrv.c:
 	.text       start:0x80010E98 end:0x80013EB0
 	.rodata     start:0x802CB1E8 end:0x802CB338
 	.data       start:0x803101E0 end:0x803105E0
-	.sdata      start:0x80421860 end:0x80421880
+	.sdata      start:0x80421860 end:0x80421880 align:32
 	.sbss       start:0x8042AF40 end:0x8042AF48
-	.sdata2     start:0x8042C1F0 end:0x8042C2B8
+	.sdata2     start:0x8042C1F8 end:0x8042C2B8
 	.sbss2      start:0x80436038 end:0x80436040
 
 driver/hitdrv.c:
@@ -209,7 +209,7 @@ driver/npcdrv.c:
 
 event/evt_npc.c:
 	.text       start:0x8004D070 end:0x80053830
-	.rodata     start:0x802CCFF0 end:0x802CD0C0
+	.rodata     start:0x802CCFF0 end:0x802CD0C8
 	.data       start:0x80312740 end:0x803127A0
 	.sdata      start:0x80422658 end:0x80422678
 	.sbss       start:0x8042B200 end:0x8042B208
@@ -218,7 +218,7 @@ event/evt_npc.c:
 
 event/evt_sub.c:
 	.text       start:0x80053830 end:0x800562B8
-	.rodata     start:0x802CD0C0 end:0x802CD420
+	.rodata     start:0x802CD0C8 end:0x802CD420
 	.data       start:0x803127A0 end:0x803154A8
 	.sdata      start:0x80422678 end:0x804226F0
 	.sbss       start:0x8042B208 end:0x8042B210
@@ -561,7 +561,7 @@ event/evt_msg.c:
 	.rodata     start:0x802D8240 end:0x802D8388
 	.data       start:0x80321020 end:0x80321130
 	.bss        start:0x803E8D28 end:0x803EB5E8
-	.sdata      start:0x80422BE0 end:0x80422D20
+	.sdata      start:0x80422BE0 end:0x80422D04
 	.sdata2     start:0x8042E198 end:0x8042E318
 
 mario/mario_pouch.c:
@@ -576,7 +576,7 @@ driver/extdrv.c:
 	.rodata     start:0x802D8398 end:0x802D83A0
 	.data       start:0x80321170 end:0x80321878
 	.bss        start:0x803EB5E8 end:0x803EB6C8
-	.sdata      start:0x80422D20 end:0x80422DE0
+	.sdata      start:0x80422D20 end:0x80422DE0 align:32
 	.sdata2     start:0x8042E328 end:0x8042E370
 
 event/evt_ext.c:
@@ -1150,7 +1150,7 @@ party/party_vivian.c:
 	.rodata     start:0x803045B8 end:0x80304630
 	.data       start:0x8039A748 end:0x8039A798
 	.sbss       start:0x8042B570 end:0x8042B578
-	.sdata2     start:0x80430D58 end:0x80430DC8
+	.sdata2     start:0x80430D58 end:0x80430DC4
 
 party/party_cloud.c:
 	.text       start:0x801885C0 end:0x80189F30
@@ -2693,11 +2693,11 @@ effect/eff_queen2.c:
 effect/eff_gonbaba_breath.c:
 	.text       start:0x8025E838 end:0x8025FC80
 	.rodata     start:0x8030E818 end:0x8030E840
-	.sdata      start:0x8042A918 end:0x8042A9E0
+	.sdata      start:0x8042A918 end:0x8042A9C4
 	.sdata2     start:0x80435598 end:0x80435618
 
 gxsub.c:
-	.sdata      start:0x8042A9E0 end:0x8042AA00
+	.sdata      start:0x8042A9E0 end:0x8042AA00 align:32
 
 event/evt_memcard.c:
 	.text       start:0x8025FC80 end:0x80260088
@@ -2859,8 +2859,11 @@ Runtime.PPCEABI.H.a/global_destructor_chain.c:
 	.sbss       start:0x8042B778 end:0x8042B780
 
 Runtime.PPCEABI.H.a/runtime.c:
-	.text       start:0x80268440 end:0x80268E84
+	.text       start:0x80268440 end:0x80268C70
 	.rodata     start:0x8030F6C0 end:0x8030F6D8
+
+Runtime.PPCEABI.H.a/Gecko_setjmp.c:
+	.text       start:0x80268C70 end:0x80268E84
 
 Runtime.PPCEABI.H.a/GCN_mem_alloc.c:
 	.text       start:0x80268E84 end:0x80268F3C
@@ -3456,7 +3459,7 @@ demo/DEMOStats.c:
 
 pad/Padclamp.c:
 	.text       start:0x802AA744 end:0x802AA988
-	.rodata     start:0x8030FE68 end:0x8030FE78
+	.rodata     start:0x8030FE68 end:0x8030FE72
 
 pad/Pad.c:
 	.text       start:0x802AA988 end:0x802AC2D0

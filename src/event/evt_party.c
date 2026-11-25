@@ -1,5 +1,7 @@
 // Script commands that control the partner: position, movement, poses, flags and the
 // partner-specific actions (Koops, Bobbery, Flurrie, Vivian, Yoshi).
+
+#include "version.h"
 #include "evt/evt_party.h"
 #include "driver/camdrv.h"
 #include "driver/hitdrv.h"
@@ -11,6 +13,7 @@
 #include "manager/evtmgr_cmd.h"
 #include "party.h"
 #include "system.h"
+#include "party/party_bomhei.h"
 #include "party/party_move.h"
 #include "party/party_nokonoko.h"
 #include "party/party_yoshi.h"
@@ -18,17 +21,24 @@
 #include "mario/mario_sbr.h"
 #include "mario/mario_hit.h"
 #include "party/party_hit.h"
-#include "version.h"
-// FAKE: evt_party.c calls partyChgPose through this prototype (the types it was compiled with) instead of the one in party.h; same registers, behaviour-identical.
-typedef void (*PartyChgPoseNoProtoFn)();
 
+// Macro, not inline: as static inline evtGetParty(args) the object changes.
 #define GETPARTY(args) partyGetPtr((args)[0] == 0 ? partyCtrlNo : 1)
-#define PARTY_ID(args) ((args)[0] == 0 ? partyCtrlNo : 1)
 
-// FAKE: bomheiGetStatus and cloudGetStatus return u8, but this file was compiled against
-// int-returning declarations: the callers test the full register (cmpwi, no clrlwi).
-extern s32 bomheiGetStatus();
-extern s32 cloudGetStatus();
+/** Sets the partner slot the commands below use for slot argument 0 (partyCtrlNo) to args[0]. */
+// evt_party_set_ctrl_no and evt_party_get_ctrl_no: original names and sizes (0x30 each) from the JP demo map (UNUSED
+// there: no script uses them); they store and return partyCtrlNo, which every command of this file reads.
+USER_FUNC(evt_party_set_ctrl_no) {
+    partyCtrlNo = evtGetValue(event, event->args[0]);
+    return EVT_RETURN_DONE;
+}
+
+/** Writes partyCtrlNo to args[0]. */
+// Original name and size from the JP demo map (see evt_party_set_ctrl_no).
+USER_FUNC(evt_party_get_ctrl_no) {
+    evtSetValue(event, event->args[0], partyCtrlNo);
+    return EVT_RETURN_DONE;
+}
 
 /**
  * Sets or clears PartyFlags bits on a partner slot.
@@ -75,6 +85,7 @@ USER_FUNC(evt_party_dispflg_onoff) {
 /**
  * Sets or clears PartyTrigFlags bits on a partner slot.
  * args: slot (0 = active partner, else follower), the mask (literal), on/off.
+ * Descriptive name (not in the symbol maps); placeholder unk_800e71bc, JP 0x800E71BC. See docs/NAME_PROVENANCE.md.
  */
 USER_FUNC(evt_party_trigflg_onoff) {
     PartyEntry* p;
@@ -137,13 +148,27 @@ USER_FUNC(evt_party_set_camid) {
     return EVT_RETURN_DONE;
 }
 
+/** Writes the camera the partner in slot args[0] is drawn with to args[1]. */
+// Original name and size (0x74) from the JP demo map (UNUSED there: no script uses it); evt_party_set_camid with
+// partyGetCamId.
+USER_FUNC(evt_party_get_camid) {
+    PartyEntry* p;
+    EvtWord* args = event->args;
+    p = GETPARTY(args);
+    if (p == NULL) {
+        return EVT_RETURN_DONE;
+    }
+    evtSetValue(event, args[1], partyGetCamId(p));
+    return EVT_RETURN_DONE;
+}
+
 /**
  * If the partner is off screen, walks it toward Mario a unit at a time,
  * snapping it to the floor below (or Mario's height), until it is on screen; clears its footmarks first.
- * The EU release also stops once Mario himself is off screen.
+ * The PAL demo and PAL also stop once Mario himself is off screen.
  */
 USER_FUNC(evt_party_force_reset_outofscreen) {
-    void* mw;
+    MarioWork* mario;
     PartyEntry* p = GETPARTY(event->args);
     Vec from;
     Vec dir;
@@ -151,13 +176,13 @@ USER_FUNC(evt_party_force_reset_outofscreen) {
     Vec out2;
     Vec pos;
     Vec pos2;
-#if VERSION >= VERSION_DEMO_EU
-    Vec marioPos;
-#endif
 #if VERSION <= VERSION_DEMO_JP
     f32 h;
     f32 sx, sy, sz;
 #else
+#if VERSION >= VERSION_DEMO_EU
+    Vec marioPos;
+#endif
     f32 sx, sy, sz;
     f32 h;
 #endif
@@ -171,7 +196,7 @@ USER_FUNC(evt_party_force_reset_outofscreen) {
         return EVT_RETURN_DONE;
     }
     partyClearFootmark();
-    mw = p->playerPtr;
+    mario = p->playerPtr;
     dir = (Vec){0.0f, -1.0f, 0.0f};
     while (1) {
         pos2 = p->position;
@@ -180,13 +205,13 @@ USER_FUNC(evt_party_force_reset_outofscreen) {
             break;
         }
 #if VERSION >= VERSION_DEMO_EU
-        marioPos = ((MarioWork*)mw)->position;
+        marioPos = ((MarioWork*)mario)->position;
         marioGetScreenPos(marioPos, &sx, &sy, &sz);
         if (!marioChkInScreen((s32)sx, (s32)sy)) {
             break;
         }
 #endif
-        ang = angleABf(p->position.x, p->position.z, ((MarioWork*)mw)->position.x, ((MarioWork*)mw)->position.z);
+        ang = angleABf(p->position.x, p->position.z, mario->position.x, mario->position.z);
         movePos(&p->position.x, &p->position.z, 1.0f, ang);
         h = 100.0f;
         from = p->position;
@@ -194,16 +219,13 @@ USER_FUNC(evt_party_force_reset_outofscreen) {
         if (partyHitCheck(p, &from, &dir, &out1, &out2, &h) != NULL) {
             p->position.y = out1.y;
         } else {
-            p->position.y = ((MarioWork*)mw)->position.y;
+            p->position.y = mario->position.y;
         }
     }
     return EVT_RETURN_DONE;
 }
 
-/**
- * Writes 1.0 to args[1] when the partner is on screen and 0.0
- * when PARTY_DISP_FLAG_OFF_SCREEN is set (the inverse of the name). args[0]: slot.
- */
+/** Writes the float 1.0 to args[1] when the partner of slot args[0] is not out of the screen, else 0.0. */
 USER_FUNC(evt_party_outofscreen) {
     PartyEntry* p;
     EvtWord* args = event->args;
@@ -211,7 +233,7 @@ USER_FUNC(evt_party_outofscreen) {
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
-    evtSetFloat(event, args[1], (f32)(s32)(((p->flags2 >> 23) & 1) ^ 1));
+    evtSetFloat(event, args[1], (f32)((p->flags2 & PARTY_DISP_FLAG_OUT_OF_SCREEN) == 0));
     return EVT_RETURN_DONE;
 }
 
@@ -263,8 +285,8 @@ USER_FUNC(evt_party_get_pos) {
     return EVT_RETURN_DONE;
 }
 
-/** Linear step for a turn: the fraction step/frames of the angle difference a - b. */
-inline float inline_fn(f32 a, f32 b, f32 c, s32 n) {
+/** (a - b) * (c / n): the part of the way from b to a covered after c of n steps. */
+inline float partyStepSize(f32 a, f32 b, f32 c, s32 n) {
     return (a - b) * (c / (f32)n);
 }
 
@@ -275,8 +297,8 @@ inline float inline_fn(f32 a, f32 b, f32 c, s32 n) {
 USER_FUNC(evt_party_set_dir) {
     EvtWord* args = event->args;
     PartyEntry* p;
-    f32 ang, t, st;
-    s32 fr, v, c;
+    f32 angle, target, start;
+    s32 frames, msec, count;
     if (isFirstCall) {
         s32 id = (*args++ == 0) ? partyCtrlNo : 1;
         event->userdata[0] = id;
@@ -289,35 +311,33 @@ USER_FUNC(evt_party_set_dir) {
     } else {
         args++;
     }
-    ang = evtGetFloat(event, args[0]);
-    v = evtGetValue(event, args[1]);
-    if (v >= 0) {
-        fr = sysMsec2Frame(v);
+    angle = evtGetFloat(event, args[0]);
+    msec = evtGetValue(event, args[1]);
+    if (msec >= 0) {
+        frames = sysMsec2Frame(msec);
     } else {
-        fr = v;
+        frames = msec;
     }
     p = partyGetPtr(event->userdata[0]);
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
-    if (fr > 0) {
-        t = revise360(270.0f - ang);
-        st = event->userdataf[1];
-        p->displayDirection = revise360(st + inline_fn(t, st, (f32)event->userdata[2], fr));
+    if (frames > 0) {
+        target = revise360(270.0f - angle);
+        start = event->userdataf[1];
+        p->displayDirection = revise360(start + partyStepSize(target, start, (f32)event->userdata[2], frames));
         p->displayDirectionTarget = p->displayDirection;
         p->targetDir = toMovedirSimple(p->displayDirectionTarget);
-        c = event->userdata[2] + 1;
-        event->userdata[2] = c;
-        return c > fr;
-    } else {
-        if (fr < 0) {
-            p->displayDirectionTarget = revise360(270.0f - ang);
-            p->targetDir = toMovedirSimple(p->displayDirectionTarget);
-        } else if (fr == 0) {
-            p->displayDirection = revise360(270.0f - ang);
-            p->displayDirectionTarget = p->displayDirection;
-            p->targetDir = toMovedirSimple(p->displayDirectionTarget);
-        }
+        count = event->userdata[2] + 1;
+        event->userdata[2] = count;
+        return count > frames ? EVT_RETURN_YIELD : EVT_RETURN_BLOCK;
+    } else if (frames < 0) {
+        p->displayDirectionTarget = revise360(270.0f - angle);
+        p->targetDir = toMovedirSimple(p->displayDirectionTarget);
+    } else if (frames == 0) {
+        p->displayDirection = revise360(270.0f - angle);
+        p->displayDirectionTarget = p->displayDirection;
+        p->targetDir = toMovedirSimple(p->displayDirectionTarget);
     }
     return EVT_RETURN_DONE;
 }
@@ -427,14 +447,14 @@ USER_FUNC(evt_party_move_pos) {
     if (isFirstCall) {
         event->userdata[2] = 0;
     }
-    event->userdata[0] = PARTY_ID(args);
+    event->userdata[0] = (args[0] == 0 ? partyCtrlNo : 1);
     p = partyGetPtr(event->userdata[0]);
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
     if (event->userdata[2] == 0) {
         u8 t = p->runMode;
-        if (t != 0 && (u8)(t - 1) > 1) {
+        if (t != 0 && !(t == 1 || t == 2)) {
             return EVT_RETURN_BLOCK;
         }
         event->userdata[2] = 1;
@@ -467,14 +487,14 @@ USER_FUNC(evt_party_move_pos2) {
     if (isFirstCall) {
         event->userdata[2] = 0;
     }
-    event->userdata[0] = PARTY_ID(args);
+    event->userdata[0] = (args[0] == 0 ? partyCtrlNo : 1);
     p = partyGetPtr(event->userdata[0]);
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
     if (event->userdata[2] == 0) {
         u8 t = p->runMode;
-        if (t != 0 && (u8)(t - 1) > 1) {
+        if (t != 0 && !(t == 1 || t == 2)) {
             return EVT_RETURN_BLOCK;
         }
         event->userdata[2] = 1;
@@ -499,13 +519,39 @@ USER_FUNC(evt_party_wait_landon) {
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
-    return ((p->flags >> 1) & 1) ? 2 : 0;
+    return (p->flags & PARTY_FLAG_IS_GROUNDED) ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
+}
+
+/**
+ * Landing check of a partner's scripted jump: snaps it onto the floor the next vy step reaches and clears its jump
+ * flags. TRUE when it landed.
+ */
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+static BOOL chkgnd(PartyEntry* p, f32 vy) {
+    BOOL ret = FALSE;
+#if VERSION <= VERSION_DEMO_JP
+    f32 dropDepth, groundY;
+    HitEntry* hit = _partySearchGround(p, &groundY, &dropDepth, __fabsf(vy), __fabsf(vy));
+    if (hit != NULL && p->position.y + vy <= groundY) {
+        p->hitobjStandOn = hit;
+        ret = TRUE;
+        p->position.y = groundY;
+#else
+    HitEntry* hit = partySearchGround(p, __fabsf(vy), __fabsf(vy));
+    if (hit != NULL && p->position.y + vy <= p->groundY) {
+        p->hitobjStandOn = hit;
+        ret = TRUE;
+        p->position.y = p->groundY;
+#endif
+        p->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
+    }
+    return ret;
 }
 
 /**
  * Makes the partner jump to (args[1], args[2], args[3]) in args[4] milliseconds, blocking until it lands.
  * args[5] = 0 also turns it toward the target; args[6] is the arc height for a level jump (-1000 or below = 20).
- * Rising jumps add headroom (half the partner's height in the JP and US demo releases, 37 units later).
+ * Rising jumps add headroom (half the partner's height in the early demos, 37 units in JP and later).
  * args[0]: slot.
  */
 USER_FUNC(evt_party_jump_pos) {
@@ -522,12 +568,12 @@ USER_FUNC(evt_party_jump_pos) {
         if (q == NULL) {
             return EVT_RETURN_DONE;
         }
-        if (q->runMode == 0xB) {
+        if (q->runMode == PARTY_RUN_RIDE) {
             return EVT_RETURN_DONE;
         }
         event->userdata3 = 0;
         partyChgMot(q, 8);
-        partyChgRunMode(q, 9);
+        partyChgRunMode(q, PARTY_RUN_FORCE_WALK);
     } else {
         args++;
     }
@@ -553,7 +599,7 @@ USER_FUNC(evt_party_jump_pos) {
             if (mode == 0) {
                 p->moveDir = p->targetDir;
             }
-            partyChgPoseId(p, 4);
+            partyChgPoseId(p, PARTY_POSE_JUMP);
             dy = y - p->position.y;
             half = 0.5f * ff;
             if (__fabsf(dy) < 1.0f) {
@@ -589,36 +635,14 @@ USER_FUNC(evt_party_jump_pos) {
         case 2:
             movePos(&p->position.x, &p->position.z, p->moveSpeed, p->targetDir);
             p->velY += p->work.common.accelY;
-            mode = 0;
-            ff = p->velY;
-            {
-#if VERSION <= VERSION_DEMO_JP
-                f32 groundY, dropDepth;
-                HitEntry* hit = _partySearchGround(
-                    p, &groundY, &dropDepth, __fabsf(ff), __fabsf(ff));
-                if (hit != NULL && p->position.y + ff <= groundY) {
-                    p->hitobjStandOn = hit;
-                    mode = 1;
-                    p->position.y = groundY;
-                    p->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
-                }
-#else
-                HitEntry* hit = _partySearchGround(p, __fabsf(ff), __fabsf(ff));
-                if (hit != NULL && p->position.y + ff <= p->groundY) {
-                    p->hitobjStandOn = hit;
-                    mode = 1;
-                    p->position.y = p->groundY;
-                    p->flags &= ~(PARTY_FLAG_IS_JUMPING | PARTY_FLAG_IS_FALLING | PARTY_FLAG_IS_STEPPING);
-                }
-#endif
-            }
+            mode = chkgnd(p, p->velY);
             if (mode) {
                 event->userdata[2] = 0;
             } else {
                 p->position.y += p->velY;
             }
             if (--event->userdata[2] <= 0) {
-                partyChgPoseId(p, 1);
+                partyChgPoseId(p, PARTY_POSE_STAND);
                 p->gravity = 0.0f;
                 p->work.common.accelY = 0.0f;
                 p->moveSpeed = 0.0f;
@@ -670,6 +694,58 @@ USER_FUNC(evt_party_set_homing_dist) {
     return EVT_RETURN_DONE;
 }
 
+/** Shows (args[1] nonzero) or hides the partner's shadow (PARTY_DISP_FLAG_SHADOW_OFF). args: slot, on/off. */
+// Original name and size (0x98) from the JP demo map (UNUSED there: no script uses it), between
+// evt_party_set_homing_dist and the stripped evt_party_set_size: evt_party_cont_onoff's form on the flag
+// partyShadowOff sets (a partyShadowOff call in the off arm is 0x94).
+USER_FUNC(evt_party_shadow_onoff) {
+    PartyEntry* p;
+    EvtWord* args = event->args;
+    p = GETPARTY(args);
+    if (p == NULL) {
+        return EVT_RETURN_DONE;
+    }
+    if (evtGetValue(event, args[1]) == 0) {
+        p->flags2 |= PARTY_DISP_FLAG_SHADOW_OFF;
+    } else {
+        p->flags2 &= ~PARTY_DISP_FLAG_SHADOW_OFF;
+    }
+    return EVT_RETURN_DONE;
+}
+
+// FAKE: stand-in that nothing calls; it only fixes the order of these literals in the constant pool; removing it
+// changes the object. JP demo map: 1.0f (@1357) comes first, then the UNUSED @1454 and 0.5f, 20.0f, 0.0f
+// (@1455-@1457), then -1000.0f (@1504); all are evt_party_jump_pos's values, but the run after @1454 is placed by
+// the stripped evt_party_jump_jumpstand (UNUSED 0x834, compiled right before evt_party_jump_pos), and 1.0f by an
+// earlier stripped command (evt_party_set_size 0xc0 is the likely one). Bodies not known. It sits in
+// evt_party_set_size's slot (between evt_party_shadow_onoff and evt_party_get_pose in the map): functions are
+// generated in reverse source order, so its literals are created after evt_party_set_homing_dist's and before
+// evt_party_jump_pos's, as the map numbers them (at the end of the file they came first).
+void evtPartyStrippedPool(f32* f) {
+    f[0] = 1.0f;
+    f[1] = 0.5f;
+    f[2] = 20.0f;
+    f[3] = 0.0f;
+#if VERSION >= VERSION_JP
+    f[4] = 37.0f;
+#endif
+    f[5] = -1000.0f;
+}
+
+/** Writes the name of the partner's current animation pose to args[1]. args: slot, out. */
+// Original name and size (0x70) from the JP demo map (UNUSED there: no script uses it), between the stripped
+// evt_party_set_size and evt_party_set_pose: evt_party_set_pose's form with evt_mario_get_pose's field (animName).
+USER_FUNC(evt_party_get_pose) {
+    PartyEntry* p;
+    EvtWord* args = event->args;
+    p = GETPARTY(args);
+    if (p == NULL) {
+        return EVT_RETURN_DONE;
+    }
+    evtSetValue(event, args[1], (EvtWord)p->animName);
+    return EVT_RETURN_DONE;
+}
+
 /**
  * Plays the named animation pose in args[1] on the partner (partyChgPose),
  * e.g. a talking or surprised pose in a cutscene.
@@ -677,13 +753,13 @@ USER_FUNC(evt_party_set_homing_dist) {
 USER_FUNC(evt_party_set_pose) {
     PartyEntry* p;
     EvtWord* args = event->args;
-    s32 v;
+    const char* pose;
     p = GETPARTY(args);
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
-    v = evtGetValue(event, args[1]);
-    ((PartyChgPoseNoProtoFn)partyChgPose)(p, v);
+    pose = (const char*)evtGetValue(event, args[1]);
+    partyChgPose(p, pose);
     return EVT_RETURN_DONE;
 }
 
@@ -694,7 +770,7 @@ USER_FUNC(evt_party_set_pose) {
 USER_FUNC(evt_party_sleep_on) {
     PartyEntry* p = GETPARTY(event->args);
     if (p != NULL) {
-        partyChgPoseId(p, 6);
+        partyChgPoseId(p, PARTY_POSE_SLEEP);
         p->flags |= PARTY_FLAG_SLEEP_ON;
     }
     return EVT_RETURN_DONE;
@@ -704,7 +780,7 @@ USER_FUNC(evt_party_sleep_on) {
 USER_FUNC(evt_party_sleep_off) {
     PartyEntry* p = GETPARTY(event->args);
     if (p != NULL) {
-        partyChgPoseId(p, 1);
+        partyChgPoseId(p, PARTY_POSE_STAND);
         p->flags &= ~PARTY_FLAG_SLEEP_ON;
     }
     return EVT_RETURN_DONE;
@@ -728,7 +804,7 @@ USER_FUNC(evt_party_set_breed_pose) {
  * Those are the ride modes of partyChgRunMode (11 riding along on Mario's plane, boat or bellows,
  * 12 ride Yoshi), not the pipe mode (10); jin_04 (JP and later) only has the partner jump along when it is 1.
  */
-USER_FUNC(L_evt_party_dokan) {
+USER_FUNC(evt_party_dokan) {
     PartyEntry* p;
     s32 dst, v;
     EvtWord* args = event->args;
@@ -737,7 +813,7 @@ USER_FUNC(L_evt_party_dokan) {
         return EVT_RETURN_DONE;
     }
     dst = args[1];
-    if (p->runMode == 0xB || p->runMode == 0xC) {
+    if (p->runMode == PARTY_RUN_RIDE || p->runMode == PARTY_RUN_RIDE_YOSHI) {
         v = 0;
     } else {
         v = 1;
@@ -756,14 +832,50 @@ USER_FUNC(evt_party_get_status) {
     s32 dst = args[1];
     s32 st;
     switch (id) {
-        case 6:
+        case PARTY_VIVIAN:
             st = vivianGetStatus();
             evtSetValue(event, dst, st);
             break;
-        case 3:
+        case PARTY_BOBBERY:
             evtSetValue(event, dst, bomheiGetStatus());
             break;
     }
+    return EVT_RETURN_DONE;
+}
+
+/** Gives the Yoshi partner his colour (yoshiSetColor). */
+// Original name and size (0x24) from the JP demo map (UNUSED there: no script uses it); one call without arguments,
+// to the function its name gives.
+USER_FUNC(evt_party_auto_set_yoshi_color) {
+    yoshiSetColor();
+    return EVT_RETURN_DONE;
+}
+
+/** Writes the partner's hitobjHead (the hit object itself, not its name) to args[1]; args[0] is the slot. */
+// evt_party_get_hitobj_head and evt_party_get_hitobj_ride: original names and sizes (0x70 each) from the JP demo
+// map (UNUSED there: no script uses them). Each writes to args[1] the hit object whose name the
+// evt_party_get_name_hitobj_ command of the same word writes. The map's other six forms (and the six missing
+// name forms) are not restored: no existing command shows their fields.
+USER_FUNC(evt_party_get_hitobj_head) {
+    PartyEntry* p;
+    EvtWord* args = event->args;
+    p = GETPARTY(args);
+    if (p == NULL) {
+        return EVT_RETURN_DONE;
+    }
+    evtSetValue(event, args[1], (EvtWord)p->hitobjHead);
+    return EVT_RETURN_DONE;
+}
+
+/** Writes the hit object the partner stands on (hitobjStandOn, not its name) to args[1]; args[0] is the slot. */
+USER_FUNC(evt_party_get_hitobj_ride) {
+    PartyEntry* p;
+    EvtWord* args = event->args;
+    p = GETPARTY(args);
+    if (p == NULL) {
+        return EVT_RETURN_DONE;
+    }
+    evtSetValue(event, args[1], (EvtWord)p->hitobjStandOn);
     return EVT_RETURN_DONE;
 }
 
@@ -825,7 +937,7 @@ USER_FUNC(evt_party_thunders_use) {
         }
         p->flags |= PARTY_FLAG_IS_EVT_USE;
         p->flags |= PARTY_FLAG_IS_BEING_USED;
-        partyChgRunMode(p, 3);
+        partyChgRunMode(p, PARTY_RUN_USE);
     }
     if (bomheiGetStatus() != 0) {
         return EVT_RETURN_BLOCK;
@@ -842,14 +954,14 @@ USER_FUNC(evt_party_vivian_hold) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (vivianGetStatus() != 0) {
+        if (vivianGetStatus() != VIVIAN_STATUS_INACTIVE) {
             return EVT_RETURN_DONE;
         }
         p->flags |= PARTY_FLAG_IS_EVT_USE;
         p->flags |= PARTY_FLAG_IS_BEING_USED;
-        partyChgRunMode(p, 3);
+        partyChgRunMode(p, PARTY_RUN_USE);
     }
-    if (vivianGetStatus() != 2) {
+    if (vivianGetStatus() != VIVIAN_STATUS_HIDDEN) {
         return EVT_RETURN_BLOCK;
     }
     return EVT_RETURN_DONE;
@@ -864,19 +976,19 @@ USER_FUNC(evt_party_vivian_unhold) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (vivianGetStatus() == 2) {
+        if (vivianGetStatus() == VIVIAN_STATUS_HIDDEN) {
             vivianUnhold(p);
         }
     }
-    return vivianGetStatus() == 0 ? 2 : 0;
+    return vivianGetStatus() == VIVIAN_STATUS_INACTIVE ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
 }
 
 /**
- * Shows (args[1] nonzero) or hides Vivian's tail (L_partyVivianTailStart/Stop),
+ * Shows (args[1] nonzero) or hides Vivian's tail (partyVivianTailStart/Stop),
  * the vivihimo ribbon drawn from her body to the floor below her.
  * bom_01 hides it and moo_00 shows it again (JP and later, with the debug notes "Vivian tail off/on").
  */
-USER_FUNC(L_evt_party_vivian_tail) {
+USER_FUNC(evt_party_vivian_tail) {
     PartyEntry* p;
     EvtWord* args = event->args;
     p = GETPARTY(args);
@@ -884,9 +996,9 @@ USER_FUNC(L_evt_party_vivian_tail) {
         return EVT_RETURN_DONE;
     }
     if (args[1] == 0) {
-        L_partyVivianTailStop(p);
+        partyVivianTailStop(p);
     } else {
-        L_partyVivianTailStart(p);
+        partyVivianTailStart(p);
     }
     return EVT_RETURN_DONE;
 }
@@ -903,33 +1015,32 @@ USER_FUNC(evt_party_yoshi_ride) {
     ride = args[1];
     if (isFirstCall) {
         if (ride) {
-            if (yoshiGetStatus() != 0) {
+            if (yoshiGetStatus() != YOSHI_STATUS_INACTIVE) {
                 return EVT_RETURN_DONE;
             }
             p->flags |= PARTY_FLAG_IS_EVT_USE;
             p->flags |= PARTY_FLAG_IS_BEING_USED;
-            partyChgRunMode(p, 3);
+            partyChgRunMode(p, PARTY_RUN_USE);
         } else {
             marioGetoffYoshi();
         }
     }
     if (ride) {
-        if (yoshiGetStatus() == 1) {
+        if (yoshiGetStatus() == YOSHI_STATUS_RIDING) {
             p->flags &= ~PARTY_FLAG_IS_EVT_USE;
             return EVT_RETURN_DONE;
         }
-    } else {
-        if (yoshiGetStatus() == 0) {
-            p->flags &= ~PARTY_FLAG_IS_EVT_USE;
-            return EVT_RETURN_DONE;
-        }
+    } else if (yoshiGetStatus() == YOSHI_STATUS_INACTIVE) {
+        p->flags &= ~PARTY_FLAG_IS_EVT_USE;
+        return EVT_RETURN_DONE;
     }
     return EVT_RETURN_BLOCK;
 }
 
 /**
- * While Mario rides Yoshi, flutters Yoshi at speed args[1] for args[2] milliseconds and blocks
- * until the flutter ends.
+ * While Mario rides Yoshi, scripts his flutter at speed args[1] and blocks while its control value is nonnegative.
+ * args[2] passes through sysMsec2Frame here and again in evt_set_yoshi_frm; it is not a countdown duration.
+ * Landing sets the stored value to -1.
  */
 USER_FUNC(evt_party_yoshi_fly) {
     PartyEntry* p;
@@ -939,7 +1050,7 @@ USER_FUNC(evt_party_yoshi_fly) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (yoshiGetStatus() != 1) {
+        if (yoshiGetStatus() != YOSHI_STATUS_RIDING) {
             return EVT_RETURN_DONE;
         }
         p->flags |= PARTY_FLAG_IS_EVT_USE;
@@ -965,7 +1076,7 @@ USER_FUNC(evt_party_nokotaro_kick) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (p->currentMemberId != PARTY_MEMBER_KOOPS) {
+        if (p->currentMemberId != PARTY_KOOPS) {
             return EVT_RETURN_DONE;
         }
         if (p->flags & PARTY_FLAG_IS_BEING_USED) {
@@ -974,9 +1085,9 @@ USER_FUNC(evt_party_nokotaro_kick) {
         p->actionTime = 0;
         p->flags |= PARTY_FLAG_IS_EVT_USE;
         p->flags |= PARTY_FLAG_IS_BEING_USED;
-        partyChgRunMode(p, 3);
+        partyChgRunMode(p, PARTY_RUN_USE);
     }
-    if (nokonokoGetStatus(p) == 0) {
+    if (nokonokoGetStatus(p) == NOKONOKO_STATUS_NONE) {
         p->flags &= ~PARTY_FLAG_IS_EVT_USE;
         return EVT_RETURN_DONE;
     }
@@ -995,7 +1106,7 @@ USER_FUNC(evt_party_nokotaro_kick_hold) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (p->currentMemberId != PARTY_MEMBER_KOOPS) {
+        if (p->currentMemberId != PARTY_KOOPS) {
             return EVT_RETURN_DONE;
         }
         if (p->flags & PARTY_FLAG_IS_BEING_USED) {
@@ -1004,13 +1115,13 @@ USER_FUNC(evt_party_nokotaro_kick_hold) {
         p->actionTime = 5000;
         p->flags |= PARTY_FLAG_IS_EVT_USE;
         p->flags |= PARTY_FLAG_IS_BEING_USED;
-        partyChgRunMode(p, 3);
+        partyChgRunMode(p, PARTY_RUN_USE);
     }
-    if (nokonokoGetStatus(p) == 0) {
+    if (nokonokoGetStatus(p) == NOKONOKO_STATUS_NONE) {
         p->flags &= ~PARTY_FLAG_IS_EVT_USE;
         return EVT_RETURN_DONE;
     }
-    return nokonokoGetStatus(p) == 3 ? 2 : 0;
+    return nokonokoGetStatus(p) == NOKONOKO_STATUS_SHELL_HELD ? EVT_RETURN_DONE : EVT_RETURN_BLOCK;
 }
 
 /**
@@ -1019,36 +1130,36 @@ USER_FUNC(evt_party_nokotaro_kick_hold) {
  */
 USER_FUNC(evt_party_nokotaro_hold_cancel) {
     PartyEntry* p;
-    s32 ret = 0;
+    s32 ret = EVT_RETURN_BLOCK;
     EvtWord* args = event->args;
     p = GETPARTY(args);
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (p->currentMemberId != PARTY_MEMBER_KOOPS) {
+        if (p->currentMemberId != PARTY_KOOPS) {
             return EVT_RETURN_DONE;
         }
-        if (nokonokoGetStatus(p) == 0) {
+        if (nokonokoGetStatus(p) == NOKONOKO_STATUS_NONE) {
             return EVT_RETURN_DONE;
         }
         event->userdata[0] = 0;
     }
     switch (event->userdata[0]) {
         case 0:
-            if (nokonokoGetStatus(p) != 3) {
-                ret = 0;
+            if (nokonokoGetStatus(p) != NOKONOKO_STATUS_SHELL_HELD) {
+                ret = EVT_RETURN_BLOCK;
                 break;
             }
             nokotaro_hold_cancel(p);
             event->userdata[0] = 1;
             break;
         case 1:
-            if (nokonokoGetStatus(p) != 0) {
-                ret = 0;
+            if (nokonokoGetStatus(p) != NOKONOKO_STATUS_NONE) {
+                ret = EVT_RETURN_BLOCK;
                 break;
             }
-            ret = 2;
+            ret = EVT_RETURN_DONE;
             p->flags &= ~PARTY_FLAG_IS_EVT_USE;
             break;
     }
@@ -1056,7 +1167,7 @@ USER_FUNC(evt_party_nokotaro_hold_cancel) {
 }
 
 /**
- * Writes Koops's shell ability state (nokonokoGetStatus: 0 idle, 3 shell held) to args[1];
+ * Writes Koops's shell ability state (NokonokoStatus) to args[1];
  * untouched for other partners.
  */
 USER_FUNC(evt_party_nokotaro_get_status) {
@@ -1067,7 +1178,7 @@ USER_FUNC(evt_party_nokotaro_get_status) {
     if (p == NULL) {
         return EVT_RETURN_DONE;
     }
-    if (p->currentMemberId != PARTY_MEMBER_KOOPS) {
+    if (p->currentMemberId != PARTY_KOOPS) {
         return EVT_RETURN_DONE;
     }
     dst = args[1];
@@ -1087,7 +1198,7 @@ USER_FUNC(evt_party_cloud_breathout) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (p->currentMemberId != PARTY_MEMBER_FLURRIE) {
+        if (p->currentMemberId != PARTY_FLURRIE) {
             return EVT_RETURN_DONE;
         }
         if (p->flags & PARTY_FLAG_IS_BEING_USED) {
@@ -1096,7 +1207,7 @@ USER_FUNC(evt_party_cloud_breathout) {
         p->actionTime = args[1];
         p->flags |= PARTY_FLAG_IS_EVT_USE;
         p->flags |= PARTY_FLAG_IS_BEING_USED;
-        partyChgRunMode(p, 3);
+        partyChgRunMode(p, PARTY_RUN_USE);
     }
     if (cloudGetStatus() == 0) {
         p->flags &= ~PARTY_FLAG_IS_EVT_USE;
@@ -1106,11 +1217,9 @@ USER_FUNC(evt_party_cloud_breathout) {
 }
 
 #if VERSION >= VERSION_US
-extern void N_cloudLockAnimationsOn(PartyEntry* party);
-extern void N_cloudLockAnimationsOff(PartyEntry* party);
 
-/** US only. */
-USER_FUNC(N_evt_party_cloud_lock_animations_on_off) {
+/** US and later only. Descriptive name (not in the symbol maps). */
+USER_FUNC(evt_party_cloud_lock_animations_on_off) {
     PartyEntry* p;
     EvtWord* args = event->args;
     p = GETPARTY(args);
@@ -1118,31 +1227,18 @@ USER_FUNC(N_evt_party_cloud_lock_animations_on_off) {
         return EVT_RETURN_DONE;
     }
     if (isFirstCall) {
-        if (p->currentMemberId != PARTY_MEMBER_FLURRIE) {
+        if (p->currentMemberId != PARTY_FLURRIE) {
             return EVT_RETURN_DONE;
         }
         if (p->flags & PARTY_FLAG_IS_BEING_USED) {
             return EVT_RETURN_DONE;
         }
         if (args[1]) {
-            N_cloudLockAnimationsOn(p);
+            cloudLockAnimationsOn(p);
         } else {
-            N_cloudLockAnimationsOff(p);
+            cloudLockAnimationsOff(p);
         }
     }
     return EVT_RETURN_DONE;
 }
 #endif
-
-// FAKE: stand-in for a function the linker stripped; it only exists to put the float constants in this file's .sdata2
-// pool in the original order and emits nothing in the DOL.
-void evtPartyStrippedPool(f32* f) {
-    f[0] = 1.0f;
-    f[1] = 0.5f;
-    f[2] = 20.0f;
-    f[3] = 0.0f;
-#if VERSION >= VERSION_JP
-    f[4] = 37.0f;
-#endif
-    f[5] = -1000.0f;
-}

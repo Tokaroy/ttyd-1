@@ -1,22 +1,16 @@
 #include <dolphin.h>
 #include <dolphin/os.h>
+#include <dolphin/db.h>
 
 #include "__os.h"
 
 // external functions
 extern void __RAS_OSDisableInterrupts_begin();
 extern void __RAS_OSDisableInterrupts_end();
-extern void DBPrintf(char*, ...);
-
-#define HID2 920
 
 volatile OSContext* __OSCurrentContext AT_ADDRESS(OS_BASE_CACHED | 0x00D4);
 volatile OSContext* __OSFPUContext AT_ADDRESS(OS_BASE_CACHED | 0x00D8);
 
-/**
- * Assembly: restores the FPRs, FPSCR and (if the paired-single bit is set in the context state) the
- * paired-single halves from an OSContext.
- */
 #ifdef __GEKKO__
 static asm void __OSLoadFPUContext(register u32 dummy, register OSContext* fpucontext) {
     nofralloc
@@ -100,7 +94,6 @@ _return:
     blr
 }
 
-/** Assembly: saves the FPRs, FPSCR and paired-single halves into an OSContext and marks it as having saved FP state. */
 static asm void __OSSaveFPUContext(register u32 dummy1, register u32 dummy2, register OSContext* fpucontext) {
     nofralloc
 
@@ -187,25 +180,18 @@ _return:
     blr
 }
 
-/** Assembly entry that loads the FPU registers from a context (a wrapper around __OSLoadFPUContext). */
 asm void OSLoadFPUContext(register OSContext* fpucontext) {
     nofralloc
     addi    r4, fpucontext, 0
     b       __OSLoadFPUContext
 }
 
-/** Assembly entry that saves the FPU registers into a context (a wrapper around __OSSaveFPUContext). */
 asm void OSSaveFPUContext(register OSContext* fpucontext) {
     nofralloc
     addi    r5, fpucontext, 0
     b       __OSSaveFPUContext
 }
 
-/**
- * Assembly: makes a context the current one (stores its address, and its physical address, in low memory).
- * If it is the FPU owner, FP stays enabled in its SRR1 and the MSR;
- * otherwise FP is disabled so the first FP use traps to OSSwitchFPUContext.
- */
 asm void OSSetCurrentContext(register OSContext* context){
     nofralloc
 
@@ -221,10 +207,10 @@ asm void OSSetCurrentContext(register OSContext* context){
     bne     _disableFPU
 
     lwz     r6, context->srr1
-    ori     r6, r6, 0x2000
+    ori     r6, r6, MSR_FP
     stw     r6, context->srr1
     mfmsr   r6
-    ori     r6, r6, 2
+    ori     r6, r6, MSR_RI
     mtmsr   r6
     blr
 
@@ -234,22 +220,17 @@ _disableFPU:
     stw     r6, context->srr1
     mfmsr   r6
     rlwinm  r6, r6, 0, 19, 17
-    ori     r6, r6, 2
+    ori     r6, r6, MSR_RI
     mtmsr   r6
     isync
     blr
 }
 #endif
 
-/** Returns the context the OS has installed as current (the running thread's or an interrupt's). */
 OSContext* OSGetCurrentContext(void) {
     return (OSContext*)__OSCurrentContext;
 }
 
-/**
- * Assembly: saves the callers' non-volatile state into a context, like setjmp;
- * returns 0 when called, and 1 when the context is later resumed with OSLoadContext.
- */
 #ifdef __GEKKO__
 asm u32 OSSaveContext(register OSContext* context) {
     nofralloc
@@ -287,10 +268,6 @@ asm u32 OSSaveContext(register OSContext* context) {
     blr
 }
 
-/**
- * Assembly: resumes a saved context via rfi, restoring its registers (and adjusting for being inside the
- * interrupt-disable atomic sequence); does not return.
- */
 asm void OSLoadContext(register OSContext* context) {
     nofralloc
 
@@ -362,14 +339,12 @@ notexc:
     rfi
 }
 
-/** Assembly: returns the current stack pointer r1. */
 asm u32 OSGetStackPointer() {
     nofralloc 
     mr r3, r1 
     blr
 }
 
-/** Assembly: switches the stack pointer to newsp and returns the old one. */
 asm u32 OSSwitchStack(register u32 newsp) {
     nofralloc
     mr  r5, r1
@@ -378,7 +353,6 @@ asm u32 OSSwitchStack(register u32 newsp) {
     blr
 }
 
-/** Assembly: calls the function at pc on the stack newsp, then restores the old stack pointer and returns. */
 asm int OSSwitchFiber(register u32 pc, register u32 newsp) {
     nofralloc
     mflr    r0
@@ -396,7 +370,6 @@ asm int OSSwitchFiber(register u32 pc, register u32 newsp) {
 }
 #endif
 
-/** Zeroes a context's mode and state and releases the FPU ownership if this context held it. */
 void OSClearContext(register OSContext* context) {
     context->mode = 0;
     context->state = 0;
@@ -404,11 +377,6 @@ void OSClearContext(register OSContext* context) {
         __OSFPUContext = NULL;
 }
 
-/**
- * Assembly: prepares a context to start at pc with stack newsp:
- * sets SRR1 (interrupts and address translation on, FP enabled), copies r2 and r13 from the caller,
- * zeroes the other registers and the GQRs, then clears mode and state. Used to create threads.
- */
 #ifdef __GEKKO__
 asm void OSInitContext(register OSContext* context, register u32 pc, register u32 newsp) {
     nofralloc
@@ -416,7 +384,7 @@ asm void OSInitContext(register OSContext* context, register u32 pc, register u3
     stw     pc,  OS_CONTEXT_SRR0(context)
     stw     newsp,  OS_CONTEXT_R1(context)
     li      r11, 0
-    ori     r11, r11, 0x00008000 | 0x00000020 | 0x00000010 | 0x00000002 | 0x00001000
+    ori     r11, r11, MSR_EE | MSR_IR | MSR_DR | MSR_RI | MSR_ME
     stw     r11, OS_CONTEXT_SRR1(context)
     li      r0,  0x0
     stw     r0,  OS_CONTEXT_CR(context)
@@ -469,10 +437,6 @@ asm void OSInitContext(register OSContext* context, register u32 pc, register u3
 }
 #endif
 
-/**
- * Prints a context to the debug console: GPRs, LR, CR, SRR0/SRR1, GQRs,
- * FPRs and paired-single halves when saved, and up to 16 stack frames of the back chain.
- */
 void OSDumpContext(OSContext* context) {
     u32 i;
     u32* p;
@@ -524,20 +488,15 @@ void OSDumpContext(OSContext* context) {
     }
 }
 
-/**
- * Assembly FP-unavailable exception handler: enables FP for the faulting context,
- * saves the previous FPU owner's registers if different and loads this context's,
- * so FPU state is switched lazily.
- */
 #ifdef __GEKKO__
 static asm void OSSwitchFPUContext(register __OSException exception, register OSContext* context) {
     nofralloc
     mfmsr   r5
-    ori     r5, r5, 0x2000
+    ori     r5, r5, MSR_FP
     mtmsr   r5
     isync
     lwz     r5, OS_CONTEXT_SRR1(context)
-    ori     r5, r5, 0x2000
+    ori     r5, r5, MSR_FP
     mtsrr1  r5
     addis   r3, r0, OS_CACHED_REGION_PREFIX
     lwz     r5, 0x00D8(r3) 
@@ -570,19 +529,17 @@ _restoreAndExit:
 }
 #endif
 
-/** Installs OSSwitchFPUContext as the FP-unavailable exception handler and clears the FPU owner. Called from OSInit. */
 void __OSContextInit(void) {
     __OSSetExceptionHandler(__OS_EXCEPTION_FLOATING_POINT, OSSwitchFPUContext);
     __OSFPUContext = NULL;
     DBPrintf("FPU-unavailable handler installed\n");
 }
 
-/** Assembly: copies the live FPRs, FPSCR and paired-single halves into a context without making it the FPU owner. */
 #ifdef __GEKKO__
 asm void OSFillFPUContext(register OSContext* context) {
     nofralloc
     mfmsr   r5
-    ori     r5, r5, 0x2000
+    ori     r5, r5, MSR_FP
     mtmsr   r5
     isync
 

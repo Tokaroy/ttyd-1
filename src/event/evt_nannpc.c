@@ -1,4 +1,6 @@
 // Script commands for crowd NPCs (nannpc): many simple sprite NPCs drawn through extdrv.
+
+#include "version.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_nannpc.h"
 #include "driver/extdrv.h"
@@ -13,19 +15,21 @@
 #include <dolphin/os.h>
 #include <string.h>
 #include "libc_decls.h"
-#include "version.h"
-
-static s32 nannpc_zcompare(const void* a, const void* b);
+#include "driver/camdrv.h"
 
 NanNPCWork* nanNPCWork;
-char makestring[16];
+static char makestring[16];
 
-#if VERSION <= VERSION_DEMO_JP
 /**
- * The demo turns the name into a string in a helper (same code, other register order).
- * Demo only: in the other versions the helper's "%06x" literal would move ahead in the string pool even unused.
+ * Turns a crowd NPC name into a string: a value without the top address bit is a number, printed as six hex digits.
+ * Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+ * JP and later: inline (only inlined copies exist; plain, its "%06x" literal would move ahead in the string pool).
  */
-static inline char* nanNPCEntryName(char* name) {
+#if VERSION >= VERSION_JP
+static inline char* nanNPCMakeString(char* name) {
+#else
+char* nanNPCMakeString(char* name) {
+#endif
     if (!((EvtWord)name & 0x80000000)) {
         sprintf(makestring, "%06x", name);
         name = makestring;
@@ -33,37 +37,19 @@ static inline char* nanNPCEntryName(char* name) {
     return name;
 }
 
-/** the demo search through that helper */
-static inline NanNPC* nanNPCSearch2(char* name) {
-    s32 i;
-    NanNPC* p;
-    NanNPCWork* w = nanNPCWork;
-    for (i = 0; i < w->num; i++) {
-        p = &w->npc[i];
-        name = nanNPCEntryName(name);
-        if (!strcmp((char*)p->name, name)) {
-            return p;
-        }
-    }
-    return NULL;
-}
-#endif
-
 /**
  * Finds the crowd NPC with the given name.
  * Names are strings; a value without the top address bit is treated as a number
  * and looked up by its six-digit hex form, so scripts can name crowd NPCs by index. NULL if none matches.
  */
-static inline NanNPC* nanNPCSearch(char* name) {
+// Original name and size (0xa4) from the JP demo map (UNUSED there: every call is inlined).
+NanNPC* nanNPCNameToPtr(char* name) {
     s32 i;
     NanNPC* p;
     NanNPCWork* w = nanNPCWork;
     for (i = 0; i < w->num; i++) {
         p = &w->npc[i];
-        if (!((EvtWord)name & 0x80000000)) {
-            sprintf(makestring, "%06x", name);
-            name = makestring;
-        }
+        name = nanNPCMakeString(name);
         if (!strcmp((char*)p->name, name)) {
             return p;
         }
@@ -72,101 +58,112 @@ static inline NanNPC* nanNPCSearch(char* name) {
 }
 
 /**
- * Moves crowd NPC r by its move vector, sliding off map collision:
- * a hit reflects the motion off the wall and pushes the NPC clear, and the move vector decays by 0.6 per frame.
- * NPCs with flag 0x8 move without collision.
+ * Moves crowd NPC npc by its move vector with map collision, casting a ray from origin along dir (length mag):
+ * a hit reflects the motion off the wall and pushes the NPC clear. Returns 1 if nothing was hit.
  */
-static inline void nanNPCHitMove(NanNPC* r, f32 mag) {
+// Original name and size (0x238) from the JP demo map (UNUSED there: every call is inlined).
+s32 nanNPCMoveAtari(NanNPC* npc, Vec origin, Vec dir, f32 mag) {
     s32 clear;
-    f32 hx;
-    f32 hy;
-    f32 hz;
-    f32 nx;
-    f32 ny;
-    f32 nz;
-    f32 d20;
-    Vec h;
-    Vec n;
-    Vec v3c;
-    Vec v48;
-    Vec v54;
-    Vec v60;
-    Vec v6c;
-    Vec v78;
-    Vec v84;
-    v60 = r->pos;
-    v60.y += 1.0f;
-    PSVECNormalize(&r->move, &v6c);
-    if (r->flags & NANNPC_FLAG_NO_HIT) {
-        PSVECAdd(&r->pos, &r->move, &r->pos);
-        PSVECScale(&r->move, &r->move, 0.6f);
+    f32 hitX;
+    f32 hitY;
+    f32 hitZ;
+    f32 normX;
+    f32 normY;
+    f32 normZ;
+    f32 dist;
+    Vec hitPos;
+    Vec normal;
+    Vec step;
+    Vec prevPos;
+    Vec reflected;
+    f32 dot;
+
+    clear = 1;
+    npc->hit1 = NULL;
+    npc->hit0 = NULL;
+    dist = mag;
+    npc->hit0 = hitCheckFilter(NULL, origin.x, origin.y, origin.z, dir.x, dir.y, dir.z, &hitPos.x, &hitPos.y,
+                               &hitPos.z, &dist, &normal.x, &normal.y, &normal.z);
+    if (!npc->hit0) {
+        PSVECAdd(&npc->pos, &npc->move, &npc->pos);
     } else {
-        clear = 1;
-        v84 = v6c;
-        v78 = v60;
-        r->hit1 = NULL;
-        r->hit0 = NULL;
-        d20 = mag;
-        r->hit0 = hitCheckFilter(NULL, &h.x, &h.y, &h.z, &d20, &n.x, &n.y, &n.z,
-                                 v78.x, v78.y, v78.z, v84.x, v84.y, v84.z);
-        if (!r->hit0) {
-            PSVECAdd(&r->pos, &r->move, &r->pos);
-        } else {
-            v48 = r->pos;
-            PSVECAdd(&r->pos, &r->move, &r->pos);
-            if (r->move.y == 0.0f) {
-                n.y = 0.0f;
-            }
-            PSVECNormalize(&n, &n);
-            C_VECReflect(&v84, &n, &v54);
-            PSVECScale(&v54, &r->move, mag);
-            clear = 0;
-            {
-                f32 dot = PSVECDotProduct(&v84, &n);
-                PSVECScale(&n, &n, dot * -(mag - d20) + 0.1f);
-            }
-            PSVECAdd(&r->pos, &n, &r->pos);
-            PSVECSubtract(&r->pos, &v48, &v3c);
-            d20 = PSVECMag(&v3c);
-            if ((f32)d20 > 0.0f) {
-                PSVECNormalize(&v3c, &v3c);
-                v78 = v48;
-                r->hit1 = hitCheckFilter(
-                    NULL, &hx, &hy, &hz, &d20, &nx, &ny, &nz, v48.x, 1.0f + v48.y, v48.z,
-                    v3c.x, v3c.y, v3c.z);
-                if (r->hit1) {
-                    r->pos = v48; // v78 == v48 here; the target reads v48 and keeps the dead v78 copy
-                }
+        prevPos = npc->pos;
+        PSVECAdd(&npc->pos, &npc->move, &npc->pos);
+        if (npc->move.y == 0.0f) {
+            normal.y = 0.0f;
+        }
+        PSVECNormalize(&normal, &normal);
+        C_VECReflect(&dir, &normal, &reflected);
+        PSVECScale(&reflected, &npc->move, mag);
+        clear = 0;
+
+        dot = PSVECDotProduct(&dir, &normal);
+        PSVECScale(&normal, &normal, dot * -(mag - dist) + 0.1f);
+        PSVECAdd(&npc->pos, &normal, &npc->pos);
+        PSVECSubtract(&npc->pos, &prevPos, &step);
+        dist = PSVECMag(&step);
+        if (dist > 0.0f) {
+            PSVECNormalize(&step, &step);
+            origin = prevPos;
+            npc->hit1 = hitCheckFilter(NULL, prevPos.x, 1.0f + prevPos.y, prevPos.z, step.x, step.y, step.z, &hitX,
+                                       &hitY, &hitZ, &dist, &normX, &normY, &normZ);
+            if (npc->hit1) {
+                npc->pos = prevPos;
             }
         }
-        if (clear) {
-            PSVECScale(&r->move, &r->move, 0.6f);
+    }
+    return clear;
+}
+
+/**
+ * Moves crowd NPC npc with its move vector capped at 5 when longer than 10, sliding off map collision
+ * (nanNPCMoveAtari); without a hit the move vector is scaled by 0.6. NPCs with NANNPC_FLAG_NO_HIT move
+ * without collision.
+ */
+// Original name and size (0x2f0) from the JP demo map (UNUSED there: every call is inlined).
+void nanNPCMoveDecel(NanNPC* npc) {
+    f32 mag;
+    Vec origin;
+    Vec dir;
+
+    mag = PSVECMag(&npc->move);
+    if (mag) {
+        if (mag > 10.0f) {
+            PSVECScale(&npc->move, &npc->move, 5.0f / mag);
+            mag = 5.0f;
+        }
+        origin = npc->pos;
+        origin.y += 1.0f;
+        PSVECNormalize(&npc->move, &dir);
+        if (npc->flags & NANNPC_FLAG_NO_HIT) {
+            PSVECAdd(&npc->pos, &npc->move, &npc->pos);
+            PSVECScale(&npc->move, &npc->move, 0.6f);
+        } else if (nanNPCMoveAtari(npc, origin, dir, mag)) {
+            PSVECScale(&npc->move, &npc->move, 0.6f);
         }
     }
 }
 
-// FAKE: opt_dead_assignments off keeps the dead v78 = v48 struct copy in the inlined nanNPCHitMove (the target stores it, never reads it)
+// FAKE: opt_dead_assignments off keeps the dead origin = prevPos struct copy in the inlined nanNPCMoveAtari (the retail code stores it, never reads it)
 #pragma push
-// FAKE: keeps the dead stores that the target has; removing it changes the code
 #pragma opt_dead_assignments off
 /**
- * Crowd behaviour pass, installed by map rels (Rogueport plaza gor_00, dou_11) as sub function 2:
- * NPCs with flag 0x4 push each other apart when closer than their size,
+ * Crowd behaviour pass, installed by map rels (muj_00, dou_11) as sub function 2:
+ * NPCs with NANNPC_FLAG_WALK push each other apart when closer than their size,
  * are pulled back towards their target position, and then move with collision (speed capped).
  */
 void nanNPCOption(void) {
     NanNPC* q;
-    void* w;
+    NanNPCWork* w;
     NanNPC* p;
-    NanNPC* r;
     Vec diff;
     f32 mag;
     f32 dist;
 
     w = nanNPCWork;
-    for (p = ((NanNPCWork*)w)->npc; p < ((NanNPCWork*)w)->npc + ((NanNPCWork*)w)->num; p++) {
+    for (p = w->npc; p < w->npc + w->num; p++) {
         if (p->flags & NANNPC_FLAG_WALK) {
-            for (q = ((NanNPCWork*)w)->npc; q < ((NanNPCWork*)w)->npc + ((NanNPCWork*)w)->num; q++) {
+            for (q = w->npc; q < w->npc + w->num; q++) {
                 if (p != q && (q->flags & NANNPC_FLAG_WALK)) {
                     dist = PSVECDistance(&p->pos, &q->pos);
                     PSVECSubtract(&p->pos, &q->pos, &diff);
@@ -185,8 +182,8 @@ void nanNPCOption(void) {
             }
         }
     }
-    // FAKE: r (loop 3 start) assigned in loop 2's exit test, as the target loads it there (no mr copy); w->npc is not changed by loop 2
-    for (p = ((NanNPCWork*)w)->npc; p < (r = ((NanNPCWork*)w)->npc) + ((NanNPCWork*)w)->num; p++) {
+
+    for (p = w->npc; p < w->npc + w->num; p++) {
         if (p->flags & NANNPC_FLAG_WALK) {
             PSVECSubtract(&p->target, &p->pos, &diff);
             mag = PSVECMag(&diff);
@@ -198,73 +195,73 @@ void nanNPCOption(void) {
             }
         }
     }
-    for (; r < ((NanNPCWork*)w)->npc + ((NanNPCWork*)w)->num; r++) {
-        if (r->flags & NANNPC_FLAG_WALK) {
-            mag = PSVECMag(&r->move);
-            if (mag) {
-                if (mag > 10.0f) {
-                    PSVECScale(&r->move, &r->move, 5.0f / mag);
-                    mag = 5.0f;
-                }
-                nanNPCHitMove(r, mag);
-            }
+    for (p = w->npc; p < w->npc + w->num; p++) {
+        if (p->flags & NANNPC_FLAG_WALK) {
+            nanNPCMoveDecel(p);
         }
     }
 }
 #pragma pop
 
-/** qsort comparator ordering crowd NPCs from far to near (larger Z first) so they draw back to front. */
-static s32 nannpc_zcompare(const void* a, const void* b) {
-    if (((const NanNPCSort*)a)->z < ((const NanNPCSort*)b)->z) {
+/**
+ * Sets the TEV, channel and fog state for drawing crowd sprites tinted by each NPC's colour (TEV colour register
+ * 1).
+ */
+// Original name and size (0xf4) from the JP demo map (UNUSED there: every call is inlined).
+void nannpc_ext_AlphaLoadTev(void) {
+    GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR0A0);
+    GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_TEXC, GX_CC_C0, GX_CC_ZERO);
+    GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_TEXA, GX_CA_A0, GX_CA_ZERO);
+    GXSetNumChans(0);
+    GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_NONE, GX_AF_NONE);
+    GXSetFog(GX_FOG_NONE, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){255, 255, 255, 255});
+    GXSetNumTexGens(1);
+    GXSetNumTevStages(1);
+}
+
+/**
+ * qsort comparator ordering crowd NPCs by Z, larger first; nannpc_ext_disp draws the sorted list from its end,
+ * so the smaller Z draw first.
+ */
+static s32 nannpc_zcompare(const void* paramA, const void* paramB) {
+    const NanNPCSort* a = paramA;
+    const NanNPCSort* b = paramB;
+    if (a->z < b->z) {
         return 1;
     }
-    if (((const NanNPCSort*)a)->z > ((const NanNPCSort*)b)->z) {
+    if (a->z > b->z) {
         return -1;
     }
     return 0;
 }
 
 /**
- * Sets the TEV, channel and fog state for drawing crowd sprites tinted by each NPC's colour (TEV colour register
- * 1).
- */
-static inline void nannpc_loadTev(void) {
-    GXSetTevOrder(0, 0, 0, 4);
-    GXSetTevColorOp(0, 0, 0, 0, 1, 0);
-    GXSetTevColorIn(0, 15, 8, 2, 15);
-    GXSetTevAlphaOp(0, 0, 0, 0, 1, 0);
-    GXSetTevAlphaIn(0, 7, 4, 1, 7);
-    GXSetNumChans(0);
-    GXSetChanCtrl(4, 0, 0, 0, 0, 0, 2);
-    GXSetFog(0, 0.0f, 0.0f, 0.0f, 0.0f, (GXColor){255, 255, 255, 255});
-    GXSetNumTexGens(1);
-    GXSetNumTevStages(1);
-}
-/**
  * Draws the crowd.
- * With work flag 0x1 each NPC's sprite is drawn separately, sorted by Z and tinted by its colour;
+ * With NANNPC_WORK_DEPTH_SORT each NPC's sprite is drawn separately, sorted by Z and tinted by its colour;
  * otherwise extdrv draws all the poses in one batch.
  */
-static void nannpc_ext_disp(CameraId camera, void* param) {
+static void nannpc_ext_disp() {
     NanNPCWork* w = nanNPCWork;
     s32 i;
     s32 idx;
     NanNPCSort* sp;
     NanNPC* np;
-    if (w->flags & 1) {
+    if (w->flags & NANNPC_WORK_DEPTH_SORT) {
         extLoadVertex();
         extLoadTexture();
-        nannpc_loadTev();
+        nannpc_ext_AlphaLoadTev();
         for (i = extGetPoseNum() - 1; i >= 0; i--) {
             np = w->npc + i;
             sp = w->sort + i;
             sp->idx = i;
             sp->z = np->pos.z;
         }
-        qqsort(w->sort, w->num, 8, nannpc_zcompare);
+        qqsort(w->sort, w->num, sizeof(NanNPCSort), nannpc_zcompare);
         for (i = extGetPoseNum() - 1; i >= 0; i--) {
             idx = w->sort[i].idx;
-            GXSetTevColor(1, w->npc[idx].color);
+            GXSetTevColor(GX_TEVREG0, w->npc[idx].color);
             extPoseDraw(idx);
         }
         extLoadTextureExit();
@@ -279,7 +276,7 @@ static void nannpc_ext_disp(CameraId camera, void* param) {
 }
 
 /** Draws the crowd's shadows through extdrv with a fixed 10x scale matrix. */
-static void nannpc_ext_shadow_disp(CameraId camera, void* param) {
+static void nannpc_ext_shadow_disp() {
     static Mtx mt = {{10.0f, 0.0f, 0.0f, 0.0f}, {0.0f, 10.0f, 0.0f, 0.1f}, {0.0f, 0.0f, 10.0f, 0.0f}};
     extLoadShadowMtx(mt);
     extLoadShadowRenderMode();
@@ -289,11 +286,11 @@ static void nannpc_ext_shadow_disp(CameraId camera, void* param) {
 }
 
 /** Default extdrv init for the crowd: hides every pose 1000 units below the map with no rotation. */
-static void nannpc_ext_init(void) {
+static void nannpc_ext_init() {
     s32 i;
     ExtdrvPose* pose = extGetPosePtr();
     for (i = extGetPoseNum() - 1; i >= 0; i--, pose++) {
-        pose->flags = 3;
+        pose->flags = EXT_POSE_FLAG_VISIBLE | EXT_POSE_FLAG_BILLBOARD;
         pose->dir = 0.0f;
         PSMTXIdentity(*pose->mtx);
         (*pose->mtx)[0][3] = 0.0f;
@@ -303,7 +300,7 @@ static void nannpc_ext_init(void) {
 }
 
 /** Default per-frame update (sub function 1): calls each active crowd NPC's own func. */
-void nannpc_ext_main_sub(void) {
+void nannpc_ext_main_sub() {
     s32 i;
     NanNPCWork* w = nanNPCWork;
     for (i = extGetPoseNum() - 1; i >= 0; i--) {
@@ -318,9 +315,9 @@ void nannpc_ext_main_sub(void) {
  * Fuller per-frame update maps install as sub function 1:
  * runs each NPC's func, steps its animation table (offset per NPC so the crowd does not animate in step),
  * and copies texture, direction and position to its extdrv pose;
- * flag 0x2 hides the NPC by moving it 1000 units down.
+ * NANNPC_FLAG_HIDDEN hides the NPC by moving it 1000 units down.
  */
-void nannpc_ext_main_sub_fast(void) {
+void nannpc_ext_main_sub_fast() {
     s32 i;
     NanNPC* p;
     NanNPCWork* w = nanNPCWork;
@@ -349,31 +346,37 @@ void nannpc_ext_main_sub_fast(void) {
 }
 
 /** Default extdrv main callback: runs the three crowd sub functions (set by evt_nannpc_set_subfunc) in order. */
-static void nannpc_ext_main(void) {
+static void nannpc_ext_main() {
     NanNPCWork* w = nanNPCWork;
-    if (w->func14) {
-        w->func14();
+    if (w->subfunc0) {
+        w->subfunc0();
     }
-    if (w->func18) {
-        w->func18();
+    if (w->subfunc1) {
+        w->subfunc1();
     }
-    if (w->func1c) {
-        w->func1c();
+    if (w->subfunc2) {
+        w->subfunc2();
     }
 }
 
 /**
  * Registers the crowd's draw and shadow callbacks with dispdrv each frame;
- * the sprites go in render mode 1, or 2 with work flag 0x1.
+ * the sprites go in render mode 1, or 2 with NANNPC_WORK_DEPTH_SORT.
  */
-static void nannpc_ext_dispent(void) {
-    if (!(nanNPCWork->flags & 1)) {
-        dispEntry(CAMERA_3D, 0.0f, 1, nannpc_ext_disp, 0);
-        dispEntry(CAMERA_3D, 0.0f, 2, nannpc_ext_shadow_disp, 0);
+static void nannpc_ext_dispent() {
+    if (!(nanNPCWork->flags & NANNPC_WORK_DEPTH_SORT)) {
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_ALPHA_TEST, nannpc_ext_disp, 0);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, nannpc_ext_shadow_disp, 0);
     } else {
-        dispEntry(CAMERA_3D, 0.0f, 2, nannpc_ext_disp, 0);
-        dispEntry(CAMERA_3D, 0.0f, 2, nannpc_ext_shadow_disp, 0);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, nannpc_ext_disp, 0);
+        dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU, nannpc_ext_shadow_disp, 0);
     }
+}
+
+/** Makes nannpc_ext_main_sub the crowd's second per-frame sub function (slot 1). */
+// Original name and slot from the JP demo's link map (UNUSED there, 0x14): its one call is inlined.
+static void nannpc_set_default_main(void) {
+    nanNPCWork->subfunc1 = nannpc_ext_main_sub;
 }
 
 /**
@@ -386,27 +389,27 @@ USER_FUNC(evt_nannpc_init) {
     EvtWord* args = event->args;
     NanNPCWork* w;
     s32 i;
-    ExtdrvTexInfo* texInfo = (ExtdrvTexInfo*)evtGetValue(event, args[0]);
+    ExtTexInfo* texInfo = (ExtTexInfo*)evtGetValue(event, args[0]);
     s16* tbl = (s16*)evtGetValue(event, args[1]);
     void (*initf)(void) = (void (*)(void))evtGetValue(event, args[2]);
     void (*mainf)(void) = (void (*)(void))evtGetValue(event, args[3]);
     void (*dispf)(void) = nannpc_ext_dispent;
     if (isFirstCall) {
-        return 0;
+        return EVT_RETURN_BLOCK;
     }
-    nanNPCWork = _mapAlloc(0x20);
-    memset(nanNPCWork, 0, 0x20);
+    nanNPCWork = _mapAlloc(sizeof(NanNPCWork));
+    memset(nanNPCWork, 0, sizeof(NanNPCWork));
     w = nanNPCWork;
     w->num = evtGetValue(event, args[4]);
-    w->npc = _mapAlloc(w->num * 0xC0);
-    memset(w->npc, 0, w->num * 0xC0);
-    w->sort = _mapAlloc(w->num * 8);
-    memset(w->sort, 0, w->num * 8);
+    w->npc = _mapAlloc(w->num * sizeof(NanNPC));
+    memset(w->npc, 0, w->num * sizeof(NanNPC));
+    w->sort = _mapAlloc(w->num * sizeof(NanNPCSort));
+    memset(w->sort, 0, w->num * sizeof(NanNPCSort));
     w->tbl = _mapAlloc(0x14);
     memset(w->tbl, 0, 0x14);
-    w->func14 = NULL;
-    nanNPCWork->func18 = nannpc_ext_main_sub;
-    w->func1c = NULL;
+    w->subfunc0 = NULL;
+    nannpc_set_default_main();
+    w->subfunc2 = NULL;
     if (!initf) {
         initf = nannpc_ext_init;
     }
@@ -434,7 +437,7 @@ USER_FUNC(evt_nannpc_init) {
         p->color = (GXColor){255, 255, 255, 255};
     }
     if (!tbl) {
-        return 2;
+        return EVT_RETURN_DONE;
     }
     for (i = 0; i < 5; i++) {
         if (tbl[i * 2] == -1) {
@@ -443,7 +446,7 @@ USER_FUNC(evt_nannpc_init) {
         w->tbl[i * 2] = tbl[i * 2];
         w->tbl[i * 2 + 1] = tbl[i * 2 + 1];
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -456,16 +459,16 @@ USER_FUNC(evt_nannpc_set_subfunc) {
     NanNPCWork* w = nanNPCWork;
     switch (kind) {
         case 0:
-            w->func14 = (void (*)(void))evtGetValue(event, args[1]);
+            w->subfunc0 = (void (*)())evtGetValue(event, args[1]);
             break;
         case 1:
-            w->func18 = (void (*)(void))evtGetValue(event, args[1]);
+            w->subfunc1 = (void (*)())evtGetValue(event, args[1]);
             break;
         case 2:
-            w->func1c = (void (*)(void))evtGetValue(event, args[1]);
+            w->subfunc2 = (void (*)())evtGetValue(event, args[1]);
             break;
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -476,26 +479,19 @@ USER_FUNC(evt_nannpc_entry) {
     NanNPC* p;
     ExtdrvPose* pose;
     char* str;
-    s32 off;
     EvtWord name;
     s32 i;
     EvtWord* args;
     NanNPCWork* w;
     args = event->args;
     pose = extGetPosePtr();
-    name = (long long)evtGetValue(event, args[0]); // FAKE: the 64-bit cast keeps the target register order
+
+    // FAKE: the value goes through a long long cast; plain name = evtGetValue(...) changes the object
+    name = (long long)evtGetValue(event, args[0]);
     w = nanNPCWork;
-    for (i = 0, off = 0; i < w->num; off += sizeof(NanNPC), i++) {
-        p = (NanNPC*)((u8*)w->npc + off); // FAKE: byte offset; &w->npc[i] reorders the loop
-#if VERSION <= VERSION_DEMO_JP
-        str = nanNPCEntryName((char*)name);
-#else
-        str = (char*)name;
-        if (!(((EvtWord)str) & 0x80000000)) {
-            sprintf(makestring, "%06x", name);
-            str = makestring;
-        }
-#endif
+    for (i = 0; i < w->num; i++) {
+        p = &w->npc[i];
+        str = nanNPCMakeString((char*)name);
         strcmp((char*)p->name, str);
         if (!p->pose) {
             strcpy((char*)p->name, str);
@@ -516,14 +512,14 @@ USER_FUNC(evt_nannpc_entry) {
         }
     }
 
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Places crowd NPC args[0] at X, Y, Z args[1]-args[3] and makes that its target position too. */
 USER_FUNC(evt_nannpc_set_position) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     f32 x = evtGetFloat(event, args[1]);
     npc->pos.x = x;
     npc->target.x = x;
@@ -533,29 +529,29 @@ USER_FUNC(evt_nannpc_set_position) {
     x = evtGetFloat(event, args[3]);
     npc->pos.z = x;
     npc->target.z = x;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Returns crowd NPC args[0]'s position in args[1]-args[3]. */
 USER_FUNC(evt_nannpc_get_position) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     evtSetFloat(event, args[1], npc->pos.x);
     evtSetFloat(event, args[2], npc->pos.y);
     evtSetFloat(event, args[3], npc->pos.z);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Sets crowd NPC args[0]'s display offset (hosei) to args[1]-args[3]. */
 USER_FUNC(evt_nannpc_set_hosei_position) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     npc->hosei.x = evtGetFloat(event, args[1]);
     npc->hosei.y = evtGetFloat(event, args[2]);
     npc->hosei.z = evtGetFloat(event, args[3]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -565,10 +561,10 @@ USER_FUNC(evt_nannpc_set_hosei_position) {
 USER_FUNC(evt_nannpc_set_size) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     npc->sizeX = evtGetFloat(event, args[1]);
     npc->sizeY = evtGetFloat(event, args[2]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Gives a crowd NPC an animation table of texture ids ended by -1 (the C version of evt_nannpc_set_animtbl). */
@@ -577,10 +573,9 @@ void evt_nannpc_set_animtbl_sub(NanNPC* npc, s16* tbl) {
     npc->animtbl = tbl;
     n = 0;
     while (TRUE) {
-        if (*tbl == -1) {
+        if (tbl[n] == -1) {
             break;
         }
-        tbl++;
         n++;
     }
     npc->animnum = n;
@@ -593,49 +588,50 @@ void evt_nannpc_set_animtbl_sub(NanNPC* npc, s16* tbl) {
 USER_FUNC(evt_nannpc_set_animtbl) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     s16* tbl = (s16*)evtGetValue(event, args[1]);
-    s32 n;
-    npc->animtbl = tbl;
-    n = 0;
-    while (TRUE) {
-        if (*tbl == -1) {
-            break;
-        }
-        tbl++;
-        n++;
-    }
-    npc->animnum = n;
-    if (npc->animnum == 0) {
-        npc->animtbl = NULL;
-    }
-    return 2;
+    evt_nannpc_set_animtbl_sub(npc, tbl);
+    return EVT_RETURN_DONE;
+}
+
+/** Sets crowd NPC args[0]'s texture id to args[1] (the pose's texId; an animation table overrides it). */
+// Original name and size (0xc0) from the JP demo map (UNUSED there: no script uses it), listed between
+// evt_nannpc_set_dir and evt_nannpc_set_animtbl: evt_nannpc_set_dir's form on the NPC's texture number (anim, the
+// value copied to pose->texId). Writing pose->texId directly gives 0xc4; also clearing animtbl 0xc8.
+USER_FUNC(evt_nannpc_set_texno) {
+    EvtWord* args = event->args;
+    char* name = (char*)evtGetValue(event, args[0]);
+    NanNPC* npc = nanNPCNameToPtr(name);
+    npc->anim = evtGetValue(event, args[1]);
+    return EVT_RETURN_DONE;
 }
 
 /** Sets crowd NPC args[0]'s facing to args[1] degrees. */
 USER_FUNC(evt_nannpc_set_dir) {
     EvtWord* args = event->args;
-    NanNPC* npc = nanNPCSearch((char*)evtGetValue(event, args[0]));
+    char* name = (char*)evtGetValue(event, args[0]);
+    NanNPC* npc = nanNPCNameToPtr(name);
     npc->dir = evtGetValue(event, args[1]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Stores args[2] in work slot args[1] of crowd NPC args[0], for the map's own NPC functions. */
 USER_FUNC(evt_nannpc_set_work) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     s32 idx = evtGetValue(event, args[1]);
     npc->work[idx] = evtGetValue(event, args[2]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Reads work slot args[1] of crowd NPC args[0] into args[2]. */
 USER_FUNC(evt_nannpc_get_work) {
     EvtWord* args = event->args;
-    NanNPC* npc = nanNPCSearch((char*)evtGetValue(event, args[0]));
+    char* name = (char*)evtGetValue(event, args[0]);
+    NanNPC* npc = nanNPCNameToPtr(name);
     evtSetValue(event, args[2], npc->work[evtGetValue(event, args[1])]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -654,10 +650,10 @@ USER_FUNC(evt_nannpc_move_position2) {
     Vec step;
     args = event->args;
 #if VERSION <= VERSION_DEMO_JP
-    npc = nanNPCSearch2((char*)evtGetValue(event, args[0]));
+    npc = nanNPCNameToPtr((char*)evtGetValue(event, args[0]));
     now = gp->inBattle ? gp->renderTime : gp->renderFieldTime;
 #else
-    npc = nanNPCSearch((char*)evtGetValue(event, args[0]));
+    npc = nanNPCNameToPtr((char*)evtGetValue(event, args[0]));
     if (gp->inBattle) {
         now = gp->renderTime;
     } else {
@@ -674,14 +670,14 @@ USER_FUNC(evt_nannpc_move_position2) {
     }
     PSVECSubtract(&target, &npc->startPos, &diff);
     total = (s32)(1000.0f * PSVECMag(&diff) / speed);
-    elapsed = (u64)(s32)((u32)now - (u32)event->savedTime) / (OS_TIMER_CLOCK / 1000);
+    elapsed = OSTicksToMilliseconds((u64)OSDiffTick(now, event->savedTime));
     PSVECScale(&diff, &step, (f32)elapsed / (f32)total);
     if (elapsed < total) {
         PSVECAdd(&npc->startPos, &step, &npc->pos);
-        return 0;
+        return EVT_RETURN_BLOCK;
     }
     npc->pos = target;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -691,19 +687,17 @@ USER_FUNC(evt_nannpc_move_position2) {
 USER_FUNC(evt_nannpc_jump_position) {
     EvtWord* args = event->args;
 #if VERSION <= VERSION_DEMO_JP
-    NanNPC* npc = nanNPCSearch2((char*)evtGetValue(event, args[0]));
+    NanNPC* npc = nanNPCNameToPtr((char*)evtGetValue(event, args[0]));
 #else
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
 #endif
     f32 x = evtGetValue(event, args[1]);
     f32 y = evtGetValue(event, args[2]);
     f32 z = evtGetValue(event, args[3]);
     s32 duration = evtGetValue(event, args[4]);
     f32 height = evtGetValue(event, args[5]);
-    s32 elapsed;
-    s32 el;
-    u32 uel;
+    int elapsed;
     f32 t;
     if (isFirstCall) {
         npc->startTime = gp->renderTime;
@@ -713,20 +707,19 @@ USER_FUNC(evt_nannpc_jump_position) {
         event->userdataf[1] = -4.0f * height;
         event->userdataf[2] = y - (f32)npc->ipos[1] - event->userdataf[1];
     }
-    el = ((u32)gp->renderTime - (u32)npc->startTime) / (OS_TIMER_CLOCK / 1000);
-    uel = el;
-    if (el < duration) {
-        elapsed = uel;
+
+    elapsed = OSTicksToMilliseconds((u32)gp->renderTime - (u32)npc->startTime);
+    if (elapsed < duration) {
         t = (f32)elapsed / (f32)duration;
-        npc->pos.x = intplGetValue(0, npc->ipos[0], x, elapsed, duration);
-        npc->pos.z = intplGetValue(0, npc->ipos[2], z, uel, duration);
+        npc->pos.x = intplGetValue(EASING_LINEAR, npc->ipos[0], x, elapsed, duration);
+        npc->pos.z = intplGetValue(EASING_LINEAR, npc->ipos[2], z, elapsed, duration);
         npc->pos.y = t * (event->userdataf[1] * t + event->userdataf[2]) + (f32)npc->ipos[1];
-        return 0;
+        return EVT_RETURN_BLOCK;
     }
     npc->pos.x = x;
     npc->pos.y = y;
     npc->pos.z = z;
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -738,14 +731,26 @@ USER_FUNC(evt_nannpc_flag_onoff) {
     EvtWord* args = event->args;
     EvtWord name = evtGetValue(event, args[0]);
     s32 onoff = evtGetValue(event, args[1]);
-    NanNPC* npc = nanNPCSearch((char*)name);
+    NanNPC* npc = nanNPCNameToPtr((char*)name);
     u16 flag = evtGetValue(event, args[2]);
     if (onoff) {
         npc->flags &= ~flag;
     } else {
         npc->flags |= flag;
     }
-    return 2;
+    return EVT_RETURN_DONE;
+}
+
+/** Writes the flags of crowd NPC args[0] to args[1]. */
+// Original name and size (0xc0) from the JP demo map (UNUSED there: no script uses it); the getter of
+// evt_nannpc_flag_onoff's word in the form of evt_nannpc_set_func (the same size). The map's evt_nannpc_sta_onoff and
+// evt_nannpc_get_sta are not restored (their word and the sense of on/off are not known).
+USER_FUNC(evt_nannpc_get_flag) {
+    EvtWord* args = event->args;
+    char* name = (char*)evtGetValue(event, args[0]);
+    NanNPC* npc = nanNPCNameToPtr(name);
+    evtSetValue(event, args[1], npc->flags);
+    return EVT_RETURN_DONE;
 }
 
 /** Changes crowd NPC args[0]'s extdrv pose flags: args[1] nonzero clears the bits in args[2], zero sets them. */
@@ -753,44 +758,56 @@ USER_FUNC(evt_nannpc_ppflag_onoff) {
     EvtWord* args = event->args;
     EvtWord name = evtGetValue(event, args[0]);
     s32 onoff = evtGetValue(event, args[1]);
-    NanNPC* npc = nanNPCSearch((char*)name);
+    NanNPC* npc = nanNPCNameToPtr((char*)name);
     u16 flag = evtGetValue(event, args[2]);
     if (onoff) {
         npc->pose->flags &= ~flag;
     } else {
         npc->pose->flags |= flag;
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Sets crowd NPC args[0]'s per-frame function to args[1]; map rels use it to run each NPC's own behaviour. */
 USER_FUNC(evt_nannpc_set_func) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     npc->func = (void (*)(NanNPC*))evtGetValue(event, args[1]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
-/** Pins crowd NPC args[0]'s shadow to height args[1] (pose flag 0x10). */
+/** Clears crowd NPC args[0]'s per-frame function (NULL, as evt_nannpc_init leaves it; NULL is not called). */
+// Original name and size (0xb4) from the JP demo map (UNUSED there: no script uses it), listed right after
+// evt_nannpc_set_func: that command's form with the NULL value init uses.
+USER_FUNC(evt_nannpc_reset_func) {
+    EvtWord* args = event->args;
+    char* name = (char*)evtGetValue(event, args[0]);
+    NanNPC* npc = nanNPCNameToPtr(name);
+    npc->func = NULL;
+    return EVT_RETURN_DONE;
+}
+
+/** Pins crowd NPC args[0]'s shadow to height args[1] (EXT_POSE_FLAG_SHADOW_POS). */
 USER_FUNC(evt_nannpc_set_shadow_position) {
     EvtWord* args = event->args;
-    NanNPC* npc = nanNPCSearch((char*)evtGetValue(event, args[0]));
-    npc->pose->flags |= 0x10;
+    char* name = (char*)evtGetValue(event, args[0]);
+    NanNPC* npc = nanNPCNameToPtr(name);
+    npc->pose->flags |= EXT_POSE_FLAG_SHADOW_POS;
     npc->pose->shadowY = evtGetFloat(event, args[1]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /** Tints crowd NPC args[0] with RGBA args[1]-args[4] (used when the crowd draws NPCs one by one). */
 USER_FUNC(evt_nannpc_set_color) {
     EvtWord* args = event->args;
     char* name = (char*)evtGetValue(event, args[0]);
-    NanNPC* npc = nanNPCSearch(name);
+    NanNPC* npc = nanNPCNameToPtr(name);
     npc->color.r = evtGetValue(event, args[1]);
     npc->color.g = evtGetValue(event, args[2]);
     npc->color.b = evtGetValue(event, args[3]);
     npc->color.a = evtGetValue(event, args[4]);
-    return 2;
+    return EVT_RETURN_DONE;
 }
 
 /**
@@ -807,7 +824,5 @@ USER_FUNC(evt_nannpcwork_flag_onoff) {
     } else {
         w->flags |= flag;
     }
-    return 2;
+    return EVT_RETURN_DONE;
 }
-
-#pragma force_active reset

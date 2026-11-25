@@ -1,4 +1,6 @@
 // Effect driver: the effect entry pool, the effect textures and the Maya-exported effect animations.
+
+#include "version.h"
 #include "driver/effdrv.h"
 #include "hwaccess.h"
 #include <dolphin/os/OSFastCast.h>
@@ -10,11 +12,18 @@
 #include "system.h"
 #include <string.h>
 #include "libc_decls.h"
-#include "version.h"
+
+// The early demos still load the effect textures from the old eff folder.
+#if VERSION <= VERSION_DEMO_JP
+#define EFF_TPL_PATH "%s/eff/%s/effect_%s.tpl"
+#define EFF_TPL_JP "%s/eff/jp/effect.tpl"
+#else
+#define EFF_TPL_PATH "%s/e/%s/effect_%s.tpl"
+#define EFF_TPL_JP "%s/e/jp/effect.tpl"
+#endif
 
 //.data
 #if VERSION <= VERSION_DEMO_JP
-// The demo table also carries debug names: each effect's Japanese name and the names of its types
 static const char* str_kemuri[] = {"着地", "敵消滅", "重いもの移動用", NULL};
 static const char* str_confetti[] = {"type 0", "type 1", "type 2", "type 3", "type 4", "type 5", "type 6", NULL};
 static const char* str_fukidashi[] = {"びっくり！", "はてな？", "ぐるぐる", "数字", "てんてん", "もじゃもじゃ", "チュチュリーナ", NULL};
@@ -62,206 +71,189 @@ static const char* str_nokotarou[] = {"バトルノコタロウ３", NULL};
 static const char* str_teresa[] = {"テレサ", "影の女王・衝撃波", NULL};
 static const char* str_gonbaba_breath[] = {"通常", "ポイズン", "メガ", "コールド", "混乱", "眠り", "ミニミニ", "クッパ", NULL};
 static const char* str_ultra_hammer[] = {"左回り", "右回り", NULL};
-
-/**
- * Every effect that event scripts can start by name (smoke, confetti, speech bubbles, butterflies, ...) with its
- * id; the demo also keeps each one's Japanese name and type names. effGetSet looks scripts' effect names up here.
- */
-EffectSet eff_set_table[] = {
-    { 0, "kemuri", "けむり", str_kemuri },
-    { 1, "confetti", "紙ふぶき", str_confetti },
-    { 2, "fukidashi", "ふきだし", str_fukidashi },
-    { 3, "butterfly", "ちょうちょ", str_butterfly },
-    { 4, "hit", "ヒット", str_hit },
-    { 5, "damage_star", "バトルダメージ", str_damage },
-    { 6, "small_star", "敵と接触", str_small_star },
-    { 7, "mario_balloon", "マリオ吹き出し", str_mario_balloon },
-    { 8, "mugi", "むぎばたけ", NULL },
-    { 9, "stardust", "ほしくず", str_stardust },
-    { 10, "recovery", "回復ハート", str_recovery },
-    { 11, "miss_star", "攻撃ミス", NULL },
-    { 12, "nice", "ナイス", str_nice },
-    { 13, "breath_fire", "クッパが火を吐く", str_breath_fire },
-    { 14, "torch", "たいまつ", NULL },
-    { 15, "confusion", "バトル・混乱", NULL },
-    { 16, "spark", "バトル・スパーク", NULL },
-    { 17, "updown", "ステータスアップ・ダウン", str_updown },
-    { 18, "charge", "バトル・チャージ", str_charge },
-    { 19, "toge_flush", "トゲフラッシュ", str_toge_flush },
-    { 20, "ice", "アイス", NULL },
-    { 21, "fire", "ファイアー", str_fire },
-    { 22, "bomb", "ボム", NULL },
-    { 23, "ripple", "波紋", str_ripple },
-    { 24, "coin_fukidashi", "コイン吹き出し", NULL },
-    { 25, "star_point", "スターポイント", NULL },
-    { 26, "puni_balloon", "ぷにバルーン", NULL },
-    { 27, "p_fukidashi", "ピーチ編のふきだし", NULL },
-    { 28, "kemuri_test", "けむりテスト", str_kemuri_test },
-    { 29, "starstone", "スターストーン", str_starstone },
-    { 30, "itemget", "アイテム取得", str_itemget },
-    { 31, "status", "ステータス異常", str_status },
-    { 32, "pointget", "ポイントゲット", NULL },
-    { 33, "levelup", "レベルアップ", NULL },
-    { 34, "stageclear", "ステージクリア", str_stageclear },
-    { 35, "fall", "落下物", str_fall },
-    { 36, "fpdamage", "ＦＰダメージ", NULL },
-    { 37, "break", "ブレイク", NULL },
-    { 38, "mobj_broken", "ＭＯＢＪ破壊", str_mobj_broken },
-    { 39, "mahojin", "魔方陣", str_mahojin },
-    { 40, "nozle", "ノズル", str_nozle },
-    { 41, "mizutama", "水中の泡", str_mizutama },
-    { 42, "minigame", "ミニゲーム", str_minigame },
-    { 43, "splash", "水しぶき", str_splash },
-    { 44, "treasure_map", "宝の地図", NULL },
-    { 45, "kiss", "チュチュリーナキス", str_kiss },
-    { 46, "funemizu", "船のしぶき", NULL },
-    { 47, "mist", "霧", str_mist },
-    { 48, "teresa", "テレサ１０００", str_teresa },
-    { 49, "batten", "バッテンダーエックス", str_batten },
-    { 50, "sheep", "ねむれよいこ", NULL },
-    { 51, "naniga", "なにがおこるかな", NULL },
-    { 52, "sandars", "サンダース爆発", str_sandars },
-    { 53, "boomerang", "ブーメラン", NULL },
-    { 54, "irekae", "いれかえーる", NULL },
-    { 55, "rankup", "ランクアップ", NULL },
-    { 56, "scanning", "スキャニング", NULL },
-    { 57, "toiki", "影の女王・吐息", str_toiki },
-    { 58, "mist2", "黒い霧", str_mist2 },
-    { 59, "particle", "パーティクル", str_particle },
-    { 60, "ibuki", "こおりのいぶき", NULL },
-    { 61, "mahorn", "マホーン", NULL },
-    { 62, "spirit", "コルテス魂", NULL },
-    { 63, "indirect", "インダイレクト", str_indirect },
-    { 64, "syuryou", "首領", str_syuryou },
-    { 65, "uranoko", "ウラノコ", str_uranoko },
-    { 66, "hibashira", "火柱", str_hibashira },
-    { 67, "number", "汎用数字", str_number },
-    { 68, "laser", "レーザー（地図イベント）", NULL },
-    { 69, "machingegun", "バッテンダー・マシンガン２", NULL },
-    { 70, "las_mon", "伝説の扉", NULL },
-    { 71, "sleep", "眠る", NULL },
-    { 72, "energy", "エネルギー", str_energy },
-    { 73, "biribirikinoko", "びりびりキノコ", str_biribirikinoko },
-    { 74, "nokotarou", "ノコタロウ", str_nokotarou },
-    { 75, "queen", "影の女王・渦", NULL },
-    { 76, "queen2", "影の女王・黒い衝撃波", NULL },
-    { 77, "gonbaba_breath", "ファイアブレス", str_gonbaba_breath },
-    { 78, "majinai", "呪い師", NULL },
-    { 79, "mahorn2", "マホーン", NULL },
-    { 80, "ultra_hammer", "ウルトラハンマー", str_ultra_hammer },
-    { -1, NULL, NULL, NULL },
-};
-#else
-/**
- * Every effect that event scripts can start by name (smoke, confetti, speech bubbles, butterflies, ...) with
- * its id; effGetSet looks the effect names of evt_eff script calls up here.
- */
-EffectSet eff_set_table[] = {
-    { 0, "kemuri" },
-    { 1, "confetti" },
-    { 2, "fukidashi" },
-    { 3, "butterfly" },
-    { 4, "hit" },
-    { 5, "damage_star" },
-    { 6, "small_star" },
-    { 7, "mario_balloon" },
-    { 8, "mugi" },
-    { 9, "stardust" },
-    { 10, "recovery" },
-    { 11, "miss_star" },
-    { 12, "nice" },
-    { 13, "breath_fire" },
-    { 14, "torch" },
-    { 15, "confusion" },
-    { 16, "spark" },
-    { 17, "updown" },
-    { 18, "charge" },
-    { 19, "toge_flush" },
-    { 20, "ice" },
-    { 21, "fire" },
-    { 22, "bomb" },
-    { 23, "ripple" },
-    { 24, "coin_fukidashi" },
-    { 25, "star_point" },
-    { 26, "puni_balloon" },
-    { 27, "p_fukidashi" },
-    { 28, "kemuri_test" },
-    { 29, "starstone" },
-    { 30, "itemget" },
-    { 31, "status" },
-    { 32, "pointget" },
-    { 33, "levelup" },
-    { 34, "stageclear" },
-    { 35, "fall" },
-    { 36, "fpdamage" },
-    { 37, "break" },
-    { 38, "mobj_broken" },
-    { 39, "mahojin" },
-    { 40, "nozle" },
-    { 41, "mizutama" },
-    { 42, "minigame" },
-    { 43, "splash" },
-    { 44, "treasure_map" },
-    { 45, "kiss" },
-    { 46, "funemizu" },
-    { 47, "mist" },
-    { 48, "teresa" },
-    { 49, "batten" },
-    { 50, "sheep" },
-    { 51, "naniga" },
-    { 52, "sandars" },
-    { 53, "boomerang" },
-    { 54, "irekae" },
-    { 55, "rankup" },
-    { 56, "scanning" },
-    { 57, "toiki" },
-    { 58, "mist2" },
-    { 59, "particle" },
-    { 60, "ibuki" },
-    { 61, "mahorn" },
-    { 62, "spirit" },
-    { 63, "indirect" },
-    { 64, "syuryou" },
-    { 65, "uranoko" },
-    { 66, "hibashira" },
-    { 67, "number" },
-    { 68, "laser" },
-    { 69, "machingegun" },
-    { 70, "las_mon" },
-    { 71, "sleep" },
-    { 72, "energy" },
-    { 73, "biribirikinoko" },
-    { 74, "nokotarou" },
-    { 75, "queen" },
-    { 76, "queen2" },
-    { 77, "gonbaba_breath" },
-    { 78, "majinai" },
-    { 79, "mahorn2" },
-    { 80, "ultra_hammer" },
-    { -1, NULL }
-};
 #endif
+
+EffectSet eff_set_table[] = {
+#if VERSION <= VERSION_DEMO_JP
+    {0, "kemuri", "けむり", str_kemuri},
+    {1, "confetti", "紙ふぶき", str_confetti},
+    {2, "fukidashi", "ふきだし", str_fukidashi},
+    {3, "butterfly", "ちょうちょ", str_butterfly},
+    {4, "hit", "ヒット", str_hit},
+    {5, "damage_star", "バトルダメージ", str_damage},
+    {6, "small_star", "敵と接触", str_small_star},
+    {7, "mario_balloon", "マリオ吹き出し", str_mario_balloon},
+    {8, "mugi", "むぎばたけ", NULL},
+    {9, "stardust", "ほしくず", str_stardust},
+    {10, "recovery", "回復ハート", str_recovery},
+    {11, "miss_star", "攻撃ミス", NULL},
+    {12, "nice", "ナイス", str_nice},
+    {13, "breath_fire", "クッパが火を吐く", str_breath_fire},
+    {14, "torch", "たいまつ", NULL},
+    {15, "confusion", "バトル・混乱", NULL},
+    {16, "spark", "バトル・スパーク", NULL},
+    {17, "updown", "ステータスアップ・ダウン", str_updown},
+    {18, "charge", "バトル・チャージ", str_charge},
+    {19, "toge_flush", "トゲフラッシュ", str_toge_flush},
+    {20, "ice", "アイス", NULL},
+    {21, "fire", "ファイアー", str_fire},
+    {22, "bomb", "ボム", NULL},
+    {23, "ripple", "波紋", str_ripple},
+    {24, "coin_fukidashi", "コイン吹き出し", NULL},
+    {25, "star_point", "スターポイント", NULL},
+    {26, "puni_balloon", "ぷにバルーン", NULL},
+    {27, "p_fukidashi", "ピーチ編のふきだし", NULL},
+    {28, "kemuri_test", "けむりテスト", str_kemuri_test},
+    {29, "starstone", "スターストーン", str_starstone},
+    {30, "itemget", "アイテム取得", str_itemget},
+    {31, "status", "ステータス異常", str_status},
+    {32, "pointget", "ポイントゲット", NULL},
+    {33, "levelup", "レベルアップ", NULL},
+    {34, "stageclear", "ステージクリア", str_stageclear},
+    {35, "fall", "落下物", str_fall},
+    {36, "fpdamage", "ＦＰダメージ", NULL},
+    {37, "break", "ブレイク", NULL},
+    {38, "mobj_broken", "ＭＯＢＪ破壊", str_mobj_broken},
+    {39, "mahojin", "魔方陣", str_mahojin},
+    {40, "nozle", "ノズル", str_nozle},
+    {41, "mizutama", "水中の泡", str_mizutama},
+    {42, "minigame", "ミニゲーム", str_minigame},
+    {43, "splash", "水しぶき", str_splash},
+    {44, "treasure_map", "宝の地図", NULL},
+    {45, "kiss", "チュチュリーナキス", str_kiss},
+    {46, "funemizu", "船のしぶき", NULL},
+    {47, "mist", "霧", str_mist},
+    {48, "teresa", "テレサ１０００", str_teresa},
+    {49, "batten", "バッテンダーエックス", str_batten},
+    {50, "sheep", "ねむれよいこ", NULL},
+    {51, "naniga", "なにがおこるかな", NULL},
+    {52, "sandars", "サンダース爆発", str_sandars},
+    {53, "boomerang", "ブーメラン", NULL},
+    {54, "irekae", "いれかえーる", NULL},
+    {55, "rankup", "ランクアップ", NULL},
+    {56, "scanning", "スキャニング", NULL},
+    {57, "toiki", "影の女王・吐息", str_toiki},
+    {58, "mist2", "黒い霧", str_mist2},
+    {59, "particle", "パーティクル", str_particle},
+    {60, "ibuki", "こおりのいぶき", NULL},
+    {61, "mahorn", "マホーン", NULL},
+    {62, "spirit", "コルテス魂", NULL},
+    {63, "indirect", "インダイレクト", str_indirect},
+    {64, "syuryou", "首領", str_syuryou},
+    {65, "uranoko", "ウラノコ", str_uranoko},
+    {66, "hibashira", "火柱", str_hibashira},
+    {67, "number", "汎用数字", str_number},
+    {68, "laser", "レーザー（地図イベント）", NULL},
+    {69, "machingegun", "バッテンダー・マシンガン２", NULL},
+    {70, "las_mon", "伝説の扉", NULL},
+    {71, "sleep", "眠る", NULL},
+    {72, "energy", "エネルギー", str_energy},
+    {73, "biribirikinoko", "びりびりキノコ", str_biribirikinoko},
+    {74, "nokotarou", "ノコタロウ", str_nokotarou},
+    {75, "queen", "影の女王・渦", NULL},
+    {76, "queen2", "影の女王・黒い衝撃波", NULL},
+    {77, "gonbaba_breath", "ファイアブレス", str_gonbaba_breath},
+    {78, "majinai", "呪い師", NULL},
+    {79, "mahorn2", "マホーン", NULL},
+    {80, "ultra_hammer", "ウルトラハンマー", str_ultra_hammer},
+    {-1, NULL, NULL, NULL},
+#else
+    {0, "kemuri"},
+    {1, "confetti"},
+    {2, "fukidashi"},
+    {3, "butterfly"},
+    {4, "hit"},
+    {5, "damage_star"},
+    {6, "small_star"},
+    {7, "mario_balloon"},
+    {8, "mugi"},
+    {9, "stardust"},
+    {10, "recovery"},
+    {11, "miss_star"},
+    {12, "nice"},
+    {13, "breath_fire"},
+    {14, "torch"},
+    {15, "confusion"},
+    {16, "spark"},
+    {17, "updown"},
+    {18, "charge"},
+    {19, "toge_flush"},
+    {20, "ice"},
+    {21, "fire"},
+    {22, "bomb"},
+    {23, "ripple"},
+    {24, "coin_fukidashi"},
+    {25, "star_point"},
+    {26, "puni_balloon"},
+    {27, "p_fukidashi"},
+    {28, "kemuri_test"},
+    {29, "starstone"},
+    {30, "itemget"},
+    {31, "status"},
+    {32, "pointget"},
+    {33, "levelup"},
+    {34, "stageclear"},
+    {35, "fall"},
+    {36, "fpdamage"},
+    {37, "break"},
+    {38, "mobj_broken"},
+    {39, "mahojin"},
+    {40, "nozle"},
+    {41, "mizutama"},
+    {42, "minigame"},
+    {43, "splash"},
+    {44, "treasure_map"},
+    {45, "kiss"},
+    {46, "funemizu"},
+    {47, "mist"},
+    {48, "teresa"},
+    {49, "batten"},
+    {50, "sheep"},
+    {51, "naniga"},
+    {52, "sandars"},
+    {53, "boomerang"},
+    {54, "irekae"},
+    {55, "rankup"},
+    {56, "scanning"},
+    {57, "toiki"},
+    {58, "mist2"},
+    {59, "particle"},
+    {60, "ibuki"},
+    {61, "mahorn"},
+    {62, "spirit"},
+    {63, "indirect"},
+    {64, "syuryou"},
+    {65, "uranoko"},
+    {66, "hibashira"},
+    {67, "number"},
+    {68, "laser"},
+    {69, "machingegun"},
+    {70, "las_mon"},
+    {71, "sleep"},
+    {72, "energy"},
+    {73, "biribirikinoko"},
+    {74, "nokotarou"},
+    {75, "queen"},
+    {76, "queen2"},
+    {77, "gonbaba_breath"},
+    {78, "majinai"},
+    {79, "mahorn2"},
+    {80, "ultra_hammer"},
+    {-1, NULL}
+#endif
+};
 
 //.sbss
 static EffectWork work;
 
 //.sdata
 static EffectWork* wp = &work;
+static const char* prefix_tbl[] = {
+    "jp", "us",
 #if VERSION >= VERSION_US
-const char* prefix_tbl[7] = {"jp", "us", "ge", "fr", "sp", "it", "du"};
-#else
-const char* prefix_tbl[2] = {"jp", "us"};
+    "ge", "fr", "sp", "it", "du"
 #endif
-
-// effect texture directory on the disc
-#if VERSION <= VERSION_DEMO_JP
-#define EFF_DIR "eff"
-#else
-#define EFF_DIR "e"
-#endif
-
-// local prototypes
-static void _callback_tpl(s32 error, DVDFileInfo* info);
+};
 
 /**
  * DVD read callback for the asynchronous effect.tpl load:
@@ -275,7 +267,7 @@ static void _callback_tpl(s32 error, DVDFileInfo* info) {
 }
 
 /**
- * Boot setup: allocates the effect entry pool (512 entries in the US and later releases, 256 before),
+ * Boot setup: allocates the effect entry pool (512 entries in US and later, 256 before),
  * clears it and the texture state, and initialises the N64-style effects.
  */
 void effInit(void) {
@@ -293,16 +285,10 @@ void effInit(void) {
     effInit64();
 }
 
-#if VERSION >= VERSION_US
-#define EFF_NTEX 118
-#else
-#define EFF_NTEX 146
-#endif
-
 /**
  * Loads effect.tpl, the shared effect textures:
  * from the startup archive if it is there, otherwise asynchronously from the disc (the jp or us folder by
- * language in the US and later releases). Called from the logo sequence at boot.
+ * language in US and later). Called from the logo sequence at boot.
  */
 void effTexSetup(void) {
     DVDEntry* entry;
@@ -314,9 +300,9 @@ void effTexSetup(void) {
     wp->texture = arcOpen("effect.tpl", 0, 0);
     if (!wp->texture) {
 #if VERSION >= VERSION_US
-        sprintf(path, "%s/" EFF_DIR "/%s/effect.tpl", getMarioStDvdRoot(), gp->language == 0U ? "jp" : "us");
+        sprintf(path, "%s/e/%s/effect.tpl", getMarioStDvdRoot(), gp->language == LANGUAGE_JP ? "jp" : "us");
 #else
-        sprintf(path, "%s/" EFF_DIR "/jp/effect.tpl", getMarioStDvdRoot());
+        sprintf(path, EFF_TPL_JP, getMarioStDvdRoot());
 #endif
         entry = DVDMgrOpen(path, 2, 0);
         size = OSRoundUp32B(DVDMgrGetLength(entry));
@@ -330,32 +316,27 @@ void effTexSetup(void) {
     effTexSetupN64();
 }
 
-#pragma explicit_zero_data on
 /**
- * Fills obj with effect texture id.
- * Ids below the effect.tpl count come from effect.tpl, higher ones from the current language's effect_xx.tpl;
- * until a file has loaded a 1x1 blank texture stands in.
+ * Fills obj with effect texture id: ids below EFF_NTEX come from effect.tpl, higher ids from the language's
+ * effect_<lang>.tpl (id - EFF_NTEX). Until the file is loaded, obj gets a blank 1x1 I4 texture.
  */
-void effGetTexObj(u32 id, GXTexObj* obj) {
-#ifdef __MWERKS__
-    if ((s32)id < EFF_NTEX) { // number of images in effect.tpl
+void effGetTexObj(s32 id, GXTexObj* obj) {
+    if (id < EFF_NTEX) { // number of images in effect.tpl
         if (!wp->texLoaded) {
-            static char dummy ATTRIBUTE_ALIGN(32) = '\0';
-            GXInitTexObj(obj, &dummy, 1, 1, GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
+            static char dummy[] ATTRIBUTE_ALIGN(32) = "";
+            GXInitTexObj(obj, dummy, 1, 1, GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
         } else {
             TEXGetGXTexObjFromPalette(wp->texture, obj, id);
         }
     } else {
-        static char dummy ATTRIBUTE_ALIGN(32) = '\0';
+        static char dummy[] ATTRIBUTE_ALIGN(32) = "";
         if (!wp->handle) {
-            GXInitTexObj(obj, &dummy, 1, 1, GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
+            GXInitTexObj(obj, dummy, 1, 1, GX_TF_I4, GX_CLAMP, GX_CLAMP, GX_FALSE);
         } else {
             TEXGetGXTexObjFromPalette(*wp->handle->data, obj, id - EFF_NTEX);
         }
     }
-#endif
 }
-#pragma explicit_zero_data reset
 
 /**
  * Frees every in-use effect that belongs to the battle (inBattle TRUE) or to the field (FALSE);
@@ -367,9 +348,8 @@ void effAutoRelease(BOOL inBattle) {
     EffectEntry* entry = wp->entries;
 
     for (i = 0; i < count; i++, entry++) {
-        if (entry->flags & EFFECT_FLAG_IN_USE && (s32)entry->inBattle == inBattle && entry && entry->flags) {
-            __memFree(HEAP_EFFECT, entry->userdata);
-            entry->flags = 0;
+        if (entry->flags & EFFECT_FLAG_ACTIVE && entry->inBattle == inBattle) {
+            effDelete(entry);
         }
     }
 }
@@ -388,9 +368,9 @@ EffectEntry* effEntry(void) {
             break;
         }
     }
-    entry->flags = EFFECT_FLAG_IN_USE;
+    entry->flags = EFFECT_FLAG_ACTIVE;
     entry->inBattle = gp->inBattle != 0;
-    entry->type = 0;
+    entry->type = NULL;
     entry->count = 0;
     entry->userdata = NULL;
     entry->callback = NULL;
@@ -416,9 +396,9 @@ void effSetName(EffectEntry* effect, const char* name) {
 }
 
 /**
- * Once per frame: runs the callback of every in-use effect of the current mode (field or battle).
- * When the game language changes it also reloads the language's effect_xx.tpl (lettering textures such as
- * "Nice!").
+ * Once per frame: runs the callback of every active effect of the current mode (battle effects during a battle, field
+ * effects outside one). When the game language has changed, frees the language texture file and, once fileAsyncf no
+ * longer returns NULL, takes effect_<lang>.tpl for the new language.
  */
 void effMain(void) {
     const char *dvdroot, *prefix;
@@ -428,28 +408,28 @@ void effMain(void) {
 
     for (i = 0; i < count; i++, entry++) {
         if (gp->inBattle) {
-            if ((s32)entry->inBattle != 1) {
+            if (entry->inBattle != 1) {
                 continue;
             }
-        } else if ((s32)entry->inBattle != 0) {
+        } else if (entry->inBattle != 0) {
             continue;
         }
-        if (entry->flags & EFFECT_FLAG_IN_USE) {
+        if (entry->flags & EFFECT_FLAG_ACTIVE) {
             if (entry->callback) {
                 entry->callback(entry);
             }
         }
     }
-    if ((u32)wp->language != (u32)gp->language) {
+    if (wp->language != gp->language) {
         if (wp->handle) {
             fileFree(wp->handle);
             wp->handle = NULL;
         }
         prefix = prefix_tbl[gp->language];
         dvdroot = getMarioStDvdRoot();
-        if (fileAsyncf(4, 0, "%s/" EFF_DIR "/%s/effect_%s.tpl", dvdroot, prefix, prefix) != NULL) {
+        if (fileAsyncf(FILE_TYPE_TPL, 0, EFF_TPL_PATH, dvdroot, prefix, prefix) != NULL) {
             prefix = prefix_tbl[gp->language];
-            wp->handle = fileAllocf(4, "%s/" EFF_DIR "/%s/effect_%s.tpl", getMarioStDvdRoot(), prefix, prefix);
+            wp->handle = fileAllocf(FILE_TYPE_TPL, EFF_TPL_PATH, getMarioStDvdRoot(), prefix, prefix);
             wp->language = gp->language;
         }
     }
@@ -464,15 +444,15 @@ void effDelete(EffectEntry* effect) {
 }
 
 /**
- * Asks an effect to end: effects that handle their own fade-out (EFFECT_FLAG_SOFT_DELETE) only get a delete
+ * Asks an effect to end: effects that handle their own fade-out (EFFECT_FLAG_SOFT_DELETABLE) only get a delete
  * request and free themselves later; others are deleted at once.
  */
 void effSoftDelete(EffectEntry* effect) {
     if (effect && effect->flags) {
-        if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
-            effect->flags |= EFFECT_FLAG_DELETE_REQUESTED;
+        if (effect->flags & EFFECT_FLAG_SOFT_DELETABLE) {
+            effect->flags |= EFFECT_FLAG_SOFT_DELETE;
         } else {
-            effDelete(effect); // inlined
+            effDelete(effect);
         }
     }
 }
@@ -502,7 +482,7 @@ EffectEntry* effNameToPtr(const char* name) {
 EffectSet* effGetSet(const char* name) {
     s32 i;
 
-    for (i = 0; eff_set_table[i].id != -1; i++) { // run until end of table
+    for (i = 0; eff_set_table[i].id != -1; i++) {
         if (!strcmp(eff_set_table[i].name, name)) {
             return &eff_set_table[i];
         }
@@ -515,14 +495,10 @@ EffectSet* effGetSet(const char* name) {
  * inline locals take the low registers, last declared lowest (qv0 f9 .. qm1 f12 above dt f8 / s f7 / s3 f6 / s2
  * f5; gqr r9 under the key-offset temp r10)
  */
+// Hermite interpolation of the 22 channels of two keys into buf (the s16 values are read through GQR5, see
+// effMayaSetGQR)
 static inline void effMayaKeyInterp(MayaHermitKey* prev, MayaHermitKey* curr, f32 t, f32* buf) {
     s32 i;
-    f32* out;
-    s8* pb;
-    s8* pa;
-    pa = (s8*)prev;
-    pb = (s8*)curr;
-    out = buf;
     for (i = 0; i < 22; i++) {
         f32 qd0;
         f32 qm1;
@@ -535,26 +511,26 @@ static inline void effMayaKeyInterp(MayaHermitKey* prev, MayaHermitKey* curr, f3
         f32 s3;
         f32 s2;
         f32 div;
-        qv0 = __OSs16tof32((s16*)(pa + 2));
-        qd0 = __OSs16tof32((s16*)(pa + 4));
-        qm0 = __OSs16tof32((s16*)(pa + 6));
-        qv1 = __OSs16tof32((s16*)(pb + 2));
-        qm1 = __OSs16tof32((s16*)(pb + 4));
-        qd0 = __OSs16tof32((s16*)(pb + 6));
-        if (pa[9] != 0) {
-            *out = qv0;
+        qv0 = __OSs16tof32(&prev->ch[i].value);
+        qd0 = __OSs16tof32(&prev->ch[i].inTangent);
+        qm0 = __OSs16tof32(&prev->ch[i].outTangent);
+        qv1 = __OSs16tof32(&curr->ch[i].value);
+        qm1 = __OSs16tof32(&curr->ch[i].inTangent);
+        qd0 = __OSs16tof32(&curr->ch[i].outTangent);
+        if (prev->ch[i].step != 0) {
+            buf[i] = qv0;
         } else {
             u = t - prev->time;
             dt = curr->time - prev->time;
-            div = (!dt) ? (0.00000001f) : (dt);
+            div = !dt ? 0.00000001f : dt;
             s = u / div;
             s2 = s * s;
             s3 = s2 * s;
-            *out = (((qv0 * (1.0f + ((2.0f * s3) - (3.0f * s2)))) + (qm0 * (dt * (s + (s3 - (2.0f * s2)))))) + (qv1 * (((-2.0f) * s3) + (3.0f * s2)))) + (qm1 * (dt * (s3 - s2)));
+            buf[i] = qv0 * (1.0f + ((2.0f * s3) - (3.0f * s2))) +
+                     qm0 * (dt * (s + (s3 - (2.0f * s2)))) +
+                     qv1 * ((-2.0f * s3) + (3.0f * s2)) +
+                     qm1 * (dt * (s3 - s2));
         }
-        pa += 8;
-        pb += 8;
-        out++;
     }
 }
 
@@ -563,7 +539,7 @@ static inline void effMayaKeyInterp(MayaHermitKey* prev, MayaHermitKey* curr, f3
  * the fixed-point format of the Maya key values read by __OSs16tof32.
  */
 static inline void effMayaSetGQR(void) {
-    register u32 gqr; // an asm operand (HW_SET_GQR5) must be a register variable
+    register u32 gqr;
     gqr = 0x06070607;
     HW_SET_GQR5(gqr);
 }
@@ -573,7 +549,7 @@ static inline void effMayaSetGQR(void) {
  * interpolates its 22 channels between the surrounding keys
  * and builds its transform matrix (translate, rotate, scale about pivots) and its alpha, clamped to 0..1.
  */
-static void effCalcMayaAnimMatrix(MayaAnim* anim, MayaPoly* poly, f32* mtx, f32* alpha) {
+static void effCalcMayaAnimMatrix(MayaAnim* anim, MayaPoly* list, f32* mtx, f32* alpha) {
     f32 buf[22];
     Mtx trans;
     Mtx scale;
@@ -589,19 +565,19 @@ static void effCalcMayaAnimMatrix(MayaAnim* anim, MayaPoly* poly, f32* mtx, f32*
     Mtx rotZ;
     Mtx tmp;
 
-    s32 n = poly->keyCount;
+    s32 n = list->keyCount;
     s32 k;
     f32 t;
 
     for (k = 1; k < n; k++) {
         MayaHermitKey* prev;
         MayaHermitKey* curr;
-        curr = &poly->keys[k];
-        prev = &poly->keys[k - 1];
+        curr = &list->keys[k];
+        prev = &list->keys[k - 1];
         effMayaSetGQR();
         if (anim->time <= curr->time) {
             t = anim->time;
-        } else if (k != (n - 1)) {
+        } else if (k != n - 1) {
             continue;
         } else {
             t = curr->time;
@@ -628,7 +604,7 @@ static void effCalcMayaAnimMatrix(MayaAnim* anim, MayaPoly* poly, f32* mtx, f32*
         PSMTXConcat(tmp, pivot1Inv, tmp2);
         PSMTXConcat(trans, tmp2, tmp);
         PSMTXConcat(tmp, scale, (MtxPtr)mtx);
-        *alpha = (buf[21] > 1.0f) ? (1.0f) : ((buf[21] < ((buf[21] < 0.0f) * 0.0f)) ? (0.0f) : (buf[21]));
+        *alpha = buf[21] > 1.0f ? 1.0f : (buf[21] < 0.0f ? 0.0f : buf[21]);
         return;
     }
 }
@@ -638,7 +614,8 @@ static void effCalcMayaAnimMatrix(MayaAnim* anim, MayaPoly* poly, f32* mtx, f32*
  * used by the damage star, ice and recovery effects.
  */
 MayaAnim* effMayaAnimAlloc(MayaAnimData* data) {
-    s32 size = data->polyList->count * sizeof(MayaJoint) + 0x18;
+    // 0x18 for the header: 4 bytes more than the offset of joints (0x14)
+    s32 size = data->lists->count * sizeof(MayaJoint) + 0x18;
     MayaAnim* anim = __memAlloc(HEAP_EFFECT, size);
     memset(anim, 0, size);
     anim->data = data;
@@ -653,7 +630,7 @@ void effDeleteMayaAnim(MayaAnim* anim) {
 /** Starts a Maya effect animation from time 0, using the field or battle render clock. */
 void effPlayMayaAnim(MayaAnim* anim) {
     OSTime now = gp->inBattle ? gp->renderTime : gp->renderFieldTime;
-    anim->startTime = now / (OS_TIMER_CLOCK / 1000);
+    anim->startTime = OSTicksToMilliseconds(now);
     anim->time = 0.0f;
     anim->flags |= MAYA_ANIM_FLAG_PLAYING;
 }
@@ -666,14 +643,14 @@ void effCalcMayaAnim(MayaAnim* anim) {
     if ((anim->flags & MAYA_ANIM_FLAG_PLAYING) && !(anim->flags & MAYA_ANIM_FLAG_ENDED)) {
         OSTime now = gp->inBattle ? gp->renderTime : gp->renderFieldTime;
         s32 i;
-        now = now / (OS_TIMER_CLOCK / 1000);
+        now = OSTicksToMilliseconds(now);
         anim->time = (f32)(u64)(now - anim->startTime) * gp->framerate / 1000.0f;
         if (anim->time >= anim->data->endTime) {
             anim->time = anim->data->endTime;
             anim->flags |= MAYA_ANIM_FLAG_ENDED;
         }
-        for (i = 0; i < anim->data->polyList->count; i++) {
-            effCalcMayaAnimMatrix(anim, &anim->data->polyList->polys[i], (f32*)anim->joints[i].mtx, &anim->joints[i].alpha);
+        for (i = 0; i < anim->data->lists->count; i++) {
+            effCalcMayaAnimMatrix(anim, &anim->data->lists->polys[i], (f32*)anim->joints[i].mtx, &anim->joints[i].alpha);
         }
     }
 }
@@ -690,7 +667,7 @@ void effDrawMayaPoly(MayaPoly* poly) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 9);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 9);
     GXSetCullMode(GX_CULL_NONE);
-    for (i = 0; i < poly->stripCount; i++) {
+    for (i = 0; i < poly->count; i++) {
         s16* strip = poly->strips[i];
         u16 n = strip[0];
         s16* v;

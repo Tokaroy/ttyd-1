@@ -1,3 +1,5 @@
+#include "trk.h"
+
 typedef int BOOL;
 typedef int DSError;
 
@@ -23,7 +25,6 @@ void TRKReleaseBuffer(int idx);
 
 TRKEventQueue gTRKEventQueue;
 
-/** Clears the (two-slot) event queue and starts event ids at 0x100. */
 DSError TRKInitializeEventQueue(void) {
     TRKInitializeMutex(&gTRKEventQueue);
     TRKAcquireMutex(&gTRKEventQueue);
@@ -34,14 +35,17 @@ DSError TRKInitializeEventQueue(void) {
     return 0;
 }
 
-/** Takes the oldest event off the queue into *event; returns 1 if there was one, 0 if the queue is empty. */
+void TRKCopyEvent(TRKEvent* dstEvent, const TRKEvent* srcEvent) {
+    TRK_memcpy(dstEvent, srcEvent, sizeof(TRKEvent));
+}
+
 BOOL TRKGetNextEvent(TRKEvent* event) {
     BOOL status = 0;
 
     TRKAcquireMutex(&gTRKEventQueue);
 
     if (0 < gTRKEventQueue.count) {
-        TRK_memcpy(event, &gTRKEventQueue.events[gTRKEventQueue.next], sizeof(TRKEvent));
+        TRKCopyEvent(event, &gTRKEventQueue.events[gTRKEventQueue.next]);
         gTRKEventQueue.count--;
 
         if (++gTRKEventQueue.next == 2)
@@ -54,7 +58,6 @@ BOOL TRKGetNextEvent(TRKEvent* event) {
     return status;
 }
 
-/** Adds an event to the queue and gives it the next event id; returns 0x100 if both slots are taken. */
 DSError TRKPostEvent(TRKEvent* event) {
     DSError ret = 0;
     int nextEventID;
@@ -62,10 +65,10 @@ DSError TRKPostEvent(TRKEvent* event) {
     TRKAcquireMutex(&gTRKEventQueue);
 
     if (gTRKEventQueue.count == 2) {
-        ret = 0x100;
+        ret = DS_EventQueueFull;
     } else {
         nextEventID = (gTRKEventQueue.next + gTRKEventQueue.count) % 2;
-        TRK_memcpy(&gTRKEventQueue.events[nextEventID], event, sizeof(TRKEvent));
+        TRKCopyEvent(&gTRKEventQueue.events[nextEventID], event);
         gTRKEventQueue.events[nextEventID].eventID = gTRKEventQueue.eventID;
         gTRKEventQueue.eventID++;
 
@@ -79,14 +82,12 @@ DSError TRKPostEvent(TRKEvent* event) {
     return ret;
 }
 
-/** Fills in an event with the given type, id 0 and no message buffer (-1). */
 void TRKConstructEvent(TRKEvent* event, int eventType) {
     event->eventType = eventType;
     event->eventID = 0;
     event->msgBufID = -1;
 }
 
-/** Frees the message buffer the event refers to (a no-op for buffer -1). */
 void TRKDestructEvent(TRKEvent* event) {
     TRKReleaseBuffer(event->msgBufID);
 }

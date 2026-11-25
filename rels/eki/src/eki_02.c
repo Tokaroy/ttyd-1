@@ -1,6 +1,16 @@
 // eki_02 (駅, Riverside Station): room with a contraption (sikake), a key item and a Star Piece; door to eki_01.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
+#include "eff/eff_magic1_n64.h"
+#include "libc_decls.h"
+#include "evt/evt_map.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "mario/mario_pouch.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
 
 #include "mario/mario.h"
 #include "driver/hitdrv.h"
@@ -8,15 +18,14 @@
 #include "system.h"
 #include "dolphin/mtx.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_item.h"
-#include "evt/evt_map.h"
-#include "evt/evt_snd.h"
-#include "eki.h"
-#include "version.h"
-#include "evt/evt_story.h"
-#include "libc_decls.h"
 
+static USER_FUNC(hit_move);
+
+static EvtWord s_close[12];
+static EvtWord s_open[12];
 static BeroEntry bero_data[2];
+static EvtWord evt_key[5];
+EvtWord eki_02_init_evt[54];
 
 /**
  * Door animation callback, closing for the s_bero exit to eki_01:
@@ -86,7 +95,7 @@ static USER_FUNC(hit_move) {
         event->userdata[1] = 0;
         return EVT_RETURN_BLOCK;
     }
-    if (!(hit->flags & 0x30)) {
+    if (!(hit->flags & (HIT_FLAG_ANIM_MTX | HIT_FLAG_MAPOBJ_BIND))) {
         event->userdata[0] = 0;
         event->userdata[1] = 0;
         return EVT_RETURN_BLOCK;
@@ -110,36 +119,36 @@ static USER_FUNC(hit_move) {
     return EVT_RETURN_BLOCK;
 }
 
-/** Runs when Mario picks up the station key (ITEM_STATION_KEY_0x19): sets the story to STORY_STG6_31_KEY. */
+/** Runs when Mario picks up the station key (ITEM_STATION_KEY_0x19): sets the story to STG6_31_KEY. */
 static EVT_BEGIN(evt_key)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG6_31_KEY)
+    SET_VALUE(GSW_STORY_PROGRESS, STG6_31_KEY)
     RETURN
 EVT_END()
 
 /**
  * Map init for eki_02: sets up the door back to eki_01, starts the contraption (sikake) animations,
- * places the Station Key until it has been picked up (picking it up sets STORY_STG6_31_KEY),
+ * places the Station Key until it has been picked up (picking it up sets STG6_31_KEY),
  * places the Star Piece, and starts hit_move so Mario rides the moving platforms.
  */
 EVT_BEGIN(eki_02_init_evt)
     SET_VALUE(LW(0), PTR(bero_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    CALL(evt_snd_bgmoff, PSND_FADE_OUT)
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG6_EKI3"))
+    CALL(evt_snd_bgmoff, PSND_FADEOUT)
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG6_EKI3"))
 #if VERSION >= VERSION_US
-    CALL(evt_map_playanim, STRING("anm_sikake_1"), 1, 1)
-    CALL(evt_map_playanim, STRING("anm_sikake_2"), 1, 1)
+    CALL(evt_map_playanim, STRING("anm_sikake_1"), MAP_ANIM_PLAY_LOOP, 1)
+    CALL(evt_map_playanim, STRING("anm_sikake_2"), MAP_ANIM_PLAY_LOOP, 1)
 #else
-    CALL(evt_map_playanim, STRING("anm_sikake_1"), 1, 0)
-    CALL(evt_map_playanim, STRING("anm_sikake_2"), 1, 0)
+    CALL(evt_map_playanim, STRING("anm_sikake_1"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_map_playanim, STRING("anm_sikake_2"), MAP_ANIM_PLAY_LOOP, 0)
 #endif
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG6_31_KEY)
-        CALL(evt_item_entry, STRING("key"), ITEM_STATION_KEY_0x19, 525, 220, 29, ITEM_ENTRY_FIXED, -1, PTR(evt_key))
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG6_31_KEY)
+        CALL(evt_item_entry, STRING("key"), ITEM_STATION_KEY_0x19, 525, 220, 29, ITEM_TYPE_STILL, -1, PTR(evt_key))
     END_IF
     BEGIN_INLINE_EVENT
         CALL(hit_move)
     END_INLINE_EVENT
-    CALL(evt_item_entry, STRING("item"), ITEM_STAR_PIECE, 540, 140, -40, ITEM_ENTRY_FIXED, GSWF(GSWF_EKI02_STAR_PIECE), 0)
+    CALL(evt_item_entry, STRING("item"), ITEM_STAR_PIECE, 540, 140, -40, ITEM_TYPE_STILL, GSWF_STARPIECE_86, 0)
     RETURN
 EVT_END()

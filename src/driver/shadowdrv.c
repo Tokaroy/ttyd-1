@@ -1,12 +1,15 @@
 // Shadow driver: blob, cylinder, projected and depth shadows (shadowInit, shadowMain, shadowDisp).
+
 #include "version.h"
-// Shadow driver: blob, cylinder, projected and depth shadows.
+
 #if VERSION <= VERSION_DEMO_JP
-// the demo unit is built without the main precompiled header: only the dtrigf constants lead its data
 #define DTRIGF_WITH_INITIAL_VALUES
 #include <dtrigf.h>
-#endif
 #include "driver/shadowdrv.h"
+#else
+#include "driver/shadowdrv.h"
+#endif
+
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
 #include "driver/hitdrv.h"
@@ -17,452 +20,90 @@
 #include "driver/mobjdrv.h"
 #include "eff/eff_n64.h"
 
+// Defined below as inline functions and used only in this file (the JP demo map lists their out-of-line copies
+// as stripped); declared here because earlier code calls them.
+CharShadowWork* shadowGetCharShadowWork(void);
+ShadowConfig* shadowGetConfig(s32 idx);
+void shadowDepthShadowInit(void);
+void shadowProjShadowInit(void);
+void CreateRampTex8(GXTexObj* obj);
+void CreateRampTex16(GXTexObj* obj);
+void SetCamera(ShadowConfig* cfg, Mtx view, Mtx44 proj);
+void projShadowBegin(CameraId cameraId, void* param);
+void depthShadowBegin(CameraId cameraId, void* param);
+
 static void shadowCharShadowDisp_Collision(CameraId cameraId, void* param);
 static void shadowCharShadowDisp_Projection(CameraId cameraId, void* param);
 static void shadowCharShadowDisp_Polygon(CameraId cameraId, void* param);
 static void shadowCharShadowDisp_Texture(CameraId cameraId, void* param);
 static void cylinderShadowDraw(CameraId cameraId, void* param);
-static void cylinder(ShadowEntry* entry);
 static void projShadowEnd(CameraId cameraId, void* param);
 static void depthShadowEnd(CameraId cameraId, void* param);
 static void shadowDisp(CameraId cameraId, void* param);
-static BOOL _filter(HitCheckQuery* query, HitEntry* hit);
 
 /**
  * The two light cameras that render shadow textures: 0, a fixed perspective light for the projected and depth
- * shadows, and 1, an orthographic light that follows the character for character shadows (cswp).
+ * shadows, and 1, an orthographic light that shadowDisp keeps 1000 units above the 3D camera's look-at point,
+ * for character shadows (cswp).
  */
 static ShadowConfig shadowConfig[2] = {
-    { 0, { -100.0f, 256.0f, 335.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, -20.0f, 20.0f, 356.0f, 741.0f, 0, 3, 0, -4.47f },
-    { 1, { 135.0f, 40.0f, 41.0f }, { 0.0f, 1.0f, 0.0f }, { 0.0f, 0.0f, 0.0f }, -240.0f, 240.0f, 80.0f, 10000.0f, 1, 3, 0, 0.0f },
+    {0, {-100.0f, 256.0f, 335.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, -20.0f, 20.0f, 356.0f, 741.0f, 0, 3, 0, -4.47f},
+    {1, {135.0f, 40.0f, 41.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f, 0.0f}, -240.0f, 240.0f, 80.0f, 10000.0f, 1, 3, 0, 0.0f},
 };
 
 static f32 testKagePosArray[18] ATTRIBUTE_ALIGN(32) = {
-    0.0f,
-    0.0f,
-    -1.0f,
-    0.9f,
-    0.0f,
-    -0.5f,
-    -0.9f,
-    0.0f,
-    -0.5f,
-    0.9f,
-    0.0f,
-    0.5f,
-    -0.9f,
-    0.0f,
-    0.5f,
-    0.0f,
-    0.0f,
-    1.0f,
+    0.0f, 0.0f, -1.0f,
+    0.9f, 0.0f, -0.5f,
+    -0.9f, 0.0f, -0.5f,
+    0.9f, 0.0f, 0.5f,
+    -0.9f, 0.0f, 0.5f,
+    0.0f, 0.0f, 1.0f,
 };
 
 static u8 cylinder_dl_top[64] ATTRIBUTE_ALIGN(32) = {
-    0xA0,
-    0x00,
-    0x10,
-    0x00,
-    0x00,
-    0x0F,
-    0x00,
-    0x0E,
-    0x00,
-    0x0D,
-    0x00,
-    0x0C,
-    0x00,
-    0x0B,
-    0x00,
-    0x0A,
-    0x00,
-    0x09,
-    0x00,
-    0x08,
-    0x00,
-    0x07,
-    0x00,
-    0x06,
-    0x00,
-    0x05,
-    0x00,
-    0x04,
-    0x00,
-    0x03,
-    0x00,
-    0x02,
-    0x00,
-    0x01,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
+    0xA0, 0x00, 0x10, 0x00, 0x00, 0x0F, 0x00, 0x0E, 0x00, 0x0D, 0x00, 0x0C, 0x00, 0x0B, 0x00, 0x0A,
+    0x00, 0x09, 0x00, 0x08, 0x00, 0x07, 0x00, 0x06, 0x00, 0x05, 0x00, 0x04, 0x00, 0x03, 0x00, 0x02,
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 static u8 cylinder_dl_bottom[64] ATTRIBUTE_ALIGN(32) = {
-    0xA0,
-    0x00,
-    0x10,
-    0x10,
-    0x01,
-    0x11,
-    0x01,
-    0x12,
-    0x01,
-    0x13,
-    0x01,
-    0x14,
-    0x01,
-    0x15,
-    0x01,
-    0x16,
-    0x01,
-    0x17,
-    0x01,
-    0x18,
-    0x01,
-    0x19,
-    0x01,
-    0x1A,
-    0x01,
-    0x1B,
-    0x01,
-    0x1C,
-    0x01,
-    0x1D,
-    0x01,
-    0x1E,
-    0x01,
-    0x1F,
-    0x01,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
+    0xA0, 0x00, 0x10, 0x10, 0x01, 0x11, 0x01, 0x12, 0x01, 0x13, 0x01, 0x14, 0x01, 0x15, 0x01, 0x16,
+    0x01, 0x17, 0x01, 0x18, 0x01, 0x19, 0x01, 0x1A, 0x01, 0x1B, 0x01, 0x1C, 0x01, 0x1D, 0x01, 0x1E,
+    0x01, 0x1F, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 static u8 cylinder_dl_side[64] ATTRIBUTE_ALIGN(32) = {
-    0x98,
-    0x00,
-    0x1E,
-    0x11,
-    0x01,
-    0x01,
-    0x02,
-    0x12,
-    0x01,
-    0x02,
-    0x02,
-    0x13,
-    0x01,
-    0x03,
-    0x02,
-    0x14,
-    0x01,
-    0x04,
-    0x02,
-    0x15,
-    0x01,
-    0x05,
-    0x02,
-    0x16,
-    0x01,
-    0x06,
-    0x02,
-    0x17,
-    0x01,
-    0x07,
-    0x02,
-    0x18,
-    0x01,
-    0x08,
-    0x02,
-    0x19,
-    0x01,
-    0x09,
-    0x02,
-    0x1A,
-    0x01,
-    0x0A,
-    0x02,
-    0x1B,
-    0x01,
-    0x0B,
-    0x02,
-    0x1C,
-    0x01,
-    0x0C,
-    0x02,
-    0x1D,
-    0x01,
-    0x0D,
-    0x02,
-    0x1E,
-    0x01,
-    0x0E,
-    0x02,
-    0x1F,
-    0x01,
-    0x0F,
-    0x02,
-    0x00,
+    0x98, 0x00, 0x1E, 0x11, 0x01, 0x01, 0x02, 0x12, 0x01, 0x02, 0x02, 0x13, 0x01, 0x03, 0x02, 0x14,
+    0x01, 0x04, 0x02, 0x15, 0x01, 0x05, 0x02, 0x16, 0x01, 0x06, 0x02, 0x17, 0x01, 0x07, 0x02, 0x18,
+    0x01, 0x08, 0x02, 0x19, 0x01, 0x09, 0x02, 0x1A, 0x01, 0x0A, 0x02, 0x1B, 0x01, 0x0B, 0x02, 0x1C,
+    0x01, 0x0C, 0x02, 0x1D, 0x01, 0x0D, 0x02, 0x1E, 0x01, 0x0E, 0x02, 0x1F, 0x01, 0x0F, 0x02, 0x00,
 };
 
 static u8 cylinder_dl_top_inside[64] ATTRIBUTE_ALIGN(32) = {
-    0xA0,
-    0x00,
-    0x10,
-    0x20,
-    0x00,
-    0x2F,
-    0x00,
-    0x2E,
-    0x00,
-    0x2D,
-    0x00,
-    0x2C,
-    0x00,
-    0x2B,
-    0x00,
-    0x2A,
-    0x00,
-    0x29,
-    0x00,
-    0x28,
-    0x00,
-    0x27,
-    0x00,
-    0x26,
-    0x00,
-    0x25,
-    0x00,
-    0x24,
-    0x00,
-    0x23,
-    0x00,
-    0x22,
-    0x00,
-    0x21,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
+    0xA0, 0x00, 0x10, 0x20, 0x00, 0x2F, 0x00, 0x2E, 0x00, 0x2D, 0x00, 0x2C, 0x00, 0x2B, 0x00, 0x2A,
+    0x00, 0x29, 0x00, 0x28, 0x00, 0x27, 0x00, 0x26, 0x00, 0x25, 0x00, 0x24, 0x00, 0x23, 0x00, 0x22,
+    0x00, 0x21, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 static u8 cylinder_dl_top_outside[64] ATTRIBUTE_ALIGN(32) = {
-    0x98,
-    0x00,
-    0x1E,
-    0x01,
-    0x02,
-    0x21,
-    0x00,
-    0x02,
-    0x02,
-    0x22,
-    0x00,
-    0x03,
-    0x02,
-    0x23,
-    0x00,
-    0x04,
-    0x02,
-    0x24,
-    0x00,
-    0x05,
-    0x02,
-    0x25,
-    0x00,
-    0x06,
-    0x02,
-    0x26,
-    0x00,
-    0x07,
-    0x02,
-    0x27,
-    0x00,
-    0x08,
-    0x02,
-    0x28,
-    0x00,
-    0x09,
-    0x02,
-    0x29,
-    0x00,
-    0x0A,
-    0x02,
-    0x2A,
-    0x00,
-    0x0B,
-    0x02,
-    0x2B,
-    0x00,
-    0x0C,
-    0x02,
-    0x2C,
-    0x00,
-    0x0D,
-    0x02,
-    0x2D,
-    0x00,
-    0x0E,
-    0x02,
-    0x2E,
-    0x00,
-    0x0F,
-    0x02,
-    0x2F,
-    0x00,
-    0x00,
+    0x98, 0x00, 0x1E, 0x01, 0x02, 0x21, 0x00, 0x02, 0x02, 0x22, 0x00, 0x03, 0x02, 0x23, 0x00, 0x04,
+    0x02, 0x24, 0x00, 0x05, 0x02, 0x25, 0x00, 0x06, 0x02, 0x26, 0x00, 0x07, 0x02, 0x27, 0x00, 0x08,
+    0x02, 0x28, 0x00, 0x09, 0x02, 0x29, 0x00, 0x0A, 0x02, 0x2A, 0x00, 0x0B, 0x02, 0x2B, 0x00, 0x0C,
+    0x02, 0x2C, 0x00, 0x0D, 0x02, 0x2D, 0x00, 0x0E, 0x02, 0x2E, 0x00, 0x0F, 0x02, 0x2F, 0x00, 0x00,
 };
 
 static u8 cube_dl_top[64] ATTRIBUTE_ALIGN(32) = {
-    0x80,
-    0x00,
-    0x14,
-    0x30,
-    0x00,
-    0x31,
-    0x00,
-    0x32,
-    0x00,
-    0x33,
-    0x00,
-    0x34,
-    0x02,
-    0x35,
-    0x02,
-    0x31,
-    0x00,
-    0x30,
-    0x00,
-    0x31,
-    0x00,
-    0x35,
-    0x02,
-    0x36,
-    0x02,
-    0x32,
-    0x00,
-    0x33,
-    0x00,
-    0x32,
-    0x00,
-    0x36,
-    0x02,
-    0x37,
-    0x02,
-    0x34,
-    0x02,
-    0x30,
-    0x00,
-    0x33,
-    0x00,
-    0x37,
-    0x02,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
-    0x00,
+    0x80, 0x00, 0x14, 0x30, 0x00, 0x31, 0x00, 0x32, 0x00, 0x33, 0x00, 0x34, 0x02, 0x35, 0x02, 0x31,
+    0x00, 0x30, 0x00, 0x31, 0x00, 0x35, 0x02, 0x36, 0x02, 0x32, 0x00, 0x33, 0x00, 0x32, 0x00, 0x36,
+    0x02, 0x37, 0x02, 0x34, 0x02, 0x30, 0x00, 0x33, 0x00, 0x37, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 };
 
 #if VERSION <= VERSION_DEMO_JP
-// the demo's -sdata 8 keeps these in .data, ahead of the vertex table
-u8 cube_dl_bottom[32] ATTRIBUTE_ALIGN(32) = {
+static u8 cube_dl_bottom[32] ATTRIBUTE_ALIGN(32) = {
     0x80,
     0x00,
     0x04,
@@ -476,7 +117,7 @@ u8 cube_dl_bottom[32] ATTRIBUTE_ALIGN(32) = {
     0x01,
     0x00,
 };
-u8 cube_dl_side[32] ATTRIBUTE_ALIGN(32) = {
+static u8 cube_dl_side[32] ATTRIBUTE_ALIGN(32) = {
     0x98,
     0x00,
     0x0A,
@@ -503,318 +144,135 @@ u8 cube_dl_side[32] ATTRIBUTE_ALIGN(32) = {
     0x00,
 };
 #endif
+
 static f32 vertex_tbl[180] ATTRIBUTE_ALIGN(32) = {
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    1.0f,
-    0.433884f,
-    0.0f,
-    0.900969f,
-    0.781832f,
-    0.0f,
-    0.62349f,
-    0.974928f,
-    0.0f,
-    0.222521f,
-    0.974928f,
-    0.0f,
-    -0.222521f,
-    0.781831f,
-    0.0f,
-    -0.62349f,
-    0.433884f,
-    0.0f,
-    -0.900969f,
-    -0.0f,
-    0.0f,
-    -1.0f,
-    -0.433884f,
-    0.0f,
-    -0.900969f,
-    -0.781832f,
-    0.0f,
-    -0.62349f,
-    -0.974928f,
-    0.0f,
-    -0.222521f,
-    -0.974928f,
-    0.0f,
-    0.222521f,
-    -0.781832f,
-    0.0f,
-    0.62349f,
-    -0.433884f,
-    0.0f,
-    0.900969f,
-    0.0f,
-    0.0f,
-    1.0f,
-    0.0f,
-    -1.0f,
-    0.0f,
-    0.0f,
-    -1.0f,
-    1.0f,
-    0.433884f,
-    -1.0f,
-    0.900969f,
-    0.781832f,
-    -1.0f,
-    0.62349f,
-    0.974928f,
-    -1.0f,
-    0.222521f,
-    0.974928f,
-    -1.0f,
-    -0.222521f,
-    0.781831f,
-    -1.0f,
-    -0.62349f,
-    0.433884f,
-    -1.0f,
-    -0.900969f,
-    -0.0f,
-    -1.0f,
-    -1.0f,
-    -0.433884f,
-    -1.0f,
-    -0.900969f,
-    -0.781832f,
-    -1.0f,
-    -0.62349f,
-    -0.974928f,
-    -1.0f,
-    -0.222521f,
-    -0.974928f,
-    -1.0f,
-    0.222521f,
-    -0.781832f,
-    -1.0f,
-    0.62349f,
-    -0.433884f,
-    -1.0f,
-    0.900969f,
-    0.0f,
-    -1.0f,
-    1.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.0f,
-    0.6f,
-    0.2603304f,
-    0.0f,
-    0.54058146f,
-    0.4690992f,
-    0.0f,
-    0.374094f,
-    0.5849568f,
-    0.0f,
-    0.13351262f,
-    0.5849568f,
-    0.0f,
-    -0.13351262f,
-    0.46909863f,
-    0.0f,
-    -0.374094f,
-    0.2603304f,
-    0.0f,
-    -0.54058146f,
-    0.0f,
-    0.0f,
-    -0.6f,
-    -0.2603304f,
-    0.0f,
-    -0.54058146f,
-    -0.4690992f,
-    0.0f,
-    -0.374094f,
-    -0.5849568f,
-    0.0f,
-    -0.13351262f,
-    -0.5849568f,
-    0.0f,
-    0.13351262f,
-    -0.4690992f,
-    0.0f,
-    0.374094f,
-    -0.2603304f,
-    0.0f,
-    0.54058146f,
-    0.0f,
-    0.0f,
-    0.6f,
-    -0.6f,
-    0.0f,
-    0.6f,
-    -0.6f,
-    0.0f,
-    -0.6f,
-    0.6f,
-    0.0f,
-    -0.6f,
-    0.6f,
-    0.0f,
-    0.6f,
-    -1.0f,
-    0.0f,
-    1.0f,
-    -1.0f,
-    0.0f,
-    -1.0f,
-    1.0f,
-    0.0f,
-    -1.0f,
-    1.0f,
-    0.0f,
-    1.0f,
-    -1.0f,
-    -1.0f,
-    1.0f,
-    -1.0f,
-    -1.0f,
-    -1.0f,
-    1.0f,
-    -1.0f,
-    -1.0f,
-    1.0f,
-    -1.0f,
-    1.0f,
+    0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 1.0f,
+    0.433884f, 0.0f, 0.900969f,
+    0.781832f, 0.0f, 0.62349f,
+    0.974928f, 0.0f, 0.222521f,
+    0.974928f, 0.0f, -0.222521f,
+    0.781831f, 0.0f, -0.62349f,
+    0.433884f, 0.0f, -0.900969f,
+    -0.0f, 0.0f, -1.0f,
+    -0.433884f, 0.0f, -0.900969f,
+    -0.781832f, 0.0f, -0.62349f,
+    -0.974928f, 0.0f, -0.222521f,
+    -0.974928f, 0.0f, 0.222521f,
+    -0.781832f, 0.0f, 0.62349f,
+    -0.433884f, 0.0f, 0.900969f,
+    0.0f, 0.0f, 1.0f,
+    0.0f, -1.0f, 0.0f,
+    0.0f, -1.0f, 1.0f,
+    0.433884f, -1.0f, 0.900969f,
+    0.781832f, -1.0f, 0.62349f,
+    0.974928f, -1.0f, 0.222521f,
+    0.974928f, -1.0f, -0.222521f,
+    0.781831f, -1.0f, -0.62349f,
+    0.433884f, -1.0f, -0.900969f,
+    -0.0f, -1.0f, -1.0f,
+    -0.433884f, -1.0f, -0.900969f,
+    -0.781832f, -1.0f, -0.62349f,
+    -0.974928f, -1.0f, -0.222521f,
+    -0.974928f, -1.0f, 0.222521f,
+    -0.781832f, -1.0f, 0.62349f,
+    -0.433884f, -1.0f, 0.900969f,
+    0.0f, -1.0f, 1.0f,
+    0.0f, 0.0f, 0.0f,
+    0.0f, 0.0f, 0.6f,
+    0.2603304f, 0.0f, 0.54058146f,
+    0.4690992f, 0.0f, 0.374094f,
+    0.5849568f, 0.0f, 0.13351262f,
+    0.5849568f, 0.0f, -0.13351262f,
+    0.46909863f, 0.0f, -0.374094f,
+    0.2603304f, 0.0f, -0.54058146f,
+    0.0f, 0.0f, -0.6f,
+    -0.2603304f, 0.0f, -0.54058146f,
+    -0.4690992f, 0.0f, -0.374094f,
+    -0.5849568f, 0.0f, -0.13351262f,
+    -0.5849568f, 0.0f, 0.13351262f,
+    -0.4690992f, 0.0f, 0.374094f,
+    -0.2603304f, 0.0f, 0.54058146f,
+    0.0f, 0.0f, 0.6f,
+    -0.6f, 0.0f, 0.6f,
+    -0.6f, 0.0f, -0.6f,
+    0.6f, 0.0f, -0.6f,
+    0.6f, 0.0f, 0.6f,
+    -1.0f, 0.0f, 1.0f,
+    -1.0f, 0.0f, -1.0f,
+    1.0f, 0.0f, -1.0f,
+    1.0f, 0.0f, 1.0f,
+    -1.0f, -1.0f, 1.0f,
+    -1.0f, -1.0f, -1.0f,
+    1.0f, -1.0f, -1.0f,
+    1.0f, -1.0f, 1.0f,
 };
 
 //.bss
-CharShadowWork char_shadow_work;
-ProjShadowWork proj_shadow_work;
-DepthShadowWork depth_shadow_work;
+static CharShadowWork char_shadow_work;
+static ProjShadowWork proj_shadow_work;
+static DepthShadowWork depth_shadow_work;
 
 //.sbss
-GXTexObj rampTex8;
-GXTexObj rampTex16;
-f32 tmp_vp[6];
-u32 tmp_sci[4];
-Mtx tmp_view;
+static GXTexObj rampTex8;
+static GXTexObj rampTex16;
+static f32 tmp_vp[6];
+static u32 tmp_sci[4];
+static Mtx tmp_view;
 
 //.sdata
-CharShadowWork* cswp = &char_shadow_work;
-ProjShadowWork* pswp = &proj_shadow_work;
-DepthShadowWork* dswp = &depth_shadow_work;
+static CharShadowWork* cswp = &char_shadow_work;
+static ProjShadowWork* pswp = &proj_shadow_work;
+static DepthShadowWork* dswp = &depth_shadow_work;
+
 /** Side lengths of the square shadow textures (400, 256, 128, 64 pixels) that a shadow config picks from. */
-u16 ShadowSizeTbl[4] = {0x190, 0x100, 0x80, 0x40};
+static u16 ShadowSizeTbl[4] = {0x190, 0x100, 0x80, 0x40};
+
 #if VERSION >= VERSION_JP
-u8 cube_dl_bottom[32] ATTRIBUTE_ALIGN(32) = {
-    0x80,
-    0x00,
-    0x04,
-    0x38,
-    0x01,
-    0x39,
-    0x01,
-    0x3A,
-    0x01,
-    0x3B,
-    0x01,
-    0x00,
+static u8 cube_dl_bottom[32] ATTRIBUTE_ALIGN(32) = {
+    0x80, 0x00, 0x04, 0x38, 0x01, 0x39, 0x01, 0x3A, 0x01, 0x3B, 0x01, 0x00,
 };
-u8 cube_dl_side[32] ATTRIBUTE_ALIGN(32) = {
-    0x98,
-    0x00,
-    0x0A,
-    0x35,
-    0x02,
-    0x38,
-    0x01,
-    0x36,
-    0x02,
-    0x39,
-    0x01,
-    0x37,
-    0x02,
-    0x3A,
-    0x01,
-    0x38,
-    0x02,
-    0x3B,
-    0x01,
-    0x39,
-    0x02,
-    0x38,
-    0x01,
-    0x00,
+static u8 cube_dl_side[32] ATTRIBUTE_ALIGN(32) = {
+    0x98, 0x00, 0x0A, 0x35, 0x02, 0x38, 0x01, 0x36, 0x02, 0x39, 0x01, 0x37,
+    0x02, 0x3A, 0x01, 0x38, 0x02, 0x3B, 0x01, 0x39, 0x02, 0x38, 0x01, 0x00,
 };
 #endif
+
 static GXColor color_tbl[3] ATTRIBUTE_ALIGN(32) = {
-    { 0x00, 0x00, 0x00, 0x6E },
-    { 0x00, 0x00, 0x00, 0x00 },
-    { 0x00, 0x00, 0x00, 0x16 },
+    {0x00, 0x00, 0x00, 0x6E}, {0x00, 0x00, 0x00, 0x00}, {0x00, 0x00, 0x00, 0x16},
 };
-GXColor color_tbl_nodecay[3] ATTRIBUTE_ALIGN(32) = {
-    { 0x00, 0x00, 0x00, 0x6E },
-    { 0x00, 0x00, 0x00, 0x6E },
-    { 0x00, 0x00, 0x00, 0x6E },
+static GXColor color_tbl_nodecay[3] ATTRIBUTE_ALIGN(32) = {
+    {0x00, 0x00, 0x00, 0x6E}, {0x00, 0x00, 0x00, 0x6E}, {0x00, 0x00, 0x00, 0x6E},
 };
-GXColor color_tbl_cube[3] ATTRIBUTE_ALIGN(32) = {
-    { 0x00, 0x00, 0x00, 0x8E },
-    { 0x00, 0x00, 0x00, 0x00 },
-    { 0x00, 0x00, 0x00, 0x16 },
+static GXColor color_tbl_cube[3] ATTRIBUTE_ALIGN(32) = {
+    {0x00, 0x00, 0x00, 0x8E}, {0x00, 0x00, 0x00, 0x00}, {0x00, 0x00, 0x00, 0x16},
 };
 
-static inline void depthShadowInit(void);
-static inline void projShadowInit(void);
+/** The character shadow work. */
+CharShadowWork* shadowGetCharShadowWork(void) {
+    return cswp;
+}
+
+/** The projected shadow work. */
+// Original name and size (0x8) from the JP demo map (UNUSED there: nothing calls it), as shadowGetDepthShadowWork
+// below; shadowGetCharShadowWork for the other two works.
+ProjShadowWork* shadowGetProjShadowWork(void) {
+    return pswp;
+}
+
+/** The depth shadow work. */
+DepthShadowWork* shadowGetDepthShadowWork(void) {
+    return dswp;
+}
 
 /**
- * Sets up the shadow system at boot: the 64-entry character shadow list (default mode 2, the cylinder shadow),
- * the character shadow texture buffer, the projected and depth shadow work,
- * and the 8-bit and 16-bit ramp textures that depth shadows use to compare depths.
+ * Sets up the shadow system at boot: the character shadows, the depth shadow (with the 8-bit and 16-bit ramp
+ * textures that depth shadows use to compare depths) and the projected shadow.
  */
 void shadowInit(void) {
-    u32 bufferSize;
-    CharShadowWork* wp;
-    void* ramp;
-    u32 i;
-
-    cswp->flags = 0;
-    cswp->drawCount = 0;
-    cswp->configIdx = 1;
-    cswp->color = (GXColor){0, 0, 0, 0x6E};
-    cswp->projection = 1;
-    cswp->defaultMode = 2;
-    cswp->defaultSizeY = 20.0f;
-    cswp->defaultEnabled = 1;
-    cswp->numEntries = 0;
-    cswp->entries = __memAlloc(HEAP_DEFAULT, sizeof(ShadowEntry) * 64);
-    memset(cswp->entries, 0, sizeof(ShadowEntry) * 64);
-    wp = cswp;
-    bufferSize = GXGetTexBufferSize(ShadowSizeTbl[0], ShadowSizeTbl[0], 2, 0, 0);
-    wp->texBuffer = smartAlloc(bufferSize, 0);
-    depthShadowInit();
-
-    {
-        bufferSize = GXGetTexBufferSize(0x10, 0x10, GX_TF_I8, GX_FALSE, 0);
-        ramp = __memAlloc(HEAP_DEFAULT, GXGetTexBufferSize(0x10, 0x10, GX_TF_I8, GX_FALSE, 0));
-        for (i = 0; i < 256; i++) {
-            ((u8*)ramp)[(((i & 0x3) * 8) + (((i & 0xC) * 16) + (((i & 0x80) / 4) + ((i & 0x70) / 16))))] = i;
-        }
-        GXInitTexObj(&rampTex8, ramp, 0x10, 0x10, GX_TF_I8, GX_CLAMP, GX_REPEAT, GX_FALSE);
-        GXInitTexObjLOD(&rampTex8, GX_NEAR, GX_NEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-        DCFlushRange(ramp, bufferSize);
-    }
-    {
-        u32 j;
-
-        i = GXGetTexBufferSize(0x100, 0x100, GX_TF_IA8, GX_FALSE, 0);
-        ramp = __memAlloc(HEAP_DEFAULT, GXGetTexBufferSize(0x100, 0x100, GX_TF_IA8, GX_FALSE, 0));
-        for (j = 0; j < 0x10000; j++) {
-            ((u16*)ramp)[(((j & 0x3) * 4) + (((j & 0xFC) * 256) + (((j & 0xFC00) / 64) + ((j & 0x300) / 256))))] = j;
-        }
-        GXInitTexObj(&rampTex16, ramp, 0x100, 0x100, GX_TF_IA8, GX_CLAMP, GX_REPEAT, GX_FALSE);
-        GXInitTexObjLOD(&rampTex16, GX_NEAR, GX_NEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-        DCFlushRange(ramp, i);
-    }
-    projShadowInit();
+    shadowCharShadowInit();
+    shadowDepthShadowInit();
+    shadowProjShadowInit();
 }
 
 /**
@@ -823,30 +281,26 @@ void shadowInit(void) {
  * depth shadow end), then empties the shadow list and draw counts for the new frame.
  */
 void shadowMain(void) {
-    dispEntry(CAMERA_3D, 0.0f, 9, shadowDisp, NULL);
-    dispEntry(CAMERA_OFFSCREEN2, 0.0f, 9, shadowDisp, NULL);
-    dispEntry(CAMERA_3D_EFFECTA, 0.0f, 9, shadowDisp, NULL);
-    dispEntry(CAMERA_3D_EFFECTB, 0.0f, 9, shadowDisp, NULL);
+    dispEntry(CAMERA_3D, 0.0f, DISP_MODE_XLU_BEFORE, shadowDisp, NULL);
+    dispEntry(CAMERA_OFFSCREEN2, 0.0f, DISP_MODE_XLU_BEFORE, shadowDisp, NULL);
+    dispEntry(CAMERA_3D_EFFECTA, 0.0f, DISP_MODE_XLU_BEFORE, shadowDisp, NULL);
+    dispEntry(CAMERA_3D_EFFECTB, 0.0f, DISP_MODE_XLU_BEFORE, shadowDisp, NULL);
     if (cswp->projection) {
-        dispEntry(CAMERA_SHADOW, 0.0f, 5, shadowDisp, NULL);
+        dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_XLU_BEFORE_OPAQUE, shadowDisp, NULL);
     }
-    dispEntry(CAMERA_SHADOW, 0.0f, 0, shadowDisp, NULL);
-    dispEntry(CAMERA_SHADOW, 0.0f, 2, shadowDisp, NULL);
-    dispEntry(CAMERA_SHADOW, 0.0f, 7, shadowDisp, NULL);
-    cswp->numEntries = 0;
-    cswp->flags &= ~SHADOW_WORK_DRAWN;
-    cswp->drawCount = 0;
-    pswp->flags &= ~SHADOW_WORK_DRAWN;
-    pswp->drawCount = 0;
-    dswp->flags &= ~SHADOW_WORK_DRAWN;
-    dswp->drawCount = 0;
+    dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_OPAQUE, shadowDisp, NULL);
+    dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_XLU, shadowDisp, NULL);
+    dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_CUSTOM_LAST, shadowDisp, NULL);
+    shadowCharShadowMain();
+    shadowProjShadowMain();
+    shadowDepthShadowMain();
 }
 
 /** GX set-up for the flat shadow shapes: one colour channel from the character shadow colour, no textures. */
 static inline void shadowSetupPolygon(void) {
     GXSetNumChans(1);
     GXSetChanCtrl(GX_COLOR0A0, GX_FALSE, GX_SRC_REG, GX_SRC_REG, GX_LIGHT_NULL, GX_DF_CLAMP, GX_AF_NONE);
-    GXSetChanMatColor(GX_COLOR0A0, cswp->color);
+    GXSetChanMatColor(GX_COLOR0A0, cswp->base.color);
     GXSetNumTexGens(0);
     GXSetNumTevStages(1);
     GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR0A0);
@@ -854,7 +308,7 @@ static inline void shadowSetupPolygon(void) {
     GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
     GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_RASC);
 #if VERSION <= VERSION_DEMO_JP
-    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA); // no shadow alpha register in the demo
+    GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_RASA);
 #else
     GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_A0, GX_CA_RASA, GX_CA_ZERO);
 #endif
@@ -863,44 +317,8 @@ static inline void shadowSetupPolygon(void) {
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    GXSetCurrentMtx(0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_NONE);
-}
-
-/**
- * Starts rendering a projected or depth shadow texture:
- * saves the view, viewport and scissor, switches to the light's view and projection from the shadow config,
- * and for depth shadows writes depth only.
- */
-static inline void shadowBegin(ProjShadowWork* wp, BOOL depth) {
-    f32(*proj)[4];
-    ShadowConfig* cfg;
-    u16 size;
-    Vec pos;
-
-    GXInvalidateTexAll();
-    size = ShadowSizeTbl[((ShadowConfig*)((u8*)shadowConfig + wp->configIdx * sizeof(ShadowConfig)))->sizeIdx];
-    if (depth) {
-        GXSetColorUpdate(GX_FALSE);
-    }
-    GXGetViewportv(tmp_vp);
-    GXGetScissor(&tmp_sci[0], &tmp_sci[1], &tmp_sci[2], &tmp_sci[3]);
-    GXSetViewport(0.0f, 0.0f, size, size, 0.0f, 1.0f);
-    GXSetScissor(1, 1, size - 2, size - 2);
-    // FAKE: shadowBegin is inlined into shadowDisp; the comma expression and the byte-offset ShadowConfig reads
-    // (sizeIdx above, projType below) keep the target registers there; same addresses
-    cfg = (0, &shadowConfig[wp->configIdx]);
-    proj = wp->proj;
-    pos = cfg->pos;
-    C_MTXLookAt(wp->view, &pos, &cfg->up, &cfg->target);
-    if (cfg->projType == 0) {
-        C_MTXFrustum(proj, cfg->top, -cfg->top, cfg->left, -cfg->left, cfg->near, cfg->far);
-    } else {
-        C_MTXOrtho(proj, cfg->top, -cfg->top, cfg->left, -cfg->left, cfg->near, cfg->far);
-    }
-    GXSetProjection(wp->proj, ((ShadowConfig*)((u8*)shadowConfig + wp->configIdx * sizeof(ShadowConfig)))->projType);
-    PSMTXCopy(camGetCurPtr()->view, tmp_view);
-    PSMTXCopy(wp->view, camGetCurPtr()->view);
 }
 
 /**
@@ -912,16 +330,13 @@ static inline void shadowBegin(ProjShadowWork* wp, BOOL depth) {
 static void shadowDisp(CameraId cameraId, void* param) {
     DispEntry* disp;
     CameraEntry* cam;
+    ShadowConfig* cfg;
 
     disp = dispGetCurWork();
 
-    if (((cameraId == CAMERA_OFFSCREEN2) || (((u32)(cameraId - CAMERA_3D)) <= 1)) || (cameraId == CAMERA_3D_EFFECTB)) {
+    if (cameraId == CAMERA_OFFSCREEN2 || cameraId == CAMERA_3D || cameraId == CAMERA_3D_EFFECTA || cameraId == CAMERA_3D_EFFECTB) {
         shadowCharShadowDisp_Polygon(cameraId, param);
-        {
-            f32 t;
-            cam = camGetCurPtr();
-            t = cam->cameraAt.y * 20.0f;
-        }
+        cam = camGetCurPtr();
         shadowSetupPolygon();
         GXSetArray(GX_VA_POS, testKagePosArray, 12);
         GXClearVtxDesc();
@@ -938,18 +353,10 @@ static void shadowDisp(CameraId cameraId, void* param) {
         shadowCharShadowDisp_Texture(cameraId, param);
     } else if (cameraId == CAMERA_SHADOW) {
         switch (disp->renderMode) {
-            case 5: {
-                ShadowConfig* cfg;
+            case DISP_MODE_XLU_BEFORE_OPAQUE:
                 shadowCharShadowDisp_Collision(cameraId, param);
-                if ((cfg = &shadowConfig[cswp->configIdx])->follow == 1) {
-                    // FAKE: a read of cam in a never-taken branch keeps a cam web live from entry into this case, which
-                    // gives cfg the target register (r27); it never executes, so nothing reads the unset pointer
-                    {
-                        s32 gz = 0;
-                        if (gz != 0) {
-                            cam->cameraAt.z = cam->cameraAt.z;
-                        }
-                    }
+                if ((cfg = &shadowConfig[cswp->base.configIdx])->follow == 1) {
+                    cam->cameraAt.z = cam->cameraAt.z; // FAKE: self-assignment through cam, which is not set yet on this path (uninitialised pointer read); removing it changes codegen
                     cam = camGetPtr(CAMERA_3D);
                     cfg->pos.x = cam->cameraAt.x;
                     cfg->pos.y = 1000.0f + cam->cameraAt.y;
@@ -961,41 +368,74 @@ static void shadowDisp(CameraId cameraId, void* param) {
                     cfg->target.y = cam->cameraAt.y;
                     cfg->target.z = cam->cameraAt.z;
                 }
-                shadowBegin((ProjShadowWork*)cswp, FALSE);
+                projShadowBegin(cameraId, &cswp->base);
                 shadowCharShadowDisp_Projection(cameraId, param);
-                projShadowEnd(cameraId, cswp);
+                projShadowEnd(cameraId, &cswp->base);
                 break;
-            }
-            case 0:
-                shadowBegin(pswp, FALSE);
+            case DISP_MODE_OPAQUE:
+                projShadowBegin(cameraId, pswp);
                 break;
-            case 2:
+            case DISP_MODE_XLU:
                 projShadowEnd(cameraId, pswp);
-                shadowBegin((ProjShadowWork*)dswp, TRUE);
+                depthShadowBegin(cameraId, dswp);
                 break;
-            case 7:
+            case DISP_MODE_CUSTOM_LAST:
                 depthShadowEnd(cameraId, dswp);
                 break;
         }
     }
 }
 
-#pragma push
-// FAKE: keeps the dead stores that the target has; removing it changes the code
-#pragma opt_dead_assignments off
+/** Returns the number of shadow configs; no version calls it (JP demo map: UNUSED, 0x8; the same form as
+ * shadowGetConfig_DispModeNum, the count is the length of shadowConfig). */
+s32 shadowGetConfigNum(void) {
+    return 2;
+}
+
+/** The shadow config at index idx. */
+ShadowConfig* shadowGetConfig(s32 idx) {
+    return &shadowConfig[idx];
+}
+
+/** Sets up the character shadows: the 64-entry list (default mode 2, the cylinder shadow) and the texture buffer. */
+void shadowCharShadowInit(void) {
+    CharShadowWork* wp;
+    u32 size;
+
+    cswp->base.flags = 0;
+    cswp->base.drawCount = 0;
+    cswp->base.configIdx = 1;
+    cswp->base.color = (GXColor){0, 0, 0, 0x6E};
+    cswp->projection = 1;
+    cswp->defaultMode = SHADOW_MODE_CYLINDER;
+    cswp->defaultSizeY = 20.0f;
+    cswp->defaultEnabled = 1;
+    cswp->numEntries = 0;
+    cswp->entries = __memAlloc(HEAP_DEFAULT, sizeof(ShadowEntry) * SHADOW_ENTRY_MAX);
+    memset(cswp->entries, 0, sizeof(ShadowEntry) * SHADOW_ENTRY_MAX);
+    wp = shadowGetCharShadowWork();
+    size = GXGetTexBufferSize(ShadowSizeTbl[0], ShadowSizeTbl[0], GX_TF_IA4, GX_FALSE, 0);
+    wp->base.texBuffer = smartAlloc(size, SMART_GROUP_PERMANENT);
+}
+
+/** Per-frame: empties the character shadow list and its draw count for the new frame. */
+// Original name and size (0x28) from the JP demo map (UNUSED there: every call is inlined).
+void shadowCharShadowMain(void) {
+    cswp->numEntries = 0;
+    cswp->base.flags &= ~SHADOW_WORK_READY;
+    cswp->base.drawCount = 0;
+}
+
 /**
  * Ground-hit filter for placing shadows: skips collision that belongs to map objects flagged 0x800 (so shadows
  * fall through them).
  */
 static BOOL _filter(HitCheckQuery* query, HitEntry* hit) {
-    f32 t = 20.0f; // FAKE: dead store (kept by opt_dead_assignments off) that puts 20.0f at its target .sdata2 slot
-
     if ((hitGetAttr(hit) & HIT_ATTR_MOBJ) && (*(u32*)mobjHitObjPtrToPtr(hit) & MOBJ_FLAG_HIDDEN)) {
         return FALSE;
     }
     return TRUE;
 }
-#pragma pop
 
 /**
  * Places each new shadow for this frame: casts a ray 150 units down from the owner
@@ -1017,14 +457,15 @@ static void shadowCharShadowDisp_Collision(CameraId cameraId, void* param) {
         if (!entry->size) {
             continue;
         }
-        if (entry->flags & SHADOW_FLAG_PLACED) {
+        if (entry->flags & SHADOW_ENTRY_PLACED) {
             continue;
         }
-        if ((entry->mode != 3) && (entry->flags & SHADOW_FLAG_COLLISION)) {
+        if (entry->mode != SHADOW_MODE_PROJECTION && (entry->flags & SHADOW_ENTRY_GROUND)) {
             query.targetPos = entry->pos;
             query.targetPos.y += 1.0f;
             query.targetDir = (Vec){0.0f, -1.0f, 0.0f};
             query.targetDistance = 150.0f;
+
             q = &query;
             if (!hitCheckVecFilter(&query, _filter)) {
                 continue;
@@ -1039,22 +480,22 @@ static void shadowCharShadowDisp_Collision(CameraId cameraId, void* param) {
             m[1][2] = query.hitNormal.z * size;
             m[2][0] = 0.0f;
             m[2][1] = query.hitNormal.z * size;
-            m[2][2] = (-query.hitNormal.y) * size;
-            m[0][0] = size * (((-query.hitNormal.y) * query.hitNormal.y) - (query.hitNormal.z * query.hitNormal.z));
+            m[2][2] = -query.hitNormal.y * size;
+            m[0][0] = size * ((-query.hitNormal.y * query.hitNormal.y) - (query.hitNormal.z * query.hitNormal.z));
             m[0][1] = size * (query.hitNormal.x * query.hitNormal.y);
             m[0][2] = size * (query.hitNormal.x * query.hitNormal.z);
         } else {
             PSMTXTrans(m, entry->pos.x, 1.5f + entry->pos.y, entry->pos.z);
-            m[0][0] = (m[2][2] = entry->size);
+            m[0][0] = m[2][2] = entry->size;
             m[1][1] = entry->sizeY;
         }
-        entry->flags |= SHADOW_FLAG_PLACED;
+        entry->flags |= SHADOW_ENTRY_PLACED;
     }
 }
 
 /**
  * Renders the projected (mode 3) character shadows into the character shadow texture from the shadow light's
- * view, at their alpha.
+ * view, in a grey taken from the character shadow colour's alpha (white in battle).
  */
 static void shadowCharShadowDisp_Projection(CameraId cameraId, void* param) {
     ShadowConfig* cfg;
@@ -1065,12 +506,12 @@ static void shadowCharShadowDisp_Projection(CameraId cameraId, void* param) {
     s32 i;
     Mtx m;
     f32 w, h, fw, fh;
-    f32 cx, cz;
+    f32 cx, cy, cz;
 
-    cfg = &shadowConfig[(wp = cswp)->configIdx];
+    cfg = &shadowConfig[(wp = cswp)->base.configIdx];
     entry = wp->entries;
     view = camGetCurPtr()->view;
-    alpha = cswp->color.a;
+    alpha = cswp->base.color.a;
     shadowSetupPolygon();
     GXSetArray(GX_VA_POS, testKagePosArray, 12);
     GXClearVtxDesc();
@@ -1084,12 +525,15 @@ static void shadowCharShadowDisp_Projection(CameraId cameraId, void* param) {
     }
     GXSetZMode(GX_FALSE, GX_LEQUAL, GX_FALSE);
     for (i = 0; i < cswp->numEntries; i++, entry++) {
-        if (!entry->size)
+        if (!entry->size) {
             continue;
-        if (entry->mode != 3)
+        }
+        if (entry->mode != SHADOW_MODE_PROJECTION) {
             continue;
-        if (!(entry->flags & SHADOW_FLAG_PLACED))
+        }
+        if (!(entry->flags & SHADOW_ENTRY_PLACED)) {
             continue;
+        }
         PSMTXConcat(view, entry->mtx, m);
         GXLoadPosMtxImm(m, GX_PNMTX0);
         GXBegin(GX_TRIANGLESTRIP, GX_VTXFMT0, 6);
@@ -1099,9 +543,9 @@ static void shadowCharShadowDisp_Projection(CameraId cameraId, void* param) {
         GXPosition1x8(3);
         GXPosition1x8(4);
         GXPosition1x8(5);
-        wp->drawCount++;
+        wp->base.drawCount++;
     }
-    if (wp->drawCount) {
+    if (wp->base.drawCount) {
         Mtx44 proj;
         Mtx look;
         C_MTXOrtho(proj, cfg->top, -cfg->top, cfg->left, -cfg->left, cfg->near, cfg->far);
@@ -1125,39 +569,41 @@ static void shadowCharShadowDisp_Projection(CameraId cameraId, void* param) {
         fh = 0.2f * h;
         fw = 0.2f * w;
         GXBegin(GX_QUADS, GX_VTXFMT0, 16);
+
         cx = 0.0f;
+        cy = 0.0f;
         cz = 0.0f;
-        GXPosition3f32((cx - w), cx, (cz - h));
+        GXPosition3f32((cx - w), cy, (cz - h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32((cx + w), cx, (cz - h));
+        GXPosition3f32((cx + w), cy, (cz - h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32((cx + w), cx, fh + (cz - h));
+        GXPosition3f32((cx + w), cy, fh + (cz - h));
         GXColor4u8(0, 0, 0, 0);
-        GXPosition3f32((cx - w), cx, fh + (cz - h));
+        GXPosition3f32((cx - w), cy, fh + (cz - h));
         GXColor4u8(0, 0, 0, 0);
-        GXPosition3f32((cx - w), cx, (cz + h));
+        GXPosition3f32((cx - w), cy, (cz + h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32((cx + w), cx, (cz + h));
+        GXPosition3f32((cx + w), cy, (cz + h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32((cx + w), cx, (cz + h) - fh);
+        GXPosition3f32((cx + w), cy, (cz + h) - fh);
         GXColor4u8(0, 0, 0, 0);
-        GXPosition3f32((cx - w), cx, (cz + h) - fh);
+        GXPosition3f32((cx - w), cy, (cz + h) - fh);
         GXColor4u8(0, 0, 0, 0);
-        GXPosition3f32((cx - w), cx, (cz - h));
+        GXPosition3f32((cx - w), cy, (cz - h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32((cx - w), cx, (cz + h));
+        GXPosition3f32((cx - w), cy, (cz + h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32(fw + (cx - w), cx, (cz + h));
+        GXPosition3f32(fw + (cx - w), cy, (cz + h));
         GXColor4u8(0, 0, 0, 0);
-        GXPosition3f32(fw + (cx - w), cx, (cz - h));
+        GXPosition3f32(fw + (cx - w), cy, (cz - h));
         GXColor4u8(0, 0, 0, 0);
-        GXPosition3f32((cx + w), cx, (cz - h));
+        GXPosition3f32((cx + w), cy, (cz - h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32((cx + w), cx, (cz + h));
+        GXPosition3f32((cx + w), cy, (cz + h));
         GXColor4u8(0, 0, 0, 0xFF);
-        GXPosition3f32((cx + w) - fw, cx, (cz + h));
+        GXPosition3f32((cx + w) - fw, cy, (cz + h));
         GXColor4u8(0, 0, 0, 0);
-        GXPosition3f32((cx + w) - fw, cx, (cz - h));
+        GXPosition3f32((cx + w) - fw, cy, (cz - h));
         GXColor4u8(0, 0, 0, 0);
     }
 }
@@ -1177,14 +623,18 @@ static void shadowCharShadowDisp_Polygon(CameraId cameraId, void* param) {
     GXSetVtxDesc(GX_VA_POS, GX_INDEX8);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
     for (i = 0; i < cswp->numEntries; i++, entry++) {
-        if (!entry->size)
+        if (!entry->size) {
             continue;
-        if (entry->mode != 0)
+        }
+        if (entry->mode != SHADOW_MODE_POLYGON) {
             continue;
-        if (!(entry->flags & SHADOW_FLAG_PLACED))
+        }
+        if (!(entry->flags & SHADOW_ENTRY_PLACED)) {
             continue;
-        if (entry->camId != cameraId)
+        }
+        if (entry->camId != cameraId) {
             continue;
+        }
         if (cameraId == CAMERA_OFFSCREEN2) {
             sysWaitDrawSync();
             GXClearBoundingBox();
@@ -1208,7 +658,7 @@ static void shadowCharShadowDisp_Polygon(CameraId cameraId, void* param) {
 
 /** Sets the GX material colour to the character shadow colour. */
 static inline void shadowSetMat(void) {
-    GXSetChanMatColor(GX_COLOR0A0, cswp->color);
+    GXSetChanMatColor(GX_COLOR0A0, cswp->base.color);
 }
 
 /**
@@ -1243,7 +693,7 @@ static void shadowCharShadowDisp_Texture(CameraId cameraId, void* param) {
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_FALSE);
     GXSetZCompLoc(GX_TRUE);
     GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_AND, GX_ALWAYS, 0);
-    GXSetCurrentMtx(0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetCullMode(GX_CULL_NONE);
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
@@ -1252,14 +702,18 @@ static void shadowCharShadowDisp_Texture(CameraId cameraId, void* param) {
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_F32, 0);
     size = 2.5f;
     for (i = 0; i < cswp->numEntries; i++, entry++) {
-        if (!entry->size)
+        if (!entry->size) {
             continue;
-        if (entry->mode != 1)
+        }
+        if (entry->mode != SHADOW_MODE_TEXTURE) {
             continue;
-        if (!(entry->flags & SHADOW_FLAG_PLACED))
+        }
+        if (!(entry->flags & SHADOW_ENTRY_PLACED)) {
             continue;
-        if (entry->camId != cameraId)
+        }
+        if (entry->camId != cameraId) {
             continue;
+        }
         if (cameraId == CAMERA_OFFSCREEN2) {
             sysWaitDrawSync();
             GXClearBoundingBox();
@@ -1283,43 +737,43 @@ static void shadowCharShadowDisp_Texture(CameraId cameraId, void* param) {
     }
 }
 
-// FAKE: keeps the following function(s) out of line as in the target; removing it changes the code
-#pragma dont_inline on
 /**
  * Draws one shadow volume as a cylinder (top, bottom and sides) for stencil-like darkening of whatever it
  * intersects, with the fade of the entry's volume and decay values unless flag 4 asks for none.
  */
 static void cylinder(ShadowEntry* entry) {
     f32 inner;
-    f32 a;
-    f32 b;
+    f32 volumeAlpha;
+    f32 decayAlpha;
     u8 alpha;
+    CharShadowWork* wp;
 
-    if (entry->flags & SHADOW_FLAG_NO_DECAY) {
+    if (entry->flags & SHADOW_ENTRY_NO_DECAY) {
         GXSetArray(GX_VA_CLR0, color_tbl_nodecay, 4);
         GXCallDisplayList(cylinder_dl_top, 0x40);
         GXCallDisplayList(cylinder_dl_bottom, 0x40);
         GXCallDisplayList(cylinder_dl_side, 0x40);
         return;
     }
+    wp = shadowGetCharShadowWork();
     inner = 1.0f - entry->decay2;
-    a = (cswp->color.a * entry->volume) / 255.0f;
-    b = a * entry->decay;
+    volumeAlpha = (wp->base.color.a * entry->volume) / 255.0f;
+    decayAlpha = volumeAlpha * entry->decay;
     if (inner < 0.0f) {
         inner = 0.0f;
     } else if (inner > 1.0f) {
         inner = 1.0f;
     }
-    if (a <= 0.0f) {
+    if (volumeAlpha <= 0.0f) {
         return;
     }
-    if (b <= 0.0f) {
-        b = 0.0f;
+    if (decayAlpha <= 0.0f) {
+        decayAlpha = 0.0f;
     }
-    if (b >= 1.0f) {
-        b = 1.0f;
+    if (decayAlpha >= 1.0f) {
+        decayAlpha = 1.0f;
     }
-    alpha = 255.0f * b;
+    alpha = 255.0f * decayAlpha;
     GXSetArray(GX_VA_CLR0, color_tbl, 4);
     if (inner != 0.0f) {
         GXCallDisplayList(cylinder_dl_top_inside, 0x40);
@@ -1330,18 +784,26 @@ static void cylinder(ShadowEntry* entry) {
     GXCallDisplayList(cylinder_dl_bottom, 0x40);
     GXCallDisplayList(cylinder_dl_side, 0x40);
 }
-#pragma dont_inline reset
+
+/**
+ * Draws one shadow volume as a cube (top, bottom and sides) with the cube's colour table.
+ * Original name and size (0x60) from the JP demo map (UNUSED there, between cylinderShadowDraw and cylinder:
+ * every call is inlined). Whether it took the entry like cylinder is not known; it reads nothing from it.
+ */
+static void cube(void) {
+    GXSetArray(GX_VA_CLR0, color_tbl_cube, 4);
+    GXCallDisplayList(cube_dl_top, 0x40);
+    GXCallDisplayList(cube_dl_bottom, 0x20);
+    GXCallDisplayList(cube_dl_side, 0x20);
+}
 
 /** Draws a shadow's volume shape: a cube for type 1, otherwise the cylinder. */
 static inline void shadowDrawVolume(ShadowEntry* entry) {
     switch (entry->type) {
-        case 1:
-            GXSetArray(GX_VA_CLR0, color_tbl_cube, 4);
-            GXCallDisplayList(cube_dl_top, 0x40);
-            GXCallDisplayList(cube_dl_bottom, 0x20);
-            GXCallDisplayList(cube_dl_side, 0x20);
+        case SHADOW_TYPE_CUBE:
+            cube();
             break;
-        case 0:
+        case SHADOW_TYPE_CYLINDER:
         default:
             cylinder(entry);
             break;
@@ -1373,14 +835,18 @@ static void cylinderShadowDraw(CameraId cameraId, void* param) {
 
     view = camGetCurPtr()->view;
     for (i = 0; i < cswp->numEntries; i++, entry++) {
-        if (!entry->size)
+        if (!entry->size) {
             continue;
-        if (entry->mode != 2)
+        }
+        if (entry->mode != SHADOW_MODE_CYLINDER) {
             continue;
-        if (!(entry->flags & SHADOW_FLAG_PLACED))
+        }
+        if (!(entry->flags & SHADOW_ENTRY_PLACED)) {
             continue;
-        if (entry->camId != cameraId)
+        }
+        if (entry->camId != cameraId) {
             continue;
+        }
         if (cameraId == CAMERA_OFFSCREEN2) {
             sysWaitDrawSync();
             GXClearBoundingBox();
@@ -1420,26 +886,29 @@ static void cylinderShadowDraw(CameraId cameraId, void* param) {
     }
 }
 
-/** Zero vector among the shadow driver's constants; nothing reads it. */
-const Vec shadow_unused_zero_vec0 = {0.0f, 0.0f, 0.0f};
-
 /**
- * Adds a shadow at (x, y, z) with radius size for this frame only, in the default mode;
- * returns its id for the shadowSet* calls. Characters, items and icons call it every frame they want a shadow.
+ * Adds a character shadow (type cylinder) of size `size` at (x, y, z) for this frame on the 3D camera, with the default
+ * sizeY and mode and, when defaultEnabled is set, ground placement; returns its id.
  */
 s32 shadowEntry(f32 x, f32 y, f32 z, f32 size) {
+    // FAKE: unused: a stand-in for the (Vec){x, y, z} template of the stripped shadowEntryAllSetting (JP demo map:
+    // UNUSED, 0xd4, just before shadowEntry), whose body is not known. The map's five Vec templates of these
+    // functions are evenly numbered: shadowEntryAllSetting, shadowEntry, shadowEntryOffscreen, shadowEntryMode and
+    // shadowSetPos, one compound literal each. The local takes no stack space of its own (shadowEntry's frame is
+    // 32 bytes, as in shadowEntryOffscreen, which has no such local).
+    Vec unused = {0.0f, 0.0f, 0.0f};
     s32 id = cswp->numEntries;
     ShadowEntry* entry = &cswp->entries[id];
 
     entry->flags = 0;
     if (cswp->defaultEnabled) {
-        entry->flags |= SHADOW_FLAG_COLLISION;
+        entry->flags |= SHADOW_ENTRY_GROUND;
     }
     entry->pos = (Vec){x, y, z};
     entry->size = size;
     entry->sizeY = cswp->defaultSizeY;
     entry->mode = cswp->defaultMode;
-    entry->type = 0;
+    entry->type = SHADOW_TYPE_CYLINDER;
     entry->offscreenId = -1;
     entry->camId = CAMERA_3D;
     entry->volume = 1.0f;
@@ -1452,8 +921,35 @@ s32 shadowEntry(f32 x, f32 y, f32 z, f32 size) {
     return id;
 }
 
-/** Zero vector among the shadow driver's constants; nothing reads it. */
-const Vec shadow_unused_zero_vec1 = {0.0f, 0.0f, 0.0f};
+/** Adds a shadow for this frame like shadowEntry that also draws into offscreen buffer offscreenId. */
+// Original name and size (0xe4) from the JP demo map (UNUSED there: nothing calls it), between shadowEntry and
+// shadowEntryMode: shadowEntry's body (the same size) with offscreenId (-1 there) from a parameter placed first as in
+// shadowEntryMode; cylinderShadowDraw reports the drawn box to that buffer. Its camera (CAMERA_3D as in shadowEntry)
+// is not fixed by the size.
+s32 shadowEntryOffscreen(s32 offscreenId, f32 x, f32 y, f32 z, f32 size) {
+    s32 id = cswp->numEntries;
+    ShadowEntry* entry = &cswp->entries[id];
+
+    entry->flags = 0;
+    if (cswp->defaultEnabled) {
+        entry->flags |= SHADOW_ENTRY_GROUND;
+    }
+    entry->pos = (Vec){x, y, z};
+    entry->size = size;
+    entry->sizeY = cswp->defaultSizeY;
+    entry->mode = cswp->defaultMode;
+    entry->type = SHADOW_TYPE_CYLINDER;
+    entry->offscreenId = offscreenId;
+    entry->camId = CAMERA_3D;
+    entry->volume = 1.0f;
+    entry->decay = 0.2f;
+    entry->decay2 = 0.4f;
+#if VERSION >= VERSION_JP
+    entry->alpha = 0xFF;
+#endif
+    cswp->numEntries++;
+    return id;
+}
 
 /**
  * Adds a shadow for this frame like shadowEntry with an explicit mode:
@@ -1465,13 +961,13 @@ s32 shadowEntryMode(s32 mode, f32 x, f32 y, f32 z, f32 size) {
 
     entry->flags = 0;
     if (cswp->defaultEnabled) {
-        entry->flags |= SHADOW_FLAG_COLLISION;
+        entry->flags |= SHADOW_ENTRY_GROUND;
     }
     entry->pos = (Vec){x, y, z};
     entry->size = size;
     entry->sizeY = cswp->defaultSizeY;
     entry->mode = mode;
-    entry->type = 0;
+    entry->type = SHADOW_TYPE_CYLINDER;
     entry->offscreenId = -1;
     entry->camId = CAMERA_3D;
     entry->volume = 1.0f;
@@ -1484,9 +980,6 @@ s32 shadowEntryMode(s32 mode, f32 x, f32 y, f32 z, f32 size) {
     return id;
 }
 
-/** Zero vector among the shadow driver's constants; nothing reads it. */
-const Vec shadow_unused_zero_vec2 = {0.0f, 0.0f, 0.0f};
-
 /** Sets the volume shape of shadow id: 0 cylinder, 1 cube. */
 void shadowSetType(s32 id, u8 type) {
     ShadowEntry* entry = &cswp->entries[id];
@@ -1494,12 +987,31 @@ void shadowSetType(s32 id, u8 type) {
 }
 
 #if VERSION >= VERSION_JP
-/** Sets the alpha of shadow id (despite the name); the demo has no per-shadow alpha. */
-void U_shadowSetMode(s32 id, u8 alpha) {
+/**
+ * Sets the alpha of shadow id (despite the name). The early demos have no per-shadow alpha; their shadowSetMode
+ * (JP demo map: UNUSED, 0x18, stripped) did something else, and its body there is unknown.
+ */
+void shadowSetMode(s32 id, u8 alpha) {
     ShadowEntry* entry = &cswp->entries[id];
     entry->alpha = alpha;
 }
 #endif
+
+/** Moves shadow id to (x, y, z). */
+// shadowSetPos and shadowGetPos: original names and sizes (0x60, 0x30) from the JP demo map (UNUSED there: nothing
+// calls them), after shadowSetType in this order. shadowSetPos is shadowEntry's position store (0x60; three field
+// stores are 0x20) and owns the Vec template the map numbers after shadowEntryMode's. shadowGetPos copies the
+// position out (0x30; three f32 out-pointers are 0x2c); a Vec return value is also 0x30, the out-pointer is a guess.
+void shadowSetPos(s32 id, f32 x, f32 y, f32 z) {
+    ShadowEntry* entry = &cswp->entries[id];
+    entry->pos = (Vec){x, y, z};
+}
+
+/** Copies the position of shadow id to pos. */
+void shadowGetPos(s32 id, Vec* pos) {
+    ShadowEntry* entry = &cswp->entries[id];
+    *pos = entry->pos;
+}
 
 /** Sets how a cylinder shadow fades with height: its volume and the two decay factors. */
 void shadowSetVolumeDecay(s32 id, f32 volume, f32 decay, f32 decay2) {
@@ -1509,26 +1021,61 @@ void shadowSetVolumeDecay(s32 id, f32 volume, f32 decay, f32 decay2) {
     entry->decay2 = decay2;
 }
 
+/** Reads back what shadowSetVolumeDecay set; each output may be NULL. */
+// Original name and size (0x44) from the JP demo map (UNUSED there: nothing calls it); the getter of
+// shadowSetVolumeDecay's three fields.
+void shadowGetVolumeDecay(s32 id, f32* volume, f32* decay, f32* decay2) {
+    ShadowEntry* entry = &cswp->entries[id];
+    if (volume != NULL) {
+        *volume = entry->volume;
+    }
+    if (decay != NULL) {
+        *decay = entry->decay;
+    }
+    if (decay2 != NULL) {
+        *decay2 = entry->decay2;
+    }
+}
+
 /** Sets the radius of shadow id. */
 void shadowSetSize(s32 id, f32 size) {
     ShadowEntry* entry = &cswp->entries[id];
     entry->size = size;
 }
 
+/** The radius of shadow id. */
+// Original name and size (0x18) from the JP demo map (UNUSED there: nothing calls it); the getter of
+// shadowSetSize's field.
+f32 shadowGetSize(s32 id) {
+    ShadowEntry* entry = &cswp->entries[id];
+    return entry->size;
+}
+
+/** Sets the height of the shadow volume of shadow id (its sizeY, the y scale of the drawn volume). */
+// Original name and size (0x18) from the JP demo map (UNUSED there: nothing calls it), between shadowGetSize and
+// shadowSetCamId: shadowSetSize's form; sizeY is the only entry value besides the position that no kept setter
+// changes, and the collision draw uses it as the volume's y scale.
+void shadowSetVolumeHeight(s32 id, f32 height) {
+    ShadowEntry* entry = &cswp->entries[id];
+    entry->sizeY = height;
+}
+
 /** Sets the camera shadow id is drawn with. */
-void shadowSetCamId(s32 id, s16 camId) {
+void shadowSetCamId(s32 id, s32 camId) {
     ShadowEntry* entry = &cswp->entries[id];
     entry->camId = camId;
 }
 
-/** Turns ground placement on or off for shadow id (SHADOW_FLAG_COLLISION); off keeps the shadow at the owner's position. */
+/**
+ * Turns ground placement (SHADOW_ENTRY_GROUND: the shadow drops to the floor found below it) on or off for shadow id.
+ */
 void shadowSetCollision(s32 id, BOOL enable) {
-    s32 off = id * sizeof(ShadowEntry);
-    ShadowEntry* e = cswp->entries;
+    ShadowEntry* e = &cswp->entries[id];
+
     if (enable) {
-        ((u16*)((u8*)e + off))[0] |= SHADOW_FLAG_COLLISION;
+        e->flags |= SHADOW_ENTRY_GROUND;
     } else {
-        ((u16*)((u8*)e + off))[0] &= ~SHADOW_FLAG_COLLISION;
+        e->flags &= ~SHADOW_ENTRY_GROUND;
     }
 }
 
@@ -1537,26 +1084,56 @@ void shadowFlagOn(s32 id, u16 flags) {
     cswp->entries[id].flags |= flags;
 }
 
+/** Clears flag bits on shadow id. */
+// Original name and size (0x1c) from the JP demo map (UNUSED there: nothing calls it); shadowFlagOn's counterpart.
+void shadowFlagOff(s32 id, u16 flags) {
+    cswp->entries[id].flags &= ~flags;
+}
+
 /** Returns the character shadow texture rendered this frame, or NULL if none was. */
 GXTexObj* shadowGetCharShadowTexObj(void) {
-    if (cswp->flags & SHADOW_WORK_DRAWN) {
-        return smartTexObj(&cswp->texObj, (void**)cswp->texBuffer);
+    if (cswp->base.flags & SHADOW_WORK_READY) {
+        return smartTexObj(&cswp->base.texObj, &cswp->base.texBuffer->address);
     }
     return NULL;
 }
 
 f32 (*shadowGetCharShadowProjTexMtx(void))[4] {
-    return cswp->texMtx;
+    return cswp->base.texMtx;
 }
 
 /** Returns the character shadow colour (semi-transparent black by default). */
 GXColor shadowGetCharShadowColor(void) {
-    return cswp->color;
+    return cswp->base.color;
+}
+
+/** Sets whether character shadows are projected with the shadow camera. */
+// Original name and size (0xc) from the JP demo map (UNUSED there: nothing calls it); the setter of
+// shadowGetCharShadowProjection's field.
+void shadowSetCharShadowProjection(s32 projection) {
+    cswp->projection = projection;
 }
 
 /** Returns whether character shadows are projected with the shadow camera (shadowMain then queues that pass). */
 s32 shadowGetCharShadowProjection(void) {
     return cswp->projection;
+}
+
+/** Sets up the depth shadow work (config 0, colour black at alpha 0x40) and the 8-bit and 16-bit ramp textures. */
+void shadowDepthShadowInit(void) {
+    dswp->flags = SHADOW_WORK_ALLOC;
+    dswp->drawCount = 0;
+    dswp->configIdx = 0;
+    dswp->color = (GXColor){0, 0, 0, 0x40};
+    CreateRampTex8(&rampTex8);
+    CreateRampTex16(&rampTex16);
+}
+
+/** Per-frame: clears the depth shadow's ready flag and draw count for the new frame. */
+// Original name and size (0x20) from the JP demo map (UNUSED there: every call is inlined).
+void shadowDepthShadowMain(void) {
+    dswp->flags &= ~SHADOW_WORK_READY;
+    dswp->drawCount = 0;
 }
 
 /** Returns the 16x16 8-bit ramp texture used to compare depths for depth shadows. */
@@ -1576,8 +1153,8 @@ void shadowDepthShadowDrawCountUp(void) {
 
 /** Returns the depth shadow texture rendered this frame, or NULL if none was. */
 GXTexObj* shadowGetDepthShadowTexObj(void) {
-    if (dswp->flags & SHADOW_WORK_DRAWN) {
-        return smartTexObj(&dswp->texObj, (void**)dswp->texBuffer);
+    if (dswp->flags & SHADOW_WORK_READY) {
+        return smartTexObj(&dswp->texObj, &dswp->texBuffer->address);
     }
     return NULL;
 }
@@ -1588,14 +1165,6 @@ f32 (*shadowGetDepthShadowDepthMtx(void))[4] {
 
 f32 (*shadowGetDepthShadowProjTexMtx(void))[4] {
     return dswp->texMtx;
-}
-
-/** Resets the depth shadow work: config 0, colour black at alpha 0x40. */
-static inline void depthShadowInit(void) {
-    dswp->flags = SHADOW_WORK_ALLOC_TEX;
-    dswp->drawCount = 0;
-    dswp->configIdx = 0;
-    dswp->color = (GXColor){0, 0, 0, 0x40};
 }
 
 /** Returns the colour to subtract for the depth shadow: the inverse of its colour scaled by its alpha. */
@@ -1613,6 +1182,21 @@ ShadowConfig* shadowGetDepthShadowConfig(void) {
     return &shadowConfig[dswp->configIdx];
 }
 
+/** Resets the projected shadow work: config 0, colour black at alpha 0x40. */
+void shadowProjShadowInit(void) {
+    pswp->flags = SHADOW_WORK_ALLOC;
+    pswp->drawCount = 0;
+    pswp->configIdx = 0;
+    pswp->color = (GXColor){0, 0, 0, 0x40};
+}
+
+/** Per-frame: clears the projected shadow's ready flag and draw count for the new frame. */
+// Original name and size (0x20) from the JP demo map (UNUSED there: every call is inlined).
+void shadowProjShadowMain(void) {
+    pswp->flags &= ~SHADOW_WORK_READY;
+    pswp->drawCount = 0;
+}
+
 /** Counts one object drawn into the projected shadow this frame; with none, projShadowEnd skips the texture copy. */
 void shadowProjShadowDrawCountUp(void) {
     pswp->drawCount++;
@@ -1620,22 +1204,14 @@ void shadowProjShadowDrawCountUp(void) {
 
 /** Returns the projected shadow texture rendered this frame, or NULL if none was. */
 GXTexObj* shadowGetProjShadowTexObj(void) {
-    if (pswp->flags & SHADOW_WORK_DRAWN) {
-        return smartTexObj(&pswp->texObj, (void**)pswp->texBuffer);
+    if (pswp->flags & SHADOW_WORK_READY) {
+        return smartTexObj(&pswp->texObj, &pswp->texBuffer->address);
     }
     return NULL;
 }
 
 f32 (*shadowGetProjShadowProjTexMtx(void))[4] {
     return pswp->texMtx;
-}
-
-/** Resets the projected shadow work: config 0, colour black at alpha 0x40. */
-static inline void projShadowInit(void) {
-    pswp->flags = SHADOW_WORK_ALLOC_TEX;
-    pswp->drawCount = 0;
-    pswp->configIdx = 0;
-    pswp->color = (GXColor){0, 0, 0, 0x40};
 }
 
 /** Returns the projected shadow colour. */
@@ -1652,25 +1228,25 @@ ShadowConfig* shadowGetProjShadowConfig(void) {
  * Builds the texture matrices that map world positions into a shadow texture (and, for depth shadows, into the
  * depth ramp) from the shadow light's view and projection.
  */
-static inline void shadowCalcTexMtx(ProjShadowWork* wp, Mtx texMtx, Mtx depthMtx) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+// It keeps `inline`: as a plain function -inline auto leaves it out of line here (the link changes).
+inline void GetTexProjMtx(ProjShadowWork* wp, Mtx texMtx, Mtx depthMtx) {
 #if VERSION <= VERSION_DEMO_JP
     u32 is16;
-    ShadowConfig* cfg = &shadowConfig[wp->configIdx];
-    Mtx m;
-    Mtx dm;
-    f32 n, f, d, scale;
-
-    is16 = cfg->format > 2;
-#else
-    ShadowConfig* cfg = &shadowConfig[wp->configIdx];
-    u32 is16 = cfg->format > 2;
-    Mtx m;
-    Mtx dm;
-    f32 n, f, d, scale;
 #endif
+    ShadowConfig* cfg = &shadowConfig[wp->configIdx];
+#if VERSION >= VERSION_JP
+    u32 is16 = cfg->format > 2;
+#endif
+    Mtx m;
+    Mtx dm;
+    f32 n, f, d, scale;
 
+#if VERSION <= VERSION_DEMO_JP
+    is16 = cfg->format > 2;
+#endif
     if (texMtx) {
-        if (cfg->projType == 0) {
+        if (cfg->projType == GX_PERSPECTIVE) {
             C_MTXLightFrustum(m, -cfg->top, cfg->top, cfg->left, -cfg->left, cfg->near, 0.5f, 0.5f, 0.5f, 0.5f);
         } else {
             C_MTXLightOrtho(m, -cfg->top, cfg->top, cfg->left, -cfg->left, 0.5f, 0.5f, 0.5f, 0.5f);
@@ -1683,7 +1259,7 @@ static inline void shadowCalcTexMtx(ProjShadowWork* wp, Mtx texMtx, Mtx depthMtx
         d = f - n;
         PSMTXScale(dm, 0.0f, 0.0f, 0.0f);
         scale = is16 ? 256.0f : 16.0f;
-        if (cfg->projType == 0) {
+        if (cfg->projType == GX_PERSPECTIVE) {
             dm[0][2] = f / d;
             dm[0][3] = (f * n) / d;
             dm[1][2] = dm[0][2] * scale;
@@ -1701,9 +1277,114 @@ static inline void shadowCalcTexMtx(ProjShadowWork* wp, Mtx texMtx, Mtx depthMtx
     }
 }
 
-/** Puts back the current camera's view matrix saved by shadowBegin. */
+/** Sets a light camera's view matrix and projection (perspective or orthographic) from shadow config cfg. */
+void SetCamera(ShadowConfig* cfg, Mtx view, Mtx44 proj) {
+    Vec pos = cfg->pos;
+
+    C_MTXLookAt(view, &pos, &cfg->up, &cfg->target);
+    if (cfg->projType == GX_PERSPECTIVE) {
+        C_MTXFrustum(proj, cfg->top, -cfg->top, cfg->left, -cfg->left, cfg->near, cfg->far);
+    } else {
+        C_MTXOrtho(proj, cfg->top, -cfg->top, cfg->left, -cfg->left, cfg->near, cfg->far);
+    }
+}
+
+/** Makes the 8-bit ramp texture (16x16 I8, texel value = index in the 4x4-tiled layout). */
+void CreateRampTex8(GXTexObj* obj) {
+    void* ramp;
+    u32 size;
+    u32 i;
+
+    size = GXGetTexBufferSize(0x10, 0x10, GX_TF_I8, GX_FALSE, 0);
+    ramp = __memAlloc(HEAP_DEFAULT, GXGetTexBufferSize(0x10, 0x10, GX_TF_I8, GX_FALSE, 0));
+    for (i = 0; i < 256; i++) {
+        ((u8*)ramp)[(((i & 0x3) * 8) + (((i & 0xC) * 16) + (((i & 0x80) / 4) + ((i & 0x70) / 16))))] = i;
+    }
+    GXInitTexObj(obj, ramp, 0x10, 0x10, GX_TF_I8, GX_CLAMP, GX_REPEAT, GX_FALSE);
+    GXInitTexObjLOD(obj, GX_NEAR, GX_NEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
+    DCFlushRange(ramp, size);
+}
+
+/** Makes the 16-bit ramp texture (256x256 IA8, texel value = index in the 4x4-tiled layout). */
+void CreateRampTex16(GXTexObj* obj) {
+    void* ramp;
+    u32 size;
+    u32 i;
+
+    size = GXGetTexBufferSize(0x100, 0x100, GX_TF_IA8, GX_FALSE, 0);
+    ramp = __memAlloc(HEAP_DEFAULT, GXGetTexBufferSize(0x100, 0x100, GX_TF_IA8, GX_FALSE, 0));
+    for (i = 0; i < 0x10000; i++) {
+        ((u16*)ramp)[(((i & 0x3) * 4) + (((i & 0xFC) * 256) + (((i & 0xFC00) / 64) + ((i & 0x300) / 256))))] = i;
+    }
+    GXInitTexObj(obj, ramp, 0x100, 0x100, GX_TF_IA8, GX_CLAMP, GX_REPEAT, GX_FALSE);
+    GXInitTexObjLOD(obj, GX_NEAR, GX_NEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
+    DCFlushRange(ramp, size);
+}
+
+/** The shadow texture size (in texels) of size index idx (ShadowSizeTbl). */
+// Original name and size (0x10) from the JP demo map (UNUSED there: nothing calls it), before the stripped
+// shadowGetConfig_ShadowTexSizeNum and shadowGetConfig_DispMode; the texture-size counterpart of
+// shadowGetConfig_DispMode. Returning the table itself, as shadowGetConfig_DispMode does, is 0x8; one entry of the
+// small-data u16 table is 0x10 (as u16 or s32, so the return type is not fixed by the size).
+u16 shadowGetConfig_ShadowTexSize(s32 idx) {
+    return ShadowSizeTbl[idx];
+}
+
+/** Returns the number of shadow texture sizes; no version calls it (JP demo map: UNUSED, 0x8; the same form as
+ * shadowGetConfig_DispModeNum, the count is the length of ShadowSizeTbl). */
+s32 shadowGetConfig_ShadowTexSizeNum(void) {
+    return 4;
+}
+
+/**
+ * Returns the labels of the six depth shadow display modes; no version calls it (JP demo map: UNUSED, 0xc). The
+ * map names its table DispModeMsg$893, a function-local static; the early demos keep the table in .data, the later
+ * versions only its strings.
+ */
+const char** shadowGetConfig_DispMode(void) {
+    static const char* DispModeMsg[6] = {
+        "result scene (8bit depth)",
+        "actual depth from the light (8bit depth)",
+        "projected shadow depth map (8bit depth)",
+        "result scene (16bit depth)",
+        "actual depth from the light (16bit depth)",
+        "projected shadow depth map (16bit depth)",
+    };
+
+    return DispModeMsg;
+}
+
+/** Returns the number of depth shadow display modes; no version calls it (JP demo map: UNUSED, 0x8). */
+s32 shadowGetConfig_DispModeNum(void) {
+    return 6;
+}
+
+/** Puts back the current camera's view matrix saved by projShadowBegin and depthShadowBegin. */
 static inline void shadowRestoreView(void) {
     PSMTXCopy(tmp_view, camGetCurPtr()->view);
+}
+
+/**
+ * Starts a projected shadow pass: saves the view, viewport and scissor and switches to the light's view and
+ * projection from the shadow config.
+ */
+void projShadowBegin(CameraId cameraId, void* param) {
+    ProjShadowWork* wp = param;
+    u16 size;
+
+    GXInvalidateTexAll();
+
+    size = ShadowSizeTbl[shadowGetConfig(wp->configIdx)->sizeIdx];
+    GXGetViewportv(tmp_vp);
+    GXGetScissor(&tmp_sci[0], &tmp_sci[1], &tmp_sci[2], &tmp_sci[3]);
+    GXSetViewport(0.0f, 0.0f, size, size, 0.0f, 1.0f);
+    GXSetScissor(1, 1, size - 2, size - 2);
+
+    SetCamera(shadowGetConfig(wp->configIdx), wp->view, wp->proj);
+
+    GXSetProjection(wp->proj, shadowGetConfig(wp->configIdx)->projType);
+    PSMTXCopy(camGetCurPtr()->view, tmp_view);
+    PSMTXCopy(wp->view, camGetCurPtr()->view);
 }
 
 /**
@@ -1723,13 +1404,13 @@ static void projShadowEnd(CameraId cameraId, void* param) {
     }
     cfg = &shadowConfig[wp->configIdx];
     size = ShadowSizeTbl[cfg->sizeIdx];
-    if (wp->flags & SHADOW_WORK_ALLOC_TEX) {
-        wp->texBuffer = smartAlloc((wp->flags & SHADOW_WORK_HALF_SIZE) ? GXGetTexBufferSize(size / 2, size / 2, GX_TF_IA4, GX_FALSE, 0)
-                                                                       : GXGetTexBufferSize(size, size, GX_TF_IA4, GX_FALSE, 0),
+    if (wp->flags & SHADOW_WORK_ALLOC) {
+        wp->texBuffer = smartAlloc((wp->flags & SHADOW_WORK_HALF_SIZE_UNUSED) ? GXGetTexBufferSize(size / 2, size / 2, GX_TF_IA4, GX_FALSE, SMART_GROUP_PERMANENT)
+                                                                              : GXGetTexBufferSize(size, size, GX_TF_IA4, GX_FALSE, 0),
                                    3);
     }
     GXSetTexCopySrc(0, 0, size, size);
-    if (wp->flags & SHADOW_WORK_HALF_SIZE) {
+    if (wp->flags & SHADOW_WORK_HALF_SIZE_UNUSED) {
         GXSetTexCopyDst(size / 2, size / 2, GX_TF_IA4, GX_TRUE);
     } else {
         GXSetTexCopyDst(size, size, GX_TF_IA4, GX_FALSE);
@@ -1737,20 +1418,44 @@ static void projShadowEnd(CameraId cameraId, void* param) {
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
     GXCopyTex(wp->texBuffer->address, GX_TRUE);
     GXPixModeSync();
-    if (wp->flags & SHADOW_WORK_HALF_SIZE) {
+    if (wp->flags & SHADOW_WORK_HALF_SIZE_UNUSED) {
         GXInitTexObj(&wp->texObj, wp->texBuffer->address, size / 2, size / 2, GX_TF_IA4, GX_CLAMP, GX_CLAMP, GX_FALSE);
     } else {
         GXInitTexObj(&wp->texObj, wp->texBuffer->address, size, size, GX_TF_IA4, GX_CLAMP, GX_CLAMP, GX_FALSE);
     }
     GXInitTexObjLOD(&wp->texObj, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    shadowCalcTexMtx(wp, wp->texMtx, NULL);
-    wp->flags |= SHADOW_WORK_DRAWN;
+    GetTexProjMtx(wp, wp->texMtx, NULL);
+    wp->flags |= SHADOW_WORK_READY;
+}
+
+/**
+ * Starts the depth shadow pass like projShadowBegin, with colour writes off (depth only).
+ */
+void depthShadowBegin(CameraId cameraId, void* param) {
+    ProjShadowWork* wp = param;
+    u16 size;
+
+    GXInvalidateTexAll();
+
+    size = ShadowSizeTbl[shadowGetConfig(wp->configIdx)->sizeIdx];
+    GXSetColorUpdate(GX_FALSE);
+    GXGetViewportv(tmp_vp);
+    GXGetScissor(&tmp_sci[0], &tmp_sci[1], &tmp_sci[2], &tmp_sci[3]);
+    GXSetViewport(0.0f, 0.0f, size, size, 0.0f, 1.0f);
+    GXSetScissor(1, 1, size - 2, size - 2);
+
+    SetCamera(shadowGetConfig(wp->configIdx), wp->view, wp->proj);
+
+    GXSetProjection(wp->proj, shadowGetConfig(wp->configIdx)->projType);
+    PSMTXCopy(camGetCurPtr()->view, tmp_view);
+    PSMTXCopy(wp->view, camGetCurPtr()->view);
 }
 
 /**
  * Finishes the depth shadow pass: restores the camera state and colour writes,
  * and if anything was drawn copies the depth buffer into the depth shadow texture and computes its matrices.
  */
+// size is set only when SHADOW_WORK_ALLOC is set; shadowDepthShadowInit always sets that flag.
 static void depthShadowEnd(CameraId cameraId, void* param) {
     ShadowConfig* cfg;
     u32 texFmt;
@@ -1773,11 +1478,9 @@ static void depthShadowEnd(CameraId cameraId, void* param) {
         copyFmt = GX_TF_Z16;
         texFmt = GX_TF_IA8;
     }
-    // size is only set under SHADOW_WORK_ALLOC_TEX, but depthShadowInit sets that bit and nothing clears it, so
-    // the copy below never reads it unset; setting size before the test (as projShadowEnd does) changes the code
-    if (wp->flags & SHADOW_WORK_ALLOC_TEX) {
+    if (wp->flags & SHADOW_WORK_ALLOC) {
         size = ShadowSizeTbl[cfg->sizeIdx];
-        wp->texBuffer = smartAlloc(GXGetTexBufferSize(size, size, texFmt, GX_FALSE, 0), 3);
+        wp->texBuffer = smartAlloc(GXGetTexBufferSize(size, size, texFmt, GX_FALSE, 0), SMART_GROUP_TEMP);
     }
     GXSetTexCopySrc(0, 0, size, size);
     GXSetTexCopyDst(size, size, copyFmt, GX_FALSE);
@@ -1786,26 +1489,6 @@ static void depthShadowEnd(CameraId cameraId, void* param) {
     GXPixModeSync();
     GXInitTexObj(&wp->texObj, wp->texBuffer->address, size, size, texFmt, GX_CLAMP, GX_CLAMP, GX_FALSE);
     GXInitTexObjLOD(&wp->texObj, GX_NEAR, GX_NEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
-    shadowCalcTexMtx(wp, wp->texMtx, wp->depthMtx);
-    wp->flags |= SHADOW_WORK_DRAWN;
+    GetTexProjMtx(wp, wp->texMtx, wp->depthMtx);
+    wp->flags |= SHADOW_WORK_READY;
 }
-
-// debug strings (from stripped debug code)
-const char shadowDepthViewResult8[0x1C] = "result scene (8bit depth)";
-const char shadowDepthViewLight8[0x2C] = "actual depth from the light (8bit depth)";
-const char shadowDepthViewMap8[0x28] = "projected shadow depth map (8bit depth)";
-const char shadowDepthViewResult16[0x1C] = "result scene (16bit depth)";
-const char shadowDepthViewLight16[0x2C] = "actual depth from the light (16bit depth)";
-const char shadowDepthViewMap16[0x2C] = "projected shadow depth map (16bit depth)";
-#if VERSION <= VERSION_DEMO_JP
-// the demo keeps a table of the depth-shadow debug view names. Its map lists it as DispModeMsg$893, a static
-// local of a debug function the demo strips, so here it stays at file scope.
-static const char* DispModeMsg[6] = {
-    shadowDepthViewResult8,
-    shadowDepthViewLight8,
-    shadowDepthViewMap8,
-    shadowDepthViewResult16,
-    shadowDepthViewLight16,
-    shadowDepthViewMap16,
-};
-#endif

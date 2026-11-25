@@ -6,17 +6,11 @@
 static void WriteCallback(s32 chan, s32 result);
 static void EraseCallback(s32 chan, s32 result);
 
-/** Returns the FAT copy (in the mount work area) that is currently valid. */
 void* __CARDGetFatBlock(CARDControl* card) {
     ASSERTLINE(57, card->currentFat);
     return card->currentFat;
 }
 
-/**
- * Completion callback for the FAT write: on success duplicates the block just written over the other FAT copy
- * and makes it the current one, releases the channel unless an API callback is pending,
- * and calls the user callback saved in eraseCallback.
- */
 static void WriteCallback(s32 chan, s32 result) {
     CARDControl* card;
     CARDCallback callback;
@@ -26,17 +20,17 @@ static void WriteCallback(s32 chan, s32 result) {
     card = &__CARDBlock[chan];
 
     if (result >= 0) {
-        fat0 = (u16*)((u8*)card->workArea + 0x6000);
-        fat1 = (u16*)((u8*)card->workArea + 0x8000);
+        fat0 = (u16*)((u8*)card->workArea + 3 * CARD_SYSTEM_BLOCK_SIZE);
+        fat1 = (u16*)((u8*)card->workArea + 4 * CARD_SYSTEM_BLOCK_SIZE);
 
         ASSERTLINE(82, card->currentFat);
         if (card->currentFat == fat0) {
             card->currentFat = fat1;
-            memcpy(fat1, fat0, 0x2000);
+            memcpy(fat1, fat0, CARD_SYSTEM_BLOCK_SIZE);
         } else {
             ASSERTLINE(90, card->currentFat == fat1);
             card->currentFat = fat0;
-            memcpy(fat0, fat1, 0x2000);
+            memcpy(fat0, fat1, CARD_SYSTEM_BLOCK_SIZE);
         }
     }
 
@@ -50,10 +44,6 @@ static void WriteCallback(s32 chan, s32 result) {
     }
 }
 
-/**
- * Completion callback for the FAT sector erase:
- * writes the current 8 KiB FAT block into that sector with __CARDWrite, or reports the error.
- */
 static void EraseCallback(s32 chan, s32 result) {
     CARDControl* card = &__CARDBlock[chan];
     CARDCallback callback;
@@ -82,13 +72,6 @@ error:
     }
 }
 
-/**
- * Allocates 'cBlock' blocks from the FAT: fails with INSSPACE if the free count (FAT word 3) is too small,
- * then scans from the last-allocated hint (word 4) for free entries,
- * links them into a chain and marks the last as 0xFFFF.
- * The first block goes to card->startBlock; the changed FAT is saved with __CARDUpdateFatBlock.
- * Returns BROKEN if the scan wraps all the way around.
- */
 s32 __CARDAllocBlock(s32 chan, u32 cBlock, CARDCallback callback) {
     CARDControl* card;
     u16* fat;
@@ -105,22 +88,22 @@ s32 __CARDAllocBlock(s32 chan, u32 cBlock, CARDCallback callback) {
         return CARD_RESULT_NOCARD;
 
     fat = __CARDGetFatBlock(card);
-    if (fat[3] < cBlock)
+    if (fat[CARD_FAT_FREEBLOCKS] < cBlock)
         return CARD_RESULT_INSSPACE;
 
-    fat[3] -= cBlock;
+    fat[CARD_FAT_FREEBLOCKS] -= cBlock;
     startBlock = 0xFFFF;
-    iBlock = fat[4];
+    iBlock = fat[CARD_FAT_LASTSLOT];
     count = 0;
     while (0 < cBlock) {
-        if (card->cBlock - 5 < ++count)
+        if (card->cBlock - CARD_NUM_SYSTEM_BLOCK < ++count)
             return CARD_RESULT_BROKEN;
 
         iBlock++;
         if (!CARDIsValidBlockNo(card, iBlock))
-            iBlock = 5;
+            iBlock = CARD_NUM_SYSTEM_BLOCK;
 
-        if (fat[iBlock] == 0x0000u) {
+        if (fat[iBlock] == CARD_FAT_AVAIL) {
             if (startBlock == 0xFFFF)
                 startBlock = iBlock;
             else
@@ -131,16 +114,11 @@ s32 __CARDAllocBlock(s32 chan, u32 cBlock, CARDCallback callback) {
         }
     }
 
-    fat[4] = iBlock;
+    fat[CARD_FAT_LASTSLOT] = iBlock;
     card->startBlock = startBlock;
     return __CARDUpdateFatBlock(chan, fat, callback);
 }
 
-/**
- * Frees the chain of blocks starting at 'nBlock':
- * zeroes each FAT entry, counts the free blocks back up, and saves the FAT.
- * Returns BROKEN on an invalid block number.
- */
 s32 __CARDFreeBlock(s32 chan, u16 nBlock, CARDCallback callback) {
     CARDControl* card;
     u16* fat;
@@ -158,18 +136,14 @@ s32 __CARDFreeBlock(s32 chan, u16 nBlock, CARDCallback callback) {
             return CARD_RESULT_BROKEN;
 
         nextBlock = fat[nBlock];
-        fat[nBlock] = 0;
+        fat[nBlock] = CARD_FAT_AVAIL;
         nBlock = nextBlock;
-        ++fat[3];
+        ++fat[CARD_FAT_FREEBLOCKS];
     }
 
     return __CARDUpdateFatBlock(chan, fat, callback);
 }
 
-/**
- * Saves the FAT: bumps its update counter, recomputes its checksums,
- * flushes it from the data cache and erases its sector; EraseCallback then writes it out.
- */
 s32 __CARDUpdateFatBlock(s32 chan, u16* fat, CARDCallback callback) {
     CARDControl* card;
     u32 addr;
@@ -177,10 +151,10 @@ s32 __CARDUpdateFatBlock(s32 chan, u16* fat, CARDCallback callback) {
     ASSERTLINE(295, 0 <= chan && chan < 2);
 
     card = &__CARDBlock[chan];
-    ++fat[2];
-    __CARDCheckSum(fat + 2, 0x1FFC, fat, fat + 1);
-    DCStoreRange(fat, 0x2000);
+    ++fat[CARD_FAT_CHECKCODE];
+    __CARDCheckSum(fat + CARD_FAT_CHECKCODE, CARD_SYSTEM_BLOCK_SIZE - sizeof(u32), fat + CARD_FAT_CHECKSUM, fat + CARD_FAT_CHECKSUMINV);
+    DCStoreRange(fat, CARD_SYSTEM_BLOCK_SIZE);
     card->eraseCallback = callback;
-    addr = (((char*)fat - (char*)card->workArea) / 8192u) * card->sectorSize;
+    addr = (((char*)fat - (char*)card->workArea) / CARD_SYSTEM_BLOCK_SIZE) * card->sectorSize;
     return __CARDEraseSector(chan, addr, EraseCallback);
 }

@@ -1,18 +1,33 @@
 // muj_11 (無人島, Keelhaul Key): the passage between muj_10 and Cortez's lair, with its warning
 // event (warning_event).
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
-#include "evt/evt_map.h"
 #include "evt/evt_mario.h"
-#include "evt/evt_mobj.h"
 #include "evt/evt_msg.h"
 #include "evt/evt_snd.h"
-#include "muj.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_map.h"
+#include "pmario_sound.h"
 
+#if VERSION <= VERSION_DEMO_JP
+#include "evt/evt_mobj.h"
+#endif
+
+static EvtWord w_close[12];
+static EvtWord w_open[12];
+static EvtWord e_close[12];
+static EvtWord e_open[12];
 static BeroEntry bero_entry_data[3];
-extern EvtWord warning_event[];
+static EvtWord warning_event[38];
+
+#if VERSION <= VERSION_DEMO_JP
+extern EvtWord muj_11_init_evt[];
+#else
+EvtWord muj_11_init_evt[35];
+#endif
 
 /**
  * Enter hook of the west door (w_bero, from muj_10, enter anime type 5): turns S_doa_l to LW(0) x 0.444 degrees;
@@ -96,44 +111,45 @@ static BeroEntry bero_entry_data[] = {
 };
 
 /**
- * Cortez's warning (STORY_STG5_31_FOUR_EYES): when Mario enters the corridor a spoken narration (stg5_dou_20)
- * warns of the danger ahead and the story becomes STORY_STG5_32_CORTEZS_WARNING.
+ * Cortez's warning (STG5_31_FOUR_EYES): when Mario enters the corridor a spoken narration (stg5_dou_20)
+ * warns of the danger ahead and the story becomes STG5_32_CORTEZS_WARNING.
  */
-EVT_BEGIN(warning_event)
+static EVT_BEGIN(warning_event)
     CALL(evt_mario_key_onoff, 0)
-    CALL(evt_bero_exec_wait, 65536)
-    CALL(evt_msg_toge, 1, 0, 0, 0)
+    CALL(evt_bero_exec_wait, BERO_EXEC_ENTRY_DONE)
+    CALL(evt_msg_toge, MSG_TOGE_NONE, 0, 0, 0)
     BEGIN_INLINE_EVENT
         CALL(evt_snd_sfxon, STRING("SFX_STG5_ELMOS_VOICE1"), 0)
         WAIT_MS(800)
         CALL(evt_snd_sfxon, STRING("SFX_STG5_ELMOS_VOICE1"), 0)
     END_INLINE_EVENT
     CALL(evt_msg_print, 0, STRING("stg5_dou_20"), 0, 0)
-    SET_VALUE(GSW(GSW_STORY_PROGRESS), STORY_STG5_32_CORTEZS_WARNING)
+    SET_VALUE(GSW_STORY_PROGRESS, STG5_32_CORTEZS_WARNING)
     CALL(evt_mario_key_onoff, 1)
     RETURN
 EVT_END()
 
 /**
  * Map init for muj_11 (the corridor between the dock and Cortez's lair):
- * picks music by story stage, registers the exits and spawns warning_event at STORY_STG5_31_FOUR_EYES.
+ * picks music by story stage, registers the exits and spawns warning_event at STG5_31_FOUR_EYES.
  */
 EVT_BEGIN(muj_11_init_evt)
-    IF_INT_LESS(GSW(GSW_STORY_PROGRESS), STORY_STG5_33_CORTEZ_AND_THE_TREASURE)
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_EVT_STG5_GHOST1"))
-        CALL(evt_snd_envoff, PSND_FADE_OUT)
+    IF_INT_LESS(GSW_STORY_PROGRESS, STG5_33_CORTEZ_AND_THE_TREASURE)
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_EVT_STG5_GHOST1"))
+        CALL(evt_snd_envoff, PSND_FADEOUT)
     ELSE
-        CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG5_DOU1"))
-        CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG5_MUJ9"))
+        CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG5_DOU1"))
+        CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG5_MUJ9"))
     END_IF
     SET_VALUE(LW(0), PTR(bero_entry_data))
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
-    IF_INT_EQUAL(GSW(GSW_STORY_PROGRESS), STORY_STG5_31_FOUR_EYES)
+
+    // Only this story step starts the warning; the warning advances progress to the next step.
+    IF_INT_EQUAL(GSW_STORY_PROGRESS, STG5_31_FOUR_EYES)
         SPAWN_EVENT(warning_event)
     END_IF
 #if VERSION <= VERSION_DEMO_JP
-    // the demo has a heart block and a save block in this room
     CALL(evt_mobj_recovery_blk, STRING("r_blk"), 12, 0, 60, -20, 0, 0)
     CALL(evt_mobj_save_blk, STRING("s_blk"), 50, 60, -20, 0, 0)
 #endif

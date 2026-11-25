@@ -1,10 +1,18 @@
 // hei.rel (平原, Petal Meadows): _prolog registers each map's init script (hei_00 to hei_13, hei_bt00) and the area's battle tables.
+
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 
 #include "data/mapdata.h"
 #include "hei.h"
-#include "rel_module.h"
+
+typedef void (*voidfunctionptr)(void);
+extern voidfunctionptr _ctors[];
+extern voidfunctionptr _dtors[];
+
+void _unresolved(void);
+void _epilog(void);
+void _prolog(void);
 
 /**
  * Module entry point of hei.rel: runs the static constructors,
@@ -43,6 +51,7 @@ void _epilog(void) {
         (*dtor)();
     }
 }
+
 /** Linker stub for unresolved symbols; does nothing. */
 void _unresolved(void) {
 }

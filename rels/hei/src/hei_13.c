@@ -1,27 +1,36 @@
-// hei_13 (平原, Petal Meadows): field linking hei_00 and hei_01 with pipes.
+// hei_13 (平原, Petal Meadows): field between hei_00 and hei_01, with a pipe pair inside the room.
 // Horsetail item, a Close Call block, bricks and a Happy Heart.
+
+#include "version.h"
 #include "battle/battle_unit.h"
 #include "evt/evt_cmd.h"
 #include "evt/evt_bero.h"
 #include "evt/evt_sub.h"
-#include "evt/evt_case.h"
-#include "evt/evt_item.h"
+#include "data_tables.h"
 #include "evt/evt_map.h"
 #include "evt/evt_mobj.h"
 #include "evt/evt_npc.h"
+#include "evt/evt_case.h"
 #include "evt/evt_snd.h"
-#include "hei.h"
-#include "data_tables.h"
-#include "version.h"
-#include "mario/mariost.h"
-#include "evt/evt_story.h"
+#include "party/party_motion.h"
+#include "evt/evt_item.h"
+#include "driver/mobjdrv.h"
+#include "mario/mario_pouch.h"
 #include "driver/casedrv.h"
+#include "pmario_sound.h"
+#include "driver/itemdrv.h"
+#include "hei.h"
+#include "driver/npcdrv.h"
 
 static BeroEntry bero_entry_data[5];
 static TreeAccess ki_data[2];
-extern EvtWord evt_anm_kan[];
+static EvtWord evt_anm_kan[59];
+EvtWord hei_13_init_evt[110];
 
-/** Doors of this room: the west exit (w_bero) to hei_00 and the east exit (e_bero) to hei_01. */
+/**
+ * Doors of this room: the west exit (w_bero) to hei_00, the east exit (e_bero) to hei_01
+ * and the pipe pair a_dokan_1 and a_dokan_2 inside this room.
+ */
 static BeroEntry bero_entry_data[] = {
     {
         "w_bero", // hitName
@@ -97,35 +106,36 @@ static TreeAccess ki_data[] = {
 };
 
 /**
- * Hammer-hit script for the cans (a_kan_5): each hit adds to GSW_HEI13_CAN_HITS
- * and the tenth hit makes a Horsetail pop out; the can animation then plays once.
+ * Hammer-hit script of the can: unless GF(0) is set, counts the hit in GSW_HEI_13_HAMMER_HIT_COUNT; at 10 (or when
+ * the count already stands at 10) it sets GF(0) and drops a Horsetail (item_tukushi). The can animation anm_kan_1
+ * plays every time.
  */
-EVT_BEGIN(evt_anm_kan)
+static EVT_BEGIN(evt_anm_kan)
     IF_INT_EQUAL(GF(0), 1)
         GOTO(99)
     END_IF
     BEGIN_INLINE_EVENT
-        IF_INT_EQUAL(GSW(GSW_HEI13_CAN_HITS), 10)
+        IF_INT_EQUAL(GSW_HEI_13_HAMMER_HIT_COUNT, 10)
             SET_VALUE(GF(0), 1)
             WAIT_MS(200)
-            CALL(evt_item_entry, STRING("item_tukushi"), ITEM_HORSETAIL, 565, 15, -65, ITEM_ENTRY_LAUNCH_5S, -1, 0)
+            CALL(evt_item_entry, STRING("item_tukushi"), ITEM_HORSETAIL, 565, 15, -65, ITEM_TYPE_SCATTER_NO_PICKUP_TIMED, -1, 0)
         ELSE
-            ADD(GSW(GSW_HEI13_CAN_HITS), 1)
-            IF_INT_EQUAL(GSW(GSW_HEI13_CAN_HITS), 10)
+            ADD(GSW_HEI_13_HAMMER_HIT_COUNT, 1)
+            IF_INT_EQUAL(GSW_HEI_13_HAMMER_HIT_COUNT, 10)
                 SET_VALUE(GF(0), 1)
                 WAIT_MS(200)
-                CALL(evt_item_entry, STRING("item_tukushi"), ITEM_HORSETAIL, 565, 15, -65, ITEM_ENTRY_LAUNCH_5S, -1, 0)
+                CALL(evt_item_entry, STRING("item_tukushi"), ITEM_HORSETAIL, 565, 15, -65, ITEM_TYPE_SCATTER_NO_PICKUP_TIMED, -1, 0)
             END_IF
         END_IF
     END_INLINE_EVENT
     LABEL(99)
-    CALL(evt_map_playanim, STRING("anm_kan_1"), 0, 0)
+    CALL(evt_map_playanim, STRING("anm_kan_1"), MAP_ANIM_PLAY_ONCE, 0)
     RETURN
 EVT_END()
 
 /**
  * Petal Meadows hei_13 map init: resets the can counter, adds the Close Call badge block,
- * a brick that hides a coin, a Happy Heart (not in the kiosk demo), a brick with ten coins and the tree rewards,
+ * a plain brick that returns every visit, a Happy Heart above it (not in the kiosk demo), a brick with ten coins and the tree,
  * and enables the can hit script outside the kiosk demo.
  */
 EVT_BEGIN(hei_13_init_evt)
@@ -133,31 +143,31 @@ EVT_BEGIN(hei_13_init_evt)
     CALL(evt_bero_get_info)
     CALL_CHILD(evt_bero_info_run)
     SET_VALUE(GF(0), 0)
-    SET_VALUE(GSW(GSW_HEI13_CAN_HITS), 0)
-    CALL(evt_npc_change_fbat_mode, 1)
-    CALL(evt_mobj_badgeblk, STRING("m"), -320, 60, -100, ITEM_CLOSE_CALL, 0, GSWF(GSWF_HEI13_CLOSE_CALL_BLOCK_HIT), 1)
-    SET_VALUE(LSWF(3), 0)
-    CALL(evt_mobj_brick, STRING("mm"), 325, 175, -100, 0, 0, 0, LSWF(3))
-    IF_INT_EQUAL(LSWF(3), 0)
+    SET_VALUE(GSW_HEI_13_HAMMER_HIT_COUNT, 0)
+    CALL(evt_npc_change_fbat_mode, FBAT_MODE_FIELD)
+    CALL(evt_mobj_badgeblk, STRING("m"), -320, 60, -100, ITEM_CLOSE_CALL, 0, GSWF_HEI_13_CLOSE_CALL_BADGE_BLOCK, 1)
+    SET_VALUE(LSWF_HEI_13_BRICK_MM, 0)
+    CALL(evt_mobj_brick, STRING("mm"), 325, 175, -100, ITEM_NULL, MOBJ_BRICK_PLAIN, 0, LSWF_HEI_13_BRICK_MM)
+    IF_INT_EQUAL(LSWF_HEI_13_BRICK_MM, 0)
         CALL(evt_mobj_flag_onoff, 1, STRING("mm"), MOBJ_FLAG_NO_SHADOW)
     END_IF
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_CLEAR(LW(0), GLOBAL_FLAG_KIOSK)
+    IF_BITS_CLEAR(LW(0), GW_FLAG_E3)
 #if VERSION <= VERSION_DEMO_JP
-        CALL(evt_item_entry, STRING("i"), ITEM_HAPPY_HEART, 325, 200, -100, ITEM_ENTRY_STAY, GSWF(GSWF_HEI13_HAPPY_HEART_TAKEN), 0)
+        CALL(evt_item_entry, STRING("i"), ITEM_HAPPY_HEART, 325, 200, -100, ITEM_TYPE_GROUND, GSWF_HEI_13_HAPPY_HEART, 0)
 #else
-        CALL(evt_item_entry, STRING("i"), ITEM_HAPPY_HEART, 325, 200, -100, ITEM_ENTRY_FIXED, GSWF(GSWF_HEI13_HAPPY_HEART_TAKEN), 0)
+        CALL(evt_item_entry, STRING("i"), ITEM_HAPPY_HEART, 325, 200, -100, ITEM_TYPE_STILL, GSWF_HEI_13_HAPPY_HEART, 0)
 #endif
     END_IF
-    CALL(evt_mobj_brick, STRING("10m"), 325, 60, -100, 0, 3, 0, GSWF(GSWF_HEI13_COIN_BRICK_EMPTIED))
+    CALL(evt_mobj_brick, STRING("10m"), 325, 60, -100, ITEM_NULL, MOBJ_BRICK_TEN_COIN, 0, GSWF_HEI_13_TEN_COIN_BRICK)
     SET_VALUE(LW(0), PTR(ki_data))
     CALL_CHILD(evt_sub_tree_access_entry)
-    CALL(evt_map_playanim, STRING("anm_mugi"), 1, 0)
-    CALL(evt_snd_bgmon, PSND_FADE_OUT, STRING("BGM_STG1_HEI1"))
-    CALL(evt_snd_envon, PSND_FADE_RESTART | PSND_FADE_IN, STRING("ENV_STG1_HEI1"))
+    CALL(evt_map_playanim, STRING("anm_mugi"), MAP_ANIM_PLAY_LOOP, 0)
+    CALL(evt_snd_bgmon, PSND_FADEOUT, STRING("BGM_STG1_HEI1"))
+    CALL(evt_snd_envon, PSND_RESTART | PSND_FADEIN, STRING("ENV_STG1_HEI1"))
     CALL(evt_sub_get_system_flag, LW(0))
-    IF_BITS_CLEAR(LW(0), GLOBAL_FLAG_KIOSK)
-        CALL(evt_run_case_evt, CASE_COND_HAMMER, 1, STRING("a_kan_5"), 0, PTR(evt_anm_kan), 0)
+    IF_BITS_CLEAR(LW(0), GW_FLAG_E3)
+        CALL(evt_run_case_evt, CASE_HAMMER, 1, STRING("a_kan_5"), 0, PTR(evt_anm_kan), 0)
     END_IF
     RETURN
 EVT_END()

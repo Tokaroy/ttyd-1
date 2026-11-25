@@ -1,4 +1,3 @@
-/* ---------------------------------------
 
 
 
@@ -7,15 +6,15 @@
 
 
 
-   ---------------------------------------
-*/
+
+
+
 #include "musyx/musyx.h"
 #include "musyx/sal.h"
 #include <float.h>
 #include <math.h>
 #include <string.h>
 
-/** Sets the read point of a delay line so its output lags the input by lag samples. */
 static void DLsetdelay(_SND_REVSTD_DELAYLINE* dl, s32 lag) {
   dl->outPoint = dl->inPoint - (lag * sizeof(f32));
   while (dl->outPoint < 0) {
@@ -23,32 +22,23 @@ static void DLsetdelay(_SND_REVSTD_DELAYLINE* dl, s32 lag) {
   }
 }
 
-/** Allocates a delay line of len samples, clears it and sets a default lag of half its length. */
 static void DLcreate(_SND_REVSTD_DELAYLINE* dl, s32 len) {
   dl->length = (s32)len * sizeof(f32);
   dl->inputs = (f32*)salMalloc(len * sizeof(f32));
-  memset(dl->inputs, 0, len * sizeof(len));
+  memset(dl->inputs, 0, len * sizeof(*dl->inputs));
   dl->lastOutput = 0.f;
-  DLsetdelay(dl, len >> 1);
+  DLsetdelay(dl, len >> 1); // no effect: inPoint is not set yet and outPoint is reset below
   dl->inPoint = 0;
   dl->outPoint = 0;
 }
 
-/** Frees a delay line's sample buffer. */
 static void DLdelete(_SND_REVSTD_DELAYLINE* dl) { salFree(dl->inputs); }
 
-/**
- * Builds the standard reverb for 32 kHz: for each of the three channels two comb filters (lengths 1789 and 1999,
- * with feedback from the reverb time) and two all-pass filters (433 and 149), the mix level,
- * the damping coefficient and an optional pre-delay line.
- * Returns FALSE if any setting is out of range (coloration 0..1, time 0.01..10 s, mix 0..1, damping 0..1,
- * pre-delay up to 0.1 s).
- */
 bool ReverbSTDCreate(_SND_REVSTD_WORK* rv, float coloration, float time, float mix, float damping,
                      float predelay) {
   static u32 lens[4] = {1789, 1999, 433, 149};
-  u8 i; // r31
-  u8 k; // r29
+  u8 i;
+  u8 k;
 
   if ((coloration < 0.f || coloration > 1.f) || (time < .01f || time > 10.f) ||
       (mix < 0.f || mix > 1.f) || (damping < 0.f || damping > 1.f) ||
@@ -97,13 +87,9 @@ bool ReverbSTDCreate(_SND_REVSTD_WORK* rv, float coloration, float time, float m
   return TRUE;
 }
 
-/**
- * Changes the settings of a running standard reverb by freeing its delay lines and creating it again;
- * FALSE if a setting is out of range.
- */
 bool ReverbSTDModify(_SND_REVSTD_WORK* rv, float coloration, float time, float mix, float damping,
                      float predelay) {
-  unsigned char i; // r31
+  unsigned char i;
 
   if ((coloration < 0.f || coloration > 1.f) || (time < .01f || time > 10.f) ||
       (mix < 0.f || mix > 1.f) || (damping < 0.f || damping > 1.f) ||
@@ -111,11 +97,12 @@ bool ReverbSTDModify(_SND_REVSTD_WORK* rv, float coloration, float time, float m
     return FALSE;
   }
 
+  // These settings are overwritten: ReverbSTDCreate below clears rv and sets them again.
   rv->allPassCoeff = coloration;
   rv->level = mix;
   rv->damping = damping;
   if (rv->damping < 0.05f) {
-    rv->damping = 0.05;
+    rv->damping = 0.05f;
   }
 
   rv->damping = 1.f - (rv->damping * 0.8f + 0.05f);
@@ -138,17 +125,9 @@ bool ReverbSTDModify(_SND_REVSTD_WORK* rv, float coloration, float time, float m
 }
 
 #ifdef __MWERKS__
-/** Constants for the cheap reverb: filter gains 0.3 and 0.6, and the integer-to-float conversion constant. */
 static const float value0_3 = 0.3f;
 static const float value0_6 = 0.6f;
 static const double i2fMagic = 4.503601774854144E15;
-/**
- * Assembly: processes one 160-sample frame of the three consecutive channel buffers (left, right, surround)
- * starting at sptr. Per channel: optional pre-delay, two parallel comb filters summed, an all-pass, a 0.3 scale,
- * a one-pole low-pass (damping) and a second all-pass,
- * written back as 0.6 * level of that plus 0.6 * (1 - level)
- * of the dry input (the same code as the SDK's standard reverb).
- */
 static asm void HandleReverb(long* sptr, struct _SND_REVSTD_WORK* rv) {
 #if 1
   nofralloc
@@ -176,7 +155,7 @@ static asm void HandleReverb(long* sptr, struct _SND_REVSTD_WORK* rv) {
   stw r30, 0x50(r1)
   li r5, 0
   
-lbl_803B56C8:
+loop:
   slwi r31, r5, 3
   add r31, r31, r4
   lfs f19, 0xf4(r31)
@@ -221,20 +200,20 @@ lbl_803B56C8:
   stw r30, 0x54(r1)
   lfd f12, 0x50(r1)
   fsubs f12, f12, f5
-  li r31, 0x9f
+  li r31, 0x9f // SND_AUX_BLOCKSIZE - 1
   mtctr r31
 
-lbl_803B5780:
+loop2:
   fmr f13, f12
-  beq cr7, lbl_803B57A0
+  beq cr7, skip
   lfs f13, 0(r28)
   addi r28, r28, 4
   cmpw r28, r22
   stfs f12, -4(r28)
-  bne+ lbl_803B57A0
+  bne+ skip
   mr r28, r27
   
-lbl_803B57A0:
+skip:
 
   fmadds f8, f19, f15, f13
   lwzu r29, 4(r3)
@@ -253,40 +232,40 @@ lbl_803B57A0:
   cmpw cr5, r19, r25
   fadds f14, f14, f16
   cmpw cr6, r18, r25
-  bne+ lbl_803B57EC
+  bne+ skip2
   li r21, 0
 
-lbl_803B57EC:
+skip2:
   xoris r29, r29, 0x8000
   fmadds f9, f2, f17, f14
-  bne+ cr1, lbl_803B57FC
+  bne+ cr1, skip3
   li r20, 0
 
-lbl_803B57FC:
+skip3:
   stw r29, 0x54(r1)
-  bne+ cr5, lbl_803B5808
+  bne+ cr5, skip4
   li r19, 0
 
-lbl_803B5808:
+skip4:
   stfsx f9, r17, r12
   fnmsubs f14, f2, f9, f17
   addi r12, r12, 4
-  bne+ cr6, lbl_803B581C
+  bne+ cr6, skip5
   li r18, 0
 
-lbl_803B581C:
+skip5:
   lfsx f17, r17, r11
   cmpw cr5, r12, r24
   addi r11, r11, 4
   cmpw cr6, r11, r24
-  bne+ cr5, lbl_803B5834
+  bne+ cr5, skip6
   li r12, 0
 
-lbl_803B5834:
-  bne+ cr6, lbl_803B583C
+skip6:
+  bne+ cr6, skip7
   li r11, 0
 
-lbl_803B583C:
+skip7:
   fmuls f14, f14, f6
   lfd f10, 0x50(r1)
   fmadds f14, f11, f7, f14
@@ -302,28 +281,28 @@ lbl_803B583C:
   cmpw cr5, r10, r23
   cmpw cr6, r9, r23
   fctiwz f14, f14
-  bne+ cr5, lbl_803B5880
+  bne+ cr5, skip8
   li r10, 0
 
-lbl_803B5880:
-  bne+ cr6, lbl_803B5888
+skip8:
+  bne+ cr6, skip9
   li r9, 0
 
-lbl_803B5888:
+skip9:
   li r31, -4
   fsubs f12, f10, f5
   stfiwx f14, r3, r31
-  bdnz lbl_803B5780
+  bdnz loop2
   fmr f13, f12
-  beq cr7, lbl_803B58B8
+  beq cr7, skip10
   lfs f13, 0(r28)
   addi r28, r28, 4
   cmpw r28, r22
   stfs f12, -4(r28)
-  bne+ lbl_803B58B8
+  bne+ skip10
   mr r28, r27
 
-lbl_803B58B8:
+skip10:
   fmadds f8, f19, f15, f13
   fmadds f9, f20, f16, f13
   stfsx f8, r7, r21
@@ -340,38 +319,38 @@ lbl_803B58B8:
   cmpw cr5, r19, r25
   fadds f14, f14, f16
   cmpw cr6, r18, r25
-  bne+ lbl_803B5900
+  bne+ skip11
   li r21, 0
 
-lbl_803B5900:
+skip11:
   fmadds f9, f2, f17, f14
-  bne+ cr1, lbl_803B590C
+  bne+ cr1, skip12
   li r20, 0
 
-lbl_803B590C:
-  bne+ cr5, lbl_803B5914
+skip12:
+  bne+ cr5, skip13
   li r19, 0
 
-lbl_803B5914:
+skip13:
   stfsx f9, r17, r12
   fnmsubs f14, f2, f9, f17
   addi r12, r12, 4
-  bne+ cr6, lbl_803B5928
+  bne+ cr6, skip14
   li r18, 0
 
-lbl_803B5928:
+skip14:
   lfsx f17, r17, r11
   cmpw cr5, r12, r24
   addi r11, r11, 4
   cmpw cr6, r11, r24
-  bne+ cr5, lbl_803B5940
+  bne+ cr5, skip15
   li r12, 0
 
-lbl_803B5940:
-  bne+ cr6, lbl_803B5948
+skip15:
+  bne+ cr6, skip16
   li r11, 0
 
-lbl_803B5948:
+skip16:
 
   fmuls f14, f14, f6
   fmadds f14, f11, f7, f14
@@ -392,14 +371,14 @@ lbl_803B5948:
   cmpw cr6, r9, r23
   
   fctiwz f14, f14
-  bne+ cr5, lbl_803B5994
+  bne+ cr5, skip17
   li r10, 0
 
-lbl_803B5994:
-  bne+ cr6, lbl_803B599C
+skip17:
+  bne+ cr6, done
   li r9, 0
 
-lbl_803B599C:
+done:
   addi r30, r4, 0
   add r30, r30, r31
   stfiwx f14, r0, r3
@@ -422,7 +401,7 @@ lbl_803B599C:
   stfs f18, 0x24(r30)
   stfs f7, 0x10c(r31)
   stw r28, 0x130(r31)
-  bne lbl_803B56C8
+  bne loop
   lfd f14, 0x58(r1)
   lfd f15, 0x60(r1)
   lfd f16, 0x68(r1)
@@ -437,23 +416,17 @@ lbl_803B599C:
 #endif
 }
 #else
-/** Empty placeholder for the assembly HandleReverb above, used only for compilers other than Metrowerks. */
 static void HandleReverb(s32* sptr, struct _SND_REVSTD_WORK* rv) {
-  // No C version: the original MusyX asm above stays asm (project rule).
+  // Non-MWCC builds: no C form of this kernel exists; the game uses the assembly above
 }
 #endif
 
-/**
- * Runs the standard reverb on the three buffers of a frame (the assembly HandleReverb handles all channels from
- * the left buffer).
- */
 void ReverbSTDCallback(s32* left, s32* right, s32* surround, _SND_REVSTD_WORK* rv) {
   HandleReverb(left, rv);
 }
 
-/** Frees the delay lines and pre-delay buffers of a standard reverb. */
 void ReverbSTDFree(_SND_REVSTD_WORK* rv) {
-  u8 i; // r31
+  u8 i;
   for (i = 0; i < 6; ++i) {
     DLdelete(&rv->AP[i]);
   }

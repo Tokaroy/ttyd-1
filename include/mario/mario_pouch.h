@@ -1,14 +1,23 @@
 // mario_pouch.c: the pouch (inventory and save data): PouchData, PouchPartyData, ItemType ids, pouch* functions.
+
 #pragma once
 
-#include <dolphin/types.h>
 #include "version.h"
+#include <dolphin/types.h>
+#include "party_member.h"
 
 #define MAX_KEY_ITEMS 121
 #define MAX_HELD_ITEMS 20
 #define HELD_ITEM_COUNT_BASE 10
-#define GetHeldItemCount pouchCheckItem(ITEM_STRANGE_SACK) ? MAX_HELD_ITEMS : HELD_ITEM_COUNT_BASE
+#define GetHeldItemCount (pouchCheckItem(ITEM_STRANGE_SACK) ? MAX_HELD_ITEMS : HELD_ITEM_COUNT_BASE)
 #define MAX_STORED_ITEMS 32
+
+// Mario's level cap: the early demos stop at 98.
+#if VERSION <= VERSION_DEMO_JP
+#define LEVEL_MAX 98
+#else
+#define LEVEL_MAX 99
+#endif
 #define MAX_BADGES 200
 
 // 4-byte wide, using u16 casting for mario_pouch
@@ -39,8 +48,8 @@ typedef enum ItemType {
     ITEM_SHOP_KEY,                     // 0x15
     ITEM_STEEPLE_KEY_0x16,             // 0x16
     ITEM_STEEPLE_KEY_0x17,             // 0x17
-    ITEM_STATION_KEY_0x18,             // 0x18, Riverside Station key for hom_00 (item_data.c: msg_key_hom_00)
-    ITEM_STATION_KEY_0x19,             // 0x19, Riverside Station key for eki_01 (item_data.c: msg_key_eki_01)
+    ITEM_STATION_KEY_0x18,             // 0x18
+    ITEM_STATION_KEY_0x19,             // 0x19
     ITEM_ELEVATOR_KEY_0x1A,            // 0x1A
     ITEM_ELEVATOR_KEY_0x1B,            // 0x1B
     ITEM_ELEVATOR_KEY_0x1C,            // 0x1C
@@ -98,8 +107,8 @@ typedef enum ItemType {
     ITEM_VITAL_PAPER,                  // 0x50
     ITEM_BRIEFCASE,                    // 0x51
     ITEM_GOLDBOB_GUIDE,                // 0x52
-    ITEM_UNK_PAPER_0x53,               // 0x53
-    ITEM_UNK_PAPER_0x54,               // 0x54
+    ITEM_GOLDBOB_GUIDE_2_UNUSED,       // 0x53, item table: a second copy of the Goldbob permit (in_unknown_item)
+    ITEM_GOLDBOB_GUIDE_3_UNUSED,       // 0x54, a third copy
     ITEM_COG,                          // 0x55
     ITEM_DATA_DISK,                    // 0x56
     ITEM_SHINE_SPRITE,                 // 0x57
@@ -120,15 +129,15 @@ typedef enum ItemType {
     ITEM_RED_POTION,                   // 0x66
     ITEM_ORANGE_POTION,                // 0x67
     ITEM_GREEN_POTION,                 // 0x68
-    ITEM_UNK_STAR_0x69,                // 0x69
+    ITEM_STAR_STONE_UNUSED,            // 0x69, item table entry in_star_stone; nothing gives it
     ITEM_LOTTERY_PICK,                 // 0x6A
     ITEM_BATTLE_TRUNKS,                // 0x6B
     ITEM_UP_ARROW,                     // 0x6C
     ITEM_PACKAGE,                      // 0x6D
     ITEM_ATTACK_FX_B_KEY_ITEM,         // 0x6E
-    ITEM_UNKNOWN_0x6F,                 // 0x6F
-    ITEM_UNKNOWN_0x70,                 // 0x70
-    ITEM_UNKNOWN_0x71,                 // 0x71
+    ITEM_FREE_SLOT_1_UNUSED,           // 0x6F, 0x6F-0x71: placeholder rows (in_unknown_item) whose names spell a
+    ITEM_FREE_SLOT_2_UNUSED,           // 0x70, "use this area" note across the three entries
+    ITEM_FREE_SLOT_3_UNUSED,           // 0x71
     ITEM_DIAMOND_STAR,                 // 0x72
     ITEM_EMERALD_STAR,                 // 0x73
     ITEM_GOLD_STAR,                    // 0x74
@@ -136,7 +145,7 @@ typedef enum ItemType {
     ITEM_SAPPHIRE_STAR,                // 0x76
     ITEM_GARNET_STAR,                  // 0x77
     ITEM_CRYSTAL_STAR,                 // 0x78
-#define KEY_ITEM_MAX ITEM_CRYSTAL_STAR + 1
+#define KEY_ITEM_MAX (ITEM_CRYSTAL_STAR + 1)
 #define KEY_ITEM_COUNT (KEY_ITEM_MAX - KEY_ITEM_MIN)
     // Normal Items ---------------------------------------
     ITEM_COIN,             // 0x79
@@ -255,10 +264,9 @@ typedef enum ItemType {
     ITEM_HEALTHY_SALAD,    // 0xE9
     ITEM_KOOPA_BUN,        // 0xEA
     ITEM_FRESH_JUICE,      // 0xEB
-#define ITEM_MAX ITEM_FRESH_JUICE + 1
+#define ITEM_MAX (ITEM_FRESH_JUICE + 1)
 #define ITEM_COUNT (ITEM_MAX - ITEM_MIN)
-    // Audience items -------------------------------------
-    // Thrown into the battle by the audience; past ITEM_MAX, so not counted as normal items
+    // Audience-thrown items
     ITEM_AUDIENCE_CAN,    // 0xEC
     ITEM_AUDIENCE_ROCK,   // 0xED
     ITEM_AUDIENCE_BONE,   // 0xEE
@@ -364,30 +372,23 @@ typedef enum ItemType {
     ITEM_UNUSED_DEFEND_BADGE_P,   // 0x150
     ITEM_SUPER_CHARGE,            // 0x151
     ITEM_SUPER_CHARGE_P,          // 0x152
-#define BADGE_MAX ITEM_SUPER_CHARGE_P + 1
+#define BADGE_MAX (ITEM_SUPER_CHARGE_P + 1)
 #define BADGE_COUNT (BADGE_MAX - BADGE_MIN)
     ITEM_TYPE_MAX
 } ItemType;
 
-typedef enum MarioPartner {
-    PARTNER_NONE,
-    PARTNER_GOOMBELLA,
-    PARTNER_KOOPS,
-    PARTNER_BOBBERY,
-    PARTNER_YOSHI,
-    PARTNER_FLURRIE,
-    PARTNER_VIVIAN,
-    PARTNER_MSMOWZ
-} PartyId;
-
-// PouchPartyData.flags bits; bits 13-15 hold the partner's colour (pouchGetPartyColor).
-enum PouchPartyFlags {
-    POUCH_PARTY_FLAG_JOINED = 0x1, // partyJoin/partyLeft: the partner is in Mario's party
-    POUCH_PARTY_FLAG_AWAY = 0x2,   // gone for now (Vivian, set in jin_04, cleared after the Doopliss fights): not in the party menu, not taken into battle
-};
+// Merlee's charms: PouchData.merleeNextCurseType, and BattleWork.majinaiState while one acts in battle. Names from
+// the charm events marioAttackEvent_Majinai{PowerUpCheck,DefenceUp,ExpUp} and _evt_majinai_coin_up_effect.
+typedef enum MajinaiType {
+    MAJINAI_NONE = 0,
+    MAJINAI_POWER_UP = 1,   // +3 attack on Mario's attack
+    MAJINAI_DEFENCE_UP = 2, // +3 defense against the enemy phase
+    MAJINAI_EXP_UP = 3,     // double Star Points
+    MAJINAI_COIN_UP = 4,    // coin bonus after the battle
+} MajinaiType;
 
 typedef struct PouchPartyData {
-    u16 flags;       // 0x0, PouchPartyFlags
+    u16 flags;       // 0x0
     s16 maximumHP;   // 0x2, includes HP Plus P boost
     s16 baseMaxHP;   // 0x4
     s16 currentHP;   // 0x6
@@ -397,51 +398,48 @@ typedef struct PouchPartyData {
 } PouchPartyData;
 
 typedef struct PouchData {
-    PouchPartyData partyData[8];       // 0x0
-    s16 currentHP;                     // 0x70
-    s16 maximumHP;                     // 0x72, includes HP Plus boost
-    s16 currentFP;                     // 0x74
-    s16 maximumFP;                     // 0x76, includes FP Plus boost
-    s16 coins;                         // 0x78
-    s16 currentSP;                     // 0x7A
-    s16 maximumSP;                     // 0x7C
-    s16 reserved_7E;                   // 0x7E, pouchInit zeroes, never read
-    s16 reserved_80;                   // 0x80, pouchInit zeroes, never read
-    s16 pad_82;                        // 0x82, never accessed
-    f32 audienceCount;                 // 0x84
-    s16 rank;                          // 0x88
-    s16 level;                         // 0x8A
-    u16 starPowersObtained;            // 0x8C, bitmask
-    s16 baseMaxHP;                     // 0x8E
-    s16 baseMaxFP;                     // 0x90
-    s16 availableBP;                   // 0x92
-    s16 maximumBP;                     // 0x94
-    s16 starPoints;                    // 0x96
-    s8 jumpLevel;                      // 0x98
-    s8 hammerLevel;                    // 0x99
-    s16 starPieceCount;                // 0x9A
-    s16 shineSpriteCount;              // 0x9C
-    u16 powerBounceRecord;             // 0x9E, Pit of 100 Trials
-    s16 keyItems[MAX_KEY_ITEMS];       // 0xA0
-    s16 heldItems[MAX_HELD_ITEMS];     // 0x192
-    s16 storedItems[MAX_STORED_ITEMS]; // 0x1BA
-    s16 badges[MAX_BADGES];            // 0x1FA
-    s16 equippedBadges[MAX_BADGES];    // 0x38A
-    u8 emailIds[100];                  // 0x51A
-    u8 pad_57E[2];                     // 0x57E, never accessed
-    u32 emailReceivedFlags[4];         // 0x580
-    u32 emailReadFlags[4];             // 0x590
-    u8 pad_5A0[0x10];                  // 0x5A0, never accessed
-    s16 shopPoints;                    // 0x5B0
-    u8 pad_5B2[2];                     // 0x5B2, never accessed
-    u32 shopPointRewardFlags;          // 0x5B4, bit i = shop point reward i claimed (evt_shop.c)
-    u8 merleeCurseUsesRemaining;       // 0x5B8
-    s8 turnsUntilMerleeActivation;     // 0x5B9
-    u8 merleeNextCurseType;            // 0x5BA
-    u8 superBowserCoins;               // 0x5BB
-    u32 superBowserScore;              // 0x5BC
-    char yoshiName[16];                // 0x5C0
-    u8 pad_5D0[4];                     // 0x5D0, never accessed
+    PouchPartyData partyData[PARTNER_COUNT]; // 0x0
+    s16 currentHP;                           // 0x70
+    s16 maximumHP;                           // 0x72, includes HP Plus boost
+    s16 currentFP;                           // 0x74
+    s16 maximumFP;                           // 0x76, includes FP Plus boost
+    s16 coins;                               // 0x78
+    s16 currentSP;                           // 0x7A
+    s16 maximumSP;                           // 0x7C
+    s16 currentPP;                           // 0x7E, read only by the stripped pouchGetPP / pouchSetPP; pouchInit zeroes it
+    s16 maximumPP;                           // 0x80, the cap pouchSetPP clamps to; only pouchInit writes it
+    f32 audienceCount;                       // 0x84
+    s16 rank;                                // 0x88
+    s16 level;                               // 0x8A
+    u16 starPowersObtained;                  // 0x8C, bitmask
+    s16 baseMaxHP;                           // 0x8E
+    s16 baseMaxFP;                           // 0x90
+    s16 availableBP;                         // 0x92
+    s16 maximumBP;                           // 0x94
+    s16 starPoints;                          // 0x96
+    s8 jumpLevel;                            // 0x98
+    s8 hammerLevel;                          // 0x99
+    s16 starPieceCount;                      // 0x9A
+    s16 shineSpriteCount;                    // 0x9C
+    u16 powerBounceRecord;                   // 0x9E, best Power Bounce combo (_record_renzoku_count)
+    s16 keyItems[MAX_KEY_ITEMS];             // 0xA0
+    s16 heldItems[MAX_HELD_ITEMS];           // 0x192
+    s16 storedItems[MAX_STORED_ITEMS];       // 0x1BA
+    s16 badges[MAX_BADGES];                  // 0x1FA
+    s16 equippedBadges[MAX_BADGES];          // 0x38A
+    u8 emailIds[100];                        // 0x51A
+    u32 emailReceivedFlags[4];               // 0x580
+    u32 emailReadFlags[4];                   // 0x590
+    u8 pad_5A0[0x10];                        // 0x5A0, never accessed
+    s16 shopPoints;                          // 0x5B0
+    u32 shopPointRewardFlags;                // 0x5B4, bit i = shop point reward i claimed (evt_shop.c)
+    u8 merleeCurseUsesRemaining;             // 0x5B8
+    s8 turnsUntilMerleeActivation;           // 0x5B9
+    u8 merleeNextCurseType;                  // 0x5BA
+    u8 superBowserCoins;                     // 0x5BB
+    u32 superBowserScore;                    // 0x5BC
+    char yoshiName[16];                      // 0x5C0
+    u8 pad_5D0[4];                           // 0x5D0, never accessed
 } PouchData;
 
 PouchData* pouchGetPtr(void);
@@ -450,6 +448,7 @@ ItemType pouchKeyItem(s32 id);
 ItemType pouchHaveItem(s32 id);
 ItemType pouchKeepItem(s32 id);
 ItemType pouchHaveBadge(s32 id);
+s32 pouchGetKeyItemCnt(void);
 s32 pouchGetHaveItemCnt(void);
 s32 pouchGetKeepItemCnt(void);
 s32 pouchGetHaveBadgeCnt(void);
@@ -466,38 +465,46 @@ s32 pouchGetCoin(void);
 s32 pouchAddCoin(s32 coins);
 s32 pouchSetCoin(s32 coins);
 s32 pouchGetSuperCoin(void);
-s16 pouchSetSuperCoin(s16 count);
+s32 pouchAddSuperCoin(s32 count);
+s32 pouchSetSuperCoin(s32 count);
 s32 pouchGetStarPiece(void);
-s16 pouchAddStarPiece(s16 count);
+s32 pouchAddStarPiece(s32 count);
+s32 pouchSetStarPiece(s32 count);
 s16 pouchAddHP(s32 points);
 s32 pouchGetHP(void);
 s32 pouchGetMaxHP(void);
 void pouchSetHP(s32 points);
-void pouchSetMaxHP(s16 points);
-s32 pouchGetPartyHP(PartyId partnerId);
+void pouchSetMaxHP(s32 points);
+s32 pouchGetPartyHP(s32 partnerId);
 void pouchSetPartyHP(s32 partnerId, s32 points);
 s32 pouchGetFP(void);
 s32 pouchGetMaxFP(void);
 void pouchSetFP(s32 points);
-void pouchSetMaxFP(s16 points);
+void pouchSetMaxFP(s32 points);
 s32 pouchGetAP(void);
 void pouchAddAP(s32 points);
 void pouchSetAP(s32 points);
 s32 pouchGetMaxAP(void);
+s32 pouchGetPP(void);
+void pouchSetPP(s32 points);
 f32 pouchGetAudienceNum(void);
 void pouchSetAudienceNum(f32 num);
 s32 pouchGetJumpLv(void);
 s32 pouchGetHammerLv(void);
-s32 pouchGetPartyAttackLv(PartyId partyId);
-BOOL pouchAddKeepItem(s16 id);
+s32 pouchGetPartyAttackLv(s32 partyId);
+BOOL pouchAddKeepItem(s32 id);
+
 #if VERSION <= VERSION_DEMO_JP
 BOOL pouchRemoveKeepItem(s32 id);
 #else
 BOOL pouchRemoveKeepItem(s32 id, s32 index);
 #endif
+
 void pouchReviseMarioParam(void);
 void pouchRevisePartyParam(void);
+s32 pouchGetPartyMaxHpBase(s32 partyId, s32 hpLevel);
 s16 pouchGetStarPoint(void);
+s16 pouchGetStarRank(void);
 BOOL pouchEquipBadgeIndex(s32 index);
 BOOL pouchUnEquipBadgeIndex(s32 index);
 s32 pouchEquipCheckBadge(s32 badgeId);
@@ -508,21 +515,30 @@ s32 pouchArriveBadge(s32 id);
 void pouchMajinaiInit(s32 curseCount);
 s32 pouchGetKpaCoin(void);
 BOOL pouchAddKpaCoin(s32 coins);
+void pouchSetKpaCoin(s32 coins);
 u32 pouchGetKpaScore(void);
 void pouchAddKpaScore(u32 score);
+void pouchSetKpaScore(u32 score);
 void pouchGetStarStone(u32 id);
 s32 pouchReceiveMailCount(void);
 void pouchReceiveMail(s32 mailId);
 void pouchOpenMail(s32 mailId);
-u32 pouchCheckMail(s32 mailId);
-s32 pouchGetPartyColor(PartyId partnerId);
-void pouchSetPartyColor(PartyId partnerId, s32 color);
-void pouchSetYoshiName(char* name);
+s32 pouchCheckMail(s32 mailId);
+s32 pouchGetPartyColor(s32 partnerId);
+void pouchSetPartyColor(s32 partnerId, s32 color);
+void pouchSetYoshiName(const char* name);
 char* pouchGetYoshiName(void);
 
 BOOL pouchRemoveItemIndex(ItemType type, s32 index);
 void pouchSortItem(s32 mode);
-
 void pouchHiraToKata(const char* src, char* dst);
-BOOL N_pouchUnEquipBadgeID(s32 badgeId);
-ItemType L_pouchEquipBadge(s32 id);
+BOOL addHead(ItemType type);
+BOOL addHeadCheck(ItemType type);
+BOOL addTail(ItemType type);
+BOOL pouchGetItemCheck(ItemType type);
+
+// Names from LLCOOLT's tree.
+enum {
+    POUCH_PARTY_FLAG_JOINED = 1,
+    POUCH_PARTY_FLAG_AWAY = 2,
+};

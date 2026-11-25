@@ -1,10 +1,10 @@
 // Declarations for the Petal Meadows (hei) module: map init scripts, battle setup tables and the area's battle units.
+
 #pragma once
 
 #include "dolphin/types.h"
 #include "driver/npcdrv.h"
 #include "evt/evt_word.h"
-#include "evt/evt_cmd.h"
 
 extern EvtWord all_party_lecture[];
 extern NpcTerritoryInfo btl_hei_setup_no_tbl[];
@@ -32,3 +32,13 @@ extern BattleUnitKind unit_patakuri;
 extern BattleUnitKind unit_sinnosuke;
 extern BattleUnitKind unit_togedaruma;
 extern BattleUnitKind unit_togekuri;
+
+// hei_09: TEV callback of the Shhwonk Fortress water, shared by hei_08 to hei_12
+struct MapTevCallbackInfo;
+void hei_test_water_tev(struct MapTevCallbackInfo* info);
+
+// Area-local saved values (HEI; swReInit clears them on every area change), named from the area's
+// scripts
+// plain brick mm in hei_13 (evt_mobj_brick MOBJ_BRICK_PLAIN), set when broken; hei_13_init_evt clears it on every
+// load (the brick returns each visit) and turns its shadow off
+#define LSWF_HEI_13_BRICK_MM LSWF(3)

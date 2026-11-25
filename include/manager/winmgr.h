@@ -1,19 +1,24 @@
 // winmgr.c: the window manager (WinMgrDesc, WinMgrEntry, winMgrEntry/Main) and the winMgrSelect* lists.
+
 #pragma once
 
 #include "driver/dispdrv.h"
 #include "evt/evt_word.h"
 #include <dolphin/gx.h>
 #include <dolphin/types.h>
-#include "evt/evt_cmd.h"
-
-struct EventEntry;
 
 typedef struct WinMgrDesc WinMgrDesc;
 typedef struct WinMgrEntry WinMgrEntry;
 
+// WinMgrDesc.type: how winMgrSeq opens and closes the window (8 frames each way)
+typedef enum WinMgrSeqType {
+    WINMGR_SEQ_SPIN = 0, // rotates in from 30 degrees while scaling up; closes the same way back
+    WINMGR_SEQ_FADE = 1, // scales up while fading in; closes fading out at full size
+    WINMGR_SEQ_POP = 2,  // shows and hides at once
+} WinMgrSeqType;
+
 struct WinMgrDesc {
-    s32 type;                         // 0x0
+    s32 type;                         // 0x0, WinMgrSeqType
     s32 dispType;                     // 0x4
     s32 camId;                        // 0x8, CameraId
     s32 x;                            // 0xC, entry->x
@@ -25,31 +30,31 @@ struct WinMgrDesc {
     void (*disp)(WinMgrEntry* entry); // 0x24
 };
 
-// WinMgrEntry.flags
-enum WinMgrEntryFlags {
-    WINMGR_ENTRY_IN_USE = 0x1,      // the window slot is taken (winMgrEntry)
-    WINMGR_ENTRY_VISIBLE = 0x2,     // open or animating: winMgrMain queues its drawing
-    WINMGR_ENTRY_ANIMATING = 0x4,   // the open or close animation is running (winMgrAction)
-    WINMGR_ENTRY_AUTO_DELETE = 0x8, // winMgrCloseAutoDelete: free the slot once closed
-};
+// WinMgrEntry.flags (winMgrEntry, winMgrMain, winMgrSeq)
+typedef enum WinMgrFlags {
+    WINMGR_FLAG_ACTIVE = (1 << 0),      // 0x1, slot in use
+    WINMGR_FLAG_VISIBLE = (1 << 1),     // 0x2, drawn
+    WINMGR_FLAG_ANIMATING = (1 << 2),   // 0x4, opening or closing animation running
+    WINMGR_FLAG_AUTO_DELETE = (1 << 3), // 0x8, winMgrCloseAutoDelete: freed once closed
+} WinMgrFlags;
 
 struct WinMgrEntry {
-    s32 flags;               // 0x0
-    s32 state;               // 0x4
-    s32 timer;               // 0x8
-    s32 alpha;               // 0xC
-    f32 scale;               // 0x10
-    f32 rotation;            // 0x14
-    s32 x;                   // 0x18
+    s32 flags;               // 0x0, WinMgrFlags
+    s32 state;               // 0x4, open/close step (winMgrSeq): 0 idle, 1 opening, 2 closing
+    s32 timer;               // 0x8, frames into the open or close animation
+    s32 alpha;               // 0xC, frame and fill alpha (255, or faded by the fade animation)
+    f32 scale;               // 0x10, draw scale (0 to 1 while opening)
+    f32 rotation;            // 0x14, z rotation in degrees (spin animation)
+    s32 x;                   // 0x18, top left corner, y up (from the descriptor; winMgrSetSize)
     s32 y;                   // 0x1C
     s32 width;               // 0x20
     s32 height;              // 0x24
-    WinMgrDesc* description; // 0x28
-    void* param;             // 0x2C
+    WinMgrDesc* description; // 0x28, the window's descriptor (animation type, colour, main and disp functions)
+    void* param;             // 0x2C, caller data for the descriptor's main and disp functions (winMgrSetParam)
     s32 priority;            // 0x30, gets cast to float for dispEntry
-    const char* msg;         // 0x34
-    s32 scroll;              // 0x38
-    s32 lines;               // 0x3C
+    const char* msg;         // 0x34, help text (msgSearch result) of a help window; winMgrHelpMain counts its lines
+    s32 scroll;              // 0x38, first help text line shown (steps of 2 on the C stick)
+    s32 lines;               // 0x3C, help text line count
     u8 pad_40[0x44 - 0x40];  // 0x40
 };
 
@@ -59,29 +64,52 @@ typedef struct WinMgrWork {
 } WinMgrWork;
 
 // WinMgrSelectItem.flags
-enum WinMgrSelectItemFlags {
-    WINMGR_ITEM_GRAY = 0x1,     // drawn grayed out (already used, already upgraded, ...)
-    WINMGR_ITEM_DISABLED = 0x2, // A only plays the error sound; no price or cost is drawn
-    WINMGR_ITEM_OVER_CAP = 0x4, // retail level-up menu: the stat would go over its cap
-    WINMGR_ITEM_EQUIPPED = 0x8, // US/PAL badge lists: the badge is equipped (drawn with a mark)
-};
+typedef enum WinMgrSelectItemFlags {
+    SELECT_ITEM_GRAY = (1 << 0),     // 0x1, drawn grayed out
+    SELECT_ITEM_DISABLED = (1 << 1), // 0x2, cannot be chosen (error sound and help)
+    SELECT_ITEM_OVER_MAX = (1 << 2), // 0x4, level up: the stat would pass its maximum ("helperr2")
+    SELECT_ITEM_EQUIPPED = (1 << 3), // 0x8, equipped badge (lamp icon, US and later)
+} WinMgrSelectItemFlags;
+
+// WinMgrSelect.flags
+typedef enum WinMgrSelectFlags {
+    SELECT_CANCEL_OK = (1 << 8),  // 0x100, B cancels the selection
+    SELECT_DONE = (1 << 12),      // 0x1000, the windows are closed: winMgrSelect returns the result
+    SELECT_CANCELLED = (1 << 13), // 0x2000, cancelled with B (result -1)
+} WinMgrSelectFlags;
 
 typedef struct WinMgrSelectItem {
     u16 flags; // 0x0, WinMgrSelectItemFlags
     u16 id;    // 0x2
 } WinMgrSelectItem;
 
-// WinMgrSelect.flags
-enum WinMgrSelectFlags {
-    WINMGR_SELECT_CANCELABLE = 0x100, // B cancels (and the new-item slot, if any, counts as cancel)
-    WINMGR_SELECT_DONE = 0x1000,      // the windows have closed; winMgrSelect returns the choice
-    WINMGR_SELECT_CANCELED = 0x2000,  // B was pressed; winMgrSelect returns -1
-};
+// WinMgrSelect.type: which list winMgrSelectEntry fills, what winMgrSelectOther returns.
+// A negative value is not one of these: it is a pointer to a -1-terminated item id list.
+typedef enum WinMgrSelectType {
+    SELECT_TYPE_KEY_ITEM = 0,              // pouchKeyItem without menu_skip_list
+    SELECT_TYPE_ITEM = 1,                  // pouchHaveItem
+    SELECT_TYPE_BADGE = 2,                 // pouchHaveBadge
+    SELECT_TYPE_ITEM_SELL = 3,             // pouchHaveItem, sell_price column (evt_shop)
+    SELECT_TYPE_ITEM_STORE = 4,            // pouchHaveItem to put away (evt_shop)
+    SELECT_TYPE_ITEM_RETRIEVE = 5,         // pouchKeepItem (evt_shop)
+    SELECT_TYPE_PARTY_RANK_UP = 6,         // partners; rank limit by GSWF_GOR_UP_ARROW_USED (gor_02)
+    SELECT_TYPE_PARTY_SWAP_RANK_UP = 7,    // the same list, first step of the tik_11 swap
+    SELECT_TYPE_PARTY_SWAP_RANK_DOWN = 8,  // partners other than GW(1), rank 0 refused (tik_11)
+    SELECT_TYPE_STAT_SWAP_UP = 9,          // HP/FP/BP to raise (tik_11)
+    SELECT_TYPE_STAT_SWAP_DOWN = 10,       // the stats other than GW(1), to lower (tik_11)
+    SELECT_TYPE_BADGE_BUY = 11,            // bargain_table, buy_price (gor_01)
+    SELECT_TYPE_BADGE_SELL = 12,           // pouchHaveBadge, sell_price (gor_01)
+    SELECT_TYPE_BADGE_STAR_PIECE = 13,     // starmaniac_table, star_piece_price (tik_00)
+    SELECT_TYPE_BADGE_CHARLIETON = 14,     // badge_bottakuru_table, buy_price * 12 / 10 (gor_01)
+    SELECT_TYPE_BADGE_CHARLIETON_PIT = 15, // badge_bottakuru100_table, price by GSW_PIT_FLOOR (jon)
+    SELECT_TYPE_BADGE_PIANTA_TOKEN = 16,   // bteresa_table, Pianta token icon (gor_03)
+    SELECT_TYPE_INFORMANT_PERFECT = 17,    // jperfect_title entries, perfectRead (gor_02)
+    SELECT_TYPE_INFORMANT_LUIGI = 18,      // Luigi's entries, luigiRead (gor)
+} WinMgrSelectType;
 
 typedef struct WinMgrSelect {
     u16 flags;               // 0x0, WinMgrSelectFlags
-    u16 pad_2;               // 0x2
-    s32 type;                // 0x4
+    s32 type;                // 0x4, WinMgrSelectType or an item list pointer
     s32 state;               // 0x8
     s32 cursor;              // 0xC
     s32 scrollTop;           // 0x10
@@ -111,11 +139,13 @@ WinMgrEntry* winMgrGetPtr(s32 id);
 void winMgrHelpInit(WinMgrEntry* entry);
 void winMgrHelpMain(WinMgrEntry* entry);
 void winMgrHelpDraw(WinMgrEntry* entry);
-WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelable);
+WinMgrSelect* winMgrSelectEntry(EvtWord type, s32 newItem, BOOL cancelOk);
 s32 winMgrSelect(WinMgrSelect* select);
 s32 winMgrSelectOther(WinMgrSelect* select, struct EventEntry* evt);
 void winMgrSelectDelete(WinMgrSelect* select);
-
-USER_FUNC(evt_win_party_lankup_chk);
-USER_FUNC(evt_win_party_lankdown_chk);
 s32 winMgrSelectGetCursor(WinMgrSelect* sel);
+
+#include "evt/evt_cmd.h"
+
+USER_FUNC(evt_win_party_lankdown_chk);
+USER_FUNC(evt_win_party_lankup_chk);

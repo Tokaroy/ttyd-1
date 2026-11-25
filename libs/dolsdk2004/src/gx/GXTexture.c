@@ -40,27 +40,20 @@ typedef struct __GXTlutRegionInt_struct {
     __GXTlutObjInt tlutObj;
 } __GXTlutRegionInt;
 
-/** Register addresses of the texture mode, image and TLUT registers of the eight texture maps. */
-u8 GXTexMode0Ids[8] = { 0x80, 0x81, 0x82, 0x83, 0xA0, 0xA1, 0xA2, 0xA3 };
-u8 GXTexMode1Ids[8] = { 0x84, 0x85, 0x86, 0x87, 0xA4, 0xA5, 0xA6, 0xA7 };
-u8 GXTexImage0Ids[8] = { 0x88, 0x89, 0x8A, 0x8B, 0xA8, 0xA9, 0xAA, 0xAB };
-u8 GXTexImage1Ids[8] = { 0x8C, 0x8D, 0x8E, 0x8F, 0xAC, 0xAD, 0xAE, 0xAF };
-u8 GXTexImage2Ids[8] = { 0x90, 0x91, 0x92, 0x93, 0xB0, 0xB1, 0xB2, 0xB3 };
-u8 GXTexImage3Ids[8] = { 0x94, 0x95, 0x96, 0x97, 0xB4, 0xB5, 0xB6, 0xB7 };
-u8 GXTexTlutIds[8] = { 0x98, 0x99, 0x9A, 0x9B, 0xB8, 0xB9, 0xBA, 0xBB };
-/** Converts a GX minification filter to the hardware's filter field, and back. */
-static u8 GX2HWFiltConv[8] = { 0x00, 0x04, 0x01, 0x05, 0x02, 0x06, 0x00, 0x00 };
+static u8 GXTexMode0Ids[8] = { 0x80, 0x81, 0x82, 0x83, 0xA0, 0xA1, 0xA2, 0xA3 };
+static u8 GXTexMode1Ids[8] = { 0x84, 0x85, 0x86, 0x87, 0xA4, 0xA5, 0xA6, 0xA7 };
+static u8 GXTexImage0Ids[8] = { 0x88, 0x89, 0x8A, 0x8B, 0xA8, 0xA9, 0xAA, 0xAB };
+static u8 GXTexImage1Ids[8] = { 0x8C, 0x8D, 0x8E, 0x8F, 0xAC, 0xAD, 0xAE, 0xAF };
+static u8 GXTexImage2Ids[8] = { 0x90, 0x91, 0x92, 0x93, 0xB0, 0xB1, 0xB2, 0xB3 };
+static u8 GXTexImage3Ids[8] = { 0x94, 0x95, 0x96, 0x97, 0xB4, 0xB5, 0xB6, 0xB7 };
+static u8 GXTexTlutIds[8] = { 0x98, 0x99, 0x9A, 0x9B, 0xB8, 0xB9, 0xBA, 0xBB };
+static u8 GX2HWFiltConv[6] = { 0x00, 0x04, 0x01, 0x05, 0x02, 0x06};
 static u8 HW2GXFiltConv[8] = { 0x00, 0x02, 0x04, 0x00, 0x01, 0x03, 0x05, 0x00 };
 
-/**
- * Gives the log2 tile width and height for a texture format:
- * 8x8 texel tiles for 4-bit formats and CMPR, 8x4 for 8-bit formats,
- * 4x4 for 16- and 32-bit formats (0 for an unknown format).
- */
 static void __GXGetTexTileShift(GXTexFmt fmt, u32* rowTileS, u32* colTileS) {
     switch (fmt) {
     case GX_TF_I4:
-    case 0x8:
+    case GX_TF_C4:
     case GX_TF_CMPR:
     case GX_CTF_R4:
     case GX_CTF_Z4:
@@ -69,7 +62,7 @@ static void __GXGetTexTileShift(GXTexFmt fmt, u32* rowTileS, u32* colTileS) {
         break;
     case GX_TF_I8:
     case GX_TF_IA4:
-    case 0x9:
+    case GX_TF_C8:
     case GX_TF_Z8:
     case GX_CTF_RA4:
     case GX_TF_A8:
@@ -85,7 +78,7 @@ static void __GXGetTexTileShift(GXTexFmt fmt, u32* rowTileS, u32* colTileS) {
     case GX_TF_RGB565:
     case GX_TF_RGB5A3:
     case GX_TF_RGBA8:
-    case 0xA:
+    case GX_TF_C14X2:
     case GX_TF_Z16:
     case GX_TF_Z24X8:
     case GX_CTF_RA8:
@@ -102,11 +95,6 @@ static void __GXGetTexTileShift(GXTexFmt fmt, u32* rowTileS, u32* colTileS) {
     }
 }
 
-/**
- * Returns the bytes a texture of the given size and format takes:
- * whole tiles (32 bytes each, 64 for RGBA8 and Z24X8) per level,
- * summed over up to max_lod mip levels when mipmap is set. Use it to size the buffer for a GXCopyTex.
- */
 u32 GXGetTexBufferSize(u16 width, u16 height, u32 format, GXBool mipmap, u8 max_lod) {
     u32 tileShiftX;
     u32 tileShiftY;
@@ -152,12 +140,6 @@ u32 GXGetTexBufferSize(u16 width, u16 height, u32 format, GXBool mipmap, u8 max_
     return bufferSize;
 }
 
-/**
- * Computes, for one texture image of the given format and size,
- * the number of tile columns and rows (each size rounded up to whole tiles),
- * and the 'cmpTiles' count of tile planes per tile (2 for the 32-bit formats);
- * used for copy strides and mip level sizes.
- */
 void __GetImageTileCount(GXTexFmt fmt, u16 wd, u16 ht, u32* rowTiles, u32* colTiles, u32* cmpTiles) {
     u32 texRowShift;
     u32 texColShift;
@@ -179,13 +161,6 @@ void __GetImageTileCount(GXTexFmt fmt, u16 wd, u16 ht, u32* rowTiles, u32* colTi
 		(reg) = (u32)__rlwimi((u32)(reg), (val), (shift), (32 - (shift) - (size)), (31 - (shift))); \
 	} while (0);
 
-/**
- * Fills in a texture object for a (non-palette) texture image:
- * the 32-byte object gets the format, size, wrap modes,
- * a default minification filter (linear, or a mipmap-linear filter when mipmapped) and, when mipmapped,
- * a maximum LOD of the larger dimension's log2,
- * the image address and the tile load count the preload path needs. The object is not active until GXLoadTexObj.
- */
 void GXInitTexObj(GXTexObj* obj, void* image_ptr, u16 width, u16 height, GXTexFmt format, GXTexWrapMode wrap_s, GXTexWrapMode wrap_t, GXBool mipmap) {
     u32 imageBase;
     u32 maxLOD;
@@ -221,7 +196,7 @@ void GXInitTexObj(GXTexObj* obj, void* image_ptr, u16 width, u16 height, GXTexFm
         u8 lmax;
         t->flags |= 1;
 
-        if (format == 8 || format == 9 || format == 10) {
+        if (format == GX_TF_C4 || format == GX_TF_C8 || format == GX_TF_C14X2) {
             SOME_SET_REG_MACRO(t->mode0, 3, 5, 5);
         } else {
             SOME_SET_REG_MACRO(t->mode0, 3, 5, 6);
@@ -250,14 +225,14 @@ void GXInitTexObj(GXTexObj* obj, void* image_ptr, u16 width, u16 height, GXTexFm
 
     switch (format & 0xF) {
     case GX_TF_I4:
-    case 8:
+    case GX_TF_C4:
         t->loadFmt = 1;
         rowT = 3;
         colT = 3;
         break;
     case GX_TF_I8:
     case GX_TF_IA4:
-    case 9:
+    case GX_TF_C8:
         t->loadFmt = 2;
         rowT = 3;
         colT = 2;
@@ -265,7 +240,7 @@ void GXInitTexObj(GXTexObj* obj, void* image_ptr, u16 width, u16 height, GXTexFm
     case GX_TF_IA8:
     case GX_TF_RGB565:
     case GX_TF_RGB5A3:
-    case 10:
+    case GX_TF_C14X2:
         t->loadFmt = 2;
         rowT = 2;
         colT = 2;
@@ -294,10 +269,6 @@ void GXInitTexObj(GXTexObj* obj, void* image_ptr, u16 width, u16 height, GXTexFm
     t->flags |= 2;
 }
 
-/**
- * Same as GXInitTexObj for a colour-indexed texture,
- * then marks it as palette-based and records the TLUT name it will use.
- */
 void GXInitTexObjCI(GXTexObj* obj, void* image_ptr, u16 width, u16 height, GXCITexFmt format, GXTexWrapMode wrap_s, GXTexWrapMode wrap_t, GXBool mipmap, u32 tlut_name) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -308,12 +279,6 @@ void GXInitTexObjCI(GXTexObj* obj, void* image_ptr, u16 width, u16 height, GXCIT
     t->tlutName = tlut_name;
 }
 
-/**
- * Sets the filters and LOD parameters of a texture object:
- * clamps the bias to [-4, 4) and the min/max LOD to 0 to 10,
- * and stores them in the hardware's 1/32 and 1/16 units along with the bias clamp,
- * edge LOD and anisotropy settings.
- */
 void GXInitTexObjLOD(GXTexObj* obj, GXTexFilter min_filt, GXTexFilter mag_filt, f32 min_lod, f32 max_lod, f32 lod_bias, u8 bias_clamp, u8 do_edge_lod, GXAnisotropy max_aniso) {
     u8 lbias;
     u8 lmin;
@@ -357,7 +322,6 @@ void GXInitTexObjLOD(GXTexObj* obj, GXTexFilter min_filt, GXTexFilter mag_filt, 
     SET_REG_FIELD(817, t->mode1, 8, 8, lmax);
 }
 
-/** Changes only the image address of a texture object (stored shifted right by 5). */
 void GXInitTexObjData(GXTexObj* obj, void* image_ptr) {
     u32 imageBase;
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
@@ -369,7 +333,6 @@ void GXInitTexObjData(GXTexObj* obj, void* image_ptr) {
     SET_REG_FIELD(843, t->image3, 21, 0, imageBase);
 }
 
-/** Sets the S and T wrap modes of a texture object. */
 void GXInitTexObjWrapMode(GXTexObj* obj, GXTexWrapMode sm, GXTexWrapMode tm) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -379,7 +342,6 @@ void GXInitTexObjWrapMode(GXTexObj* obj, GXTexWrapMode sm, GXTexWrapMode tm) {
     SET_REG_FIELD(865, t->mode0, 2, 2, tm);
 }
 
-/** Records the TLUT name of a texture object. */
 void GXInitTexObjTlut(GXTexObj* obj, u32 tlut_name) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -388,7 +350,6 @@ void GXInitTexObjTlut(GXTexObj* obj, u32 tlut_name) {
     t->tlutName = tlut_name;
 }
 
-/** Sets the minification and magnification filters of a texture object (min is converted to the hardware code). */
 void GXInitTexObjFilter(GXTexObj* obj, GXTexFilter min_filt, GXTexFilter mag_filt) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -402,7 +363,6 @@ void GXInitTexObjFilter(GXTexObj* obj, GXTexFilter min_filt, GXTexFilter mag_fil
     SET_REG_FIELD(912, t->mode0, 3, 5, GX2HWFiltConv[min_filt]);
 }
 
-/** Sets the maximum LOD of a texture object (clamped to 0 to 10, stored in 1/16 units). */
 void GXInitTexObjMaxLOD(GXTexObj* obj, f32 max_lod) {
     u8 lmax;
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
@@ -419,7 +379,6 @@ void GXInitTexObjMaxLOD(GXTexObj* obj, f32 max_lod) {
     SET_REG_FIELD(938, t->mode1, 8, 8, lmax);
 }
 
-/** Sets the minimum LOD of a texture object (clamped to 0 to 10, stored in 1/16 units). */
 void GXInitTexObjMinLOD(GXTexObj* obj, f32 min_lod) {
     u8 lmin;
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
@@ -436,7 +395,6 @@ void GXInitTexObjMinLOD(GXTexObj* obj, f32 min_lod) {
     SET_REG_FIELD(964, t->mode1, 8, 0, lmin);
 }
 
-/** Sets the LOD bias of a texture object (clamped to [-4, 4), stored in 1/32 units). */
 void GXInitTexObjLODBias(GXTexObj* obj, f32 lod_bias) {
     u8 lbias;
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
@@ -453,7 +411,6 @@ void GXInitTexObjLODBias(GXTexObj* obj, f32 lod_bias) {
     SET_REG_FIELD(991, t->mode0, 8, 9, lbias);
 }
 
-/** Sets the LOD bias clamp flag of a texture object. */
 void GXInitTexObjBiasClamp(GXTexObj* obj, u8 bias_clamp) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -463,7 +420,6 @@ void GXInitTexObjBiasClamp(GXTexObj* obj, u8 bias_clamp) {
     SET_REG_FIELD(1011, t->mode0, 1, 21, bias_clamp);
 }
 
-/** Sets the edge LOD flag of a texture object (stored inverted in the hardware mode word). */
 void GXInitTexObjEdgeLOD(GXTexObj* obj, u8 do_edge_lod) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -473,7 +429,6 @@ void GXInitTexObjEdgeLOD(GXTexObj* obj, u8 do_edge_lod) {
     SET_REG_FIELD(1031, t->mode0, 1, 8, do_edge_lod ? 0 : 1);
 }
 
-/** Sets the maximum anisotropy of a texture object. */
 void GXInitTexObjMaxAniso(GXTexObj* obj, GXAnisotropy max_aniso) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -483,7 +438,6 @@ void GXInitTexObjMaxAniso(GXTexObj* obj, GXAnisotropy max_aniso) {
     SET_REG_FIELD(1051, t->mode0, 2, 19, max_aniso);
 }
 
-/** Stores one pointer of application data in a texture object. */
 void GXInitTexObjUserData(GXTexObj* obj, void* user_data) {
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
 
@@ -492,20 +446,18 @@ void GXInitTexObjUserData(GXTexObj* obj, void* user_data) {
     t->userData = user_data;
 }
 
-/** Returns the application pointer stored by GXInitTexObjUserData. */
 void* GXGetTexObjUserData(const GXTexObj* obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)obj;
 
     ASSERTMSGLINE(1075, obj, "Texture Object Pointer is null");
     return t->userData;
 }
 
-/** Returns every field of a texture object at once: image address, size, format, wrap modes and mipmap flag. */
 void GXGetTexObjAll(const GXTexObj* obj, void** image_ptr, u16* width, u16* height, GXTexFmt* format, GXTexWrapMode* wrap_s, GXTexWrapMode* wrap_t, u8* mipmap) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)obj;
 
     ASSERTMSGLINE(1095, obj, "Texture Object Pointer is null");
-    *image_ptr = (void *)(GET_REG_FIELD(t->image3, 21, 0) << 5);
+    *image_ptr = (void*)(GET_REG_FIELD(t->image3, 21, 0) << 5);
     *width = (u32)GET_REG_FIELD(t->image0, 10, 0) + 1;
     *height = (u32)GET_REG_FIELD(t->image0, 10, 10) + 1;
     *format = t->fmt;
@@ -514,66 +466,58 @@ void GXGetTexObjAll(const GXTexObj* obj, void** image_ptr, u16* width, u16* heig
     *mipmap = (t->flags & 1) == 1;
 }
 
-/** Returns the image address stored in a texture object. */
 void* GXGetTexObjData(const GXTexObj* to) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)to;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)to;
 
     ASSERTMSGLINE(1108, to, "Texture Object Pointer is null");
     return (void*)(GET_REG_FIELD(t->image3, 21, 0) << 5);
 }
 
-/** Returns the width in texels of a texture object. */
 u16 GXGetTexObjWidth(const GXTexObj* to) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)to;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)to;
 
     ASSERTMSGLINE(1114, to, "Texture Object Pointer is null");
     return (u32)GET_REG_FIELD(t->image0, 10, 0) + 1;
 }
 
-/** Returns the height in texels of a texture object. */
 u16 GXGetTexObjHeight(const GXTexObj* to) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)to;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)to;
 
     ASSERTMSGLINE(1120, to, "Texture Object Pointer is null");
     return (u32)GET_REG_FIELD(t->image0, 10, 10) + 1;
 }
 
-/** Returns the texture format of a texture object. */
 GXTexFmt GXGetTexObjFmt(const GXTexObj* to) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)to;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)to;
 
     ASSERTMSGLINE(1126, to, "Texture Object Pointer is null");
     return t->fmt;
 }
 
-/** Returns the S wrap mode of a texture object. */
 GXTexWrapMode GXGetTexObjWrapS(const GXTexObj* to) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)to;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)to;
 
     ASSERTMSGLINE(1132, to, "Texture Object Pointer is null");
     return GET_REG_FIELD(t->mode0, 2, 0);
 }
 
-/** Returns the T wrap mode of a texture object. */
 GXTexWrapMode GXGetTexObjWrapT(const GXTexObj* to) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)to;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)to;
 
     ASSERTMSGLINE(1138, to, "Texture Object Pointer is null");
     return GET_REG_FIELD(t->mode0, 2, 2);
 }
 
-/** Returns whether a texture object has mipmaps. */
 GXBool GXGetTexObjMipMap(const GXTexObj* to) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)to;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)to;
 
     ASSERTMSGLINE(1144, to, "Texture Object Pointer is null");
     return (t->flags & 1) == 1;
 }
 
-/** Returns all filter and LOD settings of a texture object at once. */
 void GXGetTexObjLODAll(const GXTexObj* tex_obj, GXTexFilter* min_filt, GXTexFilter* mag_filt, f32* min_lod, f32* max_lod, f32* lod_bias, u8* bias_clamp, u8* do_edge_lod, GXAnisotropy* max_aniso) {
     s16 tmp;
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1166, tex_obj, "Texture Object Pointer is null");
     *min_filt = HW2GXFiltConv[GET_REG_FIELD(t->mode0, 3, 5)];
@@ -587,86 +531,71 @@ void GXGetTexObjLODAll(const GXTexObj* tex_obj, GXTexFilter* min_filt, GXTexFilt
     *max_aniso = GET_REG_FIELD(t->mode0, 2, 19);
 }
 
-/** Returns the minification filter of a texture object. */
 GXTexFilter GXGetTexObjMinFilt(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1182, tex_obj, "Texture Object Pointer is null");
     return HW2GXFiltConv[GET_REG_FIELD(t->mode0, 3, 5)];
 }
 
-/** Returns the magnification filter of a texture object. */
 GXTexFilter GXGetTexObjMagFilt(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1189, tex_obj, "Texture Object Pointer is null");
     return GET_REG_FIELD(t->mode0, 1, 4);
 }
 
-/** Returns the minimum LOD of a texture object. */
 f32 GXGetTexObjMinLOD(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1195, tex_obj, "Texture Object Pointer is null");
     return (u32)GET_REG_FIELD(t->mode1, 8, 0) / 16.0f;
 }
 
-/** Returns the maximum LOD of a texture object. */
 f32 GXGetTexObjMaxLOD(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1201, tex_obj, "Texture Object Pointer is null");
     return (u32)GET_REG_FIELD(t->mode1, 8, 8) / 16.0f;
 }
 
-/** Returns the LOD bias of a texture object. */
 f32 GXGetTexObjLODBias(const GXTexObj* tex_obj) {
     s16 tmp;
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1208, tex_obj, "Texture Object Pointer is null");
     tmp = (s32)GET_REG_FIELD(t->mode0, 8, 9);
     return (s8)tmp / 32.0f;
 }
 
-/** Returns whether the LOD bias clamp is on for a texture object. */
 GXBool GXGetTexObjBiasClamp(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1215, tex_obj, "Texture Object Pointer is null");
     return (u32)GET_REG_FIELD(t->mode0, 1, 21);
 }
 
-/** Returns whether edge LOD is on for a texture object. */
 GXBool GXGetTexObjEdgeLOD(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1221, tex_obj, "Texture Object Pointer is null");
     return !GET_REG_FIELD(t->mode0, 1, 8);
 }
 
-/** Returns the maximum anisotropy of a texture object. */
 GXAnisotropy GXGetTexObjMaxAniso(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1227, tex_obj, "Texture Object Pointer is null");
     return GET_REG_FIELD(t->mode0, 2, 19);
 }
 
-/** Returns the TLUT name a colour-indexed texture object uses. */
 u32 GXGetTexObjTlut(const GXTexObj* tex_obj) {
-    const __GXTexObjInt* t = (const __GXTexObjInt *)tex_obj;
+    const __GXTexObjInt* t = (const __GXTexObjInt*)tex_obj;
 
     ASSERTMSGLINE(1233, tex_obj, "Texture Object Pointer is null");
     return t->tlutName;
 }
 
-/**
- * Binds a texture object to texture map id using an explicit cache region:
- * writes the sampler mode registers, image size, the region's even/odd TMEM settings and the image address;
- * for a palette texture it also writes the TLUT load register of the region the TLUT callback returns.
- * Records the map's image and mode words for the setup unit and flags the setup registers dirty.
- */
 void GXLoadTexObjPreLoaded(GXTexObj* obj, GXTexRegion* region, GXTexMapID id) {
     __GXTlutRegionInt* tlr;
     u32 m0;
@@ -676,7 +605,7 @@ void GXLoadTexObjPreLoaded(GXTexObj* obj, GXTexRegion* region, GXTexMapID id) {
     u32 img2;
     u32 img3;
     __GXTexObjInt* t = (__GXTexObjInt*)obj;
-    __GXTexRegionInt* r = (__GXTexRegionInt *)region;
+    __GXTexRegionInt* r = (__GXTexRegionInt*)region;
 
     ASSERTMSGLINE(1257, obj, "Texture Object Pointer is null");
     ASSERTMSGLINE(1257, region, "TexRegion Object Pointer is null");
@@ -715,15 +644,10 @@ void GXLoadTexObjPreLoaded(GXTexObj* obj, GXTexRegion* region, GXTexMapID id) {
 
     __GXData->tImage0[id] = t->image0;
     __GXData->tMode0[id] = t->mode0;
-    __GXData->dirtyState |= 1;
+    __GXData->dirtyState |= GX_DIRTY_SU_TEX;
     __GXData->bpSentNot = 0;
 }
 
-/**
- * Binds a texture object to texture map id: asks the texture-region callback for a cache region
- * and loads the object with GXLoadTexObjPreLoaded;
- * the texture cache then fetches the image from main memory as needed.
- */
 void GXLoadTexObj(GXTexObj* obj, GXTexMapID id) {
     GXTexRegion* r;
 
@@ -735,12 +659,8 @@ void GXLoadTexObj(GXTexObj* obj, GXTexMapID id) {
     GXLoadTexObjPreLoaded(obj, r, id);
 }
 
-/**
- * Fills in a palette object: stores the format (bits 10 to 11 of the TLUT register),
- * the palette address (physical, shifted right by 5, with the BP 0x64 load command) and the entry count.
- */
 void GXInitTlutObj(GXTlutObj* tlut_obj, void* lut, GXTlutFmt fmt, u16 n_entries) {
-    __GXTlutObjInt* t = (__GXTlutObjInt *)tlut_obj;
+    __GXTlutObjInt* t = (__GXTlutObjInt*)tlut_obj;
 
     ASSERTMSGLINE(1350, tlut_obj, "TLut Object Pointer is null");
     CHECK_GXBEGIN(1351, "GXInitTlutObj");
@@ -753,54 +673,45 @@ void GXInitTlutObj(GXTlutObj* tlut_obj, void* lut, GXTlutFmt fmt, u16 n_entries)
     t->numEntries = n_entries;
 }
 
-/** Returns the address, format and entry count of a TLUT object. */
-void GXGetTlutObjAll(const GXTlutObj* tlut_obj, void **data, GXTlutFmt* format, u16* numEntries) {
-    const __GXTlutObjInt* t = (const __GXTlutObjInt *)tlut_obj;
+void GXGetTlutObjAll(const GXTlutObj* tlut_obj, void** data, GXTlutFmt* format, u16* numEntries) {
+    const __GXTlutObjInt* t = (const __GXTlutObjInt*)tlut_obj;
 
     ASSERTMSGLINE(1382, tlut_obj, "TLut Object Pointer is null");
-    *data = (void *)(GET_REG_FIELD(t->loadTlut0, 21, 0) << 5);
+    *data = (void*)(GET_REG_FIELD(t->loadTlut0, 21, 0) << 5);
     *format = GET_REG_FIELD(t->tlut, 2, 10);
     *numEntries = t->numEntries;
 }
 
-/** Returns the address of a TLUT object's palette data. */
 void* GXGetTlutObjData(const GXTlutObj* tlut_obj) {
-    const __GXTlutObjInt* t = (const __GXTlutObjInt *)tlut_obj;
+    const __GXTlutObjInt* t = (const __GXTlutObjInt*)tlut_obj;
 
     ASSERTMSGLINE(1391, tlut_obj, "TLut Object Pointer is null");
-    return (void *)(GET_REG_FIELD(t->loadTlut0, 21, 0) << 5);
+    return (void*)(GET_REG_FIELD(t->loadTlut0, 21, 0) << 5);
 }
 
-/** Returns the entry format of a TLUT object. */
 GXTlutFmt GXGetTlutObjFmt(const GXTlutObj* tlut_obj) {
-    const __GXTlutObjInt* t = (const __GXTlutObjInt *)tlut_obj;
+    const __GXTlutObjInt* t = (const __GXTlutObjInt*)tlut_obj;
 
     ASSERTMSGLINE(1398, tlut_obj, "TLut Object Pointer is null");
     return GET_REG_FIELD(t->tlut, 2, 10);
 }
 
-/** Returns the number of entries in a TLUT object. */
 u16 GXGetTlutObjNumEntries(const GXTlutObj* tlut_obj) {
-    const __GXTlutObjInt* t = (const __GXTlutObjInt *)tlut_obj;
+    const __GXTlutObjInt* t = (const __GXTlutObjInt*)tlut_obj;
 
     ASSERTMSGLINE(1405, tlut_obj, "TLut Object Pointer is null");
     return t->numEntries;
 }
 
-/**
- * Loads a palette into TMEM: gets the TLUT region for tlut_name from the region callback,
- * writes the object's and region's TLUT load registers (bracketed by texture state flushes),
- * stores the region's TMEM offset in the object and copies the object into the region.
- */
 void GXLoadTlut(GXTlutObj* tlut_obj, u32 tlut_name) {
     __GXTlutRegionInt* r;
     u32 tlut_offset;
-    __GXTlutObjInt* t = (__GXTlutObjInt *)tlut_obj;
+    __GXTlutObjInt* t = (__GXTlutObjInt*)tlut_obj;
 
     ASSERTMSGLINE(1432, tlut_obj, "TLut Object Pointer is null");
     CHECK_GXBEGIN(1434, "GXLoadTlut");
     ASSERTMSGLINEV(1435, __GXData->tlutRegionCallback, "%s: Tex/Tlut Region Callback not set", "GXLoadTlut");
-    r = (__GXTlutRegionInt *)__GXData->tlutRegionCallback(tlut_name);
+    r = (__GXTlutRegionInt*)__GXData->tlutRegionCallback(tlut_name);
     ASSERTMSGLINEV(1437, r, "%s: Tex/Tlut Region Callback returns NULL", "GXLoadTlut");
 
     __GXFlushTextureState();
@@ -812,11 +723,6 @@ void GXLoadTlut(GXTlutObj* tlut_obj, u32 tlut_name) {
     r->tlutObj = *t;
 }
 
-/**
- * Describes a texture cache region: the TMEM addresses (in 32-byte units)
- * and sizes (32K, 128K or 512K, the odd half may be none) of its even and odd halves,
- * and whether it is a 32-bit-mipmap region; marks it as cached.
- */
 void GXInitTexCacheRegion(GXTexRegion* region, u8 is_32b_mipmap, u32 tmem_even, GXTexCacheSize size_even, u32 tmem_odd, GXTexCacheSize size_odd) {
     u32 WidthExp2;
     __GXTexRegionInt* t = (__GXTexRegionInt*)region;
@@ -873,12 +779,8 @@ void GXInitTexCacheRegion(GXTexRegion* region, u8 is_32b_mipmap, u32 tmem_even, 
     t->isCached = 1;
 }
 
-/**
- * Describes a texture memory region for preloading:
- * the TMEM addresses and sizes of the even and odd halves, marked as not cached.
- */
 void GXInitTexPreLoadRegion(GXTexRegion* region, u32 tmem_even, u32 size_even, u32 tmem_odd, u32 size_odd) {
-    __GXTexRegionInt* t = (__GXTexRegionInt *)region;
+    __GXTexRegionInt* t = (__GXTexRegionInt*)region;
 
     ASSERTMSGLINE(1550, region, "TexRegion Object Pointer is null");
     CHECK_GXBEGIN(1552, "GXInitTexPreLoadRegion");
@@ -903,9 +805,8 @@ void GXInitTexPreLoadRegion(GXTexRegion* region, u32 tmem_even, u32 size_even, u
     t->sizeOdd = (u16)(size_odd >> 5);
 }
 
-/** Returns all fields of a texture cache region. */
 void GXGetTexRegionAll(const GXTexRegion* region, u8* is_cached, u8* is_32b_mipmap, u32* tmem_even, u32* size_even, u32* tmem_odd, u32* size_odd) {
-    const __GXTexRegionInt* t = (const __GXTexRegionInt *)region;
+    const __GXTexRegionInt* t = (const __GXTexRegionInt*)region;
 
     ASSERTMSGLINE(1601, region, "TexRegion Object Pointer is null");
     *tmem_even = GET_REG_FIELD(t->image1, 15, 0) << 5;
@@ -949,12 +850,8 @@ void GXGetTexRegionAll(const GXTexRegion* region, u8* is_cached, u8* is_32b_mipm
     *is_cached = t->isCached;
 }
 
-/**
- * Describes a palette region: its TMEM address (relative to 0x80000)
- * and size in the TLUT load register with the BP 0x65 command.
- */
 void GXInitTlutRegion(GXTlutRegion* region, u32 tmem_addr, GXTlutSize tlut_size) {
-    __GXTlutRegionInt* t = (__GXTlutRegionInt *)region;
+    __GXTlutRegionInt* t = (__GXTlutRegionInt*)region;
 
     ASSERTMSGLINE(1652, region, "TLutRegion Object Pointer is null");
     CHECK_GXBEGIN(1654, "GXInitTlutRegion");
@@ -967,19 +864,14 @@ void GXInitTlutRegion(GXTlutRegion* region, u32 tmem_addr, GXTlutSize tlut_size)
     SET_REG_FIELD(1662, t->loadTlut1, 8, 24, 0x65);
 }
 
-/** Returns all fields of a TLUT region. */
 void GXGetTlutRegionAll(const GXTlutRegion* region, u32* tmem_addr, GXTlutSize* tlut_size) {
-    const __GXTlutRegionInt* t = (const __GXTlutRegionInt *)region;
+    const __GXTlutRegionInt* t = (const __GXTlutRegionInt*)region;
 
     ASSERTMSGLINE(1682, region, "TLutRegion Object Pointer is null");
     *tmem_addr = (GET_REG_FIELD(t->loadTlut1, 10, 0) << 9) + 0x80000;
     *tlut_size = GET_REG_FIELD(t->loadTlut1, 11, 10);
 }
 
-/**
- * Invalidates the texture cache over one region by writing BP 0x66 with the region's even (and, if present, odd)
- * TMEM address and the number of cache lines to flush, derived from the region's width and height exponents.
- */
 void GXInvalidateTexRegion(GXTexRegion* region) {
     s32 wle;
     s32 hle;
@@ -1037,10 +929,8 @@ void GXInvalidateTexRegion(GXTexRegion* region) {
     }
     __GXFlushTextureState();
 
-    reg0; reg1; r;  // needed to match
 }
 
-/** Invalidates the whole texture cache by writing BP 0x66001000 and 0x66001100. */
 void GXInvalidateTexAll(void) {
     u32 reg0;
     u32 reg1;
@@ -1054,7 +944,6 @@ void GXInvalidateTexAll(void) {
     __GXFlushTextureState();
 }
 
-/** Installs the function that chooses a texture cache region whenever a texture is loaded; returns the old one. */
 GXTexRegionCallback GXSetTexRegionCallback(GXTexRegionCallback f) {
     GXTexRegionCallback oldcb = __GXData->texRegionCallback;
 
@@ -1062,7 +951,6 @@ GXTexRegionCallback GXSetTexRegionCallback(GXTexRegionCallback f) {
     return oldcb;
 }
 
-/** Installs the function that maps a TLUT name to a palette region; returns the old one. */
 GXTlutRegionCallback GXSetTlutRegionCallback(GXTlutRegionCallback f) {
     GXTlutRegionCallback oldcb = __GXData->tlutRegionCallback;
 
@@ -1070,11 +958,6 @@ GXTlutRegionCallback GXSetTlutRegionCallback(GXTlutRegionCallback f) {
     return oldcb;
 }
 
-/**
- * Loads a whole texture, including all its mip levels, from main memory into the TMEM region given by region:
- * for each level it writes the BP texture-load commands 0x60 to 0x63 (address, even and odd TMEM positions,
- * tile count and format), stepping the address and TMEM positions by the previous level's tile count.
- */
 void GXPreLoadEntireTexture(GXTexObj* tex_obj, GXTexRegion* region) {
     GXBool isMipMap;
     GXBool is32bit; 
@@ -1212,7 +1095,7 @@ void GXPreLoadEntireTexture(GXTexObj* tex_obj, GXTexRegion* region) {
             }
             tmem1 = (i & 1) ? tmemAR : tmemGB;
             tmem2 = (i & 1) ? tmemGB : tmemAR;
-            __GetImageTileCount(t->fmt, (u16) (wd >> (i + 1)), (u16) (ht >> (i + 1)), &rowTiles, &colTiles, &cmpTiles);
+            __GetImageTileCount(t->fmt, (u16)(wd >> (i + 1)), (u16)(ht >> (i + 1)), &rowTiles, &colTiles, &cmpTiles);
             nTiles = rowTiles * colTiles;
             SET_REG_FIELD(1957, loadImage0, 21, 0, base);
             SET_REG_FIELD(1958, loadImage1, 15, 0, tmem1);
@@ -1226,15 +1109,8 @@ void GXPreLoadEntireTexture(GXTexObj* tex_obj, GXTexRegion* region) {
     }
     __GXFlushTextureState();
 
-    // needed to match debug
-    maxLevelIndex; maxLevelIndex; base; base; base; tmem1; tmem1; tmem2; tmem2;
 }
 
-/**
- * Turns manual scale mode on or off for a texture coordinate slot;
- * when on, sets its S and T scale to ss and ts (stored minus one) in the setup-unit registers instead of using
- * the size of the texture bound to it.
- */
 void GXSetTexCoordScaleManually(GXTexCoordID coord, GXBool enable, u16 ss, u16 ts) {
     CHECK_GXBEGIN(1989, "GXSetTexCoordScaleManually");
     ASSERTMSGLINEV(1991, coord < GX_MAX_TEXCOORD, "%s: bad texcoord specified", "GXSetTexCoordScaleManually");
@@ -1249,10 +1125,6 @@ void GXSetTexCoordScaleManually(GXTexCoordID coord, GXBool enable, u16 ss, u16 t
     }
 }
 
-/**
- * Sets the cylindrical wrapping bit for S and T of a texture coordinate slot (written immediately only if the
- * slot is in manual scale mode).
- */
 void GXSetTexCoordCylWrap(GXTexCoordID coord, u8 s_enable, u8 t_enable) {
     CHECK_GXBEGIN(2023, "GXSetTexCoordCylWrap");
     ASSERTMSGLINEV(2025, coord < GX_MAX_TEXCOORD, "%s: bad texcoord specified", "GXSetTexCoordCylWrap");
@@ -1266,10 +1138,6 @@ void GXSetTexCoordCylWrap(GXTexCoordID coord, u8 s_enable, u8 t_enable) {
     }
 }
 
-/**
- * Sets the bias bit for S and T of a texture coordinate slot (written immediately only if the slot is in manual
- * scale mode).
- */
 void GXSetTexCoordBias(GXTexCoordID coord, u8 s_enable, u8 t_enable) {
     CHECK_GXBEGIN(2054, "GXSetTexCoordBias");
     ASSERTMSGLINEV(2056, coord < GX_MAX_TEXCOORD, "%s: bad texcoord specified", "GXSetTexCoordBias");
@@ -1283,10 +1151,6 @@ void GXSetTexCoordBias(GXTexCoordID coord, u8 s_enable, u8 t_enable) {
     }
 }
 
-/**
- * Writes the setup-unit scale registers for texture coordinate slot tcoord from texture map tmap:
- * width and height minus one from the map's image word, and the bias bits from its wrap modes.
- */
 static void __SetSURegs(u32 tmap, u32 tcoord) {
     u32 w;
     u32 h;
@@ -1297,8 +1161,8 @@ static void __SetSURegs(u32 tmap, u32 tcoord) {
     h = GET_REG_FIELD(__GXData->tImage0[tmap], 10, 10);
     SET_REG_FIELD(2089, __GXData->suTs0[tcoord], 16, 0, w);
     SET_REG_FIELD(2090, __GXData->suTs1[tcoord], 16, 0, h);
-    s_bias = GET_REG_FIELD(__GXData->tMode0[tmap], 2, 0) == 1;
-    t_bias = GET_REG_FIELD(__GXData->tMode0[tmap], 2, 2) == 1;
+    s_bias = GET_REG_FIELD(__GXData->tMode0[tmap], 2, 0) == GX_REPEAT;
+    t_bias = GET_REG_FIELD(__GXData->tMode0[tmap], 2, 2) == GX_REPEAT;
     SET_REG_FIELD(2096, __GXData->suTs0[tcoord], 1, 16, s_bias);
     SET_REG_FIELD(2097, __GXData->suTs1[tcoord], 1, 16, t_bias);
     GX_WRITE_RAS_REG(__GXData->suTs0[tcoord]);
@@ -1306,11 +1170,6 @@ static void __SetSURegs(u32 tmap, u32 tcoord) {
     __GXData->bpSentNot = 0;
 }
 
-/**
- * Before a draw, sets the setup-unit scale registers of every texture coordinate slot that is not in manual
- * scale mode: first for the indirect stages (their map and coordinate from the indirect reference word),
- * then for each TEV stage that has a texture map and a texcoord enabled.
- */
 void __GXSetSUTexRegs(void) {
     u32 nStages;
     u32 nIndStages;
@@ -1347,7 +1206,6 @@ void __GXSetSUTexRegs(void) {
             }
         }
 
-        i = 0;
         for (i = 0; i < nStages; i++) {
             ptref = &__GXData->tref[i / 2];
             map = __GXData->texmapId[i];
@@ -1364,16 +1222,11 @@ void __GXSetSUTexRegs(void) {
     }
 }
 
-/** Returns the width and height (the setup-unit S and T scale plus one) stored for a texture coordinate slot. */
 void __GXGetSUTexSize(GXTexCoordID coord, u16* width, u16* height) {
     *width = (u16)__GXData->suTs0[coord] + 1;
     *height = (u16)__GXData->suTs1[coord] + 1;
 }
 
-/**
- * Writes the BP registers that set the texture memory cache layout (the even/odd TMEM addresses of the eight
- * texture images and their sizes) for configuration 0, 1 or 2; GXInit uses 2.
- */
 void __GXSetTmemConfig(u32 config) {
     switch (config) {
     case 2:

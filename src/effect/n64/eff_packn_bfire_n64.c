@@ -1,4 +1,5 @@
 // Paper Mario 64 effect: Piranha Plant (packn) fire breath (bfire) from a point toward a target; types 0-2.
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -7,33 +8,34 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
-#include "eff/n64/eff_packn_bfire_n64.h"
 #include <stdlib.h>
 #include "libc_decls.h"
+#include "eff/eff_magic1_n64.h"
+#include "eff/n64/eff_packn_bfire_n64.h"
 
 typedef struct EffPacknBfireWork {
-    s32 type;        // 0x0
-    Vec pos;         // 0x4
-    Vec tgt;         // 0x10
-    s32 frames;      // 0x1c
-    s32 life;        // 0x20
-    s32 frame;       // 0x24
-    s32 color[8];    // 0x28
-    f32 scaleArg;    // 0x48
-    f32 uvx;         // 0x4c
-    f32 uvy;         // 0x50
-    f32 duvx;        // 0x54
-    f32 duvy;        // 0x58
-    f32 reserved_5c; // 0x5c, never read or written
-    Vec vel;         // 0x60
-    f32 sy;          // 0x6c
-    f32 sx;          // 0x70
-    f32 rot;         // 0x74
-    f32 drot;        // 0x78
+    s32 type;     // 0x0
+    Vec pos;      // 0x4
+    Vec tgt;      // 0x10
+    s32 frames;   // 0x1c
+    s32 life;     // 0x20
+    s32 frame;    // 0x24
+    s32 color[8]; // 0x28
+    f32 scaleArg; // 0x48
+    f32 uvx;      // 0x4c
+    f32 uvy;      // 0x50
+    f32 duvx;     // 0x54
+    f32 duvy;     // 0x58
+    f32 unk5c;    // 0x5c
+    Vec vel;      // 0x60
+    f32 sy;       // 0x6c
+    f32 sx;       // 0x70
+    f32 rot;      // 0x74
+    f32 drot;     // 0x78
 } EffPacknBfireWork;
 
 static void effPacknBfireMain(EffectEntry* effect);
-static void effPacknBfireDisp(CameraId cameraId, EffectEntry* effect);
+static void effPacknBfireDisp(CameraId cameraId, void* param);
 
 /** 64x64 camera-facing quad drawn for each fire puff and spark of the Piranha Plant's fire breath. */
 static effN64Vtx size64x64_tex32x32_vtx[] = {
@@ -64,7 +66,7 @@ EffectEntry* effPacknBfireN64Entry(s32 type, s32 frames, s32 life, f32 x, f32 y,
     work = __memAlloc(HEAP_EFFECT, count * sizeof(EffPacknBfireWork));
     effect->userdata = work;
     effect->callback = effPacknBfireMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     if (life <= 0) {
         work->life = 1000;
     } else {
@@ -115,7 +117,7 @@ EffectEntry* effPacknBfireN64Entry(s32 type, s32 frames, s32 life, f32 x, f32 y,
             work->color[6] = 123;
             work->color[7] = 255;
             base = (f32)(rand() % 361);
-            for (i = 0; i < count; i++) {
+            for (i = 0; i < count; i++, work++) {
                 work->pos.x = x;
                 work->pos.y = y;
                 work->pos.z = z;
@@ -130,7 +132,6 @@ EffectEntry* effPacknBfireN64Entry(s32 type, s32 frames, s32 life, f32 x, f32 y,
                 work->duvy = 0.0f;
                 work->rot = -45.0f;
                 work->drot = -10.0f;
-                work++;
             }
             break;
     }
@@ -155,8 +156,8 @@ static void effPacknBfireMain(EffectEntry* effect) {
     tmp.z = work->pos.z;
     position = tmp;
     type = work->type;
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->life = 16;
     }
     if (work->life < 1000) {
@@ -190,7 +191,7 @@ static void effPacknBfireMain(EffectEntry* effect) {
                 work->rot += work->drot;
                 break;
             case 2:
-                for (i = 0; i < effect->count; i++) {
+                for (i = 0; i < effect->count; i++, work++) {
                     work->vel.x *= 0.9f;
                     work->vel.y -= 0.2f;
                     work->pos.x += work->vel.x;
@@ -204,19 +205,19 @@ static void effPacknBfireMain(EffectEntry* effect) {
                     work->sx += 0.07f * -work->sx;
                     work->sy += 0.05f * -work->sy;
                     work->rot += work->drot;
-                    work++;
                 }
                 break;
         }
-        dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effPacknBfireDisp, effect);
+        dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effPacknBfireDisp, effect);
     }
 }
 
 /**
- * Draws each type 1/2 fire puff as a camera-facing 64x64 quad with two scrolling flame textures (0x71, 0x72);
+ * Draws each type 1/2 fire puff as a camera-facing 64x64 quad with a flame texture (0x71) and a scrolling one (0x72);
  * type 0 draws nothing.
  */
-static void effPacknBfireDisp(CameraId cameraId, EffectEntry* effect) {
+static void effPacknBfireDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
     EffPacknBfireWork* work;
     GXTexObj texObj;
@@ -234,39 +235,41 @@ static void effPacknBfireDisp(CameraId cameraId, EffectEntry* effect) {
     sc = work->scaleArg;
     if (work->type != 0) {
         GXSetTevColor(GX_TEVREG0, (GXColor){work->color[0], work->color[1], work->color[2], a});
+
+        // Secondary green is taken from color[1]; color[5] (set in the entry function) is not read here.
         GXSetTevColor(GX_TEVREG1, (GXColor){work->color[4], work->color[1], work->color[6], work->color[7]});
         GXSetNumChans(0);
         GXSetNumTevStages(5);
-        GXSetTevOrder(0, 0, 0, 0xff);
-        GXSetTevColorOp(0, 0, 0, 0, 1, 3);
-        GXSetTevAlphaOp(0, 0, 0, 0, 1, 3);
-        GXSetTevColorIn(0, 15, 15, 15, 8);
-        GXSetTevAlphaIn(0, 7, 7, 7, 4);
-        GXSetTevOrder(1, 1, 1, 0xff);
-        GXSetTevColorOp(1, 0, 0, 0, 0, 0);
-        GXSetTevAlphaOp(1, 0, 0, 0, 0, 0);
-        GXSetTevColorIn(1, 15, 6, 8, 4);
-        GXSetTevAlphaIn(1, 7, 2, 4, 3);
-        GXSetTevOrder(2, 1, 1, 0xff);
-        GXSetTevColorOp(2, 1, 0, 0, 1, 0);
-        GXSetTevAlphaOp(2, 1, 0, 0, 1, 0);
-        GXSetTevColorIn(2, 15, 6, 6, 0);
-        GXSetTevAlphaIn(2, 7, 1, 2, 0);
-        GXSetTevOrder(3, 1, 1, 0xff);
-        GXSetTevColorOp(3, 0, 0, 0, 0, 0);
-        GXSetTevAlphaOp(3, 0, 0, 0, 0, 0);
-        GXSetTevColorIn(3, 15, 0, 8, 2);
-        GXSetTevAlphaIn(3, 7, 0, 3, 7);
-        GXSetTevOrder(4, 1, 1, 0xff);
-        GXSetTevColorOp(4, 1, 0, 0, 1, 0);
-        GXSetTevAlphaOp(4, 0, 0, 0, 1, 0);
-        GXSetTevColorIn(4, 15, 6, 8, 0);
-        GXSetTevAlphaIn(4, 7, 7, 7, 0);
+        GXSetTevOrder(GX_TEVSTAGE0, GX_TEXCOORD0, GX_TEXMAP0, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG2);
+        GXSetTevAlphaOp(GX_TEVSTAGE0, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVREG2);
+        GXSetTevColorIn(GX_TEVSTAGE0, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_TEXC);
+        GXSetTevAlphaIn(GX_TEVSTAGE0, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
+        GXSetTevOrder(GX_TEVSTAGE1, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE1, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE1, GX_CC_ZERO, GX_CC_C2, GX_CC_TEXC, GX_CC_C1);
+        GXSetTevAlphaIn(GX_TEVSTAGE1, GX_CA_ZERO, GX_CA_A1, GX_CA_TEXA, GX_CA_A2);
+        GXSetTevOrder(GX_TEVSTAGE2, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE2, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE2, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE2, GX_CC_ZERO, GX_CC_C2, GX_CC_C2, GX_CC_CPREV);
+        GXSetTevAlphaIn(GX_TEVSTAGE2, GX_CA_ZERO, GX_CA_A0, GX_CA_A1, GX_CA_APREV);
+        GXSetTevOrder(GX_TEVSTAGE3, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE3, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_FALSE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE3, GX_CC_ZERO, GX_CC_CPREV, GX_CC_TEXC, GX_CC_C0);
+        GXSetTevAlphaIn(GX_TEVSTAGE3, GX_CA_ZERO, GX_CA_APREV, GX_CA_A2, GX_CA_ZERO);
+        GXSetTevOrder(GX_TEVSTAGE4, GX_TEXCOORD1, GX_TEXMAP1, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE4, GX_TEV_SUB, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE4, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE4, GX_CC_ZERO, GX_CC_C2, GX_CC_TEXC, GX_CC_CPREV);
+        GXSetTevAlphaIn(GX_TEVSTAGE4, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
         GXSetNumTexGens(2);
-        GXSetTexCoordGen2(0, 1, 4, 30, 0, 0x7d);
-        GXSetTexCoordGen2(1, 1, 4, 33, 0, 0x7d);
+        GXSetTexCoordGen2(GX_TEXCOORD0, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX0, GX_FALSE, GX_PTIDENTITY);
+        GXSetTexCoordGen2(GX_TEXCOORD1, GX_TG_MTX2x4, GX_TG_TEX0, GX_TEXMTX1, GX_FALSE, GX_PTIDENTITY);
         PSMTXScale(mtx, 1.0f / 32.0f, 1.0f / 32.0f, 0.0f);
-        GXLoadTexMtxImm(mtx, 30, GX_MTX2x4);
+        GXLoadTexMtxImm(mtx, GX_TEXMTX0, GX_MTX2x4);
         effGetTexObjN64(0x71, &texObj);
         GXLoadTexObj(&texObj, GX_TEXMAP0);
         effGetTexObjN64(0x72, &texObj);
@@ -300,7 +303,7 @@ static void effPacknBfireDisp(CameraId cameraId, EffectEntry* effect) {
             PSMTXScale(mtx, 1.0f / 256.0f, 1.0f / 64.0f, 0.0f);
             PSMTXTrans(scale, work->uvx, work->uvy, 0.0f);
             PSMTXConcat(mtx, scale, mtx);
-            GXLoadTexMtxImm(mtx, 33, GX_MTX2x4);
+            GXLoadTexMtxImm(mtx, GX_TEXMTX1, GX_MTX2x4);
             GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
             tri2(0, 1, 2, 0, 0, 2, 3, 0);
         }

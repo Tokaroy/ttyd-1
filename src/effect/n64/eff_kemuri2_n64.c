@@ -1,4 +1,5 @@
 // Paper Mario 64 smoke effect 2 (kemuri: smoke) drifting along a direction (dirX, dirZ); types 0-2.
+
 #include "eff/n64/eff_kemuri2_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -12,10 +13,9 @@
 typedef struct EffKemuri2N64Work {
     s32 active;   // 0x0
     u16 type;     // 0x4
-    u8 pad_6[2];  // 0x6
     Vec position; // 0x8
     u8 pad_14[0x44 - 0x14];
-    f32 speed;   // 0x44, sideways speed along (dirX, dirZ)
+    f32 hSpeed;  // 0x44, horizontal speed: position.x/z += hSpeed * dirX/dirZ each frame (as hSpeed in eff_kemuri1)
     f32 velY;    // 0x48
     f32 accelY;  // 0x4C
     f32 dirX;    // 0x50
@@ -27,17 +27,18 @@ typedef struct EffKemuri2N64Work {
 
 /** Short puff animation (types 0-1): the sprite cell on each frame, ending at the -1 marker. */
 static s8 anim_data_0[] = {0, 1, 2, 2, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6, -1};
+
 /** Longer puff animation (type 2): the sprite cell on each frame, ending at the -1 marker. */
 static s8 anim_data_1[] = {0, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 6, 7, 7, 7, -1};
 static s8* anim_data_table[] = {anim_data_0, anim_data_1};
 
 static void effKemuri2Main(EffectEntry* effect);
-static void effKemuri2Disp(CameraId cameraId, EffectEntry* effect);
+static void effKemuri2Disp(CameraId cameraId, void* param);
 
 /**
  * Spawns a single smoke puff at (x, y, z) that drifts along (dirX, dirZ) and rises.
  * Type 2 uses the longer animation; types 0-2 pick the texture and size.
- * Spawned only from event scripts through evt_eff.
+ * Spawned only from event scripts through evt_eff64 "kemuri2_n64".
  */
 EffectEntry* effKemuri2N64Entry(s32 type, f32 x, f32 y, f32 z, f32 dirX, f32 dirZ) {
     EffectEntry* effect;
@@ -58,7 +59,7 @@ EffectEntry* effKemuri2N64Entry(s32 type, f32 x, f32 y, f32 z, f32 dirX, f32 dir
     work->position.x = x;
     work->position.y = y;
     work->position.z = z;
-    work->speed = 0.33333334f;
+    work->hSpeed = 0.33333334f;
     work->velY = 1.75f;
     work->accelY = -0.16f;
     return effect;
@@ -83,12 +84,12 @@ static void effKemuri2Main(EffectEntry* effect) {
         return;
     }
     for (i = 0; i < effect->count; i++, work++) {
-        work->position.x += work->speed * work->dirX;
-        work->position.z += work->speed * work->dirZ;
+        work->position.x += work->hSpeed * work->dirX;
+        work->position.z += work->hSpeed * work->dirZ;
         work->velY += work->accelY;
         work->position.y += work->velY;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effKemuri2Disp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, effKemuri2Disp, effect);
 }
 
 /** Binds the texture for the puff type (0xC, 0xD or 0xE) and draws one centred quad (16x16 for type 0, else 24x24). */
@@ -162,17 +163,18 @@ static void main_dl(s32 type) {
 
 /**
  * Draws each puff as a camera-facing sprite via main_dl,
- * picking the cell (wf * cell units) from the type's sprite sheet (176, 224 or 256 texels wide).
+ * picking the cell (cellIndex * cell units) from the type's sprite sheet (176, 224 or 256 texels wide).
  */
-static void effKemuri2Disp(CameraId cameraId, EffectEntry* effect) {
+static void effKemuri2Disp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera = camGetPtr(cameraId);
     EffKemuri2N64Work* work = effect->userdata;
     s32 cell;
     s32 i;
-    s32 wf = work->frame;
+    s32 cellIndex = work->frame;
     s32 type = work->type;
-    s32 flag = 0;
-    s32 frame;
+    s32 lastFrame = 0;
+    s32 cellOffset;
 
     f32 texW;
     f32 sx;
@@ -186,8 +188,8 @@ static void effKemuri2Disp(CameraId cameraId, EffectEntry* effect) {
     GXColor c1;
     GXColor c2;
 
-    if ((work->kind == 0 && wf == 6) || (work->kind == 1 && wf == 7)) {
-        flag = 1;
+    if ((work->kind == 0 && cellIndex == 6) || (work->kind == 1 && cellIndex == 7)) {
+        lastFrame = 1;
     }
     c1 = (GXColor){0xE6, 0xDE, 0xDE, 0x6E};
     GXSetTevColor(GX_TEVREG0, c1);
@@ -212,22 +214,22 @@ static void effKemuri2Disp(CameraId cameraId, EffectEntry* effect) {
     if (type == 0) {
         cell = 24;
     }
-    frame = wf * cell;
+    cellOffset = cellIndex * cell;
     sx = (f32)cell / texW;
     sy = (f32)cell / texH;
     PSMTXScale(scaleMtx, sx, sy, 1.0f);
     ty = 0.0f / texH;
-    PSMTXTrans(trans, (f32)frame / texW, ty, 0.0f);
+    PSMTXTrans(trans, (f32)cellOffset / texW, ty, 0.0f);
     PSMTXConcat(trans, scaleMtx, trans);
     GXLoadTexMtxImm(trans, GX_TEXMTX0, GX_MTX2x4);
-    if (flag) {
+    if (lastFrame) {
         PSMTXScale(scaleMtx, sx, 0.0f, 1.0f);
-        PSMTXTrans(trans, (f32)(frame + cell) / texW, ty, 0.0f);
+        PSMTXTrans(trans, (f32)(cellOffset + cell) / texW, ty, 0.0f);
         PSMTXConcat(trans, scaleMtx, trans);
         GXLoadTexMtxImm(trans, GX_TEXMTX1, GX_MTX2x4);
     } else {
         PSMTXScale(scaleMtx, sx, sy, 1.0f);
-        PSMTXTrans(trans, (f32)(frame + cell) / texW, ty, 0.0f);
+        PSMTXTrans(trans, (f32)(cellOffset + cell) / texW, ty, 0.0f);
         PSMTXConcat(trans, scaleMtx, trans);
         GXLoadTexMtxImm(trans, GX_TEXMTX1, GX_MTX2x4);
     }

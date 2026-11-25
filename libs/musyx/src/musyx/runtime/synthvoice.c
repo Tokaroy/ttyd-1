@@ -16,13 +16,8 @@ SYNTH_VOICELIST voiceList[64];
 SYNTH_ROOTLIST voicePrioSortRootList[256];
 u8 voicePrioSortVoicesRoot[256];
 SYNTH_VOICELIST voicePrioSortVoices[64];
-/** Heads of the list of free voice ids and the list of voice ids in use. */
 static VID_LIST* vidFree = NULL;
 static VID_LIST* vidRoot = NULL;
-/**
- * State of the voice allocator: the next voice id, the head of the priority list, and counters of music and
- * effect voices.
- */
 static u32 vidCurrentId = 0;
 u16 voicePrioSortRootListRoot = 0;
 u8 voiceMusicRunning = 0;
@@ -30,8 +25,6 @@ u8 voiceFxRunning = 0;
 u8 voiceListInsert = 0;
 u8 voiceListRoot = 0;
 
-/** Resets the voice ID system: builds the free list of 128 VID_LIST entries and restarts the ID counter. A "voice ID"
- * is the public handle the game holds; it maps to a chain of internal voices (layers and legato retunes). */
 void vidInit() {
   int i;
   VID_LIST* lvl;
@@ -47,8 +40,7 @@ void vidInit() {
   lvl->next = NULL;
 }
 
-/** Finds the VID_LIST entry for voice ID vid in the sorted list, or NULL. */
-static inline VID_LIST* get_vidlist(u32 vid) {
+static VID_LIST* get_vidlist(u32 vid) {
   VID_LIST* vl = vidRoot;
   while (vl != NULL) {
     if (vl->vid == vid) {
@@ -63,9 +55,8 @@ static inline VID_LIST* get_vidlist(u32 vid) {
   return NULL;
 }
 
-/** Returns the next voice ID, skipping 0xFFFFFFFF (reserved for "none"). */
-static inline u32 get_newvid() {
-  u32 vid; // r31
+static u32 get_newvid() {
+  u32 vid;
   do {
     vid = vidCurrentId++;
   } while (vid == 0xFFFFFFFF);
@@ -73,8 +64,7 @@ static inline u32 get_newvid() {
   return vid;
 }
 
-/** Unlinks a VID_LIST entry, puts it back on the free list and sets the caller's pointer to NULL. */
-static inline void vidRemove(VID_LIST** vidList) {
+static void vidRemove(VID_LIST** vidList) {
   if ((*vidList)->prev != NULL) {
     (*vidList)->prev->next = (*vidList)->next;
   } else {
@@ -96,8 +86,6 @@ static inline void vidRemove(VID_LIST** vidList) {
   *vidList = NULL;
 }
 
-/** Detaches a voice from the voice ID tables before it is reused: unlinks it from its parent/child chain and frees its
- * ID entry (the child becomes the new chain root when the root voice is removed). */
 void vidRemoveVoiceReferences(SYNTH_VOICE* svoice) {
   if (svoice->id == 0xFFFFFFFF) {
     return;
@@ -132,19 +120,16 @@ void vidRemoveVoiceReferences(SYNTH_VOICE* svoice) {
   }
 }
 
-/** Makes the voice's ID entry the master one (the handle the game keeps) and returns the voice ID. */
 u32 vidMakeRoot(SYNTH_VOICE* svoice) {
   svoice->vidMasterList = svoice->vidList;
   return svoice->vidList->vid;
 }
 
-/** Creates a new voice ID entry for a voice (IDs stay unique and the list sorted). Returns the public voice ID if
- * isMaster, otherwise the voice's internal ID, or 0xFFFFFFFF if no entry is free. */
 u32 vidMakeNew(SYNTH_VOICE* svoice, u32 isMaster) {
-  u32 vid;       // r29
-  VID_LIST* nvl; // r30
-  VID_LIST* lvl; // r28
-  VID_LIST* vl;  // r31
+  u32 vid;
+  VID_LIST* nvl;
+  VID_LIST* lvl;
+  VID_LIST* vl;
 
   vid = get_newvid();
 _restart:
@@ -196,7 +181,6 @@ _restart:
   return isMaster ? vid : svoice->id;
 }
 
-/** Converts a public voice ID to the internal ID of the first voice of its chain; 0xFFFFFFFF if unknown. */
 u32 vidGetInternalId(u32 vid) {
   VID_LIST* vl;
 
@@ -209,7 +193,6 @@ u32 vidGetInternalId(u32 vid) {
   return 0xffffffff;
 }
 
-/** Finds the public voice ID of the chain that contains the internal voice ID vid; 0xFFFFFFFF if none. */
 u32 vidGetPublicId(u32 vid) {
   VID_LIST* vl;
   u32 id;
@@ -225,8 +208,7 @@ u32 vidGetPublicId(u32 vid) {
   return 0xFFFFFFFF;
 }
 
-/** Clears the per-priority lists (256 priority levels) that order running voices by priority. */
-static inline void voiceInitPrioSort() {
+static void voiceInitPrioSort() {
   u32 i;
 
   for (i = 0; i < synthInfo.voiceNum; ++i) {
@@ -240,11 +222,9 @@ static inline void voiceInitPrioSort() {
   voicePrioSortRootListRoot = 0xffff;
 }
 
-/** Removes a voice from the priority-sorted lists, also dropping its priority level from the list of levels when it was
- * the last voice of that level. */
-inline void voiceRemovePriority(SYNTH_VOICE* svoice) {
-  SYNTH_VOICELIST* vps; // r31
-  SYNTH_ROOTLIST* rps;  // r30
+void voiceRemovePriority(SYNTH_VOICE* svoice) {
+  SYNTH_VOICELIST* vps;
+  SYNTH_ROOTLIST* rps;
 
   vps = &voicePrioSortVoices[svoice->id & 0xFF];
   if (vps->user != 1) {
@@ -277,13 +257,11 @@ inline void voiceRemovePriority(SYNTH_VOICE* svoice) {
   vps->user = 0;
 }
 
-/** Places a voice in the priority-sorted lists at the given priority (taking it out of its old level) and tells the DSP
- * its priority and age. */
 void voiceSetPriority(SYNTH_VOICE* svoice, u8 prio) {
-  u16 li;               // r25
-  SYNTH_VOICELIST* vps; // r27
-  u16 i;                // r29
-  u32 v;                // r26
+  u16 li;
+  SYNTH_VOICELIST* vps;
+  u16 i;
+  u32 v;
   v = (u8)svoice->id;
   vps = &voicePrioSortVoices[v];
   if (vps->user == 1) {
@@ -331,10 +309,6 @@ void voiceSetPriority(SYNTH_VOICE* svoice, u8 prio) {
   hwSetPriority(svoice->id & 0xFF, ((u32)prio << 24) | (svoice->age >> 15));
 }
 
-/** Chooses a voice to start a new sound. If the sound's group (allocId) already uses maxVoices voices the oldest lower
- * priority one of the group is stolen; otherwise a free voice is used, and if none is free the oldest voice with equal
- * or lower priority (of the same music/effect kind when that class is over its quota) is stolen. Returns the voice
- * index or -1. */
 static s32 voiceAllocateFind(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag) {
   s32 i;
   s32 num;
@@ -371,7 +345,7 @@ static s32 voiceAllocateFind(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag) 
           continue;
 
         if (!type_alloc || fxFlag == synthVoice[i].fxFlag) {
-          if ((synthVoice[i].cFlags & 2))
+          if ((synthVoice[i].cFlags & SYNTH_CFLAG_START_PENDING))
             continue;
           if (voice != -1) {
             if (synthVoice[i].age < synthVoice[voice].age)
@@ -423,7 +397,7 @@ static s32 voiceAllocateFind(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag) 
           continue;
 
         if (!type_alloc || fxFlag == synthVoice[i].fxFlag) {
-          if ((synthVoice[i].cFlags & 2))
+          if ((synthVoice[i].cFlags & SYNTH_CFLAG_START_PENDING))
             continue;
           if (voice != -1) {
             if (synthVoice[voice].age > synthVoice[i].age)
@@ -450,27 +424,22 @@ _fail:
   return -1;
 }
 
-/** Allocates a voice with voiceAllocateFind: takes it off the free list (or counts the stolen voice out of its old
- * class) and counts it in the music or effect class. Returns the voice index or -1. */
-u32 voiceAllocate(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag) {
-  s32 voice;
-  SYNTH_VOICELIST* sfv;
+static u32 voiceAllocateDo(s32 voice, u8 fxFlag) {
   s32 i;
+  SYNTH_VOICELIST* sfv;
 
-  voice = voiceAllocateFind(priority, maxVoices, allocId, fxFlag);
   if (voice != -1) {
     if (voiceList[voice].user == 1) {
-      sfv = voiceList + voice;
+      sfv = &voiceList[voice];
       i = sfv->prev;
-
-      if (i != 0xff) {
+      if (i != 0xFF) {
         voiceList[i].next = sfv->next;
       } else {
         voiceListRoot = sfv->next;
       }
 
       i = sfv->next;
-      if (i != 0xff) {
+      if (i != 0xFF) {
         voiceList[i].prev = sfv->prev;
       }
 
@@ -479,22 +448,24 @@ u32 voiceAllocate(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag) {
       }
 
       sfv->user = 0;
-    } else if (synthVoice[voice].fxFlag) {
-      voiceFxRunning--;
+    } else if (synthVoice[voice].fxFlag != 0) {
+      voiceFxRunning -= 1;
     } else {
-      voiceMusicRunning--;
+      voiceMusicRunning -= 1;
     }
-    if (fxFlag != FALSE) {
-      ++voiceFxRunning;
+    if (fxFlag != 0) {
+      voiceFxRunning++;
     } else {
-      ++voiceMusicRunning;
+      voiceMusicRunning++;
     }
   }
   return voice;
 }
 
-/** Like voiceAllocate but changes nothing: returns 1 and the allocation group of the voice that would be stolen in
- * *currentAllocId, or 0 if a free voice or none would be used. */
+u32 voiceAllocate(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag) {
+  return voiceAllocateDo(voiceAllocateFind(priority, maxVoices, allocId, fxFlag), fxFlag);
+}
+
 int voiceAllocatePeek(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag, u32* currentAllocId) {
   s32 voice = voiceAllocateFind(priority, maxVoices, allocId, fxFlag);
 
@@ -508,11 +479,9 @@ int voiceAllocatePeek(u8 priority, u8 maxVoices, u32 allocId, u8 fxFlag, u32* cu
   return 1;
 }
 
-/** Releases a voice: stops its macro, removes it from the priority lists, returns it to the free list and updates the
- * music/effect voice counts. */
 void voiceFree(SYNTH_VOICE* svoice) {
-  u32 i;                // r29
-  SYNTH_VOICELIST* sfv; // r30
+  u32 i;
+  SYNTH_VOICELIST* sfv;
   MUSY_ASSERT(svoice->id != 0xFFFFFFFF);
   macMakeInactive(svoice, MAC_STATE_STOPPED);
   voiceRemovePriority(svoice);
@@ -542,9 +511,8 @@ void voiceFree(SYNTH_VOICE* svoice) {
   svoice->id = 0xFFFFFFFF;
 }
 
-/** Links all synth voices into the free list. */
-static inline void voiceInitFreeList() {
-  u32 i; // r31
+static void voiceInitFreeList() {
+  u32 i;
 
   for (i = 0; i < synthInfo.voiceNum; ++i) {
     voiceList[i].prev = i - 1;
@@ -558,7 +526,6 @@ static inline void voiceInitFreeList() {
   voiceListInsert = synthInfo.voiceNum - 1;
 }
 
-/** Initializes the free list, the priority lists and the running voice counters. */
 void synthInitAllocationAids() {
   voiceInitFreeList();
   voiceInitPrioSort();
@@ -566,8 +533,6 @@ void synthInitAllocationAids() {
   voiceMusicRunning = 0;
 }
 
-/** Reserves a voice for exclusive use (a stream) at priority prio: allocates it as an effect voice, stops whatever it
- * played and marks it blocked so the synth jobs skip it. Returns the voice index or 0xFFFFFFFF. */
 u32 voiceBlock(u8 prio) {
   u32 voice;
 
@@ -594,7 +559,6 @@ u32 voiceBlock(u8 prio) {
   return voice;
 }
 
-/** Gives a blocked voice back: stops the DSP voice, frees it and clears the blocked flag. */
 void voiceUnblock(u32 voice) {
   if (voice == 0xFFFFFFFF) {
     return;
@@ -609,12 +573,11 @@ void voiceUnblock(u32 voice) {
   synthVoice[voice].block = 0;
 }
 
-/** Kills voice vi: detaches its ID, frees it, stops the stream if it was blocked for one and breaks the DSP voice. */
 void voiceKill(u32 vi) {
-  SYNTH_VOICE* sv = &synthVoice[vi]; // r31
+  SYNTH_VOICE* sv = &synthVoice[vi];
   if (sv->addr != NULL) {
     vidRemoveVoiceReferences(sv);
-    sv->cFlags &= ~3;
+    sv->cFlags &= ~(SYNTH_CFLAG_START_BREAK | SYNTH_CFLAG_START_PENDING);
     sv->age = 0;
     voiceFree(sv);
   }
@@ -626,11 +589,10 @@ void voiceKill(u32 vi) {
   hwBreak(vi);
 }
 
-/** Kills every voice of the chain behind a public voice ID; returns 0 if a voice was killed, -1 otherwise. */
 s32 voiceKillSound(u32 voiceid) {
-  s32 ret = -1;     // r29
-  u32 next_voiceid; // r28
-  u32 i;            // r30
+  s32 ret = -1;
+  u32 next_voiceid;
+  u32 i;
   if (sndActive != FALSE) {
     for (voiceid = vidGetInternalId(voiceid); voiceid != -1; voiceid = next_voiceid) {
       i = voiceid & 0xff;
@@ -645,7 +607,6 @@ s32 voiceKillSound(u32 voiceid) {
   return ret;
 }
 
-/** Kills all voices, or with musiconly set only the music voices (plus voices not running a macro). */
 void synthKillAllVoices(unsigned char musiconly) {
   u32 i;
 
@@ -660,11 +621,9 @@ void synthKillAllVoices(unsigned char musiconly) {
   }
 }
 
-/** Kills voices that are not running a macro and every voice running one of the macros in the 0xFFFF-terminated ID list
- * ref (with ranges flagged by bit 15); used before unloading a group. */
 void synthKillVoicesByMacroReferences(u16* ref) {
-  u32 i;  // r31
-  u16 id; // r29
+  u32 i;
+  u16 id;
 
   for (i = 0; i < synthInfo.voiceNum; ++i) {
     if (synthVoice[i].addr == NULL && synthVoice[i].block == 0) {
@@ -695,8 +654,6 @@ void synthKillVoicesByMacroReferences(u16* ref) {
   }
 }
 
-/** Kills voices that are not running a macro and every voice playing one of the samples in the ID list ref; used before
- * unloading a group. */
 void synthKillVoicesBySampleReferences(u16* ref) {
   u32 i;
   u16 id;
@@ -730,10 +687,8 @@ void synthKillVoicesBySampleReferences(u16* ref) {
   }
 }
 
-/** Returns TRUE if the voice is the most recently started one on its MIDI channel (or sound effect slot); portamento
- * uses this. */
 u32 voiceIsLastStarted(SYNTH_VOICE* svoice) {
-  u32 i; // r31
+  u32 i;
 
   if (svoice->id != 0xFFFFFFFF && svoice->midi != 0xFF) {
     i = svoice->id & 0xFF;
@@ -749,9 +704,8 @@ u32 voiceIsLastStarted(SYNTH_VOICE* svoice) {
   return FALSE;
 }
 
-/** Records the voice as the latest one started on its MIDI channel (or effect slot). */
 void voiceSetLastStarted(SYNTH_VOICE* svoice) {
-  u32 i; // r31
+  u32 i;
 
   if (svoice->id != 0xFFFFFFFF && svoice->midi != 0xFF) {
     i = svoice->id & 0xFF;
@@ -763,7 +717,6 @@ void voiceSetLastStarted(SYNTH_VOICE* svoice) {
   }
 }
 
-/** Forgets the voice as the latest started one of its channel if it is. */
 void voiceResetLastStarted(struct SYNTH_VOICE* svoice) {
   u32 i;
 
@@ -779,7 +732,6 @@ void voiceResetLastStarted(struct SYNTH_VOICE* svoice) {
   }
 }
 
-/** Clears the latest-started voice for all MIDI channels and effect slots. */
 void voiceInitLastStarted() {
   u32 i;
   u32 j;

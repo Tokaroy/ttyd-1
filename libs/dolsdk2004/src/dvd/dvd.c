@@ -5,33 +5,19 @@
 #include "os/__os.h"
 #include "__dvd.h"
 
-// externs
-extern void __DVDPrintFatalMessage();
-extern int DVDCompareDiskID(const struct DVDDiskID * id1 /* r29 */, const struct DVDDiskID * id2 /* r30 */);
-extern int __DVDLowTestAlarm(const OSAlarm * alarm /* r3 */);
-
 #ifdef DEBUG
-/** Library version string kept in the binary (debug build). */
 const char* __DVDVersion = "<< Dolphin SDK - DVD\tdebug build: Apr  5 2004 03:56:07 (0x2301) >>";
 #else
-/** Library version string kept in the binary (release build). */
 const char* __DVDVersion = "<< Dolphin SDK - DVD\trelease build: Apr  5 2004 04:14:51 (0x2301) >>";
 #endif
 
-/**
- * When set, read commands invalidate the data cache over their destination
- * before the read (DVDSetAutoInvalidation).
- */
 static BOOL autoInvalidation = TRUE;
 
 static void defaultOptionalCommandChecker(DVDCommandBlock*, DVDCommandCheckerCallback);
-/**
- * Hook stateBusy calls for command numbers it does not know; replaced with __DVDSetOptionalCommandChecker.
- */
 static DVDCommandChecker checkOptionalCommand = defaultOptionalCommandChecker;
 
-static DVDBB2 BB2;
-static DVDDiskID CurrDiskID;
+static DVDBB2 BB2 ATTRIBUTE_ALIGN(32);
+static DVDDiskID CurrDiskID ATTRIBUTE_ALIGN(32);
 static DVDCommandBlock DummyCommandBlock;
 static OSAlarm ResetAlarm;
 
@@ -58,20 +44,14 @@ static int DVDInitialized;
 void (*LastState)(DVDCommandBlock*);
 
 // prototypes
-static void stateReadingFST();
 static void cbForStateReadingFST(u32 intType);
-static void cbForStateError(u32 intType);
-static void stateError(u32 error);
 static void stateTimeout();
 static void stateGettingError();
-static u32 CategorizeError(u32 error);
-static BOOL CheckCancel(u32 resume);
 static void cbForStateGettingError(u32 intType);
 static void cbForUnrecoveredError(u32 intType);
 static void cbForUnrecoveredErrorRetry(u32 intType);
 static void stateGoToRetry();
 static void cbForStateGoToRetry(u32 intType);
-static void stateCheckID();
 static void stateCheckID3();
 static void stateCheckID2a();
 static void stateCheckID2();
@@ -79,7 +59,6 @@ static void cbForStateCheckID1(u32 intType);
 static void cbForStateCheckID2(u32 intType);
 static void cbForStateCheckID3(u32 intType);
 static void cbForStateCheckID2a(u32 intType);
-static void AlarmHandler(OSAlarm* alarm, OSContext* context);
 static void stateCoverClosed();
 static void stateCoverClosed_CMD(DVDCommandBlock* command);
 static void cbForStateCoverClosed(u32 intType);
@@ -87,8 +66,6 @@ static void stateMotorStopped();
 static void cbForStateMotorStopped(u32 intType);
 static void stateReady();
 static void stateBusy(DVDCommandBlock* block);
-static BOOL IsImmCommandWithResult(u32 command);
-static int IsDmaCommand(u32 command);
 static void cbForStateBusy(u32 intType);
 static int issueCommand(s32 prio, DVDCommandBlock* block);
 static void cbForCancelStreamSync(s32 result, DVDCommandBlock* block);
@@ -103,25 +80,13 @@ static void cbForInquirySync(s32 result, DVDCommandBlock* block);
 static void cbForCancelSync(s32 result, DVDCommandBlock* block);
 static void cbForCancelAllSync(s32 result, DVDCommandBlock* block);
 
-/** Default for the optional command hook; does nothing, so unknown command numbers are never issued to the drive. */
 static void defaultOptionalCommandChecker(DVDCommandBlock*, DVDCommandCheckerCallback) {}
 
-/**
- * Sets the hook stateBusy calls for command numbers it does not know (the "optional" commands)
- * and returns the new hook.
- */
 DVDCommandChecker __DVDSetOptionalCommandChecker(DVDCommandChecker func) {
-    DVDCommandChecker old = checkOptionalCommand;
     checkOptionalCommand = func;
     return checkOptionalCommand;
 }
 
-/**
- * One-time DVD setup: initializes the file system, the waiting queues and the low-level read workaround,
- * installs the DI interrupt handler (interrupt 0x15) and clears the DI status.
- * If the boot info magic is 0xE5207C22 it also runs __fstLoad;
- * a magic other than 0x0D15EA5E marks the first run from the bootrom.
- */
 void DVDInit(void) {
     if (!DVDInitialized) {
         OSRegisterVersion(__DVDVersion);
@@ -135,11 +100,11 @@ void DVDInit(void) {
         bootInfo = (void*)OSPhysicalToCached(0);
         IDShouldBe = &bootInfo->DVDDiskID;
 
-        __OSSetInterruptHandler(0x15, __DVDInterruptHandler);
-        __OSUnmaskInterrupts(0x400);
+        __OSSetInterruptHandler(__OS_INTERRUPT_PI_DI, __DVDInterruptHandler);
+        __OSUnmaskInterrupts(OS_INTERRUPTMASK_PI_DI);
         OSInitThreadQueue(&__DVDThreadQueue);
-        __DIRegs[0] = 0x2A;
-        __DIRegs[1] = 0;
+        __DIRegs[DI_SR] = DI_SR_BRKINTMASK | DI_SR_TCINTMASK | DI_SR_DEINTMASK;
+        __DIRegs[DI_CVR] = 0;
 
         if (bootInfo->magic == 0xE5207C22) {
             OSReport("load fst\n");
@@ -152,10 +117,6 @@ void DVDInit(void) {
     }
 }
 
-/**
- * DVD state: reads the FST (length rounded up to 32 bytes,
- * from the position in the BB2 block just read) into the FST location in the boot info.
- */
 static void stateReadingFST() {
     LastState = stateReadingFST;
     ASSERTLINE(652, ((u32)(bootInfo->FSTLocation) & (32 - 1)) == 0);
@@ -163,15 +124,8 @@ static void stateReadingFST() {
     DVDLowRead(bootInfo->FSTLocation, (u32)(BB2.FSTLength + 0x1F) & 0xFFFFFFE0, BB2.FSTPosition, cbForStateReadingFST);
 }
 
-/** Extra command number (one slot, 0xFFFFFFFF: empty) that IsDmaCommand treats as a DMA transfer. */
 static u32 DmaCommand[1] = {0xFFFFFFFF};
 
-/**
- * Callback for stateReadingFST.
- * On success it re-initializes the file system from the new FST,
- * completes the current command with result 0 and goes to stateReady;
- * a timeout goes to stateTimeout and any other failure asks the drive for its error.
- */
 static void cbForStateReadingFST(u32 intType) {
     DVDCommandBlock* finished;
 
@@ -203,14 +157,9 @@ static void cbForStateReadingFST(u32 intType) {
     stateGettingError();
 }
 
-/**
- * Fatal-error handler, run after the motor stop:
- * marks the command as failed, shows the fatal message, sets FatalErrorFlag,
- * completes the command (and any cancel callback) with -1 and moves on. A timeout goes to stateTimeout instead.
- */
 static void cbForStateError(u32 intType) {
 	DVDCommandBlock* finished;
-    executing->state = -1;
+    executing->state = DVD_STATE_FATAL_ERROR;
 
 	if (intType == 16) {
 		stateTimeout();
@@ -224,7 +173,7 @@ static void cbForStateError(u32 intType) {
 	executing = &DummyCommandBlock;
 
 	if (finished->callback) {
-		(finished->callback)(-1, finished);
+		(finished->callback)(DVD_RESULT_FATAL_ERROR, finished);
 	}
 
 	if (Canceling) {
@@ -236,33 +185,21 @@ static void cbForStateError(u32 intType) {
 	stateReady();
 }
 
-/** DVD state: records the error code in SRAM (__DVDStoreErrorCode) and stops the motor, ending in cbForStateError. */
 static void stateError(u32 error) {
     __DVDStoreErrorCode(error);
     DVDLowStopMotor(&cbForStateError);
 }
 
-/**
- * DVD state: a command timed out.
- * Records code 0x01234568, resets the drive and goes straight to the fatal-error handler.
- */
 static void stateTimeout() {
     __DVDStoreErrorCode(0x01234568);
     DVDReset();
     cbForStateError(0);
 }
 
-/** DVD state: asks the drive for its error code (DVDLowRequestError); the reply goes to cbForStateGettingError. */
 static void stateGettingError() {
     DVDLowRequestError(cbForStateGettingError);
 }
 
-/**
- * Sorts a drive error into 0 (ignorable: 0x62800, 0x23A00 and 0xB5A01),
- * 1 (fatal: 0x20400, or the same error twice in a row on the second try),
- * 2 (retry after stopping the motor: a different error on the second try, 0x31100,
- * or any error on a disc ID read) or 3 (retry the command at once). Counts attempts in NumInternalRetry.
- */
 static u32 CategorizeError(u32 error) {
     if (error == 0x20400) {
         LastError = error;
@@ -293,11 +230,6 @@ static u32 CategorizeError(u32 error) {
     return 3;
 }
 
-/**
- * If the game has cancelled the running command, saves where to resume (resume),
- * completes the command as canceled (callbacks get -3 and 0), runs the next queued command and returns true.
- * Otherwise returns false.
- */
 static BOOL CheckCancel(u32 resume) {
 	DVDCommandBlock* finished;
 
@@ -308,10 +240,10 @@ static BOOL CheckCancel(u32 resume) {
 		finished = executing;
 		executing = &DummyCommandBlock;
 
-		finished->state = 10;
+		finished->state = DVD_STATE_CANCELED;
 
 		if (finished->callback)
-			(*finished->callback)(-3, finished);
+			(*finished->callback)(DVD_RESULT_CANCELED, finished);
 
 		if (CancelCallback)
 			(CancelCallback)(0, finished);
@@ -323,13 +255,6 @@ static BOOL CheckCancel(u32 resume) {
 	return FALSE;
 }
 
-/**
- * Handles the drive's error reply (code read from DI register 8).
- * Fatal errors go to stateError; retry categories either stop the motor and retry
- * or reissue the command (seeking first for 0x31100);
- * the ignorable ones are decoded from the status byte as motor stopped, cover opened or no disc,
- * and sent to the matching wait state.
- */
 static void cbForStateGettingError(u32 intType) {
 	u32 error;
 	u32 status;
@@ -341,14 +266,14 @@ static void cbForStateGettingError(u32 intType) {
 		return;
 	}
 
-	if (intType & 2) {
+	if (intType & DVD_INTTYPE_DE) {
 		stateError(0x1234567);
 		return;
 	}
 
     ASSERTLINE(956, intType == DVD_INTTYPE_TC);
 
-	error = __DIRegs[8];
+	error = __DIRegs[DI_IMMBUF];
 	status = error & 0xff000000;
 
 	errorCategory = CategorizeError(error);
@@ -390,15 +315,15 @@ static void cbForStateGettingError(u32 intType) {
 	}
 
 	if (status == 0x01000000) {
-		executing->state = 5;
+		executing->state = DVD_STATE_COVER_OPEN;
 		stateMotorStopped();
 		return;
 	} else if (status == 0x02000000) {
-		executing->state = 3;
+		executing->state = DVD_STATE_COVER_CLOSED;
 		stateCoverClosed();
 		return;
 	} else if (status == 0x03000000) {
-		executing->state = 4;
+		executing->state = DVD_STATE_NO_DISK;
 		stateMotorStopped();
 		return;
 	} else {
@@ -407,17 +332,13 @@ static void cbForStateGettingError(u32 intType) {
 	}
 }
 
-/**
- * Callback after the recovery seek for error 0x31100: on success it stops the motor and retries;
- * otherwise it requests the drive's error code again.
- */
 static void cbForUnrecoveredError(u32 intType) {
 	if (intType == 16) {
 		stateTimeout();
 		return;
 	}
 
-	if (intType & 1) {
+	if (intType & DVD_INTTYPE_TC) {
 		stateGoToRetry();
 		return;
 	}
@@ -426,40 +347,30 @@ static void cbForUnrecoveredError(u32 intType) {
 	DVDLowRequestError(cbForUnrecoveredErrorRetry);
 }
 
-/**
- * Callback with the drive's error after a failed recovery seek:
- * a fatal error with that code (or 0x01234567 if the request itself failed); a timeout goes to stateTimeout.
- */
 static void cbForUnrecoveredErrorRetry(u32 intType) {
 	if (intType == 0x10) {
         stateTimeout();
 	} else {
-        if (intType & 2) {
+        if (intType & DVD_INTTYPE_DE) {
             stateError(0x01234567);
             return;
         }
 
-        stateError(__DIRegs[8]);
+        stateError(__DIRegs[DI_IMMBUF]);
     }
 }
 
-/** DVD state: stops the drive motor before retrying the command. */
 static void stateGoToRetry() {
     DVDLowStopMotor(cbForStateGoToRetry);
 }
 
-/**
- * Callback after the retry motor stop: clears the retry count, flags a reset as required after a failed BS read,
- * disc ID read, audio buffer config or BS disc change,
- * sets the command state to RETRY and waits for the cover (stateMotorStopped).
- */
 static void cbForStateGoToRetry(u32 intType) {
 	if (intType == 16) {
 		stateTimeout();
 		return;
 	}
 
-	if (intType & 2) {
+	if (intType & DVD_INTTYPE_DE) {
 		stateError(0x1234567);
 		return;
 	}
@@ -467,30 +378,23 @@ static void cbForStateGoToRetry(u32 intType) {
     ASSERTLINE(1104, intType == DVD_INTTYPE_TC);
 	NumInternalRetry = 0;
 
-	if (CurrCommand == 4 || CurrCommand == 5 || CurrCommand == 13 || CurrCommand == 15) {
+	if (CurrCommand == DVD_COMMAND_BSREAD || CurrCommand == DVD_COMMAND_READID || CurrCommand == DVD_COMMAND_AUDIO_BUFFER_CONFIG || CurrCommand == DVD_COMMAND_BS_CHANGE_DISK) {
 		ResetRequired = TRUE;
 	}
 
 	if (!CheckCancel(2)) {
-		executing->state = 11;
+		executing->state = DVD_STATE_RETRY;
 		stateMotorStopped();
 	}
 }
 
-/**
- * DVD state: checks the disc that was just read.
- * For a disc change it compares the new ID with the wanted one,
- * adopts it and goes on to configure the audio buffer.
- * For other commands it compares with the boot disc ID;
- * if it is wrong it stops the motor and reports a wrong disc.
- */
 static void stateCheckID() {
     switch(CurrCommand) {
     case DVD_COMMAND_CHANGE_DISK:
         if (DVDCompareDiskID(&CurrDiskID, executing->id)) {
             memcpy(IDShouldBe, &CurrDiskID, sizeof(DVDDiskID));
             executing->state = DVD_STATE_BUSY;
-            DCInvalidateRange(&BB2.bootFilePosition, 0x20);
+            DCInvalidateRange(&BB2.bootFilePosition, sizeof(DVDBB2));
             LastState = stateCheckID2a;
             stateCheckID2a(executing);
         } else {
@@ -508,26 +412,14 @@ static void stateCheckID() {
     }
 }
 
-/**
- * DVD state: sets the drive's audio buffer according to the streaming flag of the boot disc ID,
- * then returns to the interrupted command in cbForStateCheckID3.
- */
 static void stateCheckID3() {
     DVDLowAudioBufferConfig(IDShouldBe->streaming, 0xA, cbForStateCheckID3);
 }
 
-/**
- * DVD state: sets the drive's audio buffer according to the streaming flag of the boot disc ID,
- * then reads the BB2 block in cbForStateCheckID2a.
- */
 static void stateCheckID2a() {
     DVDLowAudioBufferConfig(IDShouldBe->streaming, 0xA, cbForStateCheckID2a);
 }
 
-/**
- * Callback after the audio buffer was set following a disc change:
- * goes on to read the BB2 block, or asks for the error on a failure.
- */
 static void cbForStateCheckID2a(u32 intType) {
     if (intType == 16) {
 		stateTimeout();
@@ -547,15 +439,10 @@ static void cbForStateCheckID2a(u32 intType) {
     stateGettingError();
 }
 
-/** DVD state: reads the 0x20 byte BB2 block (which holds the FST position and size) from disc offset 0x420. */
 static void stateCheckID2() {
-    DVDLowRead(&BB2, 0x20, 0x420, cbForStateCheckID2);
+    DVDLowRead(&BB2, sizeof(DVDBB2), 0x420, cbForStateCheckID2);
 }
 
-/**
- * Callback after the stop-motor of a wrong disc:
- * unless the command was cancelled, marks it WRONG_DISK and waits for a cover change.
- */
 static void cbForStateCheckID1(u32 intType) {
     if (intType == 16) {
 		stateTimeout();
@@ -576,7 +463,6 @@ static void cbForStateCheckID1(u32 intType) {
     }
 }
 
-/** Callback after the BB2 read: continues with reading the FST (stateReadingFST). */
 static void cbForStateCheckID2(u32 intType) {
     if (intType == 16) {
 		stateTimeout();
@@ -596,7 +482,6 @@ static void cbForStateCheckID2(u32 intType) {
     stateGettingError();
 }
 
-/** Callback after the audio buffer was set: unless cancelled, restarts the interrupted command with stateBusy. */
 static void cbForStateCheckID3(u32 intType) {
     if (intType == 16) {
 		stateTimeout();
@@ -619,7 +504,6 @@ static void cbForStateCheckID3(u32 intType) {
     stateGettingError();
 }
 
-/** Alarm handler, 1150 ms after a cover close: resets the drive and starts reading the disc ID into CurrDiskID. */
 static void AlarmHandler(OSAlarm* alarm, OSContext* context) {
     DVDReset();
     DCInvalidateRange(&CurrDiskID, sizeof(DVDDiskID));
@@ -627,12 +511,6 @@ static void AlarmHandler(OSAlarm* alarm, OSContext* context) {
     stateCoverClosed_CMD(executing);
 }
 
-/**
- * DVD state: the cover has been closed.
- * For boot-strap commands, disc ID reads and audio buffer config it clears the queue
- * and fails the command with -4; for others it resets the drive and sets a 1150 ms alarm
- * before re-reading the disc ID.
- */
 static void stateCoverClosed() {
     DVDCommandBlock* finished;
 
@@ -658,12 +536,10 @@ static void stateCoverClosed() {
     }
 }
 
-/** DVD state: reads the disc ID from the disc into CurrDiskID; cbForStateCoverClosed then checks it. */
 static void stateCoverClosed_CMD(DVDCommandBlock* command) {
     DVDLowReadDiskID(&CurrDiskID, cbForStateCoverClosed);
 }
 
-/** Callback after the disc ID read: goes on to the ID check (stateCheckID), or asks for the error. */
 static void cbForStateCoverClosed(u32 intType) {
     if (intType == 16) {
 		stateTimeout();
@@ -683,28 +559,17 @@ static void cbForStateCoverClosed(u32 intType) {
     stateGettingError();
 }
 
-/** DVD state: waits until the drive cover is closed (DVDLowWaitCoverClose). */
 static void stateMotorStopped() {
     DVDLowWaitCoverClose(cbForStateMotorStopped);
 }
 
-/**
- * Callback once the cover has closed: clears the cover interrupt,
- * sets the command state to COVER_CLOSED and goes to stateCoverClosed.
- */
 static void cbForStateMotorStopped(u32 intType) {
     ASSERTLINE(1483, intType == DVD_INTTYPE_CVR);
-    __DIRegs[1] = 0;
+    __DIRegs[DI_CVR] = 0;
     executing->state = DVD_STATE_COVER_CLOSED;
     stateCoverClosed();
 }
 
-/**
- * DVD state: takes the next command off the waiting queue and starts it.
- * Stays idle if the queue is empty or the library is paused,
- * fails the command with -1 if a fatal error occurred, resumes a saved wait state,
- * or runs the command through stateBusy (or stateCoverClosed if the motor was stopped).
- */
 static void stateReady() {
     if (__DVDCheckWaitingQueue() == 0) {
         executing = NULL;
@@ -726,7 +591,7 @@ static void stateReady() {
         finished = executing;
         executing = &DummyCommandBlock;
         if (finished->callback) {
-            (*finished->callback)(-1, finished);
+            (*finished->callback)(DVD_RESULT_FATAL_ERROR, finished);
         }
 
         stateReady();
@@ -771,19 +636,14 @@ static void stateReady() {
     }
 }
 
-/**
- * DVD state: issues the executing command to the drive by command number (read in chunks of up to 0x80000 bytes,
- * seek, disc ID, change disc, the audio stream commands, buffer config, inquiry, stop motor).
- * Unknown commands go to the optional command hook.
- */
 static void stateBusy(DVDCommandBlock* block) {
     DVDCommandBlock* finished;
     LastState = stateBusy;
 
     switch(block->command) {
     case DVD_COMMAND_READID:
-        __DIRegs[1] = __DIRegs[1];
-        block->currTransferSize = 0x20;
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
+        block->currTransferSize = sizeof(DVDDiskID);
         DVDLowReadDiskID(block->addr, cbForStateBusy);
         return;
     case DVD_COMMAND_READ:
@@ -791,7 +651,7 @@ static void stateBusy(DVDCommandBlock* block) {
         if (block->length == 0) {
             finished = executing;
             executing = &DummyCommandBlock;
-            finished->state = 0;
+            finished->state = DVD_STATE_END;
 
             if (finished->callback != 0) {
                 (*finished->callback)(0, finished);
@@ -799,13 +659,13 @@ static void stateBusy(DVDCommandBlock* block) {
 
             stateReady();
         } else {
-            __DIRegs[1] = __DIRegs[1];
+            __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
             block->currTransferSize = (block->length - block->transferredSize > 0x80000) ? 0x80000 : (block->length - block->transferredSize);
             DVDLowRead((char*)block->addr + block->transferredSize, block->currTransferSize, block->offset + block->transferredSize, cbForStateBusy);
         }
         return;
     case DVD_COMMAND_SEEK:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowSeek(block->offset, cbForStateBusy);
         return;
     case DVD_COMMAND_CHANGE_DISK:
@@ -815,7 +675,7 @@ static void stateBusy(DVDCommandBlock* block) {
         DVDLowStopMotor(cbForStateBusy);
         return;
     case DVD_COMMAND_INITSTREAM:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         if (AutoFinishing != 0) {
             executing->currTransferSize = 0;
             DVDLowRequestAudioStatus(0, cbForStateBusy);
@@ -825,41 +685,41 @@ static void stateBusy(DVDCommandBlock* block) {
         DVDLowAudioStream(0, block->length, block->offset, cbForStateBusy);
         return;
     case DVD_COMMAND_CANCELSTREAM:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowAudioStream(0x10000, 0U, 0U, cbForStateBusy);
         return;
     case DVD_COMMAND_STOP_STREAM_AT_END:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         AutoFinishing = 1;
         DVDLowAudioStream(0, 0U, 0U, cbForStateBusy);
         return;
     case DVD_COMMAND_REQUEST_AUDIO_ERROR:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowRequestAudioStatus(0, cbForStateBusy);
         return;
     case DVD_COMMAND_REQUEST_PLAY_ADDR:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowRequestAudioStatus(0x10000, cbForStateBusy);
         return;
     case DVD_COMMAND_REQUEST_START_ADDR:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowRequestAudioStatus(0x20000, cbForStateBusy);
         return;
     case DVD_COMMAND_REQUEST_LENGTH:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowRequestAudioStatus(0x30000, cbForStateBusy);
         return;
     case DVD_COMMAND_AUDIO_BUFFER_CONFIG:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowAudioBufferConfig(block->offset, block->length, cbForStateBusy);
         return;
     case DVD_COMMAND_INQUIRY:
-        __DIRegs[1] = __DIRegs[1];
-        block->currTransferSize = 0x20;
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
+        block->currTransferSize = sizeof(DVDDriveInfo);
         DVDLowInquiry(block->addr, cbForStateBusy);
         return;
     case DVD_COMMAND_UNK_16:
-        __DIRegs[1] = __DIRegs[1];
+        __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
         DVDLowStopMotor(cbForStateBusy);
         return;
     default:
@@ -868,31 +728,24 @@ static void stateBusy(DVDCommandBlock* block) {
     }
 }
 
-/** Extra command numbers (three slots, 0xFFFFFFFF: empty) treated as immediate commands with a result. */
 static u32 ImmCommand[3] = {0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
 
-/** Adds a command number to the list (three slots) of immediate commands that return a result in DI register 8. */
 void __DVDSetImmCommand(u32 command) {
     static u32 immCount;
     ASSERTLINE(1790, immCount < sizeof(ImmCommand)/sizeof(ImmCommand[0]));
     ImmCommand[immCount++] = command;
 }
 
-/** Adds a command number to the list of commands that move data by DMA. */
 void __DVDSetDmaCommand(u32 command) {
     static u32 dmaCount;
     ASSERTLINE(1798, dmaCount < sizeof(DmaCommand)/sizeof(DmaCommand[0]));
     DmaCommand[dmaCount++] = command;
 }
 
-/**
- * Returns true for commands that give a result in DI register 8:
- * audio error, play address, start address and length requests, plus any added with __DVDSetImmCommand.
- */
 static BOOL IsImmCommandWithResult(u32 command) {
     u32 i;
 
-    if (command == 9 || command == 10 || command == 11 || command == 12) {
+    if (command == DVD_COMMAND_REQUEST_AUDIO_ERROR || command == DVD_COMMAND_REQUEST_PLAY_ADDR || command == DVD_COMMAND_REQUEST_START_ADDR || command == DVD_COMMAND_REQUEST_LENGTH) {
         return 1;
     }
 
@@ -905,14 +758,10 @@ static BOOL IsImmCommandWithResult(u32 command) {
     return FALSE;
 }
 
-/**
- * Returns true for commands that DMA data into memory:
- * read, BS read, disc ID read and inquiry, plus any added with __DVDSetDmaCommand.
- */
 static int IsDmaCommand(u32 command) {
     u32 i;
 
-    if (command == 1 || command == 4 || command == 5 || command == 14) {
+    if (command == DVD_COMMAND_READ || command == DVD_COMMAND_BSREAD || command == DVD_COMMAND_READID || command == DVD_COMMAND_INQUIRY) {
         return 1;
     }
 
@@ -925,13 +774,6 @@ static int IsDmaCommand(u32 command) {
     return FALSE;
 }
 
-/**
- * Completion callback of the executing command.
- * Handles timeouts, breaks (cancel), disc change completion and DMA progress,
- * then finishes the command with its callback (bytes transferred for DMA commands,
- * the register value for immediate ones, 0 otherwise) and starts the next one;
- * anything unexpected goes to error handling.
- */
 static void cbForStateBusy(u32 intType) {
     DVDCommandBlock* finished;
     s32 result;
@@ -964,7 +806,7 @@ static void cbForStateBusy(u32 intType) {
     ASSERTLINE(1877, (intType & DVD_INTTYPE_CVR) == 0);
 
     if (IsDmaCommand(CurrCommand)) {
-        executing->transferredSize += executing->currTransferSize - __DIRegs[6];
+        executing->transferredSize += executing->currTransferSize - __DIRegs[DI_LENGTH];
     }
 
     if (intType & 8) {
@@ -974,7 +816,7 @@ static void cbForStateBusy(u32 intType) {
         finished->state = DVD_STATE_CANCELED;
 
         if (finished->callback) {
-            finished->callback(-3, finished);
+            finished->callback(DVD_RESULT_CANCELED, finished);
         }
 
         if (CancelCallback) {
@@ -985,15 +827,15 @@ static void cbForStateBusy(u32 intType) {
         return;
     }
 
-    if (intType & 1) {
+    if (intType & DVD_INTTYPE_TC) {
         ASSERTLINE(1915, (intType & DVD_INTTYPE_DE) == 0);
         NumInternalRetry = 0;
 
-        if (CurrCommand == 0x10) {
+        if (CurrCommand == DVD_COMMAND_UNK_16) {
             MotorState = 1;
             finished = executing;
             executing = &DummyCommandBlock;
-            finished->state = 0;
+            finished->state = DVD_STATE_END;
 
             if (finished->callback != 0) {
                 (*finished->callback)(0, finished);
@@ -1024,9 +866,9 @@ static void cbForStateBusy(u32 intType) {
             return;
         } else if (IsImmCommandWithResult(CurrCommand)) {
             if (CurrCommand == DVD_COMMAND_REQUEST_START_ADDR || CurrCommand == DVD_COMMAND_REQUEST_PLAY_ADDR) {
-                result = __DIRegs[8] * 4;
+                result = __DIRegs[DI_IMMBUF] * 4;
             } else {
-                result = __DIRegs[8];
+                result = __DIRegs[DI_IMMBUF];
             }
 
             finished = executing;
@@ -1040,12 +882,12 @@ static void cbForStateBusy(u32 intType) {
             return;
         } else if (CurrCommand == DVD_COMMAND_INITSTREAM) {
             if (executing->currTransferSize == 0) {
-                if (__DIRegs[8] & 1) {
+                if (__DIRegs[DI_IMMBUF] & 1) {
                     finished = executing;
                     executing = &DummyCommandBlock;
                     finished->state = DVD_STATE_IGNORED;
                     if (finished->callback) {
-                        finished->callback(-2, finished);
+                        finished->callback(DVD_RESULT_IGNORED, finished);
                     }
                     stateReady();
                     return;
@@ -1080,12 +922,12 @@ static void cbForStateBusy(u32 intType) {
     } else {
         ASSERTLINE(2063, intType == DVD_INTTYPE_DE);
 
-        if (CurrCommand == 14) {
+        if (CurrCommand == DVD_COMMAND_INQUIRY) {
 			stateError(0x01234567);
 			return;
 		}
 
-		if ((CurrCommand == 1 || CurrCommand == 4 || CurrCommand == 5 || CurrCommand == 14)
+		if ((CurrCommand == DVD_COMMAND_READ || CurrCommand == DVD_COMMAND_BSREAD || CurrCommand == DVD_COMMAND_READID || CurrCommand == DVD_COMMAND_INQUIRY)
 		    && (executing->transferredSize == executing->length)) {
 
 			if (CheckCancel(0)) {
@@ -1106,17 +948,10 @@ static void cbForStateBusy(u32 intType) {
     }
 }
 
-/** Returns the address of issueCommand. */
 void* __DVDGetIssueCommandAddr(void) {
     return issueCommand;
 }
 
-/**
- * Queues a command block at the given priority.
- * First invalidates the destination cache range for reads and inquiries if auto invalidation is on,
- * then starts it immediately if the drive is idle and not paused.
- * Returns the result of pushing it on the waiting queue.
- */
 static int issueCommand(s32 prio, DVDCommandBlock* block) {
     BOOL level;
     int result;
@@ -1143,10 +978,6 @@ static int issueCommand(s32 prio, DVDCommandBlock* block) {
     return result;
 }
 
-/**
- * Queues a read of length bytes from an absolute disc offset into addr, at the given priority;
- * the callback gets the bytes read.
- */
 int DVDReadAbsAsyncPrio(DVDCommandBlock* block, void* addr, s32 length, s32 offset, DVDCBCallback callback, s32 prio) {
     int idle;
 
@@ -1169,7 +1000,6 @@ int DVDReadAbsAsyncPrio(DVDCommandBlock* block, void* addr, s32 length, s32 offs
     return idle;
 }
 
-/** Queues a seek to an absolute disc offset. */
 int DVDSeekAbsAsyncPrio(DVDCommandBlock* block, s32 offset, DVDCBCallback callback, s32 prio) {
     int idle;
 
@@ -1185,10 +1015,6 @@ int DVDSeekAbsAsyncPrio(DVDCommandBlock* block, s32 offset, DVDCBCallback callba
     return idle;
 }
 
-/**
- * Queues a read from an absolute offset at priority 2 for the boot-strap code (used by __fstLoad);
- * a failed disc check fails it with -4 instead of retrying.
- */
 int DVDReadAbsAsyncForBS(DVDCommandBlock* block, void* addr, s32 length, s32 offset, DVDCBCallback callback) {
     int idle;
 
@@ -1210,7 +1036,6 @@ int DVDReadAbsAsyncForBS(DVDCommandBlock* block, void* addr, s32 length, s32 off
     return idle;
 }
 
-/** Queues a priority 2 read of the 0x20 byte disc ID from the start of the disc. */
 int DVDReadDiskID(DVDCommandBlock* block, DVDDiskID* diskID, DVDCBCallback callback) {
     int idle;
 
@@ -1220,7 +1045,7 @@ int DVDReadDiskID(DVDCommandBlock* block, DVDDiskID* diskID, DVDCBCallback callb
 
     block->command = DVD_COMMAND_READID;
     block->addr = diskID;
-    block->length = 0x20;
+    block->length = sizeof(DVDDiskID);
     block->offset = 0;
     block->transferredSize = 0;
     block->callback = callback;
@@ -1230,7 +1055,6 @@ int DVDReadDiskID(DVDCommandBlock* block, DVDDiskID* diskID, DVDCBCallback callb
     return idle;
 }
 
-/** Queues (priority 1) a command that prepares audio streaming of length bytes from an absolute disc offset. */
 int DVDPrepareStreamAbsAsync(DVDCommandBlock* block, u32 length, u32 offset, DVDCBCallback callback) {
     int idle;
 
@@ -1242,7 +1066,6 @@ int DVDPrepareStreamAbsAsync(DVDCommandBlock* block, u32 length, u32 offset, DVD
     return idle;
 }
 
-/** Queues (priority 1) a command that cancels the audio stream. */
 int DVDCancelStreamAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
 
@@ -1252,10 +1075,6 @@ int DVDCancelStreamAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     return idle;
 }
 
-/**
- * Cancels the audio stream and sleeps until it is done.
- * Returns the result of the command, or -1 if it could not be queued.
- */
 s32 DVDCancelStream(DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1264,7 +1083,7 @@ s32 DVDCancelStream(DVDCommandBlock* block) {
 
     result = DVDCancelStreamAsync(block, cbForCancelStreamSync);
     if (result == 0) {
-        return -1; 
+        return DVD_RESULT_FATAL_ERROR; 
     }
     enabled = OSDisableInterrupts();
 
@@ -1282,13 +1101,11 @@ s32 DVDCancelStream(DVDCommandBlock* block) {
     return retVal;
 }
 
-/** Stores the command result in the block and wakes the threads sleeping on the DVD thread queue. */
 static void cbForCancelStreamSync(s32 result, DVDCommandBlock* block) {
     block->transferredSize = (u32)result;
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Queues (priority 1) a command that makes the drive stop the audio stream when it reaches its end. */
 int DVDStopStreamAtEndAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
 
@@ -1298,7 +1115,6 @@ int DVDStopStreamAtEndAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     return idle;
 }
 
-/** Waits for the stop-at-end command; returns its result, or -1 if it could not be queued. */
 s32 DVDStopStreamAtEnd(DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1307,7 +1123,7 @@ s32 DVDStopStreamAtEnd(DVDCommandBlock* block) {
 
     result = DVDStopStreamAtEndAsync(block, cbForStopStreamAtEndSync);
     if (result == 0) {
-        return -1; 
+        return DVD_RESULT_FATAL_ERROR; 
     }
     enabled = OSDisableInterrupts();
 
@@ -1325,13 +1141,11 @@ s32 DVDStopStreamAtEnd(DVDCommandBlock* block) {
     return retVal;
 }
 
-/** Stores the command result in the block and wakes the threads sleeping on the DVD thread queue. */
 static void cbForStopStreamAtEndSync(s32 result, DVDCommandBlock* block) {
     block->transferredSize = (u32)result;
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Queues (priority 1) a request for the audio stream error status. */
 int DVDGetStreamErrorStatusAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
 
@@ -1341,7 +1155,6 @@ int DVDGetStreamErrorStatusAsync(DVDCommandBlock* block, DVDCBCallback callback)
     return idle;
 }
 
-/** Waits for the stream error status request; returns the status, or -1 if it could not be queued. */
 s32 DVDGetStreamErrorStatus(DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1350,7 +1163,7 @@ s32 DVDGetStreamErrorStatus(DVDCommandBlock* block) {
 
     result = DVDGetStreamErrorStatusAsync(block, cbForGetStreamErrorStatusSync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
     enabled = OSDisableInterrupts();
 
@@ -1368,13 +1181,11 @@ s32 DVDGetStreamErrorStatus(DVDCommandBlock* block) {
     return retVal;
 }
 
-/** Stores the command result in the block and wakes the threads sleeping on the DVD thread queue. */
 static void cbForGetStreamErrorStatusSync(s32 result, DVDCommandBlock* block) {
     block->transferredSize = (u32)result;
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Queues (priority 1) a request for the disc address the audio stream is playing; the callback gets the address. */
 int DVDGetStreamPlayAddrAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
 
@@ -1384,10 +1195,6 @@ int DVDGetStreamPlayAddrAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     return idle;
 }
 
-/**
- * Waits for the play address request; returns the address (the register value times 4),
- * or -1 if it could not be queued.
- */
 s32 DVDGetStreamPlayAddr(DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1396,7 +1203,7 @@ s32 DVDGetStreamPlayAddr(DVDCommandBlock* block) {
 
     result = DVDGetStreamPlayAddrAsync(block, cbForGetStreamPlayAddrSync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
     enabled = OSDisableInterrupts();
 
@@ -1414,13 +1221,11 @@ s32 DVDGetStreamPlayAddr(DVDCommandBlock* block) {
     return retVal;
 }
 
-/** Stores the command result in the block and wakes the threads sleeping on the DVD thread queue. */
 static void cbForGetStreamPlayAddrSync(s32 result, DVDCommandBlock* block) {
     block->transferredSize = (u32)result;
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Queues (priority 1) a request for the disc address where the audio stream started. */
 int DVDGetStreamStartAddrAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
 
@@ -1430,10 +1235,6 @@ int DVDGetStreamStartAddrAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     return idle;
 }
 
-/**
- * Waits for the start address request; returns the address (the register value times 4),
- * or -1 if it could not be queued.
- */
 s32 DVDGetStreamStartAddr(DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1442,7 +1243,7 @@ s32 DVDGetStreamStartAddr(DVDCommandBlock* block) {
 
     result = DVDGetStreamStartAddrAsync(block, cbForGetStreamStartAddrSync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
     enabled = OSDisableInterrupts();
 
@@ -1460,13 +1261,11 @@ s32 DVDGetStreamStartAddr(DVDCommandBlock* block) {
     return retVal;
 }
 
-/** Stores the command result in the block and wakes the threads sleeping on the DVD thread queue. */
 static void cbForGetStreamStartAddrSync(s32 result, DVDCommandBlock* block) {
     block->transferredSize = (u32)result;
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Queues (priority 1) a request for the length of the current audio stream. */
 int DVDGetStreamLengthAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
 
@@ -1476,7 +1275,6 @@ int DVDGetStreamLengthAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     return idle;
 }
 
-/** Waits for the stream length request; returns the length, or -1 if it could not be queued. */
 s32 DVDGetStreamLength(DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1485,7 +1283,7 @@ s32 DVDGetStreamLength(DVDCommandBlock* block) {
 
     result = DVDGetStreamLengthAsync(block, cbForGetStreamLengthSync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
     enabled = OSDisableInterrupts();
 
@@ -1503,16 +1301,11 @@ s32 DVDGetStreamLength(DVDCommandBlock* block) {
     return retVal;
 }
 
-/** Stores the command result in the block and wakes the threads sleeping on the DVD thread queue. */
 static void cbForGetStreamLengthSync(s32 result, DVDCommandBlock* block) {
     block->transferredSize = (u32)result;
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/**
- * Queues a priority 2 command that sets the drive's audio buffer:
- * enable flag and size (kept in the block's offset and length fields). No return value.
- */
 void __DVDAudioBufferConfig(DVDCommandBlock* block, u32 enable, u32 size, DVDCBCallback callback) {
     int idle;
 
@@ -1523,7 +1316,6 @@ void __DVDAudioBufferConfig(DVDCommandBlock* block, u32 enable, u32 size, DVDCBC
     idle = issueCommand(2, block);
 }
 
-/** Queues a priority 2 boot-strap disc change, which stops the motor and waits for a cover cycle. */
 int DVDChangeDiskAsyncForBS(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
 
@@ -1536,12 +1328,6 @@ int DVDChangeDiskAsyncForBS(DVDCommandBlock* block, DVDCBCallback callback) {
     return idle;
 }
 
-/**
- * Queues a priority 2 disc change.
- * The motor is stopped and the drive waits for the cover to be opened and closed;
- * the new disc must match id (checked with DVDCompareDiskID) and its FST is loaded.
- * The cached FST range is invalidated first.
- */
 int DVDChangeDiskAsync(DVDCommandBlock* block, DVDDiskID* id, DVDCBCallback callback) {
     int idle;
 
@@ -1563,10 +1349,6 @@ int DVDChangeDiskAsync(DVDCommandBlock* block, DVDDiskID* id, DVDCBCallback call
     return idle;
 }
 
-/**
- * Waits for the disc change to finish.
- * Returns 0 on success, -1 on a fatal error or if it could not be queued, -3 if canceled.
- */
 s32 DVDChangeDisk(DVDCommandBlock* block, DVDDiskID* id) {
     int result;
     s32 state;
@@ -1575,7 +1357,7 @@ s32 DVDChangeDisk(DVDCommandBlock* block, DVDDiskID* id) {
 
     result = DVDChangeDiskAsync(block, id, cbForChangeDiskSync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
 
     enabled = OSDisableInterrupts();
@@ -1585,10 +1367,10 @@ s32 DVDChangeDisk(DVDCommandBlock* block, DVDDiskID* id) {
             retVal = 0;
             break;
         } else if (state == DVD_STATE_FATAL_ERROR) {
-            retVal = -1;
+            retVal = DVD_RESULT_FATAL_ERROR;
             break;
         } else if (state == DVD_STATE_CANCELED) {
-            retVal = -3;
+            retVal = DVD_RESULT_CANCELED;
             break;
         }
         OSSleepThread(&__DVDThreadQueue);
@@ -1598,15 +1380,10 @@ s32 DVDChangeDisk(DVDCommandBlock* block, DVDDiskID* id) {
     return retVal;
 }
 
-/** Wakes the threads sleeping on the DVD thread queue so DVDChangeDisk can check the command state. */
 static void cbForChangeDiskSync(s32 result, DVDCommandBlock* block) {
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/**
- * Queues a priority 2 command that stops the disc motor;
- * the next command then goes through the cover-closed spin-up path.
- */
 int DVDStopMotorAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     int idle;
     ASSERTMSGLINE(2996, block, "DVDStopMotor(): Null address was specified for block");
@@ -1619,10 +1396,6 @@ int DVDStopMotorAsync(DVDCommandBlock* block, DVDCBCallback callback) {
     return idle;
 }
 
-/**
- * Waits for the stop-motor command.
- * Returns 0 on success, -1 on a fatal error or if it could not be queued, -3 if canceled.
- */
 s32 DVDStopMotor(DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1631,7 +1404,7 @@ s32 DVDStopMotor(DVDCommandBlock* block) {
 
     result = DVDStopMotorAsync(block, cbForStopMotorSync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
 
     enabled = OSDisableInterrupts();
@@ -1641,10 +1414,10 @@ s32 DVDStopMotor(DVDCommandBlock* block) {
             retVal = 0;
             break;
         } else if (state == DVD_STATE_FATAL_ERROR) {
-            retVal = -1;
+            retVal = DVD_RESULT_FATAL_ERROR;
             break;
         } else if (state == DVD_STATE_CANCELED) {
-            retVal = -3;
+            retVal = DVD_RESULT_CANCELED;
             break;
         }
         OSSleepThread(&__DVDThreadQueue);
@@ -1654,12 +1427,10 @@ s32 DVDStopMotor(DVDCommandBlock* block) {
     return retVal;
 }
 
-/** Wakes the threads sleeping on the DVD thread queue so DVDStopMotor can check the command state. */
 static void cbForStopMotorSync(s32 result, DVDCommandBlock* block) {
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Queues a priority 2 drive inquiry that stores the drive's DVDDriveInfo in info. */
 int DVDInquiryAsync(DVDCommandBlock* block, DVDDriveInfo* info, DVDCBCallback callback) {
     int idle;
 
@@ -1669,17 +1440,13 @@ int DVDInquiryAsync(DVDCommandBlock* block, DVDDriveInfo* info, DVDCBCallback ca
 
     block->command = DVD_COMMAND_INQUIRY;
     block->addr = info;
-    block->length = 0x20;
+    block->length = sizeof(DVDDriveInfo);
     block->transferredSize = 0;
     block->callback = callback;
     idle = issueCommand(2, block);
     return idle;
 }
 
-/**
- * Waits for the inquiry.
- * Returns the bytes transferred on success, -1 on a fatal error or if it could not be queued, -3 if canceled.
- */
 s32 DVDInquiry(DVDCommandBlock* block, DVDDriveInfo* info) {
     int result;
     s32 state;
@@ -1688,7 +1455,7 @@ s32 DVDInquiry(DVDCommandBlock* block, DVDDriveInfo* info) {
 
     result = DVDInquiryAsync(block, info, cbForInquirySync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
 
     enabled = OSDisableInterrupts();
@@ -1698,10 +1465,10 @@ s32 DVDInquiry(DVDCommandBlock* block, DVDDriveInfo* info) {
             retVal = (u32)block->transferredSize;
             break;
         } else if (state == DVD_STATE_FATAL_ERROR) { 
-            retVal = -1;
+            retVal = DVD_RESULT_FATAL_ERROR;
             break;
         } else if (state == DVD_STATE_CANCELED) {
-            retVal = -3;
+            retVal = DVD_RESULT_CANCELED;
             break;
         }
         OSSleepThread(&__DVDThreadQueue);
@@ -1711,29 +1478,22 @@ s32 DVDInquiry(DVDCommandBlock* block, DVDDriveInfo* info) {
     return retVal;
 }
 
-/** Wakes the threads sleeping on the DVD thread queue so DVDInquiry can check the command state. */
 static void cbForInquirySync(s32 result, DVDCommandBlock* block) {
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Resets the drive (DVDLowReset), clears the DI status, and clears the "reset required" and resume-from state. */
 void DVDReset(void) {
     DVDLowReset();
-    __DIRegs[0] = 0x2A;
-    __DIRegs[1] = __DIRegs[1];
+    __DIRegs[DI_SR] = DI_SR_BRKINTMASK | DI_SR_TCINTMASK | DI_SR_DEINTMASK;
+    __DIRegs[DI_CVR] = __DIRegs[DI_CVR];
     ResetRequired = 0;
     ResumeFromHere = 0;
 }
 
-/** Returns whether the game must reset the drive (set after a failed boot-strap command or retry). */
 int DVDResetRequired(void) {
     return ResetRequired;
 }
 
-/**
- * Returns the state of a command block, with interrupts off.
- * The internal COVER_CLOSED state is reported as 1 (busy).
- */
 s32 DVDGetCommandBlockStatus(const DVDCommandBlock* block) {
     BOOL enabled;
     s32 retVal;
@@ -1741,8 +1501,8 @@ s32 DVDGetCommandBlockStatus(const DVDCommandBlock* block) {
     ASSERTMSGLINE(3197, block, "DVDGetCommandBlockStatus(): null pointer is specified to command block address.");
     enabled = OSDisableInterrupts();
 
-	if (block->state == 3) {
-		retVal = 1;
+	if (block->state == DVD_STATE_COVER_CLOSED) {
+		retVal = DVD_STATE_BUSY;
 	} else {
 		retVal = block->state;
 	}
@@ -1751,10 +1511,6 @@ s32 DVDGetCommandBlockStatus(const DVDCommandBlock* block) {
 	return retVal;
 }
 
-/**
- * Returns the state of the command being executed:
- * fatal error if one has occurred, pausing if paused, otherwise the executing block's state (END when idle).
- */
 s32 DVDGetDriveStatus(void) {
 	BOOL enabled = OSDisableInterrupts();
 	s32 retVal;
@@ -1778,10 +1534,6 @@ s32 DVDGetDriveStatus(void) {
 	return retVal;
 }
 
-/**
- * Sets whether issueCommand invalidates the data cache over the destination of reads and inquiries;
- * returns the old setting.
- */
 BOOL DVDSetAutoInvalidation(BOOL autoInval) {
     BOOL prev;
 
@@ -1790,7 +1542,6 @@ BOOL DVDSetAutoInvalidation(BOOL autoInval) {
     return prev;
 }
 
-/** Stops the state machine from starting new commands; the command already running finishes. */
 void DVDPause(void) {
     BOOL level;
 
@@ -1802,7 +1553,6 @@ void DVDPause(void) {
     OSRestoreInterrupts(level);
 }
 
-/** Clears the pause and starts the next queued command if the machine had stopped. */
 void DVDResume(void) {
     BOOL level;
 
@@ -1815,12 +1565,6 @@ void DVDResume(void) {
     OSRestoreInterrupts(level);
 }
 
-/**
- * Cancels a command block according to its state:
- * waiting blocks are removed from the queue and finish as canceled, a running read is broken off,
- * and blocks in cover-wait or retry states are completed as canceled. The callback is called with 0 when done.
- * Returns false if it cannot be cancelled (a cancel is already in progress).
- */
 int DVDCancelAsync(DVDCommandBlock* block, DVDCBCallback callback) {
 	BOOL enabled;
 	DVDLowCallback old;
@@ -1852,7 +1596,7 @@ int DVDCancelAsync(DVDCommandBlock* block, DVDCBCallback callback) {
 		block->state = DVD_STATE_CANCELED;
 
 		if (block->callback)
-			(block->callback)(-3, block);
+			(block->callback)(DVD_RESULT_CANCELED, block);
 
 		if (callback)
 			(*callback)(0, block);
@@ -1906,7 +1650,7 @@ int DVDCancelAsync(DVDCommandBlock* block, DVDCBCallback callback) {
 
 		block->state = DVD_STATE_CANCELED;
 		if (block->callback) {
-			(block->callback)(-3, block);
+			(block->callback)(DVD_RESULT_CANCELED, block);
 		}
 
 		if (callback) {
@@ -1920,7 +1664,6 @@ int DVDCancelAsync(DVDCommandBlock* block, DVDCBCallback callback) {
 	return TRUE;
 }
 
-/** Cancels a command block and sleeps until it is finished. Returns 0, or -1 if the cancel could not be started. */
 s32 DVDCancel(volatile DVDCommandBlock* block) {
     int result;
     s32 state;
@@ -1929,7 +1672,7 @@ s32 DVDCancel(volatile DVDCommandBlock* block) {
 
     result = DVDCancelAsync((void*)block, cbForCancelSync);
     if (result == 0) {
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
 
     enabled = OSDisableInterrupts();
@@ -1952,15 +1695,10 @@ s32 DVDCancel(volatile DVDCommandBlock* block) {
     return 0;
 }
 
-/** Wakes the threads sleeping on the DVD thread queue so DVDCancel can check the command state. */
 static void cbForCancelSync(s32 result, DVDCommandBlock* block) {
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/**
- * Pauses the library, cancels every waiting block and the executing one, then resumes.
- * The callback runs when the running command has stopped (at once if none).
- */
 int DVDCancelAllAsync(DVDCBCallback callback) {
     BOOL enabled;
     DVDCommandBlock* p;
@@ -1986,7 +1724,6 @@ int DVDCancelAllAsync(DVDCBCallback callback) {
     return retVal;
 }
 
-/** Cancels everything and sleeps until the cancel callback has fired. Returns 0, or -1 if the cancel failed. */
 s32 DVDCancelAll(void) {
     int result;
     BOOL enabled;
@@ -1996,7 +1733,7 @@ s32 DVDCancelAll(void) {
     result = DVDCancelAllAsync(cbForCancelAllSync);
     if (result == 0) {
         OSRestoreInterrupts(enabled);
-        return -1;
+        return DVD_RESULT_FATAL_ERROR;
     }
 
     while (1) {
@@ -2011,22 +1748,15 @@ s32 DVDCancelAll(void) {
     return 0;
 }
 
-/** Marks the cancel-all as complete and wakes the threads sleeping on the DVD thread queue. */
 static void cbForCancelAllSync(s32 result, DVDCommandBlock* block) {
     CancelAllSyncComplete = 1;
     OSWakeupThread(&__DVDThreadQueue);
 }
 
-/** Returns the disc ID kept at the start of memory (the DVDDiskID field of the OS boot info). */
 DVDDiskID* DVDGetCurrentDiskID(void) {
     return (void*)OSPhysicalToCached(0);
 }
 
-/**
- * Returns true if the drive is working normally:
- * busy or waiting is fine, while fatal error, retry, wrong disc and cover states give false.
- * When idle it also checks that the cover is closed in the DI cover register and no resume is pending.
- */
 BOOL DVDCheckDisk(void) {
 	BOOL enabled;
 	s32 retVal;
@@ -2036,14 +1766,14 @@ BOOL DVDCheckDisk(void) {
 	enabled = OSDisableInterrupts();
 
 	if (FatalErrorFlag) {
-		state = -1;
+		state = DVD_STATE_FATAL_ERROR;
 	} else if (PausingFlag) {
-		state = 8;
+		state = DVD_STATE_PAUSING;
 	} else {
 		if (executing == NULL) {
-			state = 0;
+			state = DVD_STATE_END;
 		} else if (executing == &DummyCommandBlock) {
-			state = 0;
+			state = DVD_STATE_END;
 		} else {
 			state = executing->state;
 		}
@@ -2067,7 +1797,7 @@ BOOL DVDCheckDisk(void) {
 		break;
 	case DVD_STATE_END:
 	case DVD_STATE_PAUSING:
-		coverReg = __DIRegs[1];
+		coverReg = __DIRegs[DI_CVR];
 		if (((coverReg >> 2) & 1) || (coverReg & 1)) {
 			retVal = FALSE;
 		} else if (ResumeFromHere != 0) {
@@ -2081,10 +1811,6 @@ BOOL DVDCheckDisk(void) {
 	return retVal;
 }
 
-/**
- * Prepares for a console reset: clears the waiting queue,
- * drops the running command's callback and cancels everything. The callback is called when that has finished.
- */
 void __DVDPrepareResetAsync(DVDCBCallback callback) {
 	BOOL enabled;
 
@@ -2105,7 +1831,6 @@ void __DVDPrepareResetAsync(DVDCBCallback callback) {
 	OSRestoreInterrupts(enabled);
 }
 
-/** Returns 1 if the alarm is the DVD library's reset alarm or one of the low-level driver's alarms. */
 int __DVDTestAlarm(const OSAlarm* alarm) {
     if (alarm == &ResetAlarm) {
         return 1;

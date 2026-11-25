@@ -1,12 +1,14 @@
 // Shadow Queen tornado (queen: the Shadow Queen): plays the MOBJ_EFF_queen_tornade model animation and fades out.
 // The duration argument sets how long it lasts (0 or less: until removed).
+
 #include "eff/eff_queen.h"
 #include "driver/animdrv.h"
 #include "driver/dispdrv.h"
 #include "mario/mariost.h"
 #include "memory.h"
 #include <dolphin/mtx.h>
-
+#include "driver/effdrv.h"
+#include "driver/mapdrv.h"
 static void effQueenDisp(CameraId cameraId, EffectEntry* effect);
 static void effQueenMain(EffectEntry* effect);
 
@@ -16,7 +18,7 @@ typedef struct EffQueenWork {
     f32 scale;    // 0x10
     f32 size;     // 0x14
     s32 poseId;   // 0x18
-    s32 state;    // 0x1C, only cleared at entry
+    s32 state;    // 0x1C
     s32 timer;    // 0x20, counts down while fading out
     s32 alpha;    // 0x24
     s32 maxAlpha; // 0x28
@@ -36,7 +38,7 @@ EffectEntry* effQueenEntry(s32 type, s32 duration, f32 x, f32 y, f32 z, f32 size
     work = __memAlloc(HEAP_EFFECT, sizeof(EffQueenWork) * effect->count);
     effect->userdata = work;
     effect->callback = effQueenMain;
-    effect->flags |= EFFECT_FLAG_SOFT_DELETE;
+    effect->flags |= EFFECT_FLAG_SOFT_DELETABLE;
     work->type = type;
     work->position.x = x;
     work->position.y = y;
@@ -66,8 +68,8 @@ static void effQueenMain(EffectEntry* effect) {
     inBattle = gp->inBattle != 0;
 
     // soft delete: start fading out
-    if (effect->flags & EFFECT_FLAG_DELETE_REQUESTED) {
-        effect->flags &= ~EFFECT_FLAG_DELETE_REQUESTED;
+    if (effect->flags & EFFECT_FLAG_SOFT_DELETE) {
+        effect->flags &= ~EFFECT_FLAG_SOFT_DELETE;
         work->timer = 100;
     }
     if (!animGroupBaseAsync("MOBJ_EFF_queen_tornade", inBattle, NULL)) {
@@ -98,10 +100,10 @@ static void effQueenMain(EffectEntry* effect) {
     if (work->alpha < 0) {
         work->alpha = 0;
     }
-    dispEntry(CAMERA_3D, dispCalcZ(&position), 2, (DispCallback)effQueenDisp, effect);
+    dispEntry(CAMERA_3D, dispCalcZ(&position), DISP_MODE_XLU, (DispCallback)effQueenDisp, effect);
 }
 
-/** Draws the tornado pose in three segments scaled by 10. */
+/** Draws the camera-facing tornado pose in xlu modes 1-3 at draw scale 10. */
 static void effQueenDisp(CameraId cameraId, EffectEntry* effect) {
     EffQueenWork* work = effect->userdata;
     Mtx mtx;
@@ -116,7 +118,7 @@ static void effQueenDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXRotRad(rot, 'y', MTXDegToRad(-camGetPtr(cameraId)->viewYaw));
         PSMTXConcat(mtx, rot, mtx);
         PSMTXConcat(mtx, scale, mtx);
-        animPoseSetMaterialFlagOn(work->poseId, ANIM_MATERIAL_FLAG_EVT_COLOR);
+        animPoseSetMaterialFlagOn(work->poseId, MAP_OBJ_FLAG_COLOR);
         animPoseSetMaterialEvtColor(work->poseId, (GXColor){0xFF, 0xFF, 0xFF, work->alpha});
         animPoseMain(work->poseId);
         animPoseDrawMtx(work->poseId, mtx, 1, 0.0f, 10.0f);

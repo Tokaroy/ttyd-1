@@ -1,5 +1,5 @@
 // Paper Mario 64 effect: `count` small star sprites scatter from a point with the given velocity.
-#include "eff/n64/eff_small_star_n64.h"
+
 #include "eff/eff_n64.h"
 #include "driver/camdrv.h"
 #include "driver/dispdrv.h"
@@ -8,11 +8,10 @@
 #include "system.h"
 #include <dolphin/gx.h>
 #include <dolphin/mtx.h>
+#include "eff/eff_magic1_n64.h"
 #include "libc_decls.h"
 #include <math.h>
-
-#define PI 3.1415927f
-#define HALF_PI 1.5707964f
+#include "poly_trig.h"
 
 typedef struct EffSmallStarN64Work {
     s32 type;     // 0x0
@@ -27,11 +26,12 @@ typedef struct EffSmallStarN64Work {
 } EffSmallStarN64Work;
 
 static void effSmallStarMain(EffectEntry* effect);
-static void effSmallStarDisp(CameraId cameraId, EffectEntry* effect);
+static void effSmallStarDisp(CameraId cameraId, void* param);
 
 /**
- * Spawns `count` small stars at (x, y, z); type picks the spread pattern and (dx, dy, dz) the base velocity.
- * Used by the Koopa partner (party_nokonoko), eff_small_star.c and event scripts.
+ * Spawns `count` small stars at (x, y, z); type picks the spread pattern and (dx, dy, dz) the base direction
+ * (normalised, reversed and scaled to speed 8). Returns NULL for count 0 or a zero direction.
+ * Used by the Koopa partner (party_nokonoko), eff_small_star.c and evt_eff64 (no script callers found).
  */
 EffectEntry* effSmallStarN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 dx, f32 dy, f32 dz) {
     static f32 kaiten;
@@ -39,7 +39,6 @@ EffectEntry* effSmallStarN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 
     EffSmallStarN64Work* w;
     f32 px, py, pz;
     f32 inv;
-    f32 zr;
     f32 len;
     f32 ang;
     s32 i;
@@ -51,19 +50,19 @@ EffectEntry* effSmallStarN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 
         return NULL;
     }
     len = dx * dx + dy * dy + dz * dz;
-    zr = 0.0f;
-    if (len == zr) {
+
+    if (!len) {
         return NULL;
     }
     inv = -1.0f / sqrtf(len);
     dx *= inv;
     dy *= inv;
     dz *= inv;
-    if (dx != zr) {
+    if (dx) {
         px = -dy / dx;
         py = 1.0f;
         pz = 0.0f;
-    } else if (dy != zr) {
+    } else if (dy) {
         px = 1.0f;
         py = -dx / dy;
         pz = 0.0f;
@@ -73,7 +72,7 @@ EffectEntry* effSmallStarN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 
         pz = -dx / dz;
     }
     len = px * px + py * py + pz * pz;
-    if (len == zr) {
+    if (!len) {
         return NULL;
     }
     inv = 1.0f / sqrtf(len);
@@ -97,7 +96,7 @@ EffectEntry* effSmallStarN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 
         w->position.x = x;
         w->position.y = y;
         w->position.z = z;
-        w->camera = 4;
+        w->camera = CAMERA_3D;
         switch (type) {
             case 0:
             case 1:
@@ -175,48 +174,13 @@ EffectEntry* effSmallStarN64Entry(s32 type, s32 count, f32 x, f32 y, f32 z, f32 
     return effect;
 }
 
-// FAKE: match-forcing setting: the same code without it compiles differently (removal tried).
 #pragma opt_propagation off
-// FAKE: lifetimes optimisation off for _cosf, alphaf, effSmallStarMain: the original register allocation and scheduling need it
 #pragma opt_lifetimes off
-/** Polynomial cosine approximation on [0, 2*pi), written out to match the original's inlined code. */
-static inline f32 _cosf(f32 x) {
-    f32 a = 0.03705f;
-    f32 b = 0.4967f;
-    f32 c = 1.0f;
-    f32 x2;
-
-    if (x <= PI) {
-        if (x <= HALF_PI) {
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-        } else {
-            x = HALF_PI - (x - HALF_PI);
-            x2 = x * x;
-            a = a * x2 - b;
-            a = a * x2 + c;
-            a = -a;
-        }
-    } else if (x < 4.712389f) {
-        x = x - PI;
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-        a = -a;
-    } else {
-        x = HALF_PI - (x - 4.712389f);
-        x2 = x * x;
-        a = a * x2 - b;
-        a = a * x2 + c;
-    }
-    return a;
-}
-
 /** Multiplies an integer alpha value by a float factor. */
 inline f32 alphaf(f32 m, s32 x) {
     return x * m;
 }
+
 /**
  * Type 2 stars bob (vy = 4*cos of 6 degrees per frame) while drifting outward,
  * and fade 40% per frame and slow their spin once falling.
@@ -247,7 +211,7 @@ static void effSmallStarMain(EffectEntry* effect) {
     ang = 6.2831855f * (f32)(w->frame * 6);
     for (i = 0; i < effect->count; i++, w++) {
         if (w->type == 2) {
-            c = _cosf(ang / 360.0f);
+            c = polyCosf(ang / 360.0f);
             w->velocity.y = 4.0f * c;
             w->velocity.x *= 0.94f;
             w->velocity.z *= 0.94f;
@@ -278,18 +242,18 @@ static void effSmallStarMain(EffectEntry* effect) {
         w->position.z += w->velocity.z;
         w->rotation += w->rotVel;
     }
-    dispEntry(((EffSmallStarN64Work*)effect->userdata)->camera, dispCalcZ(&position), 2, (DispCallback)effSmallStarDisp, effect);
+    dispEntry(((EffSmallStarN64Work*)effect->userdata)->camera, dispCalcZ(&position), DISP_MODE_XLU, effSmallStarDisp, effect);
 }
 
 #pragma opt_propagation reset
 #pragma opt_lifetimes reset
-
-/** RGB colours the small stars cycle through (pinks, purples and blues), three bytes per step. */
+/** RGB colours the small stars cycle through (12 pastel steps around the colour wheel), three bytes per step. */
 static u8 color_rotation_data[] = {
     0xFE, 0xAC, 0xAC, 0xFE, 0xAC, 0xD5, 0xFE, 0xB4, 0x9A, 0xD5, 0xB4, 0xFE,
     0xB4, 0xB4, 0xFE, 0xB4, 0xDD, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5,
     0xB4, 0xFE, 0xB4, 0xD5, 0xFE, 0xB4, 0xFE, 0xFE, 0xB4, 0xFE, 0xD5, 0xAC,
 };
+
 /** 16x16 camera-facing quad drawn for each small star. */
 static effN64Vtx size16x16_tex32x32_vtx[] = {
     {-8, -8, 0, 0, 0, 0, 0, 0, 0xFF},
@@ -298,19 +262,14 @@ static effN64Vtx size16x16_tex32x32_vtx[] = {
     {-8, 8, 0, 0, 32, 0, 0, 0, 0xFF},
 };
 
-/** Reads one byte of the shared color rotation table, wrapping at 36 entries. */
-static inline u8 color_rot_get(s32 idx) {
-    return color_rotation_data[idx % 36];
-}
-
 /**
  * Draws each star as a 16x16 quad of texture 0x1D facing the camera and turned by its spin,
  * with no depth test so it shows on top; the colour cycles through color_rotation_data,
  * each star one step further along.
  */
-static void effSmallStarDisp(CameraId cameraId, EffectEntry* effect) {
+static void effSmallStarDisp(CameraId cameraId, void* param) {
+    EffectEntry* effect = param;
     CameraEntry* camera;
-    s32 a, b, c;
     EffSmallStarN64Work* w;
     s32 i;
     GXTexObj texObj;
@@ -338,14 +297,15 @@ static void effSmallStarDisp(CameraId cameraId, EffectEntry* effect) {
     effSetVtxDescN64(size16x16_tex32x32_vtx);
     t = (w->frame - 1) * 3;
     t = t % 36;
-    a = t;
-    b = t + 1;
-    c = t + 2;
-    for (i = 0; i < effect->count; a += 3, b += 3, c += 3, i++, w++) {
+    for (i = 0; i < effect->count; i++, w++) {
+        s32 rIdx = t + i * 3;
+        s32 gIdx = t + 1 + i * 3;
+        s32 bIdx = t + 2 + i * 3;
+
         color = (GXColor){0, 0, 0, 0};
-        color.r = color_rot_get(a);
-        color.g = color_rotation_data[b % 36];
-        color.b = color_rotation_data[c % 36];
+        color.r = color_rotation_data[rIdx % 36];
+        color.g = color_rotation_data[gIdx % 36];
+        color.b = color_rotation_data[bIdx % 36];
         color.a = w->alpha;
         GXSetTevColor(GX_TEVREG0, color);
         PSMTXTrans(mtx, w->position.x, w->position.y, w->position.z);
@@ -355,18 +315,18 @@ static void effSmallStarDisp(CameraId cameraId, EffectEntry* effect) {
         PSMTXConcat(mtx, rotZ, mtx);
         PSMTXConcat(camera->view, mtx, mtx);
         GXLoadPosMtxImm(mtx, GX_PNMTX0);
-        GXSetCurrentMtx(0);
+        GXSetCurrentMtx(GX_PNMTX0);
         GXBegin(GX_TRIANGLES, GX_VTXFMT0, 6);
         tri2(0, 1, 2, 0, 0, 2, 3, 0);
     }
 }
 
 /** Sets the camera every star of the effect is drawn on. */
-void effSmallStarN64CamChg(EffectEntry* effect, s32 cameraId) {
+void effSmallStarN64CamChg(EffectEntry* effect, u8 camera) {
     EffSmallStarN64Work* w = effect->userdata;
     s32 i;
 
     for (i = 0; i < effect->count; i++, w++) {
-        w->camera = cameraId;
+        w->camera = camera;
     }
 }

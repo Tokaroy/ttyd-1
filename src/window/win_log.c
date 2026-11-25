@@ -1,5 +1,14 @@
 // Pause menu: the journal window (map, crystal stars, badge and recipe logs, tattle log).
+
+#include "version.h"
+
+// The early demos keep the dtrigf constants at the start of this unit's .data.
+#if VERSION <= VERSION_DEMO_JP
+#define DTRIGF_WITH_INITIAL_VALUES
+#include <dtrigf.h>
+#endif
 #include "win/win_main.h"
+#include "evt/evt_story.h"
 #include "driver/animdrv.h"
 #include "driver/effdrv.h"
 #include "driver/swdrv.h"
@@ -18,44 +27,216 @@
 #include "win/win_root.h"
 #include "eff/eff_starstone.h"
 #include "mario/mario.h"
-#include "win/win_log.h"
 #include "pmario_sound.h"
 #include "system.h"
-#include "driver/msgdrv.h"
-#include "manager/fontmgr.h"
-#include "libc_decls.h"
-#include "version.h"
-#include "evt/evt_story.h"
 #include <dolphin/pad.h>
 #include <demo/DEMOPad.h>
+#include "driver/camdrv.h"
+#include "sfx_name_word.h"
+#include "manager/fontmgr.h"
+#include "eff/eff_magic1_n64.h"
+#include "driver/msgdrv.h"
+#include "libc_decls.h"
+#include "win/win_log.h"
+#include "driver/mapdrv.h"
+#include "evt/evt_cmd.h"
+#include "evt/evt_save_flags.h"
 
 typedef struct TubuDt {
     s16 x;
     s16 y;
     u8 big;
     u8 type;
-    u16 id;
+    u16 progress;
     const char* map;
 } TubuDt;
+
+typedef struct MonosiriWork {
+    s32 state;          // 0x0
+    s32 id;             // 0x4
+    FileEntry* winTpl;  // 0x8
+    FileEntry* monoDat; // 0xC
+    f32 curX;           // 0x10
+    f32 curY;           // 0x14
+    f32 x;              // 0x18
+    f32 y;              // 0x1C
+    s32 pose1;          // 0x20
+    s32 pose2;          // 0x24
+    smartEntry* smart;  // 0x28
+    s32 alpha;          // 0x2C
+} MonosiriWork;
 
 static void capture(CameraId camera, void* param);
 static void monosiri_disp(CameraId camera, void* param);
 
-#if VERSION <= VERSION_DEMO_JP
-// Unreferenced; the early demos carry a copy at the start of this TU's .data (the September US demo one in
-// mariost.c).
-static f32 unusedSignTbl[16] = {-1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f};
-
 /**
- * Demo position of stone_tbl: the seven Crystal Stars in chapter order for the Journal's Crystal Stars page.
+ * Dots of the Journal map: position on the map, big (a place) or small (the path between), the chapter switch
+ * that can also reveal it, the story progress that reveals it, and the area for its name and help text.
+ * The 93 dots cover every area of the map roughly in story order,
+ * from Rogueport and Petal Meadows to the Moon, the X-Naut Fortress and the Palace of Shadow.
+ * The map page draws them, and the cursor names the nearest big one.
  */
-s32 stone_tbl[] = {ITEM_DIAMOND_STAR, ITEM_EMERALD_STAR, ITEM_GOLD_STAR, ITEM_RUBY_STAR, ITEM_SAPPHIRE_STAR, ITEM_GARNET_STAR, ITEM_CRYSTAL_STAR};
+#if VERSION >= VERSION_JP
+static TubuDt tubuDt[] = {
+    {14, -34, 1, 0, STG0_03_TO_ROGUEPORT, "gor"},
+    {-4, -31, 0, 2, STG0_11_3_GOOMBA_GOONS, "gor"},
+    {-20, -31, 0, 2, STG0_11_3_GOOMBA_GOONS, "gor"},
+    {-33, -38, 1, 2, STG0_11_3_GOOMBA_GOONS, "tik"},
+    {118, 30, 1, 0, STG1_00_PETAL_MEADOWS, "hei"},
+    {134, 22, 0, 0, STG1_01A_PETALBURG_1ST_TIME, "hei"},
+    {150, 14, 0, 0, STG1_01A_PETALBURG_1ST_TIME, "hei"},
+    {176, 9, 0, 0, STG1_01A_PETALBURG_1ST_TIME, "hei"},
+    {200, 6, 1, 0, STG1_01A_PETALBURG_1ST_TIME, "nok"},
+    {136, 39, 0, 3, STG1_09_HOOKTAIL_CASTLE, "hei"},
+    {152, 48, 0, 3, STG1_09_HOOKTAIL_CASTLE, "hei"},
+    {165, 53, 0, 3, STG1_09_HOOKTAIL_CASTLE, "hei"},
+    {165, 68, 1, 3, STG1_09_HOOKTAIL_CASTLE, "gon"},
+    {0, 36, 1, 0, STG2_00_BOGGLY_WOODS, "win"},
+    {0, 56, 0, 0, STG2_03_THE_GREAT_TREE, "win"},
+    {0, 75, 1, 0, STG2_03_THE_GREAT_TREE, "mri"},
+    {16, 44, 0, 0, STG2_05_A_SHY_FLURRIE, "win"},
+    {27, 53, 0, 0, STG2_05_A_SHY_FLURRIE, "win"},
+    {42, 65, 1, 0, STG2_05_A_SHY_FLURRIE, "hou"},
+    {30, -17, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {36, 0, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {46, 15, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {55, 32, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {74, 45, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {83, 61, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {83, 75, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {83, 93, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {72, 101, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {71, 114, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {71, 132, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {80, 141, 0, 0, STG3_00_WELCOME_TO_GLITZVILLE, "gor"},
+    {97, 150, 1, 0, STG3_00_WELCOME_TO_GLITZVILLE, "tou"},
+    {-181, -90, 1, 0, STG4_00_WELCOME_TO_STAGE_4, "usu"},
+    {-163, -90, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-145, -90, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-135, -77, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-143, -63, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-159, -63, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-176, -63, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-191, -63, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-206, -63, 0, 4, STG4_03_SHOP_KEY, "usu"},
+    {-228, -63, 1, 4, STG4_03_SHOP_KEY, "gra"},
+    {-228, -44, 0, 0, STG4_08_STEEPLE_DEMO_EXT, "gra"},
+    {-216, -31, 0, 0, STG4_08_STEEPLE_DEMO_EXT, "gra"},
+    {-198, -27, 0, 0, STG4_08_STEEPLE_DEMO_EXT, "gra"},
+    {-181, -29, 0, 0, STG4_08_STEEPLE_DEMO_EXT, "gra"},
+    {-160, -33, 0, 0, STG4_08_STEEPLE_DEMO_EXT, "gra"},
+    {-139, -33, 1, 0, STG4_08_STEEPLE_DEMO_EXT, "jin"},
+    {13, -56, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {13, -70, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {12, -84, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {-3, -94, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {-14, -104, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {-31, -115, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {-45, -128, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {-48, -143, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {-38, -158, 0, 0, STG5_11_DESERTED_ISLAND, "gor"},
+    {-11, -163, 1, 0, STG5_11_DESERTED_ISLAND, "muj"},
+    {7, -163, 0, 0, STG5_19_01_ENTERING_THE_GROTTO, "muj"},
+    {21, -163, 0, 0, STG5_19_01_ENTERING_THE_GROTTO, "muj"},
+    {41, -163, 1, 0, STG5_19_01_ENTERING_THE_GROTTO, "dou"},
+    {36, -34, 0, 0, STG6_27_RIVERSIDE_STATION, "gor"},
+    {53, -27, 0, 0, STG6_27_RIVERSIDE_STATION, "gor"},
+    {69, -12, 0, 0, STG6_27_RIVERSIDE_STATION, "gor"},
+    {85, 1, 0, 0, STG6_27_RIVERSIDE_STATION, "gor"},
+    {109, 7, 0, 0, STG6_27_RIVERSIDE_STATION, "gor"},
+    {132, 4, 0, 0, STG6_27_RIVERSIDE_STATION, "gor"},
+    {149, -8, 0, 0, STG6_27_RIVERSIDE_STATION, "gor"},
+    {158, -25, 1, 0, STG6_27_RIVERSIDE_STATION, "eki"},
+    {143, -40, 0, 0, STG6_49_POSHLEY_HEIGHTS, "eki"},
+    {133, -52, 0, 0, STG6_49_POSHLEY_HEIGHTS, "eki"},
+    {132, -66, 0, 0, STG6_49_POSHLEY_HEIGHTS, "eki"},
+    {132, -82, 0, 0, STG6_49_POSHLEY_HEIGHTS, "eki"},
+    {155, -90, 1, 0, STG6_49_POSHLEY_HEIGHTS, "pik"},
+    {175, -90, 0, 0, STG6_51_3_SURPRISE_GUESTS, "pik"},
+    {193, -91, 0, 0, STG6_51_3_SURPRISE_GUESTS, "pik"},
+    {211, -91, 1, 0, STG6_51_3_SURPRISE_GUESTS, "sin"},
+    {-167, 17, 1, 0, STG7_01_FAHR_OUTPOST_1ST_VISIT, "bom"},
+    {-167, 37, 0, 0, STG7_06_TO_THE_MOON, "bom"},
+    {-167, 50, 0, 0, STG7_06_TO_THE_MOON, "bom"},
+    {-167, 64, 0, 0, STG7_06_TO_THE_MOON, "bom"},
+    {-167, 82, 0, 0, STG7_06_TO_THE_MOON, "bom"},
+    {-167, 99, 0, 0, STG7_06_TO_THE_MOON, "bom"},
+    {-167, 116, 0, 0, STG7_06_TO_THE_MOON, "bom"},
+    {-167, 133, 0, 0, STG7_06_TO_THE_MOON, "bom"},
+    {-167, 151, 1, 0, STG7_06_TO_THE_MOON, "moo"},
+    {-171, 169, 0, 0, STG7_08_ELITE_X_NAUTS, "moo"},
+    {-185, 177, 0, 0, STG7_08_ELITE_X_NAUTS, "moo"},
+    {-200, 171, 0, 0, STG7_08_ELITE_X_NAUTS, "moo"},
+    {-209, 159, 1, 0, STG7_08_ELITE_X_NAUTS, "aji"},
+    {-33, -50, 0, 0, STG8_00_START, "gor"},
+    {-33, -62, 0, 0, STG8_00_START, "gor"},
+    {-33, -74, 1, 0, STG8_00_START, "las"},
+};
+#endif
+
+static s32 stone_tbl[] = {ITEM_DIAMOND_STAR, ITEM_EMERALD_STAR, ITEM_GOLD_STAR, ITEM_RUBY_STAR, ITEM_SAPPHIRE_STAR, ITEM_GARNET_STAR, ITEM_CRYSTAL_STAR};
+
+/** The Journal's entry buttons (WinLogMenu.id), in the order of logEntry's help texts. */
+typedef enum WinLogEntryId {
+    WIN_LOG_ENTRY_MAP = 0,     // world map
+    WIN_LOG_ENTRY_STONES = 1,  // Crystal Stars
+    WIN_LOG_ENTRY_BADGES = 2,  // badge log
+    WIN_LOG_ENTRY_RECIPES = 3, // recipe log
+    WIN_LOG_ENTRY_TATTLE = 4,  // Tattle log
+} WinLogEntryId;
+
+/* WindowWork log.state: winLogMain's state machine */
+typedef enum WinLogMainState {
+    WIN_LOG_ENTRIES = 0,        // pick an entry button; A opens its page (WIN_LOG_MAP + entry id), B back to the tabs
+    WIN_LOG_MAP = 10,           // world map: load its texture and Mario's marker, move the cursor, name the nearest
+                                // place
+    WIN_LOG_STONES = 11,        // Crystal Star ring: left / right turn it to the next star
+    WIN_LOG_BADGES = 12,        // badge log grid (7 x 4 per page, L / R pages); Z sorts (WIN_LOG_SORT)
+    WIN_LOG_RECIPES = 13,       // recipe log grid, the same way
+    WIN_LOG_TATTLE = 14,        // Tattle log list; A on a known enemy opens its card (WIN_LOG_TATTLE_CARD), Z sorts
+    WIN_LOG_TATTLE_UNUSED = 20, // never set; winLogDisp still draws the Tattle list in it
+    WIN_LOG_TATTLE_CARD = 21,   // the enemy's Tattle card is up (monosiriMain); B starts closing it
+    WIN_LOG_TATTLE_CLOSE = 22,  // wait for the card to slide off, free it, back to WIN_LOG_TATTLE
+    WIN_LOG_SORT = 1000,        // Z sort menu of the badge or recipe log; back to savedState when it closes
+    WIN_LOG_TATTLE_SORT = 1001, // Z sort menu of the Tattle log (winLogDisp keeps the list drawn behind it)
+} WinLogMainState;
+
+/*
+ * WinLogMenu.state: the entry buttons' slide (winLogMain2). Each start state sets a target, then moves on (++);
+ * the buttons ease toward their targets every frame. Positions are relative to the Journal window.
+ */
+typedef enum WinLogButtonState {
+    WIN_LOG_BUTTON_IDLE = 0,       // at its place in the column (logEntry)
+    WIN_LOG_BUTTON_PICK = 10,      // the opened entry: up to (0, 140), above the column
+    WIN_LOG_BUTTON_PICK_WAIT = 11, // after 8 frames on to the top-left corner (-160, 140)
+    WIN_LOG_BUTTON_PICKED = 12,    // stays there while its page is open
+    WIN_LOG_BUTTON_BACK = 20,      // the opened entry when its page closes: back to (0, 140)
+    WIN_LOG_BUTTON_BACK_WAIT = 21, // after 8 frames back to its place in the column
+    WIN_LOG_BUTTON_BACK_DONE = 22, // stays there
+    WIN_LOG_BUTTON_HIDE = 30,      // the other entries when a page opens: down to (0, -160)
+    WIN_LOG_BUTTON_HIDDEN = 31,    // stays there
+    WIN_LOG_BUTTON_SHOW = 40,      // the other entries when the page closes: back to their places in the column
+    WIN_LOG_BUTTON_SHOWN = 41,     // stays there
+} WinLogButtonState;
 
 /**
- * Adds a Journal entry button (0 map, 1 Crystal Stars, 2 badge log, 3 recipe log,
+ * Grid of the Tattle log list (monoshiriGX): 16 entries per page in two columns of eight, filled down the left
+ * column first. winLogMain moves the hand cursor on the same grid
+ * (helpTgtX = column * 216 - 180, helpTgtY = 106 - row * 24).
+ */
+enum TattleListLayout {
+    TATTLE_LIST_COL_W = 216, // left column to right column
+    TATTLE_LIST_ROW_H = 24,  // one row
+    TATTLE_LIST_ROWS = 8,    // rows per column
+    TATTLE_LIST_PAGE = 16,   // entries per page
+};
+
+/**
+ * Adds a Journal entry button (WinLogEntryId: 0 map, 1 Crystal Stars, 2 badge log, 3 recipe log,
  * 4 Tattle log) with its help text, and re-spaces all buttons 45 units apart around the centre.
  */
-static inline void winLogAddMenu(WindowWork* w, s32 id) {
+// Original name from the JP demo's link map (UNUSED there): every call is inlined, so the linker strips it.
+void logEntry(WindowWork* w, s32 id) {
     static const char* msg_help[] = {
         "msg_menu_kiroku_map",
         "msg_menu_kiroku_stone",
@@ -67,7 +248,7 @@ static inline void winLogAddMenu(WindowWork* w, s32 id) {
     s32 i;
     m->id = id;
     m->timer = 0;
-    m->state = 0;
+    m->state = WIN_LOG_BUTTON_IDLE;
     m->msg = msg_help[id];
     w->log.count++;
     for (i = 0; i < w->log.count; i++) {
@@ -76,26 +257,11 @@ static inline void winLogAddMenu(WindowWork* w, s32 id) {
         w->log.menu[i].ty = w->log.menu[i].y = 45.0f * w->log.count / 2.0f - 45.0f * i;
     }
 }
-#endif
 
-// The demo has no per-chapter tubu switches (type) and opens the moo/aji
-// route one sequence step earlier.
 #if VERSION <= VERSION_DEMO_JP
 #define TUBU_TYPE(t) 0
 #define TUBU_SEQ_361 360
-#else
-#define TUBU_TYPE(t) (t)
-#define TUBU_SEQ_361 361
-#endif
-
-/**
- * Dots of the Journal map: position on the map, big (a place) or small (the path between), the chapter switch
- * that can also reveal it, the story progress that reveals it, and the area for its name and help text.
- * The 93 dots cover every area of the map roughly in story order,
- * from Rogueport and Petal Meadows to the Moon, the X-Naut Fortress and the Palace of Shadow.
- * The map page draws them, and the cursor names the nearest big one.
- */
-TubuDt tubuDt[] = {
+static TubuDt tubuDt[] = {
     {14, -34, 1, 0, 3, "gor"},
     {-4, -31, 0, TUBU_TYPE(2), 12, "gor"},
     {-20, -31, 0, TUBU_TYPE(2), 12, "gor"},
@@ -190,42 +356,13 @@ TubuDt tubuDt[] = {
     {-33, -62, 0, 0, 382, "gor"},
     {-33, -74, 1, 0, 382, "las"},
 };
-
-// Order-forced: the same winLogAddMenu as the demo copy above; its static msg_help is emitted where the
-// function is defined, after tubuDt in retail and before it in the demo.
-#if VERSION >= VERSION_JP
-/** The seven Crystal Stars in chapter order; the Journal's Crystal Stars page shows the ones Mario has. */
-s32 stone_tbl[] = {ITEM_DIAMOND_STAR, ITEM_EMERALD_STAR, ITEM_GOLD_STAR, ITEM_RUBY_STAR, ITEM_SAPPHIRE_STAR, ITEM_GARNET_STAR, ITEM_CRYSTAL_STAR};
-
-/** Adds a Journal entry button and re-spaces the buttons (same as the demo copy above). */
-static inline void winLogAddMenu(WindowWork* w, s32 id) {
-    static const char* msg_help[] = {
-        "msg_menu_kiroku_map",
-        "msg_menu_kiroku_stone",
-        "msg_menu_kiroku_badge",
-        "msg_menu_kiroku_ryori",
-        "msg_menu_kiroku_mono",
-    };
-    WinLogMenu* m = &w->log.menu[w->log.count];
-    s32 i;
-    m->id = id;
-    m->timer = 0;
-    m->state = 0;
-    m->msg = msg_help[id];
-    w->log.count++;
-    for (i = 0; i < w->log.count; i++) {
-        w->log.menu[i].x = 0.0f;
-        w->log.menu[i].tx = 0.0f;
-        w->log.menu[i].ty = w->log.menu[i].y = 45.0f * w->log.count / 2.0f - 45.0f * i;
-    }
-}
 #endif
 
 /**
  * Sets up the Journal when the pause menu opens:
  * adds the entries unlocked by story progress (map always; Tattle log once Goombella joins;
  * Crystal Stars at Frankly's; badge log after the badge tutorial;
- * recipe log once unlocked), spawns the seven Crystal Star effects (unowned ones dark),
+ * recipe log once unlocked), spawns the seven Crystal Star effects (as many lit, in table order, as Mario owns; the rest dark),
  * finds Mario's spot on the world map for the current area, and builds the sorted badge,
  * recipe and Tattle lists with their found counts.
  */
@@ -245,21 +382,21 @@ void winLogInit(WindowWork* w) {
     TattleEntry* t;
     EffectEntry* e;
 #endif
+
     WinSortEnt tmp;
 
-    w->log.state = 0;
+    w->log.state = WIN_LOG_ENTRIES;
     w->log.cursor = 0;
     w->log.count = 0;
-    winLogAddMenu(w, 0);
-    if (swByteGet(GSW_STORY_PROGRESS) >= STORY_STG0_16_FRANKLYS_HOUSE)
-        winLogAddMenu(w, 1);
-    if (swByteGet(GSW_STORY_PROGRESS) >= STORY_STG0_07_GOOMBELLA_JOINS)
-        winLogAddMenu(w, 4);
-    if (swByteGet(GSW_STORY_PROGRESS) >= STORY_STG0_17_BADGE_TUTORIAL)
-        winLogAddMenu(w, 2);
-    if (swGet(GSWF_RECIPE_LOG_UNLOCKED))
-        winLogAddMenu(w, 3);
-
+    logEntry(w, WIN_LOG_ENTRY_MAP);
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) >= STG0_16_FRANKLYS_HOUSE)
+        logEntry(w, WIN_LOG_ENTRY_STONES);
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) >= STG0_07_GOOMBELLA_JOINS)
+        logEntry(w, WIN_LOG_ENTRY_TATTLE);
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) >= STG0_17_BADGE_TUTORIAL)
+        logEntry(w, WIN_LOG_ENTRY_BADGES);
+    if (swGet(GSWF_ID(GSWF_GOR_ZESS_T_DISH_RECEIVED)))
+        logEntry(w, WIN_LOG_ENTRY_RECIPES);
     w->log.stoneNum = 0;
     for (i = 0; i < 7; i++) {
         if (pouchCheckItem(stone_tbl[i])) {
@@ -277,10 +414,10 @@ void winLogInit(WindowWork* w) {
             ((EffStarStoneWork*)e->userdata)->g = 0x20;
             ((EffStarStoneWork*)e->userdata)->b = 0x20;
         }
-        ((EffStarStoneWork*)e->userdata)->cam = 8;
-        ((EffStarStoneWork*)e->userdata)->flags &= ~STARSTONE_FLAG_SHINE_SFX;
+        ((EffStarStoneWork*)e->userdata)->cam = CAMERA_2D;
+        ((EffStarStoneWork*)e->userdata)->flags &= ~STAR_STONE_FLAG_SHINE_SFX;
 #if VERSION >= VERSION_JP
-        ((EffStarStoneWork*)e->userdata)->flags |= STARSTONE_FLAG_NO_DRAW;
+        ((EffStarStoneWork*)e->userdata)->flags |= STAR_STONE_FLAG_EXTERNAL_DRAW;
 #endif
     }
 
@@ -289,8 +426,8 @@ void winLogInit(WindowWork* w) {
     w->log.mapSel = -1;
     w->log.mapIdx = 0;
     w->log.mapX = w->log.mapY = 0.0f;
-    w->log.mapPanelTx = w->log.mapPanelX = 0.0f;
-    w->log.mapPanelTy = w->log.mapPanelY = -480.0f;
+    w->log.mapWinTgtX = w->log.mapWinX = 0.0f;
+    w->log.mapWinTgtY = w->log.mapWinY = -480.0f;
     w->log.scrollX = w->log.scrollY = 0.0f;
 
     area = gp->currentAreaName;
@@ -299,14 +436,14 @@ void winLogInit(WindowWork* w) {
     if (!strcmp(gp->currentMapName, "win_04") || !strcmp(gp->currentMapName, "win_05"))
         area = "hou";
     if (!strncmp(gp->currentMapName, "rsh", 3)) {
-        if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG6_27_RIVERSIDE_STATION) {
+        if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG6_27_RIVERSIDE_STATION) {
             area = "gor";
-        } else if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG6_49_POSHLEY_HEIGHTS || swGet(GSWF_TRAIN_AT_RIVERSIDE)) {
+        } else if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG6_49_POSHLEY_HEIGHTS || swGet(GSWF_ID(GSWF_HOM_TRAIN_STOPPED_AT_RIVERSIDE))) {
             area = "eki";
-        } else if (swGet(GSWF_TRAIN_AT_POSHLEY)) {
+        } else if (swGet(GSWF_ID(GSWF_HOM_TRAIN_AT_POSHLEY))) {
             area = "pik";
         } else {
-            switch (swByteGet(GSW_TRAIN_LEG)) {
+            switch (swByteGet(GSW_ID(GSW_HOM_TRAIN_LEG))) {
                 case 0:
                     area = "gor";
                     break;
@@ -322,25 +459,43 @@ void winLogInit(WindowWork* w) {
             }
         }
     }
+#if VERSION <= VERSION_DEMO_JP
+    if (!strncmp(gp->currentMapName, "hom", 3)) {
+        area = "eki";
+    }
+    if (!strncmp(gp->currentMapName, "jon", 3)) {
+        area = "tik";
+    }
+    if (!strcmp(gp->currentMapName, "gra_06")) {
+        area = "jin";
+    }
+    {
+        for (k = 0; k < 93; k++) {
+            if (!area || !strcmp(area, tubuDt[k].map)) {
+                break;
+            }
+        }
+        if (k < 93) {
+            w->log.mapIdx = k;
+        }
+    }
+#else
     if (!strncmp(gp->currentMapName, "hom", 3))
         area = "eki";
     if (!strncmp(gp->currentMapName, "jon", 3))
         area = "tik";
     if (!strcmp(gp->currentMapName, "gra_06"))
         area = "jin";
-#if VERSION >= VERSION_JP
     if (!strcmp(gp->currentMapName, "muj_10") || !strcmp(gp->currentMapName, "muj_11") || !strcmp(gp->currentMapName, "muj_12"))
         area = "dou";
-#endif
 
-    {
-        for (k = 0; k < 93; k++) {
-            if (!area || !strcmp(area, tubuDt[k].map))
-                break;
-        }
-        if (k < 93)
-            w->log.mapIdx = k;
+    for (k = 0; k < sizeof(tubuDt) / sizeof(TubuDt); k++) {
+        if (!area || !strcmp(area, tubuDt[k].map))
+            break;
     }
+    if (k < sizeof(tubuDt) / sizeof(TubuDt))
+        w->log.mapIdx = k;
+#endif
     w->log.mapX = 304.0f + tubuDt[w->log.mapIdx].x;
     w->log.mapY = 240.0f + tubuDt[w->log.mapIdx].y;
     {
@@ -357,20 +512,19 @@ void winLogInit(WindowWork* w) {
         w->log.scrollX = -148.0f;
     if (w->log.scrollY < -240.0f)
         w->log.scrollY = -240.0f;
-
     w->log.stoneSel = 0;
-    w->log.stoneRot = w->log.stoneTgtRot = 51.42857f * w->log.stoneSel;
-    w->log.stoneTx = w->log.stoneX = 0.0f;
-    w->log.stoneTy = w->log.stoneY = -480.0f;
-    w->log.stoneTgtAlpha = w->log.stoneAlpha = 0.0f;
+    w->log.stoneAngle = w->log.stoneAngleTgt = 51.42857f * w->log.stoneSel;
+    w->log.stoneWinTgtX = w->log.stoneWinX = 0.0f;
+    w->log.stoneWinTgtY = w->log.stoneWinY = -480.0f;
+    w->log.stoneAlphaTgt = w->log.stoneAlpha = 0.0f;
 
     w->log.badge.num = 0;
 #if VERSION >= VERSION_US
     w->log.badge.page = 0;
 #endif
-    for (i = 0xF0; i < 0x153; i++) {
+    for (i = BADGE_MIN; i < BADGE_MAX; i++) {
         if (itemDataTable[i].type_sort_order != -1) {
-            w->log.badgeIds[w->log.badge.num++] = i - 0xF0;
+            w->log.badgeIds[w->log.badge.num++] = i - BADGE_MIN;
 #if VERSION >= VERSION_US
             if (swGet(i - BADGE_MIN + GSWF_BADGE_FOUND_BASE)) {
                 w->log.badge.page++;
@@ -378,7 +532,7 @@ void winLogInit(WindowWork* w) {
 #endif
         }
     }
-    qqsort(w->log.badgeIds, w->log.badge.num, sizeof(s16), compare_func5_2);
+    qqsort(w->log.badgeIds, w->log.badge.num, 2, compare_func5_2);
     w->log.badge.cursor = 0;
     w->log.badge.x = w->log.badge.tx = 320.0f;
     w->log.badge.y = w->log.badge.ty = -240.0f;
@@ -391,17 +545,17 @@ void winLogInit(WindowWork* w) {
 #if VERSION >= VERSION_US
     w->log.recipe.page = 0;
 #endif
-    for (i = WIN_RECIPE_MIN; i < ITEM_MAX; i++) {
+    for (i = ITEM_SHROOM_FRY; i < ITEM_MAX; i++) {
         if (itemDataTable[i].type_sort_order != -1) {
-            w->log.recipeIds[w->log.recipe.num++] = i - WIN_RECIPE_MIN;
+            w->log.recipeIds[w->log.recipe.num++] = i - ITEM_SHROOM_FRY;
 #if VERSION >= VERSION_US
-            if (swGet(WIN_RECIPE_COOKED_SW(i - WIN_RECIPE_MIN))) {
+            if (swGet(i - ITEM_SHROOM_FRY + GSWF_RECIPE_FOUND_BASE)) {
                 w->log.recipe.page++;
             }
 #endif
         }
     }
-    qqsort(w->log.recipeIds, w->log.recipe.num, sizeof(s16), compare_func6_2);
+    qqsort(w->log.recipeIds, w->log.recipe.num, 2, compare_func6_2);
     w->log.recipe.cursor = 0;
     w->log.recipe.x = w->log.recipe.tx = 320.0f;
     w->log.recipe.y = w->log.recipe.ty = -240.0f;
@@ -415,14 +569,14 @@ void winLogInit(WindowWork* w) {
         t = battleGetUnitMonosiriPtr(i);
         if (!t->tattleLogTag)
             continue;
-        if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG8_07_BELDAM_CONFRONTATION) {
+        if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG8_07_BELDAM_CONFRONTATION) {
             if (i == UNIT_BELDAM_CHAPTER8 || i == UNIT_MARILYN_CHAPTER8 || i == UNIT_DOOPLISS_CHAPTER8)
                 continue;
         } else {
             if (i == UNIT_BELDAM_CHAPTER2 || i == UNIT_MARILYN_CHAPTER2 || i == UNIT_DOOPLISS_CHAPTER4_FIGHT1)
                 continue;
         }
-        if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG8_15_GRODUS) {
+        if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG8_15_GRODUS) {
             if (i == UNIT_BOWSER_CHAPTER8)
                 continue;
         } else {
@@ -505,19 +659,19 @@ static inline BOOL tubuCheck(u8 type) {
         case 0:
             return FALSE;
         case 1:
-            if (swGet(GSWF_LOG_MAP_WIN_ROUTE_SHOWN))
+            if (swGet(GSWF_ID(GSWF_WIN_04_ENTERED)))
                 return TRUE;
             break;
         case 2:
-            if (swGet(GSWF_LOG_MAP_TIK_ROUTE_SHOWN))
+            if (swGet(GSWF_ID(GSWF_TIK_01_VISITED)))
                 return TRUE;
             break;
         case 3:
-            if (swGet(GSWF_LOG_MAP_GON_ROUTE_SHOWN))
+            if (swGet(GSWF_ID(GSWF_GON_00_VISITED)))
                 return TRUE;
             break;
         case 4:
-            if (swGet(GSWF_LOG_MAP_GRA_ROUTE_SHOWN))
+            if (swGet(GSWF_ID(GSWF_GRA_00_ENTERED)))
                 return TRUE;
             break;
     }
@@ -525,11 +679,14 @@ static inline BOOL tubuCheck(u8 type) {
 }
 
 /**
- * Journal input.
- * State 0 picks an entry; 10 is the world map (load the map TPL, move the cursor with the stick or D-pad,
- * snap to and name the nearest place); 11 turns the Crystal Star carousel;
- * 12 and 13 browse the badge and recipe logs (7x4 grid pages);
- * 14 the Tattle log, where A opens an entry (21/22); 1000/1001 run the Z sort menu.
+ * Journal input (states: WinLogMainState).
+ * WIN_LOG_ENTRIES picks an entry; WIN_LOG_MAP is the world map (load the map TPL, move the cursor with the stick
+ * or D-pad, snap to and name the nearest place); WIN_LOG_STONES turns the Crystal Star carousel;
+ * WIN_LOG_BADGES and WIN_LOG_RECIPES browse the badge and recipe logs (7x4 grid pages);
+ * WIN_LOG_TATTLE the Tattle log, where A opens an entry's card (WIN_LOG_TATTLE_CARD / _CLOSE);
+ * WIN_LOG_SORT / WIN_LOG_TATTLE_SORT run the Z sort menu.
+ * Opening a page slides the buttons out (WIN_LOG_BUTTON_PICK for the chosen one, WIN_LOG_BUTTON_HIDE for the
+ * rest); B on a page slides them back (WIN_LOG_BUTTON_BACK / WIN_LOG_BUTTON_SHOW).
  * Returns -1 on B at the top level, -2 on Start, else 0.
  */
 s32 winLogMain(WindowWork* w) {
@@ -554,9 +711,9 @@ s32 winLogMain(WindowWork* w) {
     s32 iy;
 
     switch (w->log.state) {
-        case 0:
+        case WIN_LOG_ENTRIES:
             if (w->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn(SFX_NAME_WORD(0x20013));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
                 return -1;
             }
             if (w->buttonTrg & PAD_BUTTON_START) {
@@ -568,66 +725,80 @@ s32 winLogMain(WindowWork* w) {
                 if (w->log.cursor >= w->log.count)
                     w->log.cursor = 0;
                 if (old != w->log.cursor)
-                    psndSFXOn(SFX_NAME_WORD(0x20005));
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_UP) {
                 old = w->log.cursor;
                 w->log.cursor--;
                 if (w->log.cursor < 0)
                     w->log.cursor = w->log.count - 1;
                 if (old != w->log.cursor)
-                    psndSFXOn(SFX_NAME_WORD(0x20005));
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonTrg & PAD_BUTTON_A) {
                 for (i = 0; i < w->log.count; i++) {
-                    w->log.menu[i].state = 30;
+                    w->log.menu[i].state = WIN_LOG_BUTTON_HIDE;
                 }
-                w->log.menu[w->log.cursor].state = 10;
-                w->log.state = w->log.menu[w->log.cursor].id + 10;
+                w->log.menu[w->log.cursor].state = WIN_LOG_BUTTON_PICK;
+
+                // the page states WIN_LOG_MAP .. WIN_LOG_TATTLE follow the entry ids
+                w->log.state = w->log.menu[w->log.cursor].id + WIN_LOG_MAP;
+
+                // move the page's panels in
                 switch (w->log.menu[w->log.cursor].id) {
-                    case 0:
-                        w->log.mapPanelTy = 20.0f;
+                    case WIN_LOG_ENTRY_MAP:
+                        w->log.mapWinTgtY = 20.0f;
                         break;
-                    case 1:
-                        w->log.stoneTy = 20.0f;
-                        w->log.stoneTgtAlpha = 255.0f;
+                    case WIN_LOG_ENTRY_STONES:
+                        w->log.stoneWinTgtY = 20.0f;
+                        w->log.stoneAlphaTgt = 255.0f;
                         break;
-                    case 2:
+                    case WIN_LOG_ENTRY_BADGES:
                         w->log.badge.tx = -130.0f;
                         w->log.badge.ty = 120.0f;
                         w->log.badge.iconTx = -200.0f;
                         w->log.badge.iconTy = 60.0f;
                         break;
-                    case 3:
+                    case WIN_LOG_ENTRY_RECIPES:
                         w->log.recipe.tx = -130.0f;
                         w->log.recipe.ty = 120.0f;
                         w->log.recipe.iconTx = -200.0f;
                         w->log.recipe.iconTy = 60.0f;
                         break;
-                    case 4:
+                    case WIN_LOG_ENTRY_TATTLE:
                         break;
                 }
-                psndSFXOn(SFX_NAME_WORD(0x20012));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
             }
             w->helpTgtX = -128.0f;
             w->helpTgtY = 8.0f + (45.0f * w->log.count / 2.0f - 45.0f * w->log.cursor);
             winMsgEntry(w, 0, w->log.menu[w->log.cursor].msg, 0);
             break;
-        case 10:
+        case WIN_LOG_MAP:
+#if VERSION <= VERSION_DEMO_JP
+            if (fileAsyncf(FILE_TYPE_TPL, NULL, WIN_DIR "jp/%s", getMarioStDvdRoot(), winGetMapTplName()) == NULL) {
+                break;
+            }
+            if (!w->mapRes) {
+                w->mapRes = fileAllocf(FILE_TYPE_TPL, WIN_DIR "jp/%s", getMarioStDvdRoot(), winGetMapTplName());
+#else
 #if VERSION >= VERSION_US
-            if (!fileAsyncf(4, NULL, "%s/w/%s/%s", getMarioStDvdRoot(), (u32)gp->language == 0 ? "jp" : "us", winGetMapTplName()))
+            if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/%s", getMarioStDvdRoot(),
+                           gp->language == LANGUAGE_JP ? "jp" : "us", winGetMapTplName()) == NULL)
                 break;
 #else
-            if (!fileAsyncf(4, NULL, WIN_DIR "jp/%s", getMarioStDvdRoot(), winGetMapTplName()))
+            if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/jp/%s", getMarioStDvdRoot(), winGetMapTplName()) == NULL)
                 break;
 #endif
             if (!w->mapRes) {
 #if VERSION >= VERSION_US
-                w->mapRes = fileAllocf(4, "%s/w/%s/%s", getMarioStDvdRoot(), (u32)gp->language == 0 ? "jp" : "us", winGetMapTplName());
+                w->mapRes = fileAllocf(FILE_TYPE_TPL, "%s/w/%s/%s", getMarioStDvdRoot(),
+                                       gp->language == LANGUAGE_JP ? "jp" : "us", winGetMapTplName());
 #else
-                w->mapRes = fileAllocf(4, WIN_DIR "jp/%s", getMarioStDvdRoot(), winGetMapTplName());
+                w->mapRes = fileAllocf(FILE_TYPE_TPL, "%s/w/jp/%s", getMarioStDvdRoot(), winGetMapTplName());
+#endif
 #endif
             }
             if (w->log.pose == -1) {
-                if (w->flags & WIN_FLAG_8BIT_MARIO) {
+                if (w->flags & WINDOW_FLAG_8BIT) {
                     anim = "W_1";
                     w->log.pose = animPoseEntry("d_mario", 0);
                     switch (marioGetColor()) {
@@ -664,16 +835,16 @@ s32 winLogMain(WindowWork* w) {
                     w->log.pose = animPoseEntry(model, 0);
                     animPoseSetAnim(w->log.pose, "M_W_1", 1);
                 }
-                animPoseSetMaterialFlagOn(w->log.pose, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+                animPoseSetMaterialFlagOn(w->log.pose, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
             }
             if (w->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn(SFX_NAME_WORD(0x20013));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
                 for (i = 0; i < w->log.count; i++) {
-                    w->log.menu[i].state = 40;
+                    w->log.menu[i].state = WIN_LOG_BUTTON_SHOW;
                 }
-                w->log.menu[w->log.cursor].state = 20;
-                w->log.state = 0;
-                w->log.mapPanelTy = -480.0f;
+                w->log.menu[w->log.cursor].state = WIN_LOG_BUTTON_BACK;
+                w->log.state = WIN_LOG_ENTRIES;
+                w->log.mapWinTgtY = -480.0f;
                 fileFree(w->mapRes);
                 w->mapRes = NULL;
                 if (w->log.pose != -1)
@@ -687,14 +858,17 @@ s32 winLogMain(WindowWork* w) {
             y = -120.0f + w->log.scrollY + w->log.mapY;
             bx = 74.0f + w->log.scrollX;
             by = 120.0f + w->log.scrollY;
+#if VERSION <= VERSION_DEMO_JP
             for (k = 0; k < 0x5D; k++) {
                 t = &tubuDt[k];
-#if VERSION <= VERSION_DEMO_JP
-                if (swByteGet(GSW_STORY_PROGRESS) < t->id)
+                if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < t->progress) {
                     break;
+                }
                 {
 #else
-                if (swByteGet(GSW_STORY_PROGRESS) >= t->id || tubuCheck(t->type)) {
+            for (k = 0; k < sizeof(tubuDt) / sizeof(TubuDt); k++) {
+                t = &tubuDt[k];
+                if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) >= t->progress || tubuCheck(t->type)) {
 #endif
                     if (t->big) {
                         f32 d = distABf(bx + t->x, by + t->y, x, y);
@@ -708,8 +882,9 @@ s32 winLogMain(WindowWork* w) {
             if (min < 50.0f) {
                 sprintf(name, "menu_monosiri_%s", tubuDt[sel].map);
                 sprintf(help, "menu_map_%s", tubuDt[sel].map);
-                if (w->log.mapSel != sel)
-                    psndSFXOn(SFX_NAME_WORD(0x20035));
+                if (w->log.mapSel != sel) {
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
+                }
                 w->log.mapSel = sel;
                 winMsgEntry(w, 0, help, name);
             } else {
@@ -769,53 +944,54 @@ s32 winLogMain(WindowWork* w) {
             w->helpTgtX -= 24.0f;
             w->helpTgtY += 20.0f;
             break;
-        case 11:
+        case WIN_LOG_STONES:
             if (w->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn(SFX_NAME_WORD(0x20013));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
                 for (i = 0; i < w->log.count; i++) {
-                    w->log.menu[i].state = 40;
+                    w->log.menu[i].state = WIN_LOG_BUTTON_SHOW;
                 }
-                w->log.menu[w->log.cursor].state = 20;
-                w->log.state = 0;
-                w->log.stoneTy = -480.0f;
-                w->log.stoneTgtAlpha = 0.0f;
+                w->log.menu[w->log.cursor].state = WIN_LOG_BUTTON_BACK;
+                w->log.state = WIN_LOG_ENTRIES;
+                w->log.stoneWinTgtY = -480.0f;
+                w->log.stoneAlphaTgt = 0.0f;
             } else if (w->dirRep & DEMO_STICK_LEFT) {
                 w->log.stoneSel--;
                 while (w->log.stoneSel < 0)
                     w->log.stoneSel += 7;
-                w->log.stoneTgtRot = 51.42857f * w->log.stoneSel;
-                while (w->log.stoneRot < w->log.stoneTgtRot)
-                    w->log.stoneRot += 360.0f;
-                psndSFXOn(SFX_NAME_WORD(0x209D6));
-                psndSFXOn(SFX_NAME_WORD(0x20037));
+                w->log.stoneAngleTgt = 51.42857f * w->log.stoneSel;
+                while (w->log.stoneAngle < w->log.stoneAngleTgt)
+                    w->log.stoneAngle += 360.0f;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_BTL_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_SSTONE_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_RIGHT) {
                 w->log.stoneSel++;
                 while (w->log.stoneSel > 6)
                     w->log.stoneSel -= 7;
-                w->log.stoneTgtRot = 51.42857f * w->log.stoneSel;
-                while (w->log.stoneRot > w->log.stoneTgtRot)
-                    w->log.stoneRot -= 360.0f;
-                psndSFXOn(SFX_NAME_WORD(0x209D6));
-                psndSFXOn(SFX_NAME_WORD(0x20037));
+                w->log.stoneAngleTgt = 51.42857f * w->log.stoneSel;
+                while (w->log.stoneAngle > w->log.stoneAngleTgt)
+                    w->log.stoneAngle -= 360.0f;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_BTL_CURSOR_MOVE1 | PSND_SFX_BYPASS_MUTE));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_SSTONE_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonTrg & PAD_BUTTON_START) {
                 return -2;
             }
             w->helpTgtY = w->helpTgtX = -50.0f;
             if (w->log.stoneSel < w->log.stoneNum) {
-                winMsgEntry(w, -1, itemDataTable[stone_tbl[w->log.stoneSel]].description, itemDataTable[stone_tbl[w->log.stoneSel]].name);
+                winMsgEntry(w, -1, itemDataTable[stone_tbl[w->log.stoneSel]].description,
+                            itemDataTable[stone_tbl[w->log.stoneSel]].name);
             } else {
                 winMsgEntry(w, -1, "msg_menu_stone_none_help", "msg_menu_stone_none_name");
             }
             break;
-        case 12:
+        case WIN_LOG_BADGES:
             pages = (w->log.badge.num + 27) / 28;
             if (w->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn(SFX_NAME_WORD(0x20013));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
                 for (i = 0; i < w->log.count; i++) {
-                    w->log.menu[i].state = 40;
+                    w->log.menu[i].state = WIN_LOG_BUTTON_SHOW;
                 }
-                w->log.menu[w->log.cursor].state = 20;
-                w->log.state = 0;
+                w->log.menu[w->log.cursor].state = WIN_LOG_BUTTON_BACK;
+                w->log.state = WIN_LOG_ENTRIES;
                 w->log.badge.tx = 330.0f;
                 w->log.badge.ty = -250.0f;
                 w->log.badge.iconTx = -200.0f;
@@ -825,27 +1001,27 @@ s32 winLogMain(WindowWork* w) {
                 if (w->log.badge.idx < 0)
                     w->log.badge.idx = 0;
                 w->log.badge.cursor = w->log.badge.idx * 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonRep & PAD_TRIGGER_R) {
                 w->log.badge.idx++;
                 if (w->log.badge.idx >= pages)
                     w->log.badge.idx = pages - 1;
                 w->log.badge.cursor = w->log.badge.idx * 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_RIGHT) {
                 if (w->log.badge.cursor % 7 < 6 && w->log.badge.cursor + 1 < w->log.badge.num)
                     w->log.badge.cursor++;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_LEFT) {
                 if (w->log.badge.cursor % 7 > 0)
                     w->log.badge.cursor--;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_UP) {
                 if ((s32)(w->log.badge.cursor - 7) >= 0 && w->log.badge.cursor - 7 < w->log.badge.num) {
                     w->log.badge.cursor -= 7;
                 }
                 w->log.badge.idx = w->log.badge.cursor / 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_DOWN) {
                 if ((s32)(w->log.badge.cursor + 7) >= 0 && w->log.badge.cursor + 7 < w->log.badge.num) {
                     w->log.badge.cursor += 7;
@@ -853,32 +1029,33 @@ s32 winLogMain(WindowWork* w) {
                     w->log.badge.cursor = w->log.badge.num - 1;
                 }
                 w->log.badge.idx = w->log.badge.cursor / 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonTrg & PAD_TRIGGER_Z) {
-                winSortEntry(w, 4, -310.0f, 150.0f);
+                winSortEntry(w, WIN_SORT_BADGE_LOG, -310.0f, 150.0f);
                 w->savedState = w->log.state;
-                psndSFXOn(SFX_NAME_WORD(0x20012));
-                w->log.state = 1000;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+                w->log.state = WIN_LOG_SORT;
             } else if (w->buttonTrg & PAD_BUTTON_START) {
                 return -2;
             }
             w->helpTgtX = w->log.badge.cursor % 28 % 7 * 56 - 140;
             w->helpTgtY = 90 - w->log.badge.cursor % 28 / 7 * 56;
             if (swGet(w->log.badgeIds[w->log.badge.cursor] + GSWF_BADGE_FOUND_BASE)) {
-                winMsgEntry(w, -2, itemDataTable[w->log.badgeIds[w->log.badge.cursor] + BADGE_MIN].menu_description, itemDataTable[w->log.badgeIds[w->log.badge.cursor] + BADGE_MIN].name);
+                winMsgEntry(w, -2, itemDataTable[w->log.badgeIds[w->log.badge.cursor] + BADGE_MIN].menu_description,
+                            itemDataTable[w->log.badgeIds[w->log.badge.cursor] + BADGE_MIN].name);
             } else {
                 winMsgEntry(w, -2, "msg_menu_stone_none_help", "msg_menu_stone_none_name");
             }
             break;
-        case 13:
+        case WIN_LOG_RECIPES:
             pages = (w->log.recipe.num + 27) / 28;
             if (w->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn(SFX_NAME_WORD(0x20013));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
                 for (i = 0; i < w->log.count; i++) {
-                    w->log.menu[i].state = 40;
+                    w->log.menu[i].state = WIN_LOG_BUTTON_SHOW;
                 }
-                w->log.menu[w->log.cursor].state = 20;
-                w->log.state = 0;
+                w->log.menu[w->log.cursor].state = WIN_LOG_BUTTON_BACK;
+                w->log.state = WIN_LOG_ENTRIES;
                 w->log.recipe.tx = 330.0f;
                 w->log.recipe.ty = -250.0f;
                 w->log.recipe.iconTx = -200.0f;
@@ -888,27 +1065,27 @@ s32 winLogMain(WindowWork* w) {
                 if (w->log.recipe.idx < 0)
                     w->log.recipe.idx = 0;
                 w->log.recipe.cursor = w->log.recipe.idx * 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonRep & PAD_TRIGGER_R) {
                 w->log.recipe.idx++;
                 if (w->log.recipe.idx >= pages)
                     w->log.recipe.idx = pages - 1;
                 w->log.recipe.cursor = w->log.recipe.idx * 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_RIGHT) {
                 if (w->log.recipe.cursor % 7 < 6 && w->log.recipe.cursor + 1 < w->log.recipe.num)
                     w->log.recipe.cursor++;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_LEFT) {
                 if (w->log.recipe.cursor % 7 > 0)
                     w->log.recipe.cursor--;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_UP) {
                 if ((s32)(w->log.recipe.cursor - 7) >= 0 && w->log.recipe.cursor - 7 < w->log.recipe.num) {
                     w->log.recipe.cursor -= 7;
                 }
                 w->log.recipe.idx = w->log.recipe.cursor / 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_DOWN) {
                 if ((s32)(w->log.recipe.cursor + 7) >= 0 && w->log.recipe.cursor + 7 < w->log.recipe.num) {
                     w->log.recipe.cursor += 7;
@@ -916,103 +1093,108 @@ s32 winLogMain(WindowWork* w) {
                     w->log.recipe.cursor = w->log.recipe.num - 1;
                 }
                 w->log.recipe.idx = w->log.recipe.cursor / 28;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonTrg & PAD_TRIGGER_Z) {
-                winSortEntry(w, 5, -310.0f, 150.0f);
+                winSortEntry(w, WIN_SORT_RECIPE_LOG, -310.0f, 150.0f);
                 w->savedState = w->log.state;
-                psndSFXOn(SFX_NAME_WORD(0x20012));
-                w->log.state = 1000;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+                w->log.state = WIN_LOG_SORT;
             } else if (w->buttonTrg & PAD_BUTTON_START) {
                 return -2;
             }
             w->helpTgtX = w->log.recipe.cursor % 28 % 7 * 56 - 140;
             w->helpTgtY = 90 - w->log.recipe.cursor % 28 / 7 * 56;
-            if (swGet(WIN_RECIPE_COOKED_SW(w->log.recipeIds[w->log.recipe.cursor]))) {
-                winMsgEntry(w, -2, itemDataTable[w->log.recipeIds[w->log.recipe.cursor] + WIN_RECIPE_MIN].menu_description, itemDataTable[w->log.recipeIds[w->log.recipe.cursor] + WIN_RECIPE_MIN].name);
+            if (swGet(w->log.recipeIds[w->log.recipe.cursor] + GSWF_RECIPE_FOUND_BASE)) {
+                winMsgEntry(w, -2,
+                            itemDataTable[w->log.recipeIds[w->log.recipe.cursor] + ITEM_SHROOM_FRY].menu_description,
+                            itemDataTable[w->log.recipeIds[w->log.recipe.cursor] + ITEM_SHROOM_FRY].name);
             } else {
                 winMsgEntry(w, -2, "msg_menu_stone_none_help", "msg_menu_stone_none_name");
             }
             break;
-        case 14:
-            pages = (w->log.enemyNum + 15) / 16;
+        case WIN_LOG_TATTLE:
+            pages = (w->log.enemyNum + (TATTLE_LIST_PAGE - 1)) / TATTLE_LIST_PAGE;
             if (w->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn(SFX_NAME_WORD(0x20013));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
                 for (i = 0; i < w->log.count; i++) {
-                    w->log.menu[i].state = 40;
+                    w->log.menu[i].state = WIN_LOG_BUTTON_SHOW;
                 }
-                w->log.menu[w->log.cursor].state = 20;
-                w->log.state = 0;
+                w->log.menu[w->log.cursor].state = WIN_LOG_BUTTON_BACK;
+                w->log.state = WIN_LOG_ENTRIES;
                 w->log.enemyTx = 320.0f;
                 w->log.enemyTy = -240.0f;
             } else if (w->buttonRep & PAD_TRIGGER_L) {
                 w->log.enemyPage--;
                 if (w->log.enemyPage < 0)
                     w->log.enemyPage = 0;
-                w->log.enemySel = w->log.enemyPage * 16;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                w->log.enemySel = w->log.enemyPage * TATTLE_LIST_PAGE;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonRep & PAD_TRIGGER_R) {
                 w->log.enemyPage++;
                 if (w->log.enemyPage >= pages)
                     w->log.enemyPage = pages - 1;
-                w->log.enemySel = w->log.enemyPage * 16;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                w->log.enemySel = w->log.enemyPage * TATTLE_LIST_PAGE;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & (DEMO_STICK_LEFT | DEMO_STICK_RIGHT)) {
-                if (w->log.enemySel % 16 < 8) {
-                    w->log.enemySel += 8;
+                // to the same row of the other column
+                if (w->log.enemySel % TATTLE_LIST_PAGE < TATTLE_LIST_ROWS) {
+                    w->log.enemySel += TATTLE_LIST_ROWS;
                 } else {
-                    w->log.enemySel -= 8;
+                    w->log.enemySel -= TATTLE_LIST_ROWS;
                 }
                 if (w->log.enemySel >= w->log.enemyNum)
                     w->log.enemySel = w->log.enemyNum - 1;
                 if (w->log.enemySel < 0)
                     w->log.enemySel = 0;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_UP) {
-                if (w->log.enemySel % 8 == 0) {
+                // up from a column's top row: 9 back, the same column's bottom row on the previous page
+                if (w->log.enemySel % TATTLE_LIST_ROWS == 0) {
                     w->log.enemySel -= 9;
                 } else {
                     w->log.enemySel -= 1;
                 }
                 if (w->log.enemySel < 0)
                     w->log.enemySel = 0;
-                w->log.enemyPage = w->log.enemySel / 16;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                w->log.enemyPage = w->log.enemySel / TATTLE_LIST_PAGE;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->dirRep & DEMO_STICK_DOWN) {
-                if (w->log.enemySel % 8 == 7) {
+                // down from a column's bottom row: 9 on, the same column's top row on the next page
+                if (w->log.enemySel % TATTLE_LIST_ROWS == TATTLE_LIST_ROWS - 1) {
                     w->log.enemySel += 9;
                 } else {
                     w->log.enemySel += 1;
                 }
                 if (w->log.enemySel >= w->log.enemyNum)
                     w->log.enemySel = w->log.enemyNum - 1;
-                w->log.enemyPage = w->log.enemySel / 16;
-                psndSFXOn(SFX_NAME_WORD(0x20035));
+                w->log.enemyPage = w->log.enemySel / TATTLE_LIST_PAGE;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_STATUS_WINDOW_TABI_MOVE1 | PSND_SFX_BYPASS_MUTE));
             } else if (w->buttonTrg & PAD_BUTTON_A) {
                 if (swGet(w->log.enemy[w->log.enemySel].id + GSWF_TATTLE_BASE)) {
-                    psndSFXOn(SFX_NAME_WORD(0x20012));
-                    w->log.state = 21;
+                    psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+                    w->log.state = WIN_LOG_TATTLE_CARD;
                     w->log.mono = monosiriInit(w->log.enemy[w->log.enemySel].id, -60.0f, 150.0f);
                 }
             } else if (w->buttonTrg & PAD_TRIGGER_Z) {
-                winSortEntry(w, 6, -310.0f, 150.0f);
+                winSortEntry(w, WIN_SORT_TATTLE_LOG, -310.0f, 150.0f);
                 w->savedState = w->log.state;
-                psndSFXOn(SFX_NAME_WORD(0x20012));
-                w->log.state = 1001;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_OK1 | PSND_SFX_BYPASS_MUTE));
+                w->log.state = WIN_LOG_TATTLE_SORT;
             } else if (w->buttonTrg & PAD_BUTTON_START) {
                 return -2;
             }
-            w->helpTgtX = w->log.enemySel % 16 / 8 * 216 - 180;
-            w->helpTgtY = 106 - w->log.enemySel % 16 % 8 * 24;
+            w->helpTgtX = w->log.enemySel % TATTLE_LIST_PAGE / TATTLE_LIST_ROWS * TATTLE_LIST_COL_W - 180;
+            w->helpTgtY = 106 - w->log.enemySel % TATTLE_LIST_PAGE % TATTLE_LIST_ROWS * TATTLE_LIST_ROW_H;
             if (swGet(w->log.enemy[w->log.enemySel].id + GSWF_TATTLE_BASE)) {
                 winMsgEntry(w, 0, battleGetUnitMonosiriPtr(w->log.enemy[w->log.enemySel].id)->tattleLogTag, 0);
             } else {
                 winMsgEntry(w, 0, "msg_menu_monosiri_enemy", 0);
             }
             break;
-        case 21:
+        case WIN_LOG_TATTLE_CARD:
             if (w->buttonTrg & PAD_BUTTON_B) {
-                psndSFXOn(SFX_NAME_WORD(0x20013));
-                w->log.state = 22;
+                psndSFXOn(SFX_NAME_WORD(PSND_SFX_CURSOR_CANCEL1 | PSND_SFX_BYPASS_MUTE));
+                w->log.state = WIN_LOG_TATTLE_CLOSE;
                 monosiriClose(w->log.mono);
             } else if (w->buttonTrg & PAD_BUTTON_START) {
                 monosiriExit(w->log.mono);
@@ -1021,16 +1203,16 @@ s32 winLogMain(WindowWork* w) {
                 monosiriMain(w->log.mono);
             }
             break;
-        case 22:
+        case WIN_LOG_TATTLE_CLOSE:
             if (monosiriCloseWait(w->log.mono)) {
-                w->log.state = 14;
+                w->log.state = WIN_LOG_TATTLE;
                 monosiriExit(w->log.mono);
             } else {
                 monosiriMain(w->log.mono);
             }
             break;
-        case 1000:
-        case 1001:
+        case WIN_LOG_SORT:
+        case WIN_LOG_TATTLE_SORT:
             if (!winSortWait(w)) {
                 w->log.state = w->savedState;
             }
@@ -1043,21 +1225,22 @@ s32 winLogMain(WindowWork* w) {
 }
 
 /**
- * Every frame: runs the entry buttons' slide animations (chosen one to the top-left, the rest off screen,
- * and back) and eases the map, Crystal Star, badge and recipe panels toward their targets.
+ * Every frame: runs the entry buttons' slide animations (WinLogButtonState: the chosen one to the top-left, the
+ * rest down out of the way, and back; PICKED, BACK_DONE and HIDDEN have no case and only ease) and eases the map,
+ * Crystal Star, badge and recipe panels toward their targets.
  */
 void winLogMain2(WindowWork* w) {
     s32 i;
 
     for (i = 0; i < w->log.count; i++) {
         switch (w->log.menu[i].state) {
-            case 10:
+            case WIN_LOG_BUTTON_PICK:
                 w->log.menu[i].tx = 0.0f;
                 w->log.menu[i].ty = 140.0f;
                 w->log.menu[i].timer = 0;
                 w->log.menu[i].state++;
                 break;
-            case 11:
+            case WIN_LOG_BUTTON_PICK_WAIT:
                 if (++w->log.menu[i].timer > 8) {
                     w->log.menu[i].tx = -160.0f;
                     w->log.menu[i].ty = 140.0f;
@@ -1065,13 +1248,13 @@ void winLogMain2(WindowWork* w) {
                     w->log.menu[i].state++;
                 }
                 break;
-            case 20:
+            case WIN_LOG_BUTTON_BACK:
                 w->log.menu[i].tx = 0.0f;
                 w->log.menu[i].ty = 140.0f;
                 w->log.menu[i].timer = 0;
                 w->log.menu[i].state++;
                 break;
-            case 21:
+            case WIN_LOG_BUTTON_BACK_WAIT:
                 if (++w->log.menu[i].timer > 8) {
                     w->log.menu[i].tx = 0.0f;
                     w->log.menu[i].ty = 45.0f * w->log.count / 2.0f - 45.0f * i;
@@ -1079,16 +1262,16 @@ void winLogMain2(WindowWork* w) {
                     w->log.menu[i].state++;
                 }
                 break;
-            case 30:
+            case WIN_LOG_BUTTON_HIDE:
                 w->log.menu[i].tx = 0.0f;
                 w->log.menu[i].ty = -160.0f;
                 w->log.menu[i].timer = 0;
                 w->log.menu[i].state++;
                 break;
-            case 0:
-            case 41:
+            case WIN_LOG_BUTTON_IDLE:
+            case WIN_LOG_BUTTON_SHOWN:
                 break;
-            case 40:
+            case WIN_LOG_BUTTON_SHOW:
                 w->log.menu[i].tx = 0.0f;
                 w->log.menu[i].ty = 45.0f * w->log.count / 2.0f - 45.0f * i;
                 w->log.menu[i].timer = 0;
@@ -1098,12 +1281,12 @@ void winLogMain2(WindowWork* w) {
         w->log.menu[i].x += (w->log.menu[i].tx - w->log.menu[i].x) / FPS_EASE(8.0f);
         w->log.menu[i].y += (w->log.menu[i].ty - w->log.menu[i].y) / FPS_EASE(8.0f);
     }
-    w->log.mapPanelX += (w->log.mapPanelTx - w->log.mapPanelX) / FPS_EASE_D(8.0, 8.0f);
-    w->log.mapPanelY += (w->log.mapPanelTy - w->log.mapPanelY) / FPS_EASE_D(8.0, 8.0f);
-    w->log.stoneX += (w->log.stoneTx - w->log.stoneX) / FPS_EASE_D(8.0, 8.0f);
-    w->log.stoneY += (w->log.stoneTy - w->log.stoneY) / FPS_EASE_D(8.0, 8.0f);
-    w->log.stoneAlpha += (w->log.stoneTgtAlpha - w->log.stoneAlpha) / FPS_EASE_D(8.0, 8.0f);
-    w->log.stoneRot += (w->log.stoneTgtRot - w->log.stoneRot) / FPS_EASE(4.0f);
+    w->log.mapWinX += (w->log.mapWinTgtX - w->log.mapWinX) / FPS_EASE_D(8.0f, 8.0);
+    w->log.mapWinY += (w->log.mapWinTgtY - w->log.mapWinY) / FPS_EASE_D(8.0f, 8.0);
+    w->log.stoneWinX += (w->log.stoneWinTgtX - w->log.stoneWinX) / FPS_EASE_D(8.0f, 8.0);
+    w->log.stoneWinY += (w->log.stoneWinTgtY - w->log.stoneWinY) / FPS_EASE_D(8.0f, 8.0);
+    w->log.stoneAlpha += (w->log.stoneAlphaTgt - w->log.stoneAlpha) / FPS_EASE_D(8.0f, 8.0);
+    w->log.stoneAngle += (w->log.stoneAngleTgt - w->log.stoneAngle) / FPS_EASE(4.0f);
     w->log.badge.scrollTgt = w->log.badge.idx * 0xE8;
     w->log.badge.scroll += (w->log.badge.scrollTgt - w->log.badge.scroll) / FPS_EASE(6.0f);
     w->log.badge.x += (w->log.badge.tx - w->log.badge.x) / FPS_EASE(6.0f);
@@ -1126,11 +1309,13 @@ static void monoshiriGX(WindowWork* w, f32 x, f32 y);
  * the Crystal Star carousel (positions the star effects with shadows),
  * the badge and recipe boxes with the selected icon (and found counts from the US release on),
  * the Tattle log list, and the entry buttons.
+ * (x, y) is the window's position (w->menu[idx]); screen coordinates have the origin at the centre and y growing
+ * upwards. Each page's panel position is an offset from (x, y) that winLogMain2 eases in and out; a panel is
+ * drawn only while it is on screen.
  */
-void winLogDisp(s32 camId, void* param, s32 idx) {
-    static const GXColor kW = {0xFF, 0xFF, 0xFF, 0xFF};
+void winLogDisp(CameraId cam, void* param, s32 idx) {
+    const GXColor white = {0xFF, 0xFF, 0xFF, 0xFF};
     WindowWork* w = param;
-    GXColor c1;
     GXColor c3;
     GXColor c2;
     Mtx m1;
@@ -1139,45 +1324,73 @@ void winLogDisp(s32 camId, void* param, s32 idx) {
     f32 y;
     s32 i;
     EffStarStoneWork* wk;
-
-    c1 = kW;
-    c2 = kW;
-    c3 = kW;
+    c2 = white;
+    c3 = white;
     x = w->menu[idx].x;
     y = w->menu[idx].y;
 
+    // the Journal's blue background panel
     winBgGX(w, 4, x, y);
-    if (y + w->log.mapPanelY > -480.0f) {
-        mapGX(w, x + w->log.mapPanelX, y + w->log.mapPanelY);
+
+    // world map panel (open at y + 20, parked at y - 480)
+    if (y + w->log.mapWinY > -480.0f) {
+        mapGX(w, x + w->log.mapWinX, y + w->log.mapWinY);
     }
-    if (y + w->log.stoneY > -480.0f) {
+
+    // Crystal Stars: a band behind the ring (texture 0x24 stretched 60 times wide) faded by stoneAlpha, then the
+    // seven stars on a ring of radius 170 about the vertical axis, tilted 25 degrees (0.436 rad) about x, star i at
+    // i * 360 / 7 degrees less stoneAngle. Each star effect sits 20 above its ring point; its shadow 30 below it.
+    if (y + w->log.stoneWinY > -480.0f) {
         winTexInit(*w->res->data);
-        winTexSet(0x24, (Vec){x + w->log.stoneX, y + w->log.stoneY, 0.0f}, (Vec){60.0f, 1.0f, 1.0f}, (GXColor){0xFF, 0xFF, 0xFF, w->log.stoneAlpha});
+        winTexSet(0x24, (Vec){x + w->log.stoneWinX, y + w->log.stoneWinY, 0.0f}, (Vec){60.0f, 1.0f, 1.0f},
+                  (GXColor){0xFF, 0xFF, 0xFF, w->log.stoneAlpha});
+
+        // the early demos leave the stars to the effect system; from JP on they are drawn here, after the shadows
+        // (STAR_STONE_FLAG_EXTERNAL_DRAW, set in winLogInit)
+#if VERSION <= VERSION_DEMO_JP
         for (i = 0; i < 7; i++) {
             Vec v = {0.0f, 0.0f, 170.0f};
             PSMTXRotRad(m1, 'x', 0.43633232f);
-            PSMTXRotRad(m2, 'y', 0.017453292f * (51.42857f * i - w->log.stoneRot));
+            PSMTXRotRad(m2, 'y', 0.017453292f * (51.42857f * i - w->log.stoneAngle));
             PSMTXMultVec(m2, &v, &v);
             PSMTXMultVec(m1, &v, &v);
-#if VERSION >= VERSION_JP
-            winKageGX(w, (GXColor){0x00, 0x00, 0x00, 0x80}, v.x + (x + w->log.stoneX), (v.y + (y + w->log.stoneY)) - 30.0f, v.z, 1.0f);
-#endif
+            // wk is reloaded before each position store; the three loads are in the retail code
             wk = w->log.eff[i]->userdata;
-            wk->position.x = v.x + (x + w->log.stoneX);
+            wk->position.x = v.x + (x + w->log.stoneWinX);
             wk = w->log.eff[i]->userdata;
-            wk->position.y = 20.0f + (v.y + (y + w->log.stoneY));
+            wk->position.y = 20.0f + (v.y + (y + w->log.stoneWinY));
             wk = w->log.eff[i]->userdata;
             wk->position.z = v.z;
-#if VERSION <= VERSION_DEMO_JP
-            winKageGX(w, (GXColor){0x00, 0x00, 0x00, 0x80}, v.x + (x + w->log.stoneX), (v.y + (y + w->log.stoneY)) - 30.0f, v.z, 1.0f);
-#endif
+            winKageGX(w, v.x + (x + w->log.stoneWinX), (v.y + (y + w->log.stoneWinY)) - 30.0f, v.z, 1.0f,
+                      (GXColor){0x00, 0x00, 0x00, 0x80});
         }
-#if VERSION >= VERSION_JP
+#else
+        for (i = 0; i < 7; i++) {
+            Vec v = {0.0f, 0.0f, 170.0f};
+            PSMTXRotRad(m1, 'x', 0.43633232f);
+            PSMTXRotRad(m2, 'y', 0.017453292f * (51.42857f * i - w->log.stoneAngle));
+            PSMTXMultVec(m2, &v, &v);
+            PSMTXMultVec(m1, &v, &v);
+            winKageGX(w, v.x + (x + w->log.stoneWinX), (v.y + (y + w->log.stoneWinY)) - 30.0f, v.z, 1.0f,
+                      (GXColor){0x00, 0x00, 0x00, 0x80});
+            // wk is reloaded before each position store; the three loads are in the retail code
+            wk = w->log.eff[i]->userdata;
+            wk->position.x = v.x + (x + w->log.stoneWinX);
+            wk = w->log.eff[i]->userdata;
+            wk->position.y = 20.0f + (v.y + (y + w->log.stoneWinY));
+            wk = w->log.eff[i]->userdata;
+            wk->position.z = v.z;
+        }
         for (i = 0; i < 7; i++) {
             effStarStoneDraw(CAMERA_2D, w->log.eff[i]);
         }
 #endif
     }
+
+    // Badge log: the grid box (winHakoGX) while it is in from its parked position (320, -240), then the box for
+    // the selected badge at (iconX, iconY), relative to the window: from US on with a found / total counter under
+    // it (a 100 x 30 inset whose top is 120 below the box's centre, the text centred in it at scale 0.75;
+    // badge.page holds the found count), the frame texture 0x95 and the badge's icon 4 lower, if it has been found.
     if (w->log.badge.x < 320.0f && w->log.badge.y > -240.0f) {
         winHakoGX(w, 0, x + w->log.badge.x, y + w->log.badge.y);
 #if VERSION >= VERSION_US
@@ -1187,11 +1400,13 @@ void winLogDisp(s32 camId, void* param, s32 idx) {
             u16 width;
 
             black = (GXColor){0x00, 0x00, 0x00, 0xFF};
-            winKirinukiGX(w, 0, (x + w->log.badge.iconX) - 50.0f, (y + w->log.badge.iconY) - 120.0f, 100.0f, 30.0f);
-            sprintf(buf, (u32)gp->language != 0 ? "%d/%d" : "%d／%d", w->log.badge.page, w->log.badge.num);
+            winKirinukiGX(w, 0, (x + w->log.badge.iconX) - 50.0f, (y + w->log.badge.iconY) - 120.0f, 100.0f,
+                          30.0f);
+            sprintf(buf, gp->language != LANGUAGE_JP ? "%d/%d" : "%d／%d", w->log.badge.page, w->log.badge.num);
             width = 0.75f * FontGetMessageWidth(buf);
             winFontInit();
-            winFontSet((Vec){(f32)((100 - width) / 2) + ((x + w->log.badge.iconX) - 50.0f), (y + w->log.badge.iconY) - 128.0f, 0.0f},
+            winFontSet((Vec){(f32)((100 - width) / 2) + ((x + w->log.badge.iconX) - 50.0f),
+                             (y + w->log.badge.iconY) - 128.0f, 0.0f},
                        (Vec){0.75f, 0.75f, 0.75f}, black, buf);
         }
 #endif
@@ -1199,9 +1414,13 @@ void winLogDisp(s32 camId, void* param, s32 idx) {
         winTexSet(0x95, (Vec){x + w->log.badge.iconX, y + w->log.badge.iconY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, c2);
         if (swGet(w->log.badgeIds[w->log.badge.cursor] + GSWF_BADGE_FOUND_BASE)) {
             winIconInit();
-            winIconSet(itemDataTable[w->log.badgeIds[w->log.badge.cursor] + BADGE_MIN].icon_id, (Vec){x + w->log.badge.iconX, (y + w->log.badge.iconY) - 4.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, c2);
+            winIconSet(itemDataTable[w->log.badgeIds[w->log.badge.cursor] + BADGE_MIN].icon_id,
+                       (Vec){x + w->log.badge.iconX, (y + w->log.badge.iconY) - 4.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                       c2);
         }
     }
+
+    // Recipe log: the same with box type 1, frame texture 0x96 and the recipe's icon 10 lower
     if (w->log.recipe.x < 320.0f && w->log.recipe.y > -240.0f) {
         winHakoGX(w, 1, x + w->log.recipe.x, y + w->log.recipe.y);
 #if VERSION >= VERSION_US
@@ -1211,33 +1430,50 @@ void winLogDisp(s32 camId, void* param, s32 idx) {
             u16 width;
 
             black = (GXColor){0x00, 0x00, 0x00, 0xFF};
-            winKirinukiGX(w, 0, (x + w->log.recipe.iconX) - 50.0f, (y + w->log.recipe.iconY) - 120.0f, 100.0f, 30.0f);
-            sprintf(buf, (u32)gp->language != 0 ? "%d/%d" : "%d／%d", w->log.recipe.page, w->log.recipe.num);
+            winKirinukiGX(w, 0, (x + w->log.recipe.iconX) - 50.0f, (y + w->log.recipe.iconY) - 120.0f, 100.0f,
+                          30.0f);
+            sprintf(buf, gp->language != LANGUAGE_JP ? "%d/%d" : "%d／%d", w->log.recipe.page, w->log.recipe.num);
             width = 0.75f * FontGetMessageWidth(buf);
             winFontInit();
-            winFontSet((Vec){(f32)((100 - width) / 2) + ((x + w->log.recipe.iconX) - 50.0f), (y + w->log.recipe.iconY) - 128.0f, 0.0f},
+            winFontSet((Vec){(f32)((100 - width) / 2) + ((x + w->log.recipe.iconX) - 50.0f),
+                             (y + w->log.recipe.iconY) - 128.0f, 0.0f},
                        (Vec){0.75f, 0.75f, 0.75f}, black, buf);
         }
 #endif
         winTexInit(*w->res->data);
         winTexSet(0x96, (Vec){x + w->log.recipe.iconX, y + w->log.recipe.iconY, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, c2);
-        if (swGet(WIN_RECIPE_COOKED_SW(w->log.recipeIds[w->log.recipe.cursor]))) {
+        if (swGet(w->log.recipeIds[w->log.recipe.cursor] + GSWF_RECIPE_FOUND_BASE)) {
             winIconInit();
-            winIconSet(itemDataTable[w->log.recipeIds[w->log.recipe.cursor] + WIN_RECIPE_MIN].icon_id, (Vec){x + w->log.recipe.iconX, (y + w->log.recipe.iconY) - 10.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, c2);
+            winIconSet(itemDataTable[w->log.recipeIds[w->log.recipe.cursor] + ITEM_SHROOM_FRY].icon_id,
+                       (Vec){x + w->log.recipe.iconX, (y + w->log.recipe.iconY) - 10.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                       c2);
         }
     }
-    if (w->log.state == 14 || (u32)(w->log.state - 20) <= 2 || w->log.state == 1001) {
+
+    // Tattle log list (its page has no sliding panel: it is drawn only in the Tattle states), top-left corner
+    // (x - 170, y + 130)
+    if (w->log.state == WIN_LOG_TATTLE || w->log.state == WIN_LOG_TATTLE_UNUSED ||
+        w->log.state == WIN_LOG_TATTLE_CARD || w->log.state == WIN_LOG_TATTLE_CLOSE ||
+        w->log.state == WIN_LOG_TATTLE_SORT) {
         monoshiriGX(w, x - 170.0f, 130.0f + y);
     }
+
+    // The entry buttons, last so they are on top. Texture 0xB5 is the button shape; 0x1F + id the entry's label,
+    // cut to that shape (winTexSet_x2). The selected button draws a half-transparent black copy of the shape as a
+    // shadow, then the label in white 8 pixels up and to the left of it; the others draw their label in gray.
     for (i = 0; i < w->log.count; i++) {
         if (i == w->log.cursor) {
             winTexInit(*w->res->data);
-            winTexSet(0xB5, (Vec){x + w->log.menu[i].x, y + w->log.menu[i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0x00, 0x00, 0x00, 0x80});
+            winTexSet(0xB5, (Vec){x + w->log.menu[i].x, y + w->log.menu[i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                      (GXColor){0x00, 0x00, 0x00, 0x80});
             winTexInit_x2(*w->res->data);
-            winTexSet_x2(w->log.menu[i].id + 0x1F, 0xB5, (Vec){(x + w->log.menu[i].x) - 8.0f, 8.0f + (y + w->log.menu[i].y), 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, c3);
+            winTexSet_x2(w->log.menu[i].id + 0x1F, 0xB5,
+                         (Vec){(x + w->log.menu[i].x) - 8.0f, 8.0f + (y + w->log.menu[i].y), 0.0f},
+                         (Vec){1.0f, 1.0f, 1.0f}, c3);
         } else {
             winTexInit_x2(*w->res->data);
-            winTexSet_x2(w->log.menu[i].id + 0x1F, 0xB5, (Vec){x + w->log.menu[i].x, y + w->log.menu[i].y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0x80, 0x80, 0x80, 0xFF});
+            winTexSet_x2(w->log.menu[i].id + 0x1F, 0xB5, (Vec){x + w->log.menu[i].x, y + w->log.menu[i].y, 0.0f},
+                         (Vec){1.0f, 1.0f, 1.0f}, (GXColor){0x80, 0x80, 0x80, 0xFF});
         }
     }
 }
@@ -1248,24 +1484,30 @@ void winLogDisp(s32 camId, void* param, s32 idx) {
  * Preloaded by winMain and loaded by the Journal map.
  */
 const char* winGetMapTplName(void) {
-    if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG0_16_FRANKLYS_HOUSE)
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG0_16_FRANKLYS_HOUSE)
         return "map0.tpl";
-    if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG1_31_FRANKLYS_HOUSE)
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG1_31_FRANKLYS_HOUSE_STG_1)
         return "map1.tpl";
-    if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG2_41_FRANKLYS_HOUSE)
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG2_41_FRANKLYS_HOUSE_STG_2)
         return "map2.tpl";
-    if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG3_51_FRANKLYS_HOUSE)
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG3_51_FRANKLYS_HOUSE_STG_3)
         return "map3.tpl";
-    if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG4_31_FRANKLYS_HOUSE)
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG4_31_FRANKLYS_HOUSE_STG_4)
         return "map4.tpl";
-    if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG5_61_FRANKLYS_HOUSE)
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG5_61_FRANKLYS_HOUSE_STG_5)
         return "map5.tpl";
-    if (swByteGet(GSW_STORY_PROGRESS) < STORY_STG6_71_FRANKLYS_HOUSE)
+    if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < STG6_71_FRANKLYS_HOUSE_STG_6)
         return "map6.tpl";
     return "map7.tpl";
 }
 
-double __fabs(double);
+/** Textures of the route dots in the window texture set (mapGX). */
+typedef enum WinMapDotTex {
+    WIN_TEX_MAP_DOT = 0xB8,       // a small dot (the path between places)
+    WIN_TEX_MAP_DOT_BLINK = 0xB9, // the hovered place, every other 16 frames
+    WIN_TEX_MAP_DOT_BIG = 0xBA,   // a big place, and the hovered place
+} WinMapDotTex;
+
 /** Local fabs on the __fabs intrinsic, used for the map arrows' bobbing offset. */
 static inline double fabs(double x) {
     return __fabs(x);
@@ -1274,9 +1516,18 @@ static inline double fabs(double x) {
 /**
  * Draws the world map panel: the scrolled map texture,
  * the route dots revealed so far (the hovered place blinks), the current chapter's goal icon,
- * Mario's marker at his location, the frame, and bobbing arrows on the sides that can still scroll.
+ * Mario's marker at his location, the frame, and an arrow on each side (bobbing while the map can still scroll
+ * that way). Nothing is drawn until the map texture has loaded (w->mapRes).
+ *
+ * (x, y) is the centre of the 460 x 240 view. The map is a 608 x 480 texture drawn centred at (mx, my), which is
+ * 74 right of and 120 above the view's centre when the scroll is 0: the map's bottom-left corner then sits in
+ * the view's bottom-left corner, and scrollX (-148 .. 0) and scrollY (-240 .. 0) pan across the rest
+ * (608 - 460 = 148, 480 - 240 = 240). Dots and the marker are drawn at (mx, my) plus their tubuDt offsets from
+ * the map's centre.
  */
 static void mapGX(WindowWork* w, f32 x, f32 y) {
+    // where each chapter's goal icon stands: the big dot of the chapter's destination (Hooktail Castle, the Great
+    // Tree, Glitz Pit, Creepy Steeple, Pirate's Grotto, Poshley Sanctum, X-Naut Fortress)
     static f32 pos_tbl[7][2] = {
         {165.0f, 68.0f},
         {0.0f, 75.0f},
@@ -1286,10 +1537,8 @@ static void mapGX(WindowWork* w, f32 x, f32 y) {
         {211.0f, -91.0f},
         {-209.0f, 159.0f},
     };
-    GXColor c2;
-    GXColor c0;
-    GXColor white = (c2 = (c0 = (GXColor){0xFF, 0xFF, 0xFF, 0xFF}));
-    s32 tex;
+
+    GXColor white = (GXColor){0xFF, 0xFF, 0xFF, 0xFF};
     Mtx m;
     f32 top;
     f32 mx;
@@ -1308,94 +1557,117 @@ static void mapGX(WindowWork* w, f32 x, f32 y) {
     my = 120.0f + (y + w->log.scrollY);
     if (w->mapRes) {
         top = 120.0f + y;
+
+        // Clip to the view and a 2-pixel border: the scissor takes screen pixels (608 x 480, y down), so the
+        // view's top-left corner (x - 230, top) is pixel (304 + x - 230, 240 - top); 0x1D0 x 0xF4 = 464 x 244.
         GXSetScissor(((304.0f + x) - 230.0f) - 2.0f, (240.0f - top) - 2.0f, 0x1D0, 0xF4);
         winTexInit(*(TEXPalette**)w->mapRes->data);
         winTexSet(0, (Vec){mx, my, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
+
+        // the route dots revealed by story progress (or by tubuCheck's flags, from JP on); the early demos stop
+        // at the first dot not yet reached, since the table is in story order
         winTexInit(*w->res->data);
         for (i = 0; i < sizeof(tubuDt) / sizeof(TubuDt); i++) {
             t = &tubuDt[i];
 #if VERSION <= VERSION_DEMO_JP
-            if (swByteGet(GSW_STORY_PROGRESS) < t->id)
+            if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) < t->progress) {
                 break;
+            }
             {
 #else
-            if (swByteGet(GSW_STORY_PROGRESS) >= t->id || tubuCheck(t->type)) {
+            if (swByteGet(GSW_ID(GSW_STORY_PROGRESS)) >= t->progress || tubuCheck(t->type)) {
 #endif
                 if (w->log.mapSel == i) {
-                    winTexSet((tex = 0xBA, ((gp->retraceCount >> 4) & 1) ? tex = 0xB9 : 0, tex), (Vec){mx + t->x, my + t->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
+                    winTexSet(((gp->retraceCount >> 4) & 1) ? WIN_TEX_MAP_DOT_BLINK : WIN_TEX_MAP_DOT_BIG,
+                              (Vec){mx + t->x, my + t->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
                 } else {
-                    winTexSet(t->big ? 0xBA : 0xB8, (Vec){mx + t->x, my + t->y, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
+                    winTexSet(t->big ? WIN_TEX_MAP_DOT_BIG : WIN_TEX_MAP_DOT, (Vec){mx + t->x, my + t->y, 0.0f},
+                              (Vec){1.0f, 1.0f, 1.0f}, white);
                 }
             }
         }
-        sw = swByteGet(GSW_STORY_PROGRESS);
+
+        // The goal icon of the chapter under way (k = chapter - 1), from that chapter's briefing at Frankly's
+        // (chapter 1: from the prologue's visit) until the story reaches the chapter's boss or Crystal Star.
+        // The early demos pair the chapters with other icons.
+        sw = swByteGet(GSW_ID(GSW_STORY_PROGRESS));
         id = -1;
-        if (sw >= 0x13 && sw < 0x37) {
-            id = ICON_197;
+        if (sw >= STG0_16_FRANKLYS_HOUSE && sw < STG1_16_HOOKTAIL) {
+            id = ICON_SAC_DEKA;
             k = 0;
-        } else if (sw >= 0x41 && sw < 0x70) {
-            id = ICON_198;
+        } else if (sw >= STG1_31_FRANKLYS_HOUSE_STG_1 && sw < STG2_25_AFTER_THE_BOSS_BATTLE) {
+            id = ICON_SAC_BAKUGAME;
             k = 1;
-        } else if (sw >= 0x79 && sw < 0xA4) {
+        } else if (sw >= STG2_41_FRANKLYS_HOUSE_STG_2 && sw < STG3_32_BOSS_BATTLE) {
 #if VERSION <= VERSION_DEMO_JP
-            id = ICON_199;
-#else
-            id = ICON_19A;
-#endif
+            id = ICON_SAC_SUKI;
             k = 2;
-        } else if (sw >= 0xAF && sw < 0xD5) {
-#if VERSION <= VERSION_DEMO_JP
-            id = ICON_19A;
-#else
-            id = ICON_19C;
-#endif
+        } else if (sw >= STG3_51_FRANKLYS_HOUSE_STG_3 && sw < STG4_15_03_THE_RUBY_STAR) {
+            id = ICON_SAC_MUKI;
             k = 3;
-        } else if (sw >= 0xDE && sw < 0x105) {
-#if VERSION <= VERSION_DEMO_JP
-            id = ICON_19B;
-#else
-            id = ICON_19D;
-#endif
+        } else if (sw >= STG4_31_FRANKLYS_HOUSE_STG_4 && sw < STG5_43_X_NAUTS_RETREAT) {
+            id = ICON_SAC_ZUBASTAR;
             k = 4;
-        } else if (sw >= 0x110 && sw < 0x152) {
-#if VERSION <= VERSION_DEMO_JP
-            id = ICON_19C;
-#else
-            id = ICON_199;
-#endif
+        } else if (sw >= STG5_61_FRANKLYS_HOUSE_STG_5 && sw < STG6_53_THE_REAL_GARNET_STAR) {
+            id = ICON_SAC_SCISSOR;
             k = 5;
-        } else if (sw >= 0x15C && sw < 0x175) {
-#if VERSION <= VERSION_DEMO_JP
-            id = ICON_19D;
+        } else if (sw >= STG6_71_FRANKLYS_HOUSE_STG_6 && sw < STG7_20_LORD_CRUMP_DEFEATED) {
+            id = ICON_SAC_GENKI1;
 #else
-            id = ICON_19B;
+            id = ICON_SAC_MUKI;
+            k = 2;
+        } else if (sw >= STG3_51_FRANKLYS_HOUSE_STG_3 && sw < STG4_15_03_THE_RUBY_STAR) {
+            id = ICON_SAC_SCISSOR;
+            k = 3;
+        } else if (sw >= STG4_31_FRANKLYS_HOUSE_STG_4 && sw < STG5_43_X_NAUTS_RETREAT) {
+            id = ICON_SAC_GENKI1;
+            k = 4;
+        } else if (sw >= STG5_61_FRANKLYS_HOUSE_STG_5 && sw < STG6_53_THE_REAL_GARNET_STAR) {
+            id = ICON_SAC_SUKI;
+            k = 5;
+        } else if (sw >= STG6_71_FRANKLYS_HOUSE_STG_6 && sw < STG7_20_LORD_CRUMP_DEFEATED) {
+            id = ICON_SAC_ZUBASTAR;
 #endif
             k = 6;
         }
         if (id != -1) {
             winIconInit();
-            winIconSet(id, (Vec){mx + pos_tbl[k][0], 45.0f + (my + pos_tbl[k][1]), 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
+
+            // 45 above the chapter's goal dot
+            winIconSet(id, (Vec){mx + pos_tbl[k][0], 45.0f + (my + pos_tbl[k][1]), 0.0f}, (Vec){1.0f, 1.0f, 1.0f},
+                       white);
         }
+
+        // Mario's marker (the pose winLogMain loads) on the dot of his current area (mapIdx), at scale 1.5
+        // (3 for the 8-bit Mario)
         if (w->log.pose != -1) {
+            // BUG: reads the loop length of the Mario page's pose (mario.poseId), not of the map marker's own pose
+            // (log.pose), so the marker's local time wraps at another animation's length.
             animPoseGetAnimPosePtr(w->mario.poseId);
             data = animPoseGetAnimDataPtr(w->mario.poseId);
             scale = 1.5f;
-            if (w->flags & WIN_FLAG_8BIT_MARIO) {
+            if (w->flags & WINDOW_FLAG_8BIT) {
                 scale = 3.0f;
             }
             PSMTXTrans(m, mx + tubuDt[w->log.mapIdx].x, my + tubuDt[w->log.mapIdx].y, 0.0f);
-            animPoseSetLocalTime(w->log.pose, gp->retraceCount % (s32)(data->loopInfo)[2]);
+            animPoseSetLocalTime(w->log.pose, gp->retraceCount % (s32)data->loopInfo->end);
             animPoseMain(w->log.pose);
             animPoseDrawMtx(w->log.pose, m, 1, 0.0f, scale);
             animPoseDrawMtx(w->log.pose, m, 2, 0.0f, scale);
             animPoseDrawMtx(w->log.pose, m, 3, 0.0f, scale);
         }
         GXSetScissor(0, 0, 0x260, 0x1E0);
+
+        // the frame: texture 0xBF stretched into bars 4 outside each edge of the view (left, right, top, bottom)
         winTexInit(*w->res->data);
         winTexSet(0xBF, (Vec){(x - 230.0f) - 4.0f, y, 0.0f}, (Vec){1.0f, 32.0f, 1.0f}, white);
         winTexSet(0xBF, (Vec){4.0f + (230.0f + x), y, 0.0f}, (Vec){1.0f, 32.0f, 1.0f}, white);
         winTexSet(0xBF, (Vec){x, 4.0f + top, 0.0f}, (Vec){59.5f, 1.0f, 1.0f}, white);
         winTexSet(0xBF, (Vec){x, (y - 120.0f) - 4.0f, 0.0f}, (Vec){59.5f, 1.0f, 1.0f}, white);
+
+        // The arrows, each bobbing outwards by s (0 to 2 pixels) unless the map is already scrolled to that edge:
+        // 0xBD at the top (still once scrollY is -240), 0xBC right (still at scrollX -148), 0xBE at the bottom
+        // (scrollY 0), 0xBB left (scrollX 0).
         s = fabs(2.0f * (f32)sin((f32)gp->retraceCount / 8.0f));
         winTexInit(*w->res->data);
         o = -240.0f == w->log.scrollY ? 0.0f : s;
@@ -1415,7 +1687,11 @@ static void mapGX(WindowWork* w, f32 x, f32 y) {
 /**
  * Draws the Tattle log page: the known/total count,
  * 16 entries in two columns with their log numbers (unknown enemies as "???",
- * Doopliss as "?" until his name is guessed), page arrows and the Z sort hint.
+ * from JP on, Doopliss as "?" until his name is guessed), page arrows and the Z sort hint.
+ *
+ * (x, y) is the list's top-left corner (winLogDisp passes the window's x - 170, y + 130). Entry i of the page sits
+ * in column i / TATTLE_LIST_ROWS and row i % TATTLE_LIST_ROWS: its number at (x + 19, y - 16), its name at
+ * (x + 56, y - 16), each column TATTLE_LIST_COL_W further right and each row TATTLE_LIST_ROW_H further down.
  */
 static void monoshiriGX(WindowWork* w, f32 x, f32 y) {
     GXColor k1;
@@ -1424,6 +1700,7 @@ static void monoshiriGX(WindowWork* w, f32 x, f32 y) {
     char buf[256];
     char num[32];
     s32 i;
+    s32 id;
     u16 tw;
     const char* msg;
     const char* name;
@@ -1433,19 +1710,24 @@ static void monoshiriGX(WindowWork* w, f32 x, f32 y) {
 
     k1 = (GXColor){0x00, 0x00, 0x00, 0xFF};
     k2 = k1;
+
+    // the book panel behind the list, and the count box to its left: a 100 x 50 inset at (x - 110, y - 160) with
+    // the msg_menu_monosiri_kazu label and "known/total" under it, both centred in it at scale 0.75
     winBookGX(w, 1, x, y);
     winKirinukiGX(w, 0, x - 110.0f, y - 160.0f, 100.0f, 50.0f);
     msg = msgSearch("msg_menu_monosiri_kazu");
     tw = 0.75f * FontGetMessageWidth(msg);
 #if VERSION >= VERSION_US
+    // the label is squeezed into 80 pixels (the width used to centre it, and winFontSetWidth's limit)
     if (tw > 80.0f) {
         tw = tw * (80.0f / tw);
     }
 #endif
     winFontInit();
 #if VERSION >= VERSION_US
-    winFontSetWidth((Vec){(x - 108.0f) + (100 - tw) / 2, y - 166.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k1, 80.0f, msg);
-    sprintf(buf, (u32)gp->language != 0 ? "%d/%d" : "%d／%d", w->log.enemyKnown, w->log.enemyNum);
+    winFontSetWidth((Vec){(x - 108.0f) + (100 - tw) / 2, y - 166.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k1, 80.0f,
+                    msg);
+    sprintf(buf, gp->language != LANGUAGE_JP ? "%d/%d" : "%d／%d", w->log.enemyKnown, w->log.enemyNum);
 #else
     winFontSet((Vec){(x - 108.0f) + (100 - tw) / 2, y - 166.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k1, msg);
     sprintf(buf, "%d／%d", w->log.enemyKnown, w->log.enemyNum);
@@ -1453,54 +1735,79 @@ static void monoshiriGX(WindowWork* w, f32 x, f32 y) {
     tw = 0.75f * FontGetMessageWidth(buf);
     winFontSet((Vec){(x - 108.0f) + (100 - tw) / 2, y - 184.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k1, buf);
     winFontInit();
-    for (i = 0; i < 16; i++) {
+
+    // the page's entries, until the list runs out
+    for (i = 0; i < TATTLE_LIST_PAGE; i++) {
+#if VERSION <= VERSION_DEMO_JP
         s32 id;
-        id = w->log.enemy[w->log.enemyPage * 16 + i].id;
+        id = w->log.enemy[w->log.enemyPage * TATTLE_LIST_PAGE + i].id;
         te = battleGetUnitMonosiriPtr(id);
-        if (w->log.enemyPage * 16 + i >= w->log.enemyNum)
+        if (w->log.enemyPage * TATTLE_LIST_PAGE + i >= w->log.enemyNum) {
+            break;
+        }
+        if (swGet(id + GSWF_TATTLE_BASE)) {
+            {
+#else
+        id = w->log.enemy[w->log.enemyPage * TATTLE_LIST_PAGE + i].id;
+        te = battleGetUnitMonosiriPtr(id);
+        if (w->log.enemyPage * TATTLE_LIST_PAGE + i >= w->log.enemyNum)
             break;
         if (swGet(id + GSWF_TATTLE_BASE)) {
-#if VERSION >= VERSION_JP
             if (id == UNIT_DOOPLISS_CHAPTER4_FIGHT1 || id == UNIT_DOOPLISS_CHAPTER8) {
-                if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG4_14_NAME_GUESSING) {
+                if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG4_14_NAME_GUESSING) {
                     name = msgSearch("btl_un_hatena");
                 } else {
                     name = msgSearch("btl_un_rampell");
                 }
-            } else
+            } else {
 #endif
-            {
                 name = msgSearch(te->enemyTag);
             }
         } else {
 #if VERSION >= VERSION_US
-            name = (u32)gp->language != 0 ? "???" : "？？？";
+            name = gp->language != LANGUAGE_JP ? "???" : "？？？";
 #else
             name = "？？？";
 #endif
         }
+
+        // the log number (enemy_monoshiri_sort_table) and the name; from US on squeezed into 40 and 145 pixels
 #if VERSION >= VERSION_US
-        sprintf(num, (u32)gp->language != 0 ? "%d. " : "%d．", enemy_monoshiri_sort_table[id]);
-        winFontSetWidth((Vec){((24.0f + x) - 5.0f) + (i / 8) * 216, (y - 16.0f) - (i % 8) * 24, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k2, 40.0f, num);
-        winFontSetWidth((Vec){(56.0f + x) + (i / 8) * 216, (y - 16.0f) - (i % 8) * 24, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k2, 145.0f, name);
+        sprintf(num, gp->language != LANGUAGE_JP ? "%d. " : "%d．", enemy_monoshiri_sort_table[id]);
+        winFontSetWidth((Vec){((24.0f + x) - 5.0f) + (i / TATTLE_LIST_ROWS) * TATTLE_LIST_COL_W,
+                              (y - 16.0f) - (i % TATTLE_LIST_ROWS) * TATTLE_LIST_ROW_H, 0.0f},
+                        (Vec){0.75f, 0.75f, 0.75f}, k2, 40.0f, num);
+        winFontSetWidth((Vec){(56.0f + x) + (i / TATTLE_LIST_ROWS) * TATTLE_LIST_COL_W,
+                              (y - 16.0f) - (i % TATTLE_LIST_ROWS) * TATTLE_LIST_ROW_H, 0.0f},
+                        (Vec){0.75f, 0.75f, 0.75f}, k2, 145.0f, name);
 #else
         sprintf(num, "%d．", enemy_monoshiri_sort_table[id]);
-        winFontSet((Vec){((24.0f + x) - 5.0f) + (i / 8) * 216, (y - 16.0f) - (i % 8) * 24, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k2, num);
-        winFontSet((Vec){(56.0f + x) + (i / 8) * 216, (y - 16.0f) - (i % 8) * 24, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, k2, name);
+        winFontSet((Vec){((24.0f + x) - 5.0f) + (i / TATTLE_LIST_ROWS) * TATTLE_LIST_COL_W,
+                         (y - 16.0f) - (i % TATTLE_LIST_ROWS) * TATTLE_LIST_ROW_H, 0.0f},
+                   (Vec){0.75f, 0.75f, 0.75f}, k2, num);
+        winFontSet((Vec){(56.0f + x) + (i / TATTLE_LIST_ROWS) * TATTLE_LIST_COL_W,
+                         (y - 16.0f) - (i % TATTLE_LIST_ROWS) * TATTLE_LIST_ROW_H, 0.0f},
+                   (Vec){0.75f, 0.75f, 0.75f}, k2, name);
 #endif
     }
+
+    // Page arrows at x + 440, right of the list: texture 0x17 flipped (scale -1) above the L button icon while there
+    // is a previous page; 0x17 below the R button icon (at y - 240) while there is a next page.
     if (w->log.enemyPage > 0) {
         winTexInit(*w->res->data);
         winTexSet(0x17, (Vec){440.0f + x, 18.0f + y, 0.0f}, (Vec){-1.0f, -1.0f, -1.0f}, white);
         winIconInit();
-        winIconSet(ICON_07E, (Vec){440.0f + x, y, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
+        winIconSet(ICON_TRIGGER_L, (Vec){440.0f + x, y, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
     }
-    if (w->log.enemyPage < (w->log.enemyNum + 15) / 16 - 1) {
+    if (w->log.enemyPage < (w->log.enemyNum + (TATTLE_LIST_PAGE - 1)) / TATTLE_LIST_PAGE - 1) {
         winTexInit(*w->res->data);
         winTexSet(0x17, (Vec){440.0f + x, (y - 15.0f) - 240.0f, 0.0f}, (Vec){1.0f, 1.0f, 1.0f}, white);
         winIconInit();
-        winIconSet(ICON_080, (Vec){440.0f + x, y - 240.0f, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
+        winIconSet(ICON_TRIGGER_R, (Vec){440.0f + x, y - 240.0f, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
     }
+
+    // Sort hint under the list: the "sort" text (scale 0.7) ends at x + 420, the Z button icon 30 pixels left of it
+#if VERSION <= VERSION_DEMO_JP
     {
         const char* msg;
         msg = msgSearch("msg_menu_sort_narabikae");
@@ -1509,15 +1816,20 @@ static void monoshiriGX(WindowWork* w, f32 x, f32 y) {
         ix = x + (420.0f - fw);
         winFontSet((Vec){ix, y - 210.0f, 0.0f}, (Vec){0.7f, 0.7f, 0.7f}, k1, msg);
         winIconInit();
-        winIconSet(ICON_217, (Vec){ix - 30.0f, y - 220.0f, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
+        winIconSet(ICON_TRIGGER_Z_ALT, (Vec){ix - 30.0f, y - 220.0f, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
     }
+#else
+    msg = msgSearch("msg_menu_sort_narabikae");
+    fw = 0.7f * FontGetMessageWidth(msg);
+    winFontInit();
+    ix = x + (420.0f - fw);
+    winFontSet((Vec){ix, y - 210.0f, 0.0f}, (Vec){0.7f, 0.7f, 0.7f}, k1, msg);
+    winIconInit();
+    winIconSet(ICON_TRIGGER_Z_ALT, (Vec){ix - 30.0f, y - 220.0f, 0.0f}, (Vec){0.6f, 0.6f, 0.6f}, white);
+#endif
 }
 
-/**
- * Creates a Tattle card for enemy kind id that slides in to (x, y).
- * Used by the Journal's Tattle log and by Goombella's Tattle in battle;
- * drive it with monosiriMain, monosiriClose/CloseWait and monosiriExit.
- */
+/** Allocates a Tattle card for unit kind id from the map heap, to slide in to (x, y) from off screen (500, -300). */
 MonosiriWork* monosiriInit(s32 id, f32 x, f32 y) {
     MonosiriWork* m = _mapAlloc(sizeof(MonosiriWork));
     memset(m, 0, sizeof(MonosiriWork));
@@ -1542,11 +1854,33 @@ MonosiriWork* monosiriInit(s32 id, f32 x, f32 y) {
  */
 void monosiriMain(MonosiriWork* m) {
     s32 group = gp->inBattle ? 1 : 0;
-#if VERSION >= VERSION_US
-    const char* lang[6] = {"jp", "us", "ge", "fr", "sp", "it"};
-#else
+#if VERSION <= VERSION_DEMO_JP
     const char* lang[2] = {"jp", "us"};
+    GXTexObj tex;
+    TattleEntry* t;
+    if (!m) {
+        return;
+    }
+    switch (m->state) {
+        case 0:
+            if (fileAsyncf(FILE_TYPE_TPL, NULL, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]) == NULL) {
+                break;
+            }
+            if (fileAsyncf(FILE_TYPE_RAW, NULL, WIN_DIR "jp/mono.dat", getMarioStDvdRoot()) == NULL)
+                break;
+            m->winTpl = fileAllocf(FILE_TYPE_TPL, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]);
+            m->monoDat = fileAllocf(FILE_TYPE_RAW, WIN_DIR "jp/mono.dat", getMarioStDvdRoot());
+            m->state++;
+            m->alpha = 0;
+            m->pose1 = -1;
+            m->pose2 = -1;
+#else
+    const char* lang[VERSION_PICK(2, 6)] = {
+        "jp", "us",
+#if VERSION >= VERSION_US
+        "ge", "fr", "sp", "it"
 #endif
+    };
 
     GXTexObj tex;
     TattleEntry* t;
@@ -1554,29 +1888,25 @@ void monosiriMain(MonosiriWork* m) {
         return;
     switch (m->state) {
         case 0:
-            if (!fileAsyncf(4, NULL, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]))
+            if (fileAsyncf(FILE_TYPE_TPL, NULL, "%s/w/%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]) == NULL)
                 break;
 #if VERSION >= VERSION_US
-            if (!fileAsyncf(0, NULL, "%s/w/%s/mono.dat", getMarioStDvdRoot(), (u32)gp->language == 0 ? "jp" : "us"))
+            if (fileAsyncf(FILE_TYPE_RAW, NULL, "%s/w/%s/mono.dat", getMarioStDvdRoot(), gp->language == LANGUAGE_JP ? "jp" : "us") == NULL)
                 break;
 #else
-            if (!fileAsyncf(0, NULL, WIN_DIR "jp/mono.dat", getMarioStDvdRoot()))
+            if (fileAsyncf(FILE_TYPE_RAW, NULL, "%s/w/jp/mono.dat", getMarioStDvdRoot()) == NULL)
                 break;
 #endif
-            m->file1 = fileAllocf(4, WIN_DIR "%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]);
+            m->winTpl = fileAllocf(FILE_TYPE_TPL, "%s/w/%s/win.tpl", getMarioStDvdRoot(), lang[gp->language]);
 #if VERSION >= VERSION_US
-            m->file2 = fileAllocf(0, "%s/w/%s/mono.dat", getMarioStDvdRoot(), (u32)gp->language == 0 ? "jp" : "us");
+            m->monoDat = fileAllocf(FILE_TYPE_RAW, "%s/w/%s/mono.dat", getMarioStDvdRoot(), gp->language == LANGUAGE_JP ? "jp" : "us");
 #else
-            m->file2 = fileAllocf(0, WIN_DIR "jp/mono.dat", getMarioStDvdRoot());
+            m->monoDat = fileAllocf(FILE_TYPE_RAW, "%s/w/jp/mono.dat", getMarioStDvdRoot());
 #endif
             m->state++;
-#if VERSION <= VERSION_DEMO_JP
-            m->alpha = 0;
-            m->pose1 = -1;
-            m->pose2 = -1;
 #endif
-            TEXGetGXTexObjFromPalette(*(TEXPalette**)m->file1->data, &tex, 0x37);
-            m->smart = smartAlloc(GXGetTexBufferSize(GXGetTexObjWidth(&tex), GXGetTexObjHeight(&tex), 5, 0, 0), 0);
+            TEXGetGXTexObjFromPalette(*(TEXPalette**)m->winTpl->data, &tex, 0x37);
+            m->smart = smartAlloc(GXGetTexBufferSize(GXGetTexObjWidth(&tex), GXGetTexObjHeight(&tex), GX_TF_RGB5A3, GX_FALSE, 0), SMART_GROUP_PERMANENT);
             break;
         case 1:
             t = battleGetUnitMonosiriPtr(m->id);
@@ -1601,7 +1931,7 @@ void monosiriMain(MonosiriWork* m) {
                     animPoseSetAnim(m->pose1, t->poseName, 1);
                     animPoseMain(m->pose1);
                 }
-                dispEntry(2, 0.0f, 6, capture, m);
+                dispEntry(CAMERA_SHADOW, 0.0f, DISP_MODE_CUSTOM_FIRST, capture, m);
             }
             break;
         case 2:
@@ -1612,7 +1942,7 @@ void monosiriMain(MonosiriWork* m) {
     m->curX += (m->x - m->curX) / FPS_EASE(6.0f);
     m->curY += (m->y - m->curY) / FPS_EASE(6.0f);
     if (m->state > 0) {
-        dispEntry(8, 0.0f, 0, monosiri_disp, m);
+        dispEntry(CAMERA_2D, 0.0f, DISP_MODE_OPAQUE, monosiri_disp, m);
     }
 }
 
@@ -1634,49 +1964,41 @@ BOOL monosiriCloseWait(MonosiriWork* m) {
 
 /** Frees a Tattle card: its files, models, portrait buffer and the work itself. */
 void monosiriExit(MonosiriWork* m) {
-    // The release versions also reset each field after freeing it and check smart before freeing it
-#if VERSION <= VERSION_DEMO_JP
     if (m) {
-        if (m->file1) {
-            fileFree(m->file1);
+        if (m->winTpl) {
+            fileFree(m->winTpl);
+#if VERSION >= VERSION_JP
+            m->winTpl = NULL;
+#endif
         }
-        if (m->file2) {
-            fileFree(m->file2);
+        if (m->monoDat) {
+            fileFree(m->monoDat);
+#if VERSION >= VERSION_JP
+            m->monoDat = NULL;
+#endif
         }
         if (m->pose1 != -1) {
             animPoseRelease(m->pose1);
-        }
-        if (m->pose2 != -1) {
-            animPoseRelease(m->pose2);
-        }
-        smartFree(m->smart);
-        _mapFree(m);
-    }
-#else
-    if (m) {
-        if (m->file1) {
-            fileFree(m->file1);
-            m->file1 = NULL;
-        }
-        if (m->file2) {
-            fileFree(m->file2);
-            m->file2 = NULL;
-        }
-        if (m->pose1 != -1) {
-            animPoseRelease(m->pose1);
+#if VERSION >= VERSION_JP
             m->pose1 = -1;
+#endif
         }
         if (m->pose2 != -1) {
             animPoseRelease(m->pose2);
+#if VERSION >= VERSION_JP
             m->pose2 = -1;
+#endif
         }
+#if VERSION >= VERSION_JP
         if (m->smart) {
             smartFree(m->smart);
             m->smart = NULL;
         }
+#else
+        smartFree(m->smart);
+#endif
         _mapFree(m);
     }
-#endif
 }
 
 typedef struct MonoDat {
@@ -1686,11 +2008,37 @@ typedef struct MonoDat {
     f32 scale;
 } MonoDat;
 
-/* header of the monosiri position file (file2): entry table pointer, then its size in bytes */
+/* header of the monosiri position file (monoDat): entry table pointer, then its size in bytes */
 typedef struct MonoDatFile {
     MonoDat* entries; // 0x0
     u32 size;         // 0x4
 } MonoDatFile;
+
+/**
+ * The portrait offset and scale for the card's enemy from its mono.dat entry (0, 0 and 1 without one).
+ * Original name and size (0x78) from the JP demo map (UNUSED there: every call is inlined). The parameter list is
+ * inferred from that size and the caller's locals.
+ */
+static void monosiriCamOffset(MonosiriWork* m, f32* x, f32* y, f32* scale) {
+    s32 n;
+    MonoDat* e;
+    s32 i;
+
+    n = ((MonoDatFile*)m->monoDat->data)->size / sizeof(MonoDat);
+    e = ((MonoDatFile*)m->monoDat->data)->entries;
+    for (i = 0; i < n; i++, e++) {
+        if (e->id == m->id)
+            break;
+    }
+    if (i < n) {
+        *x = e->x;
+        *y = e->y;
+        *scale = e->scale;
+    } else {
+        *y = *x = 0.0f;
+        *scale = 1.0f;
+    }
+}
 
 /**
  * Renders the Tattle card's enemy portrait off screen:
@@ -1724,8 +2072,6 @@ static void capture(CameraId camera, void* param) {
     u16 tw;
     u16 th;
     s32 i;
-    MonoDat* e;
-    s32 n;
     Vec* gpos;
     s32* cnt;
     s32* idx;
@@ -1741,7 +2087,7 @@ static void capture(CameraId camera, void* param) {
     GXGetViewportv(vp);
     GXGetProjectionv(proj);
     GXGetScissor(&sx, &sy, &sw, &sh);
-    TEXGetGXTexObjFromPalette(*(TEXPalette**)m->file1->data, &tex, 0x37);
+    TEXGetGXTexObjFromPalette(*(TEXPalette**)m->winTpl->data, &tex, 0x37);
     tw = GXGetTexObjWidth(&tex);
     th = GXGetTexObjHeight(&tex);
     GXSetViewport(0.0f, 0.0f, tw, th, 0.0f, 1.0f);
@@ -1754,20 +2100,7 @@ static void capture(CameraId camera, void* param) {
         dist = ((608.0f * (max.y - cy)) / 480.0f) / (f32)tan(0.21816615760326385);
     }
     C_MTXLookAt(view, &(Vec){cx, cy, dist}, &(Vec){0.0f, 1.0f, 0.0f}, &(Vec){cx, cy, 0.0f});
-    n = ((MonoDatFile*)m->file2->data)->size / sizeof(MonoDat);
-    e = ((MonoDatFile*)m->file2->data)->entries;
-    for (i = 0; i < n; i++, e++) {
-        if (e->id == m->id)
-            break;
-    }
-    if (i < n) {
-        tx = e->x;
-        ty = e->y;
-        s = e->scale;
-    } else {
-        ty = tx = 0.0f;
-        s = 1.0f;
-    }
+    monosiriCamOffset(m, &tx, &ty, &s);
     PSMTXTrans(t, tx, ty, 0.0f);
     PSMTXScale(sm, s, s, s);
     PSMTXConcat(t, sm, t);
@@ -1779,7 +2112,7 @@ static void capture(CameraId camera, void* param) {
     if (animPoseGetVivianType(m->pose1)) {
         animPoseVivianMain(m->pose1, &(Vec){0.0f, 0.0f, 0.0f});
     }
-    animPoseSetMaterialFlagOn(m->pose1, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+    animPoseSetMaterialFlagOn(m->pose1, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
     animPosePeraOff(m->pose1);
     PSMTXIdentity(t);
     animPoseDrawMtx(m->pose1, t, 1, 0.0f, 1.0f);
@@ -1787,20 +2120,21 @@ static void capture(CameraId camera, void* param) {
     animPoseDrawMtx(m->pose1, t, 3, 0.0f, 1.0f);
     animPosePeraOn(m->pose1);
     if (m->id == UNIT_SMORG) {
-        gpos = *animPoseGetAnimPosePtr(m->pose1)->worldPositions;
-        cnt = smartAlloc(g_moamoa_chain_max * 4, 3)->address;
-        idx = smartAlloc(2000, 3)->address;
+        gpos = (Vec*)animPoseGetAnimPosePtr(m->pose1)->worldPositions->address;
+        cnt = smartAlloc(g_moamoa_chain_max * 4, SMART_GROUP_TEMP)->address;
+        idx = smartAlloc(2000, SMART_GROUP_TEMP)->address;
         memset(cnt, 0, g_moamoa_chain_max * 4);
+
         for (i = 0; 500 > i; i++) {
             idx[i] = cnt[i % g_moamoa_chain_max]++;
         }
-        animPoseSetMaterialFlagOn(m->pose2, ANIM_MATERIAL_FLAG_NO_BLEND | ANIM_MATERIAL_FLAG_NO_BLEND2);
+        animPoseSetMaterialFlagOn(m->pose2, (MAP_OBJ_FLAG_NO_MAP_BLEND | MAP_OBJ_FLAG_NO_MAP_BLEND2));
         animPosePeraOff(m->pose2);
         for (i = 0; i < 500; i++) {
             k = i % g_moamoa_chain_max;
             f = (f32)idx[i] / (f32)cnt[k];
-            a = &gpos[animPoseGetGroupIdx(m->pose1, g_moamoa_chain_tbl[k].from)];
-            b = &gpos[animPoseGetGroupIdx(m->pose1, g_moamoa_chain_tbl[k].to)];
+            a = &gpos[animPoseGetGroupIdx(m->pose1, g_moamoa_chain_tbl[k].parent)];
+            b = &gpos[animPoseGetGroupIdx(m->pose1, g_moamoa_chain_tbl[k].child)];
             PSVECScale(a, &v1, f);
             PSVECScale(b, &v2, 1.0f - f);
             PSVECAdd(&v1, &v2, &v1);
@@ -1828,8 +2162,12 @@ static void capture(CameraId camera, void* param) {
 
 /**
  * Draws the Tattle card: the half-book page, the captured portrait with a soft edge and fade-in alpha,
- * the enemy's log number and name (Doopliss as "?" until his name is guessed, not in the demos),
+ * the enemy's log number and name (Doopliss as "?" until his name is guessed, not in the early demos),
  * and where it is found.
+ *
+ * (x, y) is the card's position (curX, curY, eased by monosiriMain); its parts lie right of and below it. The
+ * portrait is a 216 x 160 quad at (x + 32, y - 8); the two text lines are centred in the 248 pixels from x + 16,
+ * at y - 180 and y - 210.
  */
 static void monosiri_disp(CameraId camera, void* param) {
     MonosiriWork* m = param;
@@ -1843,33 +2181,38 @@ static void monosiri_disp(CameraId camera, void* param) {
     f32 y;
     f32 s;
     f32 w;
-    f32 xx;
     s32 mtx;
     s32 i;
     s32 id;
     TattleEntry* te;
     u16 tw;
     u16 th;
+#if VERSION <= VERSION_DEMO_JP
     s32 d;
-    GXColor c0;
-    GXColor c;
 
     x = m->curX;
     y = m->curY;
-#if VERSION >= VERSION_JP
-    if (m->file1)
-#endif
     {
-        winHalfBookGX(*(TEXPalette**)m->file1->data, 0, x, y);
-        TEXGetGXTexObjFromPalette(*(TEXPalette**)m->file1->data, &tex, 0x37);
+#else
+    x = m->curX;
+    y = m->curY;
+    if (m->winTpl) {
+#endif
+        winHalfBookGX(*(TEXPalette**)m->winTpl->data, 0, x, y);
+
+        // Texture 0x37 of win.tpl sets the size of the portrait buffer (as in monosiriMain and capture) and is
+        // also map 0 of the blend below; map 1 is the captured portrait (RGB5A3).
+        TEXGetGXTexObjFromPalette(*(TEXPalette**)m->winTpl->data, &tex, 0x37);
         tw = GXGetTexObjWidth(&tex);
         th = GXGetTexObjHeight(&tex);
-        TEXGetGXTexObjFromPalette(*(TEXPalette**)m->file1->data, &tex, 0x37);
+        TEXGetGXTexObjFromPalette(*(TEXPalette**)m->winTpl->data, &tex, 0x37);
         GXInitTexObjLOD(&tex, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
         GXLoadTexObj(&tex, GX_TEXMAP0);
         GXInitTexObj(&tex, m->smart->address, tw, th, GX_TF_RGB5A3, GX_CLAMP, GX_CLAMP, GX_FALSE);
         GXInitTexObjLOD(&tex, GX_LINEAR, GX_LINEAR, 0.0f, 0.0f, 0.0f, GX_FALSE, GX_FALSE, GX_ANISO_1);
         GXLoadTexObj(&tex, GX_TEXMAP1);
+
+        // eight texture coordinates, scaled about the texture's centre by 0.72 (i = 0) up to 1.0 (i = 7)
         GXSetNumTexGens(8);
         for (i = 0; i < 8; i++) {
             mtx = GX_TEXMTX0 + i * 3;
@@ -1882,37 +2225,51 @@ static void monosiri_disp(CameraId camera, void* param) {
             GXLoadTexMtxImm(t1, mtx, GX_MTX2x4);
             GXSetTexCoordGen2(i, GX_TG_MTX2x4, GX_TG_TEX0, mtx, GX_FALSE, GX_PTIDENTITY);
         }
+
+        // C0 is the paper colour, A1 the fade-in alpha
         GXSetTevColor(GX_TEVREG0, (GXColor){0xCF, 0xBC, 0x9E, 0xFF});
         GXSetTevColor(GX_TEVREG1, (GXColor){0x00, 0x00, 0x00, m->alpha});
         GXSetNumTevStages(12);
+
+        // stages 0-7: colour = the paper colour; alpha = the sum of 1/8 of the portrait's alpha at each of the
+        // eight scales (a soft edge around the enemy's outline)
         for (i = 0; i < 8; i++) {
             GXSetTevOrder(i, i, GX_TEXMAP1, GX_COLOR_NULL);
             GXSetTevColorOp(i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
             GXSetTevAlphaOp(i, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-            GXSetTevColorIn(i, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, 2);
-            GXSetTevAlphaIn(i, 7, 4, 6, i == 0 ? GX_CA_ZERO : GX_CA_APREV);
-            GXSetTevKAlphaSel(i, 7);
+            GXSetTevColorIn(i, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_C0);
+            GXSetTevAlphaIn(i, GX_CA_ZERO, GX_CA_TEXA, GX_CA_KONST, i == 0 ? GX_CA_ZERO : GX_CA_APREV);
+            GXSetTevKAlphaSel(i, GX_TEV_KASEL_1_8);
         }
-        GXSetTevOrder(8, 7, GX_TEXMAP1, GX_COLOR_NULL);
-        GXSetTevColorOp(8, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaOp(8, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevColorIn(8, 0, 8, 9, 0xF);
-        GXSetTevAlphaIn(8, 0, 7, 4, 4);
-        GXSetTevOrder(9, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
-        GXSetTevColorOp(9, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaOp(9, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevColorIn(9, 0xF, 0xF, 0xF, 0);
-        GXSetTevAlphaIn(9, 7, 0, 2, 7);
-        GXSetTevOrder(10, 7, GX_TEXMAP0, GX_COLOR_NULL);
-        GXSetTevColorOp(10, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaOp(10, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevColorIn(10, 0xF, 8, 0, 0xF);
-        GXSetTevAlphaIn(10, 7, 7, 7, 0);
-        GXSetTevOrder(11, 7, GX_TEXMAP0, GX_COLOR_NULL);
-        GXSetTevColorOp(11, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevAlphaOp(11, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
-        GXSetTevColorIn(11, 8, 0, 1, 0xF);
-        GXSetTevAlphaIn(11, 7, 7, 7, 4);
+
+        // stage 8: the portrait at full size over the paper colour, by its alpha; alpha =
+        // prev * (1 - portrait alpha) + portrait alpha
+        GXSetTevOrder(GX_TEVSTAGE8, GX_TEXCOORD7, GX_TEXMAP1, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE8, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE8, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE8, GX_CC_CPREV, GX_CC_TEXC, GX_CC_TEXA, GX_CC_ZERO);
+        GXSetTevAlphaIn(GX_TEVSTAGE8, GX_CA_APREV, GX_CA_ZERO, GX_CA_TEXA, GX_CA_TEXA);
+
+        // stage 9: alpha times the fade-in alpha (A1)
+        GXSetTevOrder(GX_TEVSTAGE9, GX_TEXCOORD_NULL, GX_TEXMAP_NULL, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE9, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE9, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE9, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_CPREV);
+        GXSetTevAlphaIn(GX_TEVSTAGE9, GX_CA_ZERO, GX_CA_APREV, GX_CA_A1, GX_CA_ZERO);
+
+        // stage 10: colour times texture 0x37's colour
+        GXSetTevOrder(GX_TEVSTAGE10, GX_TEXCOORD7, GX_TEXMAP0, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE10, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE10, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE10, GX_CC_ZERO, GX_CC_TEXC, GX_CC_CPREV, GX_CC_ZERO);
+        GXSetTevAlphaIn(GX_TEVSTAGE10, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_APREV);
+
+        // stage 11: colour = texture 0x37's colour blended toward that result by the alpha; alpha = texture 0x37's
+        GXSetTevOrder(GX_TEVSTAGE11, GX_TEXCOORD7, GX_TEXMAP0, GX_COLOR_NULL);
+        GXSetTevColorOp(GX_TEVSTAGE11, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevAlphaOp(GX_TEVSTAGE11, GX_TEV_ADD, GX_TB_ZERO, GX_CS_SCALE_1, GX_TRUE, GX_TEVPREV);
+        GXSetTevColorIn(GX_TEVSTAGE11, GX_CC_TEXC, GX_CC_CPREV, GX_CC_APREV, GX_CC_ZERO);
+        GXSetTevAlphaIn(GX_TEVSTAGE11, GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_TEXA);
         GXBegin(GX_QUADS, GX_VTXFMT0, 4);
         {
             f32 x1 = 32.0f + x;
@@ -1927,27 +2284,15 @@ static void monosiri_disp(CameraId camera, void* param) {
             GXPosition3f32(x1 + qw, y1, 0.0f);
             GXTexCoord2f32(1.0f, 0.0f);
         }
-#if VERSION >= VERSION_US
+
+        // "N. name" (log number from enemy_monoshiri_sort_table), centred at y - 180
         id = m->id;
         te = battleGetUnitMonosiriPtr(id);
-        if (id == UNIT_DOOPLISS_CHAPTER4_FIGHT1 || id == UNIT_DOOPLISS_CHAPTER8) {
-            if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG4_14_NAME_GUESSING) {
-                sprintf(buf, (u32)gp->language != 0 ? "%d. %s" : "%d．%s", enemy_monoshiri_sort_table[id], msgSearch("btl_un_hatena"));
-            } else {
-                sprintf(buf, (u32)gp->language != 0 ? "%d. %s" : "%d．%s", enemy_monoshiri_sort_table[id], msgSearch("btl_un_rampell"));
-            }
-        } else {
-            sprintf(buf, (u32)gp->language != 0 ? "%d. %s" : "%d．%s", enemy_monoshiri_sort_table[id], msgSearch(te->enemyTag));
-        }
-#elif VERSION <= VERSION_DEMO_JP
-        id = m->id;
-        te = battleGetUnitMonosiriPtr(id);
+#if VERSION <= VERSION_DEMO_JP
         sprintf(buf, "%d．%s", enemy_monoshiri_sort_table[id], msgSearch(te->enemyTag));
-#else
-        id = m->id;
-        te = battleGetUnitMonosiriPtr(id);
+#elif VERSION <= VERSION_JP
         if (id == UNIT_DOOPLISS_CHAPTER4_FIGHT1 || id == UNIT_DOOPLISS_CHAPTER8) {
-            if (evtGetValue(NULL, GSW(GSW_STORY_PROGRESS)) < STORY_STG4_14_NAME_GUESSING) {
+            if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG4_14_NAME_GUESSING) {
                 sprintf(buf, "%d．%s", enemy_monoshiri_sort_table[id], msgSearch("btl_un_hatena"));
             } else {
                 sprintf(buf, "%d．%s", enemy_monoshiri_sort_table[id], msgSearch("btl_un_rampell"));
@@ -1955,20 +2300,40 @@ static void monosiri_disp(CameraId camera, void* param) {
         } else {
             sprintf(buf, "%d．%s", enemy_monoshiri_sort_table[id], msgSearch(te->enemyTag));
         }
+#else
+        if (id == UNIT_DOOPLISS_CHAPTER4_FIGHT1 || id == UNIT_DOOPLISS_CHAPTER8) {
+            if (evtGetValue(NULL, GSW_STORY_PROGRESS) < STG4_14_NAME_GUESSING) {
+                sprintf(buf, gp->language != LANGUAGE_JP ? "%d. %s" : "%d．%s", enemy_monoshiri_sort_table[id],
+                        msgSearch("btl_un_hatena"));
+            } else {
+                sprintf(buf, gp->language != LANGUAGE_JP ? "%d. %s" : "%d．%s", enemy_monoshiri_sort_table[id],
+                        msgSearch("btl_un_rampell"));
+            }
+        } else {
+            sprintf(buf, gp->language != LANGUAGE_JP ? "%d. %s" : "%d．%s", enemy_monoshiri_sort_table[id],
+                    msgSearch(te->enemyTag));
+        }
 #endif
         w = 0.75f * FontGetMessageWidth(buf);
         winFontInit();
         winFontSet((Vec){(16.0f + x) + (248.0f - w) / 2.0f, y - 180.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, black, buf);
+
+        // "Found: place" (menu_monosiri_derutokoro and the enemy's location text) at y - 210, from JP on one
+        // pixel further right
+#if VERSION <= VERSION_DEMO_JP
+        sprintf(buf, "%s　%s", msgSearch("menu_monosiri_derutokoro"), msgSearch(te->locationTag));
+        w = 0.75f * FontGetMessageWidth(buf);
+        winFontSet((Vec){(16.0f + x) + (248.0f - w) / 2.0f, y - 210.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, black, buf);
+#else
 #if VERSION >= VERSION_US
-        sprintf(buf, (u32)gp->language != 0 ? "%s %s" : "%s　%s", msgSearch("menu_monosiri_derutokoro"), msgSearch(te->locationTag));
+        sprintf(buf, gp->language != LANGUAGE_JP ? "%s %s" : "%s　%s", msgSearch("menu_monosiri_derutokoro"),
+                msgSearch(te->locationTag));
 #else
         sprintf(buf, "%s　%s", msgSearch("menu_monosiri_derutokoro"), msgSearch(te->locationTag));
 #endif
         w = 0.75f * FontGetMessageWidth(buf);
-#if VERSION <= VERSION_DEMO_JP
-        winFontSet((Vec){(16.0f + x) + (248.0f - w) / 2.0f, y - 210.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, black, buf);
-#else
-        winFontSet((Vec){1.0f + ((16.0f + x) + (248.0f - w) / 2.0f), y - 210.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f}, black, buf);
+        winFontSet((Vec){1.0f + ((16.0f + x) + (248.0f - w) / 2.0f), y - 210.0f, 0.0f}, (Vec){0.75f, 0.75f, 0.75f},
+                   black, buf);
 #endif
     }
 }

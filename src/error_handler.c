@@ -1,4 +1,5 @@
 /* Original TU name unknown; separate object after eff_ultra_hammer in the retail DOL. */
+#include "version.h"
 #include "hwaccess.h"
 #include "memory.h"
 #include "system.h"
@@ -12,34 +13,35 @@
 #include "seq/seq_title.h"
 #include "libc_decls.h"
 #include "dolphin/base/PPCArch.h"
-#include "version.h"
 
 extern void *DemoCurrentBuffer, *DemoFrameBuffer1, *DemoFrameBuffer2;
 
 // local prototypes
-void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar);
+void systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar);
 
 /**
- * Installs N_systemErrorHandler for the DSI, ISI and program exceptions (bad data access, bad instruction fetch,
+ * Installs systemErrorHandler for the DSI, ISI and program exceptions (bad data access, bad instruction fetch,
  * illegal instruction). Called once from marioStInit.
+ * Descriptive name (not in the symbol maps).
  */
-void N_setupErrorHandler(void) {
-    OSSetErrorHandler(OS_ERROR_DSI, (void (*)(u16, OSContext*, ...))N_systemErrorHandler);
-    OSSetErrorHandler(OS_ERROR_ISI, (void (*)(u16, OSContext*, ...))N_systemErrorHandler);
-    OSSetErrorHandler(OS_ERROR_PROGRAM, (void (*)(u16, OSContext*, ...))N_systemErrorHandler);
+void setupErrorHandler(void) {
+    OSSetErrorHandler(OS_ERROR_DSI, (OSErrorHandler)systemErrorHandler);
+    OSSetErrorHandler(OS_ERROR_ISI, (OSErrorHandler)systemErrorHandler);
+    OSSetErrorHandler(OS_ERROR_PROGRAM, (OSErrorHandler)systemErrorHandler);
 }
 
 /**
  * Crash screen.
- * If the title screen's debug mode (N_getDebugMode) is 0 or more it stops sound and hangs;
+ * If the title screen's debug mode (getDebugMode) is 0 or more it stops sound and hangs;
  * otherwise it formats the exception type, all 32 GPRs,
  * LR/CR/SRR0/SRR1/DSISR/DAR and a 16-frame stack back chain,
  * reinitialises the heap for the ROM font and draws the text to the frame buffer forever.
- * The US and PAL releases scroll the text upward, use a 0.8 horizontal scale instead of 0.5,
+ * US and later scroll the text upward, scale it 0.8 wide and 1.0 high instead of 0.5 by 0.5,
  * and halt once it has scrolled off.
  * Debug mode (-1) comes from the title-screen button code X, B, R, B, Y, L (seq_title.c).
+ * Descriptive name (not in the symbol maps).
  */
-void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar) {
+void systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar) {
     // registers
     signed char* textBase;
     int i;
@@ -52,22 +54,23 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
     AddrWord stack; // stack frame address: back chain at +0, saved LR at +4
     s16 px2, py2, x2, y2;
     s32 tx, ty;
-    // stack vars
-    char print_buffer2[0x400]; // 0x10E0
-    char print_buffer[0x1000]; // 0xE0
-    Mtx44 projection;          // 0xA0
-    Mtx matrix;                // 0x70
-    Mtx matrix2;               // 0x40
-    GXTexObj texObj;           // 0x20
-    void* image;               // 0x1C
-    s32 x;                     // 0x18
-    s32 y;                     // 0x14
-    s32 width;                 // 0x10
 
-    if (N_getDebugMode() >= 0) {
+    // stack vars
+    char print_buffer2[0x400];
+    char print_buffer[0x1000];
+    Mtx44 projection;
+    Mtx matrix;
+    Mtx matrix2;
+    GXTexObj texObj;
+    void* image;
+    s32 x;
+    s32 y;
+    s32 width;
+
+    if (getDebugMode() >= 0) {
         psndExit();
-#if (VERSION >= VERSION_US) && defined(__MWERKS__)
-        // US: same MSR enable sequence as below (original inline asm), then halt
+#if VERSION >= VERSION_US && defined(__MWERKS__)
+        // US and later: same MSR enable sequence as below (original inline asm), then halt
         HW_ENABLE_MSR_FP_RI();
         PPCHalt();
 #endif
@@ -126,15 +129,15 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
 #endif
     OSFillFPUContext(context);
     HW_ENABLE_MSR_FP_RI();
-    L_smartReInit();
+    smartReInit();
     if (OSGetFontEncode() == OS_FONT_ENCODE_SJIS) {
-        fontHeader = smartAlloc(OS_FONT_SIZE_SJIS, 0)->address;
+        fontHeader = smartAlloc(OS_FONT_SIZE_SJIS, SMART_GROUP_PERMANENT)->address;
     } else {
-        fontHeader = smartAlloc(OS_FONT_SIZE_ANSI, 0)->address;
+        fontHeader = smartAlloc(OS_FONT_SIZE_ANSI, SMART_GROUP_PERMANENT)->address;
     }
     OSInitFont(fontHeader);
-    GXSetCopyClear((GXColor){0, 0, 0, 0xFF}, 0xFFFFFF);
-    GXCopyDisp(DEMOGetCurrentBuffer(), 1);
+    GXSetCopyClear((GXColor){0, 0, 0, 0xFF}, GX_MAX_Z24);
+    GXCopyDisp(DEMOGetCurrentBuffer(), GX_TRUE);
     GXSetViewport(0.0f, 0.0f, 608.0f, 480.0f, 0.0f, 1.0f);
     GXSetScissor(0, 0, 608, 480);
     MTXOrtho(projection, 0.0f, 608.0f, 0.0f, 480.0f, 0.0f, 1.0f);
@@ -144,8 +147,8 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
 #else
     MTXScale(matrix, 0.5f, 0.5f, 1.0f);
 #endif
-    GXLoadPosMtxImm(matrix, 0);
-    GXSetCurrentMtx(0);
+    GXLoadPosMtxImm(matrix, GX_PNMTX0);
+    GXSetCurrentMtx(GX_PNMTX0);
     GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
     GXSetNumChans(0);
     GXSetNumTevStages(1);
@@ -157,8 +160,8 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
     GXClearVtxDesc();
     GXSetVtxDesc(GX_VA_POS, GX_DIRECT);
     GXSetVtxDesc(GX_VA_TEX0, GX_DIRECT);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, 1, 3, 0);
-    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, 1, 3, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_S16, 0);
+    GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_TEX0, GX_TEX_ST, GX_S16, 0);
     textBase = (signed char*)print_buffer;
     while (1) {
         count = VIGetRetraceCount();
@@ -174,7 +177,8 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
 #endif
         i = 0;
         while (textBase[i] != 0) {
-            if ((s32)print_buffer[i] == '\n') {
+            s32 character = print_buffer[i];
+            if (character == '\n') {
 #if VERSION >= VERSION_US
                 px = 40;
 #else
@@ -189,7 +193,7 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
                          (GXTexFmt)fontHeader->sheetFormat, GX_CLAMP, GX_CLAMP, GX_FALSE);
             GXLoadTexObj(&texObj, GX_TEXMAP0);
             MTXScale(matrix2, 1.0f / (float)fontHeader->sheetWidth, 1.0f / (float)fontHeader->sheetHeight, 1.0f);
-            GXLoadTexMtxImm(matrix2, 0x1E, GX_MTX2x4);
+            GXLoadTexMtxImm(matrix2, GX_TEXMTX0, GX_MTX2x4);
             GXBegin(GX_QUADS, GX_VTXFMT0, 4);
             px2 = (s16)px + fontHeader->cellWidth;
             py2 = (s16)py + fontHeader->cellHeight;
@@ -221,9 +225,9 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
             i++;
         }
         GXSetZMode(GX_TRUE, GX_LEQUAL, GX_TRUE);
-        GXSetColorUpdate(1);
+        GXSetColorUpdate(GX_TRUE);
         GXSetAlphaCompare(GX_ALWAYS, 0, GX_AOP_OR, GX_ALWAYS, 0);
-        GXSetAlphaUpdate(1);
+        GXSetAlphaUpdate(GX_TRUE);
         GXCopyDisp(DemoCurrentBuffer, GX_TRUE);
         VISetNextFrameBuffer(DemoCurrentBuffer);
         VISetBlack(0);
@@ -231,10 +235,11 @@ void N_systemErrorHandler(OSError error, OSContext* context, u32 dsisr, u32 dar)
         do {
             ;
         } while (count == VIGetRetraceCount());
-        if (DemoCurrentBuffer == DemoFrameBuffer1)
+        if (DemoCurrentBuffer == DemoFrameBuffer1) {
             DemoCurrentBuffer = DemoFrameBuffer2;
-        else
+        } else {
             DemoCurrentBuffer = DemoFrameBuffer1;
+        }
     }
 #if VERSION >= VERSION_US
     PPCHalt();

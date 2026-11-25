@@ -1,5 +1,7 @@
 // Game start-up and the main loop: marioStInit initialises every driver, marioStMain/marioStDisp run them each
 // frame; also the DVD error check thread and the rumble check.
+
+#include "version.h"
 #include "mario/mariost.h"
 
 #include "battle/battle.h"
@@ -48,25 +50,22 @@
 #include "win/win_main.h"
 
 #include "countdown.h"
-#include "sound.h"
 #include "error_handler.h"
 #include "memory.h"
 #include "nameent.h"
 #include "pmario_sound.h"
 #include "romfont.h"
+#include "sound.h"
 #include "statuswindow.h"
 #include "system.h"
 
 #include <dolphin/vi.h>
 #include <string.h>
 #include <demo/DEMOPad.h>
-#include "version.h"
-
-#define OSIsRestart() ((OSGetResetCode() & 0x80000000) ? TRUE : FALSE)
 
 //.bss
 GlobalWork marioSt;
-OSThread DvdCheckThread;
+static OSThread DvdCheckThread;
 
 //.sdata
 GlobalWork* gp = &marioSt;
@@ -74,111 +73,244 @@ GlobalWork* gp = &marioSt;
 //.sbss
 OSTime none_key;
 s32 _mariostSystemLevel;
+
 #if VERSION >= VERSION_US
 BOOL R_bReset; // before DvdCheckTreadOn: .sbss is emitted in reverse
 #endif
-BOOL DvdCheckTreadOn;
+
+static BOOL DvdCheckTreadOn;
+
+// Stripped (UNUSED in the JP demo map, 4 bytes, first in .sbss); nothing reads it. BOOL from the name.
+BOOL movie_record_on;
 
 //.data
+// The September US demo runs on PAL consoles too: each NTSC mode below has a PAL twin that marioStInit copies
+// over it there.
+GXRenderModeObj sRMObjHReso = {
+#if VERSION >= VERSION_DEMO_EU
+    VI_TVMODE_PAL_INT, // viTVmode
+    0x260, // fbWidth
+    0x1C0, // efbHeight
+    0x212, // xfbHeight
+    0x1B, // viXOrigin
+    0x16, // viYOrigin
+    0x29A, // viWidth
+    0x212, // viHeight
+#else
+    VI_TVMODE_NTSC_INT, // viTVmode
+    0x260, // fbWidth
+    0x1C0, // efbHeight
+    0x1C0, // xfbHeight
+    0x1B, // viXOrigin
+    0x10, // viYOrigin
+    0x29A, // viWidth
+    0x1C0, // viHeight
+#endif
+    VI_XFBMODE_DF, // xFBmode
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
+
 #if VERSION == VERSION_DEMO_US_2
-// Unreferenced; the early demos carry the same table at the start of winmgr.c's and win_log.c's .data.
-static f32 unusedSignTbl[16] = {-1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, 1.0f, -1.0f, 1.0f, -1.0f};
+/** sRMObjHReso's PAL twin (50Hz), copied over it on a PAL console. */
+GXRenderModeObj sRMObjHResoPal = {
+    VI_TVMODE_PAL_INT, // viTVmode
+    0x260, // fbWidth
+    0x1C0, // efbHeight
+    0x212, // xfbHeight
+    0x1B, // viXOrigin
+    0x16, // viYOrigin
+    0x29A, // viWidth
+    0x212, // viHeight
+    VI_XFBMODE_DF, // xFBmode
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
 #endif
 
-// A full-width (0x260) video mode with no field rendering or anti-aliasing, the default sample pattern and the
-// usual vertical filter; only the TV mode, heights, origin, display size and XFB mode differ.
-// clang-format off
-#define MARIOST_RENDER_MODE(tvMode, efbHeight, xfbHeight, xOrigin, yOrigin, viWidth, viHeight, xfbMode) \
-    {tvMode, 0x260, efbHeight, xfbHeight, xOrigin, yOrigin, viWidth, viHeight, xfbMode, 0, 0,          \
-     {{6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}, {6, 6}},  \
-     {8, 8, 10, 12, 10, 8, 8}}
-// clang-format on
+/** Video mode of the boot logo screens for NTSC progressive scan or PAL EURGB60, set by seq_logo after a hot reset. */
+GXRenderModeObj sRMObjHReso_prog = {
+#if VERSION >= VERSION_DEMO_EU
+    VI_TVMODE_EURGB60_INT, // viTVmode
+#else
+    VI_TVMODE_NTSC_PROG, // viTVmode
+#endif
+    0x260, // fbWidth
+    0x1C0, // efbHeight
+    0x1C0, // xfbHeight
+    0x1B, // viXOrigin
+    0x10, // viYOrigin
+    0x29A, // viWidth
+    0x1C0, // viHeight
+#if VERSION >= VERSION_DEMO_EU
+    VI_XFBMODE_DF, // xFBmode
+#else
+    VI_XFBMODE_SF, // xFBmode
+#endif
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
 
-// PAL and the EU demo have only the 50Hz PAL / EURGB60 modes, the others only the NTSC ones. The 2004-09 US
-// demo has both: each NTSC mode is followed by its PAL twin, which marioStInit copies over it on a PAL console.
-// The plain modes are interlaced; the _prog / Prog ones progressive scan on NTSC, EURGB60 interlaced on PAL.
-#if VERSION < VERSION_DEMO_EU
-/** Video mode of the boot logo screens (448 lines): seq_logo sets it on a cold start or restart. */
-GXRenderModeObj sRMObjHReso =
-    MARIOST_RENDER_MODE(VI_TVMODE_NTSC_INT, 0x1C0, 0x1C0, 0x1B, 0x10, 0x29A, 0x1C0, VI_XFBMODE_DF);
-#endif
 #if VERSION == VERSION_DEMO_US_2
-/** sRMObjHReso's PAL twin (50Hz); the same values as PAL's mode below. */
-GXRenderModeObj sRMObjHResoPal =
-    MARIOST_RENDER_MODE(VI_TVMODE_PAL_INT, 0x1C0, 0x212, 0x1B, 0x16, 0x29A, 0x212, VI_XFBMODE_DF);
-#elif VERSION >= VERSION_DEMO_EU
-/** Video mode of the boot logo screens (448 lines, 50Hz): seq_logo sets it on a cold start or restart. */
-GXRenderModeObj sRMObjHReso =
-    MARIOST_RENDER_MODE(VI_TVMODE_PAL_INT, 0x1C0, 0x212, 0x1B, 0x16, 0x29A, 0x212, VI_XFBMODE_DF);
-#endif
-
-#if VERSION < VERSION_DEMO_EU
-/** Video mode of the boot logo screens in progressive scan, set by seq_logo after a hot reset. */
-GXRenderModeObj sRMObjHReso_prog =
-    MARIOST_RENDER_MODE(VI_TVMODE_NTSC_PROG, 0x1C0, 0x1C0, 0x1B, 0x10, 0x29A, 0x1C0, VI_XFBMODE_SF);
-#endif
-#if VERSION == VERSION_DEMO_US_2
-/** sRMObjHReso_prog's PAL twin (EURGB60); the same values as PAL's mode below. */
-GXRenderModeObj sRMObjHReso_progPal =
-    MARIOST_RENDER_MODE(VI_TVMODE_EURGB60_INT, 0x1C0, 0x1C0, 0x1B, 0x10, 0x29A, 0x1C0, VI_XFBMODE_DF);
-#elif VERSION >= VERSION_DEMO_EU
-/** Video mode of the boot logo screens in 60Hz mode (EURGB60), set by seq_logo after a hot reset. */
-GXRenderModeObj sRMObjHReso_prog =
-    MARIOST_RENDER_MODE(VI_TVMODE_EURGB60_INT, 0x1C0, 0x1C0, 0x1B, 0x10, 0x29A, 0x1C0, VI_XFBMODE_DF);
-#endif
-
-#if VERSION < VERSION_DEMO_EU
-/** The game's main video mode (480 lines, interlaced): marioStInit starts the game with it. */
-GXRenderModeObj GXNtsc480IntDfMarioSt =
-    MARIOST_RENDER_MODE(VI_TVMODE_NTSC_INT, 0x1E0, 0x1E0, 0x1E, 0x0, 0x294, 0x1E0, VI_XFBMODE_DF);
-#endif
-#if VERSION == VERSION_DEMO_US_2
-/** GXNtsc480IntDfMarioSt's PAL twin (50Hz); the same values as PAL's mode below. */
-GXRenderModeObj GXNtsc480IntDfMarioStPal =
-    MARIOST_RENDER_MODE(VI_TVMODE_PAL_INT, 0x1E0, 0x238, 0x1E, 0x6, 0x294, 0x238, VI_XFBMODE_DF);
-#elif VERSION >= VERSION_DEMO_EU
-/** The game's main video mode (50Hz PAL, interlaced): marioStInit starts the game with it. */
-GXRenderModeObj GXNtsc480IntDfMarioSt =
-    MARIOST_RENDER_MODE(VI_TVMODE_PAL_INT, 0x1E0, 0x238, 0x1E, 0x6, 0x294, 0x238, VI_XFBMODE_DF);
+/** sRMObjHReso_prog's PAL twin (EURGB60), copied over it on a PAL console. */
+GXRenderModeObj sRMObjHReso_progPal = {
+    VI_TVMODE_EURGB60_INT, // viTVmode
+    0x260, // fbWidth
+    0x1C0, // efbHeight
+    0x1C0, // xfbHeight
+    0x1B, // viXOrigin
+    0x10, // viYOrigin
+    0x29A, // viWidth
+    0x1C0, // viHeight
+    VI_XFBMODE_DF, // xFBmode
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
 #endif
 
-#if VERSION < VERSION_DEMO_EU
-/** The game's main video mode in progressive scan, used by marioStInit after a hot reset. */
-GXRenderModeObj GXNtsc480ProgMarioSt =
-    MARIOST_RENDER_MODE(VI_TVMODE_NTSC_PROG, 0x1E0, 0x1E0, 0x1E, 0x0, 0x294, 0x1E0, VI_XFBMODE_SF);
+GXRenderModeObj GXNtsc480IntDfMarioSt = {
+#if VERSION >= VERSION_DEMO_EU
+    VI_TVMODE_PAL_INT, // viTVmode
+    0x260, // fbWidth
+    0x1E0, // efbHeight
+    0x238, // xfbHeight
+    0x1E, // viXOrigin
+    0x6, // viYOrigin
+    0x294, // viWidth
+    0x238, // viHeight
+#else
+    VI_TVMODE_NTSC_INT, // viTVmode
+    0x260, // fbWidth
+    0x1E0, // efbHeight
+    0x1E0, // xfbHeight
+    0x1E, // viXOrigin
+    0x0, // viYOrigin
+    0x294, // viWidth
+    0x1E0, // viHeight
 #endif
+    VI_XFBMODE_DF, // xFBmode
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
+
 #if VERSION == VERSION_DEMO_US_2
-/** GXNtsc480ProgMarioSt's PAL twin (EURGB60); the same values as PAL's mode below. */
-GXRenderModeObj GXNtsc480ProgMarioStPal =
-    MARIOST_RENDER_MODE(VI_TVMODE_EURGB60_INT, 0x1E0, 0x1E0, 0x1E, 0x0, 0x294, 0x1E0, VI_XFBMODE_DF);
-#elif VERSION >= VERSION_DEMO_EU
-/** The game's main video mode in 60Hz (EURGB60), used by marioStInit after a hot reset. */
-GXRenderModeObj GXNtsc480ProgMarioSt =
-    MARIOST_RENDER_MODE(VI_TVMODE_EURGB60_INT, 0x1E0, 0x1E0, 0x1E, 0x0, 0x294, 0x1E0, VI_XFBMODE_DF);
+/** GXNtsc480IntDfMarioSt's PAL twin (50Hz), copied over it on a PAL console. */
+GXRenderModeObj GXNtsc480IntDfMarioStPal = {
+    VI_TVMODE_PAL_INT, // viTVmode
+    0x260, // fbWidth
+    0x1E0, // efbHeight
+    0x238, // xfbHeight
+    0x1E, // viXOrigin
+    0x6, // viYOrigin
+    0x294, // viWidth
+    0x238, // viHeight
+    VI_XFBMODE_DF, // xFBmode
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
 #endif
-#undef MARIOST_RENDER_MODE
+
+/** The game's main video mode for NTSC progressive scan or PAL EURGB60, used by marioStInit after a hot reset. */
+GXRenderModeObj GXNtsc480ProgMarioSt = {
+#if VERSION >= VERSION_DEMO_EU
+    VI_TVMODE_EURGB60_INT, // viTVmode
+#else
+    VI_TVMODE_NTSC_PROG, // viTVmode
+#endif
+    0x260, // fbWidth
+    0x1E0, // efbHeight
+    0x1E0, // xfbHeight
+    0x1E, // viXOrigin
+    0x0, // viYOrigin
+    0x294, // viWidth
+    0x1E0, // viHeight
+#if VERSION >= VERSION_DEMO_EU
+    VI_XFBMODE_DF, // xFBmode
+#else
+    VI_XFBMODE_SF, // xFBmode
+#endif
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
+
+#if VERSION == VERSION_DEMO_US_2
+/** GXNtsc480ProgMarioSt's PAL twin (EURGB60), copied over it on a PAL console. */
+GXRenderModeObj GXNtsc480ProgMarioStPal = {
+    VI_TVMODE_EURGB60_INT, // viTVmode
+    0x260, // fbWidth
+    0x1E0, // efbHeight
+    0x1E0, // xfbHeight
+    0x1E, // viXOrigin
+    0x0, // viYOrigin
+    0x294, // viWidth
+    0x1E0, // viHeight
+    VI_XFBMODE_DF, // xFBmode
+    0, // field_rendering
+    0, // aa
+    6, 6, 6, 6, 6, 6, // pix 0
+    6, 6, 6, 6, 6, 6, // pix 1
+    6, 6, 6, 6, 6, 6, // pix 2
+    6, 6, 6, 6, 6, 6, // pix 3
+    8, 8, 10, 12, 10, 8, 8, // vfilter
+};
+#endif
 
 // local prototypes
 static void viPostCallback(u32 retraceCount);
 static void* gcDvdCheckThread(void* param);
+void gcDvdCheckInit(void);
+void gcDvdCheckCancel(void);
 void gcRumbleCheck(void);
 #if VERSION <= VERSION_DEMO_JP
-static inline void L_gcResetCheck(void);
+static void gcResetCheck(void);
 #else
-void L_gcResetCheck(void);
+void gcResetCheck(void);
 #endif
 
 /**
  * Start-up.
  * The early demos have no error handler (they turn on the SDK's DVD fatal message instead),
  * show English (US demo) or Japanese (JP demo) text whatever the console font and set flag 4 on a restart.
- * Every demo sets GLOBAL_FLAG_KIOSK and starts the idle timer; the 2004-09 US demo also switches to its PAL
- * video modes on a PAL console.
+ * Every demo sets kiosk mode (GW_FLAG_E3) and starts the idle timer; the September US demo also switches to its
+ * PAL video modes on a PAL console.
  */
 void marioStInit(void) {
-    static u8 stack[0x1000];
 #if VERSION == VERSION_DEMO_US_2
-    // the 2004-09 US demo runs on PAL consoles too: there it switches every video mode to its PAL twin
     VIInit();
     if (VIGetTvFormat() != VI_NTSC) {
         memcpy(&sRMObjHReso, &sRMObjHResoPal, sizeof(GXRenderModeObj));
@@ -187,15 +319,16 @@ void marioStInit(void) {
         memcpy(&GXNtsc480ProgMarioSt, &GXNtsc480ProgMarioStPal, sizeof(GXRenderModeObj));
     }
 #endif
+
     // the releases and the later demos also start cold after a shutdown reset
-    if (!OSIsRestart()
-#if VERSION >= VERSION_JP
-        || (OSGetResetCode() & OS_RESET_SHUTDOWN)
+#if VERSION <= VERSION_DEMO_JP
+    if (!OSIsRestart()) {
+#else
+    if (!OSIsRestart() || (OSGetResetCode() & RESET_CODE_NO_VIDEO_MODE)) {
 #endif
-    ) {
         DEMOInit(&GXNtsc480IntDfMarioSt);
     } else {
-        switch (OSGetResetCode() & OS_RESET_HOTRESET) {
+        switch (OSGetResetCode() & RESET_CODE_PROGRESSIVE) {
             case 0:
                 DEMOInit(&GXNtsc480IntDfMarioSt);
                 break;
@@ -205,29 +338,29 @@ void marioStInit(void) {
         }
     }
     DEMOEnableGPHangWorkaround(5);
-#if VERSION >= VERSION_JP
-    N_setupErrorHandler();
-#endif
-    DEMOPadInit();
 #if VERSION <= VERSION_DEMO_JP
-    DVDSetAutoFatalMessaging(TRUE); // the demo has no error handler: the SDK shows the DVD error message
+    DEMOPadInit();
+    DVDSetAutoFatalMessaging(TRUE);
+#else
+    setupErrorHandler();
+    DEMOPadInit();
 #endif
-    GXSetCopyClear((GXColor){0, 0, 0, 0}, 0xFFFFFF);
+    GXSetCopyClear((GXColor){0, 0, 0, 0}, GX_MAX_Z24);
     __GXSetIndirectMask(0);
     memset(gp, 0, sizeof(GlobalWork));
     gp->fbWidth = DEMOGetRenderModeObj()->fbWidth;
     gp->efbHeight = DEMOGetRenderModeObj()->efbHeight;
 #if VERSION <= VERSION_DEMO_JP
     if (OSIsRestart()) {
-        gp->flags |= GLOBAL_FLAG_VIDEO_MODE_SET;
+        gp->flags |= GW_FLAG_VIDEO_MODE_SET;
     }
 #endif
 #if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
     // every demo runs in kiosk mode
-    gp->flags |= GLOBAL_FLAG_KIOSK;
+    gp->flags |= GW_FLAG_E3;
 #endif
     gp->rumbleEnabled = 1;
-    gp->soundMode = 0;
+    gp->soundMode = GW_SOUND_MODE_NO_SURROUND;
 
     gp->playTime = 0;
     gp->retraceDeltaTime = 0;
@@ -249,64 +382,74 @@ void marioStInit(void) {
     gp->areaFadeInDuration = 300;
     gp->areaFadeOutType = FADE_OUT_BLACK;
     gp->areaFadeOutDuration = 300;
-#if VERSION >= VERSION_DEMO_EU
-    if (VIGetTvFormat() == VI_NTSC)
+
+    // game language: 1 English, 2 German, 3 French, 4 Spanish, 5 Italian
+    // BUG (JP, the September PAL demo and PAL): the language comes from the console's font encoding, with no check
+    // that the disc has text for it. JP picks English (msgdrv's "emsg" folder) when the console's font is not
+    // Shift-JIS; PAL picks Japanese ("msg/JP") when it is. Neither disc has that folder, so every message file
+    // fails to load and msgSearch returns the "No messages." error text for every message. That text ends with a
+    // key wait and closes its window, so the first script that expects a window to stay open and adds to it reads
+    // the deleted window through NULL (msgWindow_Add): evt_memcard_check, the file select's memory card check,
+    // crashes after its first message.
+#if VERSION <= VERSION_DEMO_JP
+#if VERSION == VERSION_DEMO_JP
+    gp->language = LANGUAGE_JP;
+#else
+    gp->language = LANGUAGE_US;
+#endif
+    gp->framerate = 60;
+#elif VERSION >= VERSION_DEMO_EU
+    if (VIGetTvFormat() == VI_NTSC) {
         gp->framerate = 60;
-    else if (VIGetTvFormat() == VI_EURGB60)
+    } else if (VIGetTvFormat() == VI_EURGB60) {
         gp->framerate = 60;
-    else
-        gp->framerate = 50;
-    if ((OSGetFontEncode() == OS_FONT_ENCODE_SJIS) && !(gp->flags & GLOBAL_FLAG_KIOSK)) {
-        gp->language = 0;
     } else {
-        // game language: 1 English, 2 German, 3 French, 4 Spanish, 5 Italian
-        gp->language = 1;
+        gp->framerate = 50;
+    }
+    if (OSGetFontEncode() == OS_FONT_ENCODE_SJIS && !(gp->flags & GW_FLAG_E3)) {
+        gp->language = LANGUAGE_JP;
+    } else {
+        gp->language = LANGUAGE_US;
         switch (OSGetLanguage()) {
             case OS_LANG_ENGLISH:
-                gp->language = 1;
+                gp->language = LANGUAGE_US;
                 break;
             case OS_LANG_GERMAN:
-                gp->language = 2;
+                gp->language = LANGUAGE_GE;
                 break;
             case OS_LANG_FRENCH:
-                gp->language = 3;
+                gp->language = LANGUAGE_FR;
                 break;
             case OS_LANG_SPANISH:
-                gp->language = 4;
+                gp->language = LANGUAGE_SP;
                 break;
             case OS_LANG_ITALIAN:
-                gp->language = 5;
+                gp->language = LANGUAGE_IT;
                 break;
             case OS_LANG_DUTCH:
-                gp->language = 1;
+                gp->language = LANGUAGE_US;
                 break;
         }
     }
 #elif VERSION >= VERSION_US
-    if (VIGetTvFormat() == 0)
-        gp->framerate = 60;
-    else
-        gp->framerate = 50;
-    gp->language = 1;
-#elif VERSION <= VERSION_DEMO_JP
-#if VERSION == VERSION_DEMO_JP
-    gp->language = 0; // Japanese text whatever the console font
-#else
-    gp->language = 1; // English text whatever the console font
-#endif
+if (VIGetTvFormat() == VI_NTSC) {
     gp->framerate = 60;
+} else {
+    gp->framerate = 50;
+}
+gp->language = LANGUAGE_US;
 #else
-    if ((OSGetFontEncode() == OS_FONT_ENCODE_SJIS) && !(gp->flags & GLOBAL_FLAG_KIOSK)) {
-        gp->language = 0;
-    } else {
-        gp->language = 1;
-    }
-    gp->framerate = 60;
+if (OSGetFontEncode() == OS_FONT_ENCODE_SJIS && !(gp->flags & GW_FLAG_E3)) {
+    gp->language = LANGUAGE_JP;
+} else {
+    gp->language = LANGUAGE_US;
+}
+gp->framerate = 60;
 #endif
     gp->systemLevelFlags = 0;
     badgeShop_init(); // Badge Shop
     yuugijou_init();  // Pianta Parlor
-    johoya_init();    // information seller
+    johoya_init();    // information broker (johoya)
 #if VERSION >= VERSION_US
     gp->mapAlloc = __memAlloc(HEAP_DEFAULT, 670 * 1024);
 #else
@@ -314,9 +457,7 @@ void marioStInit(void) {
 #endif
     VISetPostRetraceCallback(viPostCallback);
     romFontInit();
-    OSCreateThread(&DvdCheckThread, gcDvdCheckThread, NULL, stack + sizeof(stack), sizeof(stack), 16, OS_THREAD_ATTR_DETACH);
-    DvdCheckTreadOn = TRUE;
-    OSResumeThread(&DvdCheckThread);
+    gcDvdCheckInit();
     DVDMgrInit();
     psndInit();
     aramMgrInit();
@@ -356,23 +497,20 @@ void marioStInit(void) {
     winMgrInit();
     seqInit_MARIOSTORY();
     seqSetSeq(SEQ_LOGO, NULL, NULL);
-    gp->soundMode = 0;
+    gp->soundMode = GW_SOUND_MODE_NO_SURROUND;
     if (OSGetSoundMode() == OS_SOUND_MODE_MONO) {
-        SoundSetOutputMode(0);
+        SoundSetOutputMode(SND_OUTPUTMODE_MONO);
     } else {
-        SoundSetOutputMode(1);
+        SoundSetOutputMode(SND_OUTPUTMODE_STEREO);
     }
 #if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
-    none_key = OSGetTime(); // every demo: start the idle timer
+    none_key = OSGetTime(); // every demo starts the idle timer
 #endif
 }
 
 /**
- * One frame of game logic, called from the main loop in main.c:
- * waits out a disc error, reads the pads, then runs every system's per-frame update in a fixed order
- * and checks for a reset.
- * In kiosk mode it also watches for idle pads and raises GLOBAL_FLAG_KIOSK_TIMEOUT
- * (every demo after one minute, resetting the game outside the field and battle; the releases after two).
+ * One game frame: waits while a DVD error is up, reads the pads and runs every manager's main function, then the reset
+ * check (gcResetCheck). In kiosk mode (GW_FLAG_E3) it also tracks input for the idle timeout.
  */
 void marioStMain(void) {
     int i;
@@ -412,46 +550,53 @@ void marioStMain(void) {
     nameEntMain();
     winMgrMain();
     effMain();
-    L_gcResetCheck();
-    if (gp->flags & GLOBAL_FLAG_KIOSK) {
+    gcResetCheck();
+    if (gp->flags & GW_FLAG_E3) {
         for (i = 0; i < 4; i++) {
-            if (gp->dirs[i])
+            if (gp->dirs[i]) {
                 break;
-            if (gp->button[i])
+            }
+            if (gp->button[i]) {
                 break;
-            if (gp->stickX[i])
+            }
+            if (gp->stickX[i]) {
                 break;
-            if (gp->stickY[i])
+            }
+            if (gp->stickY[i]) {
                 break;
-            if (gp->substickX[i])
+            }
+            if (gp->substickX[i]) {
                 break;
-            if (gp->substickY[i])
+            }
+            if (gp->substickY[i]) {
                 break;
-            if (gp->triggerLeft[i])
+            }
+            if (gp->triggerLeft[i]) {
                 break;
-            if (gp->triggerRight[i])
+            }
+            if (gp->triggerRight[i]) {
                 break;
+            }
         }
         if (i >= 4) {
 #if VERSION <= VERSION_DEMO_JP || VERSION == VERSION_DEMO_US_2 || VERSION == VERSION_DEMO_EU
-            // Every demo, after a minute without input: in the field or in battle, raise the kiosk timeout flag
-            // (seq_game and seq_battle then end the session through SEQ_GAME_OVER in kiosk mode);
+            // Every demo, after a minute without input: in the field or in battle, raise the kiosk timeout flag;
             // anywhere else, reset the game. The June US demo restarts the idle timer after raising the flag.
             if (OSTicksToSeconds(OSGetTime() - none_key) > 60) {
                 if (seqGetSeq() == SEQ_GAME || seqGetSeq() == SEQ_BATTLE) {
-                    gp->flags |= GLOBAL_FLAG_KIOSK_TIMEOUT;
+                    gp->flags |= GW_FLAG_E3_TIMEOUT;
 #if VERSION == VERSION_DEMO_US_1
                     none_key = OSGetTime();
 #endif
                 } else {
-                    gp->resetType = 1;
+                    gp->resetType = RESET_TYPE_SOFT;
                 }
             }
 #else
             // After two minutes without input in the field or in battle, raise the kiosk timeout flag
-            // (only read in kiosk mode, by seq_game and seq_battle).
+            // (only read in kiosk mode, by seq_game, seq_battle and battle.c).
             if (OSTicksToSeconds(OSGetTime() - none_key) > 120 && (seqGetSeq() == SEQ_GAME || seqGetSeq() == SEQ_BATTLE)) {
-                gp->flags |= GLOBAL_FLAG_KIOSK_TIMEOUT;
+                gp->flags |= GW_FLAG_E3_TIMEOUT;
             }
 #endif
         } else {
@@ -476,31 +621,31 @@ void marioStSystemLevel(s32 level) {
     switch (level) {
         case 0:
             _mariostSystemLevel = level;
-            gp->systemLevelFlags &= ~0xF;
-            evtStartAll(0xEF);
+            gp->systemLevelFlags &= ~SYSTEM_LEVEL_STOP_ALL;
+            evtStartAll(EVENT_TYPE_DEFAULT);
             break;
         case 1:
             _mariostSystemLevel = level;
-            gp->systemLevelFlags &= ~0xE;
-            gp->systemLevelFlags |= 1;
+            gp->systemLevelFlags &= ~(SYSTEM_LEVEL_STOP_LV1 | SYSTEM_LEVEL_STOP_LV2 | SYSTEM_LEVEL_STOP_LV3);
+            gp->systemLevelFlags |= SYSTEM_LEVEL_STOP_LV0;
             evtStopAll(1);
             break;
         case 2:
             _mariostSystemLevel = level;
-            gp->systemLevelFlags &= ~0xC;
-            gp->systemLevelFlags |= 3;
+            gp->systemLevelFlags &= ~(SYSTEM_LEVEL_STOP_LV2 | SYSTEM_LEVEL_STOP_LV3);
+            gp->systemLevelFlags |= (SYSTEM_LEVEL_STOP_LV0 | SYSTEM_LEVEL_STOP_LV1);
             evtStopAll(2);
             break;
         case 3:
             _mariostSystemLevel = level;
-            gp->systemLevelFlags &= ~8;
-            gp->systemLevelFlags |= 7;
+            gp->systemLevelFlags &= ~SYSTEM_LEVEL_STOP_LV3;
+            gp->systemLevelFlags |= (SYSTEM_LEVEL_STOP_LV0 | SYSTEM_LEVEL_STOP_LV1 | SYSTEM_LEVEL_STOP_LV2);
             evtStopAll(0x10);
             break;
         case 4:
             _mariostSystemLevel = level;
-            gp->systemLevelFlags |= 0xF;
-            evtStopAll(0xEF);
+            gp->systemLevelFlags |= SYSTEM_LEVEL_STOP_ALL;
+            evtStopAll(EVENT_TYPE_DEFAULT);
             break;
     }
 }
@@ -517,7 +662,7 @@ u32 marioStGetSystemLevel(void) {
  * Runs after every vertical retrace: advances the play-time clocks (each stops while its system level is
  * paused), records the retrace count, watches the console's Reset button
  * and the B+X+Start soft reset (held 0.5 s), then services rumble and the sound driver.
- * JP and later also reset when the drive reports a fatal status.
+ * JP and later cancel a pending reset (RESET_TYPE_NONE) while the drive reports a fatal status.
  */
 static void viPostCallback(u32 retraceCount) {
     OSTime time;
@@ -529,46 +674,40 @@ static void viPostCallback(u32 retraceCount) {
     if (gp->playTime > (OS_TIMER_CLOCK * (OSTime)359999999)) {
         gp->playTime = (OS_TIMER_CLOCK * (OSTime)359999999);
     }
-    // US and PAL also stop the system-level clocks during a disc error or while a window is open
 #if VERSION >= VERSION_US
     if (!gp->dvdError && !winCheck()) {
-        if (!(gp->systemLevelFlags & 8)) {
+        if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV3)) {
             gp->systemLv3Time += gp->retraceDeltaTime;
         }
-        if (!(gp->systemLevelFlags & 4)) {
+        if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV2)) {
             gp->systemLv2Time += gp->retraceDeltaTime;
         }
-        if (!(gp->systemLevelFlags & 2)) {
+        if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV1)) {
             gp->systemLv1Time += gp->retraceDeltaTime;
         }
-        if (!(gp->systemLevelFlags & 1)) {
+        if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV0)) {
             gp->systemLv0Time += gp->retraceDeltaTime;
         }
-        gp->renderTime += gp->retraceDeltaTime;
-        if (!gp->inBattle) {
-            gp->renderFieldTime += gp->retraceDeltaTime;
-        }
-    }
 #else
-    if (!(gp->systemLevelFlags & 8)) {
+    if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV3)) {
         gp->systemLv3Time += gp->retraceDeltaTime;
     }
-    if (!(gp->systemLevelFlags & 4)) {
+    if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV2)) {
         gp->systemLv2Time += gp->retraceDeltaTime;
     }
-    if (!(gp->systemLevelFlags & 2)) {
+    if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV1)) {
         gp->systemLv1Time += gp->retraceDeltaTime;
     }
-    if (!(gp->systemLevelFlags & 1)) {
+    if (!(gp->systemLevelFlags & SYSTEM_LEVEL_STOP_LV0)) {
         gp->systemLv0Time += gp->retraceDeltaTime;
     }
     if (!gp->dvdError && !winCheck()) {
+#endif
         gp->renderTime += gp->retraceDeltaTime;
         if (!gp->inBattle) {
             gp->renderFieldTime += gp->retraceDeltaTime;
         }
     }
-#endif
     gp->retraceTime = time;
     gp->retraceCount = retraceCount;
     if (battleDisableHResetCheck()) {
@@ -578,15 +717,13 @@ static void viPostCallback(u32 retraceCount) {
             if (OSGetResetButtonState()) {
                 gp->resetButtonDown = TRUE;
             }
-        } else {
-            if (!OSGetResetButtonState()) {
-                gp->resetType = 1;
-            }
+        } else if (!OSGetResetButtonState()) {
+            gp->resetType = RESET_TYPE_SOFT;
         }
         if (gp->keyDataValid) {
             if (OSIsRestart() && !gp->restartChecked) {
                 if ((keyGetButton(0) & reset) == reset) {
-                    gp->resetType = 0;
+                    gp->resetType = RESET_TYPE_NONE;
                     goto exitcheck;
                 } else {
                     gp->restartChecked = TRUE;
@@ -598,14 +735,14 @@ static void viPostCallback(u32 retraceCount) {
                     gp->softResetTimeout = OSGetTime();
                 }
                 if (OSTicksToMilliseconds(OSGetTime() - gp->softResetTimeout) > 500) {
-                    gp->resetType = 1;
+                    gp->resetType = RESET_TYPE_SOFT;
                 }
             } else {
                 gp->softResetWait = FALSE;
             }
 #if VERSION >= VERSION_JP
-            if (DVDGetDriveStatus() == -1) {
-                gp->resetType = 0;
+            if (DVDGetDriveStatus() == DVD_STATE_FATAL_ERROR) {
+                gp->resetType = RESET_TYPE_NONE;
             }
 #endif
         }
@@ -617,9 +754,9 @@ exitcheck:
 
 /**
  * Background thread started by marioStInit that polls the disc drive:
- * on cover open, no or wrong disc, retry or fatal error it sets gp->dvdError,
+ * on cover open, no or wrong disc, retry or (JP and later) fatal error it sets gp->dvdError,
  * mutes sound and draws the ROM-font error message on its own, until the drive recovers.
- * US and PAL wait until the status has been steady for 10 frames before drawing.
+ * US and later wait until the status has been steady for 10 frames before drawing.
  */
 static void* gcDvdCheckThread(void* param) {
 #if VERSION >= VERSION_US
@@ -668,20 +805,16 @@ static void* gcDvdCheckThread(void* param) {
 #endif
                 gp->dvdError = TRUE;
                 break;
-#if VERSION <= VERSION_DEMO_JP
-            // The demo has no message for a fatal error and leaves dvdError as it is.
-            case DVD_RESULT_FATAL_ERROR:
-                break;
-#else
-            case DVD_RESULT_FATAL_ERROR:
+            case DVD_STATE_FATAL_ERROR:
+#if VERSION >= VERSION_JP
 #if VERSION >= VERSION_US
                 msgId = 13;
 #else
                 msgId = 8;
 #endif
                 gp->dvdError = TRUE;
-                break;
 #endif
+                break;
             default:
                 gp->dvdError = FALSE;
                 break;
@@ -705,44 +838,64 @@ static void* gcDvdCheckThread(void* param) {
         } else {
             SoundCloseCover();
         }
-#if VERSION >= VERSION_JP
         if (gp->dvdError) {
+#if VERSION >= VERSION_JP
             if (cardIsExec()) {
                 gp->dvdError = FALSE;
             }
         }
-#endif
 #if VERSION >= VERSION_US
         if (gp->dvdError && stableCount > 10) {
 #else
         if (gp->dvdError) {
 #endif
-            DEMOBeforeRender();
-#if VERSION <= VERSION_DEMO_JP
-            // The demo draws the message at 0.8 scale, centred at height 0.
-            if (msgId) {
-                message = romFontGetMessage(msgId);
-                width = 0.8f * romFontGetWidth(message);
-                MTXPerspective(mtx, 25.0f, 1.2666667f, 1.0f, 10000.0f);
-                GXSetProjection(mtx, GX_PERSPECTIVE);
-                xpos = -width / 2.0f;
-                romFontPrintGX(xpos, 0.0f, 0.8f, &(GXColor){0xFF, 0xFF, 0xFF, 0xFF}, message);
-            }
-#else
-            if (msgId) {
-                message = romFontGetMessage(msgId);
-                width = (f32)romFontGetWidth(message);
-                MTXPerspective(mtx, 25.0f, 1.2666667f, 1.0f, 10000.0f);
-                GXSetProjection(mtx, GX_PERSPECTIVE);
-                xpos = -width / 2.0f;
-                romFontPrintGX(xpos, 60.0f, 1.0f, &(GXColor){0xFF, 0xFF, 0xFF, 0xFF}, message);
-            }
 #endif
+            DEMOBeforeRender();
+            if (msgId) {
+                message = romFontGetMessage(msgId);
+#if VERSION <= VERSION_DEMO_JP
+                width = 0.8f * romFontGetWidth(message);
+#else
+                // s32 -> f32 -> s32 round trip (both conversions are in the retail code)
+                width = (f32)romFontGetWidth(message);
+#endif
+                MTXPerspective(mtx, 25.0f, 1.2666667f, 1.0f, 10000.0f);
+                GXSetProjection(mtx, GX_PERSPECTIVE);
+                xpos = -width / 2.0f;
+#if VERSION <= VERSION_DEMO_JP
+                romFontPrintGX(xpos, 0.0f, 0.8f, &(GXColor){0xFF, 0xFF, 0xFF, 0xFF}, message);
+#else
+                romFontPrintGX(xpos, 60.0f, 1.0f, &(GXColor){0xFF, 0xFF, 0xFF, 0xFF}, message);
+#endif
+            }
             DEMODoneRender();
             makeKey();
-            L_gcResetCheck();
+            gcResetCheck();
         }
         OSYieldThread();
+    }
+}
+
+/** Starts the disc-check thread (gcDvdCheckThread) on its own 4 KiB stack. */
+// Original name and size (0x60) from the JP demo map (UNUSED there: its one call, in marioStInit, is inlined). The
+// JP demo map numbers its stack (stack$659) between viPostCallback's and gcRumbleCheck's labels, so the stack is
+// this function's static, not marioStInit's.
+void gcDvdCheckInit(void) {
+    static u8 stack[0x1000];
+
+    OSCreateThread(&DvdCheckThread, gcDvdCheckThread, NULL, stack + sizeof(stack), sizeof(stack), 16, OS_THREAD_ATTR_DETACH);
+    DvdCheckTreadOn = TRUE;
+    OSResumeThread(&DvdCheckThread);
+}
+
+/** Stops the disc-check thread if it is running. */
+// Original name and size (0x3c) from the JP demo map (UNUSED there: its one call, in the reset check, is inlined).
+// JP and later write the cancel out in gcResetCheck with an extra test (not on the disc-check thread itself); as a
+// call of a JP+ form of this function, JP retail inlines gcResetCheck into its callers and no longer matches.
+void gcDvdCheckCancel(void) {
+    if (DvdCheckTreadOn) {
+        OSCancelThread(&DvdCheckThread);
+        DvdCheckTreadOn = FALSE;
     }
 }
 
@@ -756,13 +909,13 @@ void gcRumbleCheck(void) {
     static OSTime off_time[4] = {0, 0, 0, 0};
     OSTime now;
     OSTime diff;
-    BOOL array[4] = {0};
+    BOOL stopRequest[4] = {0};
     int i;
 
     now = OSGetTime();
     for (i = 0; i < 4; i++) {
         if (!gp->rumbleForcedOff[i]) {
-            if (padGetRumbleStatus(i) == 1) {
+            if (padGetRumbleStatus(i) == PAD_MOTOR_RUMBLE) {
                 if (!gp->rumbleStart[i]) {
                     gp->rumbleStart[i] = TRUE;
                     gp->rumbleStartTime[i] = now;
@@ -796,15 +949,15 @@ void gcRumbleCheck(void) {
                 gp->rumbleForcedOff[i] = FALSE;
                 gp->rumbleStart[i] = FALSE;
             }
-            array[i] = TRUE;
+            stopRequest[i] = TRUE;
         }
         if (gp->dvdError) {
-            array[i] = TRUE;
+            stopRequest[i] = TRUE;
         }
-        if (gp->systemLevelFlags != 0U) {
-            array[i] = TRUE;
+        if (gp->systemLevelFlags != 0) {
+            stopRequest[i] = TRUE;
         }
-        if (array[i]) {
+        if (stopRequest[i]) {
             gp->rumbleHardStop[i] = TRUE;
         } else {
             gp->rumbleHardStop[i] = FALSE;
@@ -812,17 +965,17 @@ void gcRumbleCheck(void) {
     }
 }
 
-#if VERSION <= VERSION_DEMO_JP
 /**
- * The demos inline the reset check into its callers (the US demo also logs the reset);
+ * The early demos inline the reset check into its callers (the June US demo also logs the reset);
  * their restart codes are only RESTART and HOTRESET.
  */
-static inline void L_gcResetCheck(void) {
+#if VERSION <= VERSION_DEMO_JP
+static inline void gcResetCheck(void) {
     u32 code;
 
     if (gp->resetType) {
-#if VERSION == VERSION_DEMO_US_1
-        OSReport("\x83\x8A\x83\x5A\x83\x62\x83\x67\x8F\x88\x97\x9D\x8A\x4A\x8E\x6E\n");
+#if VERSION != VERSION_DEMO_JP
+        OSReport("リセット処理開始\n");
 #endif
         VISetBlack(TRUE);
         VIFlush();
@@ -831,41 +984,9 @@ static inline void L_gcResetCheck(void) {
         VIWaitForRetrace();
         psndExit();
         DVDMgrDelete();
-        if (DvdCheckTreadOn) {
-            OSCancelThread(&DvdCheckThread);
-            DvdCheckTreadOn = FALSE;
-        }
-        while (cardIsExec()) {
-            cardMain();
-            VIWaitForRetrace();
-        }
-        if (gp->resetType != 2) {
-            if (!(gp->flags & GLOBAL_FLAG_VIDEO_MODE_SET)) {
-                code = OS_RESET_RESTART;
-            } else {
-                if (!(gp->flags & GLOBAL_FLAG_PROGRESSIVE)) {
-                    code = OS_RESET_RESTART;
-                } else {
-                    code = OS_RESET_HOTRESET;
-                }
-            }
-            OSResetSystem(OS_RESET_RESTART, code, FALSE);
-        } else {
-            OSResetSystem(OS_RESET_HOTRESET, 0, TRUE);
-        }
-        while (1) {}
-    }
-}
+        gcDvdCheckCancel();
 #else
-// FAKE: keeps the following function(s) out of line as in the target; removing it changes the code
-#pragma dont_inline on
-/**
- * Performs a requested reset (gp->resetType): blanks the screen, stops sound,
- * the disc thread and pending memory card work, then restarts the console.
- * Type 2 hot-resets to the IPL menu; otherwise the restart code carries the video mode (and, in US and PAL, the
- * language). US and PAL also wait for card access to finish first.
- */
-void L_gcResetCheck(void) {
+void gcResetCheck(void) {
     u32 code;
 
 #if VERSION >= VERSION_US
@@ -884,19 +1005,24 @@ void L_gcResetCheck(void) {
             OSCancelThread(&DvdCheckThread);
             DvdCheckTreadOn = FALSE;
         }
+#endif
         while (cardIsExec()) {
             cardMain();
             VIWaitForRetrace();
         }
-        if (gp->resetType != 2) {
-            if (!(gp->flags & GLOBAL_FLAG_VIDEO_MODE_SET)) {
-                code = OS_RESET_SHUTDOWN;
+        if (gp->resetType != RESET_TYPE_MENU) {
+            s32 flags = gp->flags;
+
+            if (!(flags & GW_FLAG_VIDEO_MODE_SET)) {
+#if VERSION <= VERSION_DEMO_JP
+                code = RESET_CODE_INTERLACED;
+#else
+                code = RESET_CODE_NO_VIDEO_MODE;
+#endif
+            } else if (!(flags & GW_FLAG_PROGRESSIVE)) {
+                code = RESET_CODE_INTERLACED;
             } else {
-                if (!(gp->flags & GLOBAL_FLAG_PROGRESSIVE)) {
-                    code = OS_RESET_RESTART;
-                } else {
-                    code = OS_RESET_HOTRESET;
-                }
+                code = RESET_CODE_PROGRESSIVE;
             }
 #if VERSION >= VERSION_US
             code |= gp->language << 2;
@@ -908,5 +1034,3 @@ void L_gcResetCheck(void) {
         while (1) {}
     }
 }
-#pragma dont_inline reset
-#endif

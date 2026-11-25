@@ -1,4 +1,5 @@
 // evtmgr.c: the event (script) manager: EventEntry, EventOpcode, the LW/LF/GW/GF banks and the script run loop.
+
 #pragma once
 
 #include "evt/evt_word.h"
@@ -6,46 +7,39 @@
 #include "driver/npcdrv.h"
 #include <dolphin/os.h>
 
-// Sizes of an event's variable banks and nesting stacks.
-#define EVT_LW_COUNT 16    // LW(0)..LW(15): local words of one event
-#define EVT_LF_COUNT 96    // LF(0)..LF(95): local flags of one event, 32 per word
-#define EVT_GW_COUNT 32    // GW(0)..GW(31): global words shared by all events
-#define EVT_GF_COUNT 96    // GF(0)..GF(95): global flags, 32 per word
-#define EVT_LOOP_DEPTH 8   // nested DO loops one event can run
-#define EVT_SWITCH_DEPTH 8 // nested SWITCH blocks one event can run
-
-#pragma enumsalwaysint off
+// Script opcodes, named after their original mnemonics (the evtmgr_cmd.c handlers are evt_<mnemonic>; 1 has no
+// handler or name).
 typedef enum EventOpcode {
     OPCODE_NEXT = 0,
     OPCODE_END_SCRIPT = 1,
-    OPCODE_END_EVENT = 2,
-    OPCODE_LABEL = 3,
+    OPCODE_END_EVT = 2,
+    OPCODE_LBL = 3,
     OPCODE_GOTO = 4,
     OPCODE_DO = 5,
     OPCODE_WHILE = 6,
     OPCODE_DO_BREAK = 7,
     OPCODE_DO_CONTINUE = 8,
-    OPCODE_WAIT_FRAME = 9,
+    OPCODE_WAIT_FRM = 9,
     OPCODE_WAIT_MSEC = 10,
     OPCODE_HALT = 11,
     OPCODE_IF_STR_EQUAL = 12,
     OPCODE_IF_STR_NOT_EQUAL = 13,
-    OPCODE_IF_STR_LESS = 14,
-    OPCODE_IF_STR_GREATER = 15,
-    OPCODE_IF_STR_LESS_EQUAL = 16,
-    OPCODE_IF_STR_GREATER_EQUAL = 17,
+    OPCODE_IF_STR_SMALL = 14,
+    OPCODE_IF_STR_LARGE = 15,
+    OPCODE_IF_STR_SMALL_EQUAL = 16,
+    OPCODE_IF_STR_LARGE_EQUAL = 17,
     OPCODE_IFF_EQUAL = 18,
     OPCODE_IFF_NOT_EQUAL = 19,
-    OPCODE_IFF_LESS = 20,
-    OPCODE_IFF_GREATER = 21,
-    OPCODE_IFF_LESS_EQUAL = 22,
-    OPCODE_IFF_GREATER_EQUAL = 23,
+    OPCODE_IFF_SMALL = 20,
+    OPCODE_IFF_LARGE = 21,
+    OPCODE_IFF_SMALL_EQUAL = 22,
+    OPCODE_IFF_LARGE_EQUAL = 23,
     OPCODE_IF_EQUAL = 24,
     OPCODE_IF_NOT_EQUAL = 25,
-    OPCODE_IF_LESS = 26,
-    OPCODE_IF_GREATER = 27,
-    OPCODE_IF_LESS_EQUAL = 28,
-    OPCODE_IF_GREATER_EQUAL = 29,
+    OPCODE_IF_SMALL = 26,
+    OPCODE_IF_LARGE = 27,
+    OPCODE_IF_SMALL_EQUAL = 28,
+    OPCODE_IF_LARGE_EQUAL = 29,
     OPCODE_IF_FLAG = 30,
     OPCODE_IF_NOT_FLAG = 31,
     OPCODE_ELSE = 32,
@@ -54,10 +48,10 @@ typedef enum EventOpcode {
     OPCODE_SWITCHI = 35,
     OPCODE_CASE_EQUAL = 36,
     OPCODE_CASE_NOT_EQUAL = 37,
-    OPCODE_CASE_LESS = 38,
-    OPCODE_CASE_GREATER = 39,
-    OPCODE_CASE_LESS_EQUAL = 40,
-    OPCODE_CASE_GREATER_EQUAL = 41,
+    OPCODE_CASE_SMALL = 38,
+    OPCODE_CASE_LARGE = 39,
+    OPCODE_CASE_SMALL_EQUAL = 40,
+    OPCODE_CASE_LARGE_EQUAL = 41,
     OPCODE_CASE_ETC = 42,
     OPCODE_CASE_OR = 43,
     OPCODE_CASE_AND = 44,
@@ -90,9 +84,9 @@ typedef enum EventOpcode {
     OPCODE_READF3 = 71,
     OPCODE_READF4 = 72,
     OPCODE_READF_N = 73,
-    OPCODE_SET_USER_WORK = 74,
-    OPCODE_SET_USER_FLAG = 75,
-    OPCODE_ALLOC_USER_WORK = 76,
+    OPCODE_SET_USER_WRK = 74,
+    OPCODE_SET_USER_FLG = 75,
+    OPCODE_ALLOC_USER_WRK = 76,
     OPCODE_AND = 77,
     OPCODE_ANDI = 78,
     OPCODE_OR = 79,
@@ -108,11 +102,11 @@ typedef enum EventOpcode {
     OPCODE_GETR = 89,
     OPCODE_GETRF = 90,
     OPCODE_USER_FUNC = 91,
-    OPCODE_RUN_EVENT = 92,
-    OPCODE_RUN_EVENT_ID = 93,
-    OPCODE_RUN_CHILD_EVENT = 94,
-    OPCODE_DELETE_EVENT = 95,
-    OPCODE_RESTART_EVENT = 96,
+    OPCODE_RUN_EVT = 92,
+    OPCODE_RUN_EVT_ID = 93,
+    OPCODE_RUN_CHILD_EVT = 94,
+    OPCODE_DELETE_EVT = 95,
+    OPCODE_RESTART_EVT = 96,
     OPCODE_SET_PRI = 97,
     OPCODE_SET_SPD = 98,
     OPCODE_SET_TYPE = 99,
@@ -122,12 +116,12 @@ typedef enum EventOpcode {
     OPCODE_START_OTHER = 103,
     OPCODE_STOP_ID = 104,
     OPCODE_START_ID = 105,
-    OPCODE_CHECK_EVENT = 106,
-    OPCODE_INLINE_EVENT = 107,
-    OPCODE_INLINE_EVENT_ID = 108,
+    OPCODE_CHK_EVT = 106,
+    OPCODE_INLINE_EVT = 107,
+    OPCODE_INLINE_EVT_ID = 108,
     OPCODE_END_INLINE = 109,
-    OPCODE_BROTHER_EVENT = 110,
-    OPCODE_BROTHER_EVENT_ID = 111,
+    OPCODE_BROTHER_EVT = 110,
+    OPCODE_BROTHER_EVT_ID = 111,
     OPCODE_END_BROTHER = 112,
     OPCODE_DEBUG_PUT_MSG = 113,
     OPCODE_DEBUG_MSG_CLEAR = 114,
@@ -136,13 +130,11 @@ typedef enum EventOpcode {
     OPCODE_DEBUG_REM = 117,
     OPCODE_DEBUG_BP = 118
 } EventOpcode;
-#pragma enumsalwaysint on
 
 typedef struct EventEntry EventEntry;
 
 typedef s32 (*UserFunction)(EventEntry* evt, BOOL blocked);
 
-// One script command: the header word (opcode in the low half, parameter count in the high half), then the label.
 typedef struct EventCommand {
     union {
         s32 header;
@@ -164,28 +156,44 @@ typedef enum EventEntry_Flags {
     EVENT_STOPPED = (1 << 1),
 
     EVENT_WAITING_ON_CHILD = (1 << 4),
-    EVENT_START_NOW = (1 << 5), // started from inside evtmgrMain: evtEntry adds it to the current frame's run table
+    EVENT_START_IMMEDIATE = (1 << 5), // run at once when entered while the manager is running events
 } EventEntry_Flags;
 
+// EventEntry.type is a mask: evtStop/evtStart act on an event whose type shares a bit with theirs
+// (marioStSystemLevel stops 1, 2, 0x10 or 0xEF by level). evtEntry gives every event this default;
+// evtEntryType sets one (type 0: no level stops the event).
+#define EVENT_TYPE_DEFAULT 0xEF // every bit but 0x10
+
+// EventEntry.wNpcEventType: which of its owner NPC's events the entry runs
+typedef enum NpcEventType {
+    NPC_EVENT_INIT = 0,
+    NPC_EVENT_MOVE = 1, // the regular event
+    NPC_EVENT_FIND = 2,
+    NPC_EVENT_LOST = 3,
+    NPC_EVENT_RETURN = 4,
+    NPC_EVENT_BLOW = 5,
+    NPC_EVENT_TALK = 6, // talk event, or the dead event started from a field-battle result
+    NPC_EVENT_DEAD = 8,
+} NpcEventType;
+
 struct EventEntry {
-    OSTime lifetime;                   // 0x0
-    u8 flags;                          // 0x8, validated
+    OSTime lifetime;                   // 0x0, ticks the event has run (evtmgrMain adds the frame delta)
+    u8 flags;                          // 0x8, validated, EventEntry_Flags
     u8 params;                         // 0x9, number of params
-    EventOpcode opcode;                // 0xA
-    u8 priority;                       // 0xB, validated
-    u8 type;                           // 0xC
-    u8 blocked;                        // 0xD
-    s8 loopDepth;                      // 0xE, validated
-    s8 switchDepth;                    // 0xF, validated
-    u8 wNpcEventType;                  // 0x10
-    u8 pad_11[3];                      // 0x11
-    void* nextCommand;                 // 0x14, validated
-    EvtWord* args;                     // 0x18, validated
-    s8 labelIdTable[16];               // 0x1C
-    EvtWord* labelAddressTable[16];    // 0x2C
+    u8 opcode;                         // 0xA, EventOpcode
+    u8 priority;                       // 0xB, validated, run order, highest first; a child gets parent + 1
+    u8 type;                           // 0xC, stop/start mask (EVENT_TYPE_DEFAULT)
+    u8 blocked;                        // 0xD, 0 when a command starts; a waiting command sets it (some use 2, 3)
+    s8 loopDepth;                      // 0xE, validated, current DO nesting, index into loopStartPtrs / loopCounters
+    s8 switchDepth;                    // 0xF, validated, current SWITCH nesting, index into switchValues / switchStates
+    u8 wNpcEventType;                  // 0x10, NpcEventType
+    EvtWord* nextCommand;              // 0x14, validated, next script command to run
+    EvtWord* args;                     // 0x18, validated, arguments of the command being run
+    s8 labelIdTable[16];               // 0x1C, LBL ids found by make_jump_table (-1 = unused)
+    EvtWord* labelAddressTable[16];    // 0x2C, command after each LBL, for GOTO
     struct EventEntry* waitingEvent;   // 0x6C, this parent event is waiting on us
     struct EventEntry* waitingOnEvent; // 0x70, we are waiting on some child event
-    struct EventEntry* brotherEvent;   // 0x74
+    struct EventEntry* brotherEvent;   // 0x74, event this one was started beside (evtBrotherEntry)
     union {
         struct {
             union {
@@ -194,14 +202,14 @@ struct EventEntry {
                 void* userdatap[3];
             }; // 0x78
             union {
-                u32 userdata3;
+                s32 userdata3;
                 f32 userdata3f;
             }; // 0x84, 4th scratch word after userdata[3] (state/counter/window id/float z/saved flags)
             union {
                 OSTime wInterpRelatedTime; // 0x88
                 s32* wInterpWork;          // 0x88, some user funcs keep a work block pointer here instead
             };
-            u32 userdataTail[2]; // 0x90, last two scratch words (only used through userWork)
+            u32 field_0x90[2]; // 0x90, unknown
         };
         EvtWord userWork[8]; // 0x78, the same 0x20 bytes as eight scratch words (user functions that keep more state)
         struct {
@@ -215,27 +223,27 @@ struct EventEntry {
             s32 partId;              // 0x94
         } heart;                     // 0x78, Vivian's heart icon (_disp_heart_entry)
     };
-    UserFunction userfunc; // 0x98
+    UserFunction userfunc; // 0x98, user function the USER_FUNC command is calling
     union {
-        EvtWord lwData[EVT_LW_COUNT]; // 0x9C, validated
-        f32 lwDataF[EVT_LW_COUNT];    // 0x9C, the same words used as floats
+        EvtWord lwData[16]; // 0x9C, validated
+        f32 lwDataF[16];    // 0x9C, the same words used as floats
     };
-    s32 lfData[EVT_LF_COUNT / 32];          // 0xDC, validated
-    void* loopStartPtrs[EVT_LOOP_DEPTH];    // 0xE8
-    EvtWord loopCounters[EVT_LOOP_DEPTH];   // 0x108
-    s8 switchStates[EVT_SWITCH_DEPTH];      // 0x128, validated
-    EvtWord switchValues[EVT_SWITCH_DEPTH]; // 0x130, validated
-    union {                                 // Current addr for read/readf instructions
+    s32 lfData[3];             // 0xDC, validated, LF flag words (copied into new events; a child copies back)
+    EvtWord* loopStartPtrs[8]; // 0xE8, start of each open DO loop
+    EvtWord loopCounters[8];   // 0x108, count left in each open DO loop (0 = forever, or the variable counted down)
+    s8 switchStates[8];        // 0x128, validated, per depth: 1 none matched yet, 0 matched, -1 / -2 OR / AND states
+    EvtWord switchValues[8];   // 0x130, validated, per depth: the SWITCH value
+    union {                    // Current addr for read/readf instructions
         EvtWord* readAddr;
         f32* readfAddr;
     }; // 0x150
-    EvtWord* uwBase;            // 0x154, validated
-    s32* ufBase;                // 0x158, validated
-    s32 eventId;                // 0x15C, validated
-    s32 unitId;                 // 0x160
+    EvtWord* uwBase;            // 0x154, validated, UW array (SET_UW_BASE / ALLOCATE_UW)
+    s32* ufBase;                // 0x158, validated, UF flag array (SET_UF_BASE)
+    s32 eventId;                // 0x15C, validated, unique id (evtGetPtrID, evtCheckID)
+    s32 unitId;                 // 0x160, battle unit the event belongs to, -1 = none
     f32 timescale;              // 0x164, number of instructions per frame
-    f32 commandsLeft;           // 0x168, instruction budget carried between frames (timescale accumulator)
-    s32 caseId;                 // 0x16C
+    f32 commandsLeft;           // 0x168, commands still to run this frame (+timescale per frame)
+    s32 caseId;                 // 0x16C, case (evt_case) that started the event, -1 = none
     NpcEntry* ownerNPC;         // 0x170, verified
     MapObjectEntry* thisMapObj; // 0x174, verified
     s32 printWindowId;          // 0x178, verified
@@ -251,22 +259,19 @@ struct EventEntry {
         };
         Vec msgPosVec; // 0x184, x/y/z as one Vec (evt_msg speaker position)
     };
-    u32 msgPriority;   // 0x190
-    u32 pad_194;       // 0x194, aligns savedTime
-    OSTime savedTime;  // 0x198, start time of a timed wait
-    void* restartFrom; // 0x1A0, validated
-    const char* name;  // 0x1A4
-    void* currCommand; // 0x1A8
-    u32 pad_1AC;       // 0x1AC, pads to the 8-byte alignment
+    u32 msgPriority;   // 0x190, priority for the next message window (msgWindow_Entry); 0 after use
+    OSTime savedTime;  // 0x198, start time saved by timed user functions
+    void* restartFrom; // 0x1A0, validated, restart point: script start or RESTART_EVENT
+    const char* name;  // 0x1A4, DEBUG_NAME string, NULL by default
+    void* currCommand; // 0x1A8, command being run
 };
 
 typedef struct EventWork {
-    s32 count;                     // 0x0
-    EvtWord gwData[EVT_GW_COUNT];  // 0x4
-    s32 gfData[EVT_GF_COUNT / 32]; // 0x84
-    EventEntry* entries;           // 0x90
-    u32 pad_94;                    // 0x94
-    OSTime lastUpdate;             // 0x98
+    s32 count;           // 0x0
+    EvtWord gwData[32];  // 0x4
+    s32 gfData[3];       // 0x84
+    EventEntry* entries; // 0x90
+    OSTime lastUpdate;   // 0x98
 } EventWork;
 
 EventWork* evtGetWork(void);
@@ -283,6 +288,8 @@ void evtDeleteID(s32 eventId);
 BOOL evtCheckID(s32 eventId);
 void evtSetPri(EventEntry* entry, u32 priority);
 void evtSetSpeed(EventEntry* entry, f32 speed);
+void evtSetSysSpd(f32 speed);
+f32 evtGetSysSpd(void);
 void evtSetType(EventEntry* entry, u32 type);
 void evtStop(EventEntry* entry, u32 type);
 void evtStart(EventEntry* entry, u32 type);
